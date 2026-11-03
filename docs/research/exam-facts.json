@@ -1,0 +1,393 @@
+{
+  "schema_note": "Machine-readable facts for the EX280V422 exam, OCP 4.22 product docs, and the game's EX280 Prep mode (docs/CONVERSION-SPEC.md section 11). All externally sourced claims are cited in sources[]; internal game-plan references are clearly marked.",
+  "exam_code": "EX280V422",
+  "exam_family_code": "EX280/EX280K",
+  "exam_name": "Red Hat Certified Specialist in OpenShift Administration",
+  "exam_name_on_redhat_com_page": "Red Hat Certified System Administrator in OpenShift exam (EX280)",
+  "naming_note": "Naming is inconsistent between Red Hat sources as of 2026-11-03: redhat.com/en/services/training/red-hat-certified-openshift-administrator-exam is titled 'Red Hat Certified System Administrator in OpenShift exam' and says passing makes you a 'Red Hat Certified System Administrator in OpenShift', while the LMS 'Exam Objectives by Version' PDF lists 'EX280K - Red Hat Certified Specialist in OpenShift Administration'. The objectives list for EX280V422 is identical in both sources. Ask the Lead which display name the game should use; CONVERSION-SPEC.md currently uses 'Red Hat Certified Specialist in OpenShift Administration (EX280V422)'.",
+  "current_ocp_version": "4.22",
+  "exam_based_on_ocp_version": "4.22",
+  "exam_duration_hours": 3.0,
+  "exam_delivery": "Hands-on, performance-based practical exam; candidates perform routine system tasks on a live OpenShift Container Platform 4.22 system to meet specific objective criteria. Relevant product documentation is available during the exam, but no outside assistance is allowed.",
+  "performance_rule": "Configurations and services must persist and remain functional across the normal lifecycle of the platform without requiring manual intervention to restore or start them (LMS PDF: 'configurations must persist after reboot without intervention').",
+  "results": "Scores are reported by Red Hat Certification Central via email, usually within 3 U.S. business days. Results are reported as total scores only; Red Hat does not report performance on individual items or provide extra detail on request.",
+  "scoring_and_validity": {
+    "status": "UNVERIFIED",
+    "note": "The exam page specifies that results are total scores but does not state a passing score, score scale, or certification validity period. The Red Hat Certification Program Guide is linked from the exam page and covers official policy, but its content could not be extracted (docs.redhat.com page is JS-rendered; PDF endpoint returned HTTP 403 to this agent, and no Wayback snapshot was available). Do not state a passing score or validity period in game copy without re-verifying via https://docs.redhat.com/en/documentation/red_hat_learning_subscription/1-latest/html/red_hat_certification_program_guide/index ."
+  },
+  "prerequisites": {
+    "stated": "No formal prerequisite. Recommended preparation listed on the exam page:",
+    "recommended": [
+      "Red Hat System Administration I (RH124) or comparable experience; Red Hat Certified System Administrator (RHCSA) strongly recommended but not required",
+      "Red Hat OpenShift Administration I: Containers & Kubernetes (DO180) or comparable work experience using OpenShift Container Platform",
+      "Red Hat OpenShift Administration II: Operating a Production Kubernetes Cluster (DO280) or comparable work experience using OpenShift Container Platform",
+      "Experience with container technology is recommended"
+    ],
+    "do280_note": "The DO280 course name printed on the exam page is 'Red Hat OpenShift Administration II: Operating a Production Kubernetes Cluster'. The redhat.com DO280 course page returns HTTP 404 as of 2026-11-03, so the current official course outline could not be fetched. A partner-hosted outline (New Horizons / DO280LS, based on OCP 4.14) was used only as a secondary, possibly stale cross-check; it still lists an 'OpenShift Updates' chapter that is no longer in the V422 objective list."
+  },
+  "exam_version_history": {
+    "current": "EX280V422",
+    "retired": "EX280V410K, EX280V45K, EX280V46K (marked Retired in the LMS objectives PDF)",
+    "superseded": "EX280V412K, EX280V414K (still listed in the LMS PDF, not current)",
+    "version_rule": "Multiple versions of this exam are in use; candidates should review their designated version in the Red Hat Learning Management System. The game targets EX280V422."
+  },
+  "objective_counts": {
+    "groups": 9,
+    "bullets": 55,
+    "note": "Counted from the objective list in the current redhat.com exam page and cross-checked with the EX280V422 section of the Red Hat 'Exam Objectives by Version' PDF on 2026-11-03. docs/CONVERSION-SPEC.md states '104 objectives' in a few places; that number does not match the official V422 list (55 bullets / 9 groups) and should be treated as an internal estimate or typo."
+  },
+  "objectives": [
+    {
+      "title": "Manage OpenShift Container Platform",
+      "docs_url": "https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/cli_tools/index",
+      "additional_docs": [
+        "https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/web_console/index",
+        "https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/nodes/index",
+        "https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/monitoring/index"
+      ],
+      "bullets": [
+        "Use the web console to manage and configure an OpenShift cluster",
+        "Use the command-line interface to manage and configure an OpenShift cluster",
+        "Create and delete projects",
+        "Locate and examine container images",
+        "Identify images using tags and digests",
+        "Query, format, and filter attributes of Kubernetes resources",
+        "Import, export, and configure Kubernetes resources",
+        "Examine resources and cluster status",
+        "Monitor cluster events and alerts",
+        "View logs",
+        "Assess the health of an OpenShift cluster",
+        "Troubleshoot common container, pod, and cluster events and alerts",
+        "Use product documentation",
+        "Be prepared to perform all tasks of a Red Hat Certified Technologist in OpenShift"
+      ]
+    },
+    {
+      "title": "Declarative Resource Management",
+      "docs_url": "https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/building_applications/index",
+      "additional_docs": [
+        "https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/cli_tools/index"
+      ],
+      "bullets": [
+        "Work with resource manifests",
+        "Deploy applications from YAML resource manifests",
+        "Update application deployments",
+        "Deploy applications using Kustomize",
+        "Work with Kustomize overlays",
+        "Create and use secrets",
+        "Create and use configuration maps"
+      ]
+    },
+    {
+      "title": "Deploy applications",
+      "docs_url": "https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/building_applications/index",
+      "additional_docs": [
+        "https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/images/index",
+        "https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/ingress_and_load_balancing/index"
+      ],
+      "bullets": [
+        "Deploy applications from templates and Helm charts",
+        "Manage application deployments",
+        "Work with replica sets",
+        "Work with labels and selectors",
+        "Configure services",
+        "Expose applications to external access"
+      ]
+    },
+    {
+      "title": "Manage authentication and authorization",
+      "docs_url": "https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/authentication_and_authorization/index",
+      "additional_docs": [
+        "https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/authentication_and_authorization/using-rbac"
+      ],
+      "bullets": [
+        "Configure the HTPasswd identity provider for authentication",
+        "Create and delete users",
+        "Modify user passwords",
+        "Create and manage groups",
+        "Modify user and group permissions"
+      ]
+    },
+    {
+      "title": "Configure network security",
+      "docs_url": "https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/network_security/index",
+      "additional_docs": [
+        "https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/network_security/network-policy",
+        "https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/ingress_and_load_balancing/routes"
+      ],
+      "bullets": [
+        "Configure networking components",
+        "Troubleshoot software defined networking",
+        "Create and edit external routes",
+        "Control cluster network ingress",
+        "Secure external and internal traffic using TLS certificates",
+        "Configure application network policies"
+      ]
+    },
+    {
+      "title": "Expose non-HTTP/SNI Applications",
+      "docs_url": "https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/ingress_and_load_balancing/index",
+      "additional_docs": [
+        "https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/network_security/network-policy"
+      ],
+      "bullets": [
+        "Configure a load balancer service",
+        "Configure external application access"
+      ]
+    },
+    {
+      "title": "Enable developer self-service",
+      "docs_url": "https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/scalability_and_performance/compute-resource-quotas",
+      "additional_docs": [
+        "https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/building_applications/index",
+        "https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/authentication_and_authorization/using-rbac"
+      ],
+      "bullets": [
+        "Configure cluster resource quotas",
+        "Configure project quotas",
+        "Configure project resource requirements",
+        "Configure project limit ranges",
+        "Configure project templates"
+      ]
+    },
+    {
+      "title": "Manage OpenShift operators",
+      "docs_url": "https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/operators/index",
+      "additional_docs": [],
+      "bullets": [
+        "Install an operator",
+        "Uninstall an operator",
+        "Delete an operator"
+      ]
+    },
+    {
+      "title": "Configure application security",
+      "docs_url": "https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/authentication_and_authorization/index",
+      "additional_docs": [
+        "https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/authentication_and_authorization/understanding-and-creating-service-accounts",
+        "https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/nodes/index"
+      ],
+      "bullets": [
+        "Configure and manage service accounts",
+        "Run privileged applications",
+        "Manage and apply permissions using security context constraints",
+        "Create and apply secrets to manage sensitive information",
+        "Configure application access to Kubernetes APIs",
+        "Deploy jobs to perform one-time tasks",
+        "Configure Kubernetes cron jobs"
+      ]
+    }
+  ],
+  "version_sensitive_flags": [
+    {
+      "topic": "DeploymentConfig vs Deployment",
+      "detail": "DeploymentConfig (apps.openshift.io/v1) is deprecated as of OCP 4.14; still supported in 4.22 but not recommended, only security/critical fixes. New work (and the exam's declarative-manifest tasks) should use apps/v1 Deployment / ReplicaSet. DeploymentConfig-only features still exist (native triggers, deployer pod, custom strategies) and the deployer service account may not exist if the DeploymentConfig capability is disabled.",
+      "docs_url": "https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/building_applications/index"
+    },
+    {
+      "topic": "Service account token secrets",
+      "detail": "Since OCP 4.16 a long-lived service account API token Secret is no longer auto-generated for each service account. Use `oc create token <sa>` (bound/temporary token) or project a serviceAccountToken volume; existing long-lived tokens continue to work after upgrade.",
+      "docs_url": "https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/authentication_and_authorization/understanding-and-creating-service-accounts"
+    },
+    {
+      "topic": "oc export removed",
+      "detail": "`oc export` is a removed 3.x command and does not appear in the OCP 4.22 CLI reference; use `oc get <resource> -o yaml > file.yaml` (plus oc create/apply/replace) to export/import resources.",
+      "docs_url": "https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/cli_tools/index"
+    },
+    {
+      "topic": "Default SCC is restricted-v2",
+      "detail": "All authenticated users are granted restricted-v2 by default; privileged is NOT granted by default. `oc adm policy add-scc-to-user privileged -z <sa>` is the documented way to allow a privileged workload. Setting privileged: true in a Pod spec does not by itself select the privileged SCC. SCCs still govern admission in 4.22 and are synchronized with Pod Security Admission labels.",
+      "docs_url": "https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/authentication_and_authorization/index"
+    },
+    {
+      "topic": "Kustomize and Helm newly explicit in V422",
+      "detail": "V412K/V414K objectives did not name Kustomize or Helm. V422 explicitly requires deploying with Kustomize (including overlays) and deploying from templates and Helm charts. OCP 4.22 product docs contain only limited Kustomize coverage (CLI reference for `oc apply -k`/`oc kustomize` plus a MicroShift job page); Helm is documented through the Helm CLI install page, HelmChartRepository CR and web-console Helm releases.",
+      "docs_url": "https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/building_applications/index"
+    },
+    {
+      "topic": "Old objective sections removed in V422",
+      "detail": "V412K had a 'Manage storage for application configuration and data' section (PVs, storage classes, StatefulSets) and a 'Configure applications for reliability' section (probes, resource limits, scaling). V414K had an 'Update OpenShift' section (cluster updates, deprecated API usage, operator updates). None of these are separate sections in EX280V422. Storage still appears only implicitly (secrets/configmaps, PVCs used by templates or stateful workloads), and updates are not an objective. Do not make them primary game content.",
+      "docs_url": "https://training-lms.redhat.com/public_content/redhat/training/Red%20Hat%20Certification%20Exam%20Objectives%20by%20Version.pdf"
+    },
+    {
+      "topic": "OLM v0 vs OLM v1 (Operator Framework)",
+      "detail": "OCP 4.22 docs contain both classic Operator Lifecycle Manager content (Subscription/OperatorGroup/CSV/InstallPlan, operators guide) and newer 'Extensions' OLM v1 content (catalogd/operator-controller). EX280 operator tasks are most consistent with classic OLM v0 (OperatorHub, Subscription, CSV) and the game's planned Subscription model; flag OLM v1 as out of scope unless Red Hat says otherwise.",
+      "docs_url": "https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/operators/index"
+    },
+    {
+      "topic": "Default project template moved",
+      "detail": "The default project template used for self-service project creation is `project-request` in the `openshift-config` project (older OCP docs referenced other namespaces). Customize it with `oc edit template project-request -n openshift-config`; NetworkPolicies can be added to its objects list.",
+      "docs_url": "https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/network_security/network-policy"
+    },
+    {
+      "topic": "Route API and admission",
+      "detail": "Routes are route.openshift.io/v1. TLS termination types: edge (router terminates, cert/key on route), passthrough (router does not terminate; no cert/key on route; path-based routing unavailable), reencrypt (terminate then re-encrypt; needs destinationCACertificate). Cross-namespace hostname claims are controlled by IngressController .spec.routeAdmission.namespaceOwnership (default Strict).",
+      "docs_url": "https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/ingress_and_load_balancing/routes"
+    }
+  ],
+  "game_plan_reference": {
+    "note": "Internal, not an external citation: game curriculum/challenge/EX280 Prep design lives in docs/CONVERSION-SPEC.md sections 9-11 (20 campaign levels in 5 chapters, 12 challenges, EX280 Prep objective tracker schema {id,title,bullets,docsUrl} and quick labs). Existing K8s game content that can be repurposed: 20 campaign levels, 10 challenges, and 34 incident definitions (see js/data/CampaignLevels.js, js/modes/ChallengeMode.js, js/data/IncidentDefs.js).",
+    "planned_levels": [
+      "1 Your First Project",
+      "2 Query, Format, Filter",
+      "3 Logs, Events & Health",
+      "4 Declarative Manifests",
+      "5 Kustomize Base",
+      "6 Kustomize Overlays",
+      "7 Secrets & ConfigMaps",
+      "8 Templates & Helm",
+      "9 Images, Builds & Image Streams",
+      "10 Rolling Updates & Rollbacks",
+      "11 Services & Routes",
+      "12 Non-HTTP & Load Balancer",
+      "13 HTPasswd & Users",
+      "14 Groups & RBAC",
+      "15 Quotas, LimitRanges & Templates",
+      "16 Service Accounts & API Access",
+      "17 SCC & Privileged Apps",
+      "18 Operators",
+      "19 Jobs & CronJobs",
+      "20 EX280 Final: Production Platform"
+    ],
+    "planned_challenges": [
+      "Three-Tier App",
+      "Fix CrashLoopBackOff",
+      "Route with Edge TLS",
+      "Kustomize Prod Overlay",
+      "Build & Deploy from Source",
+      "Quota Guardrail",
+      "RBAC for a New Teammate",
+      "SCC for a Privileged Workload",
+      "Network Isolation",
+      "Install an Operator",
+      "HTPasswd Onboarding",
+      "EX280 Speed Run"
+    ]
+  },
+  "last_verified_date": "2026-11-03",
+  "sources": [
+    {
+      "url": "https://www.redhat.com/en/services/training/red-hat-certified-openshift-administrator-exam",
+      "title": "Red Hat Certified System Administrator in OpenShift exam | EX280 (official exam page)",
+      "accessed": "2026-11-03",
+      "notes": "Fetched with curl 2026-11-03 (HTTP 200) because the page is long/JS-heavy for browser-style fetchers; extracted visible text from raw HTML. Source for exam description, OCP 4.22 basis, 3.0 hour limit, exam format, performance rule, objective list, target audience and recommended preparation."
+    },
+    {
+      "url": "https://training-lms.redhat.com/public_content/redhat/training/Red%20Hat%20Certification%20Exam%20Objectives%20by%20Version.pdf",
+      "title": "Red Hat Certification Exam Objectives by Version (PDF)",
+      "accessed": "2026-11-03",
+      "notes": "Downloaded PDF and extracted text with pdftotext. Section 'EX280V422' confirms the 9 objective groups, 55 bullets and 'configurations must persist after reboot without intervention'. Also confirms EX280V410K/V45K/V46K retired; EX280V412K/V414K superseded; lists 'EX280K - Red Hat Certified Specialist in OpenShift Administration'."
+    },
+    {
+      "url": "https://docs.redhat.com/en/documentation/openshift_container_platform/4.22",
+      "title": "OpenShift Container Platform 4.22 documentation home",
+      "accessed": "2026-11-03",
+      "notes": "HTTP 200; used as the docs base version. 4.23 returned HTTP 404 on the same day, and the openshift-docs Git repository's newest branch is enterprise-4.22, so 4.22 is the current published 4.x release."
+    },
+    {
+      "url": "https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/authentication_and_authorization/index",
+      "title": "OpenShift Container Platform 4.22 - Authentication and authorization",
+      "accessed": "2026-11-03",
+      "notes": "HTTP 200. Source guide for HTPasswd identity providers, RBAC, service accounts, SCCs and bound service-account tokens. Command-level verification performed against the same 4.22 content in the openshift-docs repository (branch enterprise-4.22, GitHub raw files) because docs.redhat.com page bodies are JS-rendered and tool fetchers only returned page titles."
+    },
+    {
+      "url": "https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/authentication_and_authorization/using-rbac",
+      "title": "Chapter 10. Using RBAC to define and apply permissions (OCP 4.22)",
+      "accessed": "2026-11-03",
+      "notes": "HTTP 200. RBAC commands and RoleBinding YAML; `oc adm policy add-role-to-user`, `add-cluster-role-to-user`, `add-role-to-group`, `oc create role/clusterrole --verb --resource`."
+    },
+    {
+      "url": "https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/authentication_and_authorization/understanding-and-creating-service-accounts",
+      "title": "Chapter 12. Understanding and creating service accounts (OCP 4.22)",
+      "accessed": "2026-11-03",
+      "notes": "HTTP 200. Default project service accounts (builder/deployer/default), `oc create sa`, `oc policy add-role-to-user ... -z`, no auto long-lived token secret since 4.16."
+    },
+    {
+      "url": "https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/network_security/index",
+      "title": "OpenShift Container Platform 4.22 - Network security",
+      "accessed": "2026-11-03",
+      "notes": "HTTP 200. NetworkPolicy guide; chapter page https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/network_security/network-policy verified HTTP 200 ('Chapter 3. Network policy')."
+    },
+    {
+      "url": "https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/ingress_and_load_balancing/index",
+      "title": "OpenShift Container Platform 4.22 - Ingress and load balancing",
+      "accessed": "2026-11-03",
+      "notes": "HTTP 200. Routes, ingress controllers, NodePort/LoadBalancer/external IP access. Chapter page https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/ingress_and_load_balancing/routes verified HTTP 200 ('Chapter 1. Routes')."
+    },
+    {
+      "url": "https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/building_applications/index",
+      "title": "OpenShift Container Platform 4.22 - Building applications",
+      "accessed": "2026-11-03",
+      "notes": "HTTP 200. Guide for projects, deployments/replica sets, templates, Helm charts, builds and build configuration, quotas-related app content and operator-created workloads."
+    },
+    {
+      "url": "https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/images/index",
+      "title": "OpenShift Container Platform 4.22 - Images",
+      "accessed": "2026-11-03",
+      "notes": "HTTP 200. ImageStreams, tags and digests, image triggers. Chapter https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/images/managing-image-streams verified HTTP 200 ('Chapter 6. Managing image streams')."
+    },
+    {
+      "url": "https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/nodes/index",
+      "title": "OpenShift Container Platform 4.22 - Nodes",
+      "accessed": "2026-11-03",
+      "notes": "HTTP 200. Jobs and CronJobs, pod/container viewing, events, limit ranges, node resource views, debugging."
+    },
+    {
+      "url": "https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/operators/index",
+      "title": "OpenShift Container Platform 4.22 - Operators",
+      "accessed": "2026-11-03",
+      "notes": "HTTP 200. OLM v0 concepts (Subscription/OperatorGroup/CSV/InstallPlan), installing and deleting operators; also contains OLM v1 'extensions' content."
+    },
+    {
+      "url": "https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/cli_tools/index",
+      "title": "OpenShift Container Platform 4.22 - CLI tools",
+      "accessed": "2026-11-03",
+      "notes": "HTTP 200. oc CLI reference/help text used to verify `oc apply -k`, `oc kustomize`, `oc set ...`, `oc rollout ...`, `oc create service ...`, `oc explain`, `oc api-resources`."
+    },
+    {
+      "url": "https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/web_console/index",
+      "title": "OpenShift Container Platform 4.22 - Web console",
+      "accessed": "2026-11-03",
+      "notes": "HTTP 200. Administrator/Developer perspectives, dashboard/cluster information and console customization."
+    },
+    {
+      "url": "https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/monitoring/index",
+      "title": "OpenShift Container Platform 4.22 - Monitoring",
+      "accessed": "2026-11-03",
+      "notes": "HTTP 200. Accessing Alertmanager, alerts/silences, monitoring APIs, user workload monitoring."
+    },
+    {
+      "url": "https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/scalability_and_performance/compute-resource-quotas",
+      "title": "Chapter 8. Using quotas and limit ranges (OCP 4.22)",
+      "accessed": "2026-11-03",
+      "notes": "HTTP 200. ResourceQuota, ClusterResourceQuota and LimitRange procedures/YAML (`oc create quota`, `oc create clusterquota`, `oc describe quota`, scopes, object counts)."
+    },
+    {
+      "url": "https://github.com/openshift/openshift-docs/tree/enterprise-4.22",
+      "title": "openshift-docs source, branch enterprise-4.22 (same content that publishes docs.redhat.com 4.22)",
+      "accessed": "2026-11-03",
+      "notes": "Used for command-syntax verification because docs.redhat.com renders guide bodies with JavaScript (fetchers only return page titles). Verified exact CLI flags/YAML/apiVersions by reading the 4.22 asciidoc modules (e.g. routes, networkpolicy, quota, SCC, RBAC, HTPasswd, OLM, jobs/cronjobs, builds, image streams, templates, helm). 18,597 files in the branch tree; 428 modules fetched for direct inspection."
+    },
+    {
+      "url": "https://portals.newhorizons.com/watercolor/watercolor-course-outline?courseid=200009780",
+      "title": "DO280/DO280LS course outline (partner-hosted, based on OCP 4.14)",
+      "accessed": "2026-11-03",
+      "notes": "SECONDARY, possibly stale. Official redhat.com DO280 page returned HTTP 404. Partner outline chapters align with V422 objective groups (Declarative Resource Management; Deploy Packaged Applications; Authentication and Authorization; Network Security; Expose non-HTTP/SNI Applications; Enable Developer Self-Service; Manage Kubernetes Operators; Application Security) but also still lists an OpenShift Updates chapter that is not part of EX280V422."
+    },
+    {
+      "url": "file:docs/CONVERSION-SPEC.md",
+      "title": "OpenShift Games conversion specification (internal team artifact)",
+      "accessed": "2026-11-03",
+      "notes": "INTERNAL. Used only for mapping exam objectives to planned game levels/challenges/EX280 Prep schema; not an external factual source."
+    }
+  ],
+  "confidence": {
+    "exam_identity_and_version": "high - two independent Red Hat sources (exam page + LMS PDF) agree on EX280V422 and OCP 4.22",
+    "exam_objectives_text_and_grouping": "high - verbatim from the live exam page; group headings match the PDF structure and the partner DO280 chapter list",
+    "exam_duration_and_delivery": "high - stated on the exam page",
+    "scoring_scale_and_validity": "low/unverified - not stated on the exam page; program guide could not be extracted. Do not ship game copy asserting a passing score or validity period.",
+    "do280_current_outline": "low/unverified - official course page 404; only a stale partner outline available",
+    "oc_command_syntax": "high for commands explicitly present in the OCP 4.22 docs sources (all commands in the study guide were checked against openshift-docs enterprise-4.22) ; medium for generic Helm CLI verbs (helm upgrade/rollback/uninstall) which are upstream Helm behavior, not documented on the fetched Red Hat Helm page",
+    "docs_urls": "high for guide index pages and the chapter pages explicitly verified HTTP 200 on 2026-11-03; medium for chapter pages not verified (links to guide index given instead)"
+  }
+}

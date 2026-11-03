@@ -1,0 +1,1846 @@
+{
+  "timestamp": "2026-11-03T23:12:31.247Z",
+  "environment": {
+    "node": "v26.10.0",
+    "chrome": "Chrome/156.0.8078.79",
+    "baseUrl": "http://127.0.0.1:37913",
+    "viewport": {
+      "width": 1600,
+      "height": 900
+    },
+    "puppeteerCore": "/tmp/verify-tools",
+    "startedAt": "2026-11-03T23:09:36.141Z",
+    "durationSeconds": 175
+  },
+  "summary": {
+    "passes": 424,
+    "failures": 0,
+    "warnings": 0,
+    "consoleErrors": 0,
+    "pageErrors": 0
+  },
+  "goNoGo": "GO",
+  "sections": {
+    "menu": {
+      "passes": 22,
+      "failures": 0,
+      "warnings": 0
+    },
+    "responsive": {
+      "passes": 7,
+      "failures": 0,
+      "warnings": 0
+    },
+    "exam": {
+      "passes": 19,
+      "failures": 0,
+      "warnings": 0
+    },
+    "sandbox": {
+      "passes": 25,
+      "failures": 0,
+      "warnings": 0
+    },
+    "files": {
+      "passes": 13,
+      "failures": 0,
+      "warnings": 0
+    },
+    "cli": {
+      "passes": 100,
+      "failures": 0,
+      "warnings": 0
+    },
+    "ui": {
+      "passes": 18,
+      "failures": 0,
+      "warnings": 0
+    },
+    "campaign": {
+      "passes": 128,
+      "failures": 0,
+      "warnings": 0
+    },
+    "challenges": {
+      "passes": 72,
+      "failures": 0,
+      "warnings": 0
+    },
+    "draw": {
+      "passes": 10,
+      "failures": 0,
+      "warnings": 0
+    },
+    "shots": {
+      "passes": 10,
+      "failures": 0,
+      "warnings": 0
+    }
+  },
+  "failures": [],
+  "warnings": [],
+  "consoleErrors": [],
+  "pageErrors": [],
+  "artifacts": {
+    "screenshot": {
+      "path": "screenshot.png",
+      "width": 1600,
+      "height": 900,
+      "bytes": 251415
+    },
+    "ogImage": {
+      "path": "og-image.png",
+      "width": 1200,
+      "height": 630,
+      "bytes": 200078
+    },
+    "screenshots": [
+      {
+        "path": "docs/screenshots/menu.png",
+        "width": 1600,
+        "height": 900,
+        "bytes": 118086
+      },
+      {
+        "path": "docs/screenshots/exam-prep.png",
+        "width": 1600,
+        "height": 900,
+        "bytes": 119974
+      },
+      {
+        "path": "docs/screenshots/sandbox.png",
+        "width": 1600,
+        "height": 900,
+        "bytes": 252016
+      },
+      {
+        "path": "screenshot.png",
+        "width": 1600,
+        "height": 900,
+        "bytes": 251415
+      },
+      {
+        "path": "docs/screenshots/files-panel.png",
+        "width": 1600,
+        "height": 900,
+        "bytes": 193629
+      },
+      {
+        "path": "docs/screenshots/campaign-level-1.png",
+        "width": 1600,
+        "height": 900,
+        "bytes": 253975
+      },
+      {
+        "path": "docs/screenshots/draw.png",
+        "width": 1600,
+        "height": 900,
+        "bytes": 161651
+      },
+      {
+        "path": "og-image.png",
+        "width": 1200,
+        "height": 630,
+        "bytes": 200078
+      }
+    ]
+  },
+  "passes": [
+    {
+      "section": "menu",
+      "name": "menu: exact page title"
+    },
+    {
+      "section": "menu",
+      "name": "menu: main menu visible"
+    },
+    {
+      "section": "menu",
+      "name": "menu: OpenShift Games logo"
+    },
+    {
+      "section": "menu",
+      "name": "menu: OpenShift 4.22 / EX280 subtitle"
+    },
+    {
+      "section": "menu",
+      "name": "menu: campaign mode button"
+    },
+    {
+      "section": "menu",
+      "name": "menu: chaos mode button"
+    },
+    {
+      "section": "menu",
+      "name": "menu: sandbox mode button"
+    },
+    {
+      "section": "menu",
+      "name": "menu: challenge mode button"
+    },
+    {
+      "section": "menu",
+      "name": "menu: EX280 Prep button exists"
+    },
+    {
+      "section": "menu",
+      "name": "menu: OpenShift Draw link is /draw"
+    },
+    {
+      "section": "menu",
+      "name": "menu: required attribution footer"
+    },
+    {
+      "section": "menu",
+      "name": "menu: meta description"
+    },
+    {
+      "section": "menu",
+      "name": "menu: og:url"
+    },
+    {
+      "section": "menu",
+      "name": "menu: og:image"
+    },
+    {
+      "section": "menu",
+      "name": "menu: twitter card"
+    },
+    {
+      "section": "menu",
+      "name": "menu: GitHub badge points to standalone repo"
+    },
+    {
+      "section": "menu",
+      "name": "menu: Three.js importmap pinned to 0.152.0"
+    },
+    {
+      "section": "menu",
+      "name": "menu: no legacy branding in logo"
+    },
+    {
+      "section": "menu",
+      "name": "menu: settings modal opens"
+    },
+    {
+      "section": "menu",
+      "name": "menu: achievements modal opens"
+    },
+    {
+      "section": "menu",
+      "name": "menu: achievements grid populated"
+    },
+    {
+      "section": "menu",
+      "name": "menu: stats modal opens"
+    },
+    {
+      "section": "responsive",
+      "name": "responsive: 1280x720 viewport applied"
+    },
+    {
+      "section": "responsive",
+      "name": "responsive: menu visible at 1280x720"
+    },
+    {
+      "section": "responsive",
+      "name": "responsive: no horizontal overflow at 1280x720"
+    },
+    {
+      "section": "responsive",
+      "name": "responsive: 37 palette kinds at 1280x720"
+    },
+    {
+      "section": "responsive",
+      "name": "responsive: game shell visible at 1280x720"
+    },
+    {
+      "section": "responsive",
+      "name": "responsive: no horizontal overflow in sandbox at 1280x720"
+    },
+    {
+      "section": "responsive",
+      "name": "responsive: restored 1600x900"
+    },
+    {
+      "section": "exam",
+      "name": "exam: EX280 Prep overlay opens"
+    },
+    {
+      "section": "exam",
+      "name": "exam: overlay is active"
+    },
+    {
+      "section": "exam",
+      "name": "exam: 9 official objective groups"
+    },
+    {
+      "section": "exam",
+      "name": "exam: 55 official objective bullets"
+    },
+    {
+      "section": "exam",
+      "name": "exam: 4 sections/tabs"
+    },
+    {
+      "section": "exam",
+      "name": "exam: 8-10 quick labs"
+    },
+    {
+      "section": "exam",
+      "name": "exam: cheat sheet groups"
+    },
+    {
+      "section": "exam",
+      "name": "exam: command copy buttons"
+    },
+    {
+      "section": "exam",
+      "name": "exam: objective search present"
+    },
+    {
+      "section": "exam",
+      "name": "exam: readiness verdict present"
+    },
+    {
+      "section": "exam",
+      "name": "exam: progress bar reads X/55"
+    },
+    {
+      "section": "exam",
+      "name": "exam: official EX280 groups rendered"
+    },
+    {
+      "section": "exam",
+      "name": "exam: official exam name shown"
+    },
+    {
+      "section": "exam",
+      "name": "exam: objective search filters bullets"
+    },
+    {
+      "section": "exam",
+      "name": "exam: cheat sheet tab renders"
+    },
+    {
+      "section": "exam",
+      "name": "exam: copy command button works"
+    },
+    {
+      "section": "exam",
+      "name": "exam: exam facts tab shows EX280V422 / 3h"
+    },
+    {
+      "section": "exam",
+      "name": "exam: quick lab launches Sandbox"
+    },
+    {
+      "section": "exam",
+      "name": "exam: overlay closes on quick lab launch"
+    },
+    {
+      "section": "sandbox",
+      "name": "sandbox: Sandbox mode starts"
+    },
+    {
+      "section": "sandbox",
+      "name": "sandbox: seeded ~50 OpenShift resources"
+    },
+    {
+      "section": "sandbox",
+      "name": "sandbox: one mesh per seeded resource"
+    },
+    {
+      "section": "sandbox",
+      "name": "sandbox: palette has 37 placeable kinds"
+    },
+    {
+      "section": "sandbox",
+      "name": "sandbox: palette kind Project"
+    },
+    {
+      "section": "sandbox",
+      "name": "sandbox: palette kind Route"
+    },
+    {
+      "section": "sandbox",
+      "name": "sandbox: palette kind BuildConfig"
+    },
+    {
+      "section": "sandbox",
+      "name": "sandbox: palette kind ImageStream"
+    },
+    {
+      "section": "sandbox",
+      "name": "sandbox: palette kind Template"
+    },
+    {
+      "section": "sandbox",
+      "name": "sandbox: palette kind Subscription"
+    },
+    {
+      "section": "sandbox",
+      "name": "sandbox: palette kind SecurityContextConstraints"
+    },
+    {
+      "section": "sandbox",
+      "name": "sandbox: palette kind User"
+    },
+    {
+      "section": "sandbox",
+      "name": "sandbox: palette kind Group"
+    },
+    {
+      "section": "sandbox",
+      "name": "sandbox: palette kind IPAddressPool"
+    },
+    {
+      "section": "sandbox",
+      "name": "sandbox: palette kind L2Advertisement"
+    },
+    {
+      "section": "sandbox",
+      "name": "sandbox: OpenShift default Projects seeded"
+    },
+    {
+      "section": "sandbox",
+      "name": "sandbox: 13 ClusterOperators seeded"
+    },
+    {
+      "section": "sandbox",
+      "name": "sandbox: default Nodes seeded"
+    },
+    {
+      "section": "sandbox",
+      "name": "sandbox: default SCCs seeded"
+    },
+    {
+      "section": "sandbox",
+      "name": "sandbox: default ImageStreams seeded"
+    },
+    {
+      "section": "sandbox",
+      "name": "sandbox: HUD logo is OpenShift Games"
+    },
+    {
+      "section": "sandbox",
+      "name": "sandbox: HUD mode label is OpenShift 4.22"
+    },
+    {
+      "section": "sandbox",
+      "name": "sandbox: no legacy branding in HUD"
+    },
+    {
+      "section": "sandbox",
+      "name": "sandbox: toolbar visible"
+    },
+    {
+      "section": "sandbox",
+      "name": "sandbox: WebGL renderer initialised"
+    },
+    {
+      "section": "files",
+      "name": "files: Files panel opens from #btn-manifests"
+    },
+    {
+      "section": "files",
+      "name": "files: 19 default manifest files"
+    },
+    {
+      "section": "files",
+      "name": "files: file tree lists 19 files"
+    },
+    {
+      "section": "files",
+      "name": "files: editor and Apply -f/-k buttons present"
+    },
+    {
+      "section": "files",
+      "name": "files: default file manifests/deployment.yaml"
+    },
+    {
+      "section": "files",
+      "name": "files: default file kustomize/overlays/prod/kustomization.yaml"
+    },
+    {
+      "section": "files",
+      "name": "files: default file templates/webapp-template.yaml"
+    },
+    {
+      "section": "files",
+      "name": "files: default file helm/webapp/Chart.yaml"
+    },
+    {
+      "section": "files",
+      "name": "files: default file htpasswd"
+    },
+    {
+      "section": "files",
+      "name": "files: Apply -f creates Deployment/webapp"
+    },
+    {
+      "section": "files",
+      "name": "files: Apply -f shows result output"
+    },
+    {
+      "section": "files",
+      "name": "files: Apply -k creates Deployment/prod-webapp"
+    },
+    {
+      "section": "files",
+      "name": "files: Apply -k records the prod overlay"
+    },
+    {
+      "section": "cli",
+      "name": "cli: oc whoami"
+    },
+    {
+      "section": "cli",
+      "name": "cli: oc get nodes"
+    },
+    {
+      "section": "cli",
+      "name": "cli: oc get clusteroperators"
+    },
+    {
+      "section": "cli",
+      "name": "cli: oc get clusterversion"
+    },
+    {
+      "section": "cli",
+      "name": "cli: oc new-project"
+    },
+    {
+      "section": "cli",
+      "name": "cli: oc project"
+    },
+    {
+      "section": "cli",
+      "name": "cli: oc create deployment"
+    },
+    {
+      "section": "cli",
+      "name": "cli: oc expose svc creates Route"
+    },
+    {
+      "section": "cli",
+      "name": "cli: oc get routes"
+    },
+    {
+      "section": "cli",
+      "name": "cli: oc set env"
+    },
+    {
+      "section": "cli",
+      "name": "cli: oc set image"
+    },
+    {
+      "section": "cli",
+      "name": "cli: oc set resources"
+    },
+    {
+      "section": "cli",
+      "name": "cli: oc create configmap"
+    },
+    {
+      "section": "cli",
+      "name": "cli: oc create secret"
+    },
+    {
+      "section": "cli",
+      "name": "cli: Deployment controller creates a Running Pod"
+    },
+    {
+      "section": "cli",
+      "name": "cli: oc logs"
+    },
+    {
+      "section": "cli",
+      "name": "cli: oc describe deployment"
+    },
+    {
+      "section": "cli",
+      "name": "cli: oc rollout status"
+    },
+    {
+      "section": "cli",
+      "name": "cli: oc apply -f manifest"
+    },
+    {
+      "section": "cli",
+      "name": "cli: oc apply -k prod overlay"
+    },
+    {
+      "section": "cli",
+      "name": "cli: oc process | oc apply"
+    },
+    {
+      "section": "cli",
+      "name": "cli: oc new-app image"
+    },
+    {
+      "section": "cli",
+      "name": "cli: oc process --parameters"
+    },
+    {
+      "section": "cli",
+      "name": "cli: oc create user"
+    },
+    {
+      "section": "cli",
+      "name": "cli: oc create group"
+    },
+    {
+      "section": "cli",
+      "name": "cli: oc adm groups add-users"
+    },
+    {
+      "section": "cli",
+      "name": "cli: oc adm policy add-role-to-user"
+    },
+    {
+      "section": "cli",
+      "name": "cli: oc adm policy add-scc-to-user"
+    },
+    {
+      "section": "cli",
+      "name": "cli: oc auth can-i"
+    },
+    {
+      "section": "cli",
+      "name": "cli: oc auth can-i --as"
+    },
+    {
+      "section": "cli",
+      "name": "cli: oc create quota"
+    },
+    {
+      "section": "cli",
+      "name": "cli: oc create limitrange"
+    },
+    {
+      "section": "cli",
+      "name": "cli: oc get quota"
+    },
+    {
+      "section": "cli",
+      "name": "cli: oc get limitrange"
+    },
+    {
+      "section": "cli",
+      "name": "cli: oc create clusterquota"
+    },
+    {
+      "section": "cli",
+      "name": "cli: oc get clusterquota"
+    },
+    {
+      "section": "cli",
+      "name": "cli: oc get users"
+    },
+    {
+      "section": "cli",
+      "name": "cli: oc get groups"
+    },
+    {
+      "section": "cli",
+      "name": "cli: oc get scc"
+    },
+    {
+      "section": "cli",
+      "name": "cli: oc create sa"
+    },
+    {
+      "section": "cli",
+      "name": "cli: oc set serviceaccount"
+    },
+    {
+      "section": "cli",
+      "name": "cli: add-role-to-user -z"
+    },
+    {
+      "section": "cli",
+      "name": "cli: oc auth can-i --as=serviceaccount"
+    },
+    {
+      "section": "cli",
+      "name": "cli: oc create route edge"
+    },
+    {
+      "section": "cli",
+      "name": "cli: oc get route edge"
+    },
+    {
+      "section": "cli",
+      "name": "cli: oc describe route"
+    },
+    {
+      "section": "cli",
+      "name": "cli: oc get route -o yaml"
+    },
+    {
+      "section": "cli",
+      "name": "cli: oc get all"
+    },
+    {
+      "section": "cli",
+      "name": "cli: oc status"
+    },
+    {
+      "section": "cli",
+      "name": "cli: oc projects"
+    },
+    {
+      "section": "cli",
+      "name": "cli: oc explain"
+    },
+    {
+      "section": "cli",
+      "name": "cli: oc api-resources"
+    },
+    {
+      "section": "cli",
+      "name": "cli: oc get events"
+    },
+    {
+      "section": "cli",
+      "name": "cli: oc adm top nodes"
+    },
+    {
+      "section": "cli",
+      "name": "cli: oc adm top pods"
+    },
+    {
+      "section": "cli",
+      "name": "cli: oc adm must-gather"
+    },
+    {
+      "section": "cli",
+      "name": "cli: oc edit opens Files editor"
+    },
+    {
+      "section": "cli",
+      "name": "cli: oc edit opens the manifest editor"
+    },
+    {
+      "section": "cli",
+      "name": "auth: htpasswd creates alice"
+    },
+    {
+      "section": "cli",
+      "name": "auth: create htpasswd secret"
+    },
+    {
+      "section": "cli",
+      "name": "auth: OAuth HTPasswd provider configured"
+    },
+    {
+      "section": "cli",
+      "name": "auth: HTPasswd provider becomes ready"
+    },
+    {
+      "section": "cli",
+      "name": "auth: oc login as alice"
+    },
+    {
+      "section": "cli",
+      "name": "auth: oc whoami alice"
+    },
+    {
+      "section": "cli",
+      "name": "auth: wrong password rejected"
+    },
+    {
+      "section": "cli",
+      "name": "auth: User alice exists after login"
+    },
+    {
+      "section": "cli",
+      "name": "auth: Identity alice auto-created"
+    },
+    {
+      "section": "cli",
+      "name": "auth: logout"
+    },
+    {
+      "section": "cli",
+      "name": "auth: login back as kubeadmin"
+    },
+    {
+      "section": "cli",
+      "name": "cli: apply BuildConfig"
+    },
+    {
+      "section": "cli",
+      "name": "cli: oc start-build"
+    },
+    {
+      "section": "cli",
+      "name": "cli: Build reaches phase Complete"
+    },
+    {
+      "section": "cli",
+      "name": "cli: oc get builds"
+    },
+    {
+      "section": "cli",
+      "name": "cli: Build output ImageStream exists"
+    },
+    {
+      "section": "cli",
+      "name": "cli: ImageStream has an imported tag"
+    },
+    {
+      "section": "cli",
+      "name": "cli: oc apply subscription"
+    },
+    {
+      "section": "cli",
+      "name": "cli: Subscription reaches phase Succeeded"
+    },
+    {
+      "section": "cli",
+      "name": "cli: oc get subs"
+    },
+    {
+      "section": "cli",
+      "name": "cli: oc get csv"
+    },
+    {
+      "section": "cli",
+      "name": "cli: oc delete subscription"
+    },
+    {
+      "section": "cli",
+      "name": "cli: oc create job"
+    },
+    {
+      "section": "cli",
+      "name": "cli: oc create cronjob"
+    },
+    {
+      "section": "cli",
+      "name": "cli: oc get jobs"
+    },
+    {
+      "section": "cli",
+      "name": "cli: oc get cronjobs"
+    },
+    {
+      "section": "cli",
+      "name": "cli: oc adm cordon"
+    },
+    {
+      "section": "cli",
+      "name": "cli: oc adm uncordon"
+    },
+    {
+      "section": "cli",
+      "name": "cli: oc set image persists in Deployment spec"
+    },
+    {
+      "section": "cli",
+      "name": "cli: oc set env persists in Deployment spec"
+    },
+    {
+      "section": "cli",
+      "name": "cli: oc set resources persists in Deployment spec"
+    },
+    {
+      "section": "cli",
+      "name": "cli: ConfigMap app-config exists"
+    },
+    {
+      "section": "cli",
+      "name": "cli: Secret app-secret exists"
+    },
+    {
+      "section": "cli",
+      "name": "cli: User bob exists"
+    },
+    {
+      "section": "cli",
+      "name": "cli: Group devs exists"
+    },
+    {
+      "section": "cli",
+      "name": "cli: add-scc-to-user grants anyuid"
+    },
+    {
+      "section": "cli",
+      "name": "cli: ResourceQuota demo-quota exists"
+    },
+    {
+      "section": "cli",
+      "name": "cli: LimitRange demo-limit exists"
+    },
+    {
+      "section": "cli",
+      "name": "cli: ClusterResourceQuota team-quota exists"
+    },
+    {
+      "section": "cli",
+      "name": "cli: Route/web is Admitted by the router"
+    },
+    {
+      "section": "cli",
+      "name": "cli: at least one Build is Complete"
+    },
+    {
+      "section": "cli",
+      "name": "cli: deleting the Subscription removes it"
+    },
+    {
+      "section": "ui",
+      "name": "ui: route/service available for inspector"
+    },
+    {
+      "section": "ui",
+      "name": "ui: inspector opens on resource select"
+    },
+    {
+      "section": "ui",
+      "name": "ui: inspector shows selected resource name"
+    },
+    {
+      "section": "ui",
+      "name": "ui: inspector has 4 tabs"
+    },
+    {
+      "section": "ui",
+      "name": "ui: inspector YAML tab renders apiVersion"
+    },
+    {
+      "section": "ui",
+      "name": "ui: inspector Describe tab renders"
+    },
+    {
+      "section": "ui",
+      "name": "ui: context menu exposes OpenShift actions"
+    },
+    {
+      "section": "ui",
+      "name": "ui: context menu uses Expose Service → Route wording"
+    },
+    {
+      "section": "ui",
+      "name": "ui: BuildConfig context menu offers Start Build"
+    },
+    {
+      "section": "ui",
+      "name": "ui: metrics dashboard opens with 4 charts"
+    },
+    {
+      "section": "ui",
+      "name": "ui: in-game settings opens"
+    },
+    {
+      "section": "ui",
+      "name": "ui: settings has controls"
+    },
+    {
+      "section": "ui",
+      "name": "ui: \"/\" opens the oc terminal"
+    },
+    {
+      "section": "ui",
+      "name": "ui: Esc closes the oc terminal"
+    },
+    {
+      "section": "ui",
+      "name": "ui: M opens metrics"
+    },
+    {
+      "section": "ui",
+      "name": "ui: Space pauses the simulation"
+    },
+    {
+      "section": "ui",
+      "name": "ui: Space resumes the simulation"
+    },
+    {
+      "section": "ui",
+      "name": "ui: Esc returns to the main menu"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign: level 1 starts"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign: level 1 objectives populated"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign: level 1 getStatus() works"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign: objectives panel visible/populated"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign L1: oc login"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign L1: create project"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign L1: run Pod"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign L1: create Deployment"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign: level 1 objectives flip to complete"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign: level 1 currentLevel"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign: level 1 title"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign: level 1 objectives populated"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign: level 1 getStatus works"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign: level 1 objectives panel populated"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign: level 2 starts"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign: level 2 currentLevel"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign: level 2 title"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign: level 2 objectives populated"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign: level 2 getStatus works"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign: level 2 objectives panel populated"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign: level 3 starts"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign: level 3 currentLevel"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign: level 3 title"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign: level 3 objectives populated"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign: level 3 getStatus works"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign: level 3 objectives panel populated"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign: level 4 starts"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign: level 4 currentLevel"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign: level 4 title"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign: level 4 objectives populated"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign: level 4 getStatus works"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign: level 4 objectives panel populated"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign: level 5 starts"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign: level 5 currentLevel"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign: level 5 title"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign: level 5 objectives populated"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign: level 5 getStatus works"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign: level 5 objectives panel populated"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign: level 6 starts"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign: level 6 currentLevel"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign: level 6 title"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign: level 6 objectives populated"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign: level 6 getStatus works"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign: level 6 objectives panel populated"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign: level 7 starts"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign: level 7 currentLevel"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign: level 7 title"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign: level 7 objectives populated"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign: level 7 getStatus works"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign: level 7 objectives panel populated"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign: level 8 starts"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign: level 8 currentLevel"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign: level 8 title"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign: level 8 objectives populated"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign: level 8 getStatus works"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign: level 8 objectives panel populated"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign: level 9 starts"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign: level 9 currentLevel"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign: level 9 title"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign: level 9 objectives populated"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign: level 9 getStatus works"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign: level 9 objectives panel populated"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign: level 10 starts"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign: level 10 currentLevel"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign: level 10 title"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign: level 10 objectives populated"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign: level 10 getStatus works"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign: level 10 objectives panel populated"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign: level 11 starts"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign: level 11 currentLevel"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign: level 11 title"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign: level 11 objectives populated"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign: level 11 getStatus works"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign: level 11 objectives panel populated"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign: level 12 starts"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign: level 12 currentLevel"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign: level 12 title"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign: level 12 objectives populated"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign: level 12 getStatus works"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign: level 12 objectives panel populated"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign: level 13 starts"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign: level 13 currentLevel"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign: level 13 title"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign: level 13 objectives populated"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign: level 13 getStatus works"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign: level 13 objectives panel populated"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign: level 14 starts"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign: level 14 currentLevel"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign: level 14 title"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign: level 14 objectives populated"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign: level 14 getStatus works"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign: level 14 objectives panel populated"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign: level 15 starts"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign: level 15 currentLevel"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign: level 15 title"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign: level 15 objectives populated"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign: level 15 getStatus works"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign: level 15 objectives panel populated"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign: level 16 starts"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign: level 16 currentLevel"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign: level 16 title"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign: level 16 objectives populated"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign: level 16 getStatus works"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign: level 16 objectives panel populated"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign: level 17 starts"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign: level 17 currentLevel"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign: level 17 title"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign: level 17 objectives populated"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign: level 17 getStatus works"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign: level 17 objectives panel populated"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign: level 18 starts"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign: level 18 currentLevel"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign: level 18 title"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign: level 18 objectives populated"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign: level 18 getStatus works"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign: level 18 objectives panel populated"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign: level 19 starts"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign: level 19 currentLevel"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign: level 19 title"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign: level 19 objectives populated"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign: level 19 getStatus works"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign: level 19 objectives panel populated"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign: level 20 starts"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign: level 20 currentLevel"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign: level 20 title"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign: level 20 objectives populated"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign: level 20 getStatus works"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign: level 20 objectives panel populated"
+    },
+    {
+      "section": "challenges",
+      "name": "challenges: challenge 1 starts"
+    },
+    {
+      "section": "challenges",
+      "name": "challenges: challenge 1 currentChallenge"
+    },
+    {
+      "section": "challenges",
+      "name": "challenges: challenge 1 title"
+    },
+    {
+      "section": "challenges",
+      "name": "challenges: challenge 1 objectives populated"
+    },
+    {
+      "section": "challenges",
+      "name": "challenges: challenge 1 objectives panel populated"
+    },
+    {
+      "section": "challenges",
+      "name": "challenges: challenge 1 getStatus works"
+    },
+    {
+      "section": "challenges",
+      "name": "challenges: challenge 2 starts"
+    },
+    {
+      "section": "challenges",
+      "name": "challenges: challenge 2 currentChallenge"
+    },
+    {
+      "section": "challenges",
+      "name": "challenges: challenge 2 title"
+    },
+    {
+      "section": "challenges",
+      "name": "challenges: challenge 2 objectives populated"
+    },
+    {
+      "section": "challenges",
+      "name": "challenges: challenge 2 objectives panel populated"
+    },
+    {
+      "section": "challenges",
+      "name": "challenges: challenge 2 getStatus works"
+    },
+    {
+      "section": "challenges",
+      "name": "challenges: challenge 3 starts"
+    },
+    {
+      "section": "challenges",
+      "name": "challenges: challenge 3 currentChallenge"
+    },
+    {
+      "section": "challenges",
+      "name": "challenges: challenge 3 title"
+    },
+    {
+      "section": "challenges",
+      "name": "challenges: challenge 3 objectives populated"
+    },
+    {
+      "section": "challenges",
+      "name": "challenges: challenge 3 objectives panel populated"
+    },
+    {
+      "section": "challenges",
+      "name": "challenges: challenge 3 getStatus works"
+    },
+    {
+      "section": "challenges",
+      "name": "challenges: challenge 4 starts"
+    },
+    {
+      "section": "challenges",
+      "name": "challenges: challenge 4 currentChallenge"
+    },
+    {
+      "section": "challenges",
+      "name": "challenges: challenge 4 title"
+    },
+    {
+      "section": "challenges",
+      "name": "challenges: challenge 4 objectives populated"
+    },
+    {
+      "section": "challenges",
+      "name": "challenges: challenge 4 objectives panel populated"
+    },
+    {
+      "section": "challenges",
+      "name": "challenges: challenge 4 getStatus works"
+    },
+    {
+      "section": "challenges",
+      "name": "challenges: challenge 5 starts"
+    },
+    {
+      "section": "challenges",
+      "name": "challenges: challenge 5 currentChallenge"
+    },
+    {
+      "section": "challenges",
+      "name": "challenges: challenge 5 title"
+    },
+    {
+      "section": "challenges",
+      "name": "challenges: challenge 5 objectives populated"
+    },
+    {
+      "section": "challenges",
+      "name": "challenges: challenge 5 objectives panel populated"
+    },
+    {
+      "section": "challenges",
+      "name": "challenges: challenge 5 getStatus works"
+    },
+    {
+      "section": "challenges",
+      "name": "challenges: challenge 6 starts"
+    },
+    {
+      "section": "challenges",
+      "name": "challenges: challenge 6 currentChallenge"
+    },
+    {
+      "section": "challenges",
+      "name": "challenges: challenge 6 title"
+    },
+    {
+      "section": "challenges",
+      "name": "challenges: challenge 6 objectives populated"
+    },
+    {
+      "section": "challenges",
+      "name": "challenges: challenge 6 objectives panel populated"
+    },
+    {
+      "section": "challenges",
+      "name": "challenges: challenge 6 getStatus works"
+    },
+    {
+      "section": "challenges",
+      "name": "challenges: challenge 7 starts"
+    },
+    {
+      "section": "challenges",
+      "name": "challenges: challenge 7 currentChallenge"
+    },
+    {
+      "section": "challenges",
+      "name": "challenges: challenge 7 title"
+    },
+    {
+      "section": "challenges",
+      "name": "challenges: challenge 7 objectives populated"
+    },
+    {
+      "section": "challenges",
+      "name": "challenges: challenge 7 objectives panel populated"
+    },
+    {
+      "section": "challenges",
+      "name": "challenges: challenge 7 getStatus works"
+    },
+    {
+      "section": "challenges",
+      "name": "challenges: challenge 8 starts"
+    },
+    {
+      "section": "challenges",
+      "name": "challenges: challenge 8 currentChallenge"
+    },
+    {
+      "section": "challenges",
+      "name": "challenges: challenge 8 title"
+    },
+    {
+      "section": "challenges",
+      "name": "challenges: challenge 8 objectives populated"
+    },
+    {
+      "section": "challenges",
+      "name": "challenges: challenge 8 objectives panel populated"
+    },
+    {
+      "section": "challenges",
+      "name": "challenges: challenge 8 getStatus works"
+    },
+    {
+      "section": "challenges",
+      "name": "challenges: challenge 9 starts"
+    },
+    {
+      "section": "challenges",
+      "name": "challenges: challenge 9 currentChallenge"
+    },
+    {
+      "section": "challenges",
+      "name": "challenges: challenge 9 title"
+    },
+    {
+      "section": "challenges",
+      "name": "challenges: challenge 9 objectives populated"
+    },
+    {
+      "section": "challenges",
+      "name": "challenges: challenge 9 objectives panel populated"
+    },
+    {
+      "section": "challenges",
+      "name": "challenges: challenge 9 getStatus works"
+    },
+    {
+      "section": "challenges",
+      "name": "challenges: challenge 10 starts"
+    },
+    {
+      "section": "challenges",
+      "name": "challenges: challenge 10 currentChallenge"
+    },
+    {
+      "section": "challenges",
+      "name": "challenges: challenge 10 title"
+    },
+    {
+      "section": "challenges",
+      "name": "challenges: challenge 10 objectives populated"
+    },
+    {
+      "section": "challenges",
+      "name": "challenges: challenge 10 objectives panel populated"
+    },
+    {
+      "section": "challenges",
+      "name": "challenges: challenge 10 getStatus works"
+    },
+    {
+      "section": "challenges",
+      "name": "challenges: challenge 11 starts"
+    },
+    {
+      "section": "challenges",
+      "name": "challenges: challenge 11 currentChallenge"
+    },
+    {
+      "section": "challenges",
+      "name": "challenges: challenge 11 title"
+    },
+    {
+      "section": "challenges",
+      "name": "challenges: challenge 11 objectives populated"
+    },
+    {
+      "section": "challenges",
+      "name": "challenges: challenge 11 objectives panel populated"
+    },
+    {
+      "section": "challenges",
+      "name": "challenges: challenge 11 getStatus works"
+    },
+    {
+      "section": "challenges",
+      "name": "challenges: challenge 12 starts"
+    },
+    {
+      "section": "challenges",
+      "name": "challenges: challenge 12 currentChallenge"
+    },
+    {
+      "section": "challenges",
+      "name": "challenges: challenge 12 title"
+    },
+    {
+      "section": "challenges",
+      "name": "challenges: challenge 12 objectives populated"
+    },
+    {
+      "section": "challenges",
+      "name": "challenges: challenge 12 objectives panel populated"
+    },
+    {
+      "section": "challenges",
+      "name": "challenges: challenge 12 getStatus works"
+    },
+    {
+      "section": "draw",
+      "name": "draw: page loads with palette"
+    },
+    {
+      "section": "draw",
+      "name": "draw: OpenShift Draw title"
+    },
+    {
+      "section": "draw",
+      "name": "draw: palette has 37 unique kinds"
+    },
+    {
+      "section": "draw",
+      "name": "draw: Route/Project/BuildConfig in palette"
+    },
+    {
+      "section": "draw",
+      "name": "draw: OpenShift Games /draw watermark"
+    },
+    {
+      "section": "draw",
+      "name": "draw: app instance exposed"
+    },
+    {
+      "section": "draw",
+      "name": "draw: YAML export uses Route route.openshift.io/v1"
+    },
+    {
+      "section": "draw",
+      "name": "draw: YAML export uses BuildConfig build.openshift.io/v1"
+    },
+    {
+      "section": "draw",
+      "name": "draw: YAML export uses Project project.openshift.io/v1"
+    },
+    {
+      "section": "draw",
+      "name": "draw: YAML export includes Route/BuildConfig/Project"
+    },
+    {
+      "section": "shots",
+      "name": "console: no uncaught page errors"
+    },
+    {
+      "section": "shots",
+      "name": "console: no unexpected console errors"
+    },
+    {
+      "section": "shots",
+      "name": "shots: screenshot.png is 1600x900"
+    },
+    {
+      "section": "shots",
+      "name": "shots: og-image.png is 1200x630"
+    },
+    {
+      "section": "shots",
+      "name": "shots: docs/screenshots/menu.png (1600x900)"
+    },
+    {
+      "section": "shots",
+      "name": "shots: docs/screenshots/sandbox.png (1600x900)"
+    },
+    {
+      "section": "shots",
+      "name": "shots: docs/screenshots/campaign-level-1.png (1600x900)"
+    },
+    {
+      "section": "shots",
+      "name": "shots: docs/screenshots/exam-prep.png (1600x900)"
+    },
+    {
+      "section": "shots",
+      "name": "shots: docs/screenshots/files-panel.png (1600x900)"
+    },
+    {
+      "section": "shots",
+      "name": "shots: docs/screenshots/draw.png (1600x900)"
+    }
+  ]
+}

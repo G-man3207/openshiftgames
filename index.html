@@ -1,0 +1,2166 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>OpenShift Games — Learn OpenShift by Playing (EX280)</title>
+  <meta name="description" content="Learn Red Hat OpenShift by playing. Deploy apps with oc, fix CrashLoopBackOff, expose Routes, build with S2I, configure SCC/quota/RBAC — a 3D cluster simulator built for the EX280 exam.">
+  <meta name="theme-color" content="#EE0000">
+  <meta property="og:title" content="OpenShift Games — Learn OpenShift by Playing (EX280)">
+  <meta property="og:description" content="Learn Red Hat OpenShift by playing. Deploy apps with oc, fix CrashLoopBackOff, expose Routes, build with S2I, configure SCC/quota/RBAC — a 3D cluster simulator built for the EX280 exam.">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://shifting.pro">
+  <link rel="canonical" href="https://shifting.pro">
+  <meta property="og:site_name" content="OpenShift Games">
+  <meta property="og:image" content="https://shifting.pro/og-image.png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="OpenShift Games — Learn OpenShift by Playing (EX280)">
+  <meta name="twitter:description" content="Learn Red Hat OpenShift by playing. Deploy apps with oc, fix CrashLoopBackOff, expose Routes, build with S2I, configure SCC/quota/RBAC — a 3D cluster simulator built for the EX280 exam.">
+  <meta name="twitter:image" content="https://shifting.pro/og-image.png">
+  <!-- OpenShift Games favicon: OpenShift-red "O" -->
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='14' fill='%23EE0000'/><circle cx='16' cy='16' r='6' fill='%230d1117'/><text x='16' y='21' text-anchor='middle' fill='white' font-size='11' font-weight='bold'>O</text></svg>">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <script src="https://cdn.tailwindcss.com/3.4.1"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            'openshift': '#EE0000',
+            'openshift-dark': '#CC0000',
+            'openshift-light': '#FF4D4D',
+            'dark': '#0d1117',
+            'card': '#161b22',
+            'elevated': '#1c2333',
+          },
+          fontFamily: {
+            sans: ['Inter', 'system-ui', 'sans-serif'],
+            mono: ['JetBrains Mono', 'SF Mono', 'monospace'],
+          }
+        }
+      }
+    }
+  </script>
+  <link rel="stylesheet" href="style.css">
+  <!-- Pinned dependency: Three.js r152 (ES modules, no build step) -->
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://unpkg.com/three@0.152.0/build/three.module.js",
+      "three/addons/": "https://unpkg.com/three@0.152.0/examples/jsm/"
+    }
+  }
+  </script>
+</head>
+<body class="bg-dark text-white overflow-hidden select-none">
+
+  <canvas id="game-canvas"></canvas>
+
+  <!-- ───────────────────────────── Main menu ───────────────────────────── -->
+  <div id="main-menu">
+    <div class="os-badge" id="menu-exam-badge">EX280 · OpenShift 4.22</div>
+    <div class="menu-logo">OpenShift Games</div>
+    <div class="menu-subtitle">OpenShift 4.22 Cluster Simulation · Built for EX280</div>
+
+    <a href="https://github.com/G-man3207/openshiftgames" target="_blank" rel="noopener" class="github-badge" id="github-badge">
+      <div class="github-badge-inner">
+        <svg class="github-icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+          <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/>
+        </svg>
+        <span class="github-text">Star on GitHub</span>
+        <span class="github-stars" id="github-stars">
+          <svg class="github-star-icon" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 .25a.75.75 0 01.673.418l1.882 3.815 4.21.612a.75.75 0 01.416 1.279l-3.046 2.97.719 4.192a.75.75 0 01-1.088.791L8 12.347l-3.766 1.98a.75.75 0 01-1.088-.79l.72-4.194L.818 6.374a.75.75 0 01.416-1.28l4.21-.611L7.327.668A.75.75 0 018 .25z"/></svg>
+          <span id="github-star-count">--</span>
+        </span>
+      </div>
+    </a>
+
+    <div class="menu-grid">
+      <button class="menu-btn" data-mode="campaign" title="20-level EX280 campaign">
+        <span class="menu-btn-icon"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polygon points="5 3 19 12 5 21 5 3"/></svg></span>
+        <div class="menu-btn-title">Campaign</div>
+        <div class="menu-btn-desc">20 levels across 5 EX280 chapters — from <code class="menu-code">oc</code> basics to a full production platform.</div>
+      </button>
+      <button class="menu-btn" data-mode="chaos" title="Endless incident survival">
+        <span class="menu-btn-icon"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg></span>
+        <div class="menu-btn-title">Chaos Mode</div>
+        <div class="menu-btn-desc">Production firefighting. Survive escalating OpenShift incidents and keep the platform available.</div>
+      </button>
+      <button class="menu-btn" data-mode="sandbox" title="Free build, scored by the Architecture Advisor">
+        <span class="menu-btn-icon"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></span>
+        <div class="menu-btn-title">Sandbox</div>
+        <div class="menu-btn-desc">Free build. Design an OpenShift platform and let the Architecture Advisor score it.</div>
+      </button>
+      <button class="menu-btn" data-mode="challenge" title="12 timed EX280 labs">
+        <span class="menu-btn-icon"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg></span>
+        <div class="menu-btn-title">Timed Labs</div>
+        <div class="menu-btn-desc">12 timed EX280 scenarios. Build, break and fix an OpenShift cluster against the clock.</div>
+      </button>
+    </div>
+
+    <button class="menu-exam-btn" id="menu-exam-prep" title="EX280 objective tracker, quick labs and cheat sheet">
+      <span class="menu-exam-icon">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 2 3 7v6c0 5 3.8 8.4 9 9 5.2-.6 9-4 9-9V7l-9-5z"/><path d="m8.5 12.5 2.5 2.5 4.5-5"/></svg>
+      </span>
+      <span class="menu-exam-text">
+        <span class="menu-exam-title">EX280 Prep</span>
+        <span class="menu-exam-desc">Objective tracker · quick labs · cheat sheet · readiness verdict</span>
+      </span>
+      <span class="menu-exam-key">?</span>
+    </button>
+
+    <a href="/draw" class="menu-draw-link">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
+      <span>OpenShift Draw</span>
+      <span class="menu-draw-desc">Design OpenShift architectures in 3D. Drag resources onto the canvas, draw connections, export YAML.</span>
+    </a>
+
+    <div class="menu-footer">
+      <button class="menu-footer-btn" id="btn-settings">Settings</button>
+      <button class="menu-footer-btn" id="btn-achievements">Achievements</button>
+      <button class="menu-footer-btn" id="btn-stats">Stats</button>
+    </div>
+
+    <div id="menu-hints" class="menu-hints-wrap">
+      <div class="menu-keyboard-hints">
+        Press <span class="keyboard-hint">/</span> for oc terminal &middot;
+        <span class="keyboard-hint">F</span> files &middot;
+        <span class="keyboard-hint">?</span> EX280 Prep &middot;
+        <span class="keyboard-hint">Space</span> pause &middot;
+        <span class="keyboard-hint">M</span> metrics &middot;
+        <span class="keyboard-hint">Esc</span> menu
+      </div>
+      <div class="menu-attribution">
+        Built for <a href="https://www.redhat.com/en/services/training/red-hat-certified-openshift-administrator-exam" target="_blank" rel="noopener">EX280</a> &middot;
+        based on <a href="https://github.com/rohitg00/k8sgames" target="_blank" rel="noopener">K8s Games by Rohit</a> (Apache-2.0) &middot;
+        OpenShift is a trademark of Red Hat, Inc.
+      </div>
+    </div>
+  </div>
+
+  <!-- ───────────────────────────── Game shell ─────────────────────────── -->
+  <div id="game-container">
+    <div id="objectives-panel" class="fixed top-14 z-30 w-64 rounded-xl backdrop-blur-xl bg-black/60 border border-white/10 shadow-2xl overflow-hidden transition-all duration-300" style="display:none;left:76px;">
+      <div class="flex items-center justify-between px-3 py-2 border-b border-white/8">
+        <div class="flex items-center gap-2 min-w-0 flex-1">
+          <span class="text-amber-400 text-sm shrink-0">&#9654;</span>
+          <span id="obj-panel-title" class="flex items-center text-white/90 text-sm font-semibold min-w-0 flex-1">Level 1</span>
+        </div>
+        <button id="obj-panel-toggle" class="text-white/40 hover:text-white/80 text-xs transition-colors px-1" aria-label="Toggle objectives panel">&#9660;</button>
+      </div>
+      <div id="obj-panel-body">
+        <div id="obj-panel-desc" class="px-3 py-2 text-[11px] text-white/50 border-b border-white/5 leading-relaxed"></div>
+        <div id="obj-list" class="px-3 py-2 space-y-1.5"></div>
+        <div id="hint-section" class="px-3 py-2 border-t border-white/5">
+          <button id="btn-show-hint" class="flex items-center gap-1.5 w-full px-2.5 py-1.5 text-xs font-medium text-amber-400/80 hover:text-amber-400 bg-amber-400/5 hover:bg-amber-400/10 border border-amber-400/15 hover:border-amber-400/30 rounded-lg transition-all">
+            <svg class="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 20 20" aria-hidden="true"><path d="M11 3a1 1 0 10-2 0v1a1 1 0 102 0V3zM15.657 5.757a1 1 0 00-1.414-1.414l-.707.707a1 1 0 001.414 1.414l.707-.707zM18 10a1 1 0 01-1 1h-1a1 1 0 110-2h1a1 1 0 011 1zM5.05 6.464A1 1 0 106.464 5.05l-.707-.707a1 1 0 00-1.414 1.414l.707.707zM4 11a1 1 0 100-2H3a1 1 0 000 2h1zM10 18a3 3 0 01-2.83-2h5.66A3 3 0 0110 18zM13 14H7v-1a3 3 0 01.879-2.121l.707-.707A5 5 0 0010 5a5 5 0 00-1.414 0A5 5 0 005 10c0 1.38.56 2.63 1.464 3.536L7 14z"/></svg>
+            Show Hint
+          </button>
+          <div id="hint-list" class="mt-1.5 space-y-1"></div>
+        </div>
+      </div>
+    </div>
+
+    <a href="https://github.com/G-man3207/openshiftgames" target="_blank" rel="noopener" id="game-github-badge" class="fixed top-14 right-4 z-30 flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg backdrop-blur-xl bg-white/5 border border-white/8 shadow-lg text-white/40 hover:text-white/90 hover:bg-white/10 hover:border-white/15 transition-all group" title="Star OpenShift Games on GitHub" style="text-decoration:none;">
+      <svg class="w-4 h-4 opacity-60 group-hover:opacity-100 transition-opacity" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
+      <svg class="w-3 h-3 text-amber-400/70 group-hover:text-amber-400 transition-colors" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 .25a.75.75 0 01.673.418l1.882 3.815 4.21.612a.75.75 0 01.416 1.279l-3.046 2.97.719 4.192a.75.75 0 01-1.088.791L8 12.347l-3.766 1.98a.75.75 0 01-1.088-.79l.72-4.194L.818 6.374a.75.75 0 01.416-1.28l4.21-.611L7.327.668A.75.75 0 018 .25z"/></svg>
+      <span id="game-github-stars" class="text-[11px] font-mono font-semibold text-amber-400/60 group-hover:text-amber-400 transition-colors">--</span>
+    </a>
+
+    <div id="view-toolbar" class="fixed bottom-4 left-1/2 -translate-x-1/2 z-30 flex items-center gap-2 px-3 py-2 rounded-xl backdrop-blur-xl bg-white/5 border border-white/10 shadow-2xl">
+      <button id="btn-auto-align" class="toolbar-btn" title="Auto-align OpenShift architecture layout">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 5a1 1 0 011-1h14a1 1 0 011 1v2a1 1 0 01-1 1H5a1 1 0 01-1-1V5zM4 13a1 1 0 011-1h6a1 1 0 011 1v6a1 1 0 01-1 1H5a1 1 0 01-1-1v-6zM16 13a1 1 0 011-1h2a1 1 0 011 1v6a1 1 0 01-1 1h-2a1 1 0 01-1-1v-6z"/></svg>
+        Auto-Align
+      </button>
+      <button id="btn-reset-camera" class="toolbar-btn" title="Reset camera to default view">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"/></svg>
+        Reset View
+      </button>
+      <button id="btn-export-yaml" class="toolbar-btn" title="Export cluster as YAML manifests">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4"/></svg>
+        YAML
+      </button>
+      <button id="btn-manifests" class="toolbar-btn toolbar-btn-files" title="Files &amp; manifests (F)">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"/></svg>
+        Files
+        <span class="toolbar-key">F</span>
+      </button>
+      <div class="toolbar-divider"></div>
+      <div class="flex items-center gap-1.5 px-2 py-1 text-[11px] text-white/30">
+        <kbd class="toolbar-kbd">/</kbd>
+        <span>oc</span>
+      </div>
+      <div class="toolbar-divider"></div>
+      <button id="btn-exam-prep" class="toolbar-btn toolbar-btn-exam" title="EX280 Prep (?)">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 2 3 7v6c0 5 3.8 8.4 9 9 5.2-.6 9-4 9-9V7l-9-5z"/><path d="m8.5 12.5 2.5 2.5 4.5-5"/></svg>
+        EX280
+      </button>
+      <div class="toolbar-divider"></div>
+      <button id="btn-help" class="toolbar-btn toolbar-btn-help" title="How to play (H)">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.343 4 3 0 1.4-1.278 2.575-3.006 2.907-.542.104-.994.54-.994 1.093m0 3h.01"/><circle cx="12" cy="12" r="10" stroke-width="2"/></svg>
+        Help
+      </button>
+    </div>
+
+    <!-- Palette is generated at boot from js/data/kindRegistry.js (PALETTE_SECTIONS). -->
+    <div id="resource-palette" class="glass-dark" aria-label="Resource palette"></div>
+  </div>
+
+  <!-- ───────────────────────────── Select screens ─────────────────────── -->
+  <div id="level-select">
+    <div style="max-width: 720px; width: 95%;">
+      <div class="flex items-center justify-between mb-6">
+        <div>
+          <h2 class="text-xl font-bold text-white">EX280 Campaign</h2>
+          <p class="text-xs text-white/40 mt-1">20 levels · 5 chapters · from your first Project to a production OpenShift platform</p>
+        </div>
+        <button id="level-select-back" class="btn-secondary text-sm">Back</button>
+      </div>
+      <div class="level-grid" id="level-grid"></div>
+    </div>
+  </div>
+
+  <div id="challenge-select" class="modal-overlay">
+    <div class="modal-content" style="max-width: 620px;">
+      <div class="flex items-center justify-between mb-4">
+        <div>
+          <h2 class="modal-title" style="margin-bottom:0">Timed EX280 Labs</h2>
+          <p class="text-xs text-white/40 mt-1">12 scenarios against the clock</p>
+        </div>
+        <button id="challenge-back" class="btn-secondary text-sm">Back</button>
+      </div>
+      <div class="challenge-grid" id="challenge-grid"></div>
+    </div>
+  </div>
+
+  <!-- ───────────────────────────── Settings ───────────────────────────── -->
+  <div id="settings-panel" class="settings-panel">
+    <div class="settings-content">
+      <div class="flex items-center justify-between mb-6">
+        <h2 class="text-lg font-bold">Settings</h2>
+        <button id="settings-close" class="btn-secondary text-sm">Close</button>
+      </div>
+      <div class="settings-row">
+        <span class="settings-label">Sound Effects</span>
+        <button class="toggle active" id="toggle-sound" aria-label="Toggle sound effects"></button>
+      </div>
+      <div class="settings-row">
+        <span class="settings-label">Particles</span>
+        <button class="toggle active" id="toggle-particles" aria-label="Toggle traffic particles"></button>
+      </div>
+      <div class="settings-row">
+        <span class="settings-label">Shadows</span>
+        <button class="toggle active" id="toggle-shadows" aria-label="Toggle shadows"></button>
+      </div>
+      <div class="settings-row">
+        <span class="settings-label">Grid</span>
+        <button class="toggle active" id="toggle-grid" aria-label="Toggle grid"></button>
+      </div>
+      <div class="settings-row" style="border-bottom: none;">
+        <span class="settings-label">Difficulty</span>
+        <select id="select-difficulty" class="bg-dark border border-white/10 rounded px-2 py-1 text-sm text-white/80 outline-none">
+          <option value="easy">Easy</option>
+          <option value="normal" selected>Normal</option>
+          <option value="hard">Hard</option>
+          <option value="nightmare">Nightmare</option>
+        </select>
+      </div>
+      <p class="text-[10px] text-white/30 mt-2">Settings are stored locally in your browser (openshiftgames_settings).</p>
+    </div>
+  </div>
+
+  <!-- ───────────────────────────── Modals ─────────────────────────────── -->
+  <div id="achievements-panel" class="modal-overlay">
+    <div class="modal-content" style="max-width: 640px;">
+      <div class="flex items-center justify-between mb-4">
+        <h2 class="modal-title" style="margin-bottom:0">Achievements</h2>
+        <button id="achievements-close" class="btn-secondary text-sm">Close</button>
+      </div>
+      <div class="achievements-grid" id="achievements-grid"></div>
+    </div>
+  </div>
+
+  <div id="stats-panel" class="modal-overlay">
+    <div class="modal-content">
+      <div class="flex items-center justify-between mb-4">
+        <h2 class="modal-title" style="margin-bottom:0">Platform Statistics</h2>
+        <button id="stats-close" class="btn-secondary text-sm">Close</button>
+      </div>
+      <div id="stats-body" class="modal-body"></div>
+    </div>
+  </div>
+
+  <div id="modal-level-complete" class="modal-overlay">
+    <div class="modal-content" style="text-align: center;">
+      <div class="text-3xl mb-2" id="level-complete-stars"></div>
+      <h2 class="modal-title" id="level-complete-title">Level Complete!</h2>
+      <div class="modal-body" id="level-complete-body"></div>
+      <div class="modal-actions" style="justify-content: center;">
+        <button class="btn-secondary" id="level-complete-menu">Menu</button>
+        <button class="btn-primary" id="level-complete-next">Next Level</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="modal-game-over" class="modal-overlay">
+    <div class="modal-content" style="text-align: center;">
+      <div class="text-4xl mb-3">&#128165;</div>
+      <h2 class="modal-title">Cluster Degraded!</h2>
+      <div class="modal-body" id="game-over-body"></div>
+      <div class="modal-actions" style="justify-content: center;">
+        <button class="btn-secondary" id="game-over-menu">Menu</button>
+        <button class="btn-primary" id="game-over-retry">Retry</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="loading-screen" class="loading-screen" style="display: none;">
+    <div class="loading-spinner"></div>
+    <div class="loading-text">Initializing OpenShift cluster...</div>
+  </div>
+
+  <script type="module">
+    // ─────────────────────────────────────────────────────────────────────────────
+    // OpenShift Games — browser shell (static ES modules, no build step)
+    // Model/registries: js/data/kindRegistry.js. Never hard-code kind lists here.
+    // ─────────────────────────────────────────────────────────────────────────────
+    import { GameEngine, GAME_MODES, GAME_STATES } from './js/engine/GameEngine.js';
+    import {
+      createResource,
+      PALETTE_SECTIONS,
+      PLACEABLE_KINDS,
+      paletteMeta,
+      KIND_DEFS,
+      isClusterScopedKind,
+      toManifestObject,
+    } from './js/data/kindRegistry.js';
+    import { ClusterRenderer } from './js/rendering/ClusterRenderer.js';
+    import { IncidentEngine } from './js/engine/IncidentEngine.js';
+    import { ScoringEngine } from './js/engine/ScoringEngine.js';
+    import { HUD } from './js/ui/HUD.js';
+    import { CommandBar } from './js/ui/CommandBar.js';
+    import { InspectorPanel } from './js/ui/InspectorPanel.js';
+    import { ContextMenu } from './js/ui/ContextMenu.js';
+    import { MetricsDashboard } from './js/ui/MetricsDashboard.js';
+    import { IncidentPanel } from './js/ui/IncidentPanel.js';
+    import { Minimap } from './js/ui/Minimap.js';
+    import { CampaignMode } from './js/modes/CampaignMode.js';
+    import { ChaosMode } from './js/modes/ChaosMode.js';
+    import { SandboxMode } from './js/modes/SandboxMode.js';
+    import { ChallengeMode } from './js/modes/ChallengeMode.js';
+    import { CAMPAIGN_LEVELS, CHAPTERS } from './js/data/CampaignLevels.js';
+    import { ACHIEVEMENTS } from './js/data/Achievements.js';
+    import { CHALLENGES } from './js/modes/ChallengeMode.js';
+
+    // ── Brand / storage / links ────────────────────────────────────────────────
+    const APP_NAME = 'OpenShift Games';
+    const APP_VERSION_LABEL = 'OpenShift 4.22';
+    const SETTINGS_KEY = 'openshiftgames_settings';
+    const LEGACY_SETTINGS_KEY = 'k8sgames_settings';
+    const REPO_URL = 'https://github.com/G-man3207/openshiftgames';
+    const GITHUB_API = 'https://api.github.com/repos/G-man3207/openshiftgames';
+    const DOCS_URL = 'https://docs.redhat.com/en/documentation/openshift_container_platform/4.22';
+    const EXAM_URL = 'https://www.redhat.com/en/services/training/red-hat-certified-openshift-administrator-exam';
+    const YAML_FILENAME = 'openshiftgames-cluster.yaml';
+
+    // Palette shortcuts 1-9 (valid kinds only; registry shortcuts 1-7 align with this).
+    const SHORTCUT_KINDS = ['Pod', 'Deployment', 'ReplicaSet', 'StatefulSet', 'DaemonSet', 'Job', 'CronJob', 'Service', 'Route'];
+    const WORKLOAD_KINDS = ['Pod', 'Deployment', 'ReplicaSet', 'StatefulSet', 'DaemonSet', 'Job', 'CronJob'];
+
+    // Section glyphs for generated palette items (OpenShift-red accents in style.css).
+    const SECTION_ICONS = {
+      projects: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M3 7a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"/><path d="M3 10h18"/></svg>',
+      workloads: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="6" width="18" height="12" rx="3"/><path d="M7 10h4M7 14h7"/></svg>',
+      builds: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="12" r="3.2"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1"/></svg>',
+      network: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3"/><path d="M12 2v4M12 18v4"/></svg>',
+      config: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="5" y="3" width="14" height="18" rx="2"/><path d="M8 8h8M8 12h6M8 16h4"/></svg>',
+      storage: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><ellipse cx="12" cy="6" rx="8" ry="3"/><path d="M4 6v12a8 3 0 0 0 16 0V6"/></svg>',
+      scaling: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 19h16M7 16V9M12 16V5M17 16v-4"/></svg>',
+      security: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12 2 4 6v6c0 4.6 3.4 7.9 8 8.6 4.6-.7 8-4 8-8.6V6l-8-4z"/><path d="m8.8 12 2.2 2.2 4.2-4.6"/></svg>',
+      identity: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="8" r="3.5"/><path d="M5 20c0-3.6 3-6 7-6s7 2.4 7 6"/></svg>',
+    };
+
+    const escapeHtml = (value) => String(value ?? '').replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
+
+    function toRenderable(resource, x, y, z) {
+      return {
+        id: resource.uid || resource.metadata?.uid,
+        type: resource.kind,
+        name: resource.name || resource.metadata?.name || 'unnamed',
+        namespace: resource.namespace || resource.metadata?.namespace || 'default',
+        status: resource.status?.phase || resource.phase || 'Pending',
+        x: x ?? 0,
+        y: y ?? 0,
+        z: z ?? 0,
+        _ref: resource,
+      };
+    }
+
+    class OpenShiftGamesApp {
+      constructor() {
+        this.engine = null;
+        this.renderer = null;
+        this.incidentEngine = null;
+        this.scoringEngine = null;
+        this.hud = null;
+        this.commandBar = null;
+        this.inspector = null;
+        this.contextMenu = null;
+        this.metrics = null;
+        this.incidentPanel = null;
+        this.minimap = null;
+        this.manifestPanel = null;
+        this.examPrepUI = null;
+        this.currentMode = null;
+        this.modeInstance = null;
+        this.dragResource = null;
+        this.dragGhost = null;
+        this.resourceCounter = {};
+        this.placedPositions = new Map();
+        this._shortcutKinds = {};
+        this._optionalUiPromise = null;
+        this._manifestPanelPromise = null;
+        this._examPrepPromise = null;
+        this._objUpdateInterval = null;
+        this._hintIndex = 0;
+        this._panelCollapsed = false;
+        this._webglFailed = false;
+        this._tutorialQueue = null;
+        this.settings = this.loadSettings();
+      }
+
+      // ── Boot ────────────────────────────────────────────────────────────────
+      async init() {
+        this.engine = new GameEngine({ mode: 'sandbox' });
+        this.incidentEngine = new IncidentEngine(this.engine);
+        this.scoringEngine = new ScoringEngine(this.engine);
+
+        this.hud = new HUD();
+        this.commandBar = new CommandBar();
+        this.inspector = new InspectorPanel();
+        this.contextMenu = new ContextMenu();
+        this.metrics = new MetricsDashboard();
+        this.incidentPanel = new IncidentPanel();
+        this.minimap = new Minimap();
+
+        // Shared globals consumed by every UI module / verifier scripts.
+        window.game = {
+          engine: this.engine.eventBus, // ⚠ EventBus, not GameEngine
+          cluster: this.engine.cluster,
+          renderer: null,
+          gameEngine: this.engine,
+          incidentEngine: this.incidentEngine,
+          scoringEngine: this.scoringEngine,
+          app: this,
+          manifestEngine: null,
+          manifestPanel: null,
+          examPrepUI: null,
+        };
+
+        this.renderPalette();
+        this.bindMenuEvents();
+        this.bindGameEvents();
+        this.bindKeyboard();
+        this.bindPalette();
+        this.buildLevelSelect();
+        this.buildChallengeSelect();
+        this.buildAchievements();
+        this.applySettings();
+        this._bootOptionalPanels();
+
+        // WebGL availability is a hard requirement for the 3D view.
+        const testCanvas = document.createElement('canvas');
+        const gl = testCanvas.getContext('webgl2') || testCanvas.getContext('webgl');
+        if (!gl) {
+          this._webglFailed = true;
+          this._showWebGLError();
+          return;
+        }
+        gl.getExtension('WEBGL_lose_context')?.loseContext();
+
+        const canvas = document.getElementById('game-canvas');
+        try {
+          this.renderer = new ClusterRenderer(canvas);
+          window.game.renderer = this.renderer;
+        } catch (err) {
+          console.error(`${APP_NAME}: renderer init failed`, err);
+          this._webglFailed = true;
+          this._showWebGLError();
+          return;
+        }
+
+        this.engine.onUpdate((dt) => {
+          this.incidentEngine.tick(dt);
+          this.syncRenderState();
+        });
+
+        this.engine.eventBus.on('cluster:reset', () => {
+          for (const uid of [...this.renderer.resourceMeshes.keys()]) {
+            this.renderer.removeResource(uid);
+          }
+          this.placedPositions.clear();
+          // ClusterState.clear() re-seeds the OpenShift defaults (Projects, ClusterOperators,
+          // SCCs, OAuth, ClusterVersion, ImageStreams, ...) BEFORE it emits cluster:reset,
+          // so render those seeded resources instead of leaving an empty scene.
+          for (const resource of this.engine.cluster.getAllResources?.() || []) {
+            const uid = resource.uid;
+            if (!uid || this.renderer.resourceMeshes.has(uid)) continue;
+            const pos = this.placedPositions.get(uid) || this.getPlacementPosition();
+            this.placedPositions.set(uid, pos);
+            this.renderer.addResource(toRenderable(resource, pos.x, pos.y, pos.z));
+          }
+        });
+
+        this.engine.eventBus.on('cluster:added', (data) => {
+          if (!data.resource) return;
+          const uid = data.resource.uid || data.resource.metadata?.uid;
+          if (!this.renderer.resourceMeshes.has(uid)) {
+            const pos = this.placedPositions.get(uid) || this.getPlacementPosition();
+            this.renderer.addResource(toRenderable(data.resource, pos.x, pos.y, pos.z));
+            this.placedPositions.set(uid, pos);
+          }
+        });
+
+        this.engine.eventBus.on('cluster:deleted', (data) => {
+          const uid = data.uid || data.resource?.uid;
+          if (!uid) return;
+          this.renderer.removeResource(uid);
+          this.placedPositions.delete(uid);
+        });
+
+        this.renderer.onSelect = (uid) => this.engine.eventBus.emit('resource:selected', { uid });
+        this.renderer.onHover = (uid) => this.engine.eventBus.emit('resource:hovered', { uid });
+        this.renderer.onResourceMoved = (uid, pos) => this.placedPositions.set(uid, pos);
+
+        this.applySettings();
+      }
+
+      _syncSettingsUi() {
+        for (const key of ['sound', 'particles', 'shadows', 'grid']) {
+          const toggle = document.getElementById(`toggle-${key}`);
+          if (toggle) toggle.classList.toggle('active', Boolean(this.settings[key]));
+        }
+        const select = document.getElementById('select-difficulty');
+        if (select && this.settings.difficulty) select.value = this.settings.difficulty;
+      }
+
+      _showWebGLError() {
+        if (document.getElementById('webgl-error')) return;
+        const overlay = document.createElement('div');
+        overlay.id = 'webgl-error';
+        overlay.style.cssText = 'position:fixed;inset:0;z-index:200;display:flex;align-items:center;justify-content:center;background:rgba(13,17,23,0.95);';
+        overlay.innerHTML = `
+          <div style="text-align:center;max-width:460px;padding:2rem;">
+            <div style="font-size:3rem;margin-bottom:1rem;">&#x1F6A7;</div>
+            <h2 style="color:#f85149;font-size:1.3rem;margin-bottom:0.75rem;">WebGL Not Available</h2>
+            <p style="color:rgba(255,255,255,0.6);font-size:0.85rem;line-height:1.6;margin-bottom:1.5rem;">
+              ${APP_NAME} requires WebGL to render the 3D OpenShift cluster view. Your browser has WebGL
+              disabled or your GPU is not supported.
+            </p>
+            <div style="color:rgba(255,255,255,0.4);font-size:0.75rem;line-height:1.8;text-align:left;background:rgba(255,255,255,0.03);padding:1rem;border-radius:8px;border:1px solid rgba(255,255,255,0.06);">
+              <strong style="color:rgba(255,255,255,0.7);">Try these fixes:</strong><br>
+              1. Enable hardware acceleration in browser settings<br>
+              2. Update your graphics drivers<br>
+              3. Try a different browser (Chrome, Firefox, Edge)<br>
+              4. Disable browser extensions that block WebGL
+            </div>
+          </div>`;
+        document.body.appendChild(overlay);
+      }
+
+      // ── Settings (openshiftgames_settings, migrates k8sgames_settings once) ──
+      loadSettings() {
+        const defaults = { sound: true, particles: true, shadows: true, grid: true, difficulty: 'normal' };
+        try {
+          let raw = localStorage.getItem(SETTINGS_KEY);
+          if (!raw) {
+            raw = localStorage.getItem(LEGACY_SETTINGS_KEY); // best-effort migration
+            if (raw) {
+              const migrated = { ...defaults, ...JSON.parse(raw) };
+              this.saveSettings(migrated);
+              return migrated;
+            }
+          }
+          if (raw) return { ...defaults, ...JSON.parse(raw) };
+        } catch (err) {
+          console.warn(`${APP_NAME}: could not load settings`, err);
+        }
+        return defaults;
+      }
+
+      saveSettings(settings = this.settings) {
+        try {
+          localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+        } catch (err) {
+          console.warn(`${APP_NAME}: could not save settings`, err);
+        }
+      }
+
+      // ── Menu wiring ─────────────────────────────────────────────────────────
+      bindMenuEvents() {
+        document.querySelectorAll('.menu-btn[data-mode]').forEach((btn) => {
+          btn.addEventListener('click', () => this.startMode(btn.dataset.mode));
+        });
+
+        document.getElementById('menu-exam-prep')?.addEventListener('click', () => this.showExamPrep());
+
+        document.getElementById('btn-settings')?.addEventListener('click', () => {
+          document.getElementById('settings-panel')?.classList.add('active');
+        });
+        document.getElementById('settings-close')?.addEventListener('click', () => {
+          document.getElementById('settings-panel')?.classList.remove('active');
+        });
+
+        document.getElementById('btn-achievements')?.addEventListener('click', () => {
+          this.buildAchievements();
+          document.getElementById('achievements-panel')?.classList.add('active');
+        });
+        document.getElementById('achievements-close')?.addEventListener('click', () => {
+          document.getElementById('achievements-panel')?.classList.remove('active');
+        });
+
+        document.getElementById('btn-stats')?.addEventListener('click', () => {
+          this.buildStats();
+          document.getElementById('stats-panel')?.classList.add('active');
+        });
+        document.getElementById('stats-close')?.addEventListener('click', () => {
+          document.getElementById('stats-panel')?.classList.remove('active');
+        });
+
+        document.querySelectorAll('.toggle').forEach((toggle) => {
+          toggle.addEventListener('click', () => {
+            toggle.classList.toggle('active');
+            const id = toggle.id.replace('toggle-', '');
+            this.settings[id] = toggle.classList.contains('active');
+            this.saveSettings();
+            this.applySettings();
+          });
+        });
+
+        document.getElementById('select-difficulty')?.addEventListener('change', (e) => {
+          this.settings.difficulty = e.target.value;
+          this.saveSettings();
+          this.engine?.setDifficulty?.(e.target.value);
+        });
+        this._syncSettingsUi();
+
+        document.getElementById('level-select-back')?.addEventListener('click', () => {
+          document.getElementById('level-select')?.classList.remove('active');
+        });
+        document.getElementById('challenge-back')?.addEventListener('click', () => {
+          document.getElementById('challenge-select')?.classList.remove('active');
+        });
+
+        document.getElementById('level-complete-menu')?.addEventListener('click', () => {
+          document.getElementById('modal-level-complete')?.classList.remove('active');
+          this.returnToMenu();
+        });
+        document.getElementById('level-complete-next')?.addEventListener('click', () => {
+          document.getElementById('modal-level-complete')?.classList.remove('active');
+          if (this.modeInstance && typeof this.modeInstance.nextLevel === 'function') {
+            this.modeInstance.nextLevel();
+            this._initObjectivesPanel(this.currentMode);
+            this._startLevelTutorialFromMode();
+          }
+        });
+        document.getElementById('game-over-menu')?.addEventListener('click', () => {
+          document.getElementById('modal-game-over')?.classList.remove('active');
+          this.returnToMenu();
+        });
+        document.getElementById('game-over-retry')?.addEventListener('click', () => {
+          document.getElementById('modal-game-over')?.classList.remove('active');
+          if (this.modeInstance && typeof this.modeInstance.restart === 'function') {
+            this.modeInstance.restart();
+            this._initObjectivesPanel(this.currentMode);
+          } else {
+            this.startMode(this.currentMode);
+          }
+        });
+      }
+
+      bindGameEvents() {
+        this.engine.eventBus.on('mode:level-complete', (data) => {
+          const stars = data.stars || 0;
+          const starStr = '&#9733;'.repeat(stars) + '&#9734;'.repeat(Math.max(0, 3 - stars));
+          const starsEl = document.getElementById('level-complete-stars');
+          if (starsEl) starsEl.innerHTML = starStr;
+          const titleEl = document.getElementById('level-complete-title');
+          if (titleEl) titleEl.textContent = data.title || 'Level Complete!';
+          const bodyEl = document.getElementById('level-complete-body');
+          if (bodyEl) bodyEl.innerHTML = data.message || '';
+          document.getElementById('modal-level-complete')?.classList.add('active');
+        });
+
+        this.engine.eventBus.on('mode:game-over', (data) => {
+          const bodyEl = document.getElementById('game-over-body');
+          if (bodyEl) bodyEl.innerHTML = data.message || 'Your OpenShift cluster has degraded.';
+          document.getElementById('modal-game-over')?.classList.add('active');
+        });
+
+        this.engine.eventBus.on('incident:created', (data) => {
+          const inc = data.incident || data;
+          if (!inc) return;
+          this.incidentPanel?.addIncident?.(
+            inc.name || inc.defId || 'Unknown',
+            inc.severity || 3,
+            inc.target || null,
+            inc.description || '',
+            inc.id,
+          );
+        });
+
+        this.engine.eventBus.on('ui:run-command', (data) => {
+          if (data?.command && this.commandBar) this.commandBar._executeCommand(data.command);
+        });
+        this.engine.eventBus.on('ui:edit-resource', (data) => this._showEditDialog(data.uid));
+        this.engine.eventBus.on('ui:scale-dialog', (data) => this._showScaleDialog(data));
+        this.engine.eventBus.on('ui:show-manifests', () => this.showFiles());
+        this.engine.eventBus.on('ui:show-exam-prep', () => this.showExamPrep());
+        this.engine.eventBus.on('ui:start-level', (data) => {
+          if (data?.levelId) this.launchGame('campaign', data.levelId);
+        });
+        this.engine.eventBus.on('ui:start-challenge', (data) => {
+          if (data?.challengeId) this.launchGame('challenge', data.challengeId);
+        });
+      }
+
+      bindKeyboard() {
+        document.addEventListener('keydown', (e) => {
+          const tag = e.target?.tagName;
+          if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+
+          switch (e.key) {
+            case '/':
+              e.preventDefault();
+              this.commandBar?.toggle?.();
+              break;
+            case ' ':
+              e.preventDefault();
+              this.engine?.togglePause?.();
+              break;
+            case 'm':
+            case 'M':
+              this.metrics?.toggle?.();
+              break;
+            case 'Escape':
+              this.handleEscape();
+              break;
+            case 'Delete':
+            case 'Backspace':
+              if (this.renderer?.selectedResource) this.engine.cluster.remove(this.renderer.selectedResource);
+              break;
+            case '?':
+              e.preventDefault();
+              this.showExamPrep();
+              break;
+            case 'f':
+            case 'F':
+              e.preventDefault();
+              this.showFiles();
+              break;
+            case 'h':
+            case 'H':
+              this.showTutorial(this.currentMode || 'sandbox');
+              break;
+            default:
+              if (/^[1-9]$/.test(e.key) && this._shortcutKinds[e.key]) {
+                this.selectPaletteResource(this._shortcutKinds[e.key]);
+              }
+          }
+        });
+      }
+
+      handleEscape() {
+        // Panels/modals first, then inspector, then back to menu.
+        if (this.manifestPanel?.visible) { this.manifestPanel.hide?.(); return; }
+        if (this.examPrepUI?.visible) { this.examPrepUI.hide?.(); return; }
+        for (const panelId of ['settings-panel', 'achievements-panel', 'stats-panel']) {
+          const panel = document.getElementById(panelId);
+          if (panel?.classList.contains('active')) {
+            panel.classList.remove('active');
+            return;
+          }
+        }
+        if (this.inspector?.visible) { this.inspector.hide?.(); return; }
+        if (this.currentMode) this.returnToMenu();
+      }
+
+      selectPaletteResource(kind) {
+        document.querySelectorAll('.palette-item').forEach((item) => {
+          item.classList.toggle('selected', item.dataset.resource === kind);
+        });
+        this.selectedResource = kind;
+      }
+
+      // ── Palette (generated from kindRegistry.PALETTE_SECTIONS) ──────────────
+      renderPalette() {
+        const palette = document.getElementById('resource-palette');
+        if (!palette) return;
+
+        this._shortcutKinds = {};
+        SHORTCUT_KINDS.forEach((kind, idx) => { this._shortcutKinds[String(idx + 1)] = kind; });
+
+        let html = '';
+        for (const section of PALETTE_SECTIONS) {
+          if (!section.kinds || section.kinds.length === 0) continue;
+          html += `<div class="palette-section-label">${escapeHtml(section.label)}</div>`;
+          for (const kind of section.kinds) {
+            const meta = paletteMeta(kind);
+            const shortcut = Object.entries(this._shortcutKinds).find(([, k]) => k === kind)?.[0];
+            const tooltip = `${escapeHtml(kind)}${shortcut ? ` <span class="keyboard-hint">${shortcut}</span>` : ''}`;
+            html += `
+              <div class="palette-item" data-resource="${escapeHtml(kind)}" draggable="true" role="button" tabindex="0" aria-label="Create ${escapeHtml(kind)}">
+                <div class="palette-icon">${SECTION_ICONS[section.id] || SECTION_ICONS.projects}</div>
+                <div class="palette-label">${escapeHtml(meta.label || kind)}</div>
+                <div class="palette-tooltip">${tooltip}</div>
+              </div>`;
+          }
+          html += '<div class="palette-separator"></div>';
+        }
+        palette.innerHTML = html;
+      }
+
+      bindPalette() {
+        const palette = document.getElementById('resource-palette');
+        const canvas = document.getElementById('game-canvas');
+        if (!palette || !canvas) return;
+
+        palette.addEventListener('dragstart', (e) => {
+          const item = e.target.closest('.palette-item');
+          if (!item) return;
+          this.dragResource = item.dataset.resource;
+          e.dataTransfer.setData('text/plain', this.dragResource);
+          e.dataTransfer.effectAllowed = 'copy';
+
+          this.dragGhost = document.createElement('div');
+          this.dragGhost.className = 'drag-ghost';
+          this.dragGhost.innerHTML = item.querySelector('.palette-icon')?.innerHTML || '';
+          document.body.appendChild(this.dragGhost);
+          e.dataTransfer.setDragImage(this.dragGhost, 20, 20);
+        });
+
+        palette.addEventListener('dragend', () => {
+          this.dragGhost?.remove();
+          this.dragGhost = null;
+          this.dragResource = null;
+        });
+
+        palette.addEventListener('keydown', (e) => {
+          if (e.key !== 'Enter' && e.key !== ' ') return;
+          const item = e.target.closest('.palette-item');
+          if (!item) return;
+          e.preventDefault();
+          this.placeResource(item.dataset.resource);
+        });
+
+        palette.addEventListener('click', (e) => {
+          const item = e.target.closest('.palette-item');
+          if (!item) return;
+          const rect = canvas.getBoundingClientRect();
+          this.placeResource(item.dataset.resource, rect.left + rect.width / 2, rect.top + rect.height / 2);
+        });
+
+        canvas.addEventListener('dragover', (e) => {
+          e.preventDefault();
+          e.dataTransfer.dropEffect = 'copy';
+        });
+
+        canvas.addEventListener('drop', (e) => {
+          e.preventDefault();
+          const kind = e.dataTransfer.getData('text/plain');
+          if (kind && KIND_DEFS[kind]) this.placeResource(kind, e.clientX, e.clientY);
+        });
+
+        canvas.addEventListener('contextmenu', (e) => {
+          e.preventDefault();
+          const uid = this.renderer?.selectedResource;
+          if (!uid) return;
+          const resource = this.engine.cluster.getResource(uid);
+          if (resource) {
+            this.engine.eventBus.emit('resource:contextmenu', { uid, resource, x: e.clientX, y: e.clientY });
+          }
+        });
+
+        document.getElementById('btn-auto-align')?.addEventListener('click', () => this.autoAlignResources());
+        document.getElementById('btn-reset-camera')?.addEventListener('click', () => this.renderer?.resetCamera?.());
+        document.getElementById('btn-help')?.addEventListener('click', () => this.showTutorial(this.currentMode || 'sandbox'));
+        document.getElementById('btn-manifests')?.addEventListener('click', () => this.showFiles());
+        document.getElementById('btn-exam-prep')?.addEventListener('click', () => this.showExamPrep());
+        document.getElementById('btn-export-yaml')?.addEventListener('click', () => this.exportClusterYAML());
+      }
+
+      // ── Placement ───────────────────────────────────────────────────────────
+      _nextDefaultName(kind) {
+        this.resourceCounter[kind] = (this.resourceCounter[kind] || 0) + 1;
+        const base = kind.replace(/([a-z])([A-Z])/g, '$1-$2').toLowerCase();
+        return `${base}-${this.resourceCounter[kind]}`;
+      }
+
+      /**
+       * Create a resource from the palette.
+       * Signature: placeResource(kind, screenX?, screenY?, opts?)
+       * - palette click/drop passes screen coords → name prompt is shown
+       * - app.placeResource(kind) with a single argument creates immediately with a default name
+       *   (used by the verifier / scripted demos)
+       */
+      placeResource(kind, screenX, screenY, opts = {}) {
+        if (!KIND_DEFS[kind]) {
+          console.warn(`${APP_NAME}: unknown kind "${kind}"`);
+          return null;
+        }
+        const fast = opts.fast || arguments.length <= 1;
+        const create = (chosenName) => this._spawnResource(kind, chosenName, screenX, screenY);
+        if (fast) return create(this._nextDefaultName(kind));
+        this._showNamePrompt(kind, create);
+        return null;
+      }
+
+      _spawnResource(kind, name, screenX, screenY) {
+        const namespace = isClusterScopedKind(kind) ? '' : (this.engine?.currentProject || 'default');
+        const resource = createResource(kind, { name, namespace });
+
+        // Palette convenience: give workloads a coherent app= selector/template.
+        if (WORKLOAD_KINDS.includes(kind)) {
+          resource.setLabel('app', name);
+          if (resource.spec.selector) {
+            resource.spec.selector.matchLabels = resource.spec.selector.matchLabels || {};
+            resource.spec.selector.matchLabels.app = name;
+          }
+          if (resource.spec.template) {
+            resource.spec.template.metadata = resource.spec.template.metadata || {};
+            resource.spec.template.metadata.labels = { ...(resource.spec.template.metadata.labels || {}), app: name };
+          }
+        }
+
+        if (kind === 'Node') {
+          resource.setPhase('Running');
+          resource.setCondition('Ready', 'True', 'KubeletReady');
+        }
+
+        let pos = null;
+        if (screenX !== undefined && screenY !== undefined && this.renderer) {
+          pos = this.renderer.screenToGround(screenX, screenY);
+        }
+        if (!pos) pos = this.getPlacementPosition();
+        this.placedPositions.set(resource.uid, pos);
+
+        this.engine.cluster.add(resource);
+
+        if (kind === 'Project') {
+          resource.setPhase('Active');
+          try { this.engine.switchProject?.(name); } catch (err) { console.warn(`${APP_NAME}: switchProject failed`, err); }
+        }
+        if (kind === 'Service') this._showSelectorPicker(resource);
+        if (kind === 'Route') this._showRouteTargetPicker(resource);
+        if (kind === 'Ingress') this._showIngressPathPicker(resource);
+        return resource;
+      }
+
+      // ── Route target picker (Route → Service) ───────────────────────────────
+      _showRouteTargetPicker(route) {
+        const services = this.engine.cluster.getByKind?.('Service') || [];
+        document.getElementById('route-target-overlay')?.remove();
+        if (services.length === 0) {
+          this._showToast('Create a Service first, then expose it with a Route.');
+          return;
+        }
+
+        const overlay = document.createElement('div');
+        overlay.id = 'route-target-overlay';
+        overlay.className = 'fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm';
+        const options = services.map((svc) => {
+          const port = svc.spec?.ports?.[0];
+          const portName = port?.name || 'http';
+          return `<option value="${escapeHtml(svc.metadata.name)}">${escapeHtml(svc.metadata.name)} : ${escapeHtml(portName)}</option>`;
+        }).join('');
+        overlay.innerHTML = `
+          <div class="w-80 rounded-xl bg-gray-900/95 border border-white/10 shadow-2xl p-4">
+            <div class="text-xs text-white/40 font-medium uppercase tracking-wider mb-1">Expose Route to Service</div>
+            <div class="text-[10px] text-white/30 mb-3">oc expose svc/&lt;name&gt; — a Route sends external traffic to a Service</div>
+            <select id="route-target-select" class="w-full px-2 py-1.5 text-xs text-white bg-black/40 border border-white/15 rounded outline-none focus:border-openshift/50">${options}</select>
+            <div class="flex gap-2 mt-3">
+              <button id="route-target-ok" class="flex-1 px-3 py-1.5 text-xs font-medium text-white bg-openshift hover:bg-openshift-dark rounded-lg transition-colors">Create Route</button>
+              <button id="route-target-skip" class="px-3 py-1.5 text-xs font-medium text-white/60 hover:text-white bg-white/5 hover:bg-white/10 rounded-lg transition-colors">Skip</button>
+            </div>
+          </div>`;
+        document.body.appendChild(overlay);
+
+        const close = () => overlay.remove();
+        document.getElementById('route-target-skip').addEventListener('click', close);
+        document.getElementById('route-target-ok').addEventListener('click', () => {
+          const svcName = document.getElementById('route-target-select').value;
+          const svc = services.find((s) => s.metadata.name === svcName) || services[0];
+          const port = svc?.spec?.ports?.[0];
+          route.spec.to = { kind: 'Service', name: svcName, weight: 100 };
+          route.spec.port = { targetPort: port?.name || port?.targetPort || 'http' };
+          if (!route.spec.host) {
+            route.spec.host = `${route.metadata.name}-${route.metadata.namespace || 'default'}.apps.cluster.example.com`;
+          }
+          route.recordEvent?.('Normal', 'RouteCreated', `Route exposed to Service ${svcName}`);
+          close();
+        });
+      }
+
+      // ── Ingress path picker (upstream Ingress; OpenShift uses Routes first) ──
+      _showIngressPathPicker(ingress) {
+        const services = this.engine.cluster.getByKind?.('Service') || [];
+        if (services.length === 0) return;
+        document.getElementById('ingress-path-overlay')?.remove();
+
+        const overlay = document.createElement('div');
+        overlay.id = 'ingress-path-overlay';
+        overlay.className = 'fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm';
+        const svcOptions = services.map((s) => {
+          const port = s.spec?.ports?.[0]?.port || s.spec?.port || 80;
+          return `<option value="${escapeHtml(s.metadata.name)}:${port}">${escapeHtml(s.metadata.name)} (port ${port})</option>`;
+        }).join('');
+
+        overlay.innerHTML = `
+          <div class="w-80 rounded-xl bg-gray-900/95 border border-white/10 shadow-2xl p-4">
+            <div class="text-xs text-white/40 font-medium uppercase tracking-wider mb-1">Ingress Path Routing</div>
+            <div class="text-[10px] text-white/30 mb-3">Define paths and their backend Services (Routes are the OpenShift-native way)</div>
+            <div id="ingress-path-rows" class="space-y-2">
+              <div class="ingress-path-row flex items-center gap-2">
+                <input type="text" placeholder="/api" value="/api" class="ingress-path-input w-20 px-2 py-1.5 text-xs text-white bg-black/40 border border-white/15 rounded font-mono outline-none focus:border-openshift/50" />
+                <span class="text-white/20 text-xs">&#8594;</span>
+                <select class="ingress-path-svc flex-1 px-2 py-1.5 text-xs text-white bg-black/40 border border-white/15 rounded outline-none focus:border-openshift/50">${svcOptions}</select>
+              </div>
+            </div>
+            <button id="ingress-add-path" class="mt-2 text-[10px] text-openshift-light/70 hover:text-openshift-light transition-colors">+ Add path</button>
+            <div class="flex gap-2 mt-3">
+              <button id="ingress-path-ok" class="flex-1 px-3 py-1.5 text-xs font-medium text-white bg-openshift hover:bg-openshift-dark rounded-lg transition-colors">Apply Rules</button>
+              <button id="ingress-path-skip" class="px-3 py-1.5 text-xs font-medium text-white/60 hover:text-white bg-white/5 hover:bg-white/10 rounded-lg transition-colors">Skip</button>
+            </div>
+          </div>`;
+        document.body.appendChild(overlay);
+
+        const close = () => overlay.remove();
+        document.getElementById('ingress-path-skip').addEventListener('click', close);
+        document.getElementById('ingress-add-path').addEventListener('click', () => {
+          const rows = document.getElementById('ingress-path-rows');
+          const row = document.createElement('div');
+          row.className = 'ingress-path-row flex items-center gap-2';
+          row.innerHTML = `
+            <input type="text" placeholder="/path" class="ingress-path-input w-20 px-2 py-1.5 text-xs text-white bg-black/40 border border-white/15 rounded font-mono outline-none focus:border-openshift/50" />
+            <span class="text-white/20 text-xs">&#8594;</span>
+            <select class="ingress-path-svc flex-1 px-2 py-1.5 text-xs text-white bg-black/40 border border-white/15 rounded outline-none focus:border-openshift/50">${svcOptions}</select>`;
+          rows.appendChild(row);
+        });
+        document.getElementById('ingress-path-ok').addEventListener('click', () => {
+          const rows = overlay.querySelectorAll('.ingress-path-row');
+          const paths = [];
+          for (const row of rows) {
+            const path = row.querySelector('.ingress-path-input').value.trim();
+            const svcVal = row.querySelector('.ingress-path-svc').value;
+            if (!path) continue;
+            const [svcName, svcPort] = svcVal.split(':');
+            paths.push({ path, pathType: 'Prefix', backend: { service: { name: svcName, port: { number: parseInt(svcPort, 10) || 80 } } } });
+          }
+          if (paths.length > 0) {
+            ingress.spec.rules = [{ host: `${ingress.metadata.name}.example.com`, http: { paths } }];
+            ingress.recordEvent?.('Normal', 'RulesConfigured', `${paths.length} path rules configured`);
+          }
+          close();
+        });
+      }
+
+      // ── Service selector picker ─────────────────────────────────────────────
+      _showSelectorPicker(service) {
+        const deployments = this.engine.cluster.getByKind?.('Deployment') || [];
+        const statefulsets = this.engine.cluster.getByKind?.('StatefulSet') || [];
+        const targets = [...deployments, ...statefulsets];
+        document.getElementById('selector-picker-overlay')?.remove();
+        if (targets.length === 0) return;
+
+        const overlay = document.createElement('div');
+        overlay.id = 'selector-picker-overlay';
+        overlay.className = 'fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm';
+        const buttons = targets.map((t) => {
+          const appLabel = t.metadata?.labels?.app || t.metadata?.name;
+          return `<button class="selector-pick-btn w-full text-left px-3 py-2 text-sm rounded-lg bg-white/5 hover:bg-openshift/15 border border-white/10 hover:border-openshift/30 text-white/80 transition-all flex items-center gap-2" data-selector="app=${escapeHtml(appLabel)}">
+            <span class="w-2 h-2 rounded-full bg-blue-400 shrink-0"></span>
+            <span class="font-mono text-xs">${escapeHtml(t.kind)}: ${escapeHtml(t.metadata?.name)}</span>
+            <span class="text-white/30 text-xs ml-auto">app=${escapeHtml(appLabel)}</span>
+          </button>`;
+        }).join('');
+        overlay.innerHTML = `
+          <div class="w-80 rounded-xl bg-gray-900/95 border border-white/10 shadow-2xl p-4">
+            <div class="text-xs text-white/40 font-medium uppercase tracking-wider mb-1">Connect Service to workloads</div>
+            <div class="text-[10px] text-white/30 mb-3">A Service routes traffic to Pods matching its label selector</div>
+            <div class="space-y-1.5 max-h-48 overflow-y-auto">${buttons}</div>
+            <div class="flex gap-2 mt-3">
+              <button id="selector-pick-skip" class="flex-1 px-3 py-1.5 text-xs font-medium text-white/60 hover:text-white bg-white/5 hover:bg-white/10 rounded-lg transition-colors">Skip (configure later)</button>
+            </div>
+            <div class="text-[10px] text-white/30 mt-2 text-center">Tip: you can edit the selector later via the Inspector or oc set selector</div>
+          </div>`;
+        document.body.appendChild(overlay);
+
+        const close = () => overlay.remove();
+        document.getElementById('selector-pick-skip').addEventListener('click', close);
+        overlay.querySelectorAll('.selector-pick-btn').forEach((btn) => {
+          btn.addEventListener('click', () => {
+            const sel = {};
+            for (const part of btn.dataset.selector.split(',')) {
+              const trimmed = part.trim();
+              const eq = trimmed.indexOf('=');
+              if (eq > 0) sel[trimmed.substring(0, eq)] = trimmed.substring(eq + 1);
+            }
+            service.spec.selector = sel;
+            service.recordEvent?.('Normal', 'SelectorSet', `Selector set to ${btn.dataset.selector}`);
+            close();
+          });
+        });
+      }
+
+      // ── Name prompt / edit / scale dialogs ─────────────────────────────────
+      _showNamePrompt(kind, callback) {
+        const defaultName = this._nextDefaultName(kind);
+        document.getElementById('name-prompt-overlay')?.remove();
+        const overlay = document.createElement('div');
+        overlay.id = 'name-prompt-overlay';
+        overlay.className = 'fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm';
+
+        const suggestions = this._getNameSuggestions(kind);
+        const suggestionsHtml = suggestions.length > 0
+          ? `<div class="flex flex-wrap gap-1.5 mt-2">${suggestions.map((s) => `<button class="name-suggestion px-2 py-1 text-xs rounded-md bg-openshift/10 text-openshift-light/80 hover:bg-openshift/20 hover:text-openshift-light border border-openshift/15 hover:border-openshift/30 transition-all">${escapeHtml(s)}</button>`).join('')}</div>`
+          : '';
+
+        overlay.innerHTML = `
+          <div class="w-72 rounded-xl bg-gray-900/95 border border-white/10 shadow-2xl p-4">
+            <div class="text-xs text-white/40 font-medium uppercase tracking-wider mb-1">Create ${escapeHtml(kind)}</div>
+            <input id="name-prompt-input" type="text" value="${escapeHtml(defaultName)}" class="w-full px-3 py-2 text-sm text-white bg-black/40 border border-white/15 rounded-lg outline-none focus:border-openshift/50 font-mono" spellcheck="false" autocomplete="off" />
+            ${suggestionsHtml}
+            <div class="flex gap-2 mt-3">
+              <button id="name-prompt-ok" class="flex-1 px-3 py-1.5 text-xs font-medium text-white bg-openshift hover:bg-openshift-dark rounded-lg transition-colors">Create</button>
+              <button id="name-prompt-cancel" class="px-3 py-1.5 text-xs font-medium text-white/60 hover:text-white bg-white/5 hover:bg-white/10 rounded-lg transition-colors">Cancel</button>
+            </div>
+            <div class="text-[10px] text-white/30 mt-2 text-center">Tip: name must match the objective (e.g. "frontend")</div>
+          </div>`;
+        document.body.appendChild(overlay);
+
+        const input = document.getElementById('name-prompt-input');
+        input.select();
+        input.focus();
+        const submit = () => {
+          const value = input.value.trim();
+          if (!value) return;
+          overlay.remove();
+          callback(value);
+        };
+        document.getElementById('name-prompt-ok').addEventListener('click', submit);
+        document.getElementById('name-prompt-cancel').addEventListener('click', () => {
+          this.resourceCounter[kind] = Math.max(0, (this.resourceCounter[kind] || 1) - 1);
+          overlay.remove();
+        });
+        input.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter') submit();
+          if (e.key === 'Escape') {
+            this.resourceCounter[kind] = Math.max(0, (this.resourceCounter[kind] || 1) - 1);
+            overlay.remove();
+          }
+        });
+        overlay.querySelectorAll('.name-suggestion').forEach((btn) => {
+          btn.addEventListener('click', () => { input.value = btn.textContent; submit(); });
+        });
+      }
+
+      _getNameSuggestions(kind) {
+        if (!this.modeInstance?.getStatus) return [];
+        const objectives = this.modeInstance.getStatus()?.objectives || [];
+        const suggestions = [];
+        for (const obj of objectives) {
+          if (obj.completed) continue;
+          if ((obj.type === 'deploy' || obj.type === 'scale') && obj.name && obj.kind === kind) suggestions.push(obj.name);
+        }
+        return [...new Set(suggestions)];
+      }
+
+      _showEditDialog(uid) {
+        const resource = this.engine.cluster.getResource(uid);
+        if (!resource) return;
+        document.getElementById('edit-dialog-overlay')?.remove();
+
+        const kind = resource.kind;
+        const name = resource.metadata?.name || 'unnamed';
+        const labels = resource.metadata?.labels || {};
+        const overlay = document.createElement('div');
+        overlay.id = 'edit-dialog-overlay';
+        overlay.className = 'fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm';
+
+        let extraFields = '';
+        if (['Deployment', 'StatefulSet', 'ReplicaSet'].includes(kind)) {
+          extraFields += `
+            <div class="mt-3">
+              <div class="text-[10px] text-white/40 uppercase tracking-wider mb-1">Replicas</div>
+              <input id="edit-replicas" type="number" min="0" max="50" value="${resource.spec?.replicas ?? 1}" class="w-full px-3 py-1.5 text-sm text-white bg-black/40 border border-white/15 rounded-lg outline-none focus:border-openshift/50 font-mono" />
+            </div>`;
+        }
+        if (kind === 'Service') {
+          const selectorStr = Object.entries(resource.spec?.selector || {}).map(([k, v]) => `${k}=${v}`).join(', ');
+          extraFields += `
+            <div class="mt-3">
+              <div class="text-[10px] text-white/40 uppercase tracking-wider mb-1">Selector (connects to Pods with these labels)</div>
+              <input id="edit-selector" type="text" value="${escapeHtml(selectorStr)}" placeholder="app=frontend" class="w-full px-3 py-1.5 text-sm text-white bg-black/40 border border-white/15 rounded-lg outline-none focus:border-openshift/50 font-mono" />
+            </div>
+            <div class="mt-3">
+              <div class="text-[10px] text-white/40 uppercase tracking-wider mb-1">Service Type</div>
+              <select id="edit-svc-type" class="w-full px-3 py-1.5 text-sm text-white bg-black/40 border border-white/15 rounded-lg outline-none focus:border-openshift/50">
+                ${['ClusterIP', 'NodePort', 'LoadBalancer', 'ExternalName'].map((t) => `<option value="${t}" ${resource.spec?.type === t ? 'selected' : ''}>${t}</option>`).join('')}
+              </select>
+            </div>`;
+        }
+
+        const labelEntries = Object.entries(labels).filter(([k]) => !k.startsWith('kubernetes.io') && !k.startsWith('openshift.io'));
+        const labelsStr = labelEntries.map(([k, v]) => `${k}=${v}`).join('\n');
+
+        overlay.innerHTML = `
+          <div class="w-80 rounded-xl bg-gray-900/95 border border-white/10 shadow-2xl p-4 max-h-[80vh] overflow-y-auto">
+            <div class="flex items-center justify-between mb-3">
+              <div class="text-sm text-white/80 font-semibold">Edit ${escapeHtml(kind)}: ${escapeHtml(name)}</div>
+              <button id="edit-dialog-close" class="text-white/30 hover:text-white/60 text-lg">&times;</button>
+            </div>
+            <div>
+              <div class="text-[10px] text-white/40 uppercase tracking-wider mb-1">Labels (one per line: key=value)</div>
+              <textarea id="edit-labels" rows="3" class="w-full px-3 py-1.5 text-xs text-white bg-black/40 border border-white/15 rounded-lg outline-none focus:border-openshift/50 font-mono resize-none" placeholder="app=frontend&#10;tier=web">${escapeHtml(labelsStr)}</textarea>
+            </div>
+            ${extraFields}
+            <div class="flex gap-2 mt-4">
+              <button id="edit-dialog-save" class="flex-1 px-3 py-1.5 text-xs font-medium text-white bg-openshift hover:bg-openshift-dark rounded-lg transition-colors">Save</button>
+              <button id="edit-dialog-cancel" class="px-3 py-1.5 text-xs font-medium text-white/60 hover:text-white bg-white/5 hover:bg-white/10 rounded-lg transition-colors">Cancel</button>
+            </div>
+            <div class="text-[10px] text-white/30 mt-2">For full control use the oc terminal or the Files panel (oc edit / oc apply -f).</div>
+          </div>`;
+        document.body.appendChild(overlay);
+
+        const close = () => overlay.remove();
+        document.getElementById('edit-dialog-close').addEventListener('click', close);
+        document.getElementById('edit-dialog-cancel').addEventListener('click', close);
+
+        document.getElementById('edit-dialog-save').addEventListener('click', () => {
+          const labelsText = document.getElementById('edit-labels').value;
+          const newLabels = {};
+          for (const line of labelsText.split('\n')) {
+            const trimmed = line.trim();
+            if (!trimmed) continue;
+            const eq = trimmed.indexOf('=');
+            if (eq > 0) newLabels[trimmed.substring(0, eq)] = trimmed.substring(eq + 1);
+          }
+          const updates = { metadata: { labels: newLabels } };
+          const replicasInput = document.getElementById('edit-replicas');
+          if (replicasInput) updates.spec = { ...(updates.spec || {}), replicas: parseInt(replicasInput.value, 10) || 1 };
+          const selectorInput = document.getElementById('edit-selector');
+          if (selectorInput) {
+            const sel = {};
+            for (const part of selectorInput.value.split(',')) {
+              const trimmed = part.trim();
+              const eq = trimmed.indexOf('=');
+              if (eq > 0) sel[trimmed.substring(0, eq)] = trimmed.substring(eq + 1);
+            }
+            updates.spec = { ...(updates.spec || {}), selector: sel };
+          }
+          const svcType = document.getElementById('edit-svc-type');
+          if (svcType) updates.spec = { ...(updates.spec || {}), type: svcType.value };
+          this.engine.cluster.update(uid, updates);
+          resource.recordEvent?.('Normal', 'Updated', 'Resource updated via editor');
+          close();
+        });
+      }
+
+      _showScaleDialog(data) {
+        const resource = this.engine.cluster.getResource(data.uid);
+        if (!resource) return;
+        document.getElementById('scale-dialog-overlay')?.remove();
+        const current = resource.spec?.replicas ?? 1;
+        const overlay = document.createElement('div');
+        overlay.id = 'scale-dialog-overlay';
+        overlay.className = 'fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm';
+        overlay.innerHTML = `
+          <div class="w-64 rounded-xl bg-gray-900/95 border border-white/10 shadow-2xl p-4">
+            <div class="text-xs text-white/40 font-medium uppercase tracking-wider mb-1">Scale ${escapeHtml(data.kind)}</div>
+            <div class="text-sm text-white/80 font-semibold mb-3">${escapeHtml(data.name)}</div>
+            <input id="scale-input" type="number" min="0" max="50" value="${current}" class="w-full px-3 py-2 text-sm text-white bg-black/40 border border-white/15 rounded-lg outline-none focus:border-openshift/50 font-mono" />
+            <div class="flex gap-2 mt-3">
+              <button id="scale-ok" class="flex-1 px-3 py-1.5 text-xs font-medium text-white bg-openshift hover:bg-openshift-dark rounded-lg transition-colors">Scale</button>
+              <button id="scale-cancel" class="px-3 py-1.5 text-xs font-medium text-white/60 hover:text-white bg-white/5 hover:bg-white/10 rounded-lg transition-colors">Cancel</button>
+            </div>
+          </div>`;
+        document.body.appendChild(overlay);
+        const input = document.getElementById('scale-input');
+        input.select();
+        input.focus();
+        const close = () => overlay.remove();
+        const submit = () => {
+          const replicas = parseInt(input.value, 10);
+          if (!Number.isNaN(replicas) && replicas >= 0) {
+            this.engine.queueCommand({ type: 'scale', kind: data.kind, name: data.name, namespace: data.namespace, replicas });
+          }
+          close();
+        };
+        document.getElementById('scale-ok').addEventListener('click', submit);
+        document.getElementById('scale-cancel').addEventListener('click', close);
+        input.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter') submit();
+          if (e.key === 'Escape') close();
+        });
+      }
+
+      // ── Optional modules (provided by other workstreams; loaded lazily) ──────
+      /**
+       * Probe for an optional ES module without generating console errors while the
+       * file is still being authored by a parallel workstream (a 404 fetch is quiet;
+       * a failed `import()` is not). Returns true only for a 2xx response.
+       */
+      async _moduleExists(path) {
+        try {
+          const response = await fetch(path, { method: 'HEAD', cache: 'no-store' });
+          return response.ok;
+        } catch {
+          return false;
+        }
+      }
+
+      async _ensureManifestPanel() {
+        if (this.manifestPanel) return this.manifestPanel;
+        if (this._manifestPanelPromise) return this._manifestPanelPromise;
+        this._manifestPanelPromise = (async () => {
+          try {
+            if (!(await this._moduleExists('./js/ui/ManifestPanel.js'))) return null;
+            const mod = await import('./js/ui/ManifestPanel.js');
+            const PanelClass = mod.ManifestPanel || mod.ManifestEngine || mod.default;
+            if (typeof PanelClass !== 'function') return null;
+            const panel = new PanelClass(this.engine);
+            if (typeof panel.init === 'function') panel.init();
+            this.manifestPanel = panel;
+            window.game.manifestPanel = panel;
+            if (!window.game.manifestEngine && panel.manifestEngine) window.game.manifestEngine = panel.manifestEngine;
+            return panel;
+          } catch (err) {
+            console.warn(`${APP_NAME}: Files/Manifests panel module not available yet (js/ui/ManifestPanel.js):`, err?.message || err);
+            return null;
+          }
+        })();
+        return this._manifestPanelPromise;
+      }
+
+      async _ensureExamPrep() {
+        if (this.examPrepUI) return this.examPrepUI;
+        if (this._examPrepPromise) return this._examPrepPromise;
+        this._examPrepPromise = (async () => {
+          try {
+            if (!(await this._moduleExists('./js/modes/ExamPrepMode.js'))) return null;
+            const mod = await import('./js/modes/ExamPrepMode.js');
+            const PrepClass = mod.ExamPrepUI || mod.ExamPrepMode || mod.ExamPrep || mod.default;
+            if (typeof PrepClass !== 'function') return null;
+            const ui = new PrepClass(this.engine, this.scoringEngine, this);
+            if (typeof ui.init === 'function') ui.init();
+            this.examPrepUI = ui;
+            window.game.examPrepUI = ui;
+            return ui;
+          } catch (err) {
+            console.warn(`${APP_NAME}: EX280 Prep module not available yet (js/modes/ExamPrepMode.js):`, err?.message || err);
+            return null;
+          }
+        })();
+        return this._examPrepPromise;
+      }
+
+      _bootOptionalPanels() {
+        // EX280 Prep is opened from the main menu, so initialise it at boot.
+        this._ensureExamPrep().catch(() => {});
+      }
+
+      async showFiles() {
+        const panel = await this._ensureManifestPanel();
+        if (!panel) {
+          this._showToast('Files panel is still loading — the manifests module is not available yet.');
+          return;
+        }
+        try {
+          const levelDef = this._getLevelDef();
+          if (levelDef && typeof panel.setContext === 'function') {
+            panel.setContext({ manifestFiles: levelDef.manifestFiles || [], focusFiles: levelDef.focusFiles || [] });
+          }
+        } catch (err) {
+          console.warn(`${APP_NAME}: Files panel setContext failed`, err);
+        }
+        panel.show();
+      }
+
+      async showExamPrep() {
+        const ui = await this._ensureExamPrep();
+        if (!ui) {
+          this._showToast('EX280 Prep is still loading — the ExamPrep module is not available yet.');
+          return;
+        }
+        ui.show();
+      }
+
+      _showToast(message) {
+        document.querySelectorAll('.os-toast').forEach((el) => el.remove());
+        const toast = document.createElement('div');
+        toast.className = 'os-toast';
+        toast.textContent = message;
+        document.body.appendChild(toast);
+        setTimeout(() => { toast.classList.add('os-toast-out'); setTimeout(() => toast.remove(), 300); }, 3200);
+      }
+
+      getPlacementPosition() {
+        const count = this.engine.cluster.getAllResources().length;
+        const angle = count * 2.4;
+        const radius = 2 + Math.sqrt(count) * 1.8;
+        return { x: Math.cos(angle) * radius, y: 0, z: Math.sin(angle) * radius };
+      }
+
+      // ── Layout: tiers derived from kindRegistry palette sections ─────────────
+      autoAlignResources() {
+        const cluster = this.engine.cluster;
+        if (!cluster || !this.renderer) return;
+        const allResources = cluster.getAllResources();
+        if (allResources.length === 0) return;
+
+        const tiers = {};
+        let tierIndex = 0;
+        for (const section of PALETTE_SECTIONS) {
+          const kinds = Object.keys(KIND_DEFS).filter((k) => (KIND_DEFS[k].palette?.section || 'projects') === section.id);
+          if (kinds.length === 0) continue;
+          tiers[section.id] = { kinds, z: -10 + tierIndex * 4.5, spacing: Math.max(2.4, Math.min(4, 18 / kinds.length)) };
+          tierIndex++;
+        }
+
+        const targets = new Map();
+        for (const tier of Object.values(tiers)) {
+          const resources = allResources.filter((r) => tier.kinds.includes(r.kind));
+          if (resources.length === 0) continue;
+          const totalWidth = (resources.length - 1) * tier.spacing;
+          const startX = -totalWidth / 2;
+          resources.forEach((r, i) => {
+            targets.set(r.uid || r.metadata?.uid, { x: startX + i * tier.spacing, y: 0, z: tier.z });
+          });
+        }
+
+        const unmatched = allResources.filter((r) => !targets.has(r.uid || r.metadata?.uid));
+        if (unmatched.length > 0) {
+          const startX = -((unmatched.length - 1) * 3) / 2;
+          unmatched.forEach((r, i) => targets.set(r.uid || r.metadata?.uid, { x: startX + i * 3, y: 0, z: 34 }));
+        }
+
+        if (typeof this.renderer.animateToPositions === 'function') {
+          this.renderer.animateToPositions(targets, 800);
+        }
+        for (const [uid, pos] of targets) this.placedPositions.set(uid, pos);
+        setTimeout(() => this.renderer?.resetCamera?.(), 200);
+      }
+
+      // ── Modes / launch ──────────────────────────────────────────────────────
+      startMode(mode) {
+        this.currentMode = mode;
+        switch (mode) {
+          case 'campaign':
+            this.buildLevelSelect();
+            document.getElementById('level-select')?.classList.add('active');
+            return;
+          case 'challenge':
+            this.buildChallengeSelect();
+            document.getElementById('challenge-select')?.classList.add('active');
+            return;
+          default:
+            this.launchGame(mode);
+        }
+      }
+
+      launchGame(mode, levelOrChallenge) {
+        if (this._webglFailed) {
+          this._showWebGLError();
+          return;
+        }
+        this.examPrepUI?.hide?.();
+
+        document.getElementById('main-menu')?.classList.add('hidden');
+        document.getElementById('level-select')?.classList.remove('active');
+        document.getElementById('challenge-select')?.classList.remove('active');
+        document.getElementById('game-container')?.classList.add('active');
+
+        for (const uid of [...(this.renderer?.resourceMeshes?.keys() || [])]) this.renderer.removeResource(uid);
+        this.placedPositions.clear();
+        this.engine.reset();
+        this.engine.setMode(mode);
+        this.engine.setDifficulty(this.settings.difficulty);
+        this.resourceCounter = {};
+
+        this.hud.init();
+        this.commandBar.init();
+        this.inspector.init();
+        this.contextMenu.init();
+        this.metrics.init();
+        this.incidentPanel.init();
+        this.minimap.init();
+
+        this.applySettings();
+        // ?tutorial=0 skips the intro modal (used by screenshots/verifier).
+        let skipTutorial = false;
+        try { skipTutorial = new URLSearchParams(window.location.search).get('tutorial') === '0'; } catch {}
+        if (!skipTutorial) this.showTutorial(mode);
+        this.renderer.start();
+        this.engine.start();
+
+        try {
+          switch (mode) {
+            case 'campaign':
+              this.modeInstance = new CampaignMode(this.engine, this.incidentEngine, this.scoringEngine);
+              this.modeInstance.startLevel(levelOrChallenge || 1);
+              break;
+            case 'chaos':
+              this.modeInstance = new ChaosMode(this.engine, this.incidentEngine, this.scoringEngine);
+              this.modeInstance.start();
+              break;
+            case 'sandbox':
+              this.modeInstance = new SandboxMode(this.engine, this.scoringEngine);
+              this.modeInstance.start();
+              break;
+            case 'challenge':
+              this.modeInstance = new ChallengeMode(this.engine, this.incidentEngine, this.scoringEngine);
+              this.modeInstance.startChallenge(levelOrChallenge || 1);
+              break;
+            default:
+              this.modeInstance = new SandboxMode(this.engine, this.scoringEngine);
+              this.modeInstance.start();
+          }
+        } catch (err) {
+          console.error(`${APP_NAME}: failed to start ${mode} mode`, err);
+        }
+
+        this._initObjectivesPanel(mode);
+
+        // Lay out everything present after mode setup: seeded OpenShift defaults plus the
+        // mode's starting resources. Uses the renderer's registry-derived tiers and the
+        // shared RelationGraph so Route→Service→Pod / Build→ImageStream edges are visible.
+        try {
+          for (const resource of this.engine.cluster.getAllResources?.() || []) {
+            const uid = resource.uid;
+            if (!uid || this.renderer.resourceMeshes.has(uid)) continue;
+            const pos = this.placedPositions.get(uid) || this.getPlacementPosition();
+            this.placedPositions.set(uid, pos);
+            this.renderer.addResource(toRenderable(resource, pos.x, pos.y, pos.z));
+          }
+          if (typeof this.renderer.autoAlign === 'function') this.renderer.autoAlign(this.engine.cluster, { duration: 600 });
+          if (typeof this.renderer.syncConnectionsFromCluster === 'function') this.renderer.syncConnectionsFromCluster(this.engine.cluster);
+        } catch (err) {
+          console.warn(`${APP_NAME}: post-launch layout failed`, err);
+        }
+
+        // Files/Manifests panel is instantiated and initialised with the game session.
+        this._ensureManifestPanel()
+          .then((panel) => {
+            if (!panel) return;
+            const levelDef = this._getLevelDef();
+            if (levelDef && typeof panel.setContext === 'function') {
+              panel.setContext({ manifestFiles: levelDef.manifestFiles || [], focusFiles: levelDef.focusFiles || [] });
+            }
+          })
+          .catch(() => {});
+
+        this._startLevelTutorialFromMode();
+      }
+
+      _getLevelDef() {
+        return this.modeInstance?.currentLevelDef || this.modeInstance?.currentChallengeDef || null;
+      }
+
+      _initObjectivesPanel(mode) {
+        const panel = document.getElementById('objectives-panel');
+        if (!panel) return;
+        if (mode !== 'campaign' && mode !== 'challenge') {
+          panel.style.display = 'none';
+          return;
+        }
+        panel.style.display = '';
+        this._hintIndex = 0;
+        this._panelCollapsed = false;
+        const hintList = document.getElementById('hint-list');
+        if (hintList) hintList.innerHTML = '';
+        const body = document.getElementById('obj-panel-body');
+        if (body) body.style.display = '';
+        const toggle = document.getElementById('obj-panel-toggle');
+        if (toggle) toggle.innerHTML = '&#9660;';
+
+        const levelDef = this._getLevelDef();
+        const allHints = levelDef?.hints || [];
+        const hintBtn = document.getElementById('btn-show-hint');
+        const hintSection = document.getElementById('hint-section');
+        if (allHints.length > 0) {
+          if (hintSection) hintSection.style.display = '';
+          if (hintBtn) {
+            hintBtn.style.display = '';
+            hintBtn.innerHTML = `<svg class="w-3.5 h-3.5 shrink-0" fill="currentColor" viewBox="0 0 20 20" aria-hidden="true"><path d="M11 3a1 1 0 10-2 0v1a1 1 0 102 0V3zM15.657 5.757a1 1 0 00-1.414-1.414l-.707.707a1 1 0 001.414 1.414l.707-.707zM18 10a1 1 0 01-1 1h-1a1 1 0 110-2h1a1 1 0 011 1zM5.05 6.464A1 1 0 106.464 5.05l-.707-.707a1 1 0 00-1.414 1.414l.707.707zM4 11a1 1 0 100-2H3a1 1 0 000 2h1zM10 18a3 3 0 01-2.83-2h5.66A3 3 0 0110 18zM13 14H7v-1a3 3 0 01.879-2.121l.707-.707A5 5 0 0010 5a5 5 0 00-1.414 0A5 5 0 005 10c0 1.38.56 2.63 1.464 3.536L7 14z"/></svg><span>Show Hint (${allHints.length})</span>`;
+          }
+        } else {
+          if (hintSection) hintSection.style.display = 'none';
+          if (hintBtn) hintBtn.style.display = 'none';
+        }
+
+        const status = this.modeInstance?.getStatus?.();
+        if (status) this._updateObjectivesPanel(status);
+
+        if (toggle) {
+          toggle.onclick = () => {
+            this._panelCollapsed = !this._panelCollapsed;
+            document.getElementById('obj-panel-body').style.display = this._panelCollapsed ? 'none' : '';
+            toggle.innerHTML = this._panelCollapsed ? '&#9654;' : '&#9660;';
+          };
+        }
+
+        if (hintBtn) {
+          hintBtn.onclick = () => {
+            if (!this.modeInstance?.useHint) return;
+            const hint = this.modeInstance.useHint(this._hintIndex);
+            if (!hint) return;
+            const list = document.getElementById('hint-list');
+            const div = document.createElement('div');
+            div.className = 'flex items-start gap-1.5 text-[11px] text-amber-400/70 leading-relaxed';
+            div.innerHTML = `<span class="text-amber-400/50 mt-px shrink-0">&#128161;</span><span>${escapeHtml(hint)}</span>`;
+            list?.appendChild(div);
+            this._hintIndex++;
+            const all = this._getLevelDef()?.hints || [];
+            if (this._hintIndex >= all.length) hintBtn.style.display = 'none';
+            else {
+              const label = hintBtn.querySelector('span');
+              if (label) label.textContent = `Show Hint (${all.length - this._hintIndex} left)`;
+            }
+          };
+        }
+
+        if (this._objUpdateInterval) clearInterval(this._objUpdateInterval);
+        this._objUpdateInterval = setInterval(() => {
+          if (!this.modeInstance?.getStatus) return;
+          this._updateObjectivesPanel(this.modeInstance.getStatus());
+        }, 500);
+      }
+
+      _updateObjectivesPanel(status) {
+        const titleEl = document.getElementById('obj-panel-title');
+        const descEl = document.getElementById('obj-panel-desc');
+        const listEl = document.getElementById('obj-list');
+        if (!titleEl || !status) return;
+        const levelDef = this._getLevelDef();
+        const isChallenge = this.currentMode === 'challenge';
+
+        if (isChallenge) {
+          const mins = Math.floor((status.timeRemaining || 0) / 60);
+          const secs = (status.timeRemaining || 0) % 60;
+          const timeStr = `${mins}:${String(secs).padStart(2, '0')}`;
+          const urgentClass = (status.timeRemaining || 0) <= 30 ? 'text-red-400' : 'text-sky-400';
+          titleEl.innerHTML = `<span class="truncate">${escapeHtml(status.title || 'Lab')}</span><span class="${urgentClass} font-mono text-[11px] ml-auto pl-2 shrink-0">${timeStr}</span>`;
+        } else {
+          titleEl.textContent = `L${status.currentLevel || '?'} - ${status.levelTitle || ''}`;
+        }
+        if (descEl) descEl.textContent = levelDef?.description || '';
+
+        if (listEl) {
+          listEl.innerHTML = '';
+          for (const obj of status.objectives || []) {
+            const done = obj.completed;
+            const div = document.createElement('div');
+            div.className = `flex items-start gap-2 py-1 px-2 rounded-md text-xs ${done ? 'bg-green-500/8' : 'bg-white/3'}`;
+            const icon = done ? '<span class="text-green-400 shrink-0">&#10003;</span>' : '<span class="text-white/30 shrink-0">&#9675;</span>';
+            const progress = obj.target > 1 ? ` <span class="text-white/30 font-mono">${obj.current || 0}/${obj.target}</span>` : '';
+            div.innerHTML = `${icon}<span class="${done ? 'text-green-400/80 line-through' : 'text-white/70'}">${escapeHtml(obj.label || obj.type)}${progress}</span>`;
+            listEl.appendChild(div);
+          }
+        }
+
+        const allHints = levelDef?.hints || [];
+        const hintSection = document.getElementById('hint-section');
+        if (allHints.length === 0) {
+          if (hintSection) hintSection.style.display = 'none';
+        } else {
+          if (hintSection) hintSection.style.display = '';
+          const hintBtn = document.getElementById('btn-show-hint');
+          if (hintBtn && this._hintIndex < allHints.length) hintBtn.style.display = '';
+        }
+      }
+
+      returnToMenu() {
+        if (this._objUpdateInterval) {
+          clearInterval(this._objUpdateInterval);
+          this._objUpdateInterval = null;
+        }
+        const panel = document.getElementById('objectives-panel');
+        if (panel) panel.style.display = 'none';
+        this._clearTutorialOverlay();
+        this.examPrepUI?.hide?.();
+        this.manifestPanel?.hide?.();
+        this.engine.stop();
+        this.renderer?.stop?.();
+        if (this.modeInstance) {
+          if (typeof this.modeInstance.exit === 'function') this.modeInstance.exit();
+          else if (typeof this.modeInstance.cleanup === 'function') this.modeInstance.cleanup();
+          else if (typeof this.modeInstance.destroy === 'function') this.modeInstance.destroy();
+        }
+        this.modeInstance = null;
+        this.currentMode = null;
+        document.getElementById('game-container')?.classList.remove('active');
+        document.getElementById('main-menu')?.classList.remove('hidden');
+        document.querySelectorAll('#hud, #command-bar, #inspector-panel, #context-menu, #context-menu-container, #metrics-dashboard, #incident-panel, #minimap, #minimap-container').forEach((el) => el?.remove());
+        for (const uid of [...(this.renderer?.resourceMeshes?.keys() || [])]) this.renderer.removeResource(uid);
+        this.placedPositions.clear();
+      }
+
+      // ── Render sync (connections live here, not in the renderer) ────────────
+      syncRenderState() {
+        const cluster = this.engine?.cluster;
+        if (!cluster || !this.renderer) return;
+        for (const [uid, resource] of cluster.resources) {
+          if (this.renderer.resourceMeshes.has(uid)) {
+            const status = resource.status?.phase || resource.phase || 'Pending';
+            this.renderer.updateResource({ id: uid, status });
+          }
+        }
+
+        // Prefer the shared RelationGraph (ownership, Project containment, Service selectors,
+        // Route→Service, BuildConfig→ImageStream→Deployment, SCC→SA/Pod, RBAC, storage, ...).
+        if (typeof this.renderer.syncConnectionsFromCluster === 'function') {
+          this.renderer.syncConnectionsFromCluster(cluster);
+          return;
+        }
+
+        const connections = new Map();
+
+        // Ownership edges (Deployment→ReplicaSet→Pod, BuildConfig→Build, …)
+        for (const [parentUid, childUids] of cluster.relationships) {
+          if (!cluster.resources.has(parentUid)) continue;
+          for (const childUid of childUids) {
+            if (!cluster.resources.has(childUid)) continue;
+            if (!this.renderer.resourceMeshes.has(parentUid) || !this.renderer.resourceMeshes.has(childUid)) continue;
+            const id = `own:${parentUid}:${childUid}`;
+            connections.set(id, { id, sourceId: parentUid, targetId: childUid, type: 'ownership', trafficVolume: 1 });
+          }
+        }
+
+        // Service → Pods / Deployments by selector
+        const services = cluster.getByKind?.('Service') || [];
+        const pods = cluster.getByKind?.('Pod') || [];
+        const deployments = cluster.getByKind?.('Deployment') || [];
+        for (const svc of services) {
+          if (!svc.spec?.selector || Object.keys(svc.spec.selector).length === 0) continue;
+          if (!this.renderer.resourceMeshes.has(svc.uid)) continue;
+          const matchingPods = cluster.selectByLabels?.('Pod', svc.spec.selector) || pods.filter((p) => p.matchesSelector?.(svc.spec.selector));
+          for (const pod of matchingPods) {
+            if (!this.renderer.resourceMeshes.has(pod.uid)) continue;
+            connections.set(`net:${svc.uid}:${pod.uid}`, { id: `net:${svc.uid}:${pod.uid}`, sourceId: svc.uid, targetId: pod.uid, type: 'network', trafficVolume: 2 });
+          }
+          for (const dep of deployments) {
+            if (dep.metadata?.namespace !== svc.metadata?.namespace) continue;
+            const labels = dep.metadata?.labels || {};
+            const matches = Object.entries(svc.spec.selector).every(([k, v]) => labels[k] === v);
+            if (!matches || !this.renderer.resourceMeshes.has(dep.uid)) continue;
+            const id = `net:${svc.uid}:${dep.uid}`;
+            if (!connections.has(id)) connections.set(id, { id, sourceId: svc.uid, targetId: dep.uid, type: 'network', trafficVolume: 3 });
+          }
+        }
+
+        // Route → Service (OpenShift ingress path)
+        const routes = cluster.getByKind?.('Route') || [];
+        for (const route of routes) {
+          const targetName = route.spec?.to?.name;
+          if (!targetName || !this.renderer.resourceMeshes.has(route.uid)) continue;
+          const svc = services.find((s) => s.metadata.name === targetName && s.metadata.namespace === route.metadata.namespace);
+          if (!svc || !this.renderer.resourceMeshes.has(svc.uid)) continue;
+          connections.set(`net:${route.uid}:${svc.uid}`, { id: `net:${route.uid}:${svc.uid}`, sourceId: route.uid, targetId: svc.uid, type: 'network', trafficVolume: 3 });
+        }
+
+        this.renderer.connectionLines?.sync?.(connections, this.renderer.resourceMeshes);
+      }
+
+      applySettings() {
+        if (!this.renderer) return;
+        if (this.renderer.renderer) this.renderer.renderer.shadowMap.enabled = this.settings.shadows;
+        if (this.renderer.gridGroup) this.renderer.gridGroup.visible = this.settings.grid;
+        const particles = this.renderer.particleTraffic || this.renderer.particleSystem;
+        if (particles) particles.enabled = this.settings.particles;
+      }
+
+      // ── YAML export (shared registry serializer; single-file download) ───────
+      exportClusterYAML() {
+        const cluster = this.engine?.cluster;
+        if (!cluster) return;
+        let yaml = '';
+        try {
+          if (this.modeInstance && typeof this.modeInstance.exportClusterYAML === 'function') {
+            yaml = this.modeInstance.exportClusterYAML() || '';
+          }
+        } catch (err) {
+          console.warn(`${APP_NAME}: mode YAML export failed, falling back to registry serializer`, err);
+        }
+        if (!yaml) {
+          const resources = cluster.getAllResources();
+          const docs = resources.map((resource) => {
+            let manifest;
+            try {
+              manifest = typeof toManifestObject === 'function' ? toManifestObject(resource) : null;
+            } catch (err) {
+              manifest = null;
+            }
+            if (!manifest) {
+              manifest = {
+                apiVersion: resource.apiVersion || 'v1',
+                kind: resource.kind,
+                metadata: { name: resource.metadata?.name, namespace: resource.metadata?.namespace },
+                spec: resource.spec || {},
+              };
+            }
+            return this._yamlStringify(manifest);
+          });
+          yaml = docs.join('\n---\n');
+        }
+        const blob = new Blob([yaml], { type: 'text/yaml' });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = YAML_FILENAME;
+        link.click();
+        URL.revokeObjectURL(url);
+        this.engine?.eventBus?.emit?.('yaml:viewed', {});
+      }
+
+      _yamlStringify(value, indent = 0, asKeyValue = false) {
+        const pad = '  '.repeat(indent);
+        const scalar = (val) => {
+          if (val === null || val === undefined) return 'null';
+          if (typeof val === 'boolean' || typeof val === 'number') return String(val);
+          const str = String(val);
+          const needsQuote = str === '' || /[:#\n{}[\],&*!|>'"%@`]/.test(str) || /^\s|\s$/.test(str) || /^(true|false|yes|no|null|~|\d+(\.\d+)?)$/i.test(str);
+          return needsQuote ? JSON.stringify(str) : str;
+        };
+        if (Array.isArray(value)) {
+          if (value.length === 0) return '[]';
+          return value.map((item) => {
+            if (item && typeof item === 'object') return `${pad}-\n${this._yamlStringify(item, indent + 1)}`;
+            return `${pad}- ${scalar(item)}`;
+          }).join('\n');
+        }
+        if (value && typeof value === 'object') {
+          const entries = Object.entries(value).filter(([, v]) => v !== undefined);
+          if (entries.length === 0) return '{}';
+          const lines = [];
+          for (const [key, val] of entries) {
+            if (val && typeof val === 'object') lines.push(`${pad}${key}:\n${this._yamlStringify(val, indent + 1)}`);
+            else lines.push(`${pad}${key}: ${scalar(val)}`);
+          }
+          return lines.join('\n');
+        }
+        return asKeyValue ? String(value) : scalar(value);
+      }
+
+      // ── Help / tutorial ────────────────────────────────────────────────────
+      showTutorial(mode) {
+        document.getElementById('tutorial-overlay')?.remove();
+        const modeNames = {
+          sandbox: 'Sandbox Mode',
+          chaos: 'Chaos Mode',
+          campaign: 'EX280 Campaign',
+          challenge: 'Timed EX280 Labs',
+          examprep: 'EX280 Prep',
+        };
+        const modeGoals = {
+          sandbox: 'Build any OpenShift platform you want. Create Projects, deploy applications, expose Routes and let the Architecture Advisor score your design 0–100.',
+          chaos: 'Survive as long as possible. Incidents escalate over time — if cluster health hits zero, the platform goes down. Fix issues fast for combo XP.',
+          campaign: 'Complete objectives across 5 EX280 chapters to pass each level. Faster completion with fewer resources earns more stars (3 max).',
+          challenge: 'Beat the clock. Deploy and configure the required OpenShift resources before time runs out.',
+          examprep: 'Track every EX280V422 objective, practice quick labs, and read the oc cheat sheet. Readiness verdict appears at 90% mastered.',
+        };
+        const controls = [
+          { key: 'Click palette', desc: 'Create a resource from the kind registry' },
+          { key: 'Drag resource', desc: 'Move it anywhere in the 3D cluster view' },
+          { key: 'Click resource', desc: 'Inspect it (Overview / YAML / Describe / Events)' },
+          { key: 'Right-click', desc: 'OpenShift actions: expose, start build, scale, rollback, delete' },
+          { key: '/', desc: '$ oc terminal — get, describe, new-app, expose, apply -f, …' },
+          { key: 'F', desc: 'Files / manifests panel (apply -f, apply -k, templates, Helm)' },
+          { key: '?', desc: 'EX280 Prep — objective tracker, quick labs, cheat sheet' },
+          { key: 'H', desc: 'Re-open this help' },
+          { key: 'Space', desc: 'Pause / resume the simulation' },
+          { key: 'M', desc: 'Toggle live metrics dashboard' },
+          { key: '1–9', desc: 'Quick-select a palette resource' },
+          { key: 'Esc', desc: 'Close panel / return to main menu' },
+        ];
+        const modeRules = {
+          sandbox: [
+            'Start with the default platform Projects and Nodes — add more from the palette',
+            'Create a <b>Project</b> first, then deploy workloads (<b>Deployment</b>) into it',
+            'Expose a <b>Service</b>, then a <b>Route</b> (<code>oc expose svc/&lt;name&gt;</code>) for external traffic',
+            'Use the <b>Files</b> panel for declarative YAML, Kustomize overlays, templates and Helm',
+            'Architecture Advisor scores: HA, security, networking, storage, scaling, RBAC, quotas, probes, config, cost',
+          ],
+          chaos: [
+            'You start with a running OpenShift platform — keep it alive',
+            'Incidents appear as alerts in the top bar and the Incidents panel',
+            'Investigate with <code>oc describe</code>, <code>oc logs</code>, <code>oc get events</code>',
+            'Resolve incidents by fixing the actual resource state where possible',
+            'Difficulty and incident rate increase over time',
+          ],
+          campaign: [
+            'Ch 1 — Manage OpenShift: Projects, <code>oc</code> CLI, querying, declarative basics',
+            'Ch 2 — Declarative &amp; Kustomize: manifests, overlays, ConfigMaps/Secrets, templates, Helm',
+            'Ch 3 — Deploy &amp; Expose: images/builds/ImageStreams, rollouts, Services, Routes with TLS',
+            'Ch 4 — Identity, RBAC &amp; self-service: HTPasswd, users/groups, quotas, LimitRanges, SAs',
+            'Ch 5 — Security &amp; Operations: SCC, operators, jobs/cronjobs, final production platform',
+          ],
+          challenge: [
+            '<b>Click resources</b> in the palette or use the <code>oc</code> terminal to create resources',
+            '<b>Names matter</b> — a name prompt appears so you can match objective names',
+            '<b>Show Hint</b> on the objectives panel gives step-by-step <code>oc</code> commands',
+            '<b>F</b> opens the Files panel; many labs provide manifests and overlays',
+            'Right-click any resource for OpenShift actions: Expose, Start Build, Scale, Rollout, Delete',
+          ],
+        };
+        const rules = modeRules[mode] || modeRules.sandbox;
+
+        const overlay = document.createElement('div');
+        overlay.id = 'tutorial-overlay';
+        overlay.innerHTML = `
+          <div class="tutorial-card">
+            <div class="tutorial-header">
+              <div class="tutorial-mode">${escapeHtml(modeNames[mode] || mode)}</div>
+              <div class="tutorial-desc">${modeGoals[mode] || ''}</div>
+            </div>
+            <div class="tutorial-section-label">How to Play</div>
+            <div class="tutorial-tips">
+              ${rules.map((r) => `<div class="tutorial-tip"><span class="tutorial-bullet"></span><span class="tutorial-text">${r}</span></div>`).join('')}
+            </div>
+            <div class="tutorial-section-label">Controls</div>
+            <div class="tutorial-tips">
+              ${controls.map((t) => `<div class="tutorial-tip"><span class="tutorial-key">${escapeHtml(t.key)}</span><span class="tutorial-text">${escapeHtml(t.desc)}</span></div>`).join('')}
+            </div>
+            <div class="tutorial-footer">
+              <a href="${DOCS_URL}" target="_blank" rel="noopener">OpenShift 4.22 docs</a>
+              <span>·</span>
+              <a href="${EXAM_URL}" target="_blank" rel="noopener">EX280 exam objectives</a>
+            </div>
+            <button id="tutorial-start" class="tutorial-btn">Got it, let's go</button>
+            <div class="tutorial-hint">Press <span class="tutorial-hint-key">H</span> anytime to reopen this</div>
+          </div>`;
+        document.body.appendChild(overlay);
+        const close = () => { overlay.classList.add('fade-out'); setTimeout(() => overlay.remove(), 400); };
+        document.getElementById('tutorial-start').addEventListener('click', close);
+        overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+      }
+
+      _startLevelTutorialFromMode() {
+        const steps = this._getLevelDef()?.tutorial?.steps;
+        if (Array.isArray(steps) && steps.length > 0) this._startLevelTutorial(steps);
+      }
+
+      _clearTutorialOverlay() {
+        document.getElementById('level-tutorial-overlay')?.remove();
+        document.querySelectorAll('.coach-target').forEach((el) => el.classList.remove('coach-target'));
+        this._tutorialQueue = null;
+      }
+
+      _startLevelTutorial(steps) {
+        this._clearTutorialOverlay();
+        this._tutorialQueue = [...steps];
+        this._showTutorialStep();
+      }
+
+      _showTutorialStep() {
+        document.getElementById('level-tutorial-overlay')?.remove();
+        const step = this._tutorialQueue?.shift();
+        if (!step) { this._clearTutorialOverlay(); return; }
+        document.querySelectorAll('.coach-target').forEach((el) => el.classList.remove('coach-target'));
+        const targetSelector = {
+          'command-bar': '#command-bar',
+          'cluster-view': '#game-canvas',
+          inspector: '#inspector-panel',
+          files: '#btn-manifests',
+          palette: '#resource-palette',
+          objectives: '#objectives-panel',
+        }[step.target];
+        const targetEl = targetSelector ? document.querySelector(targetSelector) : null;
+        targetEl?.classList.add('coach-target');
+
+        const overlay = document.createElement('div');
+        overlay.id = 'level-tutorial-overlay';
+        overlay.className = 'coach-card-wrap';
+        const remaining = this._tutorialQueue.length;
+        overlay.innerHTML = `
+          <div class="coach-card">
+            <div class="coach-step">Tutorial · ${remaining === 0 ? 'last step' : `${remaining} step${remaining === 1 ? '' : 's'} left`}</div>
+            <div class="coach-text">${step.text || ''}</div>
+            <div class="coach-actions">
+              <button id="coach-skip" class="coach-skip">Skip tutorial</button>
+              <button id="coach-next" class="coach-next">${remaining === 0 ? 'Start' : 'Next'}</button>
+            </div>
+          </div>`;
+        document.body.appendChild(overlay);
+        document.getElementById('coach-next').addEventListener('click', () => this._showTutorialStep());
+        document.getElementById('coach-skip').addEventListener('click', () => this._clearTutorialOverlay());
+      }
+
+      // ── Select screens ─────────────────────────────────────────────────────
+      buildLevelSelect() {
+        const grid = document.getElementById('level-grid');
+        if (!grid) return;
+        grid.innerHTML = '';
+        const progress = this.scoringEngine ? this.scoringEngine.progress : { campaignProgress: {} };
+        const campaignProgress = progress.campaignProgress || {};
+        let currentChapter = 0;
+
+        (CAMPAIGN_LEVELS || []).forEach((level) => {
+          const chapter = level.chapter || Math.ceil(level.id / 4);
+          if (chapter !== currentChapter) {
+            currentChapter = chapter;
+            const chapterInfo = (CHAPTERS || [])[chapter - 1] || { name: `Chapter ${chapter}` };
+            const header = document.createElement('div');
+            header.className = 'chapter-header';
+            header.textContent = `Chapter ${chapter}: ${chapterInfo.name || chapterInfo.title || ''}`;
+            grid.appendChild(header);
+          }
+          const card = document.createElement('div');
+          const prevCompleted = level.id === 1 || campaignProgress[level.id - 1]?.completed;
+          const isLocked = !prevCompleted;
+          const isCompleted = campaignProgress[level.id]?.completed;
+          const stars = campaignProgress[level.id]?.stars || 0;
+          card.className = `level-card ${isLocked ? 'locked' : ''} ${isCompleted ? 'completed' : ''}`;
+          card.innerHTML = `
+            <div class="level-number">${level.id}</div>
+            <div class="level-title">${escapeHtml(level.title || level.name || `Level ${level.id}`)}</div>
+            <div class="level-stars">${isCompleted ? '&#9733;'.repeat(stars) + '&#9734;'.repeat(Math.max(0, 3 - stars)) : '&#9734;&#9734;&#9734;'}</div>`;
+          if (!isLocked) card.addEventListener('click', () => this.launchGame('campaign', level.id));
+          grid.appendChild(card);
+        });
+      }
+
+      buildChallengeSelect() {
+        const grid = document.getElementById('challenge-grid');
+        if (!grid) return;
+        grid.innerHTML = '';
+        (CHALLENGES || []).forEach((ch, idx) => {
+          const card = document.createElement('div');
+          card.className = 'challenge-card';
+          card.innerHTML = `
+            <div class="challenge-info">
+              <div class="challenge-name">${escapeHtml(ch.title || ch.name || `Lab ${idx + 1}`)}</div>
+              <div class="challenge-desc">${escapeHtml(ch.description || '')}</div>
+            </div>
+            <div class="challenge-time">${ch.timeLimit ? Math.floor(ch.timeLimit / 60) + ' min' : ''}</div>`;
+          card.addEventListener('click', () => this.launchGame('challenge', ch.id || idx + 1));
+          grid.appendChild(card);
+        });
+      }
+
+      buildAchievements() {
+        const grid = document.getElementById('achievements-grid');
+        if (!grid) return;
+        grid.innerHTML = '';
+        const unlocked = this.scoringEngine ? this.scoringEngine.unlockedAchievements : new Set();
+        (ACHIEVEMENTS || []).forEach((ach) => {
+          const isUnlocked = unlocked.has(ach.id);
+          const card = document.createElement('div');
+          card.className = `achievement-card ${isUnlocked ? 'unlocked' : 'locked'}`;
+          card.innerHTML = `
+            <div class="achievement-icon">${ach.icon || '&#127942;'}</div>
+            <div class="achievement-name">${escapeHtml(isUnlocked ? ach.name : '???')}</div>
+            <div class="achievement-desc">${escapeHtml(isUnlocked ? ach.description : 'Keep playing to unlock')}</div>`;
+          grid.appendChild(card);
+        });
+      }
+
+      buildStats() {
+        const body = document.getElementById('stats-body');
+        if (!body) return;
+        const progress = this.scoringEngine ? this.scoringEngine.progress : {};
+        const stats = progress.stats || {};
+        const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
+        const projects = num(stats.projectsCreated ?? stats.namespacesCreated);
+        const routes = num(stats.routesCreated);
+        const builds = num(stats.buildsCompleted);
+        const incidents = num(stats.incidentsResolved);
+        const commands = num(stats.commandsExecuted);
+        const stars = num(stats.totalStars);
+        const ach = (progress.achievements || []).length;
+        const title = (label) => `<div class="text-xs text-white/40 uppercase tracking-wider mb-1">${label}</div>`;
+        const value = (val, cls = 'text-white') => `<div class="text-lg font-bold ${cls}">${val}</div>`;
+        const cell = (label, val, cls) => `<div>${title(label)}${value(val, cls)}</div>`;
+
+        body.innerHTML = `
+          <div class="text-xs text-white/40 mb-4">${APP_VERSION_LABEL} · EX280 readiness tracker</div>
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
+            ${cell('Projects Created', projects)}
+            ${cell('Routes Created', routes)}
+            ${cell('Builds Completed', builds)}
+            ${cell('Incidents Resolved', incidents)}
+            ${cell('oc Commands Run', commands)}
+            ${cell('Time Played', this.formatTime(stats.totalTimePlayed || 0))}
+            ${cell('Campaign Stars', `${stars} / 60`, 'text-yellow-400')}
+            ${cell('Achievements', `${ach} / ${(ACHIEVEMENTS || []).length}`, 'text-yellow-400')}
+            ${cell('Best Chaos Time', this.formatTime(stats.bestChaosSurvival ?? stats.bestChaosTime ?? 0), 'text-red-400')}
+            ${cell('XP Level', progress.xpLevel || progress.level || 1, 'text-blue-400')}
+          </div>`;
+      }
+
+      formatTime(seconds) {
+        const s = Math.floor(Number(seconds) || 0);
+        if (s < 60) return `${s}s`;
+        const minutes = Math.floor(s / 60);
+        const remainder = s % 60;
+        if (s < 3600) return `${minutes}m ${remainder}s`;
+        const hours = Math.floor(s / 3600);
+        return `${hours}h ${Math.floor((s % 3600) / 60)}m`;
+      }
+    }
+
+    // ── Boot ──────────────────────────────────────────────────────────────────
+    document.documentElement.dataset.app = 'openshift-games';
+    const app = new OpenShiftGamesApp();
+    window.__openshiftGamesApp = app;
+    app.init()
+      .then(() => {
+        // Deep link support (also used by the browser verifier):
+        //   /?mode=sandbox            → start Sandbox
+        //   /?mode=campaign&level=3   → launch campaign level 3
+        //   /?mode=challenge&level=2  → launch timed lab 2
+        try {
+          const params = new URLSearchParams(window.location.search);
+          const mode = params.get('mode');
+          if (['campaign', 'challenge', 'sandbox', 'chaos'].includes(mode)) {
+            const level = parseInt(params.get('level') || '1', 10) || 1;
+            setTimeout(() => {
+              if (mode === 'campaign' || mode === 'challenge') app.launchGame(mode, level);
+              else app.startMode(mode);
+            }, 250);
+          }
+          // ?panel=files | ?panel=exam (also used by the browser verifier/screenshots)
+          const panel = params.get('panel');
+          if (panel === 'files') setTimeout(() => app.showFiles(), 600);
+          if (panel === 'exam') setTimeout(() => app.showExamPrep(), 600);
+        } catch (err) {
+          console.warn(`${APP_NAME}: deep-link boot ignored`, err);
+        }
+      })
+      .catch((err) => {
+        console.error(`${APP_NAME} init error:`, err);
+        if (!document.getElementById('webgl-error')) app._showWebGLError();
+      });
+
+    // GitHub stars (optional; fails silently offline / rate-limited)
+    fetch(GITHUB_API, { headers: { Accept: 'application/vnd.github+json' } })
+      .then((response) => (response.ok ? response.json() : null))
+      .then((data) => {
+        if (!data || typeof data.stargazers_count !== 'number') return;
+        const text = data.stargazers_count >= 1000
+          ? `${(data.stargazers_count / 1000).toFixed(1)}k`
+          : String(data.stargazers_count);
+        window._ghStars = text;
+        for (const id of ['github-star-count', 'hud-github-stars', 'game-github-stars']) {
+          const el = document.getElementById(id);
+          if (el) el.textContent = text;
+        }
+      })
+      .catch(() => {});
+  </script>
+
+</body>
+</html>

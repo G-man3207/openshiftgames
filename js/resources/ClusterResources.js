@@ -1,0 +1,440 @@
+import { ResourceBase } from './ResourceBase.js';
+import { deepClone } from './ManifestSerializer.js';
+
+const timestamp = () => new Date().toISOString();
+
+function parseCpuToMillis(cpu) {
+  if (typeof cpu === 'number') return cpu;
+  const str = String(cpu || '');
+  if (str.endsWith('m')) return parseInt(str, 10);
+  const parsed = parseFloat(str);
+  return Number.isFinite(parsed) ? parsed * 1000 : 0;
+}
+
+function parseMemoryToBytes(mem) {
+  if (typeof mem === 'number') return mem;
+  const str = String(mem || '');
+  const units = { Ki: 1024, Mi: 1024 ** 2, Gi: 1024 ** 3, Ti: 1024 ** 4 };
+  for (const [suffix, multiplier] of Object.entries(units)) {
+    if (str.endsWith(suffix)) return parseFloat(str) * multiplier;
+  }
+  const parsed = parseFloat(str);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+export class Node extends ResourceBase {
+  constructor(metadata = {}) {
+    super('Node', { ...metadata, namespace: '', apiVersion: metadata.apiVersion || 'v1' });
+    const cpuCapacity = metadata.cpuCapacity || '4';
+    const memoryCapacity = metadata.memoryCapacity || '8Gi';
+    const defaults = {
+      podCIDR: metadata.podCIDR || `10.244.${Math.floor(Math.random() * 255)}.0/24`,
+      providerID: metadata.providerID || `baremetal://cluster/${metadata.name || 'node'}`,
+      taints: deepClone(metadata.taints || []),
+      unschedulable: metadata.unschedulable ?? false,
+      // Game extension used by ClusterState.getNodeAllocatable()/MetricsDashboard:
+      cpu: String(cpuCapacity),
+      memory: String(memoryCapacity),
+    };
+    this._initSpec(defaults, metadata.spec);
+    const capacity = {
+      cpu: String(metadata.cpuCapacity || this.spec.cpu || '4'),
+      memory: String(metadata.memoryCapacity || this.spec.memory || '8Gi'),
+      pods: '110',
+      ephemeralStorage: '50Gi',
+    };
+    const allocatable = {
+      cpu: metadata.cpuAllocatable || String(Math.max(0, parseCpuToMillis(capacity.cpu) - 200)) + 'm',
+      memory: metadata.memoryAllocatable || `${Math.max(0, Math.floor(parseMemoryToBytes(capacity.memory) / 1024 ** 3) - 1)}Gi`,
+      pods: '110',
+      ephemeralStorage: '45Gi',
+    };
+    const now = timestamp();
+    const condition = (type, status, reason, message) => ({
+      type,
+      status,
+      reason,
+      message,
+      lastHeartbeatTime: now,
+      lastTransitionTime: now,
+    });
+    this._setInitialStatus({
+      phase: metadata.phase || 'Running',
+      capacity,
+      allocatable,
+      conditions: [
+        condition('Ready', 'True', 'KubeletReady', 'kubelet is posting ready status'),
+        condition('MemoryPressure', 'False', 'KubeletHasSufficientMemory', 'kubelet has sufficient memory available'),
+        condition('DiskPressure', 'False', 'KubeletHasNoDiskPressure', 'kubelet has no disk pressure'),
+        condition('PIDPressure', 'False', 'KubeletHasSufficientPID', 'kubelet has sufficient PID available'),
+        condition('NetworkUnavailable', 'False', 'NoNetworkPlugin', 'network plugin is ready'),
+      ],
+      nodeInfo: {
+        kubeletVersion: metadata.kubeletVersion || 'v1.29.2',
+        containerRuntimeVersion: 'containerd://1.7.11',
+        osImage: metadata.osImage || 'Red Hat Enterprise Linux CoreOS 4.22.0',
+        architecture: 'amd64',
+        operatingSystem: 'linux',
+        kernelVersion: metadata.kernelVersion || '5.14.0-284.el9.x86_64',
+        machineID: this.metadata.uid,
+        systemUUID: this.metadata.uid,
+      },
+      usage: { cpu: 0, memory: 0, cpuPercent: 0, memoryPercent: 0 },
+      addresses: [
+        { type: 'InternalIP', address: `192.168.${1 + Math.floor(Math.random() * 250)}.${10 + Math.floor(Math.random() * 240)}` },
+        { type: 'Hostname', address: metadata.name || 'node' },
+      ],
+    });
+    this.pods = [];
+    this.isCordon = this.spec.unschedulable === true;
+  }
+
+  get isReady() {
+    return this.isConditionTrue('Ready');
+  }
+
+  addPod(pod) {
+    if (!this.pods.includes(pod)) this.pods.push(pod);
+    pod.spec.nodeName = this.metadata.name;
+    return this;
+  }
+
+  removePod(pod) {
+    this.pods = this.pods.filter((p) => p !== pod);
+    return this;
+  }
+
+  canSchedulePod(pod) {
+    if (this.spec.unschedulable || this.isCordon) return false;
+    const podLimit = parseInt(this.status.allocatable?.pods || '110', 10);
+    if (this.pods.length >= podLimit) return false;
+    for (const taint of this.spec.taints || []) {
+      if (taint.effect !== 'NoSchedule' && taint.effect !== 'NoExecute') continue;
+      const tolerates = (pod.spec?.tolerations || []).some(
+        (t) => t.key === taint.key && (t.operator === 'Exists' || t.value === taint.value)
+      );
+      if (!tolerates) return false;
+    }
+    return true;
+  }
+
+  cordon() {
+    this.isCordon = true;
+    this.spec.unschedulable = true;
+    this.addEvent('Normal', 'NodeCordon', `Node ${this.metadata.name} cordoned`);
+    return this;
+  }
+
+  uncordon() {
+    this.isCordon = false;
+    this.spec.unschedulable = false;
+    this.addEvent('Normal', 'NodeUncordon', `Node ${this.metadata.name} uncordoned`);
+    return this;
+  }
+
+  drain() {
+    this.cordon();
+    const drained = [...this.pods];
+    this.addEvent('Normal', 'NodeDrain', `Draining node, evicting ${drained.length} pods`);
+    return drained;
+  }
+
+  addTaint(key, value, effect) {
+    this.spec.taints = this.spec.taints || [];
+    this.spec.taints.push({ key, value, effect });
+    this.metadata.generation++;
+    this.addEvent('Normal', 'TaintAdded', `Taint ${key}=${value}:${effect} added`);
+    return this;
+  }
+
+  removeTaint(key) {
+    this.spec.taints = (this.spec.taints || []).filter((t) => t.key !== key);
+    this.metadata.generation++;
+    this.addEvent('Normal', 'TaintRemoved', `Taint ${key} removed`);
+    return this;
+  }
+
+  getCpuUsagePercent() {
+    const used = this.status.usage?.cpu || 0;
+    const capacity = parseCpuToMillis(this.status.allocatable?.cpu || this.status.capacity?.cpu || this.spec.cpu || '4');
+    return capacity > 0 ? (used / capacity) * 100 : 0;
+  }
+
+  getMemoryUsagePercent() {
+    const used = this.status.usage?.memory || 0;
+    const capacity = parseMemoryToBytes(this.status.allocatable?.memory || this.status.capacity?.memory || this.spec.memory || '8Gi');
+    return capacity > 0 ? (used / capacity) * 100 : 0;
+  }
+
+  toDescribe() {
+    const roleLabel = this.metadata.labels['node-role.kubernetes.io/master'] ?? this.metadata.labels['node-role.kubernetes.io/control-plane'];
+    return `Name:               ${this.metadata.name}
+Roles:              ${roleLabel !== undefined ? 'control-plane,master' : 'worker'}
+Labels:             ${Object.entries(this.metadata.labels).map(([k, v]) => `${k}=${v}`).join('\n                    ') || '<none>'}
+Annotations:        ${Object.entries(this.metadata.annotations).map(([k, v]) => `${k}=${v}`).join(', ') || '<none>'}
+Taints:             ${(this.spec.taints || []).map((t) => `${t.key}=${t.value}:${t.effect}`).join(', ') || '<none>'}
+Unschedulable:      ${this.spec.unschedulable === true}
+Conditions:
+  Type                 Status  Reason
+  ----                 ------  ------
+${(this.status.conditions || []).map((c) => `  ${c.type.padEnd(20)} ${c.status.padEnd(6)}  ${c.reason}`).join('\n')}
+Capacity:
+  cpu:                ${this.status.capacity?.cpu}
+  memory:             ${this.status.capacity?.memory}
+  pods:               ${this.status.capacity?.pods}
+Allocatable:
+  cpu:                ${this.status.allocatable?.cpu}
+  memory:             ${this.status.allocatable?.memory}
+  pods:               ${this.status.allocatable?.pods}
+System Info:
+  Kubelet Version:    ${this.status.nodeInfo?.kubeletVersion}
+  Container Runtime:  ${this.status.nodeInfo?.containerRuntimeVersion}
+  OS Image:           ${this.status.nodeInfo?.osImage}
+  Kernel Version:     ${this.status.nodeInfo?.kernelVersion}
+  Architecture:       ${this.status.nodeInfo?.architecture}
+Non-terminated Pods: (${this.pods.length} in total)
+  CPU Usage:          ${this.status.usage?.cpu || 0}m / ${this.status.allocatable?.cpu} (${this.getCpuUsagePercent().toFixed(1)}%)
+  Memory Usage:       ${Math.round((this.status.usage?.memory || 0) / 1024 ** 2)}Mi / ${this.status.allocatable?.memory} (${this.getMemoryUsagePercent().toFixed(1)}%)
+Events:
+${this.events.slice(-10).map((e) => `  ${e.type}\t${e.reason}\t${e.message}`).join('\n')}`;
+  }
+}
+
+export class HorizontalPodAutoscaler extends ResourceBase {
+  constructor(metadata = {}) {
+    super('HorizontalPodAutoscaler', { ...metadata, apiVersion: metadata.apiVersion || 'autoscaling/v2' });
+    const defaults = {
+      scaleTargetRef: {
+        apiVersion: 'apps/v1',
+        kind: metadata.targetKind || 'Deployment',
+        name: metadata.targetName || metadata.name || 'app',
+      },
+      minReplicas: metadata.minReplicas ?? 1,
+      maxReplicas: metadata.maxReplicas ?? 10,
+      metrics: deepClone(
+        metadata.metrics || [
+          {
+            type: 'Resource',
+            resource: {
+              name: 'cpu',
+              target: { type: 'Utilization', averageUtilization: 50 },
+            },
+          },
+        ]
+      ),
+      behavior: {
+        scaleUp: {
+          stabilizationWindowSeconds: metadata.scaleUpStabilization ?? 0,
+          policies: [
+            { type: 'Percent', value: 100, periodSeconds: 15 },
+            { type: 'Pods', value: 4, periodSeconds: 15 },
+          ],
+          selectPolicy: 'Max',
+        },
+        scaleDown: {
+          stabilizationWindowSeconds: metadata.scaleDownStabilization ?? 300,
+          policies: [{ type: 'Percent', value: 100, periodSeconds: 15 }],
+          selectPolicy: 'Max',
+        },
+      },
+    };
+    this._initSpec(defaults, metadata.spec);
+    this.currentReplicas = metadata.currentReplicas || this.spec.minReplicas;
+    this.targetDeployment = null;
+    this.lastScaleTime = null;
+    this._setInitialStatus({
+      phase: 'Active',
+      currentReplicas: this.currentReplicas,
+      desiredReplicas: this.currentReplicas,
+      currentMetrics: [],
+      lastScaleTime: null,
+      conditions: [
+        { type: 'AbleToScale', status: 'True', reason: 'ReadyForNewScale', lastTransitionTime: timestamp() },
+        { type: 'ScalingActive', status: 'True', reason: 'ValidMetricFound', lastTransitionTime: timestamp() },
+        { type: 'ScalingLimited', status: 'False', reason: 'DesiredWithinRange', lastTransitionTime: timestamp() },
+      ],
+    });
+  }
+
+  setTargetDeployment(deployment) {
+    this.targetDeployment = deployment;
+    return this;
+  }
+
+  getTargetUtilization() {
+    return this.spec.metrics?.[0]?.resource?.target?.averageUtilization || 50;
+  }
+
+  toDescribe() {
+    const target = this.spec.scaleTargetRef;
+    return `Name:                                  ${this.metadata.name}
+Namespace:                             ${this.metadata.namespace}
+Reference:                             ${target.kind}/${target.name}
+Metrics:                               ( current / target )
+  resource cpu on pods (as a percentage of request):  ${Math.round(this.status.currentMetrics?.[0]?.resource?.current?.averageUtilization || 0)}% / ${this.getTargetUtilization()}%
+Min replicas:                          ${this.spec.minReplicas}
+Max replicas:                          ${this.spec.maxReplicas}
+${target.kind}/${target.name} replicas: ${this.status.currentReplicas || 0}
+Conditions:
+${(this.status.conditions || []).map((c) => `  Type: ${c.type}  Status: ${c.status}  Reason: ${c.reason}`).join('\n')}
+Events:
+${this.events.slice(-10).map((e) => `  ${e.type}\t${e.reason}\t${e.message}`).join('\n')}`;
+  }
+}
+
+export class ResourceQuota extends ResourceBase {
+  constructor(metadata = {}) {
+    super('ResourceQuota', { ...metadata, apiVersion: metadata.apiVersion || 'v1' });
+    const defaults = {
+      hard: deepClone(
+        metadata.hard || {
+          pods: '20',
+          'requests.cpu': '4',
+          'requests.memory': '8Gi',
+          'limits.cpu': '8',
+          'limits.memory': '16Gi',
+        }
+      ),
+    };
+    this._initSpec(defaults, metadata.spec);
+    const used = {};
+    for (const key of Object.keys(this.spec.hard || {})) used[key] = '0';
+    this._setInitialStatus({ phase: 'Active', hard: deepClone(this.spec.hard), used });
+  }
+
+  get used() {
+    return this.status.used || {};
+  }
+
+  setTargetNamespace(namespace) {
+    this.targetNamespace = namespace;
+    if (namespace && typeof namespace === 'object') namespace.resourceQuota = this;
+    return this;
+  }
+
+  updateUsage(resources) {
+    const namespace = this.metadata.namespace;
+    const inNamespace = resources.filter((r) => r.metadata?.namespace === namespace);
+    const used = {};
+    for (const key of Object.keys(this.spec.hard || {})) used[key] = '0';
+    used.pods = String(inNamespace.filter((r) => r.kind === 'Pod').length);
+    if ('services' in used) used.services = String(inNamespace.filter((r) => r.kind === 'Service').length);
+    if ('configmaps' in used) used.configmaps = String(inNamespace.filter((r) => r.kind === 'ConfigMap').length);
+    if ('secrets' in used) used.secrets = String(inNamespace.filter((r) => r.kind === 'Secret').length);
+
+    let requestsCpu = 0;
+    let requestsMemory = 0;
+    let limitsCpu = 0;
+    let limitsMemory = 0;
+    for (const pod of inNamespace.filter((r) => r.kind === 'Pod')) {
+      for (const container of pod.spec?.containers || []) {
+        requestsCpu += parseCpuToMillis(container.resources?.requests?.cpu);
+        requestsMemory += parseMemoryToBytes(container.resources?.requests?.memory);
+        limitsCpu += parseCpuToMillis(container.resources?.limits?.cpu);
+        limitsMemory += parseMemoryToBytes(container.resources?.limits?.memory);
+      }
+    }
+    if ('requests.cpu' in used) used['requests.cpu'] = `${Math.round(requestsCpu)}m`;
+    if ('requests.memory' in used) used['requests.memory'] = `${Math.round(requestsMemory / 1024 ** 2)}Mi`;
+    if ('limits.cpu' in used) used['limits.cpu'] = `${Math.round(limitsCpu)}m`;
+    if ('limits.memory' in used) used['limits.memory'] = `${Math.round(limitsMemory / 1024 ** 2)}Mi`;
+    this.status.used = used;
+    return used;
+  }
+
+  isExceeded(resourceType) {
+    const used = parseFloat(this.status.used?.[resourceType]) || 0;
+    const hard = parseFloat(this.spec.hard?.[resourceType]) || 0;
+    return hard > 0 && used >= hard;
+  }
+
+  getUsagePercent(resourceType) {
+    const used = parseFloat(this.status.used?.[resourceType]) || 0;
+    const hard = parseFloat(this.spec.hard?.[resourceType]) || 0;
+    return hard > 0 ? (used / hard) * 100 : 0;
+  }
+
+  toDescribe() {
+    const keys = Object.keys(this.spec.hard || {});
+    return `Name:         ${this.metadata.name}
+Namespace:    ${this.metadata.namespace}
+Resource      Used    Hard
+--------      ----    ----
+${keys.map((k) => `${k.padEnd(14)} ${String(this.status.used?.[k] ?? '0').padEnd(7)} ${this.spec.hard[k]}`).join('\n')}
+Events:
+${this.events.slice(-10).map((e) => `  ${e.type}\t${e.reason}\t${e.message}`).join('\n')}`;
+  }
+}
+
+export class PodDisruptionBudget extends ResourceBase {
+  constructor(metadata = {}) {
+    super('PodDisruptionBudget', { ...metadata, apiVersion: metadata.apiVersion || 'policy/v1' });
+    const hasMin = metadata.minAvailable !== undefined;
+    const defaults = {
+      selector: { matchLabels: deepClone(metadata.matchLabels || {}) },
+      minAvailable: hasMin ? metadata.minAvailable : null,
+      maxUnavailable: metadata.maxUnavailable !== undefined ? metadata.maxUnavailable : hasMin ? null : 1,
+      unhealthyPodEvictionPolicy: metadata.unhealthyPodEvictionPolicy || 'IfHealthy',
+    };
+    this._initSpec(defaults, metadata.spec);
+    this._setInitialStatus({
+      phase: 'Active',
+      currentHealthy: 0,
+      desiredHealthy: 0,
+      disruptionsAllowed: 0,
+      expectedPods: 0,
+      observedGeneration: 1,
+      conditions: [],
+    });
+  }
+
+  updateStatus(matchingPods = []) {
+    const running = matchingPods.filter(
+      (p) => p.status?.phase === 'Running' || p.phase === 'Running'
+    );
+    this.status.expectedPods = matchingPods.length;
+    this.status.currentHealthy = running.length;
+    const expected = matchingPods.length;
+    if (this.spec.minAvailable !== null && this.spec.minAvailable !== undefined) {
+      const minAvailable =
+        typeof this.spec.minAvailable === 'string' && this.spec.minAvailable.endsWith('%')
+          ? Math.ceil((expected * parseInt(this.spec.minAvailable, 10)) / 100)
+          : parseInt(this.spec.minAvailable, 10);
+      this.status.desiredHealthy = minAvailable;
+      this.status.disruptionsAllowed = Math.max(0, running.length - minAvailable);
+    } else {
+      const maxUnavailable =
+        typeof this.spec.maxUnavailable === 'string' && this.spec.maxUnavailable.endsWith('%')
+          ? Math.ceil((expected * parseInt(this.spec.maxUnavailable, 10)) / 100)
+          : parseInt(this.spec.maxUnavailable, 10) || 0;
+      this.status.desiredHealthy = Math.max(0, expected - maxUnavailable);
+      this.status.disruptionsAllowed = Math.max(0, maxUnavailable - (expected - running.length));
+    }
+    return this.status;
+  }
+
+  canDisrupt() {
+    return (this.status.disruptionsAllowed || 0) > 0;
+  }
+
+  toDescribe() {
+    const specLine =
+      this.spec.minAvailable !== null && this.spec.minAvailable !== undefined
+        ? `Min Available:         ${this.spec.minAvailable}`
+        : `Max Unavailable:       ${this.spec.maxUnavailable}`;
+    return `Name:                  ${this.metadata.name}
+Namespace:             ${this.metadata.namespace}
+${specLine}
+Selector:              ${Object.entries(this.spec.selector?.matchLabels || {}).map(([k, v]) => `${k}=${v}`).join(', ')}
+Status:
+  Allowed Disruptions: ${this.status.disruptionsAllowed}
+  Current Healthy:     ${this.status.currentHealthy}
+  Desired Healthy:     ${this.status.desiredHealthy}
+  Total:               ${this.status.expectedPods}
+Events:
+${this.events.slice(-10).map((e) => `  ${e.type}\t${e.reason}\t${e.message}`).join('\n')}`;
+  }
+}
+
+export { parseCpuToMillis, parseMemoryToBytes };
+export default { Node, HorizontalPodAutoscaler, ResourceQuota, PodDisruptionBudget };

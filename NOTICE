@@ -1,0 +1,36 @@
+OpenShift Games
+===============
+
+OpenShift Games is an independent, open-source educational browser game that
+teaches Red Hat OpenShift Container Platform administration and helps prepare
+for the Red Hat Certified Specialist in OpenShift Administration exam (EX280).
+
+This project is a derivative work of "K8s Games" (originally a Kubernetes
+learning game), available at:
+
+    https://github.com/rohitg00/k8sgames
+
+K8s Games was authored by Rohit G (GitHub: rohitg00) and is licensed under the
+Apache License, Version 2.0. The original project's license text is retained in
+the LICENSE file of this repository. This derivative work has been substantially
+modified and rebranded for OpenShift/EX280 education by Gustaf Ekfeldt
+(GitHub: G-man3207) in 2026.
+
+Modifications include, but are not limited to: complete rebranding; conversion
+of Kubernetes content, resources, commands and curriculum to Red Hat OpenShift
+Container Platform 4.22 concepts (projects, Routes, BuildConfigs, ImageStreams,
+templates, SCCs, quotas, HTPasswd/OAuth identity, Operators, Kustomize/Helm, and
+oc CLI workflows); a rewritten EX280-aligned campaign, incidents, challenges and
+an in-app EX280 Prep mode; and new 3D resource representations and drawing
+support for OpenShift resources.
+
+This project is not affiliated with, sponsored by, or endorsed by Red Hat, Inc.
+"Red Hat", "Red Hat OpenShift" and "OpenShift" are trademarks or registered
+trademarks of Red Hat, Inc. in the United States and other countries. Use of
+these marks in this project is nominative and for educational identification
+only.
+
+Licensed under the Apache License, Version 2.0 (see LICENSE). Unless required by
+applicable law or agreed to in writing, software distributed under the License
+is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+KIND, either express or implied.

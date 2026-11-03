@@ -1,0 +1,16 @@
+# Editor / OS
+.DS_Store
+Thumbs.db
+*.swp
+.idea/
+.vscode/
+
+# Local tooling and logs
+node_modules/
+*.log
+.vercel/
+test-results/
+playwright-report/
+
+# Local verification artifacts (screenshots and reports under docs/ are committed on purpose)
+/tmp/
