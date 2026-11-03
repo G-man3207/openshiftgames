@@ -1,19 +1,19 @@
 {
-  "timestamp": "2026-11-03T23:12:31.247Z",
+  "timestamp": "2026-11-03T23:25:54.850Z",
   "environment": {
     "node": "v26.10.0",
     "chrome": "Chrome/156.0.8078.79",
-    "baseUrl": "http://127.0.0.1:37913",
+    "baseUrl": "http://127.0.0.1:38205",
     "viewport": {
       "width": 1600,
       "height": 900
     },
     "puppeteerCore": "/tmp/verify-tools",
-    "startedAt": "2026-11-03T23:09:36.141Z",
-    "durationSeconds": 175
+    "startedAt": "2026-11-03T23:23:07.348Z",
+    "durationSeconds": 168
   },
   "summary": {
-    "passes": 424,
+    "passes": 427,
     "failures": 0,
     "warnings": 0,
     "consoleErrors": 0,
@@ -47,7 +47,7 @@
       "warnings": 0
     },
     "cli": {
-      "passes": 100,
+      "passes": 103,
       "failures": 0,
       "warnings": 0
     },
@@ -86,20 +86,20 @@
       "path": "screenshot.png",
       "width": 1600,
       "height": 900,
-      "bytes": 251415
+      "bytes": 251904
     },
     "ogImage": {
       "path": "og-image.png",
       "width": 1200,
       "height": 630,
-      "bytes": 200078
+      "bytes": 200085
     },
     "screenshots": [
       {
         "path": "docs/screenshots/menu.png",
         "width": 1600,
         "height": 900,
-        "bytes": 118086
+        "bytes": 118309
       },
       {
         "path": "docs/screenshots/exam-prep.png",
@@ -111,37 +111,37 @@
         "path": "docs/screenshots/sandbox.png",
         "width": 1600,
         "height": 900,
-        "bytes": 252016
+        "bytes": 251745
       },
       {
         "path": "screenshot.png",
         "width": 1600,
         "height": 900,
-        "bytes": 251415
+        "bytes": 251904
       },
       {
         "path": "docs/screenshots/files-panel.png",
         "width": 1600,
         "height": 900,
-        "bytes": 193629
+        "bytes": 193889
       },
       {
         "path": "docs/screenshots/campaign-level-1.png",
         "width": 1600,
         "height": 900,
-        "bytes": 253975
+        "bytes": 253420
       },
       {
         "path": "docs/screenshots/draw.png",
         "width": 1600,
         "height": 900,
-        "bytes": 161651
+        "bytes": 161637
       },
       {
         "path": "og-image.png",
         "width": 1200,
         "height": 630,
-        "bytes": 200078
+        "bytes": 200085
       }
     ]
   },
@@ -564,6 +564,10 @@
     },
     {
       "section": "cli",
+      "name": "cli: Route/web is Admitted by the router"
+    },
+    {
+      "section": "cli",
       "name": "cli: oc apply -f manifest"
     },
     {
@@ -581,6 +585,18 @@
     {
       "section": "cli",
       "name": "cli: oc process --parameters"
+    },
+    {
+      "section": "cli",
+      "name": "cli: helm install"
+    },
+    {
+      "section": "cli",
+      "name": "cli: helm list"
+    },
+    {
+      "section": "cli",
+      "name": "cli: helm uninstall"
     },
     {
       "section": "cli",
@@ -877,10 +893,6 @@
     {
       "section": "cli",
       "name": "cli: ClusterResourceQuota team-quota exists"
-    },
-    {
-      "section": "cli",
-      "name": "cli: Route/web is Admitted by the router"
     },
     {
       "section": "cli",

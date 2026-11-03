@@ -72,6 +72,7 @@ study game.
 
 ### Verification
 
-- `node scripts/verify.mjs` — 0 failures; `node scripts/browser-test.mjs --all-levels` — 130/130
-  checks across menu, sandbox, CLI, all 20 campaign levels, all 12 labs, Files, EX280 Prep, Draw.
+- `node scripts/verify.mjs` — 0 failures; `node scripts/browser-test.mjs --all-levels` — 427/427
+  checks across menu, sandbox, CLI, UI surfaces, all 20 campaign levels, all 12 labs, Files, EX280 Prep,
+  Draw and responsive layouts.
   See `docs/verification-report.md`.

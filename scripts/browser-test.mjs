@@ -783,12 +783,21 @@ await runSection('cli', async () => {
   if (podName) await expectNonEmpty('cli: oc logs', `oc logs ${podName} -n ${project}`);
   await expectCmd('cli: oc describe deployment', `oc describe deployment/web -n ${project}`, /Name:|Deployment/i);
   await expectCmd('cli: oc rollout status', `oc rollout status deployment/web -n ${project}`, /deployment|rollout/i);
+  const routeAdmittedEarly = await waitFor(() => evaluate((ns) => {
+    const route = (window.game.cluster.getByKind?.('Route') || []).find((r) => r.metadata?.name === 'web' && r.metadata?.namespace === ns);
+    return !!route?.status?.ingress?.[0]?.conditions?.some((c) => c.type === 'Admitted' && c.status === 'True');
+  }, project), 25000);
+  const routeEarly = await findResource('Route', 'web', project);
+  assert(routeAdmittedEarly, 'cli: Route/web is Admitted by the router', JSON.stringify(routeEarly?.status?.ingress?.[0]?.conditions || null));
 
   await expectCmd('cli: oc apply -f manifest', 'oc apply -f manifests/deployment.yaml', /created|configured|unchanged/i);
   await expectCmd('cli: oc apply -k prod overlay', 'oc apply -k kustomize/overlays/prod', /created|configured|unchanged/i);
   await expectCmd('cli: oc process | oc apply', 'oc process -f templates/webapp-template.yaml -p APP_NAME=demo | oc apply -f -', /created|configured|unchanged/i);
   await expectCmd('cli: oc new-app image', `oc new-app --image=nginx:latest --name=api -n ${project}`, /created|Success|deployment/i);
   await expectCmd('cli: oc process --parameters', 'oc process -f templates/webapp-template.yaml --parameters', /APP_NAME|NAME/i);
+  await expectCmd('cli: helm install', 'helm install webapp helm/webapp', /NAME:|deployed/i);
+  await expectCmd('cli: helm list', 'helm list', /webapp/);
+  await expectCmd('cli: helm uninstall', 'helm uninstall webapp', /uninstalled|release/i);
 
   await expectCmd('cli: oc create user', 'oc create user bob --full-name="Bob User"', /user.*bob.*created/i);
   await expectCmd('cli: oc create group', 'oc create group devs', /group.*created/i);
@@ -954,9 +963,6 @@ await runSection('cli', async () => {
   assert(!!limitRange, 'cli: LimitRange demo-limit exists');
   const crq = await findResource('ClusterResourceQuota', 'team-quota');
   assert(!!crq, 'cli: ClusterResourceQuota team-quota exists');
-  const route = await findResource('Route', 'web', project);
-  const admitted = route?.status?.ingress?.[0]?.conditions?.some((c) => c.type === 'Admitted' && c.status === 'True');
-  assert(admitted === true, 'cli: Route/web is Admitted by the router', JSON.stringify(route?.status?.ingress?.[0]?.conditions || null));
   const buildFinal = await evaluate(() => {
     const builds = (window.game.cluster.getByKind?.('Build') || []).filter((b) => (b.metadata?.namespace || '') === 'ex280-demo');
     return builds.map((b) => ({ name: b.metadata?.name, phase: b.status?.phase || b.phase }));
