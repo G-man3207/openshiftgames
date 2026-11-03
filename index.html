@@ -430,6 +430,7 @@
         this._panelCollapsed = false;
         this._webglFailed = false;
         this._tutorialQueue = null;
+        this._pendingLevelTutorial = false;
         this.settings = this.loadSettings();
       }
 
@@ -1479,6 +1480,8 @@
         }
         this.examPrepUI?.hide?.();
 
+        this._pendingLevelTutorial = false;
+        this._clearTutorialOverlay();
         document.getElementById('main-menu')?.classList.add('hidden');
         document.getElementById('level-select')?.classList.remove('active');
         document.getElementById('challenge-select')?.classList.remove('active');
@@ -1563,7 +1566,13 @@
           })
           .catch(() => {});
 
-        this._startLevelTutorialFromMode();
+        // Coach marks must not render on top of the "How to play" modal: defer them
+        // until the intro modal is dismissed (or start immediately when ?tutorial=0).
+        if (skipTutorial) {
+          this._startLevelTutorialFromMode();
+        } else {
+          this._pendingLevelTutorial = !!(this._getLevelDef()?.tutorial?.steps?.length);
+        }
       }
 
       _getLevelDef() {
@@ -1943,7 +1952,18 @@
             <div class="tutorial-hint">Press <span class="tutorial-hint-key">H</span> anytime to reopen this</div>
           </div>`;
         document.body.appendChild(overlay);
-        const close = () => { overlay.classList.add('fade-out'); setTimeout(() => overlay.remove(), 400); };
+        const close = () => {
+          if (overlay.dataset.closing === '1') return;
+          overlay.dataset.closing = '1';
+          overlay.classList.add('fade-out');
+          setTimeout(() => {
+            overlay.remove();
+            if (this._pendingLevelTutorial) {
+              this._pendingLevelTutorial = false;
+              this._startLevelTutorialFromMode();
+            }
+          }, 400);
+        };
         document.getElementById('tutorial-start').addEventListener('click', close);
         overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
       }

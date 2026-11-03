@@ -72,7 +72,7 @@ required attribution link to the original project is explicitly allowed by CONVE
 ## 3. Browser E2E — `node scripts/browser-test.mjs`
 
 ```
-Browser tests: 427 passed, 0 failed, 0 warnings
+Browser tests: 437 passed, 0 failed, 0 warnings
 Console/page errors: 0 / 0
 Verdict: GO
 ```
@@ -81,6 +81,7 @@ Verdict: GO
 |---|---:|---:|---|
 | Menu | 22 | 0 | exact title/meta/OG/twitter/importmap; OpenShift Games logo/subtitle; 4 mode buttons; EX280 Prep; `/draw`; required attribution; GitHub/repo link; Settings/Achievements/Stats modals; achievement count |
 | Responsive | 7 | 0 | 1280×720 menu + sandbox (no horizontal overflow, palette/HUD/toolbar visible); restored 1600×900 |
+| Tutorial | 10 | 0 | level-start help modal, coach-card sequencing, viewport bounds and stable x-position across Next, H re-opens help, skip clears coach marks |
 | EX280 Prep | 19 | 0 | overlay; 9 groups / 55 bullets; 4 tabs; 9 quick labs; 10 cheat groups; 55 copy buttons; search filtering; copy command; readiness bar `0/55`; exam facts EX280V422/3 h; quick-lab launch → Sandbox + overlay close |
 | Sandbox | 25 | 0 | Sandbox deep link; seeded ~50 resources ↔ 50 meshes; 37 palette kinds; 10 Projects, 13 ClusterOperators, 3 Nodes, 4 SCCs, 3 ImageStreams; HUD logo “OpenShift Games”, “OpenShift 4.22”; toolbar; WebGL ok |
 | Files panel | 13 | 0 | `#btn-manifests`; 19 files/tree; editor + Save/Apply -f/Apply -k; `manifests/deployment.yaml` → Deployment/webapp; prod overlay → Deployment/prod-webapp; recorded apply |
@@ -115,14 +116,14 @@ Generated/validated in the final run (all 1600×900 unless noted):
 
 | File | Size | Purpose |
 |---|---|---|
-| [`screenshot.png`](../screenshot.png) | 1600×900, 252 KB | README hero gameplay (Sandbox, seeded cluster) |
-| [`docs/screenshots/menu.png`](screenshots/menu.png) | 1600×900, 118 KB | main menu/branding |
-| [`docs/screenshots/sandbox.png`](screenshots/sandbox.png) | 1600×900, 252 KB | seeded Sandbox with HUD/palette |
-| [`docs/screenshots/campaign-level-1.png`](screenshots/campaign-level-1.png) | 1600×900, 254 KB | campaign level 1 + objectives |
+| [`screenshot.png`](../screenshot.png) | 1600×900, 328 KB | README hero gameplay (Sandbox, seeded cluster) |
+| [`docs/screenshots/menu.png`](screenshots/menu.png) | 1600×900, 116 KB | main menu/branding |
+| [`docs/screenshots/sandbox.png`](screenshots/sandbox.png) | 1600×900, 246 KB | seeded Sandbox with HUD/palette |
+| [`docs/screenshots/campaign-level-1.png`](screenshots/campaign-level-1.png) | 1600×900, 249 KB | campaign level 1 + objectives |
 | [`docs/screenshots/exam-prep.png`](screenshots/exam-prep.png) | 1600×900, 120 KB | EX280 Prep tracker (9 groups/55 bullets) |
-| [`docs/screenshots/files-panel.png`](screenshots/files-panel.png) | 1600×900, 194 KB | Files & Manifests panel |
-| [`docs/screenshots/draw.png`](screenshots/draw.png) | 1600×900, 161 KB | OpenShift Draw + YAML export |
-| [`og-image.png`](../og-image.png) | 1200×630, 200 KB | Open Graph/Twitter card (`shifting.pro`) |
+| [`docs/screenshots/files-panel.png`](screenshots/files-panel.png) | 1600×900, 189 KB | Files & Manifests panel |
+| [`docs/screenshots/draw.png`](screenshots/draw.png) | 1600×900, 158 KB | OpenShift Draw + YAML export |
+| [`og-image.png`](../og-image.png) | 1200×630, 193 KB | Open Graph/Twitter card (`shifting.pro`) |
 | [`docs/verification-report.json`](verification-report.json) | machine-readable | full pass/fail + timings + artifact metadata |
 
 Supplementary images retained from earlier verification runs:
@@ -182,7 +183,7 @@ dedicated 4.22 docs link for the cross-cutting objective; refresh the supplement
 **GO.** The definition-of-done verification gates pass on the current tree:
 
 - static verifier: **696 checks, 0 failures, 0 warnings**;
-- full browser suite: **427 checks, 0 failures, 0 warnings**, 0 console/page errors;
+- full browser suite: **437 checks, 0 failures, 0 warnings**, 0 console/page errors;
 - all required screenshots and both hero/OG artifacts regenerated at the required dimensions;
 - content accuracy and EX280V422 coverage validated against the research ground truth;
 - no dependency/build-step changes and no game-code edits by the verifier.

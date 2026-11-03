@@ -8,7 +8,7 @@
  * (or point PUPPETEER_CORE_DIR at any directory containing node_modules/puppeteer-core)
  *
  * Usage:
- *   node scripts/browser-test.mjs [--only=menu,sandbox,cli,files,ui,campaign,challenges,exam,draw,responsive,shots]
+ *   node scripts/browser-test.mjs [--only=menu,tutorial,sandbox,cli,files,ui,campaign,challenges,exam,draw,responsive,shots]
  *                                [--no-shots] [--headful]
  *
  * Serves the repo on a random localhost port, drives headless Chrome with
@@ -514,6 +514,76 @@ await runSection('responsive', async () => {
 // ═══════════════════════════════════════════════════════════════════════════
 // 3. EX280 PREP OVERLAY + QUICK LAB LAUNCH
 // ═══════════════════════════════════════════════════════════════════════════
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 3b. LEVEL TUTORIAL: sequencing + stable coach-card positioning
+// ═══════════════════════════════════════════════════════════════════════════
+await runSection('tutorial', async () => {
+  await goto('/?mode=campaign&level=1');
+  await waitFor(() => evaluate(() => !!window.game?.app?.modeInstance?.getStatus), 20000);
+  await sleep(1200);
+
+  const initial = await evaluate(() => ({
+    intro: !!document.getElementById('tutorial-overlay'),
+    coach: !!document.querySelector('.coach-card-wrap'),
+  }));
+  assert(initial.intro, 'tutorial: help modal shown on level start');
+  assert(!initial.coach, 'tutorial: coach card does not overlap the help modal', JSON.stringify(initial));
+
+  await page.click('#tutorial-start');
+  const coachReady = await waitFor(
+    () => evaluate(() => !document.getElementById('tutorial-overlay') && !!document.querySelector('.coach-card-wrap')),
+    8000,
+  );
+  assert(coachReady, 'tutorial: coach marks start after the help modal is dismissed');
+
+  const rect = () => evaluate(() => {
+    const el = document.querySelector('.coach-card-wrap');
+    if (!el) return null;
+    const b = el.getBoundingClientRect();
+    return { x: Math.round(b.x), y: Math.round(b.y), right: Math.round(b.right), bottom: Math.round(b.bottom), vw: innerWidth, vh: innerHeight };
+  });
+
+  const xSeen = [];
+  let last = null;
+  for (let stepIndex = 0; stepIndex < 2; stepIndex += 1) {
+    const btn = await page.$('#coach-next');
+    if (!btn) break;
+    await btn.click();
+    const samples = [];
+    for (let t = 0; t < 6; t += 1) {
+      await sleep(70);
+      samples.push(await rect());
+    }
+    await sleep(300);
+    const after = await rect();
+    if (after) xSeen.push(after.x, ...samples.filter(Boolean).map((r) => r.x));
+    last = after;
+    assert(
+      samples.filter(Boolean).length > 0 && samples.filter(Boolean).every((r) => r.right <= r.vw && r.bottom <= r.vh),
+      `tutorial: step ${stepIndex + 1} card stays inside the viewport`,
+      JSON.stringify(samples.filter(Boolean).slice(0, 3)),
+    );
+  }
+  const uniqueX = [...new Set(xSeen)];
+  assert(uniqueX.length <= 1, 'tutorial: coach card x-position stable across Next clicks (no left/right jump)', JSON.stringify(uniqueX));
+  assert(!!last, 'tutorial: coach card still visible during the steps');
+
+  // Reopening help while coach marks are active must render above them and stay dismissible.
+  await page.keyboard.press('h');
+  const helpOpen = await waitFor(() => evaluate(() => !!document.getElementById('tutorial-overlay')), 5000);
+  assert(helpOpen, 'tutorial: H opens help while coach marks are active');
+  await page.click('#tutorial-start');
+  const helpedClosed = await waitFor(() => evaluate(() => !document.getElementById('tutorial-overlay')), 5000);
+  const coachStillThere = await evaluate(() => !!document.querySelector('.coach-card-wrap'));
+  assert(helpedClosed && coachStillThere, 'tutorial: closing help restores the coach card without duplicates');
+
+  await evaluate(() => document.getElementById('coach-skip')?.click());
+  const skipped = await waitFor(() => evaluate(() => !document.querySelector('.coach-card-wrap')), 4000);
+  assert(skipped, 'tutorial: skip clears the coach card');
+  await closeOverlays();
+});
+
 await runSection('exam', async () => {
   await bootMenu();
   const opened = await openExamPrep();

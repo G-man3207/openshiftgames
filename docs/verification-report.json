@@ -1,19 +1,19 @@
 {
-  "timestamp": "2026-11-03T23:25:54.850Z",
+  "timestamp": "2026-11-03T23:34:45.378Z",
   "environment": {
     "node": "v26.10.0",
     "chrome": "Chrome/156.0.8078.79",
-    "baseUrl": "http://127.0.0.1:38205",
+    "baseUrl": "http://127.0.0.1:38715",
     "viewport": {
       "width": 1600,
       "height": 900
     },
     "puppeteerCore": "/tmp/verify-tools",
-    "startedAt": "2026-11-03T23:23:07.348Z",
-    "durationSeconds": 168
+    "startedAt": "2026-11-03T23:32:04.570Z",
+    "durationSeconds": 161
   },
   "summary": {
-    "passes": 427,
+    "passes": 437,
     "failures": 0,
     "warnings": 0,
     "consoleErrors": 0,
@@ -28,6 +28,11 @@
     },
     "responsive": {
       "passes": 7,
+      "failures": 0,
+      "warnings": 0
+    },
+    "tutorial": {
+      "passes": 10,
       "failures": 0,
       "warnings": 0
     },
@@ -86,62 +91,62 @@
       "path": "screenshot.png",
       "width": 1600,
       "height": 900,
-      "bytes": 251904
+      "bytes": 252186
     },
     "ogImage": {
       "path": "og-image.png",
       "width": 1200,
       "height": 630,
-      "bytes": 200085
+      "bytes": 200078
     },
     "screenshots": [
       {
         "path": "docs/screenshots/menu.png",
         "width": 1600,
         "height": 900,
-        "bytes": 118309
+        "bytes": 118259
       },
       {
         "path": "docs/screenshots/exam-prep.png",
         "width": 1600,
         "height": 900,
-        "bytes": 119974
+        "bytes": 212719
       },
       {
         "path": "docs/screenshots/sandbox.png",
         "width": 1600,
         "height": 900,
-        "bytes": 251745
+        "bytes": 251849
       },
       {
         "path": "screenshot.png",
         "width": 1600,
         "height": 900,
-        "bytes": 251904
+        "bytes": 252186
       },
       {
         "path": "docs/screenshots/files-panel.png",
         "width": 1600,
         "height": 900,
-        "bytes": 193889
+        "bytes": 193899
       },
       {
         "path": "docs/screenshots/campaign-level-1.png",
         "width": 1600,
         "height": 900,
-        "bytes": 253420
+        "bytes": 254604
       },
       {
         "path": "docs/screenshots/draw.png",
         "width": 1600,
         "height": 900,
-        "bytes": 161637
+        "bytes": 161782
       },
       {
         "path": "og-image.png",
         "width": 1200,
         "height": 630,
-        "bytes": 200085
+        "bytes": 200078
       }
     ]
   },
@@ -261,6 +266,46 @@
     {
       "section": "responsive",
       "name": "responsive: restored 1600x900"
+    },
+    {
+      "section": "tutorial",
+      "name": "tutorial: help modal shown on level start"
+    },
+    {
+      "section": "tutorial",
+      "name": "tutorial: coach card does not overlap the help modal"
+    },
+    {
+      "section": "tutorial",
+      "name": "tutorial: coach marks start after the help modal is dismissed"
+    },
+    {
+      "section": "tutorial",
+      "name": "tutorial: step 1 card stays inside the viewport"
+    },
+    {
+      "section": "tutorial",
+      "name": "tutorial: step 2 card stays inside the viewport"
+    },
+    {
+      "section": "tutorial",
+      "name": "tutorial: coach card x-position stable across Next clicks (no left/right jump)"
+    },
+    {
+      "section": "tutorial",
+      "name": "tutorial: coach card still visible during the steps"
+    },
+    {
+      "section": "tutorial",
+      "name": "tutorial: H opens help while coach marks are active"
+    },
+    {
+      "section": "tutorial",
+      "name": "tutorial: closing help restores the coach card without duplicates"
+    },
+    {
+      "section": "tutorial",
+      "name": "tutorial: skip clears the coach card"
     },
     {
       "section": "exam",

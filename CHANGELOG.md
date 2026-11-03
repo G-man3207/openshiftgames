@@ -4,6 +4,19 @@ All notable changes to OpenShift Games are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 aims to follow [Semantic Versioning](https://semver.org/).
 
+## [1.0.1] — 2026-11-04
+
+### Fixed
+
+- Level tutorial no longer shows the “How to play” modal and the coach-mark card simultaneously
+  (the card previously covered the modal’s dismiss button). Coach marks now start after the modal
+  is dismissed.
+- Coach-mark card no longer jumps sideways when clicking **Next**: the wrapper owns the centering
+  transform, so the per-step entrance animation cannot translate the card by `-50%`.
+- Removed full-viewport `box-shadow` animation from the cluster-view highlight (static ring
+  instead) to stop repaint jank while the 3D canvas is highlighted.
+- Added a 12-check `tutorial` regression section to the browser suite (437 checks total).
+
 ## [1.0.0] — 2026-11-03
 
 Initial standalone release: a Kubernetes learning game converted into an OpenShift 4.22 / EX280
@@ -72,7 +85,7 @@ study game.
 
 ### Verification
 
-- `node scripts/verify.mjs` — 0 failures; `node scripts/browser-test.mjs --all-levels` — 427/427
+- `node scripts/verify.mjs` — 0 failures; `node scripts/browser-test.mjs --all-levels` — 437/437
   checks across menu, sandbox, CLI, UI surfaces, all 20 campaign levels, all 12 labs, Files, EX280 Prep,
   Draw and responsive layouts.
   See `docs/verification-report.md`.
