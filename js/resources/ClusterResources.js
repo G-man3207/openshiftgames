@@ -468,12 +468,20 @@ export class ResourceQuota extends ResourceBase {
   }
 
   toDescribe() {
-    const keys = Object.keys(this.spec.hard || {});
+    const hard = this.spec.hard || {};
+    const used = this.status.used || {};
+    // Real `oc describe quota` uses a tabwriter: every column is padded to the
+    // widest cell so Resource/Used/Hard line up exactly (#36).
+    const keys = Object.keys(hard).sort();
+    const keyWidth = Math.max(14, ...keys.map((key) => key.length + 2));
+    const usedWidth = Math.max(6, ...keys.map((key) => String(used[key] ?? '0').length + 2));
+    const row = (resource, usedValue, hardValue) =>
+      `${String(resource).padEnd(keyWidth)}${String(usedValue).padEnd(usedWidth)}${hardValue}`;
     return `Name:         ${this.metadata.name}
 Namespace:    ${this.metadata.namespace}
-Resource      Used    Hard
---------      ----    ----
-${keys.map((k) => `${k.padEnd(14)} ${String(this.status.used?.[k] ?? '0').padEnd(7)} ${this.spec.hard[k]}`).join('\n')}
+${row('Resource', 'Used', 'Hard')}
+${row('--------', '----', '----')}
+${keys.map((key) => row(key, used[key] ?? '0', hard[key])).join('\n')}
 Events:
 ${this.events
   .slice(-10)

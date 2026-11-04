@@ -264,6 +264,8 @@ const EXPECTED_API = {
   ClusterVersion: 'config.openshift.io/v1',
   IPAddressPool: 'metallb.io/v1beta1',
   L2Advertisement: 'metallb.io/v1beta1',
+  PrometheusRule: 'monitoring.coreos.com/v1',
+  Alertmanager: 'monitoring.coreos.com/v1',
   Node: 'v1',
 };
 const EXPECTED_CLUSTER_SCOPED = new Set([

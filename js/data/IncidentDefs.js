@@ -156,8 +156,8 @@ const INCIDENT_DEFS = [
       container: 'main',
       current: [
         'Starting application...',
-        'FATAL: <deployment> failed to start: configuration for image <image> is invalid',
-        'Error: required configuration key is missing or unreadable',
+        'FATAL: <deployment> failed to start: unsupported APP_MODE configuration value',
+        'Error: configuration validation failed: APP_MODE has an unsupported value',
         'Process exited with status 1',
       ],
       previous: [
@@ -617,16 +617,19 @@ const INCIDENT_DEFS = [
     category: 'Pod',
     severity: 2,
     description:
-      'A Job exceeded its activeDeadlineSeconds and was marked Failed; its Pods were terminated before completing.',
+      'A Job exceeded its activeDeadlineSeconds and was marked Failed; its Pods were terminated before completing. The Job is not the Pod the player runs: it has a real spec.activeDeadlineSeconds that is too short for the work.',
     visualEffect: 'pulse-yellow',
     affectedResourceTypes: ['Job', 'Pod'],
     investigationSteps: [
       S('oc get job <job> -n <namespace>', 'STATUS shows Failed with reason DeadlineExceeded.'),
-      S('oc describe job <job>', 'Read the Job conditions and the activeDeadlineSeconds value.'),
+      S(
+        'oc describe job <job>',
+        'Read the Failed condition (reason DeadlineExceeded) and the activeDeadlineSeconds value.'
+      ),
       S('oc logs job/<job> -n <namespace>', 'Why the job did not finish in time.'),
       S(
         'oc get pods -n <namespace> -l job-name=<job>',
-        'The Pods were terminated; a Failed Job object cannot be resumed.'
+        'The Pod was terminated; a Failed Job object cannot be resumed.'
       ),
     ],
     resolutionActions: [
@@ -637,9 +640,10 @@ const INCIDENT_DEFS = [
     ocCommands: [
       'oc get job <job>',
       'oc describe job <job>',
+      'oc get job <job> -o yaml',
       'oc logs job/<job>',
       'oc delete job <job>',
-      'oc create job <job> --image=perl -- perl -e "print 42"',
+      'oc create job <job> --image=perl --active-deadline-seconds=600 -- perl -e "print 42"',
     ],
     autoResolveTime: null,
     docsUrl: DOCS.pod,
@@ -1172,13 +1176,16 @@ const INCIDENT_DEFS = [
     category: 'Cluster',
     severity: 3,
     description:
-      'A project ResourceQuota is exhausted: new Pods are rejected with "exceeded quota" and Deployments report FailedCreate.',
+      'A project ResourceQuota is full: the ReplicaSet cannot create the replacement Pod ("failed/quota: exceeded quota"), so the Pod object is NEVER created and quota Used never exceeds Hard.',
     visualEffect: 'pulse-yellow',
-    affectedResourceTypes: ['ResourceQuota', 'Pod', 'Deployment'],
+    affectedResourceTypes: ['ResourceQuota', 'Pod', 'Deployment', 'ReplicaSet'],
     investigationSteps: [
       S('oc describe quota <quota> -n <namespace>', 'Compare Used vs Hard for cpu/memory/pods.'),
       S('oc get quota <quota> -o yaml', 'Check hard limits and scopes.'),
-      S('oc describe deployment <deployment>', 'FailedCreate events name the exceeded quota.'),
+      S(
+        'oc describe rs -n <namespace> -l app=<deployment>',
+        'The ReplicaSet shows FailedCreate events naming the exceeded quota.'
+      ),
       S(
         'oc events -n <namespace> --types=Warning',
         'Recent admission/quota failures (the events subcommand accepts --types; oc get events does not).'
@@ -1192,8 +1199,9 @@ const INCIDENT_DEFS = [
     ocCommands: [
       'oc describe quota',
       'oc get quota -o yaml',
+      'oc describe deployment <deployment>',
       'oc edit resourcequota <quota>',
-      'oc events --types=Warning',
+      'oc patch quota <quota> --type=merge -p \'{"spec":{"hard":{"pods":"10"}}}\'',
     ],
     autoResolveTime: null,
     docsUrl: DOCS.quota,

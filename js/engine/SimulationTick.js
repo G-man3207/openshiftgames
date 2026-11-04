@@ -38,7 +38,11 @@ import {
   parseCronSchedule,
   nextCronOccurrence,
 } from '../resources/WorkloadResources.js';
-import { knownImageRuntimeFailure } from '../resources/ImageSecurityProfiles.js';
+import {
+  imageEnvironmentSatisfied,
+  knownImageRuntimeFailure,
+  knownImageSecurityProfile,
+} from '../resources/ImageSecurityProfiles.js';
 // The service-ca controller issues serving certificates with the same
 // dependency-free PEM helpers that back the shell's simulated `openssl`
 // commands (issue #32b/#33a), so `openssl x509` can read the resulting Secret.
@@ -236,9 +240,23 @@ export class SimulationTick {
         });
       });
 
-      // OAuth: provider changes need a simulated 5s oauth rollout.
+      // OAuth: provider changes need a simulated oauth rollout.
       eventBus.on('cluster:added:OAuth', () => this._scheduleOAuthRollout());
       eventBus.on('cluster:modified:OAuth', () => this._scheduleOAuthRollout());
+      // The authentication operator also watches the htpasswd Secret referenced
+      // by the identity provider: changing its data (password rotation, adding a
+      // user) triggers the same oauth-openshift rollout, so logins must wait.
+      for (const eventName of ['cluster:added:Secret', 'cluster:modified:Secret']) {
+        eventBus.on(eventName, (data) => {
+          const resource = data?.resource;
+          if (!resource || resource.kind !== 'Secret') return;
+          if ((resource.metadata?.namespace || '') !== 'openshift-config') return;
+          const provider = this.cluster.getAuthProviderConfig?.();
+          if (!provider) return;
+          if (resource.metadata?.name !== provider.secretName) return;
+          this._scheduleOAuthRollout();
+        });
+      }
 
       // SCC grant/revocation re-evaluates pods denied earlier.
       eventBus.on('cluster:modified:SecurityContextConstraints', () => {
@@ -1033,24 +1051,33 @@ export class SimulationTick {
   }
 
   /**
-   * Known root-image personality at runtime (issue #25): an image that starts as
-   * UID 0 (nginx) is happily ADMITTED by a non-root SCC — admission only checks
-   * the explicit pod spec — but the container cannot run with the arbitrary UID
-   * and exits immediately with "Permission denied". Returns the image runtime
-   * failure persona when the Pod is in that state, otherwise null.
+   * Known image personalities at runtime. Two families exist (#25, #31):
+   *  - `nonroot-scc` (nginx): an image that starts as UID 0 is happily ADMITTED
+   *    by a non-root SCC — admission only checks the explicit pod spec — but the
+   *    container cannot run with the arbitrary UID and exits with "Permission
+   *    denied";
+   *  - `missing-env` (MySQL): the image starts but the entrypoint aborts until
+   *    database credentials are supplied in the environment (`oc set env` then
+   *    rolling out new Pods is the real fix).
+   * Returns the image runtime failure persona when it applies, otherwise null.
    *
    * @param {object} pod
    * @param {object} container
    * @returns {{exitCode: number, lastStateReason: string, logLines: string[]}|null}
    */
-  _knownRootImageRuntimeFailure(pod, container) {
-    const failure = knownImageRuntimeFailure(container?.image);
-    if (!failure) return null;
+  _knownImageRuntimeFailure(pod, container) {
+    const profile = knownImageSecurityProfile(container?.image);
+    if (!profile?.runtimeFailure) return null;
+    if (profile.failureMode === 'missing-env') {
+      // Configuration-driven crash: independent of the SCC; a new rollout Pod
+      // with the credentials in its env starts normally.
+      return imageEnvironmentSatisfied(container, profile) ? null : profile.runtimeFailure;
+    }
     const scc = this._podScc(pod);
     if (!scc) return null;
     // anyuid/privileged admit the root UID the image expects: it runs normally.
     if (this._sccAllowsUidZero(scc)) return null;
-    return failure;
+    return profile.runtimeFailure;
   }
 
   /**
@@ -1113,7 +1140,7 @@ export class SimulationTick {
         // container starts (issue #25): nginx is admitted under restricted-v2
         // and immediately exits with Permission denied. The retry loop is the
         // normal CrashLoopBackOff one; only actual start attempts crash.
-        const runtimeFailure = this._knownRootImageRuntimeFailure(pod, container);
+        const runtimeFailure = this._knownImageRuntimeFailure(pod, container);
         if (
           runtimeFailure &&
           (status.state.running || status.state.waiting?.reason === 'ContainerCreating')
@@ -2098,6 +2125,20 @@ export class SimulationTick {
         typeof resource._progressingSince === 'number'
           ? Math.max(0, deadlineSeconds - (this.gameSeconds - resource._progressingSince))
           : null;
+      // Available replicas that belong to the NEW (latest-revision) ReplicaSet;
+      // used to distinguish "old replicas pending termination" from a rollout
+      // blocked by ImagePullBackOff/SCC FailedCreate.
+      const revisionOfSet = (rs) =>
+        Number(rs?.metadata?.annotations?.['deployment.kubernetes.io/revision']) || 0;
+      const deploymentSets = this.cluster
+        .getChildren(resource.uid)
+        .filter((child) => child.kind === 'ReplicaSet')
+        .sort((left, right) => revisionOfSet(left) - revisionOfSet(right));
+      const latestSet = deploymentSets[deploymentSets.length - 1] || null;
+      const unavailableUpdated = Math.min(
+        status.updated,
+        Number(latestSet?.status?.availableReplicas ?? status.updated) || 0
+      );
       let message;
       if (timedOut) {
         message = `error: deployment "${name}" exceeded its progress deadline`;
@@ -2109,6 +2150,13 @@ export class SimulationTick {
         message = `Waiting for deployment "${name}" rollout to finish: deployment is paused`;
       } else if (status.updated < status.desired) {
         message = `Waiting for deployment "${name}" rollout to finish: ${status.updated} out of ${status.desired} new replicas have been updated...`;
+      } else if (unavailableUpdated < status.updated) {
+        // A new ReplicaSet that cannot start (ImagePullBackOff, SCC rejection …)
+        // reports `0 of N updated replicas are available` — not "old replicas
+        // pending termination" (#36).
+        message = `Waiting for deployment "${name}" rollout to finish: ${unavailableUpdated} of ${status.updated} updated replicas are available...`;
+      } else if (status.available < status.updated) {
+        message = `Waiting for deployment "${name}" rollout to finish: ${status.available} of ${status.updated} updated replicas are available...`;
       } else if (status.replicas > status.updated) {
         message = `Waiting for deployment "${name}" rollout to finish: ${Math.max(0, status.replicas - status.updated)} old replicas are pending termination...`;
       } else {
@@ -2300,6 +2348,36 @@ export class SimulationTick {
     resource.metadata.generation = (Number(resource.metadata.generation) || 1) + 1;
     resource._progressingSince = undefined;
     resource._deadlineEventEmitted = false;
+    // Real DeploymentController semantics: a rollback re-activates the old
+    // ReplicaSet but stamps it with the NEXT revision, so pruning/history are
+    // monotonic (`oc rollout history` shows e.g. 2,3 and never re-adds 1).
+    const revisionOf = (rs) =>
+      Number(rs?.metadata?.annotations?.['deployment.kubernetes.io/revision']) || 0;
+    const ownedSets = this.cluster
+      .getChildren(resource.uid)
+      .filter((child) => child.kind === 'ReplicaSet');
+    const maxRevision = Math.max(
+      Number(resource.metadata?.annotations?.['deployment.kubernetes.io/revision']) || 0,
+      ...ownedSets.map((rs) => revisionOf(rs))
+    );
+    const nextRevision = maxRevision + 1;
+    resource.metadata.annotations = resource.metadata.annotations || {};
+    resource.metadata.annotations['deployment.kubernetes.io/revision'] = String(nextRevision);
+    const reactivatedRevision = nextRevision;
+    try {
+      const targetHash = this._templateHash(resource.spec.template);
+      const reactivated = ownedSets.find(
+        (rs) => rs.metadata?.labels?.['pod-template-hash'] === targetHash
+      );
+      if (reactivated) {
+        reactivated.metadata.annotations = reactivated.metadata.annotations || {};
+        reactivated.metadata.annotations['deployment.kubernetes.io/revision'] =
+          String(reactivatedRevision);
+        this.cluster.update(reactivated.uid, reactivated);
+      }
+    } catch {
+      /* the deployment controller will re-derive its revisions on the next tick */
+    }
     this.cluster.update(resource.uid, resource);
     // Counters/events shared with the objective + scoring layers (the legacy
     // GameEngine.rollout('undo') path emitted these too).
@@ -2489,6 +2567,8 @@ export class SimulationTick {
     });
     if (pod) {
       this.cluster.addRelationship(statefulSet.uid, pod.uid);
+      // Admitted above (real admission runs before the object exists).
+      pod.setAnnotation('openshiftgames/quota-admitted', 'true');
       this._clearReplicaFailure(statefulSet);
     }
     return pod;
@@ -2617,17 +2697,33 @@ export class SimulationTick {
       job.status.failed = failedPods.length;
       job.status.active = activePods.length;
 
+      /**
+       * Finish a Job the way batch/v1 does (issue #31): Job.status.phase has no
+       * `Pending`/`Running` value, so it is assigned directly instead of via
+       * setPhase (which used to emit the nonsense "Phase changed from undefined
+       * to Complete" event). The real events are `Completed` on success and the
+       * failure reason on failure; the Complete/Failed condition carries the
+       * completion/failure time.
+       */
       const finishJob = (phase, reason, message) => {
-        job.setPhase(phase);
-        job.status.completionTime = new Date().toISOString();
+        const finishedAt = new Date().toISOString();
+        job.status.phase = phase;
+        job.status.completed = phase === 'Complete';
         job.status.reason = reason;
         job.status.message = message || '';
-        job.setCondition(
-          phase === 'Complete' ? 'Complete' : 'Failed',
-          'True',
-          reason,
-          message || ''
-        );
+        job.status.active = 0;
+        if (phase === 'Complete') {
+          job.status.completionTime = finishedAt;
+          job.setCondition('Complete', 'True', reason, message || '', finishedAt);
+          job.setCondition('Failed', 'False', reason, '', finishedAt);
+          job.recordEvent('Normal', 'Completed', message || 'Job completed successfully');
+        } else {
+          delete job.status.completionTime;
+          job.setCondition('Failed', 'True', reason, message || '', finishedAt);
+          job.setCondition('Complete', 'False', reason, '', finishedAt);
+          job.recordEvent('Warning', reason || 'Failed', message || 'Job failed');
+        }
+        job._finishRecorded = true;
         this.cluster.update(job.uid, job);
         return true;
       };
@@ -2639,22 +2735,39 @@ export class SimulationTick {
       if (Number.isFinite(activeDeadlineSeconds) && activeDeadlineSeconds > 0) {
         const elapsed = this.gameSeconds - job._startedAtGameSeconds;
         if (elapsed >= activeDeadlineSeconds) {
-          // Terminate still-running pods and fail the Job (SIM-011).
+          // Terminate still-running pods and fail the Job (SIM-011). A real
+          // container is killed by the kubelet: terminated state, exit 137.
+          const now = new Date().toISOString();
           for (const pod of activePods) {
             pod.setPhase('Failed');
+            for (const status of pod.status.containerStatuses || []) {
+              status.state = {
+                terminated: {
+                  exitCode: 137,
+                  reason: 'Error',
+                  message: 'job active deadline exceeded',
+                  finishedAt: now,
+                },
+              };
+              status.ready = false;
+              status.started = false;
+            }
             pod.setCondition(
               'Ready',
               'False',
               'ContainersNotReady',
               'job active deadline exceeded'
             );
+            pod.setCondition('ContainersReady', 'False', 'ContainersNotReady');
             pod.recordEvent(
               'Warning',
               'DeadlineExceeded',
               'Pod terminated because the Job activeDeadlineSeconds was exceeded'
             );
+            this._applyJobPodOutput(job, pod);
+            this.cluster.update(pod.uid, pod);
           }
-          job.status.active = 0;
+          job.status.failed = failedPods.length + activePods.length;
           finishJob(
             'Failed',
             'DeadlineExceeded',
@@ -2664,6 +2777,7 @@ export class SimulationTick {
         }
       }
       if (failedPods.length > backoffLimit) {
+        job.status.failed = failedPods.length;
         finishJob(
           'Failed',
           'BackoffLimitExceeded',
@@ -2692,11 +2806,24 @@ export class SimulationTick {
         const pod = this._createPodForWorkload(job, job);
         if (!pod) break;
         pod.spec.restartPolicy = 'Never';
+        // Real Job pods carry the job-name/controller-uid labels so
+        // `oc logs job/<name>` and `oc get pods -l job-name=<name>` keep working
+        // even after the Job finishes (issue #31).
+        pod.metadata.labels = {
+          ...(pod.metadata.labels || {}),
+          'job-name': job.metadata.name,
+          'batch.kubernetes.io/job-name': job.metadata.name,
+          'controller-uid': job.uid,
+        };
+        this.cluster.updateMetadata(pod.uid, { labels: pod.metadata.labels });
+        const container = job.spec?.template?.spec?.containers?.[0] || {};
         const duration =
           Math.max(1, Number(job.spec.estimatedDurationSeconds) || 30) *
           (0.8 + Math.random() * 0.4);
         pod._completionAtGameSeconds = this.gameSeconds + duration;
         pod._jobUid = job.uid;
+        pod._jobLogLines = this._jobContainerOutput(container);
+        this._applyJobPodOutput(job, pod);
       }
 
       // Simulated-time completion (was wall-clock Date.now() based).
@@ -2721,6 +2848,7 @@ export class SimulationTick {
           pod.setCondition('Ready', 'False', 'ContainersNotReady', 'pod completed');
           pod.setCondition('ContainersReady', 'False', 'ContainersNotReady');
           pod.recordEvent('Normal', 'Completed', 'Pod completed successfully');
+          this._applyJobPodOutput(job, pod);
         }
       }
 
@@ -2733,6 +2861,79 @@ export class SimulationTick {
       if (succeededNow >= completions)
         finishJob('Complete', 'JobComplete', 'Job completed successfully');
     }
+  }
+
+  /**
+   * Evaluate a trivial container command's stdout for `oc logs job/<name>`
+   * (issue #31): `perl -e "print 42"` prints 42, `-- sh -c date` prints a date,
+   * an `echo` script prints its text. Unknown commands produce no output (what
+   * a silent image would really print) instead of the generic app-server lines.
+   * @param {object} container
+   * @returns {string[]}
+   */
+  _jobContainerOutput(container) {
+    const argv = [...(container?.command || []), ...(container?.args || [])].map(String);
+    const joined = argv.join(' ');
+    const lines = [];
+    if (!joined.trim()) return lines;
+    // `print <number>` (perl/ruby/python one-liners) — evaluate + - * / chains.
+    const printMatch = joined.match(/\bprint\s+(-?\d+(?:\s*[-+*/]\s*-?\d+)*)/);
+    if (printMatch) {
+      let value = null;
+      try {
+        const tokens = printMatch[1].match(/-?\d+|[-+*/]/g) || [];
+        const ops = ['*', '/', '+', '-'];
+        for (const op of ops) {
+          while (tokens.indexOf(op) > 0) {
+            const index = tokens.indexOf(op);
+            const left = Number(tokens[index - 1]);
+            const right = Number(tokens[index + 1]);
+            const result =
+              op === '*'
+                ? left * right
+                : op === '/'
+                  ? left / right
+                  : op === '+'
+                    ? left + right
+                    : left - right;
+            tokens.splice(index - 1, 3, String(result));
+          }
+        }
+        value = tokens.length === 1 ? Number(tokens[0]) : null;
+      } catch {
+        value = null;
+      }
+      if (Number.isFinite(value)) lines.push(String(value));
+    }
+    // `echo "text"` / `echo text` lines (e.g. a script's progress output).
+    const echoMatch = joined.match(/\becho\s+(?:"([^"]*)"|'([^']*)'|([^;&|]+))/);
+    if (echoMatch) {
+      const text = (echoMatch[1] ?? echoMatch[2] ?? echoMatch[3] ?? '').trim();
+      if (text) lines.push(text);
+    }
+    // `date` / `date +<format>` prints an RFC-ish timestamp.
+    if (/\bdate\b/.test(joined) && !lines.length) lines.push(new Date().toISOString());
+    return lines.slice(0, 10);
+  }
+
+  /**
+   * Persist the Job Pod's real stdout on the Pod so `oc logs job/<name>` renders
+   * it even after the Job finishes (the Pod object is kept, as on a real cluster
+   * until ttlSecondsAfterFinished / job deletion). Issue #31.
+   * @param {object} job
+   * @param {object} pod
+   */
+  _applyJobPodOutput(job, pod) {
+    if (!job || !pod) return;
+    const container = job.spec?.template?.spec?.containers?.[0] || {};
+    const lines = Array.isArray(pod._jobLogLines) ? pod._jobLogLines : null;
+    const output = lines || this._jobContainerOutput(container);
+    pod.setAnnotation('openshiftgames.io/logs', JSON.stringify(output));
+    pod.setAnnotation('openshiftgames.io/logs-previous', JSON.stringify(output));
+    pod.setAnnotation(
+      'openshiftgames.io/logs-container',
+      (pod.status?.containerStatuses || [])[0]?.name || container.name || 'main'
+    );
   }
 
   _tickCronJobs(dt) {
@@ -4765,6 +4966,17 @@ export class SimulationTick {
   /**
    * Validate a candidate Pod spec before it is created (API-server admission +
    * basic pod validation), returning a failure message or null when admitted.
+   *
+   * The admission chain mirrors a real cluster (issue #31):
+   *   1. basic PodSpec validation,
+   *   2. SCC admission (`restricted-v2` …),
+   *   3. LimitRange: defaults are APPLIED to the Pod spec, then min/max checked,
+   *   4. ResourceQuota: a compute quota with no LimitRange defaults rejects pods
+   *      that omit requests ("failed quota: … must specify …"); a hard limit
+   *      crossed rejects with the real "exceeded quota: …, requested: …, used:
+   *      …, limited: …" wording. The Pod object is NEVER created for a rejected
+   *      attempt — only a FailedCreate event on the owning controller.
+   *
    * @param {object} podSpec
    * @param {string} namespace
    * @param {string} podName
@@ -4782,8 +4994,39 @@ export class SimulationTick {
       }
     }
     const resolution = this._resolveAdmissionForSpec(podSpec, namespace);
-    if (resolution.allowed) return null;
-    return `is forbidden: ${resolution.message || 'unable to validate against any security context constraint'}`;
+    if (!resolution.allowed) {
+      return `is forbidden: ${resolution.message || 'unable to validate against any security context constraint'}`;
+    }
+    // LimitRanger admission: defaults first (they become part of the Pod spec),
+    // then the min/max validation.
+    this.cluster.applyLimitRangeDefaults(namespace, podSpec);
+    const limitRangeCheck = this.cluster.checkLimitRange(namespace, podSpec);
+    if (!limitRangeCheck.allowed) {
+      return `is forbidden: ${limitRangeCheck.violations[0] || 'pod resources violate the project LimitRange'}`;
+    }
+    // ResourceQuota admission: rejected creates leave no Pod object behind.
+    const quotaCheck = this.cluster.admitPodAgainstQuota(namespace, podSpec);
+    if (!quotaCheck.allowed) return `is forbidden: ${quotaCheck.message}`;
+    return null;
+  }
+
+  /**
+   * Public admission gate for Pods the player creates directly through the CLI
+   * (e.g. `oc run`, `oc create pod`): returns null when admitted, otherwise the
+   * API-server reason string (`is forbidden: …`).
+   *
+   * Side effect: LimitRange defaults are written into the supplied podSpec, as
+   * the real API server does. Callers should pass the spec they are about to
+   * create (they may rebuild the object afterwards).
+   *
+   * @param {object} podSpec
+   * @param {string} namespace
+   * @param {string} [podName]
+   * @returns {string|null}
+   */
+  podAdmissionForCreate(podSpec, namespace, podName = '') {
+    if (!podSpec || typeof podSpec !== 'object') return null;
+    return this._admissionFailureMessage(podSpec, namespace, podName);
   }
 
   /** Whether a Pod is blocked by SCC/LimitRange/quota admission. */
@@ -4882,21 +5125,26 @@ export class SimulationTick {
       if (pod.status.phase === 'Succeeded') continue;
       const annotations = pod.metadata.annotations;
       if (annotations['openshiftgames/quota-denied'] === 'true') {
-        const requests = this._getPodResourceRequests(pod);
-        if (
-          this.cluster.checkQuota(pod.metadata.namespace, requests.cpu, requests.memory).allowed
-        ) {
+        const admission = this.cluster.admitPodAgainstQuota(pod.metadata.namespace, pod.spec || {});
+        if (admission.allowed) {
           this._revivePod(pod, 'openshiftgames/quota-denied');
           pod.recordEvent('Normal', 'QuotaAdmitted', 'Pod now fits within the project quota');
           this.cluster.update(pod.uid, pod);
         }
         continue;
       }
+      // Controller-created pods were already admitted by _createPodForWorkload
+      // (real admission happens before the object exists), and seeded/legacy
+      // pods carry the admitted annotation: quota changes never retroactively
+      // reject an existing Pod.
+      if (annotations['openshiftgames/quota-admitted'] === 'true') continue;
       if (pod._quotaEvaluated) continue;
       pod._quotaEvaluated = true;
-      const requests = this._getPodResourceRequests(pod);
-      const result = this.cluster.checkQuota(pod.metadata.namespace, requests.cpu, requests.memory);
-      if (result.allowed) {
+      // Direct Pod creates (palette/YAML/`oc run` without the CLI gate) are
+      // still evaluated here; a rejected Pod is marked Failed with the same
+      // "Error creating: pods … is forbidden: …" reason the API server reports.
+      const admission = this.cluster.admitPodAgainstQuota(pod.metadata.namespace, pod.spec || {});
+      if (admission.allowed) {
         pod.setAnnotation('openshiftgames/quota-admitted', 'true');
         this.cluster.update(pod.uid, pod);
         continue;
@@ -4905,22 +5153,21 @@ export class SimulationTick {
       pod.setAnnotation('openshiftgames/quota-denied', 'true');
       pod.setAnnotation(
         'openshiftgames/denied-reason',
-        `pods "${pod.metadata.name}" is forbidden: ${result.violations[0] || 'exceeded quota'}`
+        `pods "${pod.metadata.name}" is forbidden: ${admission.message || 'exceeded quota'}`
       );
       pod.status.phase = 'Failed';
-      pod.setCondition('Ready', 'False', 'QuotaExceeded', result.violations[0] || 'exceeded quota');
+      pod.setCondition('Ready', 'False', 'QuotaExceeded', admission.message || 'exceeded quota');
       pod.recordEvent(
         'Warning',
         'FailedCreate',
-        `Error creating: pods "${pod.metadata.name}" is forbidden: ${result.violations[0] || 'exceeded quota'}`
+        `Error creating: pods "${pod.metadata.name}" is forbidden: ${admission.message || 'exceeded quota'}`
       );
       this.cluster.update(pod.uid, pod);
       this.eventBus?.emit('quota:exceeded', {
         namespace: pod.metadata.namespace,
         pod: pod.metadata.name,
-        violations: result.violations,
-        usage: result.usage,
-        quotaName: result.quotaName,
+        violations: admission.violations,
+        quotaName: admission.quotaName,
       });
     }
 
@@ -4944,9 +5191,82 @@ export class SimulationTick {
 
   // ── OpenShift: OAuth rollout + cluster operators ───────────────────────
 
+  /**
+   * Authentication-operator reconciliation: an OAuth configuration change (or a
+   * change to the referenced htpasswd Secret) rolls out new oauth-openshift
+   * pods. While the rollout is pending the OAuth server still serves the OLD
+   * config and `oc login` must fail with "wait for the OAuth rollout"— in both
+   * campaign L13 and lab 11 (issue #35).
+   */
   _scheduleOAuthRollout() {
     const provider = this.cluster.getAuthProviderConfig();
+    const wasPending = Boolean(this._oauthPending);
     this._oauthPending = { remaining: OAUTH_ROLLOUT_SECONDS, provider };
+    if (!wasPending) this._rollOauthAuthenticationDeployment();
+    this._setAuthenticationOperatorProgressing(true);
+    const oauth = this.cluster.getOAuth();
+    if (oauth) {
+      oauth.status = oauth.status || {};
+      oauth.status.ready = false;
+      oauth.status.rollingOut = true;
+    }
+  }
+
+  /** Bump the oauth-openshift Deployment template so its pods roll out. */
+  _rollOauthAuthenticationDeployment() {
+    const deployment = this.cluster.getByName(
+      'Deployment',
+      'oauth-openshift',
+      'openshift-authentication'
+    );
+    if (!deployment) return null;
+    deployment.spec = deployment.spec || {};
+    deployment.spec.template = deployment.spec.template || { metadata: {}, spec: {} };
+    deployment.spec.template.metadata = deployment.spec.template.metadata || {};
+    deployment.spec.template.metadata.annotations =
+      deployment.spec.template.metadata.annotations || {};
+    // A template hash change is what makes the real deployment controller
+    // create a new ReplicaSet + oauth-openshift-* pods.
+    deployment.spec.template.metadata.annotations['openshift.io/oauth-rollout'] = String(
+      Date.now()
+    );
+    deployment.metadata.generation = (Number(deployment.metadata.generation) || 1) + 1;
+    deployment.setCondition?.(
+      'Progressing',
+      'True',
+      'OAuthConfigChange',
+      'rolling out the OAuth server'
+    );
+    this.cluster.update(deployment.uid, deployment);
+    this.eventBus?.emit('rollout:triggered', {
+      kind: 'Deployment',
+      name: deployment.metadata.name,
+      namespace: deployment.metadata.namespace,
+      resource: deployment,
+    });
+    return deployment;
+  }
+
+  /** Reflect the OAuth rollout in `oc get clusteroperators authentication`. */
+  _setAuthenticationOperatorProgressing(progressing) {
+    const operator = this.cluster
+      .getClusterOperators?.()
+      .find((entry) => entry.metadata?.name === 'authentication');
+    if (!operator) return;
+    if (progressing) {
+      operator.setCondition('Available', 'True', 'AsExpected', 'All is well');
+      operator.setCondition(
+        'Progressing',
+        'True',
+        'OAuthConfigChange',
+        'OAuth server is rolling out'
+      );
+      operator.setCondition('Degraded', 'False', 'AsExpected', 'All is well');
+    } else {
+      operator.setCondition('Available', 'True', 'AsExpected', 'All is well');
+      operator.setCondition('Progressing', 'False', 'AsExpected', 'All is well');
+      operator.setCondition('Degraded', 'False', 'AsExpected', 'All is well');
+    }
   }
 
   _tickOAuth(dt) {
@@ -4956,6 +5276,7 @@ export class SimulationTick {
 
     const provider = this._oauthPending.provider;
     this._oauthPending = null;
+    this._setAuthenticationOperatorProgressing(false);
     const oauth = this.cluster.getOAuth();
     if (oauth) {
       oauth.status = oauth.status || {};
@@ -5132,6 +5453,10 @@ export class SimulationTick {
     });
     if (!pod) return null;
     this.cluster.addRelationship(parent.uid, pod.uid);
+    // The Pod passed API-server admission (SCC + LimitRange + quota) BEFORE it
+    // existed: record that fact so later quota edits never retroactively reject
+    // a running Pod (a real cluster does not re-admit existing Pods).
+    pod.setAnnotation('openshiftgames/quota-admitted', 'true');
     this._clearReplicaFailure(parent);
     if (parent.kind === 'ReplicaSet') {
       parent.status.replicas = (parent.status.replicas || 0) + 1;
@@ -5804,7 +6129,7 @@ export class SimulationTick {
   _routerDefaultCertificateInfo() {
     if (!this._routerDefaultCertificateInfoCache) {
       const material = createSelfSignedCertificate({
-        commonName: `*.apps.${APPS_DOMAIN}`,
+        commonName: `*.${APPS_DOMAIN}`,
         organization: 'OpenShift',
         days: 365,
       });

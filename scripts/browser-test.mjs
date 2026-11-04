@@ -4452,7 +4452,507 @@ await runSection('qa-incidents', async () => {
 // QA ROUND 1.1.8 — issue #31: scenario realism (crash-loop, jobs, quota)
 // ═══════════════════════════════════════════════════════════════════════════
 await runSection('qa-scenarios', async () => {
-  // QA-31-TESTS: owned by teammate `scenarios` — replace this comment.
+  // Issue #31 — scenario realism. Every assertion is behavioural: it drives the
+  // same oc commands a learner would and checks the cluster state a real 4.22
+  // cluster would show.
+
+  /** Advance BOTH clocks deterministically (controller ticks + incident ticks). */
+  const advanceBoth = async (seconds) => {
+    await evaluate((secs) => {
+      const engine = window.game?.incidentEngine;
+      if (engine) engine.tick(secs * 1000);
+    }, seconds);
+    await advanceSimulation(seconds);
+  };
+  /** Play up to `maxGameSeconds` until `predicate()` is true. */
+  const advanceUntil = async (predicate, maxGameSeconds = 40, step = 2) => {
+    for (let played = 0; played < maxGameSeconds; played += step) {
+      await advanceBoth(step);
+      if (await predicate()) return true;
+    }
+    return false;
+  };
+  const incidentNames = () =>
+    evaluate(() =>
+      (window.game?.incidentEngine?.getActiveIncidents?.() || []).map((incident) => incident.name)
+    );
+  const podsIn = (namespace) =>
+    evaluate(
+      (ns) =>
+        (window.game.cluster.getByKindAndNamespace('Pod', ns) || []).map((pod) => ({
+          name: pod.metadata.name,
+          phase: pod.status?.phase || 'Pending',
+          ready: (pod.status?.containerStatuses || []).filter((status) => status.ready).length,
+          waiting: (pod.status?.containerStatuses || [])
+            .map((status) => status.state?.waiting?.reason)
+            .filter(Boolean),
+        })),
+      namespace
+    );
+  const liveJob = (name, namespace) =>
+    evaluate(
+      ({ name, ns }) => {
+        const job = window.game.cluster.getByName('Job', name, ns);
+        if (!job) return null;
+        return {
+          phase: job.status?.phase || null,
+          completed: job.status?.completed === true,
+          succeeded: job.status?.succeeded ?? 0,
+          failed: job.status?.failed ?? 0,
+          active: job.status?.active ?? 0,
+          annotations: Object.fromEntries(
+            Object.entries(job.metadata?.annotations || {}).filter(([key]) =>
+              key.startsWith('openshiftgames.io/logs')
+            )
+          ),
+          events: (job.events || []).map((event) => ({
+            reason: event.reason,
+            message: event.message,
+          })),
+          activeDeadlineSeconds: job.spec?.activeDeadlineSeconds ?? null,
+        };
+      },
+      { name, ns: namespace }
+    );
+  const deploymentContainer = async (name, namespace) => {
+    const deployment = await findResource('Deployment', name, namespace);
+    return deployment?.spec?.template?.spec?.containers?.[0] || null;
+  };
+  const command = (raw) => runCmd(raw, 80);
+
+  // ── #31.1: L3 seeded CrashLoopBackOff — the bad value is real, and only
+  //    correcting it resolves the incident (FOO=bar / rollout restart do not).
+  await bootMenu();
+  assert(await launch('campaign', 3), 'scenarios: L3 starts');
+  await closeOverlays();
+  await command('oc project ops-lab');
+  const l3Container = await deploymentContainer('web-app', 'ops-lab');
+  assert(
+    !!l3Container && /v2-bad-config/.test(l3Container.image || ''),
+    'scenarios: L3 broken Deployment uses its own bad image (not the healthy origin-hello image)',
+    l3Container?.image
+  );
+  assert(
+    (l3Container?.env || []).some(
+      (entry) => entry.name === 'APP_MODE' && entry.value === 'debug-invalid'
+    ),
+    'scenarios: L3 Deployment actually carries env APP_MODE=debug-invalid',
+    JSON.stringify(l3Container?.env)
+  );
+  const l3Fired = await advanceUntil(
+    async () => (await incidentNames()).includes('CrashLoopBackOff'),
+    20
+  );
+  assert(l3Fired, 'scenarios: L3 CrashLoopBackOff incident fires');
+  const l3Pods = await podsIn('ops-lab');
+  assert(
+    l3Pods.some((pod) => pod.phase === 'CrashLoopBackOff') ||
+      l3Pods.some((pod) => pod.waiting.includes('CrashLoopBackOff')),
+    'scenarios: L3 Pods visibly CrashLoopBackOff',
+    JSON.stringify(l3Pods)
+  );
+  const l3PodName = l3Pods[0]?.name;
+  if (l3PodName) {
+    const previousLogs = await command(`oc logs ${l3PodName} -n ops-lab --previous`);
+    assert(
+      /configuration validation failed: APP_MODE has an unsupported value/.test(
+        previousLogs.message
+      ),
+      'scenarios: L3 crash log names the seeded faulty APP_MODE value',
+      previousLogs.message.slice(0, 300)
+    );
+  }
+  const unrelatedEnv = await command('oc set env deployment/web-app FOO=bar -n ops-lab');
+  assert(!unrelatedEnv.error, 'scenarios: L3 unrelated env edit applies', unrelatedEnv.message);
+  await advanceUntil(async () => true, 6);
+  assert(
+    (await incidentNames()).includes('CrashLoopBackOff'),
+    'scenarios: L3 unrelated env FOO=bar does NOT resolve the incident',
+    JSON.stringify(await incidentNames())
+  );
+  const rolloutRestart = await command('oc rollout restart deployment/web-app -n ops-lab');
+  assert(!rolloutRestart.error, 'scenarios: L3 rollout restart applies', rolloutRestart.message);
+  await advanceUntil(async () => true, 8);
+  assert(
+    (await incidentNames()).includes('CrashLoopBackOff'),
+    'scenarios: L3 rollout restart does NOT resolve the incident',
+    JSON.stringify(await incidentNames())
+  );
+  const correctEnv = await command('oc set env deployment/web-app APP_MODE=production -n ops-lab');
+  assert(!correctEnv.error, 'scenarios: L3 correcting APP_MODE applies', correctEnv.message);
+  const l3Healed = await advanceUntil(
+    async () => !(await incidentNames()).includes('CrashLoopBackOff'),
+    40
+  );
+  assert(l3Healed, 'scenarios: L3 incident resolves once APP_MODE is corrected');
+  const l3FixedContainer = await deploymentContainer('web-app', 'ops-lab');
+  assert(
+    (l3FixedContainer?.env || []).some(
+      (entry) => entry.name === 'APP_MODE' && entry.value === 'production'
+    ),
+    'scenarios: L3 Deployment now carries APP_MODE=production',
+    JSON.stringify(l3FixedContainer?.env)
+  );
+  await returnToMenu();
+
+  // ── #31.2/#31.3: L19 seeds its own broken Job; the player's Job completes
+  //    with its real output and its completed Pod/logs stay available.
+  assert(await launch('campaign', 19), 'scenarios: L19 starts');
+  await closeOverlays();
+  await command('oc project batch-lab');
+  const seededFailed = await advanceUntil(async () => {
+    const job = await liveJob('report-batch', 'batch-lab');
+    return job?.phase === 'Failed';
+  }, 20);
+  assert(seededFailed, 'scenarios: L19 seeded report-batch Job fails on its own short deadline');
+  const seededJob = await liveJob('report-batch', 'batch-lab');
+  assert(
+    Number(seededJob?.activeDeadlineSeconds) > 0 && Number(seededJob.activeDeadlineSeconds) <= 10,
+    'scenarios: L19 broken Job exposes a real activeDeadlineSeconds in its spec',
+    String(seededJob?.activeDeadlineSeconds)
+  );
+  const jobsTable = await command('oc get jobs -n batch-lab');
+  assert(
+    /report-batch\s+Failed/.test(jobsTable.message),
+    'scenarios: L19 get jobs shows the seeded Job as Failed (not Pending)',
+    jobsTable.message
+  );
+  const brokenLogs = await command('oc logs job/report-batch -n batch-lab');
+  assert(
+    !/Server listening|Health check passed/.test(brokenLogs.message),
+    'scenarios: L19 broken Job logs are its own output, not generic web-server lines',
+    brokenLogs.message.slice(0, 300)
+  );
+  const l19Fired = await advanceUntil(
+    async () => (await incidentNames()).includes('JobDeadlineExceeded'),
+    20
+  );
+  assert(l19Fired, 'scenarios: L19 JobDeadlineExceeded incident fires on the seeded Job');
+  const simpleJobCreate = await command(
+    'oc create job report-job --image=perl -- perl -e "print 42" -n batch-lab'
+  );
+  assert(
+    !simpleJobCreate.error,
+    'scenarios: L19 player simple Job created',
+    simpleJobCreate.message
+  );
+  const simpleJobDone = await advanceUntil(async () => {
+    const job = await liveJob('report-job', 'batch-lab');
+    return job?.phase === 'Complete';
+  }, 40);
+  assert(simpleJobDone, 'scenarios: L19 simple Job reaches Complete quickly');
+  const completedJob = await liveJob('report-job', 'batch-lab');
+  assert(
+    completedJob?.completed === true && completedJob.succeeded === 1 && completedJob.active === 0,
+    'scenarios: L19 Job status is Complete with 1/1 succeeded and no active Pods',
+    JSON.stringify(completedJob)
+  );
+  assert(
+    !(completedJob?.events || []).some((event) => /undefined/.test(event.message || '')),
+    'scenarios: L19 Job events never read "Phase changed from undefined"',
+    JSON.stringify(completedJob?.events)
+  );
+  const simpleLogs = await command('oc logs job/report-job -n batch-lab');
+  assert(
+    simpleLogs.message.trim() === '42',
+    'scenarios: L19 oc logs job/<name> shows the container real stdout (42)',
+    JSON.stringify(simpleLogs.message)
+  );
+  const podsTable = await command('oc get pods -n batch-lab');
+  assert(
+    /report-job-\S+\s+0\/1\s+Completed/.test(podsTable.message),
+    'scenarios: L19 completed Pod still exists and shows STATUS Completed',
+    podsTable.message
+  );
+  const deleteBroken = await command('oc delete job report-batch -n batch-lab');
+  assert(!deleteBroken.error, 'scenarios: L19 broken Job can be deleted', deleteBroken.message);
+  const recreateBroken = await command(
+    'oc create job report-batch --image=perl --active-deadline-seconds=600 -- perl -e "print 42" -n batch-lab'
+  );
+  assert(
+    !recreateBroken.error,
+    'scenarios: L19 broken Job recreated with a longer deadline',
+    recreateBroken.message
+  );
+  const l19Healed = await advanceUntil(
+    async () => !(await incidentNames()).includes('JobDeadlineExceeded'),
+    20
+  );
+  assert(
+    l19Healed,
+    'scenarios: L19 incident clears once the Job is recreated with a longer deadline'
+  );
+  const replacementDone = await advanceUntil(async () => {
+    const job = await liveJob('report-batch', 'batch-lab');
+    return job?.phase === 'Complete';
+  }, 40);
+  assert(replacementDone, 'scenarios: L19 replacement Job completes');
+  const replacementLogs = await command('oc logs job/report-batch -n batch-lab');
+  assert(
+    replacementLogs.message.trim() === '42',
+    'scenarios: L19 replacement Job logs remain available after completion',
+    JSON.stringify(replacementLogs.message)
+  );
+  await returnToMenu();
+
+  // ── #31.4: lab 1 MySQL image — real missing-credentials crash-loop + 3306.
+  assert(await launch('challenge', 1), 'scenarios: lab 1 starts');
+  await closeOverlays();
+  await command('oc new-project backend');
+  const mysqlNewApp = await command(
+    'oc new-app --image=registry.redhat.io/rhel9/mysql-80 --name=database -n backend'
+  );
+  assert(!mysqlNewApp.error, 'scenarios: lab 1 oc new-app mysql runs', mysqlNewApp.message);
+  const mysqlCrashed = await advanceUntil(
+    async () =>
+      (await podsIn('backend')).some(
+        (pod) => pod.phase === 'CrashLoopBackOff' || pod.waiting.includes('CrashLoopBackOff')
+      ),
+    30
+  );
+  assert(mysqlCrashed, 'scenarios: lab 1 MySQL Pod CrashLoopBackOffs without credentials');
+  const mysqlPods = await podsIn('backend');
+  const mysqlPodName = mysqlPods[0]?.name;
+  const mysqlLogs = await command(`oc logs ${mysqlPodName} -n backend`);
+  assert(
+    /You must either specify the following environment variables/.test(mysqlLogs.message) &&
+      /MYSQL_USER/.test(mysqlLogs.message) &&
+      /MYSQL_ROOT_PASSWORD/.test(mysqlLogs.message),
+    'scenarios: lab 1 MySQL crash log is the real missing-credentials message',
+    mysqlLogs.message.slice(0, 400)
+  );
+  const mysqlSvc = await command('oc get svc database -n backend');
+  assert(
+    /3306\/TCP/.test(mysqlSvc.message),
+    'scenarios: lab 1 MySQL Service exposes the image port 3306/TCP',
+    mysqlSvc.message
+  );
+  const mysqlDeployYaml = await command('oc get deployment database -n backend -o yaml');
+  assert(
+    /containerPort:\s*3306/.test(mysqlDeployYaml.message),
+    'scenarios: lab 1 MySQL container spec uses port 3306',
+    mysqlDeployYaml.message.slice(0, 400)
+  );
+  const mysqlFix = await command(
+    'oc set env deployment/database MYSQL_ROOT_PASSWORD=secretpw MYSQL_DATABASE=appdb -n backend'
+  );
+  assert(!mysqlFix.error, 'scenarios: lab 1 credentials env applies', mysqlFix.message);
+  const mysqlRunning = await advanceUntil(
+    async () => (await podsIn('backend')).some((pod) => pod.phase === 'Running' && pod.ready > 0),
+    30
+  );
+  assert(mysqlRunning, 'scenarios: lab 1 MySQL recovers after oc set env supplies credentials');
+  await returnToMenu();
+
+  // ── #31.5: lab 12 compute quota without LimitRange forbids requestless Pods.
+  assert(await launch('challenge', 12), 'scenarios: lab 12 starts');
+  await closeOverlays();
+  await command('oc new-project prod');
+  const prodQuota = await command(
+    'oc create quota prod-quota --hard=pods=20,requests.cpu=4,requests.memory=8Gi -n prod'
+  );
+  assert(!prodQuota.error, 'scenarios: lab 12 prod-quota created', prodQuota.message);
+  const dbMigrate = await command('oc create job db-migrate --image=busybox:latest -n prod');
+  assert(!dbMigrate.error, 'scenarios: lab 12 Job object is created', dbMigrate.message);
+  const requestlessBlocked = await advanceUntil(async () => {
+    const job = await liveJob('db-migrate', 'prod');
+    return (job?.events || []).some((event) => /failed quota/.test(event.message || ''));
+  }, 20);
+  assert(
+    requestlessBlocked,
+    'scenarios: lab 12 Job without requests is rejected by the compute quota'
+  );
+  const prodPods = await podsIn('prod');
+  assert(
+    prodPods.length === 0,
+    'scenarios: lab 12 rejected Job leaves NO Pod object',
+    JSON.stringify(prodPods)
+  );
+  const describeBlocked = await command('oc describe job db-migrate -n prod');
+  assert(
+    /failed quota: prod-quota: must specify requests\.cpu,requests\.memory/.test(
+      describeBlocked.message
+    ),
+    'scenarios: lab 12 FailedCreate reports the real "must specify requests" message',
+    describeBlocked.message.slice(0, 600)
+  );
+  const directPod = await runCmd('oc run p1 --image=busybox:latest -n prod');
+  assert(
+    directPod.error &&
+      /failed quota: prod-quota: must specify requests\.cpu,requests\.memory/.test(
+        directPod.message
+      ),
+    'scenarios: lab 12 direct `oc run` Pod is forbidden with the failed-quota message',
+    directPod.message.slice(0, 300)
+  );
+  assert(
+    !(await findResource('Pod', 'p1', 'prod')),
+    'scenarios: lab 12 forbidden direct Pod object was never created'
+  );
+  const jobResources = await command(
+    'oc set resources job/db-migrate -n prod --requests=cpu=100m,memory=128Mi'
+  );
+  assert(!jobResources.error, 'scenarios: lab 12 Job requests can be set', jobResources.message);
+  const jobCompletes = await advanceUntil(async () => {
+    const job = await liveJob('db-migrate', 'prod');
+    return job?.phase === 'Complete';
+  }, 60);
+  const completedMigration = await liveJob('db-migrate', 'prod');
+  assert(
+    jobCompletes,
+    'scenarios: lab 12 Job completes after its requests are set',
+    JSON.stringify(completedMigration)
+  );
+  await returnToMenu();
+
+  // ── #31.6: L15 quota-exceeded model — no phantom Pod, Used never > Hard, the
+  //    ReplicaSet reports FailedCreate, and raising the quota restores scheduling.
+  assert(await launch('campaign', 15), 'scenarios: L15 starts');
+  await closeOverlays();
+  await command('oc project quota-lab');
+  const applyQuota = await command('oc apply -f examples/quota.yaml');
+  assert(!applyQuota.error, 'scenarios: L15 quota manifest applies', applyQuota.message);
+  const applyLimits = await command('oc apply -f examples/limitrange.yaml');
+  assert(!applyLimits.error, 'scenarios: L15 LimitRange manifest applies', applyLimits.message);
+  await advanceUntil(async () => true, 10);
+  const quotaIncident = await advanceUntil(
+    async () => (await incidentNames()).includes('ResourceQuotaExceeded'),
+    25
+  );
+  assert(quotaIncident, 'scenarios: L15 ResourceQuotaExceeded incident fires');
+  const quotaModel = await evaluate(() => {
+    const cluster = window.game.cluster;
+    const namespace = 'quota-lab';
+    const pods = (cluster.getByKindAndNamespace('Pod', namespace) || []).map((pod) => ({
+      name: pod.metadata.name,
+      phase: pod.status.phase,
+      ready: (pod.status.containerStatuses || []).filter((status) => status.ready).length,
+    }));
+    const quota = (cluster.getByKind('ResourceQuota') || []).find(
+      (entry) => entry.metadata.namespace === namespace
+    );
+    const usage = cluster.getQuotaUsage(namespace);
+    const replicaSet = (cluster.getByKindAndNamespace('ReplicaSet', namespace) || [])[0];
+    return {
+      pods,
+      hardPods: Number(quota?.spec?.hard?.pods ?? 0),
+      usedPods: Number(usage?.pods ?? 0),
+      replicaSetEvents: (replicaSet?.events || []).map((event) => event.message || ''),
+    };
+  });
+  assert(
+    !quotaModel.pods.some((pod) => pod.phase === 'Pending' && pod.ready > 0),
+    'scenarios: L15 quota damage does not fabricate a contradictory Pending Pod',
+    JSON.stringify(quotaModel.pods)
+  );
+  assert(
+    quotaModel.usedPods <= quotaModel.hardPods,
+    'scenarios: L15 quota Used never exceeds Hard',
+    `used ${quotaModel.usedPods} hard ${quotaModel.hardPods}`
+  );
+  console.log(
+    'DEBUG-L15',
+    JSON.stringify({
+      quotaEventMatch: quotaModel.replicaSetEvents.map((m) =>
+        /exceeded quota: compute-quota, requested: pods=1, used: pods=(\d+), limited: (\d+)/
+          .exec(m)
+          ?.slice(1)
+      ),
+      usedPods: quotaModel.usedPods,
+      hardPods: quotaModel.hardPods,
+      types: { used: typeof quotaModel.usedPods, hard: typeof quotaModel.hardPods },
+    })
+  );
+  const quotaEventMatch = quotaModel.replicaSetEvents
+    .map((message) =>
+      /exceeded quota: compute-quota, requested: pods=1, used: pods=(\d+), limited: (\d+)/.exec(
+        message
+      )
+    )
+    .find(Boolean);
+  assert(
+    Boolean(quotaEventMatch) &&
+      quotaEventMatch[1] === quotaEventMatch[2] &&
+      Number(quotaEventMatch[1]) === quotaModel.usedPods &&
+      Number(quotaEventMatch[2]) === quotaModel.hardPods,
+    'scenarios: L15 FailedCreate event is on the ReplicaSet with the real wording',
+    JSON.stringify({
+      events: quotaModel.replicaSetEvents,
+      usedPods: quotaModel.usedPods,
+      hardPods: quotaModel.hardPods,
+    })
+  );
+  const raiseQuota = await command(
+    `oc patch quota compute-quota -n quota-lab --type=merge -p '{"spec":{"hard":{"pods":"5"}}}'`
+  );
+  assert(!raiseQuota.error, 'scenarios: L15 quota can be raised', raiseQuota.message);
+  const workloadSchedules = await advanceUntil(async () => {
+    const pods = await podsIn('quota-lab');
+    return pods.filter((pod) => pod.phase === 'Running').length >= 2;
+  }, 30);
+  assert(workloadSchedules, 'scenarios: L15 workload schedules again after raising the quota');
+  const quotaHealed = await advanceUntil(
+    async () => !(await incidentNames()).includes('ResourceQuotaExceeded'),
+    20
+  );
+  assert(quotaHealed, 'scenarios: L15 incident clears once the quota is raised');
+  await returnToMenu();
+
+  // ── #31.1 (capstone): L20 seeds the crash cause on onset — the bad image and
+  //    APP_MODE appear in the live Deployment, and fixing APP_MODE is the only
+  //    state-driven resolution (the panel is not required).
+  assert(await launch('campaign', 20), 'scenarios: L20 starts');
+  await closeOverlays();
+  await command('oc new-project prod-platform');
+  const applyWebapp = await command('oc apply -f manifests/deployment.yaml -n prod-platform');
+  assert(!applyWebapp.error, 'scenarios: L20 webapp manifest applies', applyWebapp.message);
+  await advanceUntil(async () => true, 6);
+  const l20Fired = await advanceUntil(
+    async () => (await incidentNames()).includes('CrashLoopBackOff'),
+    70,
+    5
+  );
+  assert(l20Fired, 'scenarios: L20 capstone CrashLoopBackOff fires');
+  const l20Container = await deploymentContainer('webapp', 'prod-platform');
+  assert(
+    (l20Container?.env || []).some(
+      (entry) => entry.name === 'APP_MODE' && /debug-invalid|invalid/.test(entry.value || '')
+    ),
+    'scenarios: L20 incident seeds the faulty APP_MODE into the live Deployment',
+    JSON.stringify(l20Container?.env)
+  );
+  assert(
+    /v2-bad-config/.test(l20Container?.image || '') &&
+      !/origin-hello-openshift/.test(l20Container?.image || ''),
+    'scenarios: L20 broken Deployment image is seeded and is not L1s healthy origin-hello image',
+    l20Container?.image
+  );
+  const l20Unrelated = await command('oc set env deployment/webapp FOO=bar -n prod-platform');
+  assert(!l20Unrelated.error, 'scenarios: L20 unrelated env edit applies', l20Unrelated.message);
+  await advanceUntil(async () => true, 8);
+  assert(
+    (await incidentNames()).includes('CrashLoopBackOff'),
+    'scenarios: L20 unrelated env change does NOT resolve the capstone incident'
+  );
+  const l20Fix = await command('oc set env deployment/webapp APP_MODE=production -n prod-platform');
+  assert(!l20Fix.error, 'scenarios: L20 APP_MODE correction applies', l20Fix.message);
+  const l20Healed = await advanceUntil(
+    async () => !(await incidentNames()).includes('CrashLoopBackOff'),
+    40
+  );
+  assert(
+    l20Healed,
+    'scenarios: L20 capstone CrashLoopBackOff resolves only after APP_MODE is corrected'
+  );
+  const l20Fixed = await deploymentContainer('webapp', 'prod-platform');
+  assert(
+    (l20Fixed?.env || []).some(
+      (entry) => entry.name === 'APP_MODE' && entry.value === 'production'
+    ),
+    'scenarios: L20 Deployment carries APP_MODE=production after the fix',
+    JSON.stringify(l20Fixed?.env)
+  );
+  await returnToMenu();
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -4676,28 +5176,1946 @@ await runSection('qa-cli', async () => {
 // QA ROUND 1.1.8 — issue #32/#33: workstation tools, internal TLS, routing
 // ═══════════════════════════════════════════════════════════════════════════
 await runSection('qa-workstation', async () => {
-  // QA-32-33-TESTS: owned by teammate `workstation` — replace this comment.
+  // #32/#33 — workstation tools (base64/openssl/cut, exec/rsh content, curl to
+  // Routes), internal TLS (service-ca serving certs + reencrypt) and router
+  // access after a default-deny NetworkPolicy.
+  await bootSandbox();
+  await ensureManifestEngine();
+  await evaluate(() => {
+    window.game?.gameEngine?.resume?.();
+    window.game?.gameEngine?.setTimeScale?.(4);
+    window.game?.gameEngine?.simulation?.setBuildFailureRate?.(0);
+  });
+  const ns = 'qa-workstation';
+  const appHost = `app-${ns}.apps.cluster.example.com`;
+  const edgeHost = `edge-${ns}.apps.cluster.example.com`;
+  const redirHost = `redir-${ns}.apps.cluster.example.com`;
+  const ptHost = `pt-${ns}.apps.cluster.example.com`;
+  const apiHost = `api-${ns}.apps.cluster.example.com`;
+  const tick = (seconds = 20) => advanceSimulation(seconds);
+  const podRunning = (namespace, appName) =>
+    waitFor(
+      () =>
+        evaluate(
+          ({ targetNamespace, app }) =>
+            (window.game.cluster.getByKind('Pod') || []).some(
+              (pod) =>
+                pod.metadata?.namespace === targetNamespace &&
+                pod.metadata?.labels?.app === app &&
+                pod.status?.phase === 'Running' &&
+                (pod.status.containerStatuses || []).every((status) => status.ready)
+            ),
+          { targetNamespace: namespace, app: appName }
+        ),
+      25000
+    );
+  const routeAdmitted = (name) =>
+    waitFor(
+      () =>
+        evaluate(
+          ({ routeName, routeNamespace }) => {
+            const route = window.game.cluster.getByName('Route', routeName, routeNamespace);
+            return Boolean(
+              route?.status?.ingress?.some((entry) =>
+                (entry.conditions || []).some(
+                  (condition) => condition.type === 'Admitted' && condition.status === 'True'
+                )
+              )
+            );
+          },
+          { routeName: name, routeNamespace: ns }
+        ),
+      20000
+    );
+
+  await expectCmd(
+    'qa-workstation: create project',
+    `oc new-project ${ns}`,
+    /Now using project|created/i
+  );
+  await expectCmd(
+    'qa-workstation: create configmap',
+    `oc create configmap app-config --from-literal=APP_MODE=prod --from-literal=COLOR=blue -n ${ns}`,
+    /configmap\/app-config created/
+  );
+  await expectCmd(
+    'qa-workstation: create secret',
+    `oc create secret generic db-secret --from-literal=password=s3cret -n ${ns}`,
+    /secret\/db-secret created/
+  );
+  await expectCmd(
+    'qa-workstation: create deployment',
+    `oc create deployment app --image=quay.io/openshift/origin-hello-openshift:latest -n ${ns}`,
+    /deployment\.apps\/app created/
+  );
+  await expectCmd(
+    'qa-workstation: set env literal',
+    `oc set env deployment/app EXTRA=hello -n ${ns}`,
+    /updated/i
+  );
+  await expectCmd(
+    'qa-workstation: set env from configmap',
+    `oc set env deployment/app --from=configmap/app-config -n ${ns}`,
+    /updated/i
+  );
+  await expectCmd(
+    'qa-workstation: mount configmap volume',
+    `oc set volumes deployment/app --add --name=app-config --configmap-name=app-config --mount-path=/etc/app -n ${ns}`,
+    /volume updated/i
+  );
+  await tick(20);
+  assert(await podRunning(ns, 'app'), 'qa-workstation: app pod Running with config mounted');
+
+  // ── #32d: exec/rsh reflect the Pod's real volumes + environment ─────────
+  const execLs = await runCmd(`oc exec deploy/app -n ${ns} -- ls /etc/app`);
+  assert(
+    !execLs.error && /APP_MODE/.test(execLs.message) && /COLOR/.test(execLs.message),
+    'qa-workstation: exec ls /etc/app lists mounted ConfigMap keys',
+    execLs.message.replace(/\n/g, ' ⏎ ')
+  );
+  const execCat = await runCmd(`oc exec deploy/app -n ${ns} -- cat /etc/app/APP_MODE`);
+  assert(
+    !execCat.error && execCat.message.trim() === 'prod',
+    'qa-workstation: exec cat /etc/app/APP_MODE returns the ConfigMap value',
+    execCat.message
+  );
+  const execSh = await runCmd(`oc exec deploy/app -n ${ns} -- sh -c "cat /etc/app/APP_MODE"`);
+  assert(
+    !execSh.error && execSh.message.trim() === 'prod',
+    'qa-workstation: exec sh -c "…" unwraps the script',
+    execSh.message
+  );
+  const execMissing = await runCmd(`oc exec deploy/app -n ${ns} -- cat /etc/app/NOPE`);
+  assert(
+    /No such file or directory/.test(execMissing.message),
+    'qa-workstation: exec cat missing file reports No such file',
+    execMissing.message
+  );
+  const rshEnv = await runCmd(`oc rsh -n ${ns} deploy/app env`);
+  assert(
+    !rshEnv.error &&
+      /APP_MODE=prod/.test(rshEnv.message) &&
+      /EXTRA=hello/.test(rshEnv.message) &&
+      /HOSTNAME=app-/.test(rshEnv.message),
+    'qa-workstation: rsh env shows envFrom ConfigMap + literal env',
+    rshEnv.message.slice(0, 400)
+  );
+  const execHostname = await runCmd(`oc exec deploy/app -n ${ns} -- hostname`);
+  assert(
+    !execHostname.error && /^app-[a-z0-9-]+$/.test(execHostname.message.trim()),
+    'qa-workstation: exec hostname still returns the Pod name',
+    execHostname.message
+  );
+  await expectCmd(
+    'qa-workstation: mount Secret volume + env',
+    `oc set volumes deployment/app --add --name=db-secret --secret-name=db-secret --mount-path=/etc/secret -n ${ns}`,
+    /volume updated/i
+  );
+  await expectCmd(
+    'qa-workstation: env from Secret',
+    `oc set env deployment/app --from=secret/db-secret -n ${ns}`,
+    /updated/i
+  );
+  await tick(20);
+  await waitFor(
+    () =>
+      evaluate(
+        ({ targetNamespace, mountPath }) =>
+          (window.game.cluster.getByKind('Pod') || []).some(
+            (pod) =>
+              pod.metadata?.namespace === targetNamespace &&
+              pod.status?.phase === 'Running' &&
+              (pod.status.containerStatuses || []).every((status) => status.ready) &&
+              (pod.spec?.containers || []).some((container) =>
+                (container.volumeMounts || []).some((mount) => mount.mountPath === mountPath)
+              )
+          ),
+        { targetNamespace: ns, mountPath: '/etc/secret' }
+      ),
+    25000
+  );
+  const execSecret = await runCmd(`oc exec deploy/app -n ${ns} -- cat /etc/secret/password`);
+  assert(
+    !execSecret.error && execSecret.message.trim() === 's3cret',
+    'qa-workstation: exec cat reads a mounted Secret value',
+    execSecret.message
+  );
+  const rshSecretEnv = await runCmd(`oc rsh -n ${ns} deploy/app env`);
+  assert(
+    !rshSecretEnv.error && /password=s3cret/.test(rshSecretEnv.message),
+    'qa-workstation: rsh env shows envFrom Secret values',
+    rshSecretEnv.message.slice(0, 300)
+  );
+
+  // ── #32e: cut -c ranges in pipes ────────────────────────────────────────
+  await expectCmd('qa-workstation: echo | cut -c1-5', 'echo abcdefghij | cut -c1-5', /^abcde$/);
+  await expectCmd('qa-workstation: echo | cut -c 3-', 'echo abcdefghij | cut -c 3-', /^cdefghij$/);
+  await expectCmd(
+    'qa-workstation: echo | cut -c1,3,5-6',
+    'echo abcdefghij | cut -c1,3,5-6',
+    /^acef$/
+  );
+
+  // ── #32a: base64 standalone + in pipes ──────────────────────────────────
+  const b64Decode = await runCmd(
+    `oc get secret db-secret -o jsonpath={.data.password} -n ${ns} | base64 -d`
+  );
+  assert(
+    !b64Decode.error && b64Decode.message.trim() === 's3cret',
+    'qa-workstation: secret jsonpath | base64 -d decodes the Secret',
+    b64Decode.message
+  );
+  await expectCmd('qa-workstation: echo | base64 -d', 'echo czNjcmV0 | base64 -d', /^s3cret$/);
+  await expectCmd(
+    'qa-workstation: echo -n | base64 encodes',
+    'echo -n s3cret | base64',
+    /^czNjcmV0$/
+  );
+  const b64Cut = await runCmd(
+    `oc get secret db-secret -o jsonpath={.data.password} -n ${ns} | base64 -d | cut -c1-3`
+  );
+  assert(
+    !b64Cut.error && b64Cut.message.trim() === 's3c',
+    'qa-workstation: base64 -d | cut -c1-3 chains both fixes',
+    b64Cut.message
+  );
+  const b64Invalid = await runCmd(`echo 'not base64!!' | base64 -d`);
+  assert(b64Invalid.error, 'qa-workstation: base64 -d rejects invalid input', b64Invalid.message);
+
+  // ── #32b: openssl req -x509 / openssl x509 + real PEM files ────────────
+  const opensslReq = await runCmd(
+    `openssl req -x509 -newkey rsa:2048 -nodes -keyout tls.key -out tls.crt -days 365 -subj "/CN=${edgeHost}"`
+  );
+  assert(
+    !opensslReq.error && /writing new private key/.test(opensslReq.message),
+    'qa-workstation: openssl req -x509 writes the key/cert files',
+    opensslReq.message.slice(0, 240)
+  );
+  const certPem = await runCmd('cat tls.crt');
+  const keyPem = await runCmd('cat tls.key');
+  assert(
+    !certPem.error && /-----BEGIN CERTIFICATE-----/.test(certPem.message),
+    'qa-workstation: tls.crt is a PEM certificate',
+    certPem.message.slice(0, 120)
+  );
+  assert(
+    !keyPem.error && /-----BEGIN PRIVATE KEY-----/.test(keyPem.message),
+    'qa-workstation: tls.key is a PEM private key',
+    keyPem.message.slice(0, 120)
+  );
+  const x509Subject = await runCmd('openssl x509 -in tls.crt -noout -subject');
+  assert(
+    !x509Subject.error && x509Subject.message.includes(`CN = ${edgeHost}`),
+    'qa-workstation: openssl x509 -subject shows the requested CN',
+    x509Subject.message
+  );
+  const x509Dates = await runCmd('openssl x509 -in tls.crt -noout -dates');
+  assert(
+    !x509Dates.error &&
+      /notBefore=.+GMT/.test(x509Dates.message) &&
+      /notAfter=.+GMT/.test(x509Dates.message),
+    'qa-workstation: openssl x509 -dates prints notBefore/notAfter',
+    x509Dates.message
+  );
+  const x509Text = await runCmd('openssl x509 -in tls.crt -noout -text');
+  assert(
+    !x509Text.error &&
+      /Public-Key: \(2048 bit\)/.test(x509Text.message) &&
+      new RegExp(`DNS:${edgeHost.replace(/\./g, '\\.')}`).test(x509Text.message),
+    'qa-workstation: openssl x509 -text renders the certificate',
+    x509Text.message.slice(0, 200)
+  );
+  const x509Missing = await runCmd('openssl x509 -in missing.crt -noout -subject');
+  assert(x509Missing.error, 'qa-workstation: openssl x509 on a missing file errors');
+  const reqBad = await runCmd(`openssl req -newkey rsa:2048 -nodes -subj "/CN=x"`);
+  assert(reqBad.error, 'qa-workstation: openssl req without -x509 is rejected');
+
+  const createTls = await runCmd(
+    `oc create secret tls web-tls --cert=tls.crt --key=tls.key -n ${ns}`
+  );
+  assert(
+    !createTls.error && !/simulated/i.test(createTls.message),
+    'qa-workstation: oc create secret tls reads the real PEM files (no simulated cert)',
+    createTls.message
+  );
+  const tlsSecretState = await evaluate(
+    ({ namespace, certPemText }) => {
+      const secret = window.game.cluster.getByName('Secret', 'web-tls', namespace);
+      const encoded = secret?.spec?.data?.['tls.crt'] || '';
+      let decoded = '';
+      try {
+        decoded = atob(encoded);
+      } catch {
+        decoded = '';
+      }
+      return {
+        type: secret?.spec?.type || null,
+        hasCrt: Boolean(secret?.spec?.data?.['tls.crt']),
+        hasKey: Boolean(secret?.spec?.data?.['tls.key']),
+        roundTrips: decoded.trim() === String(certPemText).trim(),
+      };
+    },
+    { namespace: ns, certPemText: certPem.message }
+  );
+  assert(
+    tlsSecretState.type === 'kubernetes.io/tls' && tlsSecretState.hasCrt && tlsSecretState.hasKey,
+    'qa-workstation: web-tls Secret is kubernetes.io/tls with tls.crt/tls.key',
+    JSON.stringify(tlsSecretState)
+  );
+  assert(
+    tlsSecretState.roundTrips,
+    'qa-workstation: Secret data base64 round-trips the PEM certificate',
+    JSON.stringify(tlsSecretState)
+  );
+  const secretYaml = await runCmd(`oc get secret web-tls -o yaml -n ${ns}`);
+  assert(
+    !secretYaml.error &&
+      /type: kubernetes\.io\/tls/.test(secretYaml.message) &&
+      /tls\.crt:/.test(secretYaml.message),
+    'qa-workstation: oc get secret -o yaml exposes the tls data',
+    secretYaml.message.slice(0, 200)
+  );
+  const extractSecret = await runCmd(`oc extract secret/web-tls -n ${ns} --to=qatest --confirm`);
+  assert(!extractSecret.error, 'qa-workstation: extract Secret writes the PEM files back');
+  const extractedSubject = await runCmd('openssl x509 -in qatest/tls.crt -noout -subject');
+  assert(
+    !extractedSubject.error && extractedSubject.message.includes(edgeHost),
+    'qa-workstation: extracted certificate parses back with the same CN',
+    extractedSubject.message
+  );
+  const secretB64 = await evaluate(
+    ({ namespace }) =>
+      window.game.cluster.getByName('Secret', 'web-tls', namespace)?.spec?.data?.['tls.crt'] || '',
+    { namespace: ns }
+  );
+  const b64W0 = await runCmd('base64 -w0 tls.crt');
+  assert(
+    !b64W0.error && b64W0.message.trim() === secretB64,
+    'qa-workstation: base64 -w0 matches the Secret data encoding',
+    b64W0.message.slice(0, 120)
+  );
+
+  // ── #32c: workstation curl against Route hosts ─────────────────────────
+  await expectCmd(
+    'qa-workstation: expose app Service',
+    `oc expose svc/app -n ${ns}`,
+    /route.*(exposed|created)/i
+  );
+  assert(await routeAdmitted('app'), 'qa-workstation: Route app admitted');
+  await tick(10);
+  const curlHttp = await runCmd(`curl -k http://${appHost}`);
+  assert(
+    !curlHttp.error && /Hello OpenShift/.test(curlHttp.message),
+    'qa-workstation: curl http://<route-host> reaches the app',
+    curlHttp.message.slice(0, 240)
+  );
+  const curlHeaders = await runCmd(`curl -k -i http://${appHost}`);
+  assert(
+    !curlHeaders.error && /HTTP\/1\.1 200 OK/.test(curlHeaders.message),
+    'qa-workstation: curl -i prints the HTTP response headers',
+    curlHeaders.message.slice(0, 240)
+  );
+  const curlHttpsPlain = await runCmd(`curl -k https://${appHost}`);
+  assert(
+    !curlHttpsPlain.error && /404 Not Found/.test(curlHttpsPlain.message),
+    'qa-workstation: https against a plain HTTP Route is a router 404',
+    curlHttpsPlain.message.slice(0, 200)
+  );
+  const curlDns = await runCmd('curl no-such-host.example.com');
+  assert(
+    curlDns.error && /curl: \(6\)/.test(curlDns.message),
+    'qa-workstation: curl unknown host fails with (6) Could not resolve host',
+    curlDns.message
+  );
+  await expectCmd(
+    'qa-workstation: create edge Route with the openssl cert',
+    `oc create route edge web --service=app --hostname=${edgeHost} --cert=tls.crt --key=tls.key -n ${ns}`,
+    /route.*(exposed|created)/i
+  );
+  assert(await routeAdmitted('web'), 'qa-workstation: edge Route web admitted');
+  await tick(10);
+  const curlEdge = await runCmd(`curl -k https://${edgeHost}`);
+  assert(
+    !curlEdge.error && /Hello OpenShift/.test(curlEdge.message),
+    'qa-workstation: curl -k https://<edge-route> terminates TLS at the router',
+    curlEdge.message.slice(0, 240)
+  );
+  const curlEdgeStrict = await runCmd(`curl https://${edgeHost}`);
+  assert(
+    curlEdgeStrict.error && /curl: \(60\)/.test(curlEdgeStrict.message),
+    'qa-workstation: a self-signed edge certificate fails verification without -k',
+    curlEdgeStrict.message.slice(0, 240)
+  );
+  await expectCmd(
+    'qa-workstation: create edge Route without --cert',
+    `oc create route edge default-tls --service=app --hostname=default-tls-${ns}.apps.cluster.example.com -n ${ns}`,
+    /route.*(exposed|created)/i
+  );
+  assert(await routeAdmitted('default-tls'), 'qa-workstation: default-cert edge Route admitted');
+  const defaultTlsRoute = await evaluate(
+    ({ namespace }) => {
+      const route = window.game.cluster.getByName('Route', 'default-tls', namespace);
+      return {
+        certificate: route?.spec?.tls?.certificate || null,
+        termination: route?.spec?.tls?.termination || null,
+      };
+    },
+    { namespace: ns }
+  );
+  assert(
+    defaultTlsRoute.termination === 'edge' && defaultTlsRoute.certificate === null,
+    'qa-workstation: edge Route without --cert keeps the router default cert (no simulated PEM)',
+    JSON.stringify(defaultTlsRoute)
+  );
+  await tick(10);
+  const curlDefaultTls = await runCmd(`curl https://default-tls-${ns}.apps.cluster.example.com`);
+  assert(
+    !curlDefaultTls.error && /Hello OpenShift/.test(curlDefaultTls.message),
+    'qa-workstation: the router default certificate serves the edge Route',
+    curlDefaultTls.message.slice(0, 200)
+  );
+
+  await expectCmd(
+    'qa-workstation: create redirect-policy edge Route',
+    `oc create route edge redirector --service=app --hostname=${redirHost} --cert=tls.crt --key=tls.key --insecure-policy=Redirect -n ${ns}`,
+    /route.*(exposed|created)/i
+  );
+  assert(await routeAdmitted('redirector'), 'qa-workstation: redirect Route admitted');
+  await tick(10);
+  const curlRedirect = await runCmd(`curl -i http://${redirHost}`);
+  assert(
+    !curlRedirect.error &&
+      /HTTP\/1\.1 302 Found/.test(curlRedirect.message) &&
+      new RegExp(`location: https://${redirHost.replace(/\./g, '\\.')}`).test(curlRedirect.message),
+    'qa-workstation: http→https Redirect policy returns 302 + location',
+    curlRedirect.message.slice(0, 300)
+  );
+  const curlRedirectFollow = await runCmd(`curl -kL http://${redirHost}`);
+  assert(
+    !curlRedirectFollow.error && /Hello OpenShift/.test(curlRedirectFollow.message),
+    'qa-workstation: curl -kL follows the http→https redirect',
+    curlRedirectFollow.message.slice(0, 240)
+  );
+  await expectCmd(
+    'qa-workstation: create passthrough Route',
+    `oc create route passthrough pt --service=app --hostname=${ptHost} -n ${ns}`,
+    /route.*(exposed|created)/i
+  );
+  assert(await routeAdmitted('pt'), 'qa-workstation: passthrough Route admitted');
+  await tick(10);
+  const curlPassthrough = await runCmd(`curl -k https://${ptHost}`);
+  assert(
+    !curlPassthrough.error && /Hello OpenShift/.test(curlPassthrough.message),
+    'qa-workstation: curl -k https://<passthrough-route> passes TLS to the backend',
+    curlPassthrough.message.slice(0, 240)
+  );
+  const curlPassthroughHttp = await runCmd(`curl http://${ptHost}`);
+  assert(
+    /404 Not Found/.test(curlPassthroughHttp.message),
+    'qa-workstation: a passthrough Route does not serve plain HTTP',
+    curlPassthroughHttp.message.slice(0, 200)
+  );
+
+  // ── #33a: service-ca serving certificate + inject-cabundle + reencrypt ─
+  await expectCmd(
+    'qa-workstation: create api deployment',
+    `oc create deployment api --image=quay.io/openshift/origin-hello-openshift:latest -n ${ns}`,
+    /deployment\.apps\/api created/
+  );
+  await expectCmd(
+    'qa-workstation: expose api deployment creates Service',
+    `oc expose deployment/api -n ${ns}`,
+    /service\/api exposed/i
+  );
+  await tick(20);
+  assert(await podRunning(ns, 'api'), 'qa-workstation: api pod Running');
+  await expectCmd(
+    'qa-workstation: annotate svc serving-cert',
+    `oc annotate svc/api service.beta.openshift.io/serving-cert-secret-name=api-tls -n ${ns}`,
+    /service\/api annotated/i
+  );
+  const servingSecret = await findResource('Secret', 'api-tls', ns);
+  assert(
+    Boolean(servingSecret) && servingSecret?.spec?.type === 'kubernetes.io/tls',
+    'qa-workstation: service-ca creates the api-tls serving-cert Secret',
+    JSON.stringify(servingSecret?.spec?.type)
+  );
+  const servingCertData = await evaluate(
+    ({ namespace }) => {
+      const secret = window.game.cluster.getByName('Secret', 'api-tls', namespace);
+      return {
+        hasCrt: Boolean(secret?.spec?.data?.['tls.crt']),
+        hasKey: Boolean(secret?.spec?.data?.['tls.key']),
+      };
+    },
+    { namespace: ns }
+  );
+  assert(
+    servingCertData.hasCrt && servingCertData.hasKey,
+    'qa-workstation: serving-cert Secret has tls.crt + tls.key',
+    JSON.stringify(servingCertData)
+  );
+  await expectCmd(
+    'qa-workstation: create CA ConfigMap',
+    `oc create configmap ca --from-literal=placeholder=1 -n ${ns}`,
+    /configmap\/ca created/
+  );
+  await expectCmd(
+    'qa-workstation: annotate configmap inject-cabundle',
+    `oc annotate configmap ca service.beta.openshift.io/inject-cabundle=true -n ${ns}`,
+    /configmap\/ca annotated/i
+  );
+  const caMap = await runCmd(`oc get cm ca -o yaml -n ${ns}`);
+  assert(
+    !caMap.error && /service-ca\.crt:/.test(caMap.message),
+    'qa-workstation: inject-cabundle adds the service-ca.crt key',
+    caMap.message.slice(0, 240)
+  );
+  const extractCabundle = await runCmd(`oc extract cm/ca -n ${ns} --to=cabundle --confirm`);
+  assert(!extractCabundle.error, 'qa-workstation: extract ConfigMap writes service-ca.crt');
+  const caText = await runCmd(
+    'openssl x509 -in cabundle/service-ca.crt -noout -ext basicConstraints'
+  );
+  assert(
+    !caText.error && /CA:TRUE/.test(caText.message),
+    'qa-workstation: the injected bundle is a CA certificate',
+    caText.message
+  );
+  const extractServing = await runCmd(`oc extract secret/api-tls -n ${ns} --to=serving --confirm`);
+  assert(!extractServing.error, 'qa-workstation: extract api-tls serving certificate');
+  const servingSubject = await runCmd('openssl x509 -in serving/tls.crt -noout -subject -issuer');
+  assert(
+    !servingSubject.error &&
+      new RegExp(`CN = api\\.${ns}\\.svc`).test(servingSubject.message) &&
+      /issuer=.*CN = service-ca/.test(servingSubject.message),
+    'qa-workstation: serving certificate is issued by service-ca for the Service DNS name',
+    servingSubject.message
+  );
+  await expectCmd(
+    'qa-workstation: create reencrypt Route from the serving cert',
+    `oc create route reencrypt api --service=api --hostname=${apiHost} --cert=serving/tls.crt --key=serving/tls.key --dest-ca-cert=cabundle/service-ca.crt -n ${ns}`,
+    /route.*(exposed|created)/i
+  );
+  assert(await routeAdmitted('api'), 'qa-workstation: reencrypt Route admitted');
+  await tick(10);
+  const curlReencrypt = await runCmd(`curl -k https://${apiHost}`);
+  assert(
+    !curlReencrypt.error && /Hello OpenShift/.test(curlReencrypt.message),
+    'qa-workstation: curl -k https://<reencrypt-route> survives router→backend TLS',
+    curlReencrypt.message.slice(0, 240)
+  );
+  const routeYaml = await runCmd(`oc get route api -o yaml -n ${ns}`);
+  assert(
+    !routeYaml.error &&
+      /termination: reencrypt/.test(routeYaml.message) &&
+      /destinationCACertificate:/.test(routeYaml.message),
+    'qa-workstation: reencrypt Route stores cert + destinationCACertificate',
+    routeYaml.message.slice(0, 240)
+  );
+
+  // ── #33b: default-deny blocks the Route; router policy restores it ─────
+  const curlBefore = await runCmd(`curl -k http://${appHost}`);
+  assert(
+    /Hello OpenShift/.test(curlBefore.message),
+    'qa-workstation: Route works before the default-deny',
+    curlBefore.message.slice(0, 160)
+  );
+  await evaluate(
+    ({ namespace }) => {
+      const deny = [
+        'apiVersion: networking.k8s.io/v1',
+        'kind: NetworkPolicy',
+        'metadata:',
+        '  name: default-deny',
+        '  namespace: ' + namespace,
+        'spec:',
+        '  podSelector: {}',
+        '  policyTypes:',
+        '    - Ingress',
+        '  ingress: []',
+        '',
+      ].join('\n');
+      window.game.manifestEngine.writeFile('qa/default-deny.yaml', deny);
+    },
+    { namespace: ns }
+  );
+  await expectCmd(
+    'qa-workstation: apply default-deny NetworkPolicy',
+    'oc apply -f qa/default-deny.yaml',
+    /networkpolicy.*(created|configured)/i
+  );
+  await tick(5);
+  const curlDenied = await runCmd(`curl -k http://${appHost}`);
+  assert(
+    /503 Service Unavailable/.test(curlDenied.message),
+    'qa-workstation: default-deny makes workstation curl fail with 503',
+    curlDenied.message.slice(0, 200)
+  );
+  const routeStillAdmitted = await evaluate(
+    ({ routeNamespace }) => {
+      const route = window.game.cluster.getByName('Route', 'app', routeNamespace);
+      return Boolean(
+        route?.status?.ingress?.some((entry) =>
+          (entry.conditions || []).some(
+            (condition) => condition.type === 'Admitted' && condition.status === 'True'
+          )
+        )
+      );
+    },
+    { routeNamespace: ns }
+  );
+  assert(
+    routeStillAdmitted,
+    'qa-workstation: Route stays Admitted=True while NetworkPolicy blocks the router (real-cluster lesson)'
+  );
+  const routerNamespaceLabels = await evaluate(() => {
+    const sim = window.game?.gameEngine?.simulation;
+    return sim?._namespaceLabels?.('openshift-ingress') || {};
+  });
+  assert(
+    routerNamespaceLabels['policy-group.network.openshift.io/ingress'] === '',
+    'qa-workstation: openshift-ingress carries the router policy-group label',
+    JSON.stringify(routerNamespaceLabels)
+  );
+  await evaluate(
+    ({ namespace }) => {
+      const allow = [
+        'apiVersion: networking.k8s.io/v1',
+        'kind: NetworkPolicy',
+        'metadata:',
+        '  name: allow-from-router',
+        '  namespace: ' + namespace,
+        'spec:',
+        '  podSelector: {}',
+        '  policyTypes:',
+        '    - Ingress',
+        '  ingress:',
+        '    - from:',
+        '        - namespaceSelector:',
+        '            matchLabels:',
+        '              policy-group.network.openshift.io/ingress: ""',
+        '',
+      ].join('\n');
+      window.game.manifestEngine.writeFile('qa/allow-from-router.yaml', allow);
+    },
+    { namespace: ns }
+  );
+  await expectCmd(
+    'qa-workstation: apply allow-from-router NetworkPolicy',
+    'oc apply -f qa/allow-from-router.yaml',
+    /networkpolicy.*(created|configured)/i
+  );
+  await tick(5);
+  const curlFixed = await runCmd(`curl -k http://${appHost}`);
+  assert(
+    /Hello OpenShift/.test(curlFixed.message),
+    'qa-workstation: allowing the router namespace restores the Route',
+    curlFixed.message.slice(0, 200)
+  );
+
+  // Grading (#30) consumes these NetworkPolicy APIs as-is — keep them stable.
+  const reachApi = await evaluate(
+    ({ namespace }) => {
+      const sim = window.game?.gameEngine?.simulation;
+      if (!sim) return null;
+      const source = {
+        metadata: { name: 'grader-source', namespace: 'default', labels: { role: 'source' } },
+        spec: { containers: [{ name: 'probe', image: 'busybox' }] },
+      };
+      const target = {
+        metadata: { name: 'grader-target', namespace: 'default', labels: { role: 'target' } },
+        spec: {
+          containers: [{ name: 'probe', image: 'busybox', ports: [{ containerPort: 8080 }] }],
+        },
+      };
+      const canReach = sim.canReach(source, target, { port: 8080 });
+      const canResolveDNS = sim.canResolveDNS(source);
+      const trafficForExec = typeof sim.trafficForExec === 'function';
+      const canRouterReach = sim.canRouterReach('app', { namespace });
+      return {
+        canReach,
+        canResolveDNS,
+        trafficForExec,
+        canRouterReachAllowed: canRouterReach.allowed,
+      };
+    },
+    { namespace: ns }
+  );
+  assert(
+    reachApi?.canReach?.allowed === true && reachApi?.canReach?.reason === 'allowed',
+    'qa-workstation: canReach(source, target, {port}) contract preserved',
+    JSON.stringify(reachApi?.canReach)
+  );
+  assert(
+    typeof reachApi?.canResolveDNS?.allowed === 'boolean' && reachApi?.trafficForExec === true,
+    'qa-workstation: canResolveDNS/trafficForExec contracts preserved',
+    JSON.stringify(reachApi)
+  );
+  assert(
+    reachApi?.canRouterReachAllowed === true,
+    'qa-workstation: canRouterReach sees the router allow policy',
+    JSON.stringify(reachApi?.canRouterReach)
+  );
+
+  // ── #35 cross-scope: exec into a CrashLoopBackOff container must fail ──
+  await expectCmd(
+    'qa-workstation: crash-loop project',
+    'oc new-project qa-workstation-ngx',
+    /Now using project|created/i
+  );
+  await expectCmd(
+    'qa-workstation: crash-loop deployment',
+    'oc create deployment ngx --image=nginx:latest -n qa-workstation-ngx',
+    /deployment\.apps\/ngx created/
+  );
+  const crashLooping = await waitFor(() =>
+    evaluate(
+      () =>
+        (window.game.cluster.getByKind('Pod') || []).some(
+          (pod) =>
+            pod.metadata?.namespace === 'qa-workstation-ngx' &&
+            (pod.status?.containerStatuses || []).some(
+              (status) => status.state?.waiting?.reason === 'CrashLoopBackOff'
+            )
+        ),
+      30000
+    )
+  );
+  assert(crashLooping, 'qa-workstation: nginx pod reaches CrashLoopBackOff');
+  await evaluate(() => window.game?.gameEngine?.pause?.());
+  const execCrash = await runCmd('oc exec deploy/ngx -n qa-workstation-ngx -- ls /etc/nginx');
+  assert(
+    execCrash.error && /not running|container not found/.test(execCrash.message),
+    'qa-workstation: exec into a CrashLoopBackOff container fails like oc',
+    execCrash.message.slice(0, 240)
+  );
+  const rshCrash = await runCmd('oc rsh -n qa-workstation-ngx deploy/ngx env');
+  assert(
+    rshCrash.error && /not running|container not found/.test(rshCrash.message),
+    'qa-workstation: rsh into a CrashLoopBackOff container fails like oc',
+    rshCrash.message.slice(0, 240)
+  );
+  await evaluate(() => window.game?.gameEngine?.resume?.());
+  await expectCmd(
+    'qa-workstation: return to the app project',
+    `oc project ${ns}`,
+    /Now using project/i
+  );
+
+  // Keep the sandbox manifest files tidy for later sections.
+  await runCmd(
+    'rm -f tls.key tls.crt qatest/tls.crt qatest/tls.key serving/tls.crt serving/tls.key cabundle/service-ca.crt qa/default-deny.yaml qa/allow-from-router.yaml'
+  );
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
 // QA ROUND 1.1.8 — issue #35: OpenShift platform details
 // ═══════════════════════════════════════════════════════════════════════════
 await runSection('qa-openshift', async () => {
-  // QA-35-TESTS: owned by teammate `openshift-details` — replace this comment.
+  // QA-35-TESTS
+  const boots = await bootSandbox();
+  assert(boots, 'openshift: sandbox boots');
+  const project = 'openshift-qa';
+  const terminalText = () => evaluate(() => document.getElementById('cmd-output')?.innerText || '');
+  const roleBindingNames = (namespace) =>
+    evaluate(
+      (ns) =>
+        (window.game.cluster.getByKindAndNamespace('RoleBinding', ns) || []).map(
+          (binding) => binding.metadata.name
+        ),
+      namespace
+    );
+
+  // ── Default behaviour of a freshly created project (OCP 4.x) ─────────────
+  let result = await runCmd(`oc new-project ${project}`);
+  assert(!result.error, 'openshift: oc new-project creates the project', result.message);
+  result = await runCmd('oc get sa');
+  assert(
+    !result.error &&
+      ['builder', 'default', 'deployer'].every((name) =>
+        new RegExp(`(^|\\n)${name}\\s`).test(result.message)
+      ),
+    'openshift: new project seeds builder/default/deployer ServiceAccounts',
+    result.message
+  );
+  const bindings = await roleBindingNames(project);
+  assert(
+    ['admin', 'system:image-pullers', 'system:image-builders', 'system:deployers'].every((name) =>
+      bindings.includes(name)
+    ),
+    'openshift: new project seeds admin + system image/deployer RoleBindings',
+    JSON.stringify(bindings)
+  );
+  result = await runCmd('oc get rolebinding');
+  assert(
+    /system:image-pullers/.test(result.message) &&
+      /system:image-builders/.test(result.message) &&
+      /system:deployers/.test(result.message) &&
+      /^admin\s/m.test(result.message),
+    'openshift: oc get rolebinding shows the default bindings',
+    result.message
+  );
+  result = await runCmd('oc get secrets');
+  assert(
+    (result.message.match(/-dockercfg-/g) || []).length >= 3,
+    'openshift: new project gets builder/default/deployer dockercfg Secrets',
+    result.message
+  );
+  result = await runCmd('oc create sa api-reader');
+  result = await runCmd('oc describe sa api-reader');
+  assert(
+    !result.error &&
+      /Image pull secrets:\s+api-reader-dockercfg-[a-z0-9]+/.test(result.message) &&
+      /Mountable secrets:\s+api-reader-dockercfg-[a-z0-9]+/.test(result.message),
+    'openshift: describe sa shows Image pull / Mountable dockercfg secrets',
+    result.message.slice(0, 600)
+  );
+  const projectLabel = await evaluate(
+    (name) => window.game.cluster.getProject(name)?.metadata?.labels || {},
+    project
+  );
+  assert(
+    projectLabel['kubernetes.io/metadata.name'] === project,
+    'openshift: every Project carries kubernetes.io/metadata.name',
+    JSON.stringify(projectLabel)
+  );
+
+  // ── SCC: 4.x grant output, who-can and scc-subject-review ────────────────
+  await runCmd('oc new-project privileged-lab');
+  await runCmd('oc create sa priv-sa');
+  result = await runCmd('oc adm policy add-scc-to-user privileged -z priv-sa');
+  assert(
+    !result.error &&
+      result.message ===
+        'clusterrole.rbac.authorization.k8s.io/system:openshift:scc:privileged added: "priv-sa"',
+    'openshift: add-scc-to-user prints the 4.x ClusterRole form',
+    JSON.stringify(result.message)
+  );
+  result = await runCmd('oc adm policy who-can use scc privileged');
+  assert(
+    !result.error &&
+      /Verb:\s+use/.test(result.message) &&
+      /Resource:\s+securitycontextconstraints\.security\.openshift\.io\/privileged/.test(
+        result.message
+      ) &&
+      /system:serviceaccount:privileged-lab:priv-sa/.test(result.message),
+    'openshift: who-can use scc lists the granted ServiceAccount',
+    result.message
+  );
+  result = await runCmd('oc adm policy scc-subject-review -f examples/privileged-deployment.yaml');
+  assert(
+    !result.error &&
+      !/subject is required/.test(result.message) &&
+      /RESOURCE/.test(result.message) &&
+      /ALLOWED BY/.test(result.message) &&
+      /Deployment\/privileged-app/.test(result.message),
+    'openshift: scc-subject-review reviews the manifest pod spec (no "subject is required")',
+    result.message
+  );
+  // The manifest uses serviceAccountName robot: after granting it the privileged
+  // SCC, admission reports privileged instead of nothing.
+  await runCmd('oc create sa robot');
+  await runCmd('oc adm policy add-scc-to-user privileged -z robot');
+  result = await runCmd('oc adm policy scc-subject-review -f examples/privileged-deployment.yaml');
+  assert(
+    /privileged-app\s+privileged/.test(result.message),
+    'openshift: scc-subject-review reports the admitting SCC after the grant',
+    result.message
+  );
+  result = await runCmd('oc adm policy who-can use scc privileged');
+  assert(
+    /system:serviceaccount:privileged-lab:robot/.test(result.message),
+    'openshift: who-can stays accurate for additional grants',
+    result.message
+  );
+
+  // ── add-role-to-group uses the real default binding names edit, edit-0, … ─
+  await runCmd('oc new-project team-dev');
+  await runCmd('oc adm groups new developers');
+  result = await runCmd('oc adm policy add-role-to-group edit developers -n team-dev');
+  assert(
+    !result.error && /clusterrole\.rbac\.authorization\.k8s\.io\/edit added/.test(result.message),
+    'openshift: add-role-to-group output names the edit ClusterRole',
+    result.message
+  );
+  let teamBindings = await roleBindingNames('team-dev');
+  assert(
+    teamBindings.includes('edit') && !teamBindings.includes('edit-developers'),
+    'openshift: first binding is named edit (not edit-developers)',
+    JSON.stringify(teamBindings)
+  );
+  await runCmd('oc adm groups new qa-team');
+  await runCmd('oc adm policy add-role-to-group edit qa-team -n team-dev');
+  teamBindings = await roleBindingNames('team-dev');
+  assert(
+    teamBindings.includes('edit-0'),
+    'openshift: a second add-role-to-group creates edit-0',
+    JSON.stringify(teamBindings)
+  );
+
+  // ── Login: kubeadmin password validation + real User/Identity semantics ──
+  const kubeadminSecret = await findResource('Secret', 'kubeadmin', 'kube-system');
+  assert(
+    Boolean(kubeadminSecret?.spec?.data?.kubeadmin),
+    'openshift: kube-system/kubeadmin Secret seeds the kubeadmin password'
+  );
+  result = await runCmd('oc login -u kubeadmin');
+  assert(
+    !result.error && /Login successful/.test(result.message),
+    'openshift: passwordless kubeadmin login still works',
+    result.message.slice(0, 160)
+  );
+  result = await runCmd('oc login -u kubeadmin -p wrong-password');
+  assert(
+    result.error && /Login failed \(401 Unauthorized\)/.test(result.message),
+    'openshift: an explicit wrong kubeadmin password is rejected',
+    result.message.slice(0, 200)
+  );
+  result = await runCmd('oc login -u kubeadmin -p kubeadmin');
+  assert(
+    !result.error && /Login successful/.test(result.message),
+    'openshift: the seeded kubeadmin password is accepted',
+    result.message.slice(0, 160)
+  );
+  const loginHistory = await evaluate(() => window.game.gameEngine?.getLoginHistory?.() || []);
+  assert(
+    Array.isArray(loginHistory) &&
+      loginHistory.length >= 2 &&
+      loginHistory.every((entry) => entry.user === 'kubeadmin' && entry.provider),
+    'openshift: successful logins are recorded in gameEngine.loginHistory',
+    JSON.stringify(loginHistory)
+  );
+  await runCmd('oc adm groups new qa-devs bob');
+  const bobUser = await evaluate(() => Boolean(window.game.cluster.getUser('bob')));
+  assert(
+    bobUser === false,
+    'openshift: group membership does not create a User object before first login'
+  );
+
+  // ── oc set env --from creates per-key secretKeyRef env entries ────────────
+  await runCmd(`oc project ${project}`);
+  await runCmd(
+    'oc create secret generic db-secret --from-literal=password=s3cret --from-literal=username=app'
+  );
+  await runCmd('oc create deployment app --image=quay.io/openshift/origin-hello-openshift:latest');
+  result = await runCmd('oc set env deploy/app --from=secret/db-secret');
+  assert(!result.error, 'openshift: set env --from=secret succeeds', result.message);
+  const deployment = await findResource('Deployment', 'app', project);
+  const container = deployment?.spec?.template?.spec?.containers?.[0] || {};
+  const envEntries = container.env || [];
+  const passwordEnv = envEntries.find((entry) => entry.name === 'PASSWORD');
+  assert(
+    Boolean(passwordEnv?.valueFrom?.secretKeyRef) &&
+      passwordEnv.valueFrom.secretKeyRef.name === 'db-secret' &&
+      passwordEnv.valueFrom.secretKeyRef.key === 'password',
+    'openshift: set env --from generates PASSWORD with valueFrom.secretKeyRef',
+    JSON.stringify(envEntries)
+  );
+  assert(
+    !(container.envFrom || []).length,
+    'openshift: set env --from does not create an envFrom.secretRef',
+    JSON.stringify(container.envFrom)
+  );
+  result = await runCmd('oc set env deploy/app --list');
+  assert(
+    /# PASSWORD from secret db-secret, key password/.test(result.message),
+    'openshift: set env --list shows "# PASSWORD from secret db-secret, key password"',
+    result.message
+  );
+
+  // ── start-build --follow streams logs and only prints Success at the end ──
+  await runCmd('oc new-build nodejs:20 --name=webapp');
+  result = await runCmd('oc start-build webapp --follow');
+  const followText = await terminalText();
+  const followStart = followText.lastIndexOf('$ oc start-build webapp --follow');
+  const followedSoFar = followStart >= 0 ? followText.slice(followStart) : followText;
+  assert(
+    !/--> Success/.test(followedSoFar) && !/no logs produced yet/.test(followedSoFar),
+    'openshift: start-build --follow reports no success while the build is running',
+    followedSoFar.slice(-320)
+  );
+  await advanceSimulation(30);
+  await sleep(900);
+  const followedText = await terminalText();
+  assert(
+    /STEP 5\/5/.test(followedText) &&
+      /Build webapp-1 completed successfully/.test(followedText) &&
+      /--> Success/.test(followedText.slice(followedText.lastIndexOf('$ oc start-build'))),
+    'openshift: start-build --follow prints --> Success only once the build completes',
+    followedText.slice(-500)
+  );
+
+  // ── oc run --overrides goes through SCC admission ─────────────────────────
+  result = await runCmd(
+    `oc run root-pod --image=quay.io/openshift/origin-hello-openshift:latest --overrides='{"spec":{"securityContext":{"runAsUser":0}}}'`
+  );
+  assert(
+    result.error &&
+      /forbidden|unable to validate against any security context constraint/.test(result.message),
+    'openshift: oc run --overrides runAsUser:0 is rejected by SCC admission',
+    result.message.slice(0, 300)
+  );
+  const rootPod = await findResource('Pod', 'root-pod', project);
+  assert(rootPod === null, 'openshift: rejected run --overrides creates no Pod');
+
+  // ── ClusterResourceQuota project selector + escaped-dot jsonpath ─────────
+  await runCmd('oc new-project quota-lab');
+  result = await runCmd(
+    'oc create clusterquota team-quota --project-label-selector=kubernetes.io/metadata.name=quota-lab --hard=pods=10 --hard=secrets=20'
+  );
+  assert(
+    !result.error,
+    'openshift: create clusterquota with the real project label',
+    result.message
+  );
+  const clusterQuota = await findResource('ClusterResourceQuota', 'team-quota', '');
+  assert(
+    (clusterQuota?.status?.namespaces || []).includes('quota-lab'),
+    'openshift: ClusterResourceQuota selects quota-lab via kubernetes.io/metadata.name',
+    JSON.stringify(clusterQuota?.status?.namespaces || null)
+  );
+  await runCmd(`oc project ${project}`);
+  result = await runCmd(
+    "oc get sa default -o jsonpath='{.metadata.annotations.openshift\\.io/requester}'"
+  );
+  assert(
+    !result.error && result.message.trim() === 'kubeadmin',
+    'openshift: jsonpath supports an escaped dot in annotation keys',
+    result.message
+  );
+
+  // ── Project registry (openshift-authentication) + OAuth rollout ──────────
+  result = await runCmd('oc get pods -n openshift-authentication');
+  assert(
+    !result.error && /oauth-openshift-[a-z0-9]+/.test(result.message),
+    'openshift: openshift-authentication runs oauth-openshift-* pods',
+    result.message
+  );
+  await runCmd('htpasswd -c -B -b htpasswd alice openshift');
+  await runCmd('oc create secret generic htpass-secret --from-file=htpasswd -n openshift-config');
+  result = await runCmd(
+    [
+      'oc apply -f - <<EOF',
+      'apiVersion: config.openshift.io/v1',
+      'kind: OAuth',
+      'metadata:',
+      '  name: cluster',
+      'spec:',
+      '  identityProviders:',
+      '  - name: htpasswd',
+      '    mappingMethod: claim',
+      '    type: HTPasswd',
+      '    htpasswd:',
+      '      fileData:',
+      '        name: htpass-secret',
+      'EOF',
+    ].join('\n')
+  );
+  assert(
+    !result.error && /oauth\.config\.openshift\.io\/cluster configured/.test(result.message),
+    'openshift: OAuth provider can be applied declaratively',
+    result.message
+  );
+  const providerBefore = await evaluate(() => window.game.gameEngine?.getAuthProvider?.());
+  assert(
+    providerBefore?.ready === false,
+    'openshift: the identity provider is not ready immediately after an OAuth change',
+    JSON.stringify(providerBefore)
+  );
+  result = await runCmd('oc login -u alice -p openshift');
+  assert(
+    result.error && /not ready yet|wait for the OAuth rollout/.test(result.message),
+    'openshift: login is blocked during the OAuth rollout',
+    result.message.slice(0, 200)
+  );
+  await advanceSimulation(10);
+  const providerAfter = await evaluate(() => window.game.gameEngine?.getAuthProvider?.());
+  assert(
+    providerAfter?.ready === true,
+    'openshift: the identity provider becomes ready after the rollout',
+    JSON.stringify(providerAfter)
+  );
+  result = await runCmd('oc login -u alice -p openshift');
+  assert(
+    !result.error && /Login successful/.test(result.message),
+    'openshift: login succeeds after the OAuth rollout',
+    result.message.slice(0, 200)
+  );
+  result = await runCmd('oc whoami');
+  assert(
+    /^alice/m.test(result.message),
+    'openshift: oc whoami is alice after login',
+    result.message
+  );
+  const aliceIdentity = await evaluate(() =>
+    window.game.cluster.getByKind('Identity').map((identity) => identity.metadata.name)
+  );
+  assert(
+    aliceIdentity.some((name) => /htpasswd:alice/.test(name)),
+    'openshift: first login creates the Identity',
+    JSON.stringify(aliceIdentity)
+  );
+  await runCmd('oc login -u kubeadmin');
+  result = await runCmd('oc get rolebinding -n openshift-qa -o name');
+  assert(!result.error, 'openshift: session restored to kubeadmin', result.message);
+
+  // ── L13 consistency: provider change AND htpasswd Secret change both wait ─
+  await returnToMenu();
+  const launched = await launch('campaign', 13);
+  assert(launched, 'openshift: campaign L13 launches');
+  await closeOverlays();
+  await runCmd('oc project identity-lab');
+  await runCmd('htpasswd -c -B -b htpasswd carol carolpass');
+  await runCmd('oc create secret generic htpass-secret --from-file=htpasswd -n openshift-config');
+  result = await runCmd(
+    [
+      'oc apply -f - <<EOF',
+      'apiVersion: config.openshift.io/v1',
+      'kind: OAuth',
+      'metadata:',
+      '  name: cluster',
+      'spec:',
+      '  identityProviders:',
+      '  - name: htpasswd',
+      '    mappingMethod: claim',
+      '    type: HTPasswd',
+      '    htpasswd:',
+      '      fileData:',
+      '        name: htpass-secret',
+      'EOF',
+    ].join('\n')
+  );
+  assert(!result.error, 'openshift: L13 OAuth provider applied', result.message);
+  result = await runCmd('oc login -u carol -p carolpass');
+  assert(
+    result.error && /wait for the OAuth rollout/.test(result.message),
+    'openshift: L13 blocks login until the OAuth rollout completes',
+    result.message.slice(0, 200)
+  );
+  await advanceSimulation(10);
+  result = await runCmd('oc login -u carol -p carolpass');
+  assert(
+    !result.error && /Login successful/.test(result.message),
+    'openshift: L13 login succeeds after the OAuth rollout',
+    result.message.slice(0, 200)
+  );
+  // Rotating the htpasswd Secret triggers the same rollout wait that lab 11
+  // teaches (the authentication operator watches the referenced Secret).
+  await runCmd('oc login -u kubeadmin');
+  await runCmd('htpasswd -B -b htpasswd carol carolpass2');
+  await runCmd('oc set data secret/htpass-secret --from-file=htpasswd -n openshift-config');
+  result = await runCmd('oc login -u carol -p carolpass2');
+  assert(
+    result.error && /wait for the OAuth rollout/.test(result.message),
+    'openshift: a rotated htpasswd Secret also waits for the OAuth rollout (L13/lab 11 consistent)',
+    result.message.slice(0, 240)
+  );
+  await advanceSimulation(10);
+  result = await runCmd('oc login -u carol -p carolpass2');
+  assert(
+    !result.error && /Login successful/.test(result.message),
+    'openshift: the rotated password works after the rollout',
+    result.message.slice(0, 200)
+  );
+  const authenticationPods = await evaluate(() =>
+    (window.game.cluster.getByKind('Pod') || [])
+      .filter((pod) => pod.metadata.namespace === 'openshift-authentication')
+      .map((pod) => ({ name: pod.metadata.name, phase: pod.status?.phase }))
+  );
+  assert(
+    authenticationPods.length >= 1 && authenticationPods.every((pod) => pod.phase === 'Running'),
+    'openshift: oauth-openshift pods are Running after the rollouts',
+    JSON.stringify(authenticationPods)
+  );
+  await returnToMenu();
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
 // QA ROUND 1.1.8 — issue #30: state-based objective grading
 // ═══════════════════════════════════════════════════════════════════════════
 await runSection('qa-grading', async () => {
-  // QA-30-TESTS: owned by teammate `grading` — replace this comment.
+  // Issue #30 — objectives are graded on the resulting cluster state and on
+  // simulated traffic behaviour, never on hidden resource names or on a
+  // command regex. Every assertion below drives the real mode + evaluator.
+  const OAUTH_YAML = `apiVersion: config.openshift.io/v1
+kind: OAuth
+metadata:
+  name: cluster
+spec:
+  identityProviders:
+    - name: htpasswd
+      mappingMethod: claim
+      type: HTPasswd
+      htpasswd:
+        fileData:
+          name: htpass-secret`;
+  const OAUTH_PATCH =
+    '{"spec":{"identityProviders":[{"name":"htpasswd","mappingMethod":"claim","type":"HTPasswd","htpasswd":{"fileData":{"name":"htpass-secret"}}}]}}';
+  // A hand-written policy set: deliberately NOT the provided file, and with
+  // names an objective could never know about (#30). `dnsPort` lets the test
+  // prove that port 53 does not count as OpenShift DNS egress.
+  const handWrittenPolicies = (dnsPort) => `apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: block-everything
+  namespace: shop
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: dns-out
+  namespace: shop
+spec:
+  podSelector: {}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: openshift-dns
+      ports:
+        - protocol: UDP
+          port: ${dnsPort}
+        - protocol: TCP
+          port: ${dnsPort}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: web-path
+  namespace: shop
+spec:
+  podSelector:
+    matchLabels:
+      app: backend
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: frontend
+      ports:
+        - protocol: TCP
+          port: 8080
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: web-egress
+  namespace: shop
+spec:
+  podSelector:
+    matchLabels:
+      app: frontend
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app: backend
+      ports:
+        - protocol: TCP
+          port: 8080`;
+
+  // Evaluate every objective through the live evaluator + live mode context.
+  const objectiveResults = () =>
+    evaluate(async () => {
+      const mode = window.game?.app?.modeInstance;
+      const def = mode?.currentChallengeDef || mode?.currentLevelDef;
+      if (!def) return [];
+      const { evaluateObjective } = await import('/js/engine/ObjectiveEvaluator.js');
+      const ctx = {
+        clusterState: window.game.cluster,
+        gameEngine: window.game.gameEngine,
+        incidentEngine: window.game.incidentEngine,
+        scoringEngine: window.game.scoringEngine,
+        manifestEngine: window.game.manifestEngine,
+        objectiveProgress: mode.objectiveProgress,
+        levelDef: def,
+      };
+      return def.objectives.map((objective) => ({
+        label: objective.label,
+        ...evaluateObjective(objective, ctx),
+      }));
+    });
+  const objectiveByLabel = (results, pattern) =>
+    results.find((entry) => pattern.test(entry.label || ''));
+  // Scripted incidents advance on the incident clock; drive it directly so the
+  // test does not depend on wall-clock/rAF timing in the headless browser.
+  const advanceIncidents = (seconds) =>
+    evaluate((secs) => {
+      const engine = window.game?.incidentEngine;
+      for (let i = 0; i < Math.ceil(secs / 0.5); i += 1) engine.tick(0.5);
+      return engine.getActiveIncidents().length;
+    }, seconds);
+  const writeVirtualFile = (path, text) =>
+    evaluate(({ filePath, fileText }) => window.game.manifestEngine.writeFile(filePath, fileText), {
+      filePath: path,
+      fileText: text,
+    });
+  const startChallenge = async (id) => {
+    await bootMenu();
+    const started = await launch('challenge', id);
+    await closeOverlays();
+    await waitFor(() => evaluate(() => !!window.game?.manifestEngine), 8000);
+    await evaluate(() => window.game?.app?.modeInstance?.seedChallengeFiles?.());
+    await sleep(250);
+    return started;
+  };
+  const startCampaign = async (id) => {
+    await bootMenu();
+    const started = await launch('campaign', id);
+    await closeOverlays();
+    return started;
+  };
+
+  // ── #30a: lab 9 — behaviour grading, hand-written policy set ─────────────
+  assert(await startChallenge(9), 'qa-grading #30a: lab 9 starts');
+  let results = await objectiveResults();
+  assert(
+    results.length > 0 && results.every((entry) => entry.completed === false),
+    'qa-grading #30a: lab 9 objectives are not pre-ticked before any policy exists',
+    JSON.stringify(results.filter((entry) => entry.completed).map((entry) => entry.label))
+  );
+  await writeVirtualFile('my-network-policies.yaml', handWrittenPolicies(53));
+  let command = await runCmd('oc apply -f my-network-policies.yaml', 700);
+  assert(!command.error, 'qa-grading #30a: apply hand-written policy set', command.message);
+  results = await objectiveResults();
+  assert(
+    objectiveByLabel(results, /Deny all traffic by default/i)?.completed === true,
+    'qa-grading #30a: hand-written default-deny ticks without the provided policy names',
+    JSON.stringify(results.map((entry) => [entry.label, entry.completed]))
+  );
+  assert(
+    objectiveByLabel(results, /Allow DNS egress/i)?.completed === false,
+    'qa-grading #30a: DNS egress on port 53 does not count (OpenShift DNS listens on 5353)',
+    JSON.stringify(objectiveByLabel(results, /Allow DNS egress/i))
+  );
+  // Correct the same hand-written set to 5353: no object was renamed.
+  await writeVirtualFile('my-network-policies.yaml', handWrittenPolicies(5353));
+  command = await runCmd('oc apply -f my-network-policies.yaml', 700);
+  assert(!command.error, 'qa-grading #30a: re-apply corrected hand-written set', command.message);
+  const handwrittenNames = await evaluate(() =>
+    (window.game.cluster.getByKindAndNamespace('NetworkPolicy', 'shop') || []).map(
+      (policy) => policy.metadata?.name
+    )
+  );
+  assert(
+    handwrittenNames.includes('block-everything') &&
+      !handwrittenNames.some((name) => /deny-by-default|allow-dns-egress/.test(name)),
+    'qa-grading #30a: playthrough uses hand-written policy names only',
+    JSON.stringify(handwrittenNames)
+  );
+  results = await objectiveResults();
+  const behaviourObjectives = results.filter((entry) => /deny|allow/i.test(entry.label));
+  assert(
+    behaviourObjectives.length >= 5 &&
+      behaviourObjectives.every((entry) => entry.completed === true),
+    'qa-grading #30a: all behaviour objectives tick for the hand-written set',
+    JSON.stringify(behaviourObjectives.map((entry) => [entry.label, entry.completed]))
+  );
+  assert(
+    objectiveByLabel(results, /Resolve DNSResolutionFailure/i)?.completed === false,
+    'qa-grading #30a: scripted DNS incident is still unresolved before it fires'
+  );
+  await advanceIncidents(60);
+  results = await objectiveResults();
+  assert(
+    results.every((entry) => entry.completed === true),
+    'qa-grading #30a: hand-written solution reaches 6/6 (incident resolves)',
+    JSON.stringify(results.map((entry) => [entry.label, entry.completed]))
+  );
+  await evaluate(() => window.game.app.modeInstance.update());
+  const challengeStatus = await evaluate(() => window.game.app.modeInstance.getStatus());
+  assert(
+    challengeStatus.state === 'completed' && challengeStatus.completionPercentage === 100,
+    'qa-grading #30a: lab 9 completes on behaviour alone',
+    JSON.stringify({ state: challengeStatus.state, pct: challengeStatus.completionPercentage })
+  );
+
+  // ── #30b: lab 9 — the provided file still passes 6/6 ────────────────────
+  assert(await startChallenge(9), 'qa-grading #30b: lab 9 starts for the provided file');
+  command = await runCmd('oc apply -f challenges/shop-networkpolicy.yaml', 700);
+  assert(!command.error, 'qa-grading #30b: apply provided policy set', command.message);
+  await advanceIncidents(60);
+  results = await objectiveResults();
+  assert(
+    results.every((entry) => entry.completed === true),
+    'qa-grading #30b: provided challenges/shop-networkpolicy.yaml still reaches 6/6',
+    JSON.stringify(results.map((entry) => [entry.label, entry.completed]))
+  );
+
+  // ── #30c: lab 11 — heredoc OAuth apply, first-login User, login latch ───
+  assert(await startChallenge(11), 'qa-grading #30c: lab 11 starts');
+  await runCmd('oc project onboarding', 150);
+  await runCmd('htpasswd -c -b htpasswd alice openshift', 250);
+  await runCmd(
+    'oc create secret generic htpass-secret --from-file=htpasswd=htpasswd -n openshift-config',
+    320
+  );
+  await objectiveResults(); // capture the login-evidence baseline before any login
+  command = await runCmd(`cat <<EOF | oc apply -f -\n${OAUTH_YAML}\nEOF`, 650);
+  assert(
+    !command.error,
+    'qa-grading #30c: heredoc oc apply -f - configures OAuth',
+    command.message
+  );
+  await advanceSimulation(8);
+  results = await objectiveResults();
+  assert(
+    objectiveByLabel(results, /OAuth HTPasswd identity provider/i)?.completed === true,
+    'qa-grading #30c: heredoc OAuth apply ticks the state-based identity-provider objective',
+    JSON.stringify(objectiveByLabel(results, /OAuth HTPasswd identity provider/i))
+  );
+  // Real OpenShift only creates the User object at first login: group
+  // membership alone must not tick "User alice exists".
+  command = await runCmd('oc adm groups new developers alice', 320);
+  assert(!command.error, 'qa-grading #30c: create group developers', command.message);
+  assert(
+    (await findResource('User', 'alice')) === null,
+    'qa-grading #30c: oc adm groups new does not create the User object'
+  );
+  results = await objectiveResults();
+  assert(
+    objectiveByLabel(results, /User alice exists/i)?.completed === false,
+    'qa-grading #30c: "User alice exists" is not ticked by group membership',
+    JSON.stringify(objectiveByLabel(results, /User alice exists/i))
+  );
+  command = await runCmd('oc login -u alice -p openshift', 500);
+  assert(!command.error, 'qa-grading #30c: log in as alice', command.message);
+  assert(
+    (await runCmd('oc whoami', 120)).message.trim() === 'alice',
+    'qa-grading #30c: session user is alice'
+  );
+  results = await objectiveResults();
+  assert(
+    objectiveByLabel(results, /User alice exists/i)?.completed === true,
+    'qa-grading #30c: first login creates the real User object'
+  );
+  assert(
+    objectiveByLabel(results, /Log in as alice/i)?.completed === true,
+    'qa-grading #30c: login objective ticks on a successful login'
+  );
+  command = await runCmd('oc login -u kubeadmin', 320);
+  assert(!command.error, 'qa-grading #30c: log back in as kubeadmin', command.message);
+  results = await objectiveResults();
+  assert(
+    objectiveByLabel(results, /Log in as alice/i)?.completed === true,
+    'qa-grading #30c: login objective latches across a user switch',
+    JSON.stringify(objectiveByLabel(results, /Log in as alice/i))
+  );
+
+  // ── #30d: lab 11 — `oc patch oauth cluster` also ticks ──────────────────
+  assert(await startChallenge(11), 'qa-grading #30d: lab 11 starts for the patch flow');
+  await runCmd('htpasswd -c -b htpasswd alice openshift', 250);
+  await runCmd(
+    'oc create secret generic htpass-secret --from-file=htpasswd=htpasswd -n openshift-config',
+    320
+  );
+  command = await runCmd(`oc patch oauth cluster --type=merge -p '${OAUTH_PATCH}'`, 650);
+  assert(!command.error, 'qa-grading #30d: oc patch oauth cluster --type=merge', command.message);
+  await advanceSimulation(8);
+  results = await objectiveResults();
+  assert(
+    objectiveByLabel(results, /OAuth HTPasswd identity provider/i)?.completed === true,
+    'qa-grading #30d: oc patch oauth cluster ticks the state-based objective',
+    JSON.stringify(objectiveByLabel(results, /OAuth HTPasswd identity provider/i))
+  );
+
+  // ── #30e: campaign L13 — login evidence + file-based OAuth apply ────────
+  assert(await startCampaign(13), 'qa-grading #30e: campaign level 13 starts');
+  await runCmd('oc project identity-lab', 150);
+  await runCmd('htpasswd -c -B -b htpasswd alice openshift', 250);
+  await runCmd(
+    'oc create secret generic htpass-secret --from-file=htpasswd=htpasswd -n openshift-config',
+    320
+  );
+  await writeVirtualFile('idp.yaml', OAUTH_YAML);
+  await objectiveResults();
+  command = await runCmd('oc apply -f idp.yaml', 650);
+  assert(!command.error, 'qa-grading #30e: oc apply -f idp.yaml activates the OAuth provider');
+  await advanceSimulation(8);
+  command = await runCmd('oc login -u alice -p openshift', 500);
+  assert(!command.error, 'qa-grading #30e: L13 log in as alice', command.message);
+  await runCmd('oc whoami', 120);
+  command = await runCmd('oc login -u kubeadmin', 320);
+  assert(!command.error, 'qa-grading #30e: L13 switch back to kubeadmin', command.message);
+  results = await objectiveResults();
+  assert(
+    (objectiveByLabel(results, /Log in to the CLI as alice/i) || {}).completed === true,
+    'qa-grading #30e: L13 "Log in to the CLI as alice" latches after the user switch',
+    JSON.stringify(results.map((entry) => [entry.label, entry.completed]))
+  );
+  assert(
+    (objectiveByLabel(results, /User "alice" exists after first login/i) || {}).completed === true,
+    'qa-grading #30e: L13 User alice exists after first login'
+  );
+
+  // ── #30f: L2 label objective is namespace-correct ──────────────────────
+  assert(await startCampaign(2), 'qa-grading #30f: campaign level 2 starts');
+  await runCmd(
+    'oc create deployment web --image=quay.io/openshift/origin-hello-openshift:latest -n default',
+    380
+  );
+  await runCmd('oc label deploy web tier=frontend -n default', 320);
+  await runCmd('oc project default', 200);
+  await runCmd('oc label deploy web tier=frontend', 320);
+  results = await objectiveResults();
+  assert(
+    (objectiveByLabel(results, /Label Deployment web/i) || {}).completed === false,
+    'qa-grading #30f: wrong-namespace label does not tick "Label Deployment web"',
+    JSON.stringify(objectiveByLabel(results, /Label Deployment web/i))
+  );
+  await runCmd('oc label deploy web tier=frontend -n query-lab', 320);
+  results = await objectiveResults();
+  assert(
+    (objectiveByLabel(results, /Label Deployment web/i) || {}).completed === true,
+    'qa-grading #30f: correct-namespace label ticks "Label Deployment web"',
+    JSON.stringify(objectiveByLabel(results, /Label Deployment web/i))
+  );
+
+  await returnToMenu();
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
 // QA ROUND 1.1.8 — issue #34: EX280 coverage and post-campaign handover
 // ═══════════════════════════════════════════════════════════════════════════
 await runSection('qa-coverage', async () => {
-  // QA-34-TESTS: owned by teammate `coverage` — replace this comment.
+  // ── #34 deploy-templates-helm: standard OpenShift sample templates ────────
+  assert(await bootSandbox(), 'coverage: sandbox boots for templates/alerting/alerts checks');
+  await runCmd('oc project default');
+
+  const templatesList = await runCmd('oc get templates -n openshift');
+  assert(
+    ['webapp-template', 'httpd-example', 'mysql-persistent', 'postgresql-persistent'].every(
+      (name) => templatesList.message.includes(name)
+    ),
+    'coverage: oc get templates -n openshift lists the standard sample templates',
+    templatesList.message.replace(/\n/g, ' | ').slice(0, 340)
+  );
+
+  const httpdParams = await runCmd('oc process --parameters httpd-example');
+  assert(
+    /NAME\b/.test(httpdParams.message) &&
+      /SOURCE_IMAGE/.test(httpdParams.message) &&
+      /MEMORY_LIMIT/.test(httpdParams.message),
+    'coverage: oc process --parameters httpd-example exposes real parameters',
+    httpdParams.message.slice(0, 260)
+  );
+  const mysqlParams = await runCmd('oc process --parameters mysql-persistent');
+  assert(
+    /DATABASE_SERVICE_NAME/.test(mysqlParams.message) &&
+      /MYSQL_PASSWORD/.test(mysqlParams.message) &&
+      /expression/.test(mysqlParams.message),
+    'coverage: mysql-persistent exposes generated MYSQL_* parameters',
+    mysqlParams.message.slice(0, 260)
+  );
+
+  await expectCmd(
+    'coverage: oc new-project template-lab',
+    'oc new-project template-lab',
+    /Now using project|created/i
+  );
+  await expectCmd(
+    'coverage: oc process httpd-example | oc apply -f -',
+    'oc process httpd-example -p NAME=qa-httpd | oc apply -f -',
+    /created|configured/i
+  );
+  const httpdDeployment = await findResource('Deployment', 'qa-httpd', 'template-lab');
+  const httpdService = await findResource('Service', 'qa-httpd', 'template-lab');
+  const httpdRoute = await findResource('Route', 'qa-httpd', 'template-lab');
+  assert(
+    Boolean(httpdDeployment && httpdService && httpdRoute),
+    'coverage: processed httpd template creates Deployment + Service + Route',
+    JSON.stringify({
+      deployment: Boolean(httpdDeployment),
+      service: Boolean(httpdService),
+      route: Boolean(httpdRoute),
+    })
+  );
+  assert(
+    /registry\.redhat\.io\/ubi9\/httpd-24/.test(
+      httpdDeployment?.spec?.template?.spec?.containers?.[0]?.image || ''
+    ),
+    'coverage: httpd SOURCE_IMAGE parameter is substituted into the Deployment'
+  );
+
+  await expectCmd(
+    'coverage: oc new-app --template=mysql-persistent -p ...',
+    'oc new-app --template=mysql-persistent -p DATABASE_SERVICE_NAME=qa-db -p MYSQL_USER=qa -p MYSQL_PASSWORD=s3cr3t',
+    /created|Success/i
+  );
+  const mysqlDeployment = await findResource('Deployment', 'qa-db', 'template-lab');
+  const mysqlPvc = await findResource('PersistentVolumeClaim', 'qa-db', 'template-lab');
+  const mysqlEnv = mysqlDeployment?.spec?.template?.spec?.containers?.[0]?.env || [];
+  assert(
+    Boolean(mysqlDeployment && mysqlPvc),
+    'coverage: mysql-persistent deploys a Deployment and a PVC',
+    JSON.stringify({ deployment: Boolean(mysqlDeployment), pvc: Boolean(mysqlPvc) })
+  );
+  assert(
+    mysqlEnv.some((entry) => entry.name === 'MYSQL_PASSWORD' && entry.value === 's3cr3t'),
+    'coverage: -p values replace the generated mysql parameters in the Deployment env',
+    JSON.stringify(mysqlEnv.map((entry) => entry.name))
+  );
+  assert(
+    mysqlPvc?.spec?.resources?.requests?.storage === '1Gi',
+    'coverage: mysql VOLUME_CAPACITY parameter lands on the PVC',
+    JSON.stringify(mysqlPvc?.spec?.resources)
+  );
+
+  await expectCmd(
+    'coverage: oc new-app --template=postgresql-persistent (generated params)',
+    'oc new-app --template=postgresql-persistent -p DATABASE_SERVICE_NAME=qa-pg',
+    /created|Success/i
+  );
+  const postgresDeployment = await findResource('Deployment', 'qa-pg', 'template-lab');
+  const postgresEnv = postgresDeployment?.spec?.template?.spec?.containers?.[0]?.env || [];
+  assert(Boolean(postgresDeployment), 'coverage: postgresql-persistent deploys a Deployment');
+  assert(
+    /^[A-Za-z0-9]{16}$/.test(
+      postgresEnv.find((entry) => entry.name === 'POSTGRESQL_USER')?.value || ''
+    ),
+    'coverage: generated POSTGRESQL_* parameters expand to a 16-char expression value',
+    JSON.stringify(postgresEnv.find((entry) => entry.name === 'POSTGRESQL_USER'))
+  );
+  assert(
+    /postgresql-16/.test(postgresDeployment?.spec?.template?.spec?.containers?.[0]?.image || ''),
+    'coverage: postgresql POSTGRESQL_VERSION parameter is substituted into the image'
+  );
+
+  await expectCmd(
+    'coverage: webapp-template keeps working',
+    'oc new-app --template=webapp-template -p APP_NAME=qa-web',
+    /created|Success/i
+  );
+  assert(
+    Boolean(await findResource('Deployment', 'qa-web', 'template-lab')),
+    'coverage: the original webapp-template still deploys'
+  );
+
+  // ── #34 manage-monitor-events-alerts: PrometheusRule + Alertmanager model ─
+  await expectCmd(
+    'coverage: oc get prometheusrules -A lists the monitoring rules',
+    'oc get prometheusrules -A',
+    /NAMESPACE[\s\S]*openshift-monitoring[\s\S]*kubernetes-monitoring-rules[\s\S]*node-exporter-rules[\s\S]*openshift-monitoring-rules/
+  );
+  await expectCmd(
+    'coverage: oc describe prometheusrule shows the alert rules',
+    'oc describe prometheusrule kubernetes-monitoring-rules -n openshift-monitoring',
+    /KubePodCrashLooping[\s\S]*KubePodNotReady[\s\S]*severity[\s\S]*monitoring\.coreos\.com\/v1/
+  );
+  await expectCmd(
+    'coverage: oc get alertmanager lists the main instance',
+    'oc get alertmanager -n openshift-monitoring',
+    /NAME[\s\S]*main/
+  );
+  await expectCmd(
+    'coverage: describe alertmanager shows a firing Watchdog alert',
+    'oc describe alertmanager main -n openshift-monitoring',
+    /Firing Alerts:[\s\S]*Watchdog[\s\S]*firing/
+  );
+  await expectCmd(
+    'coverage: alertmanager pods are seeded in openshift-monitoring',
+    'oc get pods -n openshift-monitoring',
+    /alertmanager-main-0[\s\S]*Running/
+  );
+  await expectCmd(
+    'coverage: alertmanager route is seeded',
+    'oc get route alertmanager-main -n openshift-monitoring',
+    /alertmanager-main[\s\S]*reencrypt/
+  );
+  await expectCmd(
+    'coverage: alerting events surface in oc get events',
+    'oc get events -n openshift-monitoring',
+    /Watchdog/
+  );
+
+  // Alerts are evaluated from live cluster state: a broken workload must fire
+  // the matching rule, not just display static text.
+  await expectCmd(
+    'coverage: create a broken workload for live alert evaluation',
+    'oc create deployment qa-broken --image=quay.io/coverage/missing-image:latest -n template-lab',
+    /created/i
+  );
+  await advanceSimulation(30);
+  const firedAlerts = await runCmd('oc describe alertmanager main -n openshift-monitoring');
+  assert(
+    /KubePod(NotReady|CrashLooping)/.test(firedAlerts.message),
+    'coverage: Alertmanager surfaces an alert for the real broken workload',
+    firedAlerts.message
+      .split('\n')
+      .filter((line) => /Watchdog|KubePod|Firing/.test(line))
+      .join(' | ')
+  );
+  await runCmd('oc delete deployment qa-broken -n template-lab');
+
+  // ── #34 Kustomize v5: labels:/patches: drill data ─────────────────────────
+  if (!(await waitFor(() => evaluate(() => !!window.game?.manifestEngine), 3000))) {
+    await evaluate(() => document.getElementById('btn-manifests')?.click());
+  }
+  assert(
+    await waitFor(() => evaluate(() => !!window.game?.manifestEngine), 8000),
+    'coverage: Files/ManifestEngine ready for the kustomize drill'
+  );
+  const kustomizeSource = await evaluate(() => {
+    const files = window.game?.manifestEngine?.files;
+    if (!files || typeof files.get !== 'function') return null;
+    return {
+      base: files.get('kustomize/base/kustomization.yaml') || '',
+      dev: files.get('kustomize/overlays/dev/kustomization.yaml') || '',
+      prod: files.get('kustomize/overlays/prod/kustomization.yaml') || '',
+    };
+  });
+  assert(
+    kustomizeSource &&
+      /labels:/.test(kustomizeSource.base) &&
+      /labels:/.test(kustomizeSource.dev) &&
+      /labels:/.test(kustomizeSource.prod) &&
+      /patches:/.test(kustomizeSource.prod),
+    'coverage: kustomize examples teach v5 labels:/patches:'
+  );
+  assert(
+    kustomizeSource &&
+      !/(^|\n)commonLabels:/.test(
+        kustomizeSource.base + kustomizeSource.dev + kustomizeSource.prod
+      ) &&
+      !/(^|\n)patchesStrategicMerge:/.test(kustomizeSource.prod),
+    'coverage: deprecated commonLabels/patchesStrategicMerge removed from the examples'
+  );
+
+  await expectCmd(
+    'coverage: oc new-project kustomize-v5-lab',
+    'oc new-project kustomize-v5-lab',
+    /Now using project|created/i
+  );
+  await expectCmd(
+    'coverage: oc apply -k kustomize/base',
+    'oc apply -k kustomize/base',
+    /created|configured/i
+  );
+  const baseDeployment = await findResource('Deployment', 'webapp', 'kustomize-v5-lab');
+  assert(Boolean(baseDeployment), 'coverage: kustomize base renders Deployment/webapp');
+  const baseLabels = await evaluate(() => {
+    const deployment = (window.game.cluster.getByKind('Deployment') || []).find(
+      (resource) =>
+        resource.metadata?.name === 'webapp' && resource.metadata?.namespace === 'kustomize-v5-lab'
+    );
+    return {
+      metadata: deployment?.metadata?.labels || {},
+      podTemplate: deployment?.spec?.template?.metadata?.labels || {},
+    };
+  });
+  assert(
+    baseLabels.metadata['app.kubernetes.io/part-of'] === 'webapp' &&
+      baseLabels.metadata['app.kubernetes.io/managed-by'] === 'kustomize',
+    'coverage: labels: pairs land in metadata.labels (v5 transformer)',
+    JSON.stringify(baseLabels.metadata)
+  );
+  assert(
+    baseDeployment?.spec?.selector?.matchLabels?.['app.kubernetes.io/part-of'] === undefined,
+    'coverage: labels: without includeSelectors leaves the selector alone (v5 semantics)',
+    JSON.stringify(baseDeployment?.spec?.selector?.matchLabels)
+  );
+
+  await runCmd('oc new-project webapp-prod');
+  await expectCmd(
+    'coverage: oc apply -k kustomize/overlays/prod',
+    'oc apply -k kustomize/overlays/prod',
+    /created|configured/i
+  );
+  const prodDeployment = await findResource('Deployment', 'prod-webapp', 'webapp-prod');
+  assert(Boolean(prodDeployment), 'coverage: prod overlay renders prefixed Deployment/prod-webapp');
+  assert(
+    Number(prodDeployment?.spec?.replicas) === 3,
+    'coverage: prod overlay replicas transformer sets 3 replicas',
+    JSON.stringify(prodDeployment?.spec?.replicas)
+  );
+  assert(
+    /origin-hello-openshift:1\.0\.0/.test(
+      prodDeployment?.spec?.template?.spec?.containers?.[0]?.image || ''
+    ),
+    'coverage: prod overlay images transformer pins the tag'
+  );
+  assert(
+    (prodDeployment?.spec?.template?.spec?.containers?.[0]?.env || []).some(
+      (entry) => entry.name === 'APP_ENV' && entry.value === 'production'
+    ),
+    'coverage: patches: strategic-merge patch merges the APP_ENV env var'
+  );
+  assert(
+    prodDeployment?.spec?.selector?.matchLabels?.environment === 'prod',
+    'coverage: labels: + includeSelectors: true updates selectors in v5',
+    JSON.stringify(prodDeployment?.spec?.selector?.matchLabels)
+  );
+
+  // ── #34 post-campaign handover after "Finish campaign" ───────────────────
+  await bootMenu();
+  assert(await launch('campaign', 20), 'coverage: campaign level 20 starts for the handover flow');
+  await closeOverlays();
+  const restartProbe = await evaluate(() => {
+    const mode = window.game.app.modeInstance;
+    if (!mode || typeof mode.restart !== 'function') return { restartable: false };
+    const restarted = mode.restart();
+    return { restartable: true, restarted };
+  });
+  assert(
+    restartProbe.restartable && restartProbe.restarted !== false,
+    'coverage: level 20 restart still works before the finish flow',
+    JSON.stringify(restartProbe)
+  );
+  await sleep(1200);
+
+  // Complete the last level through the shell's real completion handler, then
+  // press the relabelled primary action.
+  await evaluate(() => {
+    const app = window.game.app;
+    app.scoringEngine.progress.campaignProgress[20] = { completed: true, stars: 3 };
+    window.game.engine.emit('mode:level-complete', {
+      levelId: 20,
+      title: 'Level 20 — Cluster Under Pressure',
+      stars: 3,
+      nextLevel: null,
+      isLastLevel: true,
+      totalLevels: 20,
+      message: 'Campaign complete',
+    });
+  });
+  const finishLabel = await evaluate(
+    () => document.getElementById('level-complete-next')?.textContent || ''
+  );
+  assert(
+    finishLabel.trim() === 'Finish campaign',
+    'coverage: final level relabels the primary action to "Finish campaign"',
+    finishLabel
+  );
+  await evaluate(() => document.getElementById('level-complete-next')?.click());
+  assert(
+    await waitFor(
+      () =>
+        evaluate(
+          () =>
+            window.game?.app?.isCampaignHandoverOpen?.() === true &&
+            document.getElementById('campaign-handover')?.hidden === false
+        ),
+      8000
+    ),
+    'coverage: "Finish campaign" opens the post-campaign handover instead of the start page'
+  );
+  await sleep(400);
+  const handover = await evaluate(() => {
+    const text = (id) => document.getElementById(id)?.innerText || '';
+    const overlay = document.getElementById('campaign-handover');
+    return {
+      title: text('handover-title'),
+      stats: text('handover-stats'),
+      bullets: text('handover-bullets'),
+      checklist: text('handover-checklist'),
+      checkProgress: text('handover-checklist-progress'),
+      buttons: [...overlay.querySelectorAll('button, a')].map(
+        (el) => `${el.tagName}:${el.id}:${el.innerText.trim()}`
+      ),
+      open: window.game.app.isCampaignHandoverOpen(),
+      focused: document.activeElement?.id,
+      modeTornDown: window.game.app.modeInstance === null,
+    };
+  });
+  assert(
+    /real cluster/i.test(handover.title),
+    'coverage: handover has closing copy about a real cluster',
+    handover.title.slice(0, 160)
+  );
+  assert(
+    /20\/20/.test(handover.stats) && /60\/60/.test(handover.stats),
+    'coverage: handover stats show 20/20 levels and 60/60 stars',
+    handover.stats.replace(/\n/g, ' | ').slice(0, 240)
+  );
+  assert(
+    /OpenShift Local/.test(handover.checklist) && /Developer Sandbox/.test(handover.checklist),
+    'coverage: handover checklist tells the learner to set up a real cluster',
+    handover.checklist.slice(0, 240)
+  );
+  assert(
+    /L5 — /.test(handover.checklist) &&
+      /L9 — /.test(handover.checklist) &&
+      /L13 — /.test(handover.checklist) &&
+      /L14 — /.test(handover.checklist) &&
+      /L17 — /.test(handover.checklist),
+    'coverage: handover checklist redo list covers L5/L9/L13/L14/L17',
+    handover.checklist.replace(/\n/g, ' | ').slice(0, 240)
+  );
+  assert(
+    handover.bullets.trim().length > 20 && /EX280|APPLICATION|CONFIGURE/i.test(handover.bullets),
+    'coverage: handover lists weak EX280 bullets from the readiness evidence',
+    handover.bullets.replace(/\n/g, ' | ').slice(0, 240)
+  );
+  assert(
+    handover.buttons.some((label) => /Start EX280 Prep/.test(label)) &&
+      handover.buttons.some((label) => /Back to start page/.test(label)) &&
+      handover.buttons.some((label) => /Book EX280V422/.test(label)),
+    'coverage: handover offers EX280 Prep, back-to-menu and exam links',
+    handover.buttons.join(' | ')
+  );
+  assert(
+    handover.modeTornDown === true && handover.focused === 'handover-prep',
+    'coverage: handover tears the run down and focuses its primary action',
+    JSON.stringify({ modeTornDown: handover.modeTornDown, focused: handover.focused })
+  );
+
+  // Checklist ticks persist in localStorage across close/reopen.
+  await evaluate(() => localStorage.removeItem('openshiftgames_handover_checklist'));
+  const saved = await evaluate(() => {
+    const box = document.querySelector('#handover-checklist [data-handover-check]');
+    box?.click();
+    return JSON.parse(localStorage.getItem('openshiftgames_handover_checklist') || '{}');
+  });
+  assert(
+    saved.cluster === true,
+    'coverage: handover checklist persists ticks in localStorage',
+    JSON.stringify(saved)
+  );
+  const checkProgress = await evaluate(
+    () => document.getElementById('handover-checklist-progress')?.textContent || ''
+  );
+  assert(/1\/6/.test(checkProgress), 'coverage: checklist progress counter updates', checkProgress);
+
+  await evaluate(() => document.getElementById('handover-menu')?.click());
+  const handoverClosed = await evaluate(() => ({
+    open: window.game.app.isCampaignHandoverOpen(),
+    menuVisible: document.getElementById('main-menu')?.classList.contains('hidden') === false,
+  }));
+  assert(
+    handoverClosed.open === false && handoverClosed.menuVisible === true,
+    'coverage: "Back to start page" closes the handover onto the start page',
+    JSON.stringify(handoverClosed)
+  );
+
+  // Non-final "Next Level" must keep working (the handover hook is one-shot).
+  assert(
+    await launch('campaign', 1),
+    'coverage: campaign level 1 starts for the next-level control'
+  );
+  await closeOverlays();
+  await evaluate(() => {
+    window.game.app.scoringEngine.progress.campaignProgress[1] = { completed: true, stars: 3 };
+    window.game.engine.emit('mode:level-complete', {
+      levelId: 1,
+      title: 'Level 1',
+      stars: 3,
+      nextLevel: 2,
+      totalLevels: 20,
+      message: 'done',
+    });
+    document.getElementById('level-complete-next')?.click();
+  });
+  assert(
+    await waitFor(() => evaluate(() => window.game.app.modeInstance?.currentLevel === 2), 12000),
+    'coverage: non-final "Next Level" still advances to level 2'
+  );
+  await returnToMenu();
 });
 
 // ═══════════════════════════════════════════════════════════════════════════

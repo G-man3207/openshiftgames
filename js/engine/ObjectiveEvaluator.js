@@ -76,6 +76,12 @@ export const OBJECTIVE_TYPES = [
   'command',
   'examScore',
   'architectureScore',
+  // Behaviour-based grading (issue #30): a `networkPolicy` objective probes the
+  // simulator's own traffic evaluator instead of matching hidden NetworkPolicy
+  // object names, and `oauthProvider` grades the resulting OAuth/identity
+  // provider state instead of a command regex.
+  'networkPolicy',
+  'oauthProvider',
   // Extension: `label` appears in the level-2 curriculum prose in §9 even
   // though it is missing from the type list. Implemented as a state check so
   // "work with labels and selectors" is actually exercised.
@@ -124,6 +130,8 @@ const BOOLEAN_TYPES = new Set([
   'taint',
   'examScore',
   'architectureScore',
+  'networkPolicy',
+  'oauthProvider',
   'label',
 ]);
 
@@ -370,6 +378,27 @@ function objectiveResourceNamespace(c, obj, kind = null) {
   if (!LEVEL_SCOPED_KINDS.has(canonical)) return null;
   return levelProjectNamespace(c);
 }
+
+/**
+ * Kinds that live at cluster scope. Everything else is namespaced and therefore
+ * cannot be graded correctly without a namespace (issue #30: a write command
+ * executed in the wrong project must not tick a namespaced objective).
+ */
+const CLUSTER_SCOPED_KINDS = new Set([
+  'Node',
+  'Project',
+  'ClusterRole',
+  'ClusterRoleBinding',
+  'ClusterOperator',
+  'ClusterVersion',
+  'ClusterResourceQuota',
+  'SecurityContextConstraints',
+  'OAuth',
+  'StorageClass',
+  'PersistentVolume',
+  'CustomResourceDefinition',
+  'Namespace',
+]);
 
 /** Store a lazy per-objective baseline the first time an objective is evaluated. */
 function ensureBaseline(objective, factory) {
@@ -750,6 +779,11 @@ function evaluateLabel(obj, c) {
   const value = obj.value;
   if (!key) return bool(false);
   const namespace = objectiveResourceNamespace(c, obj, kind);
+  // Namespace-correct grading (#30 / #29): a label objective may only be
+  // satisfied by the object that lives in the objective's project. An
+  // unlabelled namespaced target cannot be verified, so it stays incomplete
+  // rather than crediting a same-named object in another project.
+  if (namespace === null && !CLUSTER_SCOPED_KINDS.has(kind)) return bool(false);
   let resources = listKind(c.clusterState, kind);
   if (name) resources = resources.filter((resource) => resourceName(resource) === name);
   if (namespace)
@@ -778,6 +812,193 @@ function evaluateLabel(obj, c) {
     return String(resource?.metadata?.resourceVersion || '') !== baseline.versions[keyId];
   });
   return bool(matching.length > 0 && (!baseline.matchedAtStart || changed));
+}
+
+// ─── behaviour probes: network policy (issue #30) ──────────────────────────
+//
+// Challenge 9 grades "zero-trust project networking", not the names of the
+// learner's NetworkPolicy objects. These probes call the same traffic
+// evaluator that `oc exec … curl` uses, so a hand-written policy set with the
+// right behaviour earns full credit. Purpose-built objective fields:
+//   probe: 'default-deny' → unlabelled Pods in the project are isolated for
+//          Ingress *and* Egress (no Pod-to-Pod and no internet egress),
+//   probe: 'dns-egress'   → a frontend Pod can resolve DNS (5353 to
+//          openshift-dns) while the project is otherwise isolated,
+//   probe: 'reach'        → source can reach target:port (allowed path),
+//   probe: 'deny'         → source cannot reach target:port,
+//   probe: 'deny-external'→ source resolves names but cannot reach the
+//          internet, and the denial comes from the egress policy (not from a
+//          broken DNS egress rule).
+// Probe Pods are synthesised from the workloads' own pod templates, so
+// grading never races the Deployment controller creating concrete Pods.
+
+function simulationOf(c) {
+  const engine = c.gameEngine;
+  const simulation = engine?.simulation || engine?.engine?.simulation || null;
+  if (!simulation || typeof simulation.canReach !== 'function') return null;
+  return simulation;
+}
+
+function networkProbeNamespace(obj, c) {
+  return obj.namespace || levelProjectNamespace(c) || '';
+}
+
+function cloneTemplateSpec(spec) {
+  try {
+    return JSON.parse(JSON.stringify(spec || {}));
+  } catch {
+    return { containers: [] };
+  }
+}
+
+/** Build a Pod-shaped probe from a workload descriptor's pod template. */
+function workloadProbePod(c, descriptor, fallbackNamespace) {
+  if (!descriptor) return null;
+  const ref =
+    typeof descriptor === 'string' ? { kind: 'Deployment', name: descriptor } : descriptor;
+  const kind = canonicalKind(ref.kind || 'Deployment');
+  const name = ref.name;
+  if (!name) return null;
+  const namespace = ref.namespace || fallbackNamespace || '';
+  const resource = findResource(c.clusterState, kind, name, namespace || undefined);
+  if (!resource) return null;
+  if (kind === 'Pod') return resource;
+  const template = resourceSpec(resource).template || {};
+  const labels = { ...resourceLabels(resource), ...(template.metadata?.labels || {}) };
+  const spec = cloneTemplateSpec(template.spec);
+  if (!Array.isArray(spec.containers) || spec.containers.length === 0) {
+    spec.containers = [{ name: 'probe', image: 'busybox' }];
+  }
+  return {
+    kind: 'Pod',
+    apiVersion: 'v1',
+    metadata: {
+      name: `${name}-network-probe`,
+      namespace: resourceNamespace(resource) || namespace,
+      labels,
+    },
+    spec,
+  };
+}
+
+/** Build a Pod-shaped endpoint probe for a Service target. */
+function serviceProbePod(c, descriptor, fallbackNamespace) {
+  const ref = typeof descriptor === 'string' ? { name: descriptor } : descriptor;
+  if (!ref?.name) return null;
+  const namespace = ref.namespace || fallbackNamespace || '';
+  const service = findResource(c.clusterState, 'Service', ref.name, namespace || undefined);
+  if (!service) return null;
+  const spec = resourceSpec(service);
+  const selector = spec.selector || {};
+  const firstPort = asArray(spec.ports)[0] || {};
+  const targetPort = asNumber(firstPort.targetPort ?? firstPort.port, 80);
+  return {
+    kind: 'Pod',
+    apiVersion: 'v1',
+    metadata: {
+      name: `${ref.name}-network-probe`,
+      namespace: resourceNamespace(service) || namespace,
+      labels: { ...selector },
+    },
+    spec: {
+      containers: [{ name: 'probe', image: 'busybox', ports: [{ containerPort: targetPort }] }],
+    },
+  };
+}
+
+function networkTargetPod(c, descriptor, fallbackNamespace) {
+  if (!descriptor) return null;
+  const kind = canonicalKind(typeof descriptor === 'string' ? 'Service' : descriptor.kind || 'Pod');
+  if (kind === 'Service') return serviceProbePod(c, descriptor, fallbackNamespace);
+  return workloadProbePod(c, descriptor, fallbackNamespace);
+}
+
+/** An unlabelled probe Pod: only a namespace-wide policy can select it. */
+function neutralProbePod(namespace, suffix) {
+  return {
+    kind: 'Pod',
+    apiVersion: 'v1',
+    metadata: { name: `netpol-probe-${suffix}`, namespace, labels: {} },
+    spec: { containers: [{ name: 'probe', image: 'busybox' }] },
+  };
+}
+
+function probeTrafficForExec(sim, sourcePod, target, namespace, options = {}) {
+  if (!sourcePod || typeof sim.trafficForExec !== 'function') return null;
+  return sim.trafficForExec(sourcePod, { target, namespace, ...options });
+}
+
+/** Is the project isolated in both directions for a Pod with no allow rules? */
+function namespaceIsolationActive(c, namespace) {
+  const sim = simulationOf(c);
+  if (!sim || !namespace) return false;
+  const peerA = neutralProbePod(namespace, 'a');
+  const peerB = neutralProbePod(namespace, 'b');
+  if (sim.canReach(peerA, peerB, { namespace, port: 8080, protocol: 'TCP' }).allowed !== false)
+    return false;
+  const external = probeTrafficForExec(sim, peerA, 'http://example.com', namespace, { port: 80 });
+  return external !== null && external.allowed === false;
+}
+
+function probeDnsEgress(c, obj, namespace) {
+  const sim = simulationOf(c);
+  if (!sim || typeof sim.canResolveDNS !== 'function') return false;
+  // "Allow DNS while everything else is denied": the project must already be
+  // egress-isolated, otherwise an unrestricted cluster would pass trivially.
+  if (!namespaceIsolationActive(c, namespace)) return false;
+  const source = workloadProbePod(
+    c,
+    obj.source || { kind: 'Deployment', name: 'frontend' },
+    namespace
+  );
+  if (!source) return false;
+  return sim.canResolveDNS(source).allowed === true;
+}
+
+function probeReach(c, obj, namespace, expected) {
+  const sim = simulationOf(c);
+  if (!sim) return false;
+  // The allowed path only counts once the project is actually isolated: with
+  // no NetworkPolicy at all, frontend → backend is reachable by default.
+  if (expected && !namespaceIsolationActive(c, namespace)) return false;
+  const source = workloadProbePod(c, obj.source, namespace);
+  const target = networkTargetPod(c, obj.target, namespace);
+  if (!source || !target) return false;
+  const port = asNumber(obj.port, 80);
+  const protocol = String(obj.protocol || 'TCP').toUpperCase();
+  const outcome = sim.canReach(source, target, { namespace, port, protocol });
+  return outcome.allowed === expected;
+}
+
+function probeExternalDenied(c, obj, namespace) {
+  const sim = simulationOf(c);
+  const source = workloadProbePod(c, obj.source, namespace);
+  if (!source) return false;
+  const external = probeTrafficForExec(sim, source, 'http://example.com', namespace, { port: 80 });
+  if (!external || external.allowed !== false) return false;
+  // A failed DNS lookup must not satisfy "external traffic is blocked": the
+  // denial has to come from the egress policy after name resolution works.
+  return external.reason !== 'dns-egress';
+}
+
+function evaluateNetworkPolicy(obj, c) {
+  const probe = String(obj.probe || obj.check || '').toLowerCase();
+  const namespace = networkProbeNamespace(obj, c);
+  if (!namespace || !simulationOf(c)) return bool(false);
+  switch (probe) {
+    case 'default-deny':
+      return bool(namespaceIsolationActive(c, namespace));
+    case 'dns-egress':
+      return bool(probeDnsEgress(c, obj, namespace));
+    case 'reach':
+      return bool(probeReach(c, obj, namespace, true));
+    case 'deny':
+      return bool(probeReach(c, obj, namespace, false));
+    case 'deny-external':
+      return bool(probeExternalDenied(c, obj, namespace));
+    default:
+      return bool(false);
+  }
 }
 
 function evaluateScale(obj, c) {
@@ -819,12 +1040,106 @@ function evaluateProject(obj, c) {
   return result(active.length >= target, Math.min(active.length, target), target);
 }
 
-function evaluateLogin(obj, c) {
-  const currentUser = c.gameEngine?.currentUser || null;
-  if (obj.user) return bool(currentUser === obj.user);
-  return bool(Boolean(currentUser));
+// ─── login evidence and OAuth identity-provider state (issue #30) ─────────
+//
+// `oc login -u alice …; oc whoami; oc login -u kubeadmin` must still tick
+// "Log in to the CLI as alice": the objective latches on a successful login
+// event instead of only looking at the current session. A login history
+// exposed by the engine/cluster (openshift-details owns the login path) is
+// preferred; an EventBus latch installed here covers builds without it.
+// The baseline index is captured on the first evaluation of the run, so a
+// retry/relaunch cannot be pre-ticked by a login from an earlier run.
+
+const loginEventLatch = new WeakMap();
+
+function latchLoginEvents(engine) {
+  if (!engine || typeof engine !== 'object') return null;
+  let entries = loginEventLatch.get(engine);
+  if (!entries) {
+    entries = [];
+    loginEventLatch.set(engine, entries);
+    try {
+      const bus = engine.eventBus;
+      if (bus && typeof bus.on === 'function') {
+        bus.on('login', (data) => {
+          const user =
+            typeof data === 'string' ? data : (data?.user ?? data?.username ?? data?.name);
+          if (!user) return;
+          entries.push({ user: String(user), provider: data?.provider || null });
+          if (entries.length > 200) entries.splice(0, entries.length - 200);
+        });
+      }
+    } catch {
+      /* feature-detected: an engine without an event bus simply has no latch */
+    }
+  }
+  return entries;
 }
 
+function loginEntryUser(entry) {
+  if (!entry) return '';
+  if (typeof entry === 'string') return entry;
+  return String(entry.user ?? entry.username ?? entry.name ?? '');
+}
+
+function callLoginHistory(owner, method) {
+  if (!owner || typeof owner[method] !== 'function') return null;
+  try {
+    const list = owner[method]();
+    return Array.isArray(list) ? list : null;
+  } catch {
+    return null;
+  }
+}
+
+function arrayLoginHistory(owner, property) {
+  if (!owner) return null;
+  const value = owner[property];
+  return Array.isArray(value) ? value : null;
+}
+
+function loginHistory(c) {
+  // Use the first source that actually has entries: concatenating an accessor
+  // with the array it copies would duplicate entries and break the baseline
+  // index. A non-empty owner-provided history is authoritative; the EventBus
+  // latch only covers builds where no owner-provided history exists yet.
+  const engine = c.gameEngine;
+  const cluster = c.clusterState;
+  const candidates = [
+    callLoginHistory(engine, 'getLoginHistory'),
+    arrayLoginHistory(engine, 'loginHistory'),
+    arrayLoginHistory(engine, 'recentLogins'),
+    callLoginHistory(cluster, 'getLoginHistory'),
+    arrayLoginHistory(cluster, 'loginHistory'),
+    arrayLoginHistory(cluster, 'recentLogins'),
+  ];
+  for (const list of candidates) {
+    if (list && list.length > 0) return list;
+  }
+  return latchLoginEvents(engine) || [];
+}
+
+function evaluateLogin(obj, c) {
+  const wanted = obj.user ? String(obj.user) : null;
+  const matches = (user) => (wanted ? user === wanted : Boolean(user));
+  const currentUser = c.gameEngine?.currentUser || null;
+  const history = loginHistory(c);
+  // Capture the baseline on the FIRST evaluation of the run, even while the
+  // history is still empty: otherwise the first login after level start would
+  // be folded into the baseline and a later user switch would un-tick it.
+  const baseline = ensureBaseline(obj, () => ({ historyLength: history.length }));
+  const start = Math.min(Math.max(0, asNumber(baseline.historyLength, 0)), history.length);
+  // Latch: once the required login happened during this run, switching back to
+  // another user (or logging out) must not un-tick the objective.
+  if (history.slice(start).some((entry) => matches(loginEntryUser(entry)))) return bool(true);
+  return bool(matches(currentUser));
+}
+
+/**
+ * Real cluster state only: OpenShift creates the User object on first login
+ * (`oc adm groups new`/`add-users` only record group membership). A bare name
+ * in a Group must therefore not tick "User alice exists" (issue #30).
+ */
 function evaluateUser(obj, c) {
   const users = listKind(c.clusterState, 'User');
   if (obj.name) {
@@ -832,6 +1147,56 @@ function evaluateUser(obj, c) {
   }
   const target = Math.max(1, asNumber(obj.count, 1));
   return result(users.length >= target, Math.min(users.length, target), target);
+}
+
+function htpasswdSecretOf(provider) {
+  return provider?.htpasswd?.fileData?.name || provider?.htpasswd?.secret?.name || '';
+}
+
+/**
+ * OAuth identity-provider state (issue #30): grade
+ * `oauth.config.openshift.io/cluster` and the live authentication rollout
+ * instead of a command regex. Heredoc applies, `oc apply -f` and
+ * `oc patch oauth cluster` all count once the provider is really active.
+ */
+function evaluateOAuthProvider(obj, c) {
+  const wantedType = String(obj.providerType || 'HTPasswd').toLowerCase();
+  const wantedSecret = obj.secretName ? String(obj.secretName) : null;
+  const cluster = c.clusterState;
+  let oauth = null;
+  try {
+    if (cluster && typeof cluster.getOAuth === 'function') oauth = cluster.getOAuth();
+  } catch {
+    /* ignore */
+  }
+  if (!oauth) oauth = findResource(cluster, 'OAuth', obj.oauthName || 'cluster', '');
+  const provider = asArray(oauth?.spec?.identityProviders).find((candidate) => {
+    if (!candidate || String(candidate.type || '').toLowerCase() !== wantedType) return false;
+    if (obj.providerName && candidate.name !== obj.providerName) return false;
+    if (wantedSecret && htpasswdSecretOf(candidate) !== wantedSecret) return false;
+    return true;
+  });
+  if (!provider) return bool(false);
+  // "The provider actually active": the authentication operator completed the
+  // OAuth rollout for this configuration. GameEngine only flips authProvider to
+  // ready after that rollout, so a configured-but-not-rolled-out provider does
+  // not tick yet.
+  const engine = c.gameEngine;
+  try {
+    if (engine && typeof engine.getAuthProvider === 'function') {
+      const active = engine.getAuthProvider();
+      if (!active || active.ready !== true) return bool(false);
+      if (wantedSecret && String(active.secretName || '') !== wantedSecret) return bool(false);
+      return bool(true);
+    }
+  } catch {
+    /* fall through to the cluster view */
+  }
+  const config =
+    cluster && typeof cluster.getAuthProviderConfig === 'function'
+      ? cluster.getAuthProviderConfig()
+      : null;
+  return bool(Boolean(config));
 }
 
 function groupUsers(group) {
@@ -1945,6 +2310,8 @@ function evaluateByType(type, obj, c) {
       return evaluateDeploy(obj, c);
     case 'label':
       return evaluateLabel(obj, c);
+    case 'networkpolicy':
+      return evaluateNetworkPolicy(obj, c);
     case 'scale':
       return evaluateScale(obj, c);
     case 'replicas':
@@ -1955,6 +2322,8 @@ function evaluateByType(type, obj, c) {
       return evaluateLogin(obj, c);
     case 'user':
       return evaluateUser(obj, c);
+    case 'oauthprovider':
+      return evaluateOAuthProvider(obj, c);
     case 'group':
       return evaluateGroup(obj, c);
     case 'cani':

@@ -1180,6 +1180,74 @@
       </div>
     </div>
 
+    <!-- ───────────── Post-campaign handover (issue #34) ──────────────────── -->
+    <!-- Shown after "Campaign complete! ★★★" → "Finish campaign" instead of
+         silently returning to the start page: weak EX280 bullets from the
+         readiness evidence + a "do it on a real cluster" handover checklist. -->
+    <div
+      id="campaign-handover"
+      class="handover-overlay"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="handover-title"
+      aria-hidden="true"
+      hidden
+    >
+      <div class="handover-card">
+        <header class="handover-head">
+          <div class="handover-kicker" id="handover-kicker">EX280 · Campaign complete</div>
+          <h2 class="handover-title" id="handover-title">
+            You finished the campaign. Now do it on a real cluster.
+          </h2>
+          <p class="handover-lede">
+            All 20 levels are done, but a simulator cannot replace a real API server. Before you
+            book EX280V422, stand up a cluster of your own and re-run the workflows where exam
+            muscle memory matters most.
+          </p>
+        </header>
+
+        <div class="handover-stats" id="handover-stats" aria-label="Campaign results"></div>
+
+        <section class="handover-section" aria-labelledby="handover-weak-title">
+          <div class="handover-section-head">
+            <h3 id="handover-weak-title">Weakest EX280 bullets</h3>
+            <button type="button" class="btn-quiet handover-inline-btn" id="handover-exam-prep">
+              Open EX280 Prep
+            </button>
+          </div>
+          <p class="handover-section-sub">
+            Derived from your drill evidence — not a Red Hat pass prediction.
+          </p>
+          <ul class="handover-bullets" id="handover-bullets"></ul>
+        </section>
+
+        <section class="handover-section" aria-labelledby="handover-checklist-title">
+          <div class="handover-section-head">
+            <h3 id="handover-checklist-title">Your handover checklist</h3>
+            <span class="handover-check-progress" id="handover-checklist-progress"></span>
+          </div>
+          <p class="handover-section-sub">
+            Set up OpenShift Local or the Developer Sandbox, then redo these levels against a real
+            cluster. Ticks are saved in this browser.
+          </p>
+          <ul class="handover-checklist" id="handover-checklist"></ul>
+        </section>
+
+        <footer class="handover-actions">
+          <button type="button" class="btn-primary" id="handover-prep">Start EX280 Prep</button>
+          <button type="button" class="btn-secondary" id="handover-menu">Back to start page</button>
+          <a
+            class="handover-exam-link"
+            id="handover-exam-link"
+            href="https://www.redhat.com/en/services/training/red-hat-certified-openshift-administrator-exam"
+            target="_blank"
+            rel="noopener noreferrer"
+            >Book EX280V422 →</a
+          >
+        </footer>
+      </div>
+    </div>
+
     <div id="loading-screen" class="loading-screen" style="display: none">
       <div class="loading-mark" aria-hidden="true">
         <svg viewBox="0 0 32 32" fill="none" stroke="currentColor" stroke-width="2">
@@ -1321,6 +1389,11 @@
       import { CAMPAIGN_LEVELS, CHAPTERS } from './js/data/CampaignLevels.js';
       import { ACHIEVEMENTS } from './js/data/Achievements.js';
       import { CHALLENGES } from './js/modes/ChallengeMode.js';
+      import {
+        EX280_OBJECTIVE_BULLETS,
+        EX280_OBJECTIVE_COUNT,
+        EX280_READINESS_THRESHOLD,
+      } from './js/data/EX280Objectives.js';
 
       // ── Brand / storage / links ────────────────────────────────────────────────
       const APP_NAME = 'OpenShift Games';
@@ -1333,6 +1406,14 @@
       const EXAM_URL =
         'https://www.redhat.com/en/services/training/red-hat-certified-openshift-administrator-exam';
       const YAML_FILENAME = 'openshiftgames-cluster.yaml';
+
+      // ── Post-campaign handover (issue #34) ────────────────────────────────────
+      /** Browser-local persistence key for the handover checklist ticks. */
+      const HANDOVER_CHECKLIST_KEY = 'openshiftgames_handover_checklist';
+      /** Levels worth re-doing on a real cluster after finishing the campaign. */
+      const HANDOVER_LEVEL_IDS = [5, 9, 13, 14, 17];
+      /** Developer Sandbox entry point offered in the handover checklist. */
+      const DEVELOPER_SANDBOX_URL = 'https://developers.redhat.com/developer-sandbox';
 
       // Palette shortcuts 1-9 (valid kinds only; registry shortcuts 1-7 align with this).
       const SHORTCUT_KINDS = [
@@ -1435,6 +1516,13 @@
           this._pauseOpener = null;
           this._menuPanelOpener = null;
           this._tutorialOpener = null;
+          // Post-campaign handover (issue #34): the `campaign:campaign-complete`
+          // listener records the payload + a one-shot flag; the final "Finish
+          // campaign" click consumes it and opens the handover screen.
+          this._campaignHandoverPending = false;
+          this._campaignCompletePayload = null;
+          this._handoverOpen = false;
+          this._handoverKeydown = null;
           // Surfaces that cover a live run (pause card, help modal, EX280 Prep)
           // register a reason here instead of tracking their own pause flag, so
           // overlapping overlays pause once and resume exactly once.
@@ -1474,6 +1562,7 @@
           this.renderPalette();
           this.bindMenuEvents();
           this.bindGameEvents();
+          this.bindCampaignHandover();
           this.bindKeyboard();
           this.bindPalette();
           this.bindPauseEvents();
@@ -1713,6 +1802,19 @@
             }
             const advanced = mode.nextLevel();
             if (advanced === false) {
+              // Final campaign level: `nextLevel()` emits
+              // `campaign:campaign-complete`, and the listener arms a one-shot
+              // flag. Open the handover screen instead of silently returning to
+              // the start page (issue #34).
+              if (this.currentMode === 'campaign' && this._campaignHandoverPending) {
+                this._campaignHandoverPending = false;
+                document.getElementById('modal-level-complete')?.classList.remove('active');
+                document
+                  .getElementById('modal-level-complete')
+                  ?.setAttribute('aria-hidden', 'true');
+                this.showCampaignHandover(this._campaignCompletePayload);
+                return;
+              }
               this.returnToMenu();
               return;
             }
@@ -1802,6 +1904,35 @@
           }
         }
 
+        /**
+         * Post-campaign handover screen wiring (issue #34).
+         *
+         * The screen itself is opened from the final "Finish campaign" action;
+         * this binds the static buttons and the checklist persistence. The
+         * event hook (`campaign:campaign-complete` below) only records the
+         * payload and arms the one-shot flag the click handler consumes.
+         */
+        bindCampaignHandover() {
+          const openPrep = () => {
+            this.hideCampaignHandover();
+            this.showExamPrep();
+          };
+          document.getElementById('handover-prep')?.addEventListener('click', openPrep);
+          document.getElementById('handover-exam-prep')?.addEventListener('click', openPrep);
+          document.getElementById('handover-menu')?.addEventListener('click', () => {
+            this.hideCampaignHandover();
+          });
+          document.getElementById('handover-checklist')?.addEventListener('change', (event) => {
+            const checkbox = event.target.closest('[data-handover-check]');
+            if (!checkbox) return;
+            const state = this._loadHandoverChecklist();
+            state[checkbox.dataset.handoverCheck] = Boolean(checkbox.checked);
+            this._saveHandoverChecklist(state);
+            checkbox.closest('.handover-check')?.classList.toggle('is-checked', checkbox.checked);
+            this._syncHandoverChecklistProgress();
+          });
+        }
+
         bindGameEvents() {
           this.engine.eventBus.on('mode:level-complete', (data = {}) => {
             const stars = data.stars || 0;
@@ -1829,6 +1960,14 @@
             this._challengeTimedOut = false;
             document.getElementById('modal-level-complete')?.classList.add('active');
             document.getElementById('modal-level-complete')?.setAttribute('aria-hidden', 'false');
+          });
+
+          // Campaign completion (CampaignMode.nextLevel on level 20): remember the
+          // payload and arm the one-shot handover flag. The final "Finish campaign"
+          // click consumes it — see the level-complete-next handler.
+          this.engine.eventBus.on('campaign:campaign-complete', (data = {}) => {
+            this._campaignCompletePayload = data || {};
+            this._campaignHandoverPending = true;
           });
 
           this.engine.eventBus.on('mode:game-over', (data = {}) => {
@@ -3254,6 +3393,299 @@
           } catch {
             /* inert unsupported */
           }
+        }
+
+        // ── Post-campaign handover (issue #34) ──────────────────────────────────
+
+        /** True while the handover screen is covering the start page. */
+        isCampaignHandoverOpen() {
+          return this._handoverOpen === true;
+        }
+
+        /**
+         * Open the post-campaign handover screen: campaign results, the weakest
+         * EX280 bullets (from the readiness evidence) and the "set up a real
+         * cluster + redo L5/L9/L13/L14/L17" checklist.
+         *
+         * Called from the final "Finish campaign" action after
+         * `campaign:campaign-complete` fires. Leaves the finished run first so the
+         * start page (and its live diorama) sits behind the screen.
+         */
+        showCampaignHandover(payload = {}) {
+          const overlay = document.getElementById('campaign-handover');
+          if (!overlay) return false;
+          this._campaignCompletePayload = payload || this._campaignCompletePayload || {};
+          this.returnToMenu();
+          this._renderHandoverStats();
+          this._renderHandoverWeakBullets();
+          this._renderHandoverChecklist();
+          overlay.hidden = false;
+          overlay.setAttribute('aria-hidden', 'false');
+          overlay.classList.add('is-open');
+          this._handoverOpen = true;
+          if (!this._handoverKeydown) {
+            this._handoverKeydown = (event) => {
+              if (event.key !== 'Escape') return;
+              event.preventDefault();
+              this.hideCampaignHandover();
+            };
+            document.addEventListener('keydown', this._handoverKeydown);
+          }
+          requestAnimationFrame(() =>
+            document.getElementById('handover-prep')?.focus?.({ preventScroll: true })
+          );
+          // Per-bullet evidence needs the lazily-loaded EX280 Prep module; refresh
+          // the weak-bullet list (and stats) once it is ready.
+          this._ensureExamPrep()
+            ?.then(() => {
+              if (!this._handoverOpen) return;
+              this._renderHandoverWeakBullets();
+              this._renderHandoverStats();
+            })
+            ?.catch(() => {});
+          return true;
+        }
+
+        /** Close the handover screen (the start page is already visible behind it). */
+        hideCampaignHandover() {
+          const overlay = document.getElementById('campaign-handover');
+          if (!overlay) return false;
+          overlay.classList.remove('is-open');
+          overlay.setAttribute('aria-hidden', 'true');
+          overlay.hidden = true;
+          this._handoverOpen = false;
+          if (this._handoverKeydown) {
+            document.removeEventListener('keydown', this._handoverKeydown);
+            this._handoverKeydown = null;
+          }
+          return true;
+        }
+
+        /** Campaign results snapshot used by the handover stats row. */
+        _handoverResults() {
+          let progress = {};
+          try {
+            progress = this.scoringEngine?.getProgress?.() || {};
+          } catch {
+            progress = {};
+          }
+          const campaignProgress = progress.campaignProgress || {};
+          const levels = CAMPAIGN_LEVELS.length || 20;
+          let completed = 0;
+          let stars = 0;
+          for (const level of CAMPAIGN_LEVELS) {
+            const entry = campaignProgress[level.id] ?? campaignProgress[String(level.id)];
+            if (entry?.completed) completed += 1;
+            stars += Math.max(0, Math.min(3, Number(entry?.stars) || 0));
+          }
+          return {
+            levels,
+            completed,
+            stars,
+            maxStars: levels * 3,
+            xp: Number(progress.xp) || 0,
+            campaignProgress,
+          };
+        }
+
+        /**
+         * Per-bullet readiness report for the handover. Prefers the EX280 Prep
+         * evidence snapshot (kept private by ExamPrepMode; read defensively) and
+         * falls back to the completed-linked-drill signal before the module loads.
+         */
+        _handoverBulletReport() {
+          const { campaignProgress } = this._handoverResults();
+          let snapshot = null;
+          try {
+            snapshot = this.examPrepUI?._computeSnapshot?.() || null;
+          } catch {
+            snapshot = null;
+          }
+          const statuses = snapshot?.statuses;
+          const weak = [];
+          let mastered = 0;
+          if (statuses instanceof Map) {
+            for (const bullet of EX280_OBJECTIVE_BULLETS) {
+              const status = statuses.get(bullet.id) || 'todo';
+              if (status === 'mastered') mastered += 1;
+              else weak.push({ bullet, status });
+            }
+          } else {
+            for (const bullet of EX280_OBJECTIVE_BULLETS) {
+              const linked = (bullet.levels || []).map(
+                (id) => campaignProgress[id] ?? campaignProgress[String(id)]
+              );
+              if (linked.some((entry) => entry?.completed)) mastered += 1;
+              else weak.push({ bullet, status: 'todo' });
+            }
+          }
+          weak.sort(
+            (a, b) =>
+              (({ todo: 0, practiced: 1, mastered: 2 })[a.status] ?? 1) -
+                ({ todo: 0, practiced: 1, mastered: 2 }[b.status] ?? 1) ||
+              String(a.bullet.groupTitle || '').localeCompare(String(b.bullet.groupTitle || '')) ||
+              String(a.bullet.id).localeCompare(String(b.bullet.id))
+          );
+          return { mastered, total: EX280_OBJECTIVE_COUNT, weak };
+        }
+
+        _renderHandoverStats() {
+          const host = document.getElementById('handover-stats');
+          if (!host) return;
+          const results = this._handoverResults();
+          const report = this._handoverBulletReport();
+          const ratio = report.mastered / (report.total || 1);
+          const verdict =
+            ratio >= EX280_READINESS_THRESHOLD
+              ? { label: 'Drills verified', tone: 'ready' }
+              : ratio >= 0.6
+                ? { label: 'Almost there', tone: 'close' }
+                : { label: 'Keep going', tone: 'todo' };
+          const cards = [
+            {
+              label: 'Campaign levels',
+              value: `${results.completed}/${results.levels}`,
+              note: 'completed',
+            },
+            {
+              label: 'Stars earned',
+              value: `${results.stars}/${results.maxStars}`,
+              note: 'level performance',
+            },
+            { label: 'XP', value: String(results.xp), note: 'across every mode' },
+            {
+              label: 'EX280 bullets',
+              value: `${report.mastered}/${report.total}`,
+              note: 'with verified evidence',
+              chip: verdict,
+            },
+          ];
+          host.innerHTML = cards
+            .map(
+              (card) => `
+              <div class="handover-stat">
+                <span class="handover-stat-label">${escapeHtml(card.label)}</span>
+                <span class="handover-stat-value">${escapeHtml(card.value)}</span>
+                <span class="handover-stat-note">
+                  ${escapeHtml(card.note)}
+                  ${
+                    card.chip
+                      ? `<em class="handover-stat-chip is-${escapeHtml(card.chip.tone)}">${escapeHtml(card.chip.label)}</em>`
+                      : ''
+                  }
+                </span>
+              </div>`
+            )
+            .join('');
+        }
+
+        _renderHandoverWeakBullets() {
+          const host = document.getElementById('handover-bullets');
+          if (!host) return;
+          const report = this._handoverBulletReport();
+          const shown = report.weak.slice(0, 6);
+          if (!shown.length) {
+            host.innerHTML = `
+              <li class="handover-bullet is-empty">
+                <span class="handover-bullet-title">Every EX280 bullet has verified drill evidence.</span>
+                <span class="handover-bullet-note">Keep it warm with the EX280 Prep quick labs before the exam.</span>
+              </li>`;
+            return;
+          }
+          host.innerHTML = shown
+            .map(
+              ({ bullet, status }) => `
+              <li class="handover-bullet">
+                <span class="handover-bullet-group">${escapeHtml(bullet.groupTitle || 'EX280')}</span>
+                <span class="handover-bullet-title">${escapeHtml(bullet.title || bullet.id)}</span>
+                <span class="handover-bullet-status is-${escapeHtml(status)}">${
+                  status === 'practiced' ? 'practiced' : 'no evidence'
+                }</span>
+              </li>`
+            )
+            .join('');
+        }
+
+        /** Checklist items: set up a cluster, then redo the exam-critical levels. */
+        _handoverChecklistItems() {
+          const items = [
+            {
+              id: 'cluster',
+              title: 'Set up a real cluster',
+              detail:
+                'Install OpenShift Local (crc) on your workstation, or open the free Developer Sandbox in your browser.',
+              href: DEVELOPER_SANDBOX_URL,
+              linkLabel: 'Open the Developer Sandbox →',
+            },
+          ];
+          for (const id of HANDOVER_LEVEL_IDS) {
+            const level = CAMPAIGN_LEVELS.find((entry) => entry.id === id);
+            items.push({
+              id: `level-${id}`,
+              title: `Redo L${id} — ${level?.title || `Campaign level ${id}`}`,
+              detail: 'Replay the same workflow against a real API server and watch the console.',
+            });
+          }
+          return items;
+        }
+
+        _loadHandoverChecklist() {
+          try {
+            const raw = JSON.parse(localStorage.getItem(HANDOVER_CHECKLIST_KEY) || '{}');
+            return raw && typeof raw === 'object' ? raw : {};
+          } catch {
+            return {};
+          }
+        }
+
+        _saveHandoverChecklist(state) {
+          try {
+            localStorage.setItem(HANDOVER_CHECKLIST_KEY, JSON.stringify(state || {}));
+          } catch {
+            /* private mode / storage disabled */
+          }
+        }
+
+        _renderHandoverChecklist() {
+          const host = document.getElementById('handover-checklist');
+          if (!host) return;
+          const state = this._loadHandoverChecklist();
+          const items = this._handoverChecklistItems();
+          host.innerHTML = items
+            .map(
+              (item) => `
+              <li class="handover-check${state[item.id] ? ' is-checked' : ''}">
+                <label class="handover-check-row">
+                  <input
+                    type="checkbox"
+                    data-handover-check="${escapeHtml(item.id)}"
+                    ${state[item.id] ? 'checked' : ''}
+                  />
+                  <span class="handover-check-box" aria-hidden="true"></span>
+                  <span class="handover-check-text">
+                    <span class="handover-check-title">${escapeHtml(item.title)}</span>
+                    <span class="handover-check-detail">${escapeHtml(item.detail)}</span>
+                    ${
+                      item.href
+                        ? `<a class="handover-check-link" href="${escapeHtml(item.href)}" target="_blank" rel="noopener noreferrer">${escapeHtml(item.linkLabel || 'Open link →')}</a>`
+                        : ''
+                    }
+                  </span>
+                </label>
+              </li>`
+            )
+            .join('');
+          this._syncHandoverChecklistProgress();
+        }
+
+        _syncHandoverChecklistProgress() {
+          const host = document.getElementById('handover-checklist-progress');
+          if (!host) return;
+          const state = this._loadHandoverChecklist();
+          const items = this._handoverChecklistItems();
+          const done = items.filter((item) => state[item.id]).length;
+          host.textContent = `${done}/${items.length} done`;
+          host.classList.toggle('is-complete', done === items.length);
         }
 
         launchGame(mode, levelOrChallenge) {

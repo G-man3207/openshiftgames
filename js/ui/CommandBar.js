@@ -3937,6 +3937,7 @@ export class CommandBar {
 
   destroy() {
     this._clearRolloutWatches?.();
+    this._clearBuildWatches?.();
     if (typeof document !== 'undefined')
       document.removeEventListener('keydown', this._boundKeydown);
     this.eventBus?.off?.('ui:show-command-bar', this._boundShowCommandBar);
@@ -5385,12 +5386,14 @@ Object.assign(CommandBar.prototype, {
 
   _podStatus(resource) {
     const phase = resource.status?.phase || resource.phase || 'Pending';
+    // `oc get pods` prints Completed for phase Succeeded (real name-printer).
+    const displayPhase = phase === 'Succeeded' ? 'Completed' : phase;
     const statuses = resource.status?.containerStatuses || resource.containerStatuses || [];
     if (!statuses.length)
-      return { ready: phase === 'Running' ? '1/1' : '0/1', status: phase, restarts: 0 };
+      return { ready: phase === 'Running' ? '1/1' : '0/1', status: displayPhase, restarts: 0 };
     const readyCount = statuses.filter((status) => status.ready).length;
     const total = statuses.length;
-    let status = phase;
+    let status = displayPhase;
     for (const containerStatus of statuses) {
       const waiting = containerStatus.state?.waiting?.reason;
       const terminated = containerStatus.state?.terminated;
@@ -5398,7 +5401,7 @@ Object.assign(CommandBar.prototype, {
         status = waiting;
         break;
       }
-      if (terminated && phase !== 'Succeeded') {
+      if (terminated && phase !== 'Succeeded' && status !== 'Completed') {
         status = terminated.reason || (terminated.exitCode === 0 ? 'Completed' : 'Error');
         break;
       }
@@ -5428,9 +5431,14 @@ Object.assign(CommandBar.prototype, {
     const isReady = ready
       ? ready.status === 'True'
       : (resource.status?.phase || 'Running') === 'Running';
-    const cordoned = Boolean(resource.spec?.unschedulable);
-    if (!isReady) return 'NotReady';
-    return cordoned ? 'Ready,SchedulingDisabled' : 'Ready';
+    const cordoned = Boolean(
+      resource.spec?.unschedulable ?? resource.isCordoned ?? resource.unschedulable
+    );
+    // Real oc joins every condition-ish status with commas:
+    // `Ready,SchedulingDisabled` / `NotReady,SchedulingDisabled` (issue #28).
+    const statuses = [isReady ? 'Ready' : 'NotReady'];
+    if (cordoned) statuses.push('SchedulingDisabled');
+    return statuses.join(',');
   },
 
   _serviceClusterIP(resource) {
@@ -5458,10 +5466,21 @@ Object.assign(CommandBar.prototype, {
   _servicePorts(resource) {
     const ports = resource.spec?.ports || [];
     if (!ports.length) return '<none>';
+    const type = resource.spec?.type || 'ClusterIP';
+    const allocatesNodePort = type === 'NodePort' || type === 'LoadBalancer';
+    const namespace = resource.metadata?.namespace || '';
+    const name = resource.metadata?.name || '';
     return ports
-      .map((port) => {
+      .map((port, index) => {
         const value = port.port ?? port.targetPort ?? '';
-        if (port.nodePort) return `${value}:${port.nodePort}/${port.protocol || 'TCP'}`;
+        // NodePort/LoadBalancer Services get an allocated nodePort from the
+        // 30000-32767 range; `oc get svc` prints `80:31234/TCP`.
+        const nodePort =
+          port.nodePort ||
+          (allocatesNodePort
+            ? 30000 + (stableHash(`${namespace}/${name}/${index}`, 2767) >>> 0)
+            : null);
+        if (nodePort) return `${value}:${nodePort}/${port.protocol || 'TCP'}`;
         return `${value}/${port.protocol || 'TCP'}`;
       })
       .join(',');
@@ -5502,6 +5521,20 @@ Object.assign(CommandBar.prototype, {
         ];
       case 'Deployment':
         return [
+          {
+            header: 'CONTAINERS',
+            value: (resource) =>
+              this._containerList(resource)
+                .map((container) => container.name)
+                .join(',') || '<none>',
+          },
+          {
+            header: 'IMAGES',
+            value: (resource) =>
+              this._containerList(resource)
+                .map((container) => container.image)
+                .join(',') || '<none>',
+          },
           {
             header: 'SELECTOR',
             value: (resource) => this._selectorString(resource.spec?.selector),
@@ -5607,14 +5640,30 @@ Object.assign(CommandBar.prototype, {
 
   _buildDuration(resource) {
     const status = resource.status || {};
-    if (status.startTimestamp && status.completionTimestamp) {
-      return formatDuration(
-        new Date(status.completionTimestamp).getTime() - new Date(status.startTimestamp).getTime()
-      );
+    const start = status.startTimestamp || status.startTime;
+    const end = status.completionTimestamp || status.completionTime;
+    if (start && end) {
+      return formatDuration(new Date(end).getTime() - new Date(start).getTime());
     }
-    if (status.startTimestamp)
-      return formatDuration(Date.now() - new Date(status.startTimestamp).getTime());
+    if (Number(status.duration) > 0) return formatDuration(Number(status.duration) * 1000);
+    if (start) return formatDuration(Date.now() - new Date(start).getTime());
     return '0s';
+  },
+
+  /**
+   * `FROM` column for Build/BuildConfig rows: the builder image tag only.
+   * `oc new-build nodejs:20-ubi9~https://…` stores the combined token in some
+   * code paths; real oc prints `nodejs:20-ubi9` (#36).
+   */
+  _buildSourceLabel(resource) {
+    const strategy = resource.spec?.strategy || {};
+    const source = resource.spec?.source || {};
+    let from = strategy.sourceStrategy?.from?.name || '';
+    if (!from && strategy.dockerStrategy) from = 'Dockerfile';
+    if (!from && source.git?.uri) from = 'Git';
+    from = String(from).split('~')[0];
+    from = from.replace(/^(?:openshift|openshift-config)\//, '');
+    return from || '<none>';
   },
 
   /** Cells for the given kind keyed by the registry column headers. */
@@ -5719,7 +5768,7 @@ Object.assign(CommandBar.prototype, {
         return {
           NAME: name,
           SCHEDULE: resource.spec?.schedule || '0 0 * * *',
-          TIMEZONE: resource.spec?.timeZone || '',
+          TIMEZONE: resource.spec?.timeZone || '<none>',
           SUSPEND: String(Boolean(resource.spec?.suspend)),
           ACTIVE: String(active),
           'LAST SCHEDULE': last ? formatAge(last) : '<none>',
@@ -5978,25 +6027,22 @@ Object.assign(CommandBar.prototype, {
       }
       case 'BuildConfig': {
         const strategy = resource.spec?.strategy || {};
-        const source = resource.spec?.source || {};
         return {
           NAME: name,
           TYPE: strategy.type || 'Source',
-          FROM: strategy.sourceStrategy?.from?.name || source.git?.uri || '',
+          FROM: this._buildSourceLabel(resource),
           LATEST: String(resource.status?.lastVersion ?? 0),
         };
       }
       case 'Build': {
         const strategy = resource.spec?.strategy || {};
-        const source = resource.spec?.source || {};
+        const started = resource.status?.startTimestamp || resource.status?.startTime;
         return {
           NAME: name,
           TYPE: strategy.type || 'Source',
-          FROM: strategy.sourceStrategy?.from?.name || source.git?.uri || '',
+          FROM: this._buildSourceLabel(resource),
           STATUS: resource.status?.phase || 'New',
-          STARTED: resource.status?.startTimestamp
-            ? formatAge(resource.status.startTimestamp)
-            : '<none>',
+          STARTED: started && resource.status?.phase !== 'New' ? formatAge(started) : '<none>',
           DURATION: this._buildDuration(resource),
         };
       }
@@ -6107,6 +6153,17 @@ Object.assign(CommandBar.prototype, {
       }
       case 'MetalLB': {
         return { NAME: name, AGE: age };
+      }
+      case 'PrometheusRule': {
+        return { NAME: name, AGE: age };
+      }
+      case 'Alertmanager': {
+        return {
+          NAME: name,
+          VERSION: resource.spec?.version || '<none>',
+          REPLICAS: String(resource.status?.replicas ?? resource.spec?.replicas ?? 0),
+          AGE: age,
+        };
       }
       case 'IPAddressPool':
       case 'L2Advertisement': {
@@ -6756,9 +6813,28 @@ Object.assign(CommandBar.prototype, {
   _eventsForResource(kind, resource) {
     const name = resource.metadata?.name;
     const object = `${String(kind).toLowerCase()}/${name}`;
-    return this._syntheticEvents({ namespace: resource.metadata?.namespace }).filter(
-      (event) => event.object === object
-    );
+    const namespace = resource.metadata?.namespace;
+    // Synthetic lifecycle events + runtime controller events (SCC FailedCreate …).
+    const events = [
+      ...this._syntheticEvents({ namespace }),
+      ...this._runtimeEvents({ namespace, allNamespaces: false }),
+    ];
+    const seen = new Set();
+    return events.filter((event) => {
+      const eventObject = event.object || '';
+      let related = eventObject === object;
+      // A Deployment's ReplicaSet controller records FailedCreate/Scaling events
+      // on the ReplicaSet; `oc describe deployment` still surfaces them (#36).
+      if (!related && kind === 'Deployment' && eventObject.startsWith('replicaset/')) {
+        const rsName = eventObject.slice('replicaset/'.length);
+        related = Boolean(name) && rsName.startsWith(`${name}-`);
+      }
+      if (!related) return false;
+      const key = `${event.type}|${event.reason}|${event.message}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
   },
 
   _eventsSection(kind, resource) {
@@ -6782,7 +6858,15 @@ Object.assign(CommandBar.prototype, {
     if (!output || typeof output !== 'string')
       output = this._describeLines(kind, resource).join('\n');
     output = scrubInternalAnnotationsText(output);
-    if (!/^Events:/m.test(output)) output += `\n${this._eventsSection(kind, resource)}`;
+    if (!/^Events:/m.test(output)) {
+      output += `\n${this._eventsSection(kind, resource)}`;
+    } else if (/^Events:\s+<none>\s*$/m.test(output)) {
+      // Rich resource describes hard-code an empty events block; fill it with
+      // the real synthetic/runtime events when there are any (#36).
+      const liveSection = this._eventsSection(kind, resource);
+      if (!/Events:\s+<none>/.test(liveSection))
+        output = output.replace(/^Events:\s+<none>\s*$/m, liveSection);
+    }
     return output;
   },
 
@@ -7698,14 +7782,17 @@ Object.assign(CommandBar.prototype, {
         )
       );
     }
-    const rows = objects.map((object) => [
-      object.metadata.name,
-      object.status.phase,
-      this._creationAge(
-        projects.find((project) => project.metadata?.name === object.metadata.name)
-      ),
-    ]);
-    return this._ok(padTable(['NAME', 'STATUS', 'AGE'], rows));
+    const showLabels = Boolean(flags['show-labels']);
+    const headers = ['NAME', 'STATUS', 'AGE'];
+    if (showLabels) headers.push('LABELS');
+    const rows = objects.map((object) => {
+      const project = projects.find((entry) => entry.metadata?.name === object.metadata.name);
+      const row = [object.metadata.name, object.status.phase, this._creationAge(project)];
+      if (showLabels) row.push(this._labelString(project) || '<none>');
+      return row;
+    });
+    const table = padTable(headers, rows);
+    return this._ok(flags['no-headers'] ? table.split('\n').slice(1).join('\n') : table);
   },
 
   _cmdGetAll({ flags, output, allNamespaces, namespace }) {
@@ -8005,8 +8092,21 @@ Object.assign(CommandBar.prototype, {
       const entries = tags.length ? tags : [{ tag: 'latest' }];
       for (const tag of entries) {
         const tagName = tag.tag || tag.name;
-        const reference = tag.items?.[0]?.dockerImageReference || `${repo}:${tagName}`;
-        const imageName = tag.items?.[0]?.image || this._imageDigest(reference);
+        const item = tag.items?.[0] || {};
+        // Real `oc get istag` prints the immutable digest reference
+        // (`repo@sha256:…`), never the mutable `:latest` tag.
+        const dockerRef = item.dockerImageReference || `${repo}:${tagName}`;
+        const digestMatch = String(dockerRef).includes('@sha256:')
+          ? String(dockerRef).slice(String(dockerRef).indexOf('@'))
+          : '';
+        const reference =
+          item.image && /^sha256:/.test(String(item.image))
+            ? `${String(dockerRef)
+                .split('@')[0]
+                .replace(/:[^/:]+$/, '')}@${item.image}`
+            : dockerRef || `${repo}:${tagName}`;
+        void digestMatch;
+        const imageName = item.image || this._imageDigest(reference);
         const updated =
           tag.updated || tag.items?.[0]?.created || stream.metadata?.creationTimestamp;
         objects.push({
@@ -8170,45 +8270,108 @@ Object.assign(CommandBar.prototype, {
   },
 
   _getEndpointsView({ flags, allNamespaces, namespace, name }) {
+    const output = this._outputFormat(flags);
     let services = this._resources('Service');
     if (!allNamespaces)
       services = services.filter((service) => service.metadata?.namespace === namespace);
-    const rows = [];
+    if (name) services = services.filter((service) => service.metadata?.name === name);
+    const endpointsObjects = [];
     for (const service of services) {
-      if (name && service.metadata?.name !== name) continue;
       const selector = service.spec?.selector || {};
-      const pods = this._getKindList('Pod').filter(
-        (pod) =>
-          pod.metadata?.namespace === service.metadata?.namespace &&
-          Object.entries(selector).every(
-            ([key, value]) => (pod.metadata?.labels || {})[key] === value
-          )
-      );
+      const pods = this._getKindList('Pod')
+        .filter(
+          (pod) =>
+            pod.metadata?.namespace === service.metadata?.namespace &&
+            Object.keys(selector).length > 0 &&
+            Object.entries(selector).every(
+              ([key, value]) => (pod.metadata?.labels || {})[key] === value
+            ) &&
+            (pod.status?.phase || pod.phase) === 'Running'
+        )
+        .sort((a, b) => String(a.metadata?.name).localeCompare(String(b.metadata?.name)));
+      // A Service's Endpoints object is one row: every ready address:port pair.
+      const subsets = [];
       for (const port of service.spec?.ports || []) {
-        const portName = port.name || `${port.port}-tcp`;
-        if (!pods.length) {
-          rows.push([service.metadata?.name, `<none>`, portName, '<none>', '<none>']);
-          continue;
-        }
+        const targetPort = port.targetPort ?? port.port;
+        const addresses = [];
         for (const pod of pods) {
-          rows.push([
-            service.metadata?.name,
-            `<none>`,
-            portName,
-            pod.status?.podIP || '10.128.0.1',
-            `${port.targetPort || port.port}/TCP`,
-          ]);
+          const podIp = pod.status?.podIP || pod.ip;
+          if (!podIp) continue;
+          addresses.push({ ip: String(podIp) });
+        }
+        if (addresses.length) {
+          subsets.push({
+            addresses,
+            ports: [
+              {
+                name: port.name,
+                port: Number.isFinite(Number(targetPort)) ? Number(targetPort) : port.port,
+                protocol: port.protocol || 'TCP',
+              },
+            ],
+          });
         }
       }
-      if (!service.spec?.ports?.length)
-        rows.push([service.metadata?.name, '<none>', '<none>', '<none>', '<none>']);
+      endpointsObjects.push({
+        apiVersion: 'v1',
+        kind: 'Endpoints',
+        metadata: {
+          name: service.metadata?.name,
+          namespace: service.metadata?.namespace,
+          creationTimestamp: service.metadata?.creationTimestamp,
+          labels: { ...(service.metadata?.labels || {}) },
+        },
+        subsets,
+      });
     }
-    if (!rows.length) {
+    if (!endpointsObjects.length) {
+      if (name) return this._err(`Error from server (NotFound): endpoints "${name}" not found`);
       return this._ok(
         allNamespaces ? 'No resources found.' : `No resources found in ${namespace} namespace.`
       );
     }
-    return this._ok(padTable(['NAME', 'ENDPOINTS', 'PORT', 'ADDRESS', 'TARGET PORT'], rows));
+    if (output.format === 'name') {
+      return this._ok(
+        endpointsObjects.map((object) => `endpoints/${object.metadata.name}`).join('\n')
+      );
+    }
+    if (output.format === 'yaml' || output.format === 'json') {
+      const subject =
+        name && endpointsObjects.length === 1
+          ? endpointsObjects[0]
+          : { apiVersion: 'v1', kind: 'EndpointsList', items: endpointsObjects };
+      if (output.format === 'json') return this._ok(JSON.stringify(subject, null, 4));
+      if (name && endpointsObjects.length === 1) return this._ok(toYamlDocument(subject));
+      return this._ok(endpointsObjects.map((object) => toYamlDocument(object)).join('\n---\n'));
+    }
+    if (output.format === 'jsonpath') {
+      if (!output.arg)
+        return this._err(
+          `error: jsonpath requires a template, e.g. -o jsonpath='{.items[*].subsets[*].addresses[*].ip}'`
+        );
+      const subject =
+        name && endpointsObjects.length === 1
+          ? endpointsObjects[0]
+          : { kind: 'List', items: endpointsObjects };
+      return this._ok(evaluateJsonPath(subject, output.arg));
+    }
+    const headers = allNamespaces
+      ? ['NAMESPACE', 'NAME', 'ENDPOINTS', 'AGE']
+      : ['NAME', 'ENDPOINTS', 'AGE'];
+    const rows = endpointsObjects.map((object) => {
+      const addresses = (object.subsets || []).flatMap((subset) =>
+        (subset.addresses || []).flatMap((address) =>
+          (subset.ports || []).map((port) => `${address.ip}:${port.port}`)
+        )
+      );
+      return [
+        ...(allNamespaces ? [object.metadata.namespace || ''] : []),
+        object.metadata.name,
+        addresses.join(',') || '<none>',
+        this._creationAge(object),
+      ];
+    });
+    return this._ok(padTable(headers, rows));
   },
 
   _cmdGetEvents(tokens) {
@@ -9342,6 +9505,7 @@ Object.assign(CommandBar.prototype, {
         'cert',
         'key',
         'ca-cert',
+        'dest-ca-cert',
         'external-name',
         'target-port',
         'port',
@@ -10334,6 +10498,20 @@ Object.assign(CommandBar.prototype, {
           warnings
         );
     }
+    // Real `oc create route passthrough` always pins route.spec.port to the
+    // Service's targetPort (forcePort), so a TLS Service on 443:8443 shows
+    // PORT 8443 — not the (synthetic) service port name `http` (#36).
+    if (termination === 'passthrough' && options.port === undefined) {
+      const service = this._findResource('Service', serviceName, {
+        namespace: flags.namespace,
+        explicitNamespace: Boolean(flags.namespace),
+        allowOtherNamespaces: false,
+      });
+      const servicePort = service?.spec?.ports?.[0];
+      if (servicePort) {
+        options.port = String(servicePort.targetPort ?? servicePort.port);
+      }
+    }
     const ge = this.gameEngine;
     if (ge && typeof ge.createRoute === 'function') {
       const result = ge.createRoute(options);
@@ -10986,35 +11164,138 @@ Object.assign(CommandBar.prototype, {
     for (const entry of this._arrayFlag(flags, 'remove')) remove.push(String(entry));
     const fromList = this._arrayFlag(flags, 'from').map((entry) => String(entry));
     const ge = this.gameEngine;
-    if (flags.list) {
-      if (ge && typeof ge.setEnv === 'function') {
-        const result = ge.setEnv(kind, name, { namespace, list: true, container: flags.container });
-        if (result.success === false) return this._err(result.message);
-        const containerName = flags.container || 'main';
-        const lines = [`# ${this._resourceRef(kind)}/${name}, container ${containerName}`];
-        for (const entry of result.env || []) {
-          lines.push(
-            entry.valueFrom
-              ? `${entry.name}=<from ${Object.keys(entry.valueFrom)[0]}>`
-              : `${entry.name}=${entry.value}`
-          );
-        }
-        if ((result.env || []).length === 0) lines.push('<none>');
-        return this._ok(lines.join('\n'));
+    const prefix = flags.prefix && flags.prefix !== true ? String(flags.prefix) : '';
+
+    /** Env arrays of the target containers (workloads and BuildConfigs). */
+    const envArraysForSpec = (spec) => {
+      if (kind === 'BuildConfig') {
+        const strategy = spec.strategy || {};
+        const containerStrategy =
+          strategy.sourceStrategy ||
+          strategy.dockerStrategy ||
+          strategy.customStrategy ||
+          (strategy.sourceStrategy = {});
+        containerStrategy.env = containerStrategy.env || [];
+        return [containerStrategy.env];
       }
-      return this._err('error: environment variable listing is not available in this build');
+      const containers = spec.template?.spec?.containers || spec.containers || [];
+      const targets =
+        flags.container && flags.container !== true
+          ? containers.filter((container) => container.name === flags.container)
+          : containers;
+      return targets.map((container) => {
+        container.env = container.env || [];
+        return container.env;
+      });
+    };
+
+    /** Env name real oc derives from a Secret/ConfigMap key (upper-cased, valid chars). */
+    const envNameForKey = (key) =>
+      `${prefix}${String(key)
+        .replace(/[^A-Za-z0-9_]/g, '_')
+        .toUpperCase()}`;
+
+    if (flags.list) {
+      const resource = this._findResource(kind, name, {
+        namespace: flags.namespace,
+        explicitNamespace: Boolean(flags.namespace),
+        allowPrefix: false,
+      });
+      if (!resource) return this._err(this._notFoundMessage(kind, name));
+      const spec = JSON.parse(JSON.stringify(resource.spec || {}));
+      const arrays = envArraysForSpec(spec);
+      const resourceContainers =
+        kind === 'BuildConfig' ? [] : spec.template?.spec?.containers || spec.containers || [];
+      const containerName =
+        flags.container && flags.container !== true
+          ? String(flags.container)
+          : kind === 'BuildConfig'
+            ? spec.strategy?.sourceStrategy?.from?.name || 'main'
+            : resourceContainers[0]?.name || this._containerList(resource)[0]?.name || 'main';
+      const lines = [`# ${this._resourceRef(kind)}/${name}, container ${containerName}`];
+      let count = 0;
+      for (const envArray of arrays) {
+        for (const entry of envArray) {
+          count += 1;
+          const valueFrom = entry.valueFrom || {};
+          if (valueFrom.secretKeyRef) {
+            lines.push(
+              `# ${entry.name} from secret ${valueFrom.secretKeyRef.name}, key ${valueFrom.secretKeyRef.key}`
+            );
+          } else if (valueFrom.configMapKeyRef) {
+            lines.push(
+              `# ${entry.name} from configmap ${valueFrom.configMapKeyRef.name}, key ${valueFrom.configMapKeyRef.key}`
+            );
+          } else if (valueFrom.fieldRef) {
+            lines.push(`# ${entry.name} from field ${valueFrom.fieldRef.fieldPath}`);
+          } else {
+            lines.push(`${entry.name}=${entry.value}`);
+          }
+        }
+      }
+      if (count === 0) lines.push('<none>');
+      return this._ok(lines.join('\n'));
     }
     if (!Object.keys(env).length && !remove.length && !fromList.length) {
       return this._err(
         'error: at least one environment variable must be provided\n\n  oc set env <resource>/<name> KEY=VALUE [--from=configmap/name] [--remove=KEY] [--list]'
       );
     }
-    if (ge && typeof ge.setEnv === 'function') {
+
+    // Real oc reads each --from Secret/ConfigMap and creates one explicit env
+    // entry per key with a secretKeyRef/configMapKeyRef and an upper-cased name
+    // (it does NOT add an envFrom block):
+    //   $ oc set env deploy/app --from=secret/db-secret
+    //   -> PASSWORD = valueFrom.secretKeyRef{name: db-secret, key: password}
+    const fromEntries = [];
+    for (const fromRef of fromList) {
+      const separator = fromRef.indexOf('/');
+      if (separator <= 0) {
+        return this._err(
+          `error: --from must be of the form <secret|configmap>/<name>: "${fromRef}"`
+        );
+      }
+      const sourceKindToken = fromRef.slice(0, separator).toLowerCase();
+      const sourceName = fromRef.slice(separator + 1);
+      const sourceKind = sourceKindToken.startsWith('secret')
+        ? 'Secret'
+        : sourceKindToken.startsWith('configmap') || sourceKindToken.startsWith('cm')
+          ? 'ConfigMap'
+          : null;
+      if (!sourceKind) {
+        return this._err(
+          `error: unsupported --from source "${sourceKindToken}": use secret/<name> or configmap/<name>`
+        );
+      }
+      const source = this._findResource(sourceKind, sourceName, {
+        namespace: flags.namespace,
+        explicitNamespace: Boolean(flags.namespace),
+        allowPrefix: false,
+      });
+      if (!source) return this._err(this._notFoundMessage(sourceKind, sourceName));
+      const data =
+        sourceKind === 'Secret'
+          ? Object.keys(source.spec?.data || source.data || {})
+          : Object.keys(source.spec?.data || {});
+      for (const key of data) {
+        fromEntries.push({
+          name: envNameForKey(key),
+          valueFrom:
+            sourceKind === 'Secret'
+              ? { secretKeyRef: { name: sourceName, key } }
+              : { configMapKeyRef: { name: sourceName, key } },
+        });
+      }
+    }
+
+    // Keep the engine path for plain BuildConfig env mutations (strategy env),
+    // but handle `--from` here: oc creates explicit per-key entries, and the
+    // engine's legacy `envFrom` behaviour is the issue #35 bug.
+    if (kind === 'BuildConfig' && !fromList.length && ge && typeof ge.setEnv === 'function') {
       const result = ge.setEnv(kind, name, {
         namespace,
         env,
         remove,
-        from: fromList[0] || null,
         container: flags.container,
         prefix: flags.prefix,
         overwrite: true,
@@ -11022,25 +11303,46 @@ Object.assign(CommandBar.prototype, {
       if (result.success === false) return this._err(result.message);
       return this._ok(`${this._resourceRef(kind)}/${name} updated`);
     }
+
     const result = this._updateResource(
       kind,
       name,
-      (spec) => {
-        const containers = spec.template?.spec?.containers || spec.containers || [];
-        const targets = flags.container
-          ? containers.filter((container) => container.name === flags.container)
-          : containers;
-        if (!targets.length)
-          return { error: this._err(`error: container "${flags.container || 'main'}" not found`) };
-        for (const container of targets) {
-          container.env = container.env || [];
+      (spec, resource) => {
+        const target = kind === 'BuildConfig' ? [] : spec.template?.spec?.containers;
+        if (kind !== 'BuildConfig' && !(target || spec.containers)?.length) {
+          return {
+            error: this._err(`error: container "${flags.container || 'main'}" not found`),
+          };
+        }
+        const arrays = envArraysForSpec(spec);
+        if (!arrays.length) {
+          return {
+            error: this._err(`error: container "${flags.container || 'main'}" not found`),
+          };
+        }
+        for (const envArray of arrays) {
           for (const [key, value] of Object.entries(env)) {
-            const existing = container.env.find((entry) => entry.name === key);
-            if (existing) existing.value = value;
-            else container.env.push({ name: key, value });
+            const existing = envArray.find((entry) => entry.name === key);
+            if (existing) {
+              delete existing.valueFrom;
+              existing.value = value;
+            } else envArray.push({ name: key, value });
           }
-          for (const key of remove)
-            container.env = container.env.filter((entry) => entry.name !== key);
+          for (const entry of fromEntries) {
+            const existing = envArray.find((candidate) => candidate.name === entry.name);
+            if (existing) {
+              delete existing.value;
+              existing.valueFrom = JSON.parse(JSON.stringify(entry.valueFrom));
+            } else envArray.push(JSON.parse(JSON.stringify(entry)));
+          }
+          for (const key of remove) {
+            const index = envArray.findIndex((entry) => entry.name === key);
+            if (index >= 0) envArray.splice(index, 1);
+          }
+        }
+        // `oc set env` rolls the workload out (new pod template hash).
+        if (resource) {
+          resource._rollout = { reason: 'set env', startedAt: Date.now(), remaining: null };
         }
         return {};
       },
@@ -12443,14 +12745,14 @@ Object.assign(CommandBar.prototype, {
       run: name,
       ...parseCommaAssignments(flags.labels && flags.labels !== true ? String(flags.labels) : []),
     };
-    // Real `kubectl/oc run <name> --image=…` names the container after the run name.
+    // Real `kubectl/oc run <name> --image=…` names the container after the run
+    // name and sets NO resource requests/limits: a project quota that tracks
+    // requests.cpu/requests.memory therefore rejects the Pod with
+    // "must specify requests.cpu,requests.memory" when no LimitRange defaults it
+    // (the lab 12 exam trap). LimitRanger admission fills defaults in later.
     const container = {
       name,
       image,
-      resources: {
-        requests: { cpu: '100m', memory: '128Mi' },
-        limits: { cpu: '500m', memory: '512Mi' },
-      },
     };
     if (port) container.ports = [{ containerPort: port, protocol: 'TCP' }];
     if (Object.keys(env).length)
@@ -12466,6 +12768,54 @@ Object.assign(CommandBar.prototype, {
         restartPolicy,
       },
     };
+    // `--overrides` takes a strategic-merge-patch-style JSON fragment that is
+    // applied to the generated object before it is sent to the API server, so
+    // admission (SCC) sees the overridden spec. A runAsUser: 0 override must be
+    // rejected exactly like a manifest with securityContext.runAsUser: 0.
+    if (flags.overrides && flags.overrides !== true) {
+      let overrides;
+      try {
+        overrides = JSON.parse(String(flags.overrides));
+      } catch (error) {
+        return this._err(
+          `error: invalid JSON passed to --overrides: ${error && error.message ? error.message : error}`
+        );
+      }
+      if (!overrides || typeof overrides !== 'object' || Array.isArray(overrides)) {
+        return this._err('error: --overrides must be a JSON object');
+      }
+      const deepMergeObject = (target, patch) => {
+        for (const [key, value] of Object.entries(patch || {})) {
+          if (value && typeof value === 'object' && !Array.isArray(value)) {
+            target[key] = target[key] && typeof target[key] === 'object' ? target[key] : {};
+            deepMergeObject(target[key], value);
+          } else {
+            target[key] = value;
+          }
+        }
+        return target;
+      };
+      deepMergeObject(object, overrides);
+      // Overrides may supply metadata; the generated name/namespace stay unless
+      // explicitly replaced (real oc honours metadata overrides).
+      object.metadata.name = object.metadata.name || name;
+    }
+    // Quota admission for direct Pod creation (e.g. lab 12's "pods without
+    // requests are forbidden when the quota has no LimitRange defaults"). The
+    // simulation exposes the same admission check its controllers use; the API
+    // is optional so `_cmdRun` keeps working when it is absent.
+    const ge = this.gameEngine;
+    const targetNamespace = object.metadata.namespace || namespace;
+    const podAdmission = ge?.simulation?.podAdmissionForCreate?.(
+      object.spec,
+      targetNamespace,
+      object.metadata.name || name
+    );
+    if (podAdmission) {
+      return this._err(
+        `Error from server (Forbidden): pods "${object.metadata.name || name}" ${podAdmission}`
+      );
+    }
     const result = this._applyObject(object);
     if (result.error) return result.error;
     if (name.toLowerCase() === 'konami') {
@@ -12910,7 +13260,9 @@ Object.assign(CommandBar.prototype, {
       const configMap = this.cluster.getByName('ConfigMap', volume.configMap.name, namespace);
       addData(configMap?.spec?.data, volume.configMap.items, false);
     } else if (volume.secret) {
-      const secret = this.cluster.getByName('Secret', volume.secret.name, namespace);
+      // Pod volume spec uses `secretName` (projected sources use `name`).
+      const secretName = volume.secret.secretName || volume.secret.name;
+      const secret = this.cluster.getByName('Secret', secretName, namespace);
       addData(secret?.spec?.data, volume.secret.items, true);
     } else if (volume.projected) {
       for (const source of volume.projected.sources || []) {
@@ -13851,18 +14203,32 @@ Object.assign(CommandBar.prototype, {
     const ge = this.gameEngine;
     const namespace = this._namespaceFromFlags(flags);
     const source = positionals[0];
+    // Real oc accepts `oc new-build <image-stream>~<git-url>`: split the two.
+    let sourceImageStream = undefined;
+    let sourceCode = undefined;
+    if (source && String(source).includes('~')) {
+      const [beforeImage, afterImage] = String(source).split('~');
+      sourceImageStream = beforeImage;
+      sourceCode = afterImage;
+    }
+    const imageStreamArg = sourceImageStream || source;
     const code =
       flags.code && flags.code !== true
         ? String(flags.code)
-        : source && (/^(https?:\/\/|git@)/.test(source) || source === '.')
-          ? source
-          : undefined;
-    const imageStream =
+        : sourceCode !== undefined
+          ? sourceCode
+          : source && (/^(https?:\/\/|git@)/.test(source) || source === '.')
+            ? source
+            : undefined;
+    let imageStream =
       flags['image-stream'] && flags['image-stream'] !== true
         ? String(flags['image-stream'])
         : source && !code
-          ? source
+          ? imageStreamArg
           : undefined;
+    // `openshift/nodejs:20-ubi9` → tag `nodejs:20-ubi9` (namespace defaults to openshift).
+    if (imageStream)
+      imageStream = String(imageStream).replace(/^(?:openshift|openshift-config)\//, '');
     const name = flags.name && flags.name !== true ? String(flags.name) : undefined;
     if (!code && !imageStream && !flags.dockerfile && !flags.binary) {
       return this._err(
@@ -13915,24 +14281,89 @@ Object.assign(CommandBar.prototype, {
       if (result.success === false) return this._err(result.message);
       const lines = [result.message || `build.build.openshift.io/${buildConfigName}-1 started`];
       if (flags.follow) {
-        lines.push(
-          '',
-          ...this._buildLogLines(
-            result.build || {
-              metadata: { name: buildConfigName },
-              status: { phase: 'Running' },
-              spec: {},
-            }
-          ),
-          '',
-          '--> Success'
-        );
+        // Real `oc start-build --follow` streams the build logs and only prints
+        // `--> Success` once the build reaches Complete (a build that is still
+        // Running must not report success). The command returns immediately with
+        // the started line; the log chunks are appended by a poller as the
+        // controllers advance the Build resource.
+        const buildName = result.build?.metadata?.name || `${buildConfigName}-1`;
+        this._watchBuildFollow(buildName, namespace);
       } else if (result.build) {
         lines.push("Run 'oc logs -f bc/" + buildConfigName + "' to follow the build logs.");
       }
       return this._ok(lines.join('\n'));
     }
     return this._err('error: oc start-build requires the game engine to be initialised');
+  },
+
+  /**
+   * Follow an in-flight Build like `oc start-build --follow` / `oc logs -f`:
+   * append log chunks as the Build moves through Running and only print
+   * `--> Success` when it reaches Complete (issue #35).
+   * @param {string} buildName
+   * @param {string} namespace
+   */
+  _watchBuildFollow(buildName, namespace) {
+    this._clearBuildWatches();
+    const state = { stopped: false, timer: null, phase: null, startedAt: Date.now() };
+    this._buildWatches = [state];
+    const finish = () => {
+      if (state.stopped) return;
+      state.stopped = true;
+      if (state.timer) clearInterval(state.timer);
+      this._buildWatches = (this._buildWatches || []).filter((entry) => entry !== state);
+    };
+    const findBuild = () =>
+      this._getKindList('Build').find(
+        (candidate) =>
+          candidate.metadata?.name === buildName &&
+          candidate.metadata?.namespace === (namespace || this.currentProject)
+      ) || null;
+    const poll = () => {
+      if (state.stopped) return;
+      const build = findBuild();
+      if (!build) {
+        if (Date.now() - state.startedAt > 180000) finish();
+        return;
+      }
+      const phase = build.status?.phase || 'New';
+      if (phase === state.phase) return;
+      const previousPhase = state.phase;
+      state.phase = phase;
+      if (phase === 'New' || phase === 'Pending') return;
+      const logLines = this._buildLogLines(build);
+      if (phase === 'Running') {
+        // Stream the logs produced so far; no success claim while running.
+        this._appendOutput(logLines.join('\n'), 'text-white/70');
+        return;
+      }
+      // Terminal phase — append the remaining log lines exactly once. When the
+      // Running chunk was already shown, the shared head (Cloning … STEP 4/5)
+      // was already printed, so only the completion tail is appended.
+      const tail = previousPhase === 'Running' ? logLines.slice(11) : logLines;
+      this._appendOutput(tail.join('\n'), phase === 'Failed' ? 'text-red-400' : 'text-white/70');
+      if (phase === 'Complete') {
+        this._appendOutput('--> Success', 'text-green-400/80');
+      } else if (phase === 'Failed') {
+        this._appendOutput(
+          `error: build ${build.metadata?.name || buildName} failed`,
+          'text-red-400'
+        );
+      }
+      finish();
+    };
+    state.timer = setInterval(poll, 350);
+    // First sample on the next macrotask so the command's own output is printed
+    // before any follow-up log lines.
+    setTimeout(poll, 50);
+  },
+
+  _clearBuildWatches() {
+    for (const state of this._buildWatches || []) {
+      state.stopped = true;
+      if (state.timer) clearInterval(state.timer);
+    }
+    this._buildWatches = [];
   },
 
   _cmdCancelBuild(tokens) {
@@ -14944,7 +15375,7 @@ Object.assign(CommandBar.prototype, {
   /** Run `oc debug node/x -- <command>` without entering the session. */
   _runDebugOneShot(nodeName, commandLine) {
     const session = { kind: 'node', name: nodeName, chroot: false, uid: null };
-    this._debugSession = null; // the one-shot form always exits
+    this._debugSession = null; // the one-shot form always exits afterwards
     const header = [
       `Creating debug namespace/openshift-debug-node-${nodeName} ...`,
       `Starting pod/${nodeName}-debug ...`,
@@ -14954,10 +15385,22 @@ Object.assign(CommandBar.prototype, {
     if (parts.length === 0) {
       return this._ok([...header, `(node/${nodeName}) $ `].join('\n'));
     }
+    // `-- chroot /host` with no trailing command opens the interactive host
+    // shell, like `oc debug node/x -- chroot /host` on a real cluster.
+    if (parts.length === 1 && /^chroot\s+\/host$/i.test(parts[0])) {
+      session.chroot = true;
+      this._debugSession = session;
+      return this._ok([...header, '', `${this._debugPrompt()} `].join('\n'));
+    }
     const outputs = [];
     let failed = false;
     for (const part of parts) {
-      const outcome = this._runDebugCommandForSession(session, part);
+      // The one-shot argument list runs in the debug pod, so `chroot /host …`
+      // switches the subsequent commands to the node host shell.
+      if (/^chroot\s+\/host\b/i.test(part)) session.chroot = true;
+      const outcome = session.chroot
+        ? this._runDebugHostCommand(session, part)
+        : this._runDebugContainerCommand(session, part);
       if (outcome.message) outputs.push(outcome.message);
       if (outcome.error) {
         failed = true;
@@ -16713,13 +17156,18 @@ Object.assign(CommandBar.prototype, {
       }
       if (resolved && resolved.found) {
         name = `${resolved.imageStream.metadata?.name}:${resolved.tag}`;
-        pullSpec =
-          resolved.dockerImageReference || `${INTERNAL_REGISTRY}/${namespace}/${repoAndTag}:${tag}`;
         const item = resolved.tagEntry?.items?.[0] || {};
         digest =
           item.image && /^sha256:/.test(String(item.image))
             ? String(item.image)
-            : this._imageDigest(pullSpec);
+            : this._imageDigest(
+                resolved.dockerImageReference ||
+                  `${INTERNAL_REGISTRY}/${namespace}/${repoAndTag}:${tag}`
+              );
+        // An ImageStreamTag points at the internal registry copy of the image:
+        // `image-registry.openshift-image-registry.svc:5000/<ns>/<is>@sha256:…`.
+        const streamName = resolved.imageStream.metadata?.name || repoAndTag;
+        pullSpec = `${INTERNAL_REGISTRY}/${resolved.imageStream.metadata?.namespace || namespace}/${streamName}@${digest}`;
         created = item.created || created;
       } else {
         name = `${repoAndTag}:${tag}`;
@@ -16734,6 +17182,10 @@ Object.assign(CommandBar.prototype, {
       name = raw;
     }
     const imageName = name;
+    // The container Command is image-specific: S2I language images run
+    // /usr/libexec/s2i/run, only the Apache/nginx images run httpd directly.
+    const imageToken = `${repoToken} ${name} ${pullSpec}`.toLowerCase();
+    const isHttpd = /nginx|httpd|apache/.test(imageToken);
     return {
       name: imageName,
       reference: raw,
@@ -16745,8 +17197,8 @@ Object.assign(CommandBar.prototype, {
       layers: 5,
       os: 'linux',
       arch: 'amd64',
-      entrypoint: '/usr/bin/run-httpd',
-      command: '/usr/bin/run-httpd',
+      entrypoint: isHttpd ? '/usr/bin/run-httpd' : '/usr/libexec/s2i/entrypoint',
+      command: isHttpd ? '/usr/bin/run-httpd' : '/usr/libexec/s2i/run',
       workingDir: '/opt/app-root/src',
       user: '1001',
       env: [

@@ -152,6 +152,7 @@ const deployment = (name, options = {}) => ({
             name: options.containerName || 'main',
             image: options.image || 'quay.io/openshift/origin-hello-openshift:latest',
             ports: [{ containerPort: 8080, name: 'http' }],
+            ...(options.env ? { env: options.env } : {}),
             ...(options.securityContext ? { securityContext: options.securityContext } : {}),
             ...(options.resources ? { resources: options.resources } : {}),
           },
@@ -168,6 +169,38 @@ const service = (name, options = {}) => ({
     type: options.type || 'ClusterIP',
     selector: options.selector || { app: options.app || name },
     ports: [{ name: 'http', port: options.port ?? 8080, targetPort: options.targetPort ?? 8080 }],
+  },
+});
+
+/**
+ * Batch/v1 Job starting resource. `command` is the container argv, so the
+ * simulator can render its real stdout in `oc logs job/<name>` (issue #31).
+ */
+const job = (name, options = {}) => ({
+  kind: 'Job',
+  name,
+  labels: { app: name, 'job-name': name },
+  spec: {
+    ...(options.activeDeadlineSeconds
+      ? { activeDeadlineSeconds: options.activeDeadlineSeconds }
+      : {}),
+    ...(options.estimatedDurationSeconds
+      ? { estimatedDurationSeconds: options.estimatedDurationSeconds }
+      : {}),
+    ...(options.backoffLimit !== undefined ? { backoffLimit: options.backoffLimit } : {}),
+    template: {
+      metadata: { labels: { app: name, 'job-name': name } },
+      spec: {
+        restartPolicy: 'Never',
+        containers: [
+          {
+            name: 'main',
+            image: options.image || 'perl',
+            ...(options.command ? { command: options.command } : {}),
+          },
+        ],
+      },
+    },
   },
 });
 
@@ -324,7 +357,7 @@ const CAMPAIGN_LEVELS = [
     chapter: 1,
     chapterName: 'Manage OpenShift',
     description:
-      'Production OpenShift is about reading symptoms: `oc logs`, `oc describe`, `oc get events`, `oc adm top`, ClusterOperators and ClusterVersion. A hidden CrashLoopBackOff is breaking the web-app Deployment — read the crash reason, fix the workload configuration (not just the Pod), and bring cluster health back to 90%+.',
+      'Production OpenShift is about reading symptoms: `oc logs`, `oc describe`, `oc get events`, `oc adm top`, ClusterOperators and ClusterVersion. A hidden CrashLoopBackOff is breaking the web-app Deployment: its container carries an invalid `APP_MODE` value, so the app exits 1 on startup. Read the crash reason, fix the faulty configuration value (not just the Pod — adding an unrelated env var or restarting the Pod changes nothing), and bring cluster health back to 90%+.',
     examObjectives: [
       'Manage OpenShift Container Platform > Use the web console to manage and configure an OpenShift cluster',
       'Manage OpenShift Container Platform > Examine resources and cluster status',
@@ -341,7 +374,8 @@ const CAMPAIGN_LEVELS = [
       project('ops-lab'),
       deployment('web-app', {
         replicas: 2,
-        image: 'quay.io/openshift/origin-hello-openshift:latest',
+        image: 'quay.io/example/webapp:v2-bad-config',
+        env: [{ name: 'APP_MODE', value: 'debug-invalid' }],
       }),
     ],
     availableResources: ['Project', 'Deployment', 'Pod', 'Service', 'Node'],
@@ -372,12 +406,28 @@ const CAMPAIGN_LEVELS = [
       },
       { type: 'clusterHealth', minPercent: 90, label: 'Restore cluster health to 90% or better' },
     ],
-    incidents: [{ type: 'CrashLoopBackOff', triggerTime: 10, target: 'web-app', severity: 2 }],
+    incidents: [
+      {
+        type: 'CrashLoopBackOff',
+        triggerTime: 10,
+        target: 'web-app',
+        severity: 2,
+        // The Deployment already carries the invalid APP_MODE (seeded above);
+        // the incident only clears when that value is CORRECTED — not when any
+        // other env/annotation changes (issue #31).
+        fix: {
+          env: {
+            name: 'APP_MODE',
+            allowed: ['production', 'prod', 'development', 'dev'],
+          },
+        },
+      },
+    ],
     hints: [
       'Switch projects: `oc project ops-lab`. Then `oc get pods` and click the failing Pod for Inspector → Events.',
-      'Read the crash output: `oc logs <pod> --previous`. Then `oc describe pod <pod>` — the Events section shows Back-off restarting failed container.',
+      'Read the crash output: `oc logs <pod> --previous` — `configuration validation failed: APP_MODE has an unsupported value`. `oc describe pod <pod>` shows a growing restart count and Back-off restarting failed container.',
       'Correlate events: `oc get events --sort-by=.lastTimestamp`, and check cluster operators with `oc get clusteroperators`.',
-      'A CrashLoopBackOff is a symptom, not the cause: `oc rollout restart deployment/web-app` and deleting the Pod only bring the same broken image/command back. Fix the Deployment (correct image, command or env) — or use the Incident panel resolution action — and the incident clears once the container spec really changes.',
+      'Inspect the faulty value: `oc get deployment/web-app -o yaml` — the container env sets `APP_MODE=debug-invalid`. Correct it: `oc set env deployment/web-app APP_MODE=production`. Anything else fails: `oc set env deployment/web-app FOO=bar` (unrelated variable), `oc rollout restart` and deleting the Pod only recreate the same broken configuration, so the incident keeps firing.',
     ],
     starCriteria: { time: 360, efficiency: 0.7, noFailures: false },
     nextLevel: 4,
@@ -1054,7 +1104,7 @@ const CAMPAIGN_LEVELS = [
     chapter: 4,
     chapterName: 'Identity, RBAC & Self-service',
     description:
-      'Developer self-service needs guardrails. Apply a ResourceQuota and LimitRange from the example manifests, create a ClusterResourceQuota that spans projects, set resource requests/limits on the web Deployment, resolve a ResourceQuotaExceeded incident, then publish a project template: generate the bootstrap `project-request` template, add a guardrail object to it, store it in `openshift-config` and point `project.config.openshift.io/cluster` at it.',
+      'Developer self-service needs guardrails. Apply a ResourceQuota and LimitRange from the example manifests, create a ClusterResourceQuota that spans projects, set resource requests/limits on the web Deployment, resolve a ResourceQuotaExceeded incident (the quota is full, so the ReplicaSet cannot create a replacement Pod — no Pod object appears, Used never exceeds Hard), then publish a project template: generate the bootstrap `project-request` template, add a guardrail object to it, store it in `openshift-config` and point `project.config.openshift.io/cluster` at it.',
     examObjectives: [
       'Manage OpenShift Container Platform > Create and delete projects',
       'Enable developer self-service > Configure cluster resource quotas',
@@ -1131,12 +1181,15 @@ const CAMPAIGN_LEVELS = [
       },
     ],
     incidents: [
+      // The incident is injected against the namespace; IncidentEngine binds it
+      // to the ResourceQuota that actually exists (issue #27b).
       { type: 'ResourceQuotaExceeded', triggerTime: 20, target: 'quota-lab', severity: 3 },
     ],
     hints: [
       'Switch projects: `oc project quota-lab`. Apply the example quota and limits: `oc apply -f examples/quota.yaml` and `oc apply -f examples/limitrange.yaml`.',
       'Create the multi-project quota: `oc create clusterquota team-quota --project-label-selector=name=quota-lab --hard=pods=10 --hard=secrets=20`.',
       'Set container resources: `oc set resources deployment/web --limits=cpu=500m,memory=512Mi --requests=cpu=100m,memory=128Mi`.',
+      'Read the quota incident like a real cluster: `oc describe deployment/web -n quota-lab` shows a FailedCreate event ("exceeded quota: compute-quota, requested: pods=1, used: …, limited: …"), `oc get pods` shows NO extra Pending Pod, and `oc describe quota compute-quota` shows Used == Hard for pods (a real cluster never creates a Pod it cannot admit, so Used never exceeds Hard). Raise the guardrail to let the ReplicaSet replace the Pod: `oc patch quota compute-quota --type=merge -p \'{"spec":{"hard":{"pods":"5"}}}\'` then watch `oc get pods -n quota-lab` recover.',
       'Verify: `oc describe quota compute-quota`, `oc describe limits resource-limits`, `oc describe clusterresourcequota team-quota`. Then resolve the quota incident.',
       'Publish a project template: `oc adm create-bootstrap-project-template -o yaml > template.yaml`, add a NetworkPolicy object to the template object list (edit `template.yaml` in the Files panel; the shipped `templates/webapp-template.yaml` shows the object-list shape), then `oc create -f template.yaml -n openshift-config` and check `oc get templates -n openshift-config`.',
       'Point the cluster at the template: `oc edit project.config.openshift.io/cluster` and set `spec.projectRequestTemplate.name: project-request`, then `oc new-project template-check` and confirm the templated object was created. On a real cluster `oc edit` launches `$EDITOR` (vi/vim by default) in the terminal — the simulator opens its manifest editor; practise vim separately for the exam.',
@@ -1320,13 +1373,28 @@ const CAMPAIGN_LEVELS = [
     chapter: 5,
     chapterName: 'Security & Operations',
     description:
-      'Batch workloads run to completion. Create a Job that succeeds, a CronJob that schedules future runs, and fix a JobDeadlineExceeded incident so the batch pipeline finishes reliably.',
+      'Batch workloads run to completion. The nightly `report-batch` Job was created with an `activeDeadlineSeconds` that is far too short, so it reliably fails with DeadlineExceeded. Inspect the failed Job, run a simple Job that really prints its output, repair the broken Job by recreating it with a longer deadline, and schedule recurring work with a CronJob.',
     examObjectives: [
       'Configure application security > Deploy jobs to perform one-time tasks',
       'Configure application security > Configure Kubernetes cron jobs',
     ],
     docsLinks: [DOCS.jobs, DOCS.cli],
-    startingResources: [node('node-1'), node('node-2'), project('batch-lab')],
+    startingResources: [
+      node('node-1'),
+      node('node-2'),
+      project('batch-lab'),
+      // Seeded faulty batch Job (#31): a too-short activeDeadlineSeconds while
+      // the report takes much longer, so the Job fails on its own. The
+      // JobDeadlineExceeded incident targets THIS Job — it never hijacks a Job
+      // the player creates.
+      job('report-batch', {
+        image: 'perl',
+        command: ['/bin/sh', '-c', 'echo "starting report generation"; sleep 600'],
+        activeDeadlineSeconds: 8,
+        estimatedDurationSeconds: 600,
+        backoffLimit: 0,
+      }),
+    ],
     availableResources: ['Project', 'Job', 'CronJob', 'Pod', 'Node'],
     objectives: [
       { type: 'complete', kind: 'Job', count: 1, label: 'Run a Job to phase Complete' },
@@ -1349,13 +1417,13 @@ const CAMPAIGN_LEVELS = [
       },
     ],
     incidents: [
-      { type: 'JobDeadlineExceeded', triggerTime: 30, target: 'report-job', severity: 2 },
+      { type: 'JobDeadlineExceeded', triggerTime: 15, target: 'report-batch', severity: 2 },
     ],
     hints: [
-      'Switch projects: `oc project batch-lab`. Run a one-off Job: `oc create job report-job --image=perl -- perl -e "print 42"`.',
-      'Watch it complete: `oc get jobs,pods`, then `oc logs job/report-job`.',
+      'Switch projects: `oc project batch-lab`, then inspect the broken batch job: `oc get jobs` (report-batch is Failed), `oc describe job report-batch` (condition Failed / reason DeadlineExceeded) and `oc get job report-batch -o yaml` — `activeDeadlineSeconds: 8` is far too short for the report.',
+      'Read its output: `oc logs job/report-batch` (the container was killed while the report was still running). A Failed Job cannot be resumed — raise the deadline by recreating it: `oc delete job report-batch` then `oc create job report-batch --image=perl --active-deadline-seconds=600 -- perl -e "print 42"`. That new Job completes, so the JobDeadlineExceeded incident clears.',
+      'Run a second, simple Job and read its REAL stdout: `oc create job report-job --image=perl -- perl -e "print 42"`; watch `oc get jobs,pods`, then `oc logs job/report-job` prints `42` (the Pod stays around after completion, like on a real cluster).',
       'Schedule recurring work (five-field cron only — `--schedule="every 5 min"` is rejected by the API server, and the first Job only appears at the next scheduled time): `oc create cronjob cleanup --image=busybox --schedule="*/5 * * * *" -- sh -c date`.',
-      'The JobDeadlineExceeded incident means the Job ran past activeDeadlineSeconds and is marked Failed. A Failed Job cannot be resumed: `oc delete job report-job`, then create a replacement with a longer deadline (`oc create job report-job --image=perl -- perl -e "print 42"`) — the incident clears once a replacement Job completes.',
     ],
     starCriteria: { time: 420, efficiency: 0.7, noFailures: false },
     nextLevel: 20,
@@ -1514,7 +1582,26 @@ const CAMPAIGN_LEVELS = [
       },
     ],
     incidents: [
-      { type: 'CrashLoopBackOff', triggerTime: 60, target: 'webapp', severity: 2 },
+      // Capstone CrashLoopBackOff (#31): the incident SEEDS the faulty
+      // configuration into the webapp Deployment (bad image + APP_MODE) when it
+      // fires, then damages the Pods. Resolution requires correcting APP_MODE —
+      // an unrelated env var or `oc rollout restart` does not heal it.
+      {
+        type: 'CrashLoopBackOff',
+        triggerTime: 60,
+        target: 'webapp',
+        severity: 2,
+        seed: {
+          image: 'quay.io/example/webapp:v2-bad-config',
+          env: { name: 'APP_MODE', value: 'debug-invalid' },
+        },
+        fix: {
+          env: {
+            name: 'APP_MODE',
+            allowed: ['production', 'prod', 'development', 'dev'],
+          },
+        },
+      },
       { type: 'NodeNotReady', triggerTime: 120, target: 'worker-1', severity: 3 },
     ],
     hints: [
@@ -1523,7 +1610,7 @@ const CAMPAIGN_LEVELS = [
       'Build: `oc apply -f examples/buildconfig.yaml` (it already outputs ImageStreamTag `webapp:latest`), then `oc start-build webapp --follow` and watch the Build reach Complete.',
       'Security/self-service: `oc create user developer`, `oc adm groups new developers developer`, apply the shipped `examples/default-deny.yaml` (a `networking.k8s.io/v1` NetworkPolicy that selects all pods) with `oc apply -f examples/default-deny.yaml -n prod-platform` — there is no oc create networkpolicy subcommand; use the Files panel New/Import buttons if you want to edit or add manifests.',
       'Install MetalLB the 4.x OLM way: `oc new-project metallb-system`, `oc apply -f examples/operatorgroup.yaml`, edit `examples/subscription.yaml` (spec.name/metadata.name `metallb-operator`, namespace `metallb-system`) and apply it, wait for the CSV `metallb-operator.v0.14.9` (`oc get csv -n metallb-system`) to reach Succeeded, then `oc apply -f examples/metallb.yaml` (MetalLB CR + IP pool + L2 advertisement).',
-      'Finish with a Job (`oc create job report-job --image=perl -- perl -e "print 42"`), a CronJob (`oc create cronjob nightly --image=busybox --schedule="*/5 * * * *" -- sh -c date`), then check `oc status` and the Architecture Advisor in the HUD. The capstone is gated on the scheduled incidents being RESOLVED: CrashLoopBackOff fires 60 s in on webapp and NodeNotReady fires 120 s in on worker-1. Fix the workload / restore the node (or use the Incidents panel resolution actions) and confirm both are gone from the Incidents panel — the level cannot complete while either is still active.',
+      'Finish with a Job (`oc create job report-job --image=perl -- perl -e "print 42"`) and a CronJob (`oc create cronjob nightly --image=busybox --schedule="*/5 * * * *" -- sh -c date`), then check `oc status` and the Architecture Advisor in the HUD. The capstone is gated on the scheduled incidents being RESOLVED: CrashLoopBackOff fires 60 s in on webapp and NodeNotReady fires 120 s in on worker-1. For the CrashLoopBackOff, run `oc logs <pod> -n prod-platform --previous` (the crash names the invalid `APP_MODE`) and correct it with `oc set env deployment/webapp APP_MODE=production -n prod-platform` — an unrelated env var or `oc rollout restart` will NOT clear it. Restore the node (`oc debug node/worker-1`, then `chroot /host systemctl restart kubelet`) and confirm both incidents are gone from the Incidents panel — the level cannot complete while either is still active.',
     ],
     starCriteria: { time: 900, efficiency: 0.6, noFailures: false },
     nextLevel: null,

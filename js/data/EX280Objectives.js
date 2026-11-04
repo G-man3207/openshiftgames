@@ -1256,12 +1256,12 @@ export const EX280_QUICK_LABS = [
     ],
     hints: [
       'kustomization.yaml lists resources and can set namespace, images and replicas.',
-      'On a real cluster, `oc kustomize <dir>` renders the YAML without applying it; in the simulator the Files engine renders on `oc apply -k`.',
+      'Preview a kustomization without applying it: `oc kustomize <dir>` prints the rendered YAML; apply it with `oc apply -k <dir>`.',
     ],
     steps: [
       {
         command: `oc apply -k kustomize/overlays/prod`,
-        text: 'Apply the overlay into the webapp-prod namespace (the Files engine renders the merged Kustomize output; on a real cluster you can preview it with `oc kustomize kustomize/overlays/prod`).',
+        text: 'Preview the rendered overlay with `oc kustomize kustomize/overlays/prod`, then apply it into the webapp-prod namespace with `oc apply -k kustomize/overlays/prod`.',
       },
       {
         command: `oc get deployment -n webapp-prod`,

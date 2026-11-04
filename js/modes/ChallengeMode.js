@@ -406,8 +406,9 @@ const CHALLENGES = [
     availableResources: ['Project', 'Deployment', 'Service', 'Route', 'ConfigMap', 'Secret'],
     hints: [
       'Create both projects first: oc new-project frontend && oc new-project backend',
-      'Deploy each tier with oc new-app --image=quay.io/openshift/origin-hello-openshift:latest --name=<tier> -n <project> (frontend in frontend; backend and database in backend).',
-      'oc new-app creates both a Deployment and a Service. Verify with oc get deploy,svc -n frontend and -n backend',
+      'Deploy the frontend and backend tiers with oc new-app --image=quay.io/openshift/origin-hello-openshift:latest --name=<tier> -n <project> (frontend in frontend; backend in backend).',
+      'Deploy the database tier from the real MySQL image: oc new-app --image=registry.redhat.io/rhel9/mysql-80 --name=database -n backend. It CrashLoopBackOffs until credentials are supplied — oc get pods -n backend shows CrashLoopBackOff and oc logs <pod> -n backend prints "You must either specify the following environment variables: MYSQL_USER, MYSQL_PASSWORD, MYSQL_DATABASE or MYSQL_ROOT_PASSWORD". Fix it the exam way: oc set env deployment/database -n backend MYSQL_ROOT_PASSWORD=secretpw MYSQL_DATABASE=appdb, then watch the new Pods become Running.',
+      'oc new-app creates both a Deployment and a Service; the generated Service exposes the image port (3306/TCP for MySQL, 8080 for the hello-openshift image). Verify with oc get deploy,svc -n frontend and -n backend',
       'Expose the frontend Service: oc expose svc/frontend -n frontend (or oc create route edge...)',
       'A Route is only Admitted when its Service has ready endpoints: oc get route frontend -n frontend -o wide',
     ],
@@ -800,45 +801,53 @@ const CHALLENGES = [
     timeLimit: 300,
     docsLinks: [DOCS.network, DOCS.routes],
     objectives: [
+      // Graded on resulting traffic behaviour (issue #30): the simulator's own
+      // NetworkPolicy evaluator probes reachability, DNS egress and default
+      // isolation, so any correct hand-written policy set passes — the object
+      // names are the learner's choice.
       {
-        type: 'deploy',
-        kind: 'NetworkPolicy',
-        name: 'deny-by-default',
+        type: 'networkPolicy',
+        probe: 'default-deny',
         namespace: 'shop',
-        label: 'Create default-deny NetworkPolicy',
+        label: 'Deny all traffic by default (Ingress and Egress)',
       },
       {
-        type: 'deploy',
-        kind: 'NetworkPolicy',
-        name: 'allow-dns-egress',
+        type: 'networkPolicy',
+        probe: 'dns-egress',
         namespace: 'shop',
+        source: { kind: 'Deployment', name: 'frontend' },
         label: 'Allow DNS egress on port 5353 (dns-default Pod port)',
       },
       {
-        type: 'deploy',
-        kind: 'NetworkPolicy',
-        name: 'allow-frontend-to-backend',
+        type: 'networkPolicy',
+        probe: 'reach',
         namespace: 'shop',
-        label: 'Allow frontend ingress to backend',
+        source: { kind: 'Deployment', name: 'frontend' },
+        target: { kind: 'Service', name: 'backend' },
+        port: 8080,
+        label: 'Allow frontend → backend on port 8080',
       },
       {
-        type: 'deploy',
-        kind: 'NetworkPolicy',
-        name: 'allow-frontend-egress',
+        type: 'networkPolicy',
+        probe: 'deny',
         namespace: 'shop',
-        label: 'Allow frontend egress to backend',
+        source: { kind: 'Deployment', name: 'backend' },
+        target: { kind: 'Service', name: 'frontend' },
+        port: 8080,
+        label: 'Deny backend → frontend traffic',
+      },
+      {
+        type: 'networkPolicy',
+        probe: 'deny-external',
+        namespace: 'shop',
+        source: { kind: 'Deployment', name: 'frontend' },
+        label: 'Deny external (internet) egress',
       },
       {
         type: 'resolve',
         incidentType: 'DNSResolutionFailure',
         count: 1,
         label: 'Resolve DNSResolutionFailure',
-      },
-      {
-        type: 'command',
-        pattern: '(networkpolicy|netpol)',
-        count: 1,
-        label: 'Apply or edit a NetworkPolicy',
       },
     ],
     startingResources: [
@@ -862,11 +871,11 @@ const CHALLENGES = [
     focusFiles: ['challenges/shop-networkpolicy.yaml'],
     availableResources: ['Project', 'NetworkPolicy', 'Deployment', 'Service', 'Route'],
     hints: [
-      'Apply the policy set from the Files panel: oc apply -f challenges/shop-networkpolicy.yaml',
-      'A NetworkPolicy is additive: the default-deny selects every Pod, then explicit allow rules re-open only the paths you name.',
+      'Apply the provided policy set: oc apply -f challenges/shop-networkpolicy.yaml — or write your own equivalent policies; the check probes traffic behaviour, not NetworkPolicy object names.',
+      'A NetworkPolicy is additive: a default-deny policy that selects every Pod isolates the project, then explicit allow rules re-open only the paths you name.',
       'DNS is required: on OpenShift the dns-default Pods listen on 5353, so the egress rule must allow UDP and TCP 5353 to the openshift-dns namespace — port 53 does NOT unblock name resolution.',
-      'Verify: oc get networkpolicy -n shop; oc describe networkpolicy deny-by-default -n shop; then test from a Pod with oc exec deploy/frontend -- curl -sv http://backend:8080',
-      'Resolve DNSResolutionFailure from the incident panel (allow-DNS-egress) after applying the rule — or just apply the corrected allow-dns-egress policy and the incident clears.',
+      'Verify from a Pod: oc get networkpolicy -n shop; then oc exec deploy/frontend -- curl -sv http://backend:8080 (allowed) and try http://frontend:8080 from the backend (blocked) and an external host from the frontend (blocked).',
+      'Resolve the DNSResolutionFailure incident by allowing egress to the openshift-dns namespace on 5353 (UDP and TCP) — the incident clears as soon as the policy is present.',
     ],
   },
   {
@@ -970,13 +979,17 @@ const CHALLENGES = [
         namespace: 'openshift-config',
         label: 'Create htpass-secret in openshift-config',
       },
+      // Graded on resulting state (issue #30): the OAuth singleton must
+      // reference the htpass-secret HTPasswd provider and the authentication
+      // rollout must have applied it. Heredoc `oc apply -f -`,
+      // `oc apply -f idp.yaml` and `oc patch oauth cluster` all count.
       {
-        type: 'command',
-        pattern: '(apply|replace|edit).*oauth|oauth.*(apply|replace)',
-        count: 1,
-        label: 'Apply the OAuth identity provider',
+        type: 'oauthProvider',
+        providerType: 'HTPasswd',
+        secretName: 'htpass-secret',
+        label: 'Activate the OAuth HTPasswd identity provider (htpass-secret)',
       },
-      { type: 'user', name: 'alice', label: 'User alice exists' },
+      { type: 'user', name: 'alice', label: 'User alice exists (created on first login)' },
       { type: 'login', user: 'alice', label: 'Log in as alice' },
       {
         type: 'group',
@@ -1017,7 +1030,7 @@ const CHALLENGES = [
     hints: [
       'Create the htpasswd entry (the simulator has a virtual htpasswd file): htpasswd -c -b htpasswd alice openshift',
       'Store it in openshift-config with the mandatory htpasswd key: oc create secret generic htpass-secret --from-file=htpasswd=htpasswd -n openshift-config',
-      'Apply the OAuth provider from the Files panel: oc apply -f challenges/oauth-htpasswd.yaml',
+      'Configure the provider from the Files panel: oc apply -f challenges/oauth-htpasswd.yaml — or write the OAuth manifest yourself and oc apply -f idp.yaml / cat <<EOF | oc apply -f - / oc patch oauth cluster --type=merge -p \'{"spec":…}\'. The check grades the resulting OAuth state, not the command.',
       'Wait for the OAuth rollout, then log in: oc login -u alice -p openshift; oc whoami',
       'Create the group with the user (or add later): oc adm groups new developers alice  # oc adm groups add-users developers alice',
       'Grant project access: oc adm policy add-role-to-user edit alice -n onboarding',
@@ -1101,9 +1114,9 @@ const CHALLENGES = [
     hints: [
       'Create and switch to the project: oc new-project prod',
       'Apply the app manifests in order: oc apply -f manifests/deployment.yaml; oc apply -f manifests/service.yaml; oc apply -f manifests/route.yaml',
-      'Create and start a build: oc new-build nodejs:20 --name=builder; oc start-build builder',
+      'Create and start a build: oc new-build nodejs:20-ubi9 --name=builder; oc start-build builder',
       'Create the quota: oc create quota prod-quota --hard=pods=20,requests.cpu=4,requests.memory=8Gi',
-      'Run the Job: oc create job db-migrate --image=busybox:latest; oc get job db-migrate -w',
+      'Run the Job: oc create job db-migrate --image=busybox:latest. Trap: a compute quota without a LimitRange rejects a Pod that omits requests — no Pod is created and oc describe job db-migrate -n prod shows a FailedCreate event ("failed quota: prod-quota: must specify requests.cpu,requests.memory"). Add the requests to the Job template (or apply a Job manifest that sets them): oc set resources job/db-migrate -n prod --requests=cpu=100m,memory=128Mi, then watch it Complete with oc get job db-migrate -w.',
       'Grant RBAC: oc create user developer; oc adm policy add-role-to-user edit developer -n prod',
       'Verify the Route is admitted and the Job completes before the timer runs out.',
     ],

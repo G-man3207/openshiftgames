@@ -143,7 +143,7 @@ const INITIAL_CLUSTER = {
         strategy: {
           type: 'Source',
           sourceStrategy: {
-            from: { kind: 'ImageStreamTag', name: 'nodejs:20', namespace: 'openshift' },
+            from: { kind: 'ImageStreamTag', name: 'nodejs:20-ubi9', namespace: 'openshift' },
           },
         },
         output: { to: { kind: 'ImageStreamTag', name: 'web-frontend:latest' } },

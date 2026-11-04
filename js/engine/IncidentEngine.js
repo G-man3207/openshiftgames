@@ -527,6 +527,12 @@ class IncidentEngine {
           scriptedFrom: scripted.originalType || scripted.def.name,
           // Never invent a different target for a data-authored incident.
           exactTarget: true,
+          // #31 A1: optional per-incident seed/fix contract authored in the
+          // level data. `seed` makes the broken value part of the cluster
+          // state (the fault has a real root cause); `fix` defines the only
+          // state-driven remediation (e.g. APP_MODE in allowed[]).
+          seed: scripted.seed || null,
+          fix: scripted.fix || null,
         });
       }
     }
@@ -688,6 +694,9 @@ class IncidentEngine {
     const id = `inc-${this.incidentCounter}`;
     const incident = new Incident(def, target || 'unknown', id);
     if (overrideSeverity) incident.severity = overrideSeverity;
+    // Per-incident seed/fix contract (#31 A1) authored in the level data.
+    incident.seed = opts.seed || null;
+    incident.fix = opts.fix || null;
 
     // Scripted incidents name a concrete target from level/challenge data; do
     // not silently retarget a same-kind resource or fabricate `<kind>-incident-N`
@@ -1246,16 +1255,7 @@ class IncidentEngine {
     if (!target && !incident.target) return { applied: false, reason: 'no-target' };
 
     const byName = {
-      CrashLoopBackOff: () =>
-        this._damagePod(incident, {
-          phase: 'CrashLoopBackOff',
-          waitingReason: 'CrashLoopBackOff',
-          lastReason: 'Error',
-          exitCode: 1,
-          restarts: 1,
-          eventReason: 'BackOff',
-          message: 'Back-off restarting failed container',
-        }),
+      CrashLoopBackOff: () => this._damageCrashLoop(incident),
       ImagePullBackOff: () =>
         this._damagePod(incident, {
           phase: 'ImagePullBackOff',
@@ -1331,6 +1331,88 @@ class IncidentEngine {
   _markIncident(podOrResource, incident) {
     this._annotate(podOrResource, INCIDENT_ANNOTATION, incident.name);
     this._clearAnnotation(podOrResource, HEAL_ANNOTATION);
+  }
+
+  /**
+   * CrashLoopBackOff onset (#31 A1): when the level authors a `seed` env
+   * contract, inject that faulty value into the workload template FIRST so the
+   * broken value is part of the live cluster state (and therefore of the
+   * baseline a later "did the learner fix it?" comparison uses), then damage
+   * the Pods exactly as before.
+   */
+  _damageCrashLoop(incident) {
+    this._seedIncidentEnv(incident);
+    return this._damagePod(incident, {
+      phase: 'CrashLoopBackOff',
+      waitingReason: 'CrashLoopBackOff',
+      lastReason: 'Error',
+      exitCode: 1,
+      restarts: 1,
+      eventReason: 'BackOff',
+      message: 'Back-off restarting failed container',
+    });
+  }
+
+  /**
+   * Write `incident.seed` into the target workload's first container: a faulty
+   * env value and/or a broken image tag (#31). This makes the fault part of the
+   * live cluster state BEFORE damage is applied, so the baseline a later "did
+   * the learner fix it?" comparison uses includes it.
+   */
+  _seedIncidentEnv(incident) {
+    const seed = incident?.seed;
+    if ((!seed?.env?.name && !seed?.image) || incident._seedApplied) return false;
+    const target = this._resolveTargetResource(incident);
+    if (!target || target.kind === 'Pod') return false;
+    const containers = target.spec?.template?.spec?.containers || [];
+    if (containers.length === 0) return false;
+    const container = containers[0];
+    const changes = [];
+    if (seed.image) {
+      container.image = String(seed.image);
+      changes.push(`image=${seed.image}`);
+    }
+    if (seed.env?.name) {
+      container.env = Array.isArray(container.env) ? container.env : [];
+      const existing = container.env.find((entry) => entry.name === seed.env.name);
+      if (existing) {
+        existing.value = String(seed.env.value ?? '');
+        delete existing.valueFrom;
+      } else {
+        container.env.push({ name: seed.env.name, value: String(seed.env.value ?? '') });
+      }
+      changes.push(`${seed.env.name}=${seed.env.value}`);
+    }
+    incident._seedApplied = true;
+    this._recordEvent(
+      target,
+      'Warning',
+      'ConfigInjected',
+      `Deployment is configured with ${changes.join(', ')}; the container cannot start with this configuration`
+    );
+    this._commit(target);
+    return true;
+  }
+
+  /** Current first-container env value for the fix contract's env name. */
+  _incidentEnvValue(incident, target) {
+    const fix = incident?.fix;
+    if (!fix?.env?.name) return null;
+    const containers = target?.spec?.template?.spec?.containers || [];
+    const container = containers[0];
+    if (!container) return null;
+    const entry = (container.env || []).find((item) => item.name === fix.env.name);
+    return entry ? String(entry.value ?? '') : null;
+  }
+
+  /** Is the authored fix contract satisfied on the owning workload? */
+  _incidentFixSatisfied(incident, target) {
+    const fix = incident?.fix;
+    if (!fix?.env?.name) return false;
+    const value = this._incidentEnvValue(incident, target);
+    if (value === null) return false;
+    const allowed = Array.isArray(fix.env.allowed) ? fix.env.allowed.map(String) : [];
+    return allowed.includes(value);
   }
 
   _damagePod(incident, opts) {
@@ -2401,6 +2483,18 @@ class IncidentEngine {
     return { applied: !!oauth || !!co || !!secret };
   }
 
+  /**
+   * Quota-exceeded onset damage (#27b + #31 A2).
+   *
+   * The truthful model: the project's quota is exactly full, so the owning
+   * controller cannot create the replacement Pod. We do NOT rewrite a Pod to
+   * Pending/FailedCreate (that object would not exist on a real cluster): one
+   * deterministic Running Pod owned by a Deployment/ReplicaSet is removed and
+   * the quota's `pods` hard limit is set to the post-removal usage, i.e.
+   * Used == Hard. The quota-level Exceeded condition/event is what the learner
+   * sees; raising the hard limits (or deleting workloads) makes room and the
+   * controller schedules the replacement again.
+   */
   _damageQuota(incident) {
     const ns = incident.namespace || this.gameEngine?.currentProject || 'default';
     const resolved = this._resolveTargetResource(incident);
@@ -2410,68 +2504,92 @@ class IncidentEngine {
       this._findResource('ResourceQuota', incident.target, ns) ||
       quotas[0] ||
       null;
+    if (!quota) return { applied: false };
 
-    if (quota) {
-      // #27(b): bind the incident to the quota that is ACTUALLY damaged. L15
-      // authors the namespace ("quota-lab") as the target, and lab 6 names
-      // "team-quota" while the shipped examples/quota.yaml creates
-      // "compute-quota". Without rebinding, `_resolveTargetResource()` returns
-      // null and the state check can never run, so `autoResolveTime: null`
-      // leaves the drawer button as the only exit.
-      const quotaName = quota.name || quota.metadata?.name;
-      if (quotaName && incident.target !== quotaName) {
-        incident.target = quotaName;
-        incident.pendingTarget = false;
-      }
-      if (quotaName) incident.damagedQuotaName = quotaName;
-      incident.uid = quota.uid || quota.metadata?.uid || incident.uid;
-      incident.namespace = quota.namespace || quota.metadata?.namespace || ns;
-      const savedHard = JSON.parse(JSON.stringify(quota.spec?.hard || {}));
-      this._saveRestore(incident, { uid: quota.uid, hard: savedHard });
-      const usage = this._safe(() => this.cluster.getQuotaUsage(ns)) || {};
-      const tight = { ...savedHard };
-      // Make the quota visibly exceeded: leave less capacity than currently used.
-      tight.pods = String(Math.max(0, (usage.pods || 1) - 1));
-      if (tight['requests.cpu'] !== undefined)
-        tight['requests.cpu'] = `${Math.max(0, Math.floor((usage['requests.cpu'] || 0) - 100))}m`;
-      if (tight['requests.memory'] !== undefined)
-        tight['requests.memory'] =
-          `${Math.max(0, Math.ceil((usage['requests.memory'] || 0) - 64))}Mi`;
-      quota.spec = { ...(quota.spec || {}), hard: tight };
-      this._setCondition(quota, 'Exceeded', 'True', 'QuotaExceeded', 'exceeded quota: pods');
-      this._recordEvent(
-        quota,
-        'Warning',
-        'QuotaExceeded',
-        `exceeded quota: ${quota.name} is exhausted`
-      );
-      this._markIncident(quota, incident);
-      this._commit(quota);
-      this.emit('quota:exceeded', { namespace: ns, quota: quota.name });
-      this._safe(() => this.cluster.recalculateQuotaStatus?.());
+    // #27(b): bind the incident to the quota that is ACTUALLY damaged. L15
+    // authors the namespace ("quota-lab") as the target, and lab 6 names
+    // "team-quota" while the shipped examples/quota.yaml creates
+    // "compute-quota". Without rebinding, `_resolveTargetResource()` returns
+    // null and the state check can never run, so `autoResolveTime: null`
+    // leaves the drawer button as the only exit.
+    const quotaName = quota.name || quota.metadata?.name;
+    if (quotaName && incident.target !== quotaName) {
+      incident.target = quotaName;
+      incident.pendingTarget = false;
     }
+    if (quotaName) incident.damagedQuotaName = quotaName;
+    incident.uid = quota.uid || quota.metadata?.uid || incident.uid;
+    incident.namespace = quota.namespace || quota.metadata?.namespace || ns;
 
-    const pods = this._safe(() => this.cluster?.getByKindAndNamespace('Pod', ns)) || [];
-    const pod = pods.find((p) => p.status?.phase === 'Pending') || pods[0];
-    if (pod) {
-      this._setPhase(pod, 'Pending');
-      this._setCondition(
-        pod,
-        'PodScheduled',
-        'False',
-        'Unschedulable',
-        'FailedCreate: exceeded quota'
+    const usageBefore = this._safe(() => this.cluster.getQuotaUsage(ns)) || {};
+    // Remove ONE deterministic Running Pod owned by a workload so the quota is
+    // full at the post-removal usage (no phantom Pod objects, Used <= Hard).
+    const removedPod = this._removePodForQuotaDamage(ns);
+    if (removedPod) incident.removedPodName = removedPod.metadata?.name || removedPod.name || null;
+    const usageAfter = this._safe(() => this.cluster.getQuotaUsage(ns)) || {};
+    const usedPods = Number.isFinite(Number(usageAfter.pods))
+      ? Number(usageAfter.pods)
+      : Math.max(0, Number(usageBefore.pods || 0) - (removedPod ? 1 : 0));
+
+    const savedHard = JSON.parse(JSON.stringify(quota.spec?.hard || {}));
+    if (!incident.restoreState) this._saveRestore(incident, { uid: quota.uid, hard: savedHard });
+    const tight = { ...savedHard };
+    // Used == Hard on the pods dimension: the next Pod creation is rejected
+    // with `exceeded quota: <name>` by the admission path.
+    tight.pods = String(usedPods);
+    // CPU/memory limits are left untouched so Used can never exceed Hard there.
+    quota.spec = { ...(quota.spec || {}), hard: tight };
+    this._setCondition(quota, 'Exceeded', 'True', 'QuotaExceeded', 'exceeded quota: pods');
+    this._recordEvent(
+      quota,
+      'Warning',
+      'QuotaExceeded',
+      `exceeded quota: ${quota.name} is exhausted (used ${usedPods} of ${usedPods} pods)`
+    );
+    this._markIncident(quota, incident);
+    this._commit(quota);
+    this.emit('quota:exceeded', {
+      namespace: ns,
+      quota: quota.name,
+      removedPod: incident.removedPodName,
+    });
+    this._safe(() => this.cluster.recalculateQuotaStatus?.());
+    return { applied: true, quota: quotaName, removedPod: incident.removedPodName, usedPods };
+  }
+
+  /**
+   * Pick the deterministic (name-sorted) first Running Pod owned by a
+   * Deployment/ReplicaSet in `namespace` and remove it. Returns the Pod object.
+   */
+  _removePodForQuotaDamage(namespace) {
+    const pods = this._safe(() => this.cluster?.getByKindAndNamespace('Pod', namespace)) || [];
+    const owned = pods.filter((pod) => {
+      if (!pod || pod.status?.phase !== 'Running') return false;
+      const owners = pod.metadata?.ownerReferences || pod.ownerReferences || [];
+      return owners.some(
+        (ref) =>
+          ref?.kind === 'ReplicaSet' ||
+          ref?.kind === 'Deployment' ||
+          ref?.kind === 'ReplicationController'
       );
-      this._recordEvent(
-        pod,
-        'Warning',
-        'FailedCreate',
-        `Error creating: pods ... is forbidden: exceeded quota: ${quota ? quota.name : 'quota'}`
-      );
-      this._markIncident(pod, incident);
-      this._commit(pod);
-    }
-    return { applied: !!quota, quota: quota ? quota.name : null };
+    });
+    owned.sort((left, right) =>
+      String(left.metadata?.name || left.name || '').localeCompare(
+        String(right.metadata?.name || right.name || '')
+      )
+    );
+    const victim = owned[0];
+    if (!victim) return null;
+    const uid = victim.uid || victim.metadata?.uid;
+    if (!uid) return null;
+    this._recordEvent(
+      victim,
+      'Normal',
+      'Killing',
+      'Quota exhausted: the ReplicaSet cannot create a replacement Pod'
+    );
+    this._safe(() => this.cluster.remove(uid));
+    return victim;
   }
 
   _damageLimitRange(incident) {
@@ -3748,6 +3866,16 @@ class IncidentEngine {
         : this._findResource('Job', incident.target, incident.namespace) ||
           (this._safe(() => this.cluster?.getByKind('Job')) || [])[0];
     if (!job) return { applied: false };
+    // #31: never FABRICATE completion for a Job the learner already repaired by
+    // delete+recreate (or otherwise moved out of Failed). Overwriting the fresh
+    // Job to Complete used to skip the real controller, so no Pod was ever
+    // created and `oc logs job/<name>` said "no pods found". Only a Job that is
+    // still Failed (or absent) is force-completed by the resolution effect.
+    if (job.status?.phase && job.status.phase !== 'Failed') {
+      this._clearAnnotation(job, INCIDENT_ANNOTATION);
+      this._commit(job);
+      return { applied: true, kind: 'job', target: job.name, fabricated: false };
+    }
     job.status = job.status || {};
     job.status.phase = 'Complete';
     job.status.succeeded = Math.max(job.status.succeeded || 0, 1);
@@ -4604,8 +4732,13 @@ class IncidentEngine {
     // Only re-damage while the workload template is STILL the broken one: once
     // the learner fixes the image/command/env, replacement Pods must come up
     // healthy (otherwise this safety net would undo the fix).
+    // #31 A1: with a seed/fix contract, "fixed" is defined by the fix (e.g.
+    // APP_MODE in allowed[]), not by any semantic signature change — so
+    // `oc set env FOO=bar` keeps re-damaging the fresh Pods.
     const base = incident.baseline?.workload;
-    if (base) {
+    if (incident.fix) {
+      if (this._incidentFixSatisfied(incident, target)) return false;
+    } else if (base) {
       const currentContainers =
         this._safe(() => this._containerSemanticSignature(target), '') || '';
       const currentTemplate =
@@ -4668,7 +4801,14 @@ class IncidentEngine {
       : currentTemplate !== base.template;
     const templateChanged =
       currentTemplate !== base.template || currentGeneration > base.generation;
-    const changed = semanticOnly.has(incident.name) ? semanticChanged : templateChanged;
+    let changed = semanticOnly.has(incident.name) ? semanticChanged : templateChanged;
+    // #31 A1: when the level authors a seed/fix contract, ONLY satisfying the
+    // fix counts. Any other template change (e.g. `oc set env FOO=bar`) would
+    // change the semantic signature but must not heal the incident.
+    if (incident.fix) {
+      if (!this._incidentFixSatisfied(incident, target)) return false;
+      changed = true;
+    }
     if (!changed) return false;
 
     // Heal every damaged Pod so the workload can report healthy replicas.
@@ -4894,15 +5034,23 @@ class IncidentEngine {
         const quotas = this._safe(() => this.cluster.getResourceQuotaObjects?.(ns)) || [];
         if (quotas.length === 0) return false;
         const damagedName = incident.damagedQuotaName;
+        let damaged = target?.kind === 'ResourceQuota' ? target : null;
         if (damagedName) {
-          const damaged = quotas.find(
-            (quota) => (quota.name || quota.metadata?.name) === damagedName
-          );
+          damaged =
+            quotas.find((quota) => (quota.name || quota.metadata?.name) === damagedName) || null;
           // The damaged quota must still exist (raising a different quota is
           // not a fix for this incident).
           if (!damaged) return false;
         }
-        return true;
+        // #31 A2: the damaged state is Used == Hard (no room for the blocked
+        // replacement Pod). The learner fixed it when the pods dimension has
+        // room again — by raising the hard limit or by freeing usage.
+        const hardPods = Number(damaged?.spec?.hard?.pods);
+        if (!Number.isFinite(hardPods)) return true;
+        const usage = this._safe(() => this.cluster.getQuotaUsage?.(ns)) || {};
+        const usedPods = Number(usage.pods);
+        if (!Number.isFinite(usedPods)) return true;
+        return usedPods < hardPods;
       }
       case 'LimitRangeViolation':
         return !!target && !this._isConditionTrue(target, 'Exceeded');

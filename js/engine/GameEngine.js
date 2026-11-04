@@ -43,6 +43,7 @@ import {
   strategicMergePatch,
 } from './MergePatch.js';
 import { apiVersionForKind, createResource, normalizeKind } from '../data/kindRegistry.js';
+import { knownImageSecurityProfile } from '../resources/ImageSecurityProfiles.js';
 
 // ─── SHA1 + base64 helpers (for the simulated {SHA} htpasswd hashes) ──────
 
@@ -3459,7 +3460,13 @@ export class GameEngine {
    */
   _buildServiceObject(options) {
     const name = options.name;
-    const port = options.port || options.containerPort || 8080;
+    // Known images advertise their real port (nginx 80, MySQL 3306); a generic
+    // `oc new-app <image>` exposes that port instead of a hard-coded 8080 (#31).
+    const port =
+      options.port ||
+      options.containerPort ||
+      knownImageSecurityProfile(options.image)?.ports?.[0] ||
+      8080;
     return {
       apiVersion: 'v1',
       kind: 'Service',
@@ -3504,7 +3511,11 @@ export class GameEngine {
         ...options,
         name,
         namespace,
-        containerPort: options.port || options.containerPort || 8080,
+        containerPort:
+          options.port ||
+          options.containerPort ||
+          knownImageSecurityProfile(options.image)?.ports?.[0] ||
+          8080,
       })
     );
     if (!deployment)
@@ -3830,6 +3841,10 @@ export class GameEngine {
         if (options.key || options.tls?.key) routeSpec.tls.key = options.key || options.tls.key;
         if (options.caCertificate || options.tls?.caCertificate)
           routeSpec.tls.caCertificate = options.caCertificate || options.tls.caCertificate;
+        if (options.destinationCACertificate || options.tls?.destinationCACertificate) {
+          routeSpec.tls.destinationCACertificate =
+            options.destinationCACertificate || options.tls.destinationCACertificate;
+        }
       }
     }
     const route = this.applyManifestObject({

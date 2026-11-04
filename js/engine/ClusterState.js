@@ -1810,6 +1810,141 @@ export class ClusterState {
   }
 
   /**
+   * Real API-server quota admission for one candidate Pod (issue #31).
+   *
+   * Unlike {@link checkQuota} — which only answers "does one more generic Pod
+   * fit?" for state-driven incident resolution — this mirrors the ResourceQuota
+   * admission plugin: it uses the Pod's OWN requests/limits, rejects pods that
+   * omit a constrained compute resource ("failed quota: … must specify …") and
+   * reports the real `exceeded quota: <name>, requested: …, used: …, limited: …`
+   * wording when a hard limit is crossed. The Pod object must not be created
+   * for either result.
+   *
+   * @param {string} namespace
+   * @param {object} podSpec candidate Pod spec (after LimitRange defaults)
+   * @returns {{allowed: boolean, message: string, violations: string[], quotaName?: string}}
+   */
+  admitPodAgainstQuota(namespace, podSpec) {
+    const violations = [];
+    let quotaName = null;
+    const containers = podSpec?.containers || [];
+
+    // Pod-level usage of the compute resources a quota can track.
+    const requested = { pods: 1, 'requests.cpu': 0, 'requests.memory': 0, 'limits.cpu': 0 };
+    const limitRequested = { 'limits.memory': 0 };
+    const allSpecified = {
+      'requests.cpu': true,
+      'requests.memory': true,
+      'limits.cpu': true,
+      'limits.memory': true,
+    };
+    for (const container of containers) {
+      const requests = container?.resources?.requests || {};
+      const limits = container?.resources?.limits || {};
+      if (requests.cpu === undefined) allSpecified['requests.cpu'] = false;
+      if (requests.memory === undefined) allSpecified['requests.memory'] = false;
+      if (limits.cpu === undefined) allSpecified['limits.cpu'] = false;
+      if (limits.memory === undefined) allSpecified['limits.memory'] = false;
+      requested['requests.cpu'] += parseCpuMillis(requests.cpu || '0');
+      requested['requests.memory'] += parseMemoryMi(requests.memory || '0');
+      requested['limits.cpu'] += parseCpuMillis(limits.cpu || '0');
+      limitRequested['limits.memory'] += parseMemoryMi(limits.memory || '0');
+    }
+    Object.assign(requested, limitRequested);
+
+    const formatValue = (key, value) => {
+      if (key.endsWith('.cpu')) return `${Math.round(value)}m`;
+      if (key.endsWith('.memory')) return `${Math.ceil(value)}Mi`;
+      return String(Math.round(value));
+    };
+    const usageKeyFor = (hardKey) => {
+      if (hardKey === 'cpu') return 'requests.cpu';
+      if (hardKey === 'memory') return 'requests.memory';
+      return hardKey;
+    };
+
+    const evaluate = (hard, usage, label, isClusterQuota) => {
+      const keys = Object.keys(hard).filter((key) => requested[usageKeyFor(key)] !== undefined);
+      // 1) Compute quota with no defaulted requests: the API server refuses the
+      //    create with "failed quota: <name>: must specify <resources>".
+      const missing = [];
+      for (const key of ['requests.cpu', 'requests.memory', 'limits.cpu', 'limits.memory']) {
+        if (hard[key] === undefined) continue;
+        const usageKey = usageKeyFor(key);
+        const constrained = usage[usageKey] !== undefined;
+        if (constrained && allSpecified[key] === false && requested[usageKey] === 0) {
+          missing.push(key);
+        }
+      }
+      if (missing.length > 0) {
+        missing.sort();
+        violations.push(`failed quota: ${label}: must specify ${missing.join(',')}`);
+        return;
+      }
+      // 2) Hard-limit check on the resources this Pod actually consumes.
+      const exceeded = [];
+      for (const key of keys) {
+        const usageKey = usageKeyFor(key);
+        const hardValue = hard[key];
+        const requestedTotal = requested[usageKey] || 0;
+        const used = Number(usage[usageKey] || 0);
+        const fits =
+          key === 'pods' || key === 'count/pods'
+            ? used + requestedTotal <= Number(hardValue)
+            : usageKey.endsWith('.cpu')
+              ? used + requestedTotal <= parseCpuMillis(hardValue)
+              : usageKey.endsWith('.memory')
+                ? used + requestedTotal <= parseMemoryMi(hardValue)
+                : used + requestedTotal <= Number(hardValue);
+        if (!fits) exceeded.push({ key, used: used, requested: requestedTotal, hard: hardValue });
+      }
+      if (exceeded.length === 0) return;
+      exceeded.sort((a, b) => a.key.localeCompare(b.key));
+      const requestedList = exceeded
+        .map((entry) => `${entry.key}=${formatValue(entry.key, entry.requested)}`)
+        .join(',');
+      const usedList = exceeded
+        .map((entry) => `${entry.key}=${formatValue(entry.key, entry.used)}`)
+        .join(',');
+      const limitedList = exceeded
+        .map((entry) =>
+          entry.key.endsWith('.cpu')
+            ? `${entry.key}=${formatValue(entry.key, parseCpuMillis(entry.hard))}`
+            : entry.key.endsWith('.memory')
+              ? `${entry.key}=${formatValue(entry.key, parseMemoryMi(entry.hard))}`
+              : `${entry.key}=${entry.hard}`
+        )
+        .join(',');
+      violations.push(
+        `${isClusterQuota ? 'exceeded cluster quota' : 'exceeded quota'}: ${label}, requested: ${requestedList}, used: ${usedList}, limited: ${limitedList}`
+      );
+    };
+
+    for (const quota of this.getResourceQuotaObjects(namespace)) {
+      const before = violations.length;
+      evaluate(quota.spec?.hard || {}, this.getQuotaUsage(namespace), quota.metadata.name, false);
+      if (violations.length > before) quotaName = quotaName || quota.metadata.name;
+    }
+    for (const clusterQuota of this.getClusterResourceQuotasForProject(namespace)) {
+      const before = violations.length;
+      evaluate(
+        clusterQuota.spec?.quota?.hard || {},
+        this.getClusterQuotaUsage(clusterQuota),
+        clusterQuota.metadata.name,
+        true
+      );
+      if (violations.length > before) quotaName = quotaName || clusterQuota.metadata.name;
+    }
+
+    return {
+      allowed: violations.length === 0,
+      message: violations[0] || '',
+      violations,
+      quotaName,
+    };
+  }
+
+  /**
    * Check a ClusterResourceQuota (used by the controller for named reporting).
    * @param {string} namespace
    * @param {number} requestedCpu
@@ -3454,13 +3589,24 @@ export class ClusterState {
 
   /** Deterministic fake sha256 digest for a string (no crypto dependency). */
   _fakeDigest(seed) {
+    // FNV-1a seeds a xorshift32 stream so the 64 hex chars of the fake sha256
+    // vary (a real digest never repeats one 8-char chunk eight times, #36).
     let hash = 0x811c9dc5;
     for (let i = 0; i < seed.length; i++) {
       hash ^= seed.charCodeAt(i);
       hash = Math.imul(hash, 0x01000193) >>> 0;
     }
-    const chunk = hash.toString(16).padStart(8, '0');
-    return `${chunk}${chunk}${chunk}${chunk}${chunk}${chunk}${chunk}${chunk}`;
+    let state = hash >>> 0 || 0x9e3779b9;
+    let out = '';
+    for (let i = 0; i < 8; i += 1) {
+      state ^= state << 13;
+      state >>>= 0;
+      state ^= state >>> 17;
+      state ^= state << 5;
+      state >>>= 0;
+      out += state.toString(16).padStart(8, '0');
+    }
+    return out;
   }
 
   /** @returns {object|null} */

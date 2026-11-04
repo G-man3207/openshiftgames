@@ -42,6 +42,11 @@ import { ChallengeMode } from '../js/modes/ChallengeMode.js';
 import { CAMPAIGN_LEVELS, CHAPTERS } from '../js/data/CampaignLevels.js';
 import { ACHIEVEMENTS } from '../js/data/Achievements.js';
 import { CHALLENGES } from '../js/modes/ChallengeMode.js';
+import {
+  EX280_OBJECTIVE_BULLETS,
+  EX280_OBJECTIVE_COUNT,
+  EX280_READINESS_THRESHOLD,
+} from '../js/data/EX280Objectives.js';
 // Static imports — draw.html whiteboard:
 import { computeConnections } from '../js/rendering/RelationGraph.js';
 // Dynamic import() targets in index.html (Files panel and EX280 Prep are loaded on demand):
