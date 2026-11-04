@@ -4439,6 +4439,55 @@ await runSection('regressions', async () => {
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
+// QA ROUND 1.1.8 — issue #27/#28: incident self-healing and node recovery
+// ═══════════════════════════════════════════════════════════════════════════
+await runSection('qa-incidents', async () => {
+  // QA-27-28-TESTS: owned by teammate `incidents` — replace this comment.
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// QA ROUND 1.1.8 — issue #31: scenario realism (crash-loop, jobs, quota)
+// ═══════════════════════════════════════════════════════════════════════════
+await runSection('qa-scenarios', async () => {
+  // QA-31-TESTS: owned by teammate `scenarios` — replace this comment.
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// QA ROUND 1.1.8 — issue #29/#36: CLI write safety and output fidelity
+// ═══════════════════════════════════════════════════════════════════════════
+await runSection('qa-cli', async () => {
+  // QA-29-36-TESTS: owned by teammate `cli-safety` — replace this comment.
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// QA ROUND 1.1.8 — issue #32/#33: workstation tools, internal TLS, routing
+// ═══════════════════════════════════════════════════════════════════════════
+await runSection('qa-workstation', async () => {
+  // QA-32-33-TESTS: owned by teammate `workstation` — replace this comment.
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// QA ROUND 1.1.8 — issue #35: OpenShift platform details
+// ═══════════════════════════════════════════════════════════════════════════
+await runSection('qa-openshift', async () => {
+  // QA-35-TESTS: owned by teammate `openshift-details` — replace this comment.
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// QA ROUND 1.1.8 — issue #30: state-based objective grading
+// ═══════════════════════════════════════════════════════════════════════════
+await runSection('qa-grading', async () => {
+  // QA-30-TESTS: owned by teammate `grading` — replace this comment.
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// QA ROUND 1.1.8 — issue #34: EX280 coverage and post-campaign handover
+// ═══════════════════════════════════════════════════════════════════════════
+await runSection('qa-coverage', async () => {
+  // QA-34-TESTS: owned by teammate `coverage` — replace this comment.
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
 // 11. DRAW PAGE
 // ═══════════════════════════════════════════════════════════════════════════
 await runSection('draw', async () => {
