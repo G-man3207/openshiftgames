@@ -300,6 +300,11 @@ export class StartMenu {
   _nextCampaignLevel() {
     try {
       const unlocked = this._unlockedCampaignLevels();
+      const completed = LEVEL_ORDER.filter(
+        (id) => this.app?.scoringEngine?.getProgress?.()?.campaignProgress?.[id]?.completed,
+      );
+      // A finished campaign has nothing to "continue": replay from level 1.
+      if (completed.length === LEVEL_ORDER.length) return 1;
       for (const id of LEVEL_ORDER) {
         if (!unlocked.has(id)) return Math.max(1, id - 1);
       }
@@ -332,6 +337,12 @@ export class StartMenu {
       const completed = LEVEL_ORDER.filter((id) => campaign[id]?.completed);
       if (completed.length === 0) {
         label.textContent = 'Start the campaign';
+        return;
+      }
+      if (completed.length === LEVEL_ORDER.length) {
+        // Reporting "Continue · level 20" after the capstone was already
+        // confusing: the campaign is finished, so offer a replay instead.
+        label.textContent = 'Replay the campaign';
         return;
       }
       const next = this._nextCampaignLevel();

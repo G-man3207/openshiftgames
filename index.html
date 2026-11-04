@@ -3098,8 +3098,13 @@
         }
         const continueBtn = document.getElementById('level-continue');
         if (continueBtn) {
-          continueBtn.textContent = completedIds.length === 0 ? 'Start campaign' : `Continue · Level ${continueLevel}`;
-          continueBtn.onclick = () => this.launchGame('campaign', continueLevel);
+          const campaignComplete = completedIds.length === (CAMPAIGN_LEVELS || []).length;
+          continueBtn.textContent = completedIds.length === 0
+            ? 'Start campaign'
+            : campaignComplete
+              ? 'Replay campaign'
+              : `Continue · Level ${continueLevel}`;
+          continueBtn.onclick = () => this.launchGame('campaign', campaignComplete ? 1 : continueLevel);
         }
 
         for (const chapterInfo of CHAPTERS || []) {
