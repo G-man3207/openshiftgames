@@ -19,8 +19,10 @@
  *   - commands:            cat, echo, grep, tail, head, wc, vim/vi, sort, uniq,
  *                          cut (-c char ranges, -f fields), tr, sed, ls, rm, cp, mv,
  *                          touch, pwd, which, env, base64 (-d/-w0), curl (workstation
- *                          HTTP(S) to Routes), openssl (rand, req -x509, x509),
- *                          skopeo, htpasswd (-B forwarded to bcrypt hashing)
+ *                          HTTP(S) to Routes; -s/-S, -o, -w, -i/-I, -k, -L; also
+ *                          renders `oc exec … -- curl` via runExecCurl), openssl
+ *                          (rand, req -x509, x509), skopeo, htpasswd (-B forwarded
+ *                          to bcrypt hashing)
  *
  * The CommandBar calls `isShellLine()` to decide whether an input line is shell
  * (no `oc` prefix is added), `preprocess()` for heredocs/substitutions, and
@@ -597,9 +599,14 @@ function parseSubjectString(subject) {
 
 /**
  * Build a simulated X.509 certificate + PKCS#8 private key.
- * @param {{commonName?: string, organization?: string, days?: number,
- *   issuer?: {commonName?: string, organization?: string}, sans?: {dns?: string[], ip?: string[]},
- *   isCA?: boolean, bits?: number, notBefore?: string|number, notAfter?: string|number}} options
+ * `organization: null` (and `null` for any RDN) omits that attribute; when the
+ * option is `undefined` the simulator's branded `O = OpenShift Games` default
+ * still applies (issue #43: `openssl req` leaf subjects must match `-subj`).
+ * @param {{commonName?: string, organization?: string|null,
+ *   organizationalUnit?: string, country?: string, state?: string, locality?: string,
+ *   days?: number, issuer?: {commonName?: string, organization?: string},
+ *   sans?: {dns?: string[], ip?: string[]}, isCA?: boolean, bits?: number,
+ *   notBefore?: string|number, notAfter?: string|number}} options
  * @returns {{certPem: string, keyPem: string, der: number[], keyMaterial: object}}
  */
 export function createCertificateMaterial(options = {}) {
@@ -611,7 +618,18 @@ export function createCertificateMaterial(options = {}) {
   const notAfter = options.notAfter
     ? new Date(options.notAfter)
     : new Date(now.getTime() + days * 24 * 60 * 60 * 1000);
-  const subjectAttributes = { commonName, organization };
+  const subjectAttributes = { commonName };
+  // A `null` organization explicitly disables the simulator's default O= while
+  // `undefined` keeps the branded default (issue #43: a leaf created by
+  // `openssl req -x509 -subj "/CN=…"` must not gain `O = OpenShift Games`).
+  if (organization !== null && organization !== undefined && organization !== '') {
+    subjectAttributes.organization = organization;
+  }
+  for (const field of ['organizationalUnit', 'country', 'state', 'locality']) {
+    const value = options[field];
+    if (value !== null && value !== undefined && value !== '')
+      subjectAttributes[field] = String(value);
+  }
   const issuerAttributes = options.issuer
     ? {
         commonName: options.issuer.commonName || 'service-ca',
@@ -966,7 +984,7 @@ export class ShellTools {
   }
 
   _readFile(path) {
-    return this.bar._readVirtualFile(String(path));
+    return this.bar._readVirtualFile(this.expandHomePath(path));
   }
 
   _fileExists(path) {
@@ -974,9 +992,15 @@ export class ShellTools {
   }
 
   _writeFile(path, content) {
-    const written = this.bar._writeVirtualFile(String(path), String(content ?? ''));
+    const written = this.bar._writeVirtualFile(this.expandHomePath(path), String(content ?? ''));
     this._refreshFilesPanel();
     return written;
+  }
+
+  _deleteFile(path) {
+    if (typeof this.bar.manifestEngine?.deleteFile === 'function')
+      this.bar.manifestEngine.deleteFile(this.expandHomePath(path));
+    this._refreshFilesPanel();
   }
 
   _refreshFilesPanel() {
@@ -992,7 +1016,7 @@ export class ShellTools {
 
   _listFiles(path = '') {
     const files = this.bar._manifestFileList();
-    const prefix = String(path || '')
+    const prefix = this.expandHomePath(path)
       .replace(/^\.\/+/, '')
       .replace(/\/+$/, '');
     if (!prefix || prefix === '.') return files;
@@ -1094,6 +1118,23 @@ export class ShellTools {
 
   // ── file helpers ─────────────────────────────────────────────────────────
 
+  /**
+   * Expand a leading `~`/`~/` to the workstation home. The virtual filesystem
+   * is rooted at the home directory, so `~/auth/kubeadmin-password` maps to
+   * `auth/kubeadmin-password` (issue #42-4) while plain relative paths keep
+   * working.
+   * @param {string} path
+   * @returns {string}
+   */
+  expandHomePath(path) {
+    const raw = String(path ?? '');
+    if (raw === '~') return '';
+    if (raw.startsWith('~/')) return raw.slice(2);
+    const home = raw.match(/^\$(?:\{HOME\}|HOME)(\/.*)?$/);
+    if (home) return home[1] ? home[1].slice(1) : '';
+    return raw;
+  }
+
   _readInputFiles(args, stdin, commandName) {
     const files = args.filter((arg) => !arg.startsWith('-'));
     if (!files.length) return { contents: stdin === null ? '' : stdin, label: null, files: [] };
@@ -1130,8 +1171,8 @@ export class ShellTools {
       }
       const content = this._readFile(file);
       if (content === null) {
-        if (this._listFiles(file).length && file.endsWith('/'))
-          return this._err(`cat: ${file}: Is a directory`);
+        const expanded = this.expandHomePath(file);
+        if (this._listFiles(expanded).length) return this._err(`cat: ${file}: Is a directory`);
         return this._err(`cat: ${file}: No such file or directory`);
       }
       chunks.push(content);
@@ -1787,7 +1828,7 @@ export class ShellTools {
     const recursive = flags.has('R');
     /** Immediate children of a directory prefix from the recursive file list. */
     const childrenOf = (prefix) => {
-      const clean = String(prefix || '')
+      const clean = this.expandHomePath(prefix)
         .replace(/^\.\/+/, '')
         .replace(/\/+$/, '');
       const base = clean ? `${clean}/` : '';
@@ -1815,7 +1856,7 @@ export class ShellTools {
       return `${entry.isDirectory ? 'drwxr-xr-x' : '-rw-r--r--'}. 1 student student ${String(size).padStart(6)} ${entry.name}${entry.isDirectory ? '/' : ''}`;
     };
     const listTarget = (target) => {
-      const clean = String(target || '')
+      const clean = this.expandHomePath(target)
         .replace(/^\.\/+/, '')
         .replace(/\/+$/, '');
       const entries = childrenOf(clean);
@@ -1858,9 +1899,7 @@ export class ShellTools {
         if (!force) errors.push(`rm: cannot remove '${file}': No such file or directory`);
         continue;
       }
-      if (typeof this.bar.manifestEngine?.deleteFile === 'function')
-        this.bar.manifestEngine.deleteFile(file);
-      this._refreshFilesPanel();
+      this._deleteFile(file);
     }
     if (errors.length) return this._err(errors.join('\n'));
     return this._ok('');
@@ -1894,9 +1933,7 @@ export class ShellTools {
     if (content === null)
       return this._err(`mv: cannot stat '${source}': No such file or directory`);
     this._writeFile(destination, content);
-    if (typeof this.bar.manifestEngine?.deleteFile === 'function')
-      this.bar.manifestEngine.deleteFile(source);
-    this._refreshFilesPanel();
+    this._deleteFile(source);
     return this._ok('');
   }
 
@@ -2076,7 +2113,14 @@ export class ShellTools {
     }
     const material = createSelfSignedCertificate({
       commonName: subjectAttributes.commonName,
-      organization: subjectAttributes.organization,
+      // Issue #43: the leaf subject must match `-subj` exactly — only carry
+      // O (or any other RDN) when the CSR/subject actually requested it (null
+      // disables the certificate factory's default `O = OpenShift Games`).
+      organization: subjectAttributes.organization ?? null,
+      organizationalUnit: subjectAttributes.organizationalUnit,
+      country: subjectAttributes.country,
+      state: subjectAttributes.state,
+      locality: subjectAttributes.locality,
       days: Number(options.days) || 365,
       bits: options.bits,
       sans: { dns: [...new Set(dnsNames)], ip: ipAddresses },
@@ -2136,7 +2180,9 @@ export class ShellTools {
     for (let index = 0; index < args.length; index += 1) {
       const arg = args[index];
       if (arg === '-help' || arg === '--help') {
-        return this._ok('openssl x509 -in <cert> -noout -text|-subject|-issuer|-dates|-serial');
+        return this._ok(
+          'openssl x509 -in <cert> -noout -text|-subject|-issuer|-dates|-startdate|-enddate|-serial'
+        );
       }
       if (arg === '-in') {
         options.in = args[++index] ?? null;
@@ -2155,7 +2201,9 @@ export class ShellTools {
         arg === '-subject' ||
         arg === '-issuer' ||
         arg === '-dates' ||
-        arg === '-serial'
+        arg === '-serial' ||
+        arg === '-startdate' ||
+        arg === '-enddate'
       ) {
         selectors.add(arg.slice(1));
         continue;
@@ -2191,6 +2239,14 @@ export class ShellTools {
     }
     if (selectors.has('dates')) {
       lines.push(`notBefore=${formatCertificateDate(info.notBefore)}`);
+      lines.push(`notAfter=${formatCertificateDate(info.notAfter)}`);
+    }
+    // Issue #43: `openssl x509 -noout -enddate` must print
+    // `notAfter=<Mon DD HH:MM:SS YYYY GMT>` (and -startdate → notBefore).
+    if (selectors.has('startdate') && !selectors.has('dates')) {
+      lines.push(`notBefore=${formatCertificateDate(info.notBefore)}`);
+    }
+    if (selectors.has('enddate') && !selectors.has('dates')) {
       lines.push(`notAfter=${formatCertificateDate(info.notAfter)}`);
     }
     if (selectors.has('text')) lines.push(...this._certificateTextLines(info));
@@ -2380,16 +2436,17 @@ export class ShellTools {
     });
   }
 
+  /** Plain `curl: (N) message` failure line. */
   _curlFailureLines(code, message) {
     return [`curl: (${code}) ${message}`];
   }
 
   /**
-   * Workstation `curl` (issue #32c): resolves Route hosts through the simulated
-   * router, honouring edge/passthrough/re-encrypt TLS, the http→https redirect
-   * policy and router→Service NetworkPolicy reachability.
+   * Parse curl argv into normalised options + positional URLs. Kept shared by
+   * the workstation `curl` and `oc exec … -- curl` so both honour the same
+   * real flags (`-s`, `-S`, `-o`, `-w`, `-i`, `-I`, `-k`, `-L`, `-X`, …).
    */
-  _cmd_curl(args) {
+  _parseCurlOptions(args) {
     const options = {
       insecure: false,
       silent: false,
@@ -2402,6 +2459,8 @@ export class ShellTools {
       output: null,
       cacert: null,
       method: null,
+      writeOut: null,
+      maxTime: null,
     };
     const urls = [];
     const shortValueFlags = new Set([
@@ -2476,6 +2535,9 @@ export class ShellTools {
         if (arg === '--output') options.output = value;
         else if (arg === '--cacert') options.cacert = value;
         else if (arg === '--request') options.method = value.toUpperCase();
+        else if (arg === '--write-out') options.writeOut = value;
+        else if (arg === '--max-time' || arg === '--connect-timeout')
+          options.maxTime = Number(value) || null;
         else if (arg === '--url') urls.push(value);
         continue;
       }
@@ -2500,6 +2562,8 @@ export class ShellTools {
         const value = args[++index] ?? '';
         if (arg === '-o') options.output = value;
         else if (arg === '-X') options.method = value.toUpperCase();
+        else if (arg === '-w') options.writeOut = value;
+        else if (arg === '-m') options.maxTime = Number(value) || null;
         else if (arg === '-H') {
           /* custom headers are echoed by -v only; the simulator keeps the defaults */
         }
@@ -2520,6 +2584,136 @@ export class ShellTools {
       }
       urls.push(arg);
     }
+    return { options, urls };
+  }
+
+  /**
+   * Expand a curl `--write-out` format. Values are looked up case-sensitively
+   * in `values`; `%%` is a literal `%`. Escape support covers `\n`, `\t`,
+   * `\r` and `\\` (single-quoted formats keep the backslash through the
+   * tokenizer, e.g. `-w '%{http_code}\n'`). Unknown `%{variables}` are left
+   * as-is, like curl printing the literal for variables it does not know.
+   */
+  _curlWriteOutText(options, values = {}) {
+    const format = options ? options.writeOut : null;
+    if (format === null || format === undefined || format === '') return '';
+    const marker = '\u0000';
+    let text = String(format).replace(/%%/g, marker);
+    text = text.replace(/%\{([A-Za-z0-9_.-]+)\}/g, (match, key) => {
+      if (Object.prototype.hasOwnProperty.call(values, key)) return String(values[key] ?? '');
+      return match;
+    });
+    text = text.replace(/\\([ntr\\])/g, (match, escape) => {
+      const map = { n: '\n', t: '\t', r: '\r', '\\': '\\' };
+      return map[escape] ?? match;
+    });
+    return text.split(marker).join('%');
+  }
+
+  /** Classify a curl `-o/--output` target: discard, stdout, or a real file. */
+  _curlOutputTarget(path) {
+    if (path === null || path === undefined || path === '') return null;
+    const raw = String(path);
+    if (raw === '/dev/null' || raw === '/dev/zero') return 'discard';
+    if (raw === '-' || raw === '/dev/stdout') return 'stdout';
+    return 'file';
+  }
+
+  /**
+   * Join the curl response + `--write-out` output the way the real tool writes
+   * stdout: response bytes first (unless `-o`), then the expanded format with
+   * no implicit newline.
+   */
+  _curlComposeOutput(options, { responseText = '', writeOutValues = {}, writeFile = null } = {}) {
+    const target = options.output ? this._curlOutputTarget(options.output) : null;
+    if (target === 'file' && typeof writeFile === 'function') {
+      const failure = writeFile(responseText);
+      if (failure) return failure;
+    }
+    const writeOut = this._curlWriteOutText(options, writeOutValues);
+    if (target === 'discard' || target === 'file') return this._ok(writeOut);
+    return this._ok(responseText + writeOut);
+  }
+
+  /** Values exposed to `--write-out` for a completed request. */
+  _curlWriteOutValues({
+    url,
+    scheme,
+    host,
+    port,
+    status,
+    headers = {},
+    body = '',
+    redirects = 0,
+    serverIp = '',
+  } = {}) {
+    const code = String(Number(status) || 0).padStart(3, '0');
+    return {
+      http_code: code,
+      response_code: code,
+      url_effective: String(url || ''),
+      scheme: String(scheme || ''),
+      remote_ip: String(serverIp || ''),
+      remote_port: String(port || ''),
+      num_redirects: String(redirects || 0),
+      time_total: '0.001',
+      size_download: String(String(body || '').length),
+      content_type: String(headers['content-type'] || '')
+        .split(';')[0]
+        .trim(),
+      redirect_url: String(headers.location || ''),
+      ssl_verify_result: '0',
+      exitcode: '0',
+      errormsg: '',
+    };
+  }
+
+  /** Normalise a simulated failure into real curl's code/message shapes. */
+  _normalizeCurlError(error, options = {}) {
+    const code = Number(error && error.code) || 7;
+    const message = String((error && error.message) || 'Failed to connect');
+    const timeoutMs = Number(options.maxTime) > 0 ? Number(options.maxTime) * 1000 : 30000;
+    const timedOut =
+      (error && error.timedOut === true) ||
+      code === 28 ||
+      (code === 7 && /tim(e|ed)?[ -]?out|timeout/i.test(message));
+    if (timedOut)
+      return { code: 28, message: `Connection timed out after ${timeoutMs} milliseconds` };
+    return { code, message };
+  }
+
+  /**
+   * Render a failed curl request: `-s` silences error messages unless `-S`,
+   * while `--write-out` still runs (real curl prints it even on failure).
+   */
+  _curlFailureOutput(options, error, { lines = [], detailLines = null, writeOutValues = {} } = {}) {
+    const normalized = this._normalizeCurlError(error, options);
+    const showError = !options.silent || options.showError || options.verbose;
+    const allLines = [...lines];
+    if (showError) {
+      if (detailLines && detailLines.length) allLines.push(...detailLines);
+      else allLines.push(...this._curlFailureLines(normalized.code, normalized.message));
+    }
+    const writeOut = this._curlWriteOutText(options, {
+      ...writeOutValues,
+      http_code: '000',
+      response_code: '000',
+      exitcode: String(normalized.code),
+      errormsg: normalized.message,
+      size_download: '0',
+    });
+    const text = allLines.join('\n') + (allLines.length && writeOut ? '\n' : '') + writeOut;
+    return this._err(text);
+  }
+
+  /**
+   * Workstation `curl` (issue #32c): resolves Route hosts through the simulated
+   * router, honouring edge/passthrough/re-encrypt TLS, the http→https redirect
+   * policy and router→Service NetworkPolicy reachability. Issue #43 fidelity:
+   * `-s`, `-o /dev/null`, `-w "%{http_code}"`, scheme-default ports.
+   */
+  _cmd_curl(args) {
+    const { options, urls } = this._parseCurlOptions(args);
     if (!urls.length) {
       return this._err(
         "curl: no URL specified!\ncurl: try 'curl --help' or 'curl --manual' for more information"
@@ -2529,6 +2723,7 @@ export class ShellTools {
     if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(url)) url = `http://${url}`;
     const maxRedirects = 5;
     const requestLines = [];
+    let redirects = 0;
     let result = null;
     for (let hop = 0; hop <= maxRedirects; hop += 1) {
       const parsed = this._parseCurlUrl(url);
@@ -2550,6 +2745,7 @@ export class ShellTools {
         if (hop >= maxRedirects) {
           return this._err(this._curlFailureLines(47, 'Maximum (5) redirects followed').join('\n'));
         }
+        redirects += 1;
         if (options.verbose)
           requestLines.push(`* Issue another request to this URL: '${location}'`);
         url = location;
@@ -2557,27 +2753,69 @@ export class ShellTools {
       }
       break;
     }
-    const lines = [];
+    const parsedUrl = this._parseCurlUrl(url);
+    const scheme = (result && result.scheme) || parsedUrl.scheme || 'http';
+    const host = (result && result.host) || parsedUrl.hostname || '';
+    const port = (result && result.port) || parsedUrl.port || (scheme === 'https' ? 443 : 80);
+    const writeOutValues = this._curlWriteOutValues({
+      url,
+      scheme,
+      host,
+      port,
+      status: result && result.status,
+      headers: (result && result.headers) || {},
+      body: (result && result.body) || '',
+      redirects,
+      serverIp: (result && result.serverIp) || '',
+    });
     if (result && result.error) {
-      lines.push(...requestLines);
-      lines.push(...this._curlFailureLines(result.error.code, result.error.message));
-      return this._err(lines.join('\n'));
+      if (options.verbose) requestLines.push(`*   Trying ${host}:${port}...`);
+      return this._curlFailureOutput(options, result.error, {
+        lines: requestLines,
+        writeOutValues,
+      });
     }
-    if (!result) return this._err('curl: (7) Failed to connect');
-    const scheme = result.scheme || 'http';
-    const host = result.host || '';
-    const port = result.port || (scheme === 'https' ? 443 : 80);
-    const requestLine = `${options.head ? 'HEAD' : options.method || 'GET'} ${result.path || '/'} HTTP/1.1`;
+    if (!result) {
+      if (options.verbose) requestLines.push(`*   Trying ${host}:${port}...`);
+      return this._curlFailureOutput(
+        options,
+        { code: 7, message: 'Failed to connect' },
+        { lines: requestLines, writeOutValues }
+      );
+    }
+    // Real curl prints the connection preamble before a TLS verification
+    // failure, so build it up-front and reuse it in both paths.
+    const verboseLines = [];
+    if (options.verbose) {
+      verboseLines.push(`*   Trying ${host}:${port}...`);
+      verboseLines.push(
+        `* Connected to ${host} (${result.serverIp || '172.30.0.20'}) port ${port}`
+      );
+      if (scheme === 'https') {
+        verboseLines.push('* TLS 1.3 connection using TLS_AES_256_GCM_SHA384');
+        verboseLines.push('* Server certificate:');
+        verboseLines.push(
+          `*  subject: ${formatDistinguishedName(result.serverCert?.subject || {})}`
+        );
+        verboseLines.push(`*  issuer: ${formatDistinguishedName(result.serverCert?.issuer || {})}`);
+      }
+      verboseLines.push(
+        `> ${options.head ? 'HEAD' : options.method || 'GET'} ${result.path || '/'} HTTP/1.1`
+      );
+      verboseLines.push(`> Host: ${host}`);
+      verboseLines.push('> User-Agent: curl/8.7.1');
+      verboseLines.push('> Accept: */*');
+      verboseLines.push('>');
+    }
+    const lines = [];
     if (scheme === 'https' && !options.insecure) {
       const certificate = result.serverCert;
       if (!certificate) {
-        lines.push(
-          ...this._curlFailureLines(
-            60,
-            'SSL certificate problem: unable to get local issuer certificate'
-          )
+        return this._curlFailureOutput(
+          options,
+          { code: 60, message: 'SSL certificate problem: unable to get local issuer certificate' },
+          { lines: [...requestLines, ...verboseLines], writeOutValues }
         );
-        return this._err(lines.join('\n'));
       }
       if (options.cacert) {
         const ca = this._readFile(options.cacert);
@@ -2591,41 +2829,35 @@ export class ShellTools {
         const problem = certificate.selfSigned
           ? 'self-signed certificate'
           : 'unable to get local issuer certificate';
-        lines.push(...this._curlFailureLines(60, `SSL certificate problem: ${problem}`));
-        lines.push(
-          'More details here: https://curl.se/docs/sslcerts.html',
-          '',
-          'curl failed to verify the legitimacy of the server and therefore could not',
-          'establish a secure connection to it. To learn more about this situation and',
-          'how to fix it, please visit the web page mentioned above.'
+        return this._curlFailureOutput(
+          options,
+          { code: 60, message: `SSL certificate problem: ${problem}` },
+          {
+            lines: [...requestLines, ...verboseLines],
+            detailLines: [
+              ...this._curlFailureLines(60, `SSL certificate problem: ${problem}`),
+              'More details here: https://curl.se/docs/sslcerts.html',
+              '',
+              'curl failed to verify the legitimacy of the server and therefore could not',
+              'establish a secure connection to it. To learn more about this situation and',
+              'how to fix it, please visit the web page mentioned above.',
+            ],
+            writeOutValues,
+          }
         );
-        return this._err(lines.join('\n'));
       }
       if (!this._certificateMatchesHost(certificate, host)) {
-        lines.push(
-          ...this._curlFailureLines(
-            60,
-            `SSL: no alternative certificate subject name matches target host name '${host}'`
-          )
+        return this._curlFailureOutput(
+          options,
+          {
+            code: 60,
+            message: `SSL: no alternative certificate subject name matches target host name '${host}'`,
+          },
+          { lines: [...requestLines, ...verboseLines], writeOutValues }
         );
-        return this._err(lines.join('\n'));
       }
     }
-    if (options.verbose) {
-      lines.push(`*   Trying ${host}:${port}...`);
-      lines.push(`* Connected to ${host} (${result.serverIp || '172.30.0.20'}) port ${port}`);
-      if (scheme === 'https') {
-        lines.push('* TLS 1.3 connection using TLS_AES_256_GCM_SHA384');
-        lines.push('* Server certificate:');
-        lines.push(`*  subject: ${formatDistinguishedName(result.serverCert?.subject || {})}`);
-        lines.push(`*  issuer: ${formatDistinguishedName(result.serverCert?.issuer || {})}`);
-      }
-      lines.push(`> ${requestLine}`);
-      lines.push(`> Host: ${host}`);
-      lines.push('> User-Agent: curl/8.7.1');
-      lines.push('> Accept: */*');
-      lines.push('>');
-    }
+    lines.push(...verboseLines);
     const status = Number(result.status || 0);
     const statusText = result.statusText || '';
     const headers = result.headers || {};
@@ -2638,25 +2870,171 @@ export class ShellTools {
       lines.push('<');
     }
     if (options.fail && status >= 400) {
-      lines.push(...this._curlFailureLines(22, `The requested URL returned error: ${status}`));
-      return this._err(lines.join('\n'));
+      return this._curlFailureOutput(
+        options,
+        { code: 22, message: `The requested URL returned error: ${status}` },
+        { lines: requestLines, detailLines: lines, writeOutValues }
+      );
     }
-    if (!options.head && result.body) lines.push(result.body);
-    if (options.output) {
-      const written = this._writeFile(options.output, result.body || '');
-      if (written && written.error) return written;
-      return this._ok('');
+    const responseLines = [...requestLines, ...lines];
+    const bodyText = options.head ? '' : result.body || '';
+    return this._curlComposeOutput(options, {
+      responseText: [...responseLines, ...(bodyText ? [bodyText] : [])].join('\n'),
+      writeOutValues,
+      writeFile: (text) => {
+        const written = this._writeFile(options.output, text);
+        return written && written.error ? written : null;
+      },
+    });
+  }
+
+  /**
+   * Render `oc exec <pod> -- curl …` with real curl semantics (issue #43).
+   *
+   * Reads the same argv as the workstation `curl` but runs the request against
+   * the simulated Pod network (`SimulationTick.trafficForExec`). A SYN dropped
+   * by a NetworkPolicy is a connection timeout — `curl: (28) Connection timed
+   * out after 30000 milliseconds` — while a Service with no endpoints is a real
+   * refusal — `curl: (7) … Connection refused`. The URL scheme decides the
+   * default port (https → 443, not 80).
+   *
+   * @param {string[]} args curl argv (the command name already stripped)
+   * @param {object} context CommandBar `_podExecContext(pod, containerName)`
+   * @returns {{ok: boolean, lines: string[]}}
+   */
+  runExecCurl(args, context = {}) {
+    const { options, urls } = this._parseCurlOptions(args);
+    const asResult = (value) =>
+      value.message === ''
+        ? { ok: !value.error, lines: [] }
+        : { ok: !value.error, lines: String(value.message).split('\n') };
+    if (!urls.length) {
+      return {
+        ok: false,
+        lines: [
+          'curl: no URL specified!',
+          "curl: try 'curl --help' or 'curl --manual' for more information",
+        ],
+      };
     }
-    return this._ok(lines.join('\n'));
+    let url = urls[0];
+    if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(url)) url = `http://${url}`;
+    const parsed = this._parseCurlUrl(url);
+    if (parsed.error) {
+      return { ok: false, lines: ['curl: (3) URL rejected: Malformed input to a URL function'] };
+    }
+    if (!['http', 'https'].includes(parsed.scheme)) {
+      return { ok: false, lines: [`curl: (1) Protocol "${parsed.scheme}" not supported`] };
+    }
+    if (!parsed.hostname) {
+      return { ok: false, lines: ['curl: (3) URL rejected: Malformed input to a URL function'] };
+    }
+    const port = parsed.port || (parsed.scheme === 'https' ? 443 : 80);
+    const sim = this.bar?.gameEngine?.simulation;
+    let result = null;
+    if (sim && typeof sim.trafficForExec === 'function') {
+      result = sim.trafficForExec(context.pod, {
+        target: parsed.hostname,
+        port,
+        scheme: parsed.scheme,
+        namespace: context.namespace,
+        protocol: 'TCP',
+      });
+    }
+    const requestLines = [];
+    if (options.verbose) {
+      requestLines.push(`*   Trying ${parsed.hostname}:${port}...`);
+      requestLines.push(`* Connected to ${parsed.hostname} port ${port}`);
+      if (parsed.scheme === 'https') {
+        requestLines.push('* TLS 1.3 connection using TLS_AES_256_GCM_SHA384');
+      }
+    }
+    /** Real curl exit code for a simulated deny reason (issue #43). */
+    const failureFor = () => {
+      if (!result) return { code: 6, message: `Could not resolve host: ${parsed.hostname}` };
+      if (result.error) return result.error;
+      if (result.allowed !== false) return null;
+      const reason = String(result.reason || '');
+      if (['dns-egress', 'dns', 'target-not-found', 'source-not-found'].includes(reason)) {
+        return { code: 6, message: `Could not resolve host: ${parsed.hostname}` };
+      }
+      if (['no-endpoints', 'service-not-found'].includes(reason)) {
+        return {
+          code: 7,
+          message: `Failed to connect to ${parsed.hostname} port ${port} after 0 ms: Connection refused`,
+        };
+      }
+      if (['egress', 'ingress', 'networkpolicy-drop'].includes(reason)) {
+        return { code: 28, message: 'Connection timed out after 30000 milliseconds' };
+      }
+      return {
+        code: 7,
+        message: `Failed to connect to ${parsed.hostname} port ${port} after 0 ms: Couldn't connect to server`,
+      };
+    };
+    const writeOutValues = this._curlWriteOutValues({
+      url,
+      scheme: parsed.scheme,
+      host: parsed.hostname,
+      port,
+      status: result && result.status !== undefined ? result.status : 200,
+      headers: (result && result.headers) || {},
+      body: ((result && result.lines) || []).join('\n'),
+      serverIp: (result && result.serverIp) || '',
+    });
+    const failure = failureFor();
+    if (failure) {
+      return asResult(
+        this._curlFailureOutput(options, failure, { lines: requestLines, writeOutValues })
+      );
+    }
+    const body = ((result && result.lines) || []).join('\n');
+    const showHeaders = options.verbose || options.include || options.head;
+    const headerLines = showHeaders
+      ? ['HTTP/1.1 200 OK', 'content-type: text/html; charset=utf-8', '']
+      : [];
+    const responseText = [
+      ...requestLines,
+      ...headerLines,
+      ...(options.head || !body ? [] : [body]),
+    ].join('\n');
+    return asResult(
+      this._curlComposeOutput(options, {
+        responseText,
+        writeOutValues,
+        writeFile: (text) => this._execCurlWriteFile(options.output, text, context),
+      })
+    );
+  }
+
+  /** Store a curl `-o <file>` response inside the `oc exec` pod filesystem. */
+  _execCurlWriteFile(path, text, context = {}) {
+    const files = context.files;
+    if (!files || typeof files.set !== 'function') return null;
+    let normalized = String(path || '');
+    if (!normalized.startsWith('/')) normalized = `/${normalized}`;
+    files.set(normalized.replace(/\/+/g, '/'), String(text ?? ''));
+    return null;
   }
 
   _parseCurlUrl(rawUrl) {
     try {
       const parsed = new URL(String(rawUrl));
+      const scheme = parsed.protocol.replace(/:$/, '').toLowerCase();
       return {
-        scheme: parsed.protocol.replace(/:$/, '').toLowerCase(),
+        scheme,
         hostname: parsed.hostname,
-        port: parsed.port ? Number(parsed.port) : null,
+        // Real curl derives the port from the scheme when the URL omits it:
+        // https → 443, http → 80 (issue #43: `curl https://example.com` must
+        // not report port 80).
+        port: parsed.port
+          ? Number(parsed.port)
+          : scheme === 'https'
+            ? 443
+            : scheme === 'http'
+              ? 80
+              : null,
+        explicitPort: Boolean(parsed.port),
         path: `${parsed.pathname || '/'}${parsed.search || ''}`,
       };
     } catch {
