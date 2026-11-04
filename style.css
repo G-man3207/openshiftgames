@@ -2060,6 +2060,16 @@ html, body {
   --hud-h: 52px;
   --palette-w: 248px;
   --dock-h: 308px;
+  /* Bottom chrome geometry. Floating panels (objectives, side panels, palette)
+     keep clear of the view toolbar, the docked oc terminal and the metrics
+     dashboard instead of being covered by them. `--bottom-ui` is the space a
+     bottom-anchored panel must leave free below itself; `--bottom-dock` is the
+     height of an open bottom dock. */
+  --toolbar-h: 36px;
+  --ui-gap: 12px;
+  --metrics-h: min(420px, 62vh);
+  --bottom-ui: calc(var(--toolbar-h) + var(--s4) + var(--ui-gap));
+  --bottom-dock: 0px;
   --shadow-float: 0 18px 44px rgba(0, 0, 0, 0.55), 0 2px 10px rgba(0, 0, 0, 0.4);
 
   /* Legacy token aliases kept so draw.html and the lazily loaded panels
@@ -2884,6 +2894,9 @@ kbd {
 }
 #game-container .palette-hint-keys { display: inline-flex; align-items: center; gap: 3px; white-space: nowrap; }
 #game-container .palette-hint-keys kbd { min-width: 14px; height: 14px; font-size: 10px; padding: 0 3px; }
+/* The open terminal/metrics dock must not bury the last palette rows / footer. */
+body.metrics-open #game-container #resource-palette,
+body.terminal-open #game-container #resource-palette { bottom: var(--bottom-dock); }
 
 #game-github-badge { display: none !important; }
 
@@ -2896,7 +2909,7 @@ kbd {
   left: calc(var(--palette-w) + var(--s4));
   z-index: 30;
   width: 336px;
-  max-height: min(560px, calc(100vh - var(--hud-h) - 150px));
+  max-height: min(560px, calc(100vh - var(--hud-h) - var(--s4) - var(--bottom-ui)));
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -2929,11 +2942,16 @@ kbd {
 .mission-collapse svg { transition: transform 160ms ease; }
 #obj-panel-body {
   display: flex;
+  flex: 1 1 auto;
   flex-direction: column;
   min-height: 0;
   overflow-y: auto;
-  padding: var(--s2) var(--s4) var(--s4);
+  overscroll-behavior: contain;
+  padding: var(--s2) var(--s4) var(--s3);
 }
+/* Collapsing the mission card folds the hint footer too (it now lives outside
+   the scrolling body so it stays visible on short viewports). */
+#objectives-panel.collapsed .mission-hints { display: none !important; }
 .mission-title {
   margin: var(--s1) 0 0;
   color: var(--text);
@@ -3000,10 +3018,24 @@ kbd {
 .obj-row.done .obj-label { color: var(--faint); }
 .obj-count { color: var(--faint); font-family: var(--font-mono); font-size: var(--fs-11); }
 .obj-row.done .obj-count { color: var(--faint); }
-.mission-hints { border-top: 1px solid var(--line); padding-top: var(--s3); }
+/* Hint footer — outside the scrolling objectives body, so the "Show hint"
+   affordance stays visible on short laptop viewports instead of hiding under
+   the terminal dock. The hint list scrolls internally when it grows. */
+.mission-hints {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+  max-height: min(38vh, 340px);
+  padding: var(--s3) var(--s4) var(--s4);
+  background: var(--surface);
+  border-top: 1px solid var(--line);
+}
 .mission-hints[style*="display: none"] { display: none !important; }
 .hint-btn {
   display: inline-flex;
+  flex: 0 0 auto;
+  align-self: flex-start;
   align-items: center;
   gap: var(--s2);
   height: 30px;
@@ -3021,7 +3053,20 @@ kbd {
 .hint-btn:hover { border-color: rgba(232, 163, 61, 0.45); }
 .hint-btn svg { width: 13px; height: 13px; }
 .hint-btn[style*="display: none"] { display: none !important; }
-.hint-list { display: flex; flex-direction: column; gap: var(--s2); margin-top: var(--s2); }
+.hint-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+  min-height: 0;
+  max-height: min(24vh, 200px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.hint-list:empty { display: none; }
+/* The panel shares the viewport with the dock: keep the expanded hint list on a
+   short leash so revealed hints never squeeze the objectives body to nothing. */
+body.terminal-open .hint-list { max-height: min(14vh, 120px); }
+body.metrics-open .hint-list { max-height: min(18vh, 160px); }
 .hint-row {
   display: flex;
   align-items: flex-start;
@@ -3124,6 +3169,18 @@ body.terminal-open #minimap-container { bottom: calc(var(--dock-h) + var(--s3)) 
   pointer-events: none;
 }
 .term-container.is-open { transform: translateY(0); pointer-events: auto; }
+/* Open bottom docks reserve their own height for the bottom-anchored surfaces
+   (objectives panel, side panels, palette) instead of covering them. The
+   terminal also carries the raised view toolbar, so it reserves a bit more;
+   when both classes are set the terminal wins (the metrics dock is hidden). */
+body.metrics-open {
+  --bottom-dock: var(--metrics-h);
+  --bottom-ui: calc(var(--metrics-h) + var(--ui-gap));
+}
+body.terminal-open {
+  --bottom-dock: var(--dock-h);
+  --bottom-ui: calc(var(--dock-h) + var(--ui-gap) + var(--toolbar-h) + var(--ui-gap));
+}
 .term-dock {
   height: var(--dock-h);
   display: flex;
@@ -3821,7 +3878,7 @@ body.terminal-open #minimap-container { bottom: calc(var(--dock-h) + var(--s3)) 
   #game-container .palette-group-body { padding: 2px 6px 6px; align-items: center; }
   #game-container .palette-item { justify-content: center; padding: 0; height: 36px; }
   #game-container .palette-label, .palette-shortcut { display: none; }
-  #objectives-panel { left: calc(64px + var(--s2)); width: min(320px, calc(100vw - 80px)); max-height: 50vh; }
+  #objectives-panel { left: calc(64px + var(--s2)); width: min(320px, calc(100vw - 80px)); max-height: min(50vh, calc(100vh - var(--hud-h) - var(--s2) - var(--bottom-ui))); }
   #view-toolbar { left: calc(64px + var(--s2)); right: var(--s2); overflow-x: auto; }
   #view-toolbar .tb-btn span { display: none; }
   .tb-sep { display: none; }
@@ -3884,6 +3941,10 @@ body.terminal-open #minimap-container { bottom: calc(var(--dock-h) + var(--s3)) 
 .panel-right { right: 0; border-left: 1px solid var(--line); transform: translateX(100%); }
 .panel-left { left: 0; border-right: 1px solid var(--line); transform: translateX(-100%); }
 .panel-side.is-open { transform: translateX(0); }
+/* Dock-aware side panels: stop above the open terminal/metrics dock instead of
+   sliding under it. */
+body.metrics-open .panel-side,
+body.terminal-open .panel-side { bottom: var(--bottom-dock); }
 .panel-inner {
   display: flex;
   flex-direction: column;
@@ -3908,7 +3969,7 @@ body.terminal-open #minimap-container { bottom: calc(var(--dock-h) + var(--s3)) 
 .panel-dock.is-open { transform: translateY(0); }
 body.terminal-open .panel-dock { display: none; }
 .metrics-panel {
-  height: min(420px, 62vh) !important;
+  height: var(--metrics-h) !important;
   display: flex;
   flex-direction: column;
   background: var(--surface);
@@ -4162,7 +4223,7 @@ body.terminal-open .panel-dock { display: none; }
   #game-container #resource-palette { width: 64px !important; top: var(--hud-h) !important; padding: 0 !important; }
   #game-container .palette-item { width: 100% !important; height: 36px !important; border-radius: var(--radius-sm) !important; }
   #game-container .palette-group-body { padding: 2px 6px 6px !important; }
-  #objectives-panel { left: calc(64px + var(--s2)) !important; width: min(320px, calc(100vw - 80px)) !important; max-height: 50vh !important; top: calc(var(--hud-h) + var(--s2)) !important; }
+  #objectives-panel { left: calc(64px + var(--s2)) !important; width: min(320px, calc(100vw - 80px)) !important; max-height: min(50vh, calc(100vh - var(--hud-h) - var(--s2) - var(--bottom-ui))) !important; top: calc(var(--hud-h) + var(--s2)) !important; }
   #view-toolbar { left: calc(64px + var(--s2)) !important; right: var(--s2) !important; bottom: var(--s2) !important; transform: none !important; max-width: none !important; overflow-x: auto !important; }
   body.terminal-open #view-toolbar { bottom: calc(var(--dock-h) + var(--s3)) !important; }
   #inspector-panel { width: min(400px, 92vw) !important; top: var(--hud-h) !important; right: 0 !important; left: auto !important; }

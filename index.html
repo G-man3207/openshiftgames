@@ -46,7 +46,7 @@
       }
     }
   </script>
-  <link rel="stylesheet" href="style.css?v=1.2.0">
+  <link rel="stylesheet" href="style.css?v=1.2.1">
   <link rel="stylesheet" href="start.css?v=1.1.0">
   <!-- Pinned dependency: Three.js r152 (ES modules, no build step) -->
   <script type="importmap">
@@ -365,13 +365,13 @@
           <div class="mission-progress-track" aria-hidden="true"><div id="obj-progress-fill" class="mission-progress-fill"></div></div>
         </div>
         <div id="obj-list" class="obj-list" role="list"></div>
-        <div id="hint-section" class="mission-hints">
-          <button id="btn-show-hint" class="hint-btn" type="button" hidden>
-            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M8 1.5a4 4 0 00-2.3 7.3c.4.3.6.7.6 1.2v.3h3.4V10c0-.5.2-.9.6-1.2A4 4 0 008 1.5z"/><path d="M6.3 13h3.4M7 15h2" stroke-linecap="round"/></svg>
-            <span>Show hint</span>
-          </button>
-          <div id="hint-list" class="hint-list"></div>
-        </div>
+      </div>
+      <div id="hint-section" class="mission-hints">
+        <button id="btn-show-hint" class="hint-btn" type="button" hidden>
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M8 1.5a4 4 0 00-2.3 7.3c.4.3.6.7.6 1.2v.3h3.4V10c0-.5.2-.9.6-1.2A4 4 0 008 1.5z"/><path d="M6.3 13h3.4M7 15h2" stroke-linecap="round"/></svg>
+          <span>Show hint</span>
+        </button>
+        <div id="hint-list" class="hint-list" aria-live="polite"></div>
       </div>
     </section>
 
@@ -2516,6 +2516,10 @@
               div.className = 'hint-row';
               div.innerHTML = `<span class="hint-index">${this._hintIndex + 1}</span><span class="hint-text">${escapeHtml(hint)}</span>`;
               list?.appendChild(div);
+              // On short laptop viewports the panel body scrolls (the terminal
+              // dock reserves its own space); make sure the revealed hint is
+              // actually in view instead of silently landing below the fold.
+              try { div.scrollIntoView({ block: 'nearest' }); } catch { /* jsdom */ }
               this._hintIndex++;
               if (this._hintIndex >= allHints.length) hintBtn.style.display = 'none';
               else hintBtn.querySelector('span').textContent = `Show hint (${allHints.length - this._hintIndex} left)`;

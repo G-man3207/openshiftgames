@@ -1004,6 +1004,64 @@ if (should('game')) {
     return info;
   });
 
+  // ── laptop viewport: campaign objectives panel + open oc terminal ───────
+  // A MacBook 14" browser viewport is ~1512x900 once browser chrome is
+  // subtracted. The terminal dock and the view toolbar must never bury the
+  // objectives panel, its hints or the Show hint button.
+  await captureState('campaign-level1-terminal-laptop', async () => {
+    await page.setViewport({ width: 1512, height: 900, deviceScaleFactor: 1 });
+    await goto('/?mode=campaign&level=1&tutorial=0');
+    const started = await waitFor(() => evaluate(() => !!window.game?.app?.modeInstance), 20000);
+    check('laptop: campaign level 1 starts', started);
+    await sleep(1400);
+    await closeOverlays();
+    // Freeze the 240ms dock slide-in so the measurement is deterministic under
+    // headless SwiftShader (the render loop can starve the CSS transition).
+    const freeze = await page.addStyleTag({ content: '.term-container, .term-container.is-open, #view-toolbar { transition: none !important; }' });
+    const opened = await evaluate(() => { window.game?.app?.commandBar?.show?.(); return window.game?.app?.commandBar?.visible === true; });
+    check('laptop: terminal opens', opened);
+    await sleep(500);
+    const info = await evaluate(() => {
+      const rect = (el) => {
+        const r = el?.getBoundingClientRect();
+        return r ? { top: Math.round(r.top), bottom: Math.round(r.bottom), left: Math.round(r.left), right: Math.round(r.right) } : null;
+      };
+      const panel = document.getElementById('objectives-panel');
+      const body = document.getElementById('obj-panel-body');
+      const toolbar = document.getElementById('view-toolbar');
+      const term = document.getElementById('command-bar');
+      const palette = document.getElementById('resource-palette');
+      const hint = document.getElementById('btn-show-hint');
+      const pr = panel?.getBoundingClientRect();
+      const tr = toolbar?.getBoundingClientRect();
+      const dr = term?.getBoundingClientRect();
+      const hr = hint?.getBoundingClientRect();
+      const hitStack = hint && hr ? document.elementsFromPoint(hr.left + hr.width / 2, hr.top + hr.height / 2) : [];
+      return {
+        viewport: { width: innerWidth, height: innerHeight },
+        terminalOpen: document.body.classList.contains('terminal-open'),
+        panel: rect(panel), toolbar: rect(toolbar), terminal: rect(term), palette: rect(palette), hint: rect(hint),
+        panelBottomAboveToolbar: pr && tr ? Math.round(tr.top - pr.bottom) : null,
+        panelBottomAboveTerminal: pr && dr ? Math.round(dr.top - pr.bottom) : null,
+        paletteBottomAboveTerminal: rect(palette) && dr ? Math.round(dr.top - rect(palette).bottom) : null,
+        bodyScroll: body ? { scrollHeight: body.scrollHeight, clientHeight: body.clientHeight } : null,
+        bodyScrollable: Boolean(body && body.scrollHeight > body.clientHeight + 1),
+        hintVisible: Boolean(hint && getComputedStyle(hint).display !== 'none' && hr && hr.width > 0),
+        hintHitIsButton: hitStack.some((el) => el?.id === 'btn-show-hint'),
+      };
+    });
+    check('laptop: objectives panel ends above the view toolbar', info.panelBottomAboveToolbar !== null && info.panelBottomAboveToolbar >= 8, `gap=${info.panelBottomAboveToolbar}px`);
+    check('laptop: objectives panel ends above the terminal dock', info.panelBottomAboveTerminal !== null && info.panelBottomAboveTerminal >= 8, `gap=${info.panelBottomAboveTerminal}px`);
+    check('laptop: objectives body scrolls while the terminal is open', info.bodyScrollable, JSON.stringify(info.bodyScroll));
+    check('laptop: Show hint button is visible and not covered', info.hintVisible && info.hintHitIsButton, JSON.stringify({ hint: info.hint, hit: info.hintHitIsButton }));
+    check('laptop: palette footer stays above the terminal dock', info.paletteBottomAboveTerminal !== null && info.paletteBottomAboveTerminal >= -1, `gap=${info.paletteBottomAboveTerminal}px`);
+    const laptopShot = await shot('game-campaign-level1-terminal-1512x900');
+    if (freeze) await freeze.evaluate((el) => el.remove()).catch(() => {});
+    await page.setViewport({ ...GAME_VIEWPORT, deviceScaleFactor: 1 });
+    await sleep(200);
+    return { ...info, laptopShot };
+  });
+
   // ── sandbox ─────────────────────────────────────────────────────────────
   await captureState('sandbox', async () => {
     const ok = await launchUrl('sandbox', { tutorial0: true });

@@ -4,6 +4,33 @@ All notable changes to OpenShift Games are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 aims to follow [Semantic Versioning](https://semver.org/).
 
+## [1.1.3] — 2026-11-04
+
+Laptop-layout release: the open `oc` terminal dock and the view toolbar no longer bury the
+campaign objectives panel on short laptop viewports (e.g. a MacBook 14" browser at 1512×900).
+
+### Fixed
+
+- **The objectives panel now reserves space for bottom docks.** Opening the terminal used to
+  slide a 308px full-width dock over the bottom of the panel, hiding the hints and the “Show hint”
+  button; because the panel was not overflowing it could not be scrolled, so the only workaround
+  was closing the terminal. The panel's max-height is now dock-aware
+  (`--bottom-ui` + `body.terminal-open` / `body.metrics-open`), so it ends above the view toolbar
+  (which in turn sits above the terminal), and its body scrolls when the viewport is short. The
+  same treatment applies to the metrics dashboard: it no longer covers the objectives panel, hints
+  or palette when opened with the terminal closed. The slide-in inspector/incident side panels and
+  the resource palette also stop above an open dock, so their last rows, footer and console tabs
+  stay reachable.
+- **The hint affordance stays in reach.** The mission hint section is now a fixed footer outside the
+  scrolling objectives body, so “Show hint” remains visible on short viewports (the hint list
+  scrolls internally and is height-capped while a dock is open so it never squeezes the objectives
+  out), and a revealed hint scrolls itself into view instead of silently landing below the fold.
+- Added a `campaign-level1-terminal-laptop` regression state to `scripts/visual-qa.mjs`
+  (1512×900, campaign level 1 + open terminal) asserting the panel/toolbar/dock gaps, panel
+  scrollability, hint-button hit target and palette clearance.
+
+---
+
 ## [1.1.2] — 2026-11-04
 
 External-review follow-up: real project-template flow, HTPasswd password rotation, and the
