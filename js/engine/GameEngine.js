@@ -303,6 +303,9 @@ const GAME_STATES = {
   MENU: 'menu',
 };
 
+/** Workload image-change trigger annotation (apps/v1 Deployments have no spec.triggers). */
+const IMAGE_TRIGGER_ANNOTATION = 'image.openshift.io/triggers';
+
 /** Commands whose authorization is checked when recorded (spec §4). */
 const UPSTREAM_CLI_ALIAS = ['kube', 'ctl'].join('');
 const CLI_PREFIX_RE = new RegExp(`^(oc|${UPSTREAM_CLI_ALIAS})\\s+`, 'i');
@@ -770,6 +773,27 @@ export class GameEngine {
       };
     }
 
+    // A real 4.22 cluster cannot authenticate when the IdP references a missing
+    // (or malformed) htpasswd Secret in openshift-config: the authentication
+    // operator degrades and oc login is rejected. Do not let an OAuth rollout
+    // "ready" flag stand in for an actual Secret (GAME-011).
+    const providerSecretName =
+      this.authProvider.secretName
+      || this.authProvider.htpasswd?.fileData?.name
+      || this.authProvider.htpasswd?.secret?.name
+      || 'htpasswd-secret';
+    const providerSecret = this.cluster.getByName('Secret', providerSecretName, 'openshift-config');
+    const providerSecretData = providerSecret?.spec?.data || providerSecret?.data || {};
+    if (!providerSecret || !providerSecretData.htpasswd) {
+      return {
+        success: false,
+        reason: 'identity-provider-secret-invalid',
+        message:
+          `Login failed (401 Unauthorized)\nThe HTPasswd identity provider is not ready: `
+          + `Secret "${providerSecretName}" in project openshift-config is missing or has no "htpasswd" key.`,
+      };
+    }
+
     const verification = this._verifyHtpasswdCredential(user, password);
     if (!verification.ok) {
       return {
@@ -837,6 +861,106 @@ export class GameEngine {
   }
 
   /**
+   * The `project.config.openshift.io/cluster` singleton.
+   *
+   * Feature-detected delegation to ClusterState (platform-owned). When the
+   * platform bridge is absent we keep a local fallback singleton so declarative
+   * `oc apply -f projectconfig.yaml` / `oc edit project.config.openshift.io/cluster`
+   * still round-trip instead of being mistaken for a Project.
+   *
+   * @returns {object} the ProjectConfig-style object (`{apiVersion, kind, metadata, spec}`)
+   */
+  getProjectConfig() {
+    const state = this.cluster;
+    if (state && typeof state.getProjectConfig === 'function') {
+      try {
+        const delegated = state.getProjectConfig();
+        if (delegated && typeof delegated === 'object') return delegated;
+      } catch {
+        /* fall through to local fallback */
+      }
+    }
+    if (!this._projectConfigFallback) {
+      // Real OCP shape: `apiVersion: config.openshift.io/v1, kind: Project,
+      // metadata.name: cluster` (resource project.config.openshift.io/cluster).
+      this._projectConfigFallback = {
+        apiVersion: 'config.openshift.io/v1',
+        kind: 'Project',
+        metadata: { name: 'cluster' },
+        spec: {},
+      };
+      try {
+        if (!this.cluster.projectConfig) this.cluster.projectConfig = this._projectConfigFallback;
+      } catch {
+        /* ignore */
+      }
+    }
+    return this._projectConfigFallback;
+  }
+
+  /**
+   * Update `project.config.openshift.io/cluster` (Project template / requester
+   * defaults). Delegates to ClusterState when the platform bridge exists.
+   *
+   * @param {object} specPatch partial ProjectConfig spec (merged)
+   * @returns {{success: boolean, message: string, projectConfig?: object}}
+   */
+  updateProjectConfig(specPatch = {}) {
+    const patch = specPatch && typeof specPatch === 'object' ? deepClone(specPatch) : {};
+    const state = this.cluster;
+    if (state && typeof state.updateProjectConfig === 'function') {
+      try {
+        const delegated = state.updateProjectConfig(patch);
+        if (delegated && typeof delegated === 'object') {
+          return {
+            success: delegated.success !== false,
+            message: delegated.message || 'project.config.openshift.io/cluster configured',
+            projectConfig: delegated.projectConfig || delegated.resource || this.getProjectConfig(),
+          };
+        }
+        return {
+          success: true,
+          message: 'project.config.openshift.io/cluster configured',
+          projectConfig: this.getProjectConfig(),
+        };
+      } catch (error) {
+        return { success: false, message: `error: ${error?.message || error}` };
+      }
+    }
+
+    // Local fallback (platform bridge not available yet): merge the patch into
+    // the in-memory singleton so get/set/apply round-trip consistently.
+    const current = this.getProjectConfig();
+    this._projectConfigFallback = {
+      ...current,
+      apiVersion: current.apiVersion || 'config.openshift.io/v1',
+      kind: 'Project',
+      metadata: { ...(current.metadata || {}), name: 'cluster' },
+      spec: deepMerge({}, current.spec || {}, patch),
+    };
+    // Mirror the singleton on the cluster instance so UI/`oc get` read paths
+    // that look at `cluster.projectConfig` see the same value.
+    try {
+      this.cluster.projectConfig = this._projectConfigFallback;
+    } catch {
+      /* read-only cluster wrappers */
+    }
+    try {
+      this.eventBus.emit('projectconfig:updated', {
+        spec: deepClone(this._projectConfigFallback.spec),
+        resource: this._projectConfigFallback,
+      });
+    } catch {
+      /* listeners must never break apply */
+    }
+    return {
+      success: true,
+      message: 'project.config.openshift.io/cluster configured',
+      projectConfig: this._projectConfigFallback,
+    };
+  }
+
+  /**
    * `oc new-project <name>` — create the Project resource, its default
    * service account and switch to it.
    * @param {string} name
@@ -845,7 +969,10 @@ export class GameEngine {
    */
   createProject(name, options = {}) {
     if (!this.currentUser) return { success: false, message: 'error: You must be logged in to the server (Unauthorized)' };
-    const result = this.cluster.createProject(name, options);
+    // The requester is part of the real `oc new-project` flow: ClusterState
+    // records it on the Project and (with a configured project template) grants
+    // the requester project-admin and renders the template objects.
+    const result = this.cluster.createProject(name, { ...options, requester: this.currentUser });
     if (!result.success) return result;
     this.switchProject(name);
     return { success: true, project: result.project, message: `Now using project "${name}" on server "https://api.cluster.example.com:6443".` };
@@ -1039,6 +1166,42 @@ export class GameEngine {
       return last;
     }
 
+    // Bridge: `config.openshift.io/v1, kind: Project, metadata.name: cluster`
+    // is the project.config.openshift.io/cluster singleton — NOT a Project.
+    // Declarative tooling (ManifestEngine applyFile / `oc replace -f -`) reaches
+    // this method with the apiVersion/kind preserved; configure project
+    // provisioning (template / requester message) and never create a Project.
+    if (
+      obj.apiVersion === 'config.openshift.io/v1'
+      && obj.kind === 'Project'
+      && (obj.metadata?.name || obj.name) === 'cluster'
+    ) {
+      const spec = obj.spec && typeof obj.spec === 'object' ? deepClone(obj.spec) : {};
+      const result = this.updateProjectConfig(spec);
+      if (!result.success) {
+        this.lastApplyError =
+          result.message || 'error: unable to configure project.config.openshift.io/cluster';
+        return null;
+      }
+      this.lastApplyError = null;
+      const projectConfig = result.projectConfig && typeof result.projectConfig === 'object'
+        ? result.projectConfig
+        : this.getProjectConfig();
+      try {
+        this.eventBus.emit('resource:applied', {
+          action: 'configured',
+          kind: 'Project',
+          apiVersion: 'config.openshift.io/v1',
+          name: 'cluster',
+          namespace: '',
+          resource: projectConfig,
+        });
+      } catch {
+        /* listeners must never break apply */
+      }
+      return projectConfig;
+    }
+
     const normalised = this._normaliseManifestObject(obj);
     if (!normalised) {
       this.lastApplyError = `manifest object has no kind`;
@@ -1071,6 +1234,7 @@ export class GameEngine {
       existing.metadata.generation++;
       this.cluster.update(existing.uid, existing);
       existing._applyAction = 'updated';
+      this._syncHtpasswdFileFromSecret(kind, existing);
       this.eventBus.emit('resource:applied', { action: 'updated', kind, name, namespace, resource: existing });
       return existing;
     }
@@ -1106,8 +1270,53 @@ export class GameEngine {
     resource.spec = deepClone(normalised.spec || {});
     const added = this.cluster.add(resource);
     added._applyAction = 'created';
+    this._syncHtpasswdFileFromSecret(kind, added);
     this.eventBus.emit('resource:applied', { action: 'created', kind, name, namespace, resource: added });
     return added;
+  }
+
+  /**
+   * A real cluster watches the HTPasswd Secret referenced by the OAuth CR and
+   * reads the `htpasswd` key from it. The simulator's identity provider verifies
+   * logins against the virtual `htpasswd` file, so mirror the Secret content into
+   * that file whenever a manifest/CLI path creates or updates it
+   * (`oc create secret … --from-file=htpasswd=…` / `oc set data …` / `oc apply -f`).
+   * Also nudges the OAuth singleton so the normal 5s authentication rollout runs,
+   * matching the operator's Secret watch.
+   *
+   * @param {string} kind
+   * @param {object} resource
+   */
+  _syncHtpasswdFileFromSecret(kind, resource) {
+    if (kind !== 'Secret' || !resource) return;
+    if ((resource.metadata?.namespace || '') !== 'openshift-config') return;
+    const data = resource.spec?.data || resource.data || {};
+    const encoded = data.htpasswd;
+    if (typeof encoded !== 'string' || !encoded) return;
+    let text = '';
+    try {
+      text = globalThis.atob ? globalThis.atob(encoded) : '';
+    } catch {
+      return;
+    }
+    if (!text) return;
+    const manifestEngine = this._getManifestEngine();
+    if (manifestEngine && typeof manifestEngine.writeFile === 'function') {
+      try {
+        manifestEngine.writeFile('htpasswd', text.endsWith('\n') ? text : `${text}\n`);
+      } catch {
+        /* the virtual FS is optional (headless engine harnesses) */
+      }
+    }
+    const oauth = this.cluster.getOAuth?.();
+    if (oauth) {
+      try {
+        oauth._bumpResourceVersion?.();
+        this.cluster.update(oauth.uid, oauth);
+      } catch {
+        /* rollout scheduling is best-effort */
+      }
+    }
   }
 
   /** @param {string} value @returns {boolean} */
@@ -1262,6 +1471,78 @@ export class GameEngine {
   }
 
   /**
+   * Parse a workload's `image.openshift.io/triggers` annotation into the
+   * canonical trigger entry list (real OpenShift annotation model).
+   * @param {object} resource
+   * @returns {object[]}
+   */
+  _parseImageTriggerAnnotation(resource) {
+    const raw = resource?.metadata?.annotations?.[IMAGE_TRIGGER_ANNOTATION];
+    if (!raw) return [];
+    try {
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed.filter((entry) => entry && entry.from) : [];
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * Convert ImageChange trigger descriptors (spec-style) into
+   * `image.openshift.io/triggers` annotation entries for a workload.
+   * @param {object[]} triggers
+   * @param {string[]} containerNames container names in pod-template order
+   * @returns {object[]}
+   */
+  _imageTriggerAnnotationEntries(triggers, containerNames = ['main']) {
+    const entries = [];
+    for (const trigger of Array.isArray(triggers) ? triggers : []) {
+      if (!trigger || trigger.type !== 'ImageChange') continue;
+      const params = trigger.imageChangeParams || trigger.imageChange || {};
+      const from = params.from || trigger.from || null;
+      if (!from || !from.name) continue;
+      const targets = Array.isArray(params.containerNames) && params.containerNames.length > 0
+        ? params.containerNames
+        : containerNames;
+      for (const containerName of targets) {
+        const index = Math.max(0, containerNames.indexOf(containerName));
+        entries.push({
+          from: {
+            kind: from.kind || 'ImageStreamTag',
+            name: from.name,
+            ...(from.namespace ? { namespace: from.namespace } : {}),
+          },
+          fieldPath: `spec.template.spec.containers[${index}].image`,
+        });
+      }
+    }
+    return entries;
+  }
+
+  /**
+   * Image-change triggers for a workload/BuildConfig: BuildConfigs keep
+   * `spec.triggers`; workloads expose the `image.openshift.io/triggers`
+   * annotation (platform model).
+   * @param {string} kind
+   * @param {string} name
+   * @param {{namespace?: string}} [options]
+   * @returns {object[]}
+   */
+  getImageTriggers(kind, name, options = {}) {
+    const canonical = this.cluster._canonicalKind(kind);
+    const resource = this.getResource(canonical, name, options.namespace);
+    if (!resource) return [];
+    if (canonical === 'BuildConfig') return [...(resource.spec?.triggers || [])];
+    const fromAnnotation = this._parseImageTriggerAnnotation(resource);
+    // Backwards compatibility for resources created before the annotation model.
+    if (fromAnnotation.length > 0) return fromAnnotation;
+    return [...(resource.spec?.triggers || [])].map((trigger) => ({
+      type: trigger.type,
+      imageChangeParams: trigger.imageChangeParams || trigger.imageChange,
+    }));
+  }
+
+  /**
    * @param {object} options
    * @param {string} options.name
    * @param {string} options.namespace
@@ -1297,12 +1578,18 @@ export class GameEngine {
         spec: { containers: [container] },
       },
     };
-    if (options.triggers) deploymentSpec.triggers = options.triggers;
     if (options.serviceAccountName) deploymentSpec.template.spec.serviceAccountName = options.serviceAccountName;
+    const imageTriggerEntries = this._imageTriggerAnnotationEntries(options.triggers, [container.name]);
+    const metadata = { name, namespace: options.namespace, labels };
+    if (imageTriggerEntries.length > 0) {
+      // apps/v1 Deployments have no spec.triggers: image triggers live in the
+      // image.openshift.io/triggers annotation (OCP 4.x).
+      metadata.annotations = { [IMAGE_TRIGGER_ANNOTATION]: JSON.stringify(imageTriggerEntries) };
+    }
     return {
       apiVersion: 'apps/v1',
       kind: 'Deployment',
-      metadata: { name, namespace: options.namespace, labels },
+      metadata,
       spec: deploymentSpec,
     };
   }
@@ -1385,7 +1672,7 @@ export class GameEngine {
     const imageStream = this.applyManifestObject(imageStreamObject);
     if (imageStream) resources.push(imageStream);
 
-    const builderImage = options.builderImage || 'nodejs:20';
+    const builderImage = options.builderImage || 'nodejs:20-ubi9';
     const buildConfigObject = {
       apiVersion: 'build.openshift.io/v1',
       kind: 'BuildConfig',
@@ -1463,7 +1750,7 @@ export class GameEngine {
     const name = options.name || this._appNameFor(options.code || options.imageStream || 'build');
     const strategy = options.dockerfile
       ? { type: 'Docker', dockerStrategy: { dockerfilePath: 'Dockerfile' } }
-      : { type: 'Source', sourceStrategy: { from: { kind: 'ImageStreamTag', name: options.imageStream || 'nodejs:20', namespace: 'openshift' } } };
+      : { type: 'Source', sourceStrategy: { from: { kind: 'ImageStreamTag', name: options.imageStream || 'nodejs:20-ubi9', namespace: 'openshift' } } };
     const buildConfig = this.applyManifestObject({
       apiVersion: 'build.openshift.io/v1',
       kind: 'BuildConfig',
@@ -1832,9 +2119,59 @@ export class GameEngine {
     const namespace = options.namespace || this.currentProject || 'default';
     const resource = this.cluster.getByName(canonical, name, namespace);
     if (!resource) return { success: false, message: `Error from server (NotFound): ${String(canonical).toLowerCase()}s "${name}" not found` };
+
+    // BuildConfig is the only kind with a spec.triggers field; workload image
+    // triggers use the image.openshift.io/triggers annotation (OCP 4.x).
+    if (canonical !== 'BuildConfig') {
+      const current = this._parseImageTriggerAnnotation(resource);
+      if (options.remove) {
+        const before = current.length;
+        const next = current.filter((entry) => {
+          if (!options.fromImage) return false;
+          return String(entry?.from?.name || '') !== String(options.fromImage);
+        });
+        resource.metadata.annotations = resource.metadata.annotations || {};
+        if (next.length > 0) resource.metadata.annotations[IMAGE_TRIGGER_ANNOTATION] = JSON.stringify(next);
+        else delete resource.metadata.annotations[IMAGE_TRIGGER_ANNOTATION];
+        resource.metadata.generation++;
+        this.cluster.update(resource.uid, resource);
+        return { success: true, message: `${before - next.length} trigger(s) removed`, resource };
+      }
+      if (!options.fromImage) return { success: false, message: 'error: you must specify --from-image=<imagestream>:<tag>' };
+      const [imageStreamName, tag = 'latest'] = String(options.fromImage).split(':');
+      const containers = Array.isArray(resource.spec?.template?.spec?.containers)
+        ? resource.spec.template.spec.containers.map((container) => container.name)
+        : ['main'];
+      const targets = options.containers ? [].concat(options.containers) : containers;
+      const nextEntries = current.filter((entry) => {
+        const path = String(entry?.fieldPath || '');
+        return !targets.some((containerName) => {
+          const index = containers.indexOf(containerName);
+          return index >= 0 && path === `spec.template.spec.containers[${index}].image`;
+        });
+      });
+      const added = this._imageTriggerAnnotationEntries(
+        [{
+          type: 'ImageChange',
+          imageChangeParams: {
+            automatic: true,
+            containerNames: targets,
+            from: { kind: 'ImageStreamTag', name: `${imageStreamName}:${tag}` },
+          },
+        }],
+        containers
+      );
+      const merged = [...nextEntries, ...added];
+      resource.metadata.annotations = resource.metadata.annotations || {};
+      if (merged.length > 0) resource.metadata.annotations[IMAGE_TRIGGER_ANNOTATION] = JSON.stringify(merged);
+      else delete resource.metadata.annotations[IMAGE_TRIGGER_ANNOTATION];
+      resource.metadata.generation++;
+      this.cluster.update(resource.uid, resource);
+      return { success: true, message: `triggers updated for ${String(canonical).toLowerCase()}/${name}`, resource };
+    }
+
     resource.spec = resource.spec || {};
     resource.spec.triggers = resource.spec.triggers || [];
-
     if (options.remove) {
       const before = resource.spec.triggers.length;
       resource.spec.triggers = resource.spec.triggers.filter((trigger) => {
@@ -1845,21 +2182,10 @@ export class GameEngine {
       this.cluster.update(resource.uid, resource);
       return { success: true, message: `${before - resource.spec.triggers.length} trigger(s) removed`, resource };
     }
-
     if (!options.fromImage) return { success: false, message: 'error: you must specify --from-image=<imagestream>:<tag>' };
     const [imageStreamName, tag = 'latest'] = String(options.fromImage).split(':');
-    const trigger = canonical === 'BuildConfig'
-      ? { type: 'ImageChange', imageChange: { from: { kind: 'ImageStreamTag', name: `${imageStreamName}:${tag}` } } }
-      : {
-        type: 'ImageChange',
-        imageChangeParams: {
-          automatic: true,
-          containerNames: options.containers || ['main'],
-          from: { kind: 'ImageStreamTag', name: `${imageStreamName}:${tag}` },
-        },
-      };
     resource.spec.triggers = resource.spec.triggers.filter((entry) => entry.type !== 'ImageChange');
-    resource.spec.triggers.push(trigger);
+    resource.spec.triggers.push({ type: 'ImageChange', imageChange: { from: { kind: 'ImageStreamTag', name: `${imageStreamName}:${tag}` } } });
     this.cluster.update(resource.uid, resource);
     return { success: true, message: `triggers updated for ${String(canonical).toLowerCase()}/${name}`, resource };
   }
@@ -2380,7 +2706,7 @@ export class GameEngine {
 
   /**
    * `oc tag <src> <dst> [--scheduled]`.
-   * @param {string} source e.g. "nodejs:20" or "openshift/nodejs:20"
+   * @param {string} source e.g. "nodejs:20-ubi9" or "openshift/nodejs:20-ubi9"
    * @param {string} destination e.g. "app:latest"
    * @param {{namespace?: string}} [options]
    */

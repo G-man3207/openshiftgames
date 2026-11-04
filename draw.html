@@ -9,18 +9,21 @@
   <meta property="og:description" content="Design OpenShift architectures visually in 3D. Drag Projects, Routes, BuildConfigs and more, draw connections, export OpenShift YAML. Built for EX280.">
   <meta property="og:type" content="website">
   <meta property="og:url" content="https://shifting.pro/draw">
+  <meta property="og:site_name" content="OpenShift Games">
   <meta property="og:image" content="https://shifting.pro/og-image.png">
   <meta property="og:image:width" content="1200">
   <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="OpenShift Draw — a 3D architecture diagram of OpenShift resources with YAML export">
   <meta name="twitter:card" content="summary_large_image">
   <meta name="twitter:title" content="OpenShift Draw — 3D OpenShift Architecture Diagram">
   <meta name="twitter:description" content="Design OpenShift architectures visually in 3D. Drag Projects, Routes, BuildConfigs and more, draw connections, export OpenShift YAML. Built for EX280.">
   <meta name="twitter:image" content="https://shifting.pro/og-image.png">
+  <meta name="theme-color" content="#EE0000">
   <link rel="canonical" href="https://shifting.pro/draw">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='14' fill='%23EE0000'/><text x='16' y='22' text-anchor='middle' fill='white' font-size='15' font-weight='bold'>O</text></svg>">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Schibsted+Grotesk:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Schibsted+Grotesk:wght@400;500;600;700;800&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
   <script src="https://cdn.tailwindcss.com/3.4.1"></script>
   <script>
     tailwind.config = {
@@ -41,7 +44,7 @@
       }
     }
   </script>
-  <link rel="stylesheet" href="style.css?v=1.0.1">
+  <link rel="stylesheet" href="style.css?v=1.2.0">
   <script type="importmap">
   {
     "imports": {
@@ -143,7 +146,7 @@
     <div class="palette-item" data-resource="Subscription" draggable="true"><div class="palette-label">Operator</div></div>
   </div>
 
-  <div id="draw-props" class="fixed right-0 top-12 z-30 backdrop-blur-xl bg-black/70 border-l border-white/10 overflow-y-auto transition-transform duration-300 translate-x-full" style="bottom:0;width:18rem;">
+  <div id="draw-props" class="fixed right-0 top-12 z-30 backdrop-blur-xl bg-black/70 border-l border-white/10 overflow-y-auto transition-transform duration-300 translate-x-full" style="bottom:0;width:18rem;" inert>
     <div class="flex items-center justify-between px-4 py-3 border-b border-white/10">
       <span class="text-sm font-semibold text-white/90">Properties</span>
       <button id="btn-close-props" class="text-white/40 hover:text-white/80 text-xs transition-colors">&#10005;</button>
@@ -313,7 +316,11 @@
       const obj = JSON.parse(JSON.stringify(manifest));
       if (obj.metadata) {
         if (obj.metadata.labels && Object.keys(obj.metadata.labels).length === 0) delete obj.metadata.labels;
-        if (obj.metadata.annotations && Object.keys(obj.metadata.annotations).length === 0) delete obj.metadata.annotations;
+        if (obj.metadata.annotations) {
+          // The draw marker is app-internal: never leak it into exported YAML.
+          delete obj.metadata.annotations[DRAW_ANNOTATION];
+          if (Object.keys(obj.metadata.annotations).length === 0) delete obj.metadata.annotations;
+        }
       }
       if (obj.kind === 'Project') delete obj.metadata?.namespace;
       return obj;
@@ -791,7 +798,6 @@
             const newName = input.value.trim();
             if (newName && newName !== resource.metadata.name) {
               resource.metadata.name = newName;
-              resource.name = newName;
               this._rerenderResource(resource);
               this.syncConnections();
             }
@@ -1009,7 +1015,6 @@
 
           if (newName && newName !== resource.metadata.name) {
             resource.metadata.name = newName;
-            resource.name = newName;
           }
           if (newNamespace && newNamespace !== resource.metadata.namespace && !isClusterScopedKind(kind)) {
             resource.metadata.namespace = newNamespace;
@@ -1028,12 +1033,14 @@
 
         panel.classList.remove('translate-x-full');
         panel.classList.add('translate-x-0');
+        try { panel.inert = false; } catch { /* inert unsupported */ }
       }
 
       hideProps() {
         const panel = document.getElementById('draw-props');
         panel.classList.add('translate-x-full');
         panel.classList.remove('translate-x-0');
+        try { panel.inert = true; } catch { /* inert unsupported */ }
       }
 
       // ── YAML export ────────────────────────────────────────────────────────

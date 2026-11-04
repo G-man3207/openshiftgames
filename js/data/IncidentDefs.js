@@ -198,21 +198,21 @@ const INCIDENT_DEFS = [
       S('oc describe pod <pod>', 'The Events section lists each SCC that rejected the pod and why.'),
       S('oc get sa <serviceaccount> -o yaml', 'The ServiceAccount is the identity used by workload-created pods.'),
       S('oc get scc', 'List SCCs and their USER/GROUPS columns.'),
-      S('oc adm policy who-can use scc/<scc>', 'Check who may use a specific SCC (RBAC view).'),
+      S('oc adm policy who-can use scc <scc>', 'Check who may use a specific SCC (RBAC view).'),
     ],
     resolutionActions: [
-      A('grant-scc', 'Grant an SCC to the ServiceAccount', 1),
+      A('grant-scc', 'Grant a permissive SCC to the ServiceAccount', 1),
       A('adjust-security-context', 'Remove the privileged/UID request', 2),
     ],
     ocCommands: [
       'oc describe pod <pod>',
       'oc get scc',
-      'oc adm policy add-scc-to-user anyuid -z <serviceaccount>',
-      'oc auth can-i use scc/anyuid',
+      'oc adm policy add-scc-to-user privileged -z <serviceaccount>',
+      'oc auth can-i use scc/privileged',
     ],
     autoResolveTime: null,
     docsUrl: DOCS.scc,
-    resolution: { kind: 'pod', effect: 'heal', targetKind: 'Pod', grantScc: 'anyuid' },
+    resolution: { kind: 'pod', effect: 'heal', targetKind: 'Pod', grantScc: 'privileged' },
   },
   {
     id: 'pending-scheduling',
@@ -510,7 +510,7 @@ const INCIDENT_DEFS = [
     category: 'Pod',
     severity: 1,
     description:
-      'A CronJob missed its schedule (suspended or impossible cron expression) and no new Jobs are being created.',
+      'A CronJob missed its schedule (it is suspended, or its schedule/window means no run is due) and no new Jobs are being created.',
     visualEffect: 'pulse-yellow',
     affectedResourceTypes: ['CronJob', 'Job'],
     investigationSteps: [
@@ -681,14 +681,14 @@ const INCIDENT_DEFS = [
     category: 'Network',
     severity: 3,
     description:
-      'A Route was not admitted by the Ingress Controller (status.ingress[].conditions Admitted=False): missing endpoints, shard mismatch or invalid config.',
+      'A Route was not admitted by the Ingress Controller (status.ingress[].conditions Admitted=False): a hostname claim conflict, shard/router mismatch or invalid TLS/config. Missing Service endpoints do not block admission — they only stop traffic from being served.',
     visualEffect: 'pulse-yellow',
     affectedResourceTypes: ['Route', 'Service'],
     investigationSteps: [
       S('oc get route <route> -n <namespace>', 'Check HOST/PORT, SERVICE and TERMINATION columns.'),
       S('oc describe route <route>', 'Status/conditions show whether an Ingress Controller admitted it.'),
       S('oc get route <route> -o jsonpath={.status.ingress[*].conditions}', 'Inspect Admitted reason/message.'),
-      S('oc get endpoints <service> -n <namespace>', 'No endpoints usually means the route cannot serve traffic.'),
+      S('oc get endpoints <service> -n <namespace>', 'No endpoints means the admitted Route has no backend to serve traffic (a traffic failure, not an admission failure).'),
     ],
     resolutionActions: [
       A('fix-endpoints', 'Restore Service endpoints', 2),
@@ -802,7 +802,7 @@ const INCIDENT_DEFS = [
     visualEffect: 'flash-red',
     affectedResourceTypes: ['Service', 'Pod'],
     investigationSteps: [
-      S('oc exec <pod> -- nslookup <service> -n <namespace>', 'Reproduce the resolution failure from a Pod.'),
+      S('oc exec <pod> -- nslookup <service>.<namespace>.svc.cluster.local', 'Reproduce the resolution failure from a Pod using the full service DNS name.'),
       S('oc get pods -n openshift-dns', 'Check that the DNS Pods are Running and Ready.'),
       S('oc get networkpolicy -n <namespace>', 'An egress default-deny that omits UDP/TCP 53 breaks DNS.'),
       S('oc get endpoints <service> -n <namespace>', 'Confirm the Service itself has endpoints.'),
@@ -812,7 +812,7 @@ const INCIDENT_DEFS = [
       A('restore-dns', 'Restore openshift-dns Pods', 2),
     ],
     ocCommands: [
-      'oc exec <pod> -- nslookup <service>',
+      'oc exec <pod> -- nslookup <service>.<namespace>.svc.cluster.local',
       'oc get pods -n openshift-dns',
       'oc get networkpolicy',
       'oc get svc -n openshift-dns',
@@ -955,7 +955,7 @@ const INCIDENT_DEFS = [
       S('oc describe quota <quota> -n <namespace>', 'Compare Used vs Hard for cpu/memory/pods.'),
       S('oc get quota <quota> -o yaml', 'Check hard limits and scopes.'),
       S('oc describe deployment <deployment>', 'FailedCreate events name the exceeded quota.'),
-      S('oc get events -n <namespace> --types=Warning', 'Recent admission/quota failures.'),
+      S('oc events -n <namespace> --types=Warning', 'Recent admission/quota failures (the events subcommand accepts --types; oc get events does not).'),
     ],
     resolutionActions: [
       A('raise-quota', 'Increase the quota hard limits', 1),
@@ -966,7 +966,7 @@ const INCIDENT_DEFS = [
       'oc describe quota',
       'oc get quota -o yaml',
       'oc edit resourcequota <quota>',
-      'oc get events --types=Warning',
+      'oc events --types=Warning',
     ],
     autoResolveTime: null,
     docsUrl: DOCS.quota,

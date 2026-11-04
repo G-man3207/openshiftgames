@@ -59,9 +59,9 @@ export function parseYaml(text, opts = {}) {
   for (let i = 0; i < rawLines.length; i++) {
     const raw = rawLines[i];
     const trimmed = raw.trim();
-    const indent = _leadingSpaces(raw, i + 1, file);
+    const { indent, tabbed } = _indentInfo(raw, i + 1, file);
     if (!trimmed) {
-      current.push({ text: raw, lineNo: i + 1, indent, content: '' });
+      current.push({ text: raw, lineNo: i + 1, indent, tabbed, content: '' });
       continue;
     }
     if (indent === 0 && (trimmed === '---' || trimmed.startsWith('--- ') || trimmed.startsWith('---#'))) {
@@ -85,7 +85,7 @@ export function parseYaml(text, opts = {}) {
       // %YAML / %TAG directives: ignore, they do not change this subset.
       continue;
     }
-    current.push({ text: raw, lineNo: i + 1, indent, content: trimmed });
+    current.push({ text: raw, lineNo: i + 1, indent, tabbed, content: trimmed });
   }
   docSegments.push(current);
 
@@ -135,15 +135,24 @@ export function toYamlError(err) {
 
 // ─── tokenizing helpers ─────────────────────────────────────────────────────
 
-function _leadingSpaces(text, lineNo, file) {
+/**
+ * Leading indentation of a line. Tabs may only appear as *content* after the
+ * indentation (valid inside block scalars); a tab at column 0 is rejected here,
+ * and structural parsers reject `tabbed` lines with a clear error.
+ * @returns {{indent: number, tabbed: boolean}}
+ */
+function _indentInfo(text, lineNo, file) {
   let i = 0;
   while (i < text.length && (text[i] === ' ' || text[i] === '\t')) {
     if (text[i] === '\t') {
-      throw new YamlParseError('tab characters must not be used for indentation', lineNo, file);
+      if (i === 0) {
+        throw new YamlParseError('tab characters must not be used for indentation', lineNo, file);
+      }
+      return { indent: i, tabbed: true };
     }
     i++;
   }
-  return i;
+  return { indent: i, tabbed: false };
 }
 
 function _skipEmpty(tokens, start) {
@@ -152,8 +161,16 @@ function _skipEmpty(tokens, start) {
   return i;
 }
 
+/** A tab after leading spaces is only legal as block-scalar content. */
+function _rejectTabbedIndent(token, file) {
+  if (token && token.tabbed) {
+    throw new YamlParseError('tab characters must not be used for indentation', token.lineNo, file);
+  }
+}
+
 function _parseNode(tokens, index, indent, file) {
   const line = tokens[index];
+  _rejectTabbedIndent(line, file);
   if (_isSeqIndicator(line.content)) return _parseSequence(tokens, index, indent, file);
   if (line.content.startsWith('[') || line.content.startsWith('{')) {
     const flow = _collectFlow(tokens, index, line.content, line.lineNo, file);
@@ -179,6 +196,7 @@ function _parseSequence(tokens, index, indent, file) {
     if (i >= tokens.length) break;
     const line = tokens[i];
     if (line.indent < indent) break;
+    _rejectTabbedIndent(line, file);
     if (line.indent > indent) {
       throw new YamlParseError('bad indentation of a sequence entry', line.lineNo, file);
     }
@@ -197,12 +215,9 @@ function _parseSequence(tokens, index, indent, file) {
         const nested = _parseNode(tokens, next, tokens[next].indent, file);
         items.push(nested.value);
         i = nested.index;
-      } else if (next < tokens.length && tokens[next].indent === indent && _isSeqIndicator(tokens[next].content)) {
-        // `- - a` written across lines is unusual but valid.
-        const nested = _parseSequence(tokens, next, indent, file);
-        items.push(nested.value);
-        i = nested.index;
       } else {
+        // A bare `-` is an empty (null) item; a following dash at the same
+        // indent is a sibling, not a nested sequence.
         items.push(null);
         i++;
       }
@@ -248,6 +263,7 @@ function _parseMapping(tokens, index, indent, file) {
     if (i >= tokens.length) break;
     const line = tokens[i];
     if (line.indent < indent) break;
+    _rejectTabbedIndent(line, file);
     if (line.indent > indent) {
       throw new YamlParseError('bad indentation of a mapping entry', line.lineNo, file);
     }
@@ -497,7 +513,9 @@ function _collectFlow(tokens, index, first, lineNo, file) {
     if (i >= tokens.length) {
       throw new YamlParseError('unterminated flow collection', lineNo, file);
     }
-    if (!tokens[i].empty) text += ` ${tokens[i].content}`;
+    // Keep a newline between lines: flow comments end at a line break and
+    // multi-line plain scalars in flow context fold the break to a space.
+    if (!tokens[i].empty) text += `\n${tokens[i].content}`;
     i++;
   }
   return { text, index: i };
@@ -671,7 +689,9 @@ class _FlowParser {
       if (ch === '#' && (this.i === start || /\s/.test(this.text[this.i - 1]))) break;
       this.i++;
     }
-    return _inferScalar(this.text.slice(start, this.i).trim());
+    // YAML folds line breaks in flow plain scalars into a single space.
+    const raw = this.text.slice(start, this.i).replace(/\s*\n\s*/g, ' ').trim();
+    return _inferScalar(raw);
   }
 }
 
@@ -729,19 +749,31 @@ function _parseBlockScalar(tokens, startIndex, parentIndent, header, lineNo, fil
 }
 
 function _foldBlockLines(lines) {
+  // Folded style: a single line break between two normal lines becomes a
+  // space, blank lines are preserved as line breaks, and lines that are more
+  // indented than the block keep their breaks and indentation literally.
   let out = '';
+  let prev = null; // last non-blank line: {text, more}
+  let blanks = 0;
   for (const line of lines) {
     if (line === '') {
-      out += '\n';
-    } else if (out === '' || out.endsWith('\n')) {
-      out += line;
-    } else {
-      out += ` ${line}`;
+      blanks++;
+      continue;
     }
+    const more = /^[ \t]/.test(line);
+    if (prev) {
+      if (prev.more || more) out += '\n'.repeat(blanks + 1);
+      else if (blanks === 0) out += ' ';
+      else out += '\n'.repeat(blanks);
+    }
+    out += line;
+    prev = { text: line, more };
+    blanks = 0;
   }
+  // Trailing blank lines (mattering for `>+` chomping) are line breaks.
+  if (blanks > 0) out += '\n'.repeat(blanks);
   return out;
 }
-
 // ─── stringifier ────────────────────────────────────────────────────────────
 
 const RESERVED_WORDS = new Set([
@@ -1202,6 +1234,24 @@ spec:
   check('root scalar document', () => {
     expectEqual(parseDocument('42\n'), 42);
     expectEqual(parseDocument('hello\n'), 'hello');
+  });
+
+  check('block scalar content may start with a tab', () => {
+    expectEqual(parseDocument('a: |\n  \tfoo\n  bar\n'), { a: '\tfoo\nbar\n' });
+  });
+
+  check('multi-line flow collection may contain comments', () => {
+    expectEqual(parseDocument('labels: {\n  app: web, # trailing comment\n  env: prod\n}\n'), {
+      labels: { app: 'web', env: 'prod' },
+    });
+  });
+
+  check('bare sequence item followed by a sibling is null, not nested', () => {
+    expectEqual(parseDocument('a:\n  -\n  - x\n'), { a: [null, 'x'] });
+  });
+
+  check('folded block scalar keeps more-indented lines literal', () => {
+    expectEqual(parseDocument('a: >\n  foo\n    bar\n  baz\n'), { a: 'foo\n  bar\nbaz\n' });
   });
 
   check('stringify empty collections', () => {

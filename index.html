@@ -15,6 +15,7 @@
   <meta property="og:image" content="https://shifting.pro/og-image.png">
   <meta property="og:image:width" content="1200">
   <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="OpenShift Games — the live 3D OpenShift cluster view with the oc terminal ready">
   <meta name="twitter:card" content="summary_large_image">
   <meta name="twitter:title" content="OpenShift Games — Learn OpenShift by Playing (EX280)">
   <meta name="twitter:description" content="Learn Red Hat OpenShift by playing. Deploy apps with oc, fix CrashLoopBackOff, expose Routes, build with S2I, configure SCC/quota/RBAC — a 3D cluster simulator built for the EX280 exam.">
@@ -122,16 +123,16 @@
 
         <div class="sp-hero-stage">
           <figure class="sp-stage" id="sp-stage">
-            <div class="sp-stage-mount" id="sp-stage-mount" aria-label="Live 3D OpenShift cluster view"></div>
+            <div class="sp-stage-mount" id="sp-stage-mount" role="img" aria-label="Live 3D OpenShift cluster view"></div>
             <div class="sp-stage-chrome" aria-hidden="true">
               <div class="sp-stage-top">
                 <span class="sp-stage-live"><span class="sp-dot"></span>Live cluster</span>
                 <span class="sp-stage-id">ocp 4.22</span>
               </div>
               <div class="sp-stage-bottom">
-                <span class="sp-readout"><span class="sp-readout-v" id="sp-r-projects">10</span>projects</span>
-                <span class="sp-readout"><span class="sp-readout-v" id="sp-r-nodes">0</span>nodes</span>
-                <span class="sp-readout"><span class="sp-readout-v" id="sp-r-pods">0</span>pods</span>
+                <span class="sp-readout"><span class="sp-readout-v" id="sp-r-projects">&mdash;</span>projects</span>
+                <span class="sp-readout"><span class="sp-readout-v" id="sp-r-nodes">&mdash;</span>nodes</span>
+                <span class="sp-readout"><span class="sp-readout-v" id="sp-r-pods">&mdash;</span>pods</span>
                 <span class="sp-stage-hint">the actual renderer</span>
               </div>
             </div>
@@ -483,27 +484,23 @@
   </div>
 
   <!-- ───────────────────────────── Settings ───────────────────────────── -->
-  <div id="settings-panel" class="settings-panel">
+  <div id="settings-panel" class="settings-panel" role="dialog" aria-modal="true" aria-labelledby="settings-panel-title" aria-hidden="true">
     <div class="settings-content">
       <div class="flex items-center justify-between mb-6">
-        <h2 class="text-lg font-bold">Settings</h2>
+        <h2 class="text-lg font-bold" id="settings-panel-title">Settings</h2>
         <button id="settings-close" class="btn-secondary text-sm">Close</button>
       </div>
       <div class="settings-row">
-        <span class="settings-label">Sound Effects</span>
-        <button class="toggle active" id="toggle-sound" aria-label="Toggle sound effects"></button>
-      </div>
-      <div class="settings-row">
         <span class="settings-label">Particles</span>
-        <button class="toggle active" id="toggle-particles" aria-label="Toggle traffic particles"></button>
+        <button class="toggle active" id="toggle-particles" role="switch" aria-checked="true" aria-label="Toggle traffic particles"></button>
       </div>
       <div class="settings-row">
         <span class="settings-label">Shadows</span>
-        <button class="toggle active" id="toggle-shadows" aria-label="Toggle shadows"></button>
+        <button class="toggle active" id="toggle-shadows" role="switch" aria-checked="true" aria-label="Toggle shadows"></button>
       </div>
       <div class="settings-row">
         <span class="settings-label">Grid</span>
-        <button class="toggle active" id="toggle-grid" aria-label="Toggle grid"></button>
+        <button class="toggle active" id="toggle-grid" role="switch" aria-checked="true" aria-label="Toggle grid"></button>
       </div>
       <div class="settings-row" style="border-bottom: none;">
         <span class="settings-label">Difficulty</span>
@@ -514,32 +511,32 @@
           <option value="nightmare">Nightmare</option>
         </select>
       </div>
-      <p class="text-[10px] text-white/30 mt-2">Settings are stored locally in your browser (openshiftgames_settings).</p>
+      <p class="text-[10px] text-white/30 mt-2">Settings are stored locally in your browser (openshiftgames_settings). Audio is not available in this build.</p>
     </div>
   </div>
 
   <!-- ───────────────────────────── Modals ─────────────────────────────── -->
-  <div id="achievements-panel" class="modal-overlay">
+  <div id="achievements-panel" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="achievements-title" aria-hidden="true">
     <div class="modal-content" style="max-width: 640px;">
       <div class="flex items-center justify-between mb-4">
-        <h2 class="modal-title" style="margin-bottom:0">Achievements</h2>
+        <h2 class="modal-title" id="achievements-title" style="margin-bottom:0">Achievements</h2>
         <button id="achievements-close" class="btn-secondary text-sm">Close</button>
       </div>
       <div class="achievements-grid" id="achievements-grid"></div>
     </div>
   </div>
 
-  <div id="stats-panel" class="modal-overlay">
+  <div id="stats-panel" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="stats-title" aria-hidden="true">
     <div class="modal-content">
       <div class="flex items-center justify-between mb-4">
-        <h2 class="modal-title" style="margin-bottom:0">Platform Statistics</h2>
+        <h2 class="modal-title" id="stats-title" style="margin-bottom:0">Platform Statistics</h2>
         <button id="stats-close" class="btn-secondary text-sm">Close</button>
       </div>
       <div id="stats-body" class="modal-body"></div>
     </div>
   </div>
 
-  <div id="modal-level-complete" class="modal-overlay">
+  <div id="modal-level-complete" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="level-complete-title" aria-hidden="true">
     <div class="modal-content" style="text-align: center;">
       <div class="text-3xl mb-2" id="level-complete-stars"></div>
       <h2 class="modal-title" id="level-complete-title">Level Complete!</h2>
@@ -551,10 +548,10 @@
     </div>
   </div>
 
-  <div id="modal-game-over" class="modal-overlay">
+  <div id="modal-game-over" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="game-over-title" aria-hidden="true">
     <div class="modal-content" style="text-align: center;">
       <div class="text-4xl mb-3">&#128165;</div>
-      <h2 class="modal-title">Cluster Degraded!</h2>
+      <h2 class="modal-title" id="game-over-title">Cluster Degraded!</h2>
       <div class="modal-body" id="game-over-body"></div>
       <div class="modal-actions" style="justify-content: center;">
         <button class="btn-secondary" id="game-over-menu">Menu</button>
@@ -742,6 +739,10 @@
         this._tutorialQueue = null;
         this._pendingLevelTutorial = false;
         this._closeTutorialOverlay = null;
+        this._challengeTimedOut = false;
+        this._pauseOpener = null;
+        this._menuPanelOpener = null;
+        this._tutorialOpener = null;
         // Surfaces that cover a live run (pause card, help modal, EX280 Prep)
         // register a reason here instead of tracking their own pause flag, so
         // overlapping overlays pause once and resume exactly once.
@@ -871,7 +872,10 @@
       _syncSettingsUi() {
         for (const key of ['sound', 'particles', 'shadows', 'grid']) {
           const toggle = document.getElementById(`toggle-${key}`);
-          if (toggle) toggle.classList.toggle('active', Boolean(this.settings[key]));
+          if (!toggle) continue;
+          const on = Boolean(this.settings[key]);
+          toggle.classList.toggle('active', on);
+          if (toggle.hasAttribute('role')) toggle.setAttribute('aria-checked', String(on));
         }
         const select = document.getElementById('select-difficulty');
         if (select && this.settings.difficulty) select.value = this.settings.difficulty;
@@ -937,34 +941,27 @@
 
         document.getElementById('menu-exam-prep')?.addEventListener('click', () => this.showExamPrep());
 
-        document.getElementById('btn-settings')?.addEventListener('click', () => {
-          document.getElementById('settings-panel')?.classList.add('active');
-        });
-        document.getElementById('settings-close')?.addEventListener('click', () => {
-          document.getElementById('settings-panel')?.classList.remove('active');
-        });
+        document.getElementById('btn-settings')?.addEventListener('click', () => this._openMenuPanel('settings-panel'));
+        document.getElementById('settings-close')?.addEventListener('click', () => this._closeMenuPanel('settings-panel'));
 
         document.getElementById('btn-achievements')?.addEventListener('click', () => {
           this.buildAchievements();
-          document.getElementById('achievements-panel')?.classList.add('active');
+          this._openMenuPanel('achievements-panel');
         });
-        document.getElementById('achievements-close')?.addEventListener('click', () => {
-          document.getElementById('achievements-panel')?.classList.remove('active');
-        });
+        document.getElementById('achievements-close')?.addEventListener('click', () => this._closeMenuPanel('achievements-panel'));
 
         document.getElementById('btn-stats')?.addEventListener('click', () => {
           this.buildStats();
-          document.getElementById('stats-panel')?.classList.add('active');
+          this._openMenuPanel('stats-panel');
         });
-        document.getElementById('stats-close')?.addEventListener('click', () => {
-          document.getElementById('stats-panel')?.classList.remove('active');
-        });
+        document.getElementById('stats-close')?.addEventListener('click', () => this._closeMenuPanel('stats-panel'));
 
         document.querySelectorAll('.toggle').forEach((toggle) => {
           toggle.addEventListener('click', () => {
             toggle.classList.toggle('active');
             const id = toggle.id.replace('toggle-', '');
             this.settings[id] = toggle.classList.contains('active');
+            toggle.setAttribute('aria-checked', String(this.settings[id]));
             this.saveSettings();
             this.applySettings();
           });
@@ -979,29 +976,43 @@
 
         document.getElementById('level-select-back')?.addEventListener('click', () => {
           document.getElementById('level-select')?.classList.remove('active');
+          if (!this.modeInstance) this.currentMode = null;
         });
         document.getElementById('challenge-back')?.addEventListener('click', () => {
           document.getElementById('challenge-select')?.classList.remove('active');
+          if (!this.modeInstance) this.currentMode = null;
         });
 
         document.getElementById('level-complete-menu')?.addEventListener('click', () => {
           document.getElementById('modal-level-complete')?.classList.remove('active');
+          document.getElementById('modal-level-complete')?.setAttribute('aria-hidden', 'true');
           this.returnToMenu();
         });
         document.getElementById('level-complete-next')?.addEventListener('click', () => {
           document.getElementById('modal-level-complete')?.classList.remove('active');
-          if (this.modeInstance && typeof this.modeInstance.nextLevel === 'function') {
-            this.modeInstance.nextLevel();
-            this._initObjectivesPanel(this.currentMode);
-            this._startLevelTutorialFromMode();
-          }
+          document.getElementById('modal-level-complete')?.setAttribute('aria-hidden', 'true');
+          const mode = this.modeInstance;
+          if (!mode) { this.returnToMenu(); return; }
+          // Final campaign level (and any mode without a nextLevel handler):
+          // never dead-end on an empty "Level ?" screen — exit to the menu.
+          if (typeof mode.nextLevel !== 'function') { this.returnToMenu(); return; }
+          const advanced = mode.nextLevel();
+          if (advanced === false) { this.returnToMenu(); return; }
+          this._challengeTimedOut = false;
+          this._initObjectivesPanel(this.currentMode);
+          this._startLevelTutorialFromMode();
         });
         document.getElementById('game-over-menu')?.addEventListener('click', () => {
           document.getElementById('modal-game-over')?.classList.remove('active');
+          document.getElementById('modal-game-over')?.setAttribute('aria-hidden', 'true');
+          this._resetGameOverModal();
           this.returnToMenu();
         });
         document.getElementById('game-over-retry')?.addEventListener('click', () => {
           document.getElementById('modal-game-over')?.classList.remove('active');
+          document.getElementById('modal-game-over')?.setAttribute('aria-hidden', 'true');
+          this._resetGameOverModal();
+          this._challengeTimedOut = false;
           if (this.modeInstance && typeof this.modeInstance.restart === 'function') {
             this.modeInstance.restart();
             this._initObjectivesPanel(this.currentMode);
@@ -1011,8 +1022,60 @@
         });
       }
 
+      /** Restore the shared game-over modal title after a "time's up" use. */
+      _resetGameOverModal() {
+        const title = document.getElementById('game-over-title');
+        if (title) title.textContent = 'Cluster Degraded!';
+      }
+
+      /** Open a modal owned by the start page and remember the opener focus. */
+      _openMenuPanel(id) {
+        this._menuPanelOpener = document.activeElement;
+        const panel = document.getElementById(id);
+        if (!panel) return;
+        panel.classList.add('active');
+        panel.setAttribute('aria-hidden', 'false');
+        requestAnimationFrame(() => panel.querySelector('button, [href], select')?.focus?.());
+      }
+
+      /** Close a start-page modal and return focus to whatever opened it. */
+      _closeMenuPanel(id) {
+        const panel = document.getElementById(id);
+        if (!panel) return;
+        panel.classList.remove('active');
+        panel.setAttribute('aria-hidden', 'true');
+        this._restoreFocus(this._menuPanelOpener);
+      }
+
+      /** Best-effort focus restore; ignores detached/hidden elements. */
+      _restoreFocus(el) {
+        if (!el || el === document.body || !el.isConnected) return;
+        try { el.focus({ preventScroll: true }); } catch { /* detached */ }
+      }
+
+      /** Keep UI-only preferences (hints, minimap, connection lines) in sync. */
+      _applyUiFromSettings() {
+        const showHints = this.settings.showHints !== false;
+        const hintBtn = document.getElementById('btn-show-hint');
+        const hintSection = document.getElementById('hint-section');
+        const hasHints = (this._getLevelDef()?.hints || []).length > 0;
+        if (hintBtn) hintBtn.hidden = !showHints;
+        if (hintSection) hintSection.style.display = showHints && hasHints ? '' : 'none';
+        const minimap = document.getElementById('minimap');
+        if (minimap && this.settings.showMinimap !== undefined) {
+          minimap.style.display = this.settings.showMinimap ? '' : 'none';
+        }
+        const lines = this.renderer?.connectionLines;
+        if (lines && this.settings.showConnectionLines !== undefined) {
+          // ConnectionLines recomputes per-line visibility from resource visibility;
+          // hiding the parent group is the only non-invasive switch.
+          const group = lines.lineGroup || lines.group;
+          if (group) group.visible = this.settings.showConnectionLines !== false;
+        }
+      }
+
       bindGameEvents() {
-        this.engine.eventBus.on('mode:level-complete', (data) => {
+        this.engine.eventBus.on('mode:level-complete', (data = {}) => {
           const stars = data.stars || 0;
           const starStr = '&#9733;'.repeat(stars) + '&#9734;'.repeat(Math.max(0, 3 - stars));
           const starsEl = document.getElementById('level-complete-stars');
@@ -1021,13 +1084,54 @@
           if (titleEl) titleEl.textContent = data.title || 'Level Complete!';
           const bodyEl = document.getElementById('level-complete-body');
           if (bodyEl) bodyEl.innerHTML = data.message || '';
+          // Final campaign level: relabel the primary action so it cannot
+          // promise a next level that does not exist.
+          const isCampaign = this.currentMode === 'campaign';
+          const isFinalLevel = isCampaign && data.nextLevel == null;
+          const nextBtn = document.getElementById('level-complete-next');
+          const nextLabel = isFinalLevel
+            ? 'Finish campaign'
+            : (this.modeInstance && typeof this.modeInstance.nextLevel === 'function' ? 'Next Level' : 'Back to menu');
+          if (nextBtn) nextBtn.textContent = nextLabel;
+          if (isFinalLevel && titleEl && !/complete/i.test(String(data.title || ''))) {
+            titleEl.textContent = 'Campaign complete!';
+          }
+          this._challengeTimedOut = false;
           document.getElementById('modal-level-complete')?.classList.add('active');
+          document.getElementById('modal-level-complete')?.setAttribute('aria-hidden', 'false');
         });
 
-        this.engine.eventBus.on('mode:game-over', (data) => {
+        this.engine.eventBus.on('mode:game-over', (data = {}) => {
+          this._resetGameOverModal();
           const bodyEl = document.getElementById('game-over-body');
           if (bodyEl) bodyEl.innerHTML = data.message || 'Your OpenShift cluster has degraded.';
           document.getElementById('modal-game-over')?.classList.add('active');
+          document.getElementById('modal-game-over')?.setAttribute('aria-hidden', 'false');
+        });
+
+        // Timed-lab timeout: ChallengeMode emits this when the clock hits 00:00.
+        // Show a clear "time's up" result instead of leaving the run silent.
+        this.engine.eventBus.on('challenge:timeout', (data = {}) => {
+          this._challengeTimedOut = true;
+          const id = data.challengeId ?? this.modeInstance?.getStatus?.()?.challengeId ?? '';
+          const title = data.title || this.modeInstance?.getStatus?.()?.title || `Timed lab ${id}`.trim();
+          const pct = Math.max(0, Math.min(100, Math.round(Number(data.completionPercentage ?? data.percentage ?? data.score ?? 0) || 0)));
+          const xp = Math.max(0, Math.round(Number(data.xpEarned ?? data.xp ?? 0) || 0));
+          const heading = document.getElementById('game-over-title');
+          if (heading) heading.textContent = "Time's up — lab failed";
+          const bodyEl = document.getElementById('game-over-body');
+          if (bodyEl) {
+            bodyEl.innerHTML = `<strong>${escapeHtml(title)}</strong> ran out of time.<br>`
+              + `You completed <strong>${pct}%</strong> of the objectives${xp > 0 ? ` · +${xp} XP` : ''}. Retry the lab or return to the menu.`;
+          }
+          document.getElementById('modal-game-over')?.classList.add('active');
+          document.getElementById('modal-game-over')?.setAttribute('aria-hidden', 'false');
+          this._stopChallengeTimerDisplay(id);
+        });
+
+        this.engine.eventBus.on('settings:changed', (data = {}) => {
+          this.settings = { ...this.settings, ...(data || {}) };
+          this._applyUiFromSettings();
         });
 
         this.engine.eventBus.on('incident:created', (data) => {
@@ -1070,15 +1174,22 @@
         document.addEventListener('keydown', (e) => {
           const tag = e.target?.tagName;
           if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+          // Never steal browser/system shortcuts (Ctrl+F find, Ctrl+H history,
+          // Cmd+L, …). Only bare keys are game controls.
+          if (e.ctrlKey || e.metaKey || e.altKey) return;
+
+          if (e.key === ' ') {
+            // Space must keep its native "activate this control" behaviour.
+            if (this._isInteractiveTarget(e.target)) return;
+            e.preventDefault();
+            this.togglePause();
+            return;
+          }
 
           switch (e.key) {
             case '/':
               e.preventDefault();
               this.commandBar?.toggle?.();
-              break;
-            case ' ':
-              e.preventDefault();
-              this.togglePause();
               break;
             case 'm':
             case 'M':
@@ -1106,10 +1217,29 @@
               break;
             default:
               if (/^[1-9]$/.test(e.key) && this._shortcutKinds[e.key]) {
-                this.selectPaletteResource(this._shortcutKinds[e.key]);
+                e.preventDefault();
+                this._quickPlace(this._shortcutKinds[e.key]);
               }
           }
         });
+      }
+
+      /** True when the focused element handles Space/Enter itself. */
+      _isInteractiveTarget(target) {
+        if (!target || typeof target.closest !== 'function') return false;
+        return Boolean(target.closest(
+          'button, a[href], input, select, textarea, [role="button"], [role="switch"], [role="tab"], [contenteditable="true"], [tabindex]:not([tabindex="-1"])',
+        ));
+      }
+
+      /** 1–9 palette shortcut: place like a click (with the name prompt). */
+      _quickPlace(kind) {
+        if (!kind) return;
+        this.selectPaletteResource(kind);
+        const canvas = document.getElementById('game-canvas');
+        if (!canvas) { this.placeResource(kind); return; }
+        const rect = canvas.getBoundingClientRect();
+        this.placeResource(kind, rect.left + rect.width / 2, rect.top + rect.height / 2);
       }
 
       handleEscape() {
@@ -1118,20 +1248,27 @@
         if (this.commandBar?.visible) { this.commandBar.hide?.(); return; }
         if (document.getElementById('desktop-notice')?.classList.contains('active')) { return; }
         if (this.manifestPanel?.visible) { this.manifestPanel.hide?.(); return; }
+        if (this.hud?.settingsPanel?.visible) { this.hud.settingsPanel.hide(); return; }
         for (const panelId of ['settings-panel', 'achievements-panel', 'stats-panel']) {
           const panel = document.getElementById(panelId);
           if (panel?.classList.contains('active')) {
-            panel.classList.remove('active');
+            this._closeMenuPanel(panelId);
             return;
           }
         }
+        // In-game docked panels: close instead of pausing underneath them.
+        if (this.metrics?.visible) { this.metrics.hide?.(); return; }
+        if (this.incidentPanel?.visible) { this.incidentPanel.hide?.(); return; }
         if (this.inspector?.visible) { this.inspector.hide?.(); return; }
+        if (this.contextMenu?.visible) { this.contextMenu.hide?.(); return; }
         if (document.getElementById('level-select')?.classList.contains('active')) {
           document.getElementById('level-select')?.classList.remove('active');
+          if (!this.modeInstance) this.currentMode = null;
           return;
         }
         if (document.getElementById('challenge-select')?.classList.contains('active')) {
           document.getElementById('challenge-select')?.classList.remove('active');
+          if (!this.modeInstance) this.currentMode = null;
           return;
         }
         // Help renders above the pause card, so Esc must dismiss it instead of
@@ -1142,6 +1279,21 @@
         if (this.examPrepUI?.visible) {
           this.examPrepUI.hide?.();
           this._resumeClocksFor('examprep');
+          return;
+        }
+        // Coach marks: advance/skip the guide instead of pausing behind it.
+        if (document.getElementById('level-tutorial-overlay')) {
+          if (this._tutorialQueue?.length) this._showTutorialStep();
+          else this._clearTutorialOverlay();
+          return;
+        }
+        // Result modals: resolve them (advance or go to menu) before pausing.
+        if (document.getElementById('modal-level-complete')?.classList.contains('active')) {
+          document.getElementById('level-complete-next')?.click();
+          return;
+        }
+        if (document.getElementById('modal-game-over')?.classList.contains('active')) {
+          document.getElementById('game-over-menu')?.click();
           return;
         }
         if (document.getElementById('pause-overlay')?.classList.contains('active')) {
@@ -1222,22 +1374,44 @@
         if (!overlay || overlay.classList.contains('active')) return;
         this.inspector?.hide?.();
         this.contextMenu?.hide?.();
+        this._pauseOpener = document.activeElement;
         const status = this.modeInstance?.getStatus?.() || {};
-        const isChallenge = this.currentMode === 'challenge';
+        const mode = this.currentMode;
+        const isChallenge = mode === 'challenge';
         const kickerEl = document.getElementById('pause-kicker');
         const subEl = document.getElementById('pause-sub');
         const clockEl = document.getElementById('pause-clock');
+        const restartBtn = document.getElementById('pause-restart');
         if (kickerEl) {
-          kickerEl.textContent = isChallenge
-            ? `Timed Lab ${status.challengeId || ''} · ${status.title || 'In progress'}`.trim()
-            : `Campaign · Level ${status.currentLevel || 1}${status.chapterName ? ` · ${status.chapterName}` : ''}`;
+          if (isChallenge) {
+            kickerEl.textContent = `Timed Lab ${status.challengeId || ''} · ${status.title || 'In progress'}`.trim();
+          } else if (mode === 'sandbox') {
+            kickerEl.textContent = 'Sandbox · Free build';
+          } else if (mode === 'chaos') {
+            kickerEl.textContent = `Chaos mode · Wave ${status.waveNumber || 1}`;
+          } else {
+            kickerEl.textContent = `Campaign · Level ${status.currentLevel || 1}${status.chapterName ? ` · ${status.chapterName}` : ''}`;
+          }
         }
         if (subEl) {
-          subEl.textContent = isChallenge
-            ? `Time remaining ${this.formatClock(status.timeRemaining || 0)} · the clock is paused.`
-            : `${status.levelTitle || 'In progress'} — your run is safe. Take a breath.`;
+          if (isChallenge) {
+            subEl.textContent = `Time remaining ${this.formatClock(status.timeRemaining || 0)} · the clock is paused.`;
+          } else if (mode === 'sandbox') {
+            subEl.textContent = 'Your free build is paused. Resume to keep designing the platform.';
+          } else if (mode === 'chaos') {
+            subEl.textContent = `Survived ${this.formatClock(status.survivalTime || 0)} · the incident stream is paused.`;
+          } else {
+            subEl.textContent = `${status.levelTitle || 'In progress'} — your run is safe. Take a breath.`;
+          }
         }
-        if (clockEl) clockEl.textContent = this.formatClock(status.elapsedTime || 0);
+        const clockSeconds = isChallenge || mode === 'chaos'
+          ? (mode === 'chaos' ? status.survivalTime : status.elapsedTime)
+          : status.elapsedTime;
+        if (clockEl) clockEl.textContent = this.formatClock(clockSeconds || 0);
+        if (restartBtn) {
+          restartBtn.textContent = mode === 'sandbox' ? 'Restart sandbox'
+            : mode === 'chaos' ? 'Restart run' : 'Restart level';
+        }
         const confirm = document.getElementById('pause-confirm');
         if (confirm) confirm.hidden = true;
         const quit = document.getElementById('pause-quit');
@@ -1256,6 +1430,8 @@
         if (!overlay?.classList.contains('active')) return;
         overlay.classList.remove('active');
         overlay.setAttribute('aria-hidden', 'true');
+        this._restoreFocus(this._pauseOpener);
+        this._pauseOpener = null;
         if (resume) {
           this._resumeClocksFor('pause');
         } else {
@@ -1265,6 +1441,13 @@
       }
 
       restartCurrentLevel() {
+        // A full sandbox reset is destructive; confirm before wiping a free build.
+        if (this.currentMode === 'sandbox'
+          && typeof window.confirm === 'function'
+          && !window.confirm('Restart the sandbox? The current free build will be reset.')) {
+          return;
+        }
+        this._challengeTimedOut = false;
         // The new run must start unpaused: drop the card's pause and resume the
         // swapped-in mode instead of inheriting the frozen state.
         this.hidePause({ resume: true });
@@ -1469,7 +1652,11 @@
           const item = e.target.closest('.palette-item');
           if (!item) return;
           e.preventDefault();
-          this.placeResource(item.dataset.resource);
+          e.stopPropagation();
+          // Keyboard follows the pointer flow: place at the canvas centre with
+          // the name prompt, so objective names can be matched.
+          const rect = canvas.getBoundingClientRect();
+          this.placeResource(item.dataset.resource, rect.left + rect.width / 2, rect.top + rect.height / 2);
         });
 
         palette.addEventListener('click', (e) => {
@@ -1515,15 +1702,8 @@
           if (kind && KIND_DEFS[kind]) this.placeResource(kind, e.clientX, e.clientY);
         });
 
-        canvas.addEventListener('contextmenu', (e) => {
-          e.preventDefault();
-          const uid = this.renderer?.selectedResource;
-          if (!uid) return;
-          const resource = this.engine.cluster.getResource(uid);
-          if (resource) {
-            this.engine.eventBus.emit('resource:contextmenu', { uid, resource, x: e.clientX, y: e.clientY });
-          }
-        });
+        // Right-click is handled by ClusterRenderer's own raycast handler, which
+        // emits resource:contextmenu for the resource under the cursor.
 
         document.getElementById('btn-auto-align')?.addEventListener('click', () => this.autoAlignResources());
         document.getElementById('btn-reset-camera')?.addEventListener('click', () => this.renderer?.resetCamera?.());
@@ -2104,7 +2284,6 @@
 
       // ── Modes / launch ──────────────────────────────────────────────────────
       startMode(mode) {
-        this.currentMode = mode;
         switch (mode) {
           case 'campaign':
             this.buildLevelSelect();
@@ -2119,11 +2298,44 @@
         }
       }
 
+      /** Tear down the previous run before a new one replaces it. */
+      _teardownCurrentMode() {
+        const old = this.modeInstance;
+        if (!old) return;
+        this.modeInstance = null;
+        try {
+          // Stop any wall-clock ticker first, then let the mode release its own
+          // listeners/edit resources through its documented teardown hook.
+          if (typeof old.stopTicking === 'function') old.stopTicking();
+          else if (old.ticker) { clearInterval(old.ticker); old.ticker = null; }
+          for (const intervalKey of ['autoScoreInterval', '_timerInterval', '_objInterval']) {
+            if (old[intervalKey]) { clearInterval(old[intervalKey]); old[intervalKey] = null; }
+          }
+          if (typeof old.exit === 'function') old.exit();
+          else if (typeof old.cleanup === 'function') old.cleanup();
+          else if (typeof old.destroy === 'function') old.destroy();
+        } catch (err) {
+          console.warn(`${APP_NAME}: previous mode teardown failed`, err);
+        }
+      }
+
+      /** Show/hide the start page for gameplay, keeping it out of the a11y tree. */
+      _setStartPageHidden(hidden) {
+        const menu = document.getElementById('main-menu');
+        if (!menu) return;
+        menu.classList.toggle('hidden', Boolean(hidden));
+        menu.setAttribute('aria-hidden', String(Boolean(hidden)));
+        try { menu.inert = Boolean(hidden); } catch { /* inert unsupported */ }
+      }
+
       launchGame(mode, levelOrChallenge) {
         if (this._webglFailed) {
           this._showWebGLError();
           return;
         }
+        // A new run must fully replace the previous mode (EX280 Prep can launch a
+        // level while another run is live — never leave the old mode ticking).
+        this._teardownCurrentMode();
         // The start page's live renderer becomes the full-screen game view.
         try {
           this.startMenu?.hideScene?.();
@@ -2140,10 +2352,16 @@
         this.manifestPanel?.hide?.();
         this.hidePause();
         this.currentMode = mode;
+        this._challengeTimedOut = false;
+        this._resetGameOverModal();
+        document.getElementById('modal-level-complete')?.classList.remove('active');
+        document.getElementById('modal-game-over')?.classList.remove('active');
+        document.getElementById('modal-level-complete')?.setAttribute('aria-hidden', 'true');
+        document.getElementById('modal-game-over')?.setAttribute('aria-hidden', 'true');
 
         this._pendingLevelTutorial = false;
         this._clearTutorialOverlay();
-        document.getElementById('main-menu')?.classList.add('hidden');
+        this._setStartPageHidden(true);
         document.getElementById('level-select')?.classList.remove('active');
         document.getElementById('challenge-select')?.classList.remove('active');
         document.getElementById('game-container')?.classList.add('active');
@@ -2166,6 +2384,7 @@
         this.minimap.init();
 
         this.applySettings();
+        this._applyUiFromSettings();
         this.renderer.start();
         this.engine.start();
 
@@ -2247,9 +2466,18 @@
         if (!panel) return;
         if (mode !== 'campaign' && mode !== 'challenge') {
           panel.style.display = 'none';
+          if (this._objUpdateInterval) { clearInterval(this._objUpdateInterval); this._objUpdateInterval = null; }
+          return;
+        }
+        // A finished/exited mode has no level definition left — do not render a
+        // "Level ?" ghost card; hide the panel instead.
+        if (!this._getLevelDef()) {
+          panel.style.display = 'none';
+          if (this._objUpdateInterval) { clearInterval(this._objUpdateInterval); this._objUpdateInterval = null; }
           return;
         }
         panel.style.display = '';
+        panel.classList.remove('collapsed');
         this._hintIndex = 0;
         this._panelCollapsed = false;
         this._objSig = '';
@@ -2303,9 +2531,24 @@
 
         if (this._objUpdateInterval) clearInterval(this._objUpdateInterval);
         this._objUpdateInterval = setInterval(() => {
+          if (this._challengeTimedOut) return;
           if (!this.modeInstance?.getStatus) return;
           this._updateObjectivesPanel(this.modeInstance.getStatus());
         }, 500);
+      }
+
+      /** Freeze the timed-lab objective card once the clock has run out. */
+      _stopChallengeTimerDisplay(challengeId) {
+        this._challengeTimedOut = true;
+        if (this._objUpdateInterval) { clearInterval(this._objUpdateInterval); this._objUpdateInterval = null; }
+        const metaEl = document.getElementById('obj-panel-meta');
+        if (metaEl) {
+          const status = this.modeInstance?.getStatus?.() || {};
+          metaEl.textContent = `Timed lab ${challengeId ?? status.challengeId ?? ''} · Time's up`.replace(/\s+/g, ' ').trim();
+          metaEl.dataset.urgent = 'true';
+        }
+        const titleEl = document.getElementById('obj-panel-title');
+        if (titleEl) titleEl.textContent = 'Time\'s up — lab failed';
       }
 
       _updateObjectivesPanel(status) {
@@ -2322,16 +2565,21 @@
 
         if (metaEl) {
           if (isChallenge) {
-            const left = status.timeRemaining || 0;
-            metaEl.textContent = `Timed lab ${status.challengeId || ''} · ${this.formatClock(left)} left`.trim();
-            metaEl.dataset.urgent = String(left <= 30);
+            if (this._challengeTimedOut) {
+              metaEl.textContent = `Timed lab ${status.challengeId || ''} · Time's up`.trim();
+              metaEl.dataset.urgent = 'true';
+            } else {
+              const left = status.timeRemaining || 0;
+              metaEl.textContent = `Timed lab ${status.challengeId || ''} · ${this.formatClock(left)} left`.trim();
+              metaEl.dataset.urgent = String(left <= 30);
+            }
           } else {
             metaEl.textContent = `Campaign · Level ${status.currentLevel || '?'}${status.chapterName ? ` · ${status.chapterName}` : ''}`;
             delete metaEl.dataset.urgent;
           }
         }
         titleEl.textContent = isChallenge
-          ? (status.title || 'Timed lab')
+          ? (this._challengeTimedOut ? 'Time\'s up — lab failed' : (status.title || 'Timed lab'))
           : (status.levelTitle ? `L${status.currentLevel || '?'} · ${status.levelTitle}` : `Level ${status.currentLevel || '?'}`);
         if (descEl) descEl.innerHTML = this._inlineFormat(levelDef?.description || '');
 
@@ -2347,7 +2595,10 @@
         const nextText = document.getElementById('mission-next-text');
         const pending = objectives.find((o) => !o.completed);
         if (nextWrap && nextText) {
-          if (pending) {
+          if (this._challengeTimedOut) {
+            nextWrap.hidden = false;
+            nextText.textContent = 'The lab clock reached 00:00 — retry the lab from the result dialog.';
+          } else if (pending) {
             nextWrap.hidden = false;
             nextText.textContent = pending.label || pending.type || 'Continue';
           } else if (total > 0) {
@@ -2379,11 +2630,12 @@
 
         const allHints = levelDef?.hints || [];
         const hintSection = document.getElementById('hint-section');
-        if (allHints.length === 0) {
+        if (allHints.length === 0 || this.settings.showHints === false) {
           if (hintSection) hintSection.style.display = 'none';
         } else {
           if (hintSection) hintSection.style.display = '';
           const hintBtn = document.getElementById('btn-show-hint');
+          if (hintBtn) hintBtn.hidden = false;
           if (hintBtn && this._hintIndex < allHints.length) hintBtn.style.display = '';
         }
       }
@@ -2393,6 +2645,7 @@
           clearInterval(this._objUpdateInterval);
           this._objUpdateInterval = null;
         }
+        this._challengeTimedOut = false;
         this.hidePause();
         // Dropping an overlay-held pause must not leak into the next run.
         this._clearClockPauseReasons();
@@ -2403,9 +2656,15 @@
         notice?.setAttribute('aria-hidden', 'true');
         const panel = document.getElementById('objectives-panel');
         if (panel) panel.style.display = 'none';
+        document.getElementById('modal-level-complete')?.classList.remove('active');
+        document.getElementById('modal-game-over')?.classList.remove('active');
+        document.getElementById('modal-level-complete')?.setAttribute('aria-hidden', 'true');
+        document.getElementById('modal-game-over')?.setAttribute('aria-hidden', 'true');
+        this._resetGameOverModal();
         this._clearTutorialOverlay();
         this.examPrepUI?.hide?.();
         this.manifestPanel?.hide?.();
+        this.hud?.settingsPanel?.hide?.();
         this.engine.stop();
         this.renderer?.stop?.();
         if (this.modeInstance) {
@@ -2416,7 +2675,7 @@
         this.modeInstance = null;
         this.currentMode = null;
         document.getElementById('game-container')?.classList.remove('active');
-        document.getElementById('main-menu')?.classList.remove('hidden');
+        this._setStartPageHidden(false);
         document.body.classList.remove('terminal-open');
         for (const ui of [this.commandBar, this.inspector, this.contextMenu, this.metrics, this.incidentPanel, this.minimap]) {
           try { ui?.destroy?.(); } catch { /* already gone */ }
@@ -2505,6 +2764,11 @@
         if (this.renderer.gridGroup) this.renderer.gridGroup.visible = this.settings.grid;
         const particles = this.renderer.particleTraffic || this.renderer.particleSystem;
         if (particles) particles.enabled = this.settings.particles;
+        const lines = this.renderer.connectionLines;
+        if (lines && this.settings.showConnectionLines !== undefined) {
+          const group = lines.lineGroup || lines.group;
+          if (group) group.visible = this.settings.showConnectionLines !== false;
+        }
       }
 
       // ── YAML export (shared registry serializer; single-file download) ───────
@@ -2704,6 +2968,8 @@
             </footer>
           </div>`;
         document.body.appendChild(overlay);
+        this._tutorialOpener = document.activeElement;
+        requestAnimationFrame(() => document.getElementById('tutorial-start')?.focus?.({ preventScroll: true }));
         const close = () => {
           if (overlay.dataset.closing === '1') return;
           overlay.dataset.closing = '1';
@@ -2711,6 +2977,8 @@
           // The modal no longer covers the run: let the mission clock tick again
           // (no-op when the modal was opened outside a live run — menu, intro).
           this._resumeClocksFor('tutorial');
+          this._restoreFocus(this._tutorialOpener);
+          this._tutorialOpener = null;
           overlay.classList.add('fade-out');
           setTimeout(() => {
             overlay.remove();
@@ -2943,7 +3211,7 @@
             ${cell('Time Played', this.formatTime(stats.totalTimePlayed || 0))}
             ${cell('Campaign Stars', `${stars} / 60`, 'text-yellow-400')}
             ${cell('Achievements', `${ach} / ${(ACHIEVEMENTS || []).length}`, 'text-yellow-400')}
-            ${cell('Best Chaos Time', this.formatTime(stats.bestChaosSurvival ?? stats.bestChaosTime ?? 0), 'text-red-400')}
+            ${cell('Best Chaos Time', this.formatTime(stats.longestChaosSurvival ?? stats.bestChaosSurvival ?? stats.bestChaosTime ?? 0), 'text-red-400')}
             ${cell('XP Level', progress.xpLevel || progress.level || 1, 'text-blue-400')}
           </div>`;
       }

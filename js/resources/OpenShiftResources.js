@@ -112,16 +112,17 @@ export class Route extends ResourceBase {
     const serviceName = metadata.serviceName || metadata.to?.name || name;
     const defaults = {
       host: metadata.host || '',
-      path: metadata.path || '/',
       to: {
         kind: 'Service',
         name: serviceName,
         weight: metadata.weight ?? 100,
       },
       port: { targetPort: metadata.targetPort || metadata.portName || 'http' },
-      tls: metadata.tls !== undefined ? deepClone(metadata.tls) : null,
       wildcardPolicy: metadata.wildcardPolicy || 'None',
     };
+    // Real oc expose routes omit spec.path/tls (omitempty) until configured.
+    if (metadata.path !== undefined) defaults.path = metadata.path;
+    if (metadata.tls !== undefined) defaults.tls = deepClone(metadata.tls);
     if (metadata.termination) {
       defaults.tls = {
         termination: metadata.termination,
@@ -267,6 +268,29 @@ export class BuildConfig extends ResourceBase {
     });
     const name = metadata.name || 'unnamed';
     const outputName = metadata.outputImage || metadata.outputTo || `${name}:latest`;
+    const strategyType = metadata.strategyType || 'Source';
+    // Real BuildConfig validation requires exactly one strategy object:
+    // sourceStrategy for Source, dockerStrategy for Docker, customStrategy for Custom.
+    const strategy = { type: strategyType };
+    if (strategyType === 'Docker') {
+      strategy.dockerStrategy = { dockerfilePath: metadata.dockerfilePath || 'Dockerfile' };
+    } else if (strategyType === 'Custom') {
+      strategy.customStrategy = {
+        from: {
+          kind: 'ImageStreamTag',
+          name: metadata.builderImage || metadata.from || 'nodejs:20-ubi9',
+          namespace: metadata.builderNamespace || 'openshift',
+        },
+      };
+    } else {
+      strategy.sourceStrategy = {
+        from: {
+          kind: 'ImageStreamTag',
+          name: metadata.builderImage || metadata.from || 'nodejs:20-ubi9',
+          namespace: metadata.builderNamespace || 'openshift',
+        },
+      };
+    }
     const defaults = {
       source: {
         type: metadata.sourceType || 'Git',
@@ -276,17 +300,7 @@ export class BuildConfig extends ResourceBase {
         },
         contextDir: metadata.contextDir || '',
       },
-      strategy: {
-        type: metadata.strategyType || 'Source',
-        sourceStrategy: {
-          from: {
-            kind: 'ImageStreamTag',
-            name: metadata.builderImage || metadata.from || 'nodejs:20',
-            namespace: metadata.builderNamespace || 'openshift',
-          },
-        },
-        dockerStrategy: { dockerfilePath: metadata.dockerfilePath || 'Dockerfile' },
-      },
+      strategy,
       output: { to: { kind: 'ImageStreamTag', name: outputName } },
       triggers: deepClone(
         metadata.triggers || [{ type: 'ConfigChange' }, { type: 'ImageChange', imageChange: {} }]
@@ -382,7 +396,7 @@ export class Build extends ResourceBase {
       strategy: deepClone(
         metadata.strategy || {
           type: 'Source',
-          sourceStrategy: { from: { kind: 'ImageStreamTag', name: 'nodejs:20', namespace: 'openshift' } },
+          sourceStrategy: { from: { kind: 'ImageStreamTag', name: 'nodejs:20-ubi9', namespace: 'openshift' } },
         }
       ),
       output: deepClone(
@@ -808,27 +822,32 @@ export class SecurityContextConstraints extends ResourceBase {
       apiVersion: metadata.apiVersion || 'security.openshift.io/v1',
     });
     const defaults = {
-      priority: metadata.priority ?? 10,
+      priority: metadata.priority ?? null,
       allowPrivilegedContainer: metadata.allowPrivilegedContainer ?? false,
       allowHostDirVolumePlugin: metadata.allowHostDirVolumePlugin ?? false,
       allowHostNetwork: metadata.allowHostNetwork ?? false,
       allowHostPorts: metadata.allowHostPorts ?? false,
       allowHostPID: metadata.allowHostPID ?? false,
       allowHostIPC: metadata.allowHostIPC ?? false,
+      allowPrivilegeEscalation: metadata.allowPrivilegeEscalation ?? false,
       readOnlyRootFilesystem: metadata.readOnlyRootFilesystem ?? false,
+      defaultAddCapabilities: deepClone(metadata.defaultAddCapabilities || null),
+      allowedCapabilities: deepClone(metadata.allowedCapabilities || ['NET_BIND_SERVICE']),
+      requiredDropCapabilities: deepClone(metadata.requiredDropCapabilities || ['ALL']),
       runAsUser: deepClone(metadata.runAsUser || { type: 'MustRunAsRange' }),
       seLinuxContext: deepClone(metadata.seLinuxContext || { type: 'MustRunAs' }),
       fsGroup: deepClone(metadata.fsGroup || { type: 'MustRunAs' }),
       supplementalGroups: deepClone(metadata.supplementalGroups || { type: 'MustRunAs' }),
+      seccompProfiles: deepClone(metadata.seccompProfiles || ['runtime/default']),
+      volumes: deepClone(
+        metadata.volumes || ['configMap', 'csi', 'downwardAPI', 'emptyDir', 'ephemeral', 'image', 'persistentVolumeClaim', 'projected', 'secret']
+      ),
       users: deepClone(metadata.users || []),
       groups: deepClone(metadata.groups || []),
     };
     // Optional fields are only emitted when the caller supplies them.
-    if (metadata.allowedCapabilities) defaults.allowedCapabilities = deepClone(metadata.allowedCapabilities);
-    if (metadata.defaultAddCapabilities) defaults.defaultAddCapabilities = deepClone(metadata.defaultAddCapabilities);
-    if (metadata.requiredDropCapabilities) defaults.requiredDropCapabilities = deepClone(metadata.requiredDropCapabilities);
-    if (metadata.volumes) defaults.volumes = deepClone(metadata.volumes);
-    if (metadata.seccompProfiles) defaults.seccompProfiles = deepClone(metadata.seccompProfiles);
+    if (metadata.allowedUnsafeSysctls) defaults.allowedUnsafeSysctls = deepClone(metadata.allowedUnsafeSysctls);
+    if (metadata.userNamespaceLevel) defaults.userNamespaceLevel = metadata.userNamespaceLevel;
     this._initSpec(defaults, metadata.spec);
     this._setInitialStatus({ phase: 'Active' });
   }
@@ -887,7 +906,10 @@ export class SecurityContextConstraints extends ResourceBase {
 
   validate() {
     const result = super.validate();
-    if (typeof this.spec.priority !== 'number') result.errors.push('priority must be a number');
+    // priority is nullable in the real API (unset for all default SCCs).
+    if (this.spec.priority !== null && this.spec.priority !== undefined && typeof this.spec.priority !== 'number') {
+      result.errors.push('priority must be a number or null');
+    }
     const strategies = ['MustRunAs', 'MustRunAsNonRoot', 'MustRunAsRange', 'RunAsAny'];
     for (const field of ['runAsUser', 'seLinuxContext', 'fsGroup', 'supplementalGroups']) {
       const strategy = this.spec[field]?.type;

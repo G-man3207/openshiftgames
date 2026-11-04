@@ -71,12 +71,18 @@ function clone(value) {
 }
 
 function normalizePath(input) {
-  return String(input ?? '')
-    .trim()
-    .replace(/\\/g, '/')
-    .replace(/^\.\//, '')
-    .replace(/\/+/g, '/')
-    .replace(/\/$/, '');
+  const raw = String(input ?? '').trim().replace(/\\/g, '/');
+  if (!raw) return '';
+  const parts = [];
+  for (const part of raw.split('/')) {
+    if (!part || part === '.') continue;
+    if (part === '..') {
+      parts.pop();
+      continue;
+    }
+    parts.push(part);
+  }
+  return parts.join('/');
 }
 
 function resolvePath(baseDir, relative) {
@@ -113,6 +119,60 @@ export function deepMerge(base, patch) {
     else out[key] = clone(value);
   }
   return out;
+}
+
+/** Kubernetes strategic-merge keys for the list fields used by OpenShift manifests. */
+const STRATEGIC_MERGE_KEYS = {
+  containers: ['name'],
+  initContainers: ['name'],
+  ephemeralContainers: ['name'],
+  env: ['name'],
+  volumes: ['name'],
+  volumeMounts: ['mountPath'],
+  volumeDevices: ['devicePath'],
+  imagePullSecrets: ['name'],
+  ports: ['containerPort', 'port'],
+  hostAliases: ['ip'],
+  topologySpreadConstraints: ['topologyKey'],
+};
+
+/**
+ * Strategic merge patch used by `patchesStrategicMerge` / `patches` (Kustomize):
+ * maps merge recursively, lists with a known Kubernetes merge key merge by that
+ * key, other lists are replaced (patch strategy `replace`).
+ */
+export function strategicMerge(base, patch) {
+  return _strategicMerge(base, patch, null);
+}
+
+function _strategicMerge(base, patch, hint) {
+  if (patch === undefined) return clone(base);
+  if (Array.isArray(patch)) {
+    const keys = hint ? STRATEGIC_MERGE_KEYS[hint] : null;
+    if (!Array.isArray(base) || !keys) return clone(patch);
+    const out = base.map((item) => clone(item));
+    for (const patchItem of patch) {
+      if (!isPlainObject(patchItem)) {
+        out.push(clone(patchItem));
+        continue;
+      }
+      const index = out.findIndex(
+        (item) => isPlainObject(item) && keys.some((key) => item[key] !== undefined && item[key] === patchItem[key])
+      );
+      if (index === -1) out.push(clone(patchItem));
+      else out[index] = _strategicMerge(out[index], patchItem, null);
+    }
+    return out;
+  }
+  if (isPlainObject(patch)) {
+    const out = isPlainObject(base) ? { ...base } : {};
+    for (const [key, value] of Object.entries(patch)) {
+      if (value === undefined) continue;
+      out[key] = _strategicMerge(out[key], value, key);
+    }
+    return out;
+  }
+  return clone(patch);
 }
 
 function base64(str) {
@@ -409,13 +469,60 @@ export class ManifestEngine {
       const items = Array.isArray(raw.items) ? raw.items : [];
       return { ok: true, list: items.map((item, index) => this._normalizeDoc(item, `${source}[items ${index}]`, options)) };
     }
+    const declaredApiVersion = raw.apiVersion === undefined || raw.apiVersion === null ? '' : String(raw.apiVersion);
+    // `project.config.openshift.io/cluster` is a virtual singleton (kind Project
+    // in the config.openshift.io group) that the kind registry cannot represent
+    // (its Project kind is project.openshift.io/v1). Route exactly that object to
+    // the GameEngine bridge instead of failing discovery; every other
+    // config.openshift.io Project name is rejected like a real cluster would.
+    if (kind === 'Project' && declaredApiVersion === 'config.openshift.io/v1') {
+      const rawMetadata = isPlainObject(raw.metadata) ? raw.metadata : {};
+      const configName = rawMetadata.name === undefined || rawMetadata.name === null ? '' : String(rawMetadata.name);
+      if (configName === 'cluster') {
+        const metadata = clone(rawMetadata);
+        metadata.name = 'cluster';
+        delete metadata.namespace; // cluster-scoped singleton
+        const spec = isPlainObject(raw.spec) ? clone(raw.spec) : {};
+        const extra = {};
+        for (const [key, value] of Object.entries(raw)) {
+          if (['apiVersion', 'kind', 'metadata', 'spec', 'status'].includes(key)) continue;
+          extra[key] = clone(value);
+          if (!(key in spec)) spec[key] = clone(value);
+        }
+        const labels = isPlainObject(metadata.labels) ? metadata.labels : {};
+        const annotations = isPlainObject(metadata.annotations) ? metadata.annotations : {};
+        return {
+          ok: true,
+          doc: { apiVersion: 'config.openshift.io/v1', kind: 'Project', metadata, spec },
+          normalized: {
+            kind: 'Project',
+            apiVersion: 'config.openshift.io/v1',
+            name: 'cluster',
+            namespace: '',
+            namespaced: false,
+            labels,
+            annotations,
+            spec,
+            extra,
+            routed: 'project-config',
+          },
+        };
+      }
+      const message = `project.config.openshift.io "${configName}" is invalid: metadata.name: Unsupported value: "${configName}": supported values: "cluster"`;
+      return { ok: false, error: `error: ${message}`, detail: { file: source, message } };
+    }
     const canonical = this._canonicalKind(kind);
-    if (!canonical) {
-      const apiVersion = raw.apiVersion || 'v1';
+    // Real oc resolves (apiVersion, kind) through API discovery: kind names are
+    // the exact API kind (CLI aliases such as `dc`/`svc` are not valid manifest
+    // kinds) and apiVersion is required and must match the kind's group/version.
+    const expectedApiVersion = canonical ? apiVersionForKind(canonical) : '';
+    if (!canonical || kind !== canonical || !declaredApiVersion || declaredApiVersion !== expectedApiVersion) {
+      const version = declaredApiVersion;
+      const message = `no matches for kind "${kind}" in version "${version}"`;
       return {
         ok: false,
-        error: `error: unable to recognize "${source}": no matches for kind "${kind}" in version "${apiVersion}"`,
-        detail: { file: source, message: `no matches for kind "${kind}" in version "${apiVersion}"` },
+        error: `error: unable to recognize "${source}": ${message}`,
+        detail: { file: source, message },
       };
     }
 
@@ -554,7 +661,57 @@ export class ManifestEngine {
     return { resource, created };
   }
 
+  /**
+   * Apply the virtual `project.config.openshift.io/cluster` singleton.
+   *
+   * This object is not a Kubernetes resource in the simulator's registry: it is
+   * forwarded to the GameEngine bridge (which stores the project configuration)
+   * without creating a Project resource, touching cluster indexes or emitting a
+   * resource:applied event.
+   */
+  _applyProjectConfig(normalized) {
+    const engine = this._gameEngine();
+    if (!engine || typeof engine.applyManifestObject !== 'function') {
+      throw new Error(
+        'Error from server (ServiceUnavailable): project.config.openshift.io "cluster" cannot be applied: initialise the cluster engine first'
+      );
+    }
+    const rawObj = {
+      apiVersion: normalized.apiVersion,
+      kind: 'Project',
+      metadata: {
+        name: 'cluster',
+        labels: clone(normalized.labels),
+        annotations: clone(normalized.annotations),
+      },
+      spec: clone(normalized.spec),
+    };
+    for (const [key, value] of Object.entries(normalized.extra || {})) {
+      if (!(key in rawObj)) rawObj[key] = clone(value);
+    }
+    const returned = engine.applyManifestObject(rawObj);
+    if (!returned) {
+      const reason = typeof engine.lastApplyError === 'string' && engine.lastApplyError ? engine.lastApplyError : '';
+      throw new Error(reason || 'Error from server (BadRequest): unable to apply project.config.openshift.io "cluster"');
+    }
+    if (typeof returned === 'object' && (returned.success === false || returned.ok === false)) {
+      throw new Error(returned.message || returned.error || 'Error from server (BadRequest): unable to apply project.config.openshift.io "cluster"');
+    }
+    return {
+      created: false,
+      projectConfig: true,
+      ref: {
+        kind: 'Project',
+        name: 'cluster',
+        namespace: '',
+        apiVersion: 'config.openshift.io/v1',
+      },
+      resource: returned,
+    };
+  }
+
   _applyOne(normalized) {
+    if (normalized.routed === 'project-config') return this._applyProjectConfig(normalized);
     const engine = this._gameEngine();
     const existed = Boolean(this._findResource(normalized.kind, normalized.name, normalized.namespace));
     let resource = null;
@@ -576,6 +733,11 @@ export class ManifestEngine {
         if (!(key in rawObj)) rawObj[key] = clone(value);
       }
       const returned = engine.applyManifestObject(rawObj);
+      if (returned === null) {
+        // The engine rejected the object; never report a false success.
+        const reason = typeof engine.lastApplyError === 'string' && engine.lastApplyError ? engine.lastApplyError : '';
+        throw new Error(reason || `error: unable to apply ${normalized.kind} "${normalized.name}"`);
+      }
       if (returned && returned.resource) {
         resource = returned.resource;
         if (typeof returned.created === 'boolean') created = returned.created;
@@ -583,6 +745,9 @@ export class ManifestEngine {
         resource = returned;
       }
       if (!resource) resource = this._findResource(normalized.kind, normalized.name, normalized.namespace);
+      if (!resource && returned === undefined) {
+        throw new Error(`error: unable to apply ${normalized.kind} "${normalized.name}"`);
+      }
     } else {
       const result = this._applyFallback(normalized);
       resource = result.resource;
@@ -609,25 +774,47 @@ export class ManifestEngine {
     const source = opts.source || '<input>';
     const normalizeOptions = opts.namespace ? { namespace: String(opts.namespace) } : {};
     const { docs, errors, details } = this._normalizeAll(rawDocs, source, normalizeOptions);
-    if (errors.length > 0) {
-      return this._emptyResult({ errors, errorDetails: details, source });
-    }
 
+    // Real `oc apply -f` applies every valid document and reports per-document
+    // errors; a bad document does not roll back its siblings. Parse failures are
+    // still handled transactionally by applyFile() before this point.
     const result = this._emptyResult({ ok: true, source });
+    result.errors.push(...errors);
+    result.errorDetails.push(...details);
     const warnings = [];
     const created = [];
     const updated = [];
     const autoCreatedProjects = [];
+    const autoCreateProjects =
+      opts.autoCreateProjects !== undefined
+        ? opts.autoCreateProjects === true
+        : this.options.autoCreateProjects !== false;
 
-    // Simulator convenience: ensure target projects exist. Real OCP would
-    // reject a namespaced apply with "namespaces \"x\" not found".
-    if (this.options.autoCreateProjects !== false && typeof this._cluster === 'function') {
-      const missing = new Set();
-      for (const normalized of docs) {
-        if (!normalized.namespaced) continue;
-        const ns = normalized.namespace;
-        if (ns && !this._namespaceExists(ns)) missing.add(ns);
+    const missing = new Set();
+    const skippedNamespaces = new Set();
+    const applicable = [];
+    for (const normalized of docs) {
+      if (!normalized.namespaced) {
+        applicable.push(normalized);
+        continue;
       }
+      const ns = normalized.namespace;
+      if (!ns || this._namespaceExists(ns)) {
+        applicable.push(normalized);
+        continue;
+      }
+      if (autoCreateProjects) {
+        missing.add(ns);
+        applicable.push(normalized);
+      } else {
+        skippedNamespaces.add(ns);
+      }
+    }
+
+    // Simulator convenience (enabled by default): ensure target projects exist.
+    // Real OCP would reject a namespaced apply with "namespaces "x" not found";
+    // callers can pass {autoCreateProjects: false} to get that behaviour.
+    if (autoCreateProjects && missing.size) {
       for (const ns of missing) {
         try {
           const project = this._normalizeDoc(
@@ -650,15 +837,26 @@ export class ManifestEngine {
           warnings.push(`could not create project "${ns}": ${err?.message || err}`);
         }
       }
+    } else if (skippedNamespaces.size > 0) {
+      for (const ns of skippedNamespaces) {
+        const message = `Error from server (NotFound): namespaces "${ns}" not found`;
+        result.errors.push(message);
+        result.errorDetails.push({ file: source, message });
+      }
     }
 
-    for (const normalized of docs) {
+    let projectConfigApplied = false;
+    for (const normalized of applicable) {
+      if (normalized.namespaced && skippedNamespaces.has(normalized.namespace)) continue;
       try {
         const applied = this._applyOne(normalized);
+        if (applied.projectConfig) {
+          projectConfigApplied = true;
+          continue;
+        }
         if (applied.created) created.push(applied.ref);
         else updated.push(applied.ref);
       } catch (err) {
-        result.ok = false;
         result.errors.push(formatError(err, source));
         result.errorDetails.push(errorDetail(err, source));
       }
@@ -668,6 +866,15 @@ export class ManifestEngine {
     result.updated = updated;
     result.autoCreatedProjects = autoCreatedProjects;
     result.warnings.push(...warnings);
+    result.ok = result.errors.length === 0;
+    if (projectConfigApplied) {
+      result.projectConfig = { apiVersion: 'config.openshift.io/v1', kind: 'Project', name: 'cluster' };
+      if (result.ok && !result.message) {
+        result.message = 'project.config.openshift.io/cluster configured';
+      }
+    }
+    if (result.ok) delete result.error;
+    else result.error = result.errors[0];
 
     if (result.ok && opts.event) {
       const resources = [...created, ...updated].map((ref) => ({ ...ref }));
@@ -705,6 +912,18 @@ export class ManifestEngine {
   applyFile(path, options = {}) {
     const norm = normalizePath(path);
     if (!this.files.has(norm)) {
+      // `oc apply -f <directory>` applies every YAML/JSON file below it.
+      const prefix = norm ? `${norm}/` : '';
+      const directoryFiles = this.listFiles().filter(
+        (candidate) =>
+          candidate !== norm &&
+          candidate.startsWith(prefix) &&
+          !candidate.startsWith('.oc/') &&
+          /\.(ya?ml|json)$/i.test(candidate)
+      );
+      if (directoryFiles.length > 0) {
+        return this._applyDirectory(norm, directoryFiles, options);
+      }
       return this._emptyResult({
         errors: [`error: the path "${norm}" does not exist`],
         errorDetails: [{ file: norm, message: 'path does not exist' }],
@@ -723,7 +942,13 @@ export class ManifestEngine {
         errorDetails: [{ file: norm, message: 'no objects passed to apply' }],
       });
     }
-    const result = this._applyDocuments(docs, { source: norm, path: norm, event: 'manifest:applied', namespace: options.namespace });
+    const result = this._applyDocuments(docs, {
+      source: norm,
+      path: norm,
+      event: 'manifest:applied',
+      namespace: options.namespace,
+      autoCreateProjects: options.autoCreateProjects,
+    });
     if (result.ok) {
       const templateMatch = this._matchPendingTemplate(docs);
       if (templateMatch) {
@@ -750,6 +975,29 @@ export class ManifestEngine {
     return result;
   }
 
+  /** Apply every manifest file in a directory (real `oc apply -f <dir>`). */
+  _applyDirectory(dir, files, options = {}) {
+    const aggregate = this._emptyResult({ ok: true, source: dir || '.' });
+    aggregate.created = [];
+    aggregate.updated = [];
+    aggregate.errorDetails = [];
+    aggregate.warnings = [];
+    aggregate.autoCreatedProjects = [];
+    for (const file of files) {
+      const result = this.applyFile(file, options);
+      aggregate.created.push(...(result.created || []));
+      aggregate.updated.push(...(result.updated || []));
+      aggregate.errors.push(...(result.errors || []));
+      aggregate.errorDetails.push(...(result.errorDetails || []));
+      aggregate.warnings.push(...(result.warnings || []));
+      aggregate.autoCreatedProjects.push(...(result.autoCreatedProjects || []));
+    }
+    aggregate.ok = aggregate.errors.length === 0;
+    if (aggregate.ok) delete aggregate.error;
+    else aggregate.error = aggregate.errors[0];
+    return aggregate;
+  }
+
   /**
    * Parse + apply an array of objects (used by `oc process ... | oc apply -f -`).
    * @param {object[]} objects
@@ -769,7 +1017,13 @@ export class ManifestEngine {
         errorDetails: [{ message: 'no objects passed to apply' }],
       });
     }
-    const result = this._applyDocuments(docs, { source, path: source, event: 'manifest:applied', namespace: options.namespace });
+    const result = this._applyDocuments(docs, {
+      source,
+      path: source,
+      event: 'manifest:applied',
+      namespace: options.namespace,
+      autoCreateProjects: options.autoCreateProjects,
+    });
 
     // If the objects are the output of processTemplate(), record/emit the
     // template application (oc process ... | oc apply -f -).
@@ -793,8 +1047,8 @@ export class ManifestEngine {
   }
 
   /** Apply + record a processed template in one call (no CLI pipe needed). */
-  applyTemplate(path, params = {}) {
-    const processed = this.processTemplate(path, params);
+  applyTemplate(path, params = {}, options = {}) {
+    const processed = this.processTemplate(path, params, options);
     if (!processed.ok) {
       return {
         ok: false,
@@ -811,7 +1065,14 @@ export class ManifestEngine {
   }
 
   _matchPendingTemplate(objects) {
-    const serialized = JSON.stringify(objects);
+    // `oc process ... | oc apply -f -` pipes a `kind: List` document; flatten it
+    // so the piped objects can still be matched against a pending template.
+    let candidates = objects;
+    if (Array.isArray(objects) && objects.length === 1 && objects[0]?.kind === 'List' && Array.isArray(objects[0].items)) {
+      candidates = objects[0].items;
+    }
+    if (!Array.isArray(candidates)) return null;
+    const serialized = JSON.stringify(candidates);
     for (const entry of this.pendingTemplates) {
       if (entry.applied) continue;
       if (JSON.stringify(entry.objects) === serialized) return entry;
@@ -852,6 +1113,38 @@ export class ManifestEngine {
 
     const warnings = [];
     const objects = [];
+    // Silent ignores hide real work from the learner: refuse unsupported
+    // kustomize features loudly instead of producing a partial build. Unknown
+    // fields are warned about (they may be typos for supported fields).
+    const UNSUPPORTED_KUSTOMIZATION_KEYS = [
+      'patchesJson6902',
+      'configMapGenerator',
+      'secretGenerator',
+      'components',
+      'replacements',
+      'transformers',
+      'vars',
+      'helmCharts',
+      'crds',
+      'configurations',
+      'openapi',
+    ];
+    const SUPPORTED_KUSTOMIZATION_KEYS = new Set([
+      'apiVersion', 'kind', 'metadata', 'resources', 'bases', 'namespace', 'namePrefix', 'nameSuffix',
+      'commonLabels', 'commonAnnotations', 'labels', 'images', 'replicas', 'patchesStrategicMerge',
+      'patches', 'generatorOptions',
+    ]);
+    const unsupportedKeys = UNSUPPORTED_KUSTOMIZATION_KEYS.filter((key) => kustomization[key] !== undefined);
+    if (unsupportedKeys.length > 0) {
+      throw new Error(
+        `${kustomizationPath}: ${unsupportedKeys.join(', ')} is not supported by this simulator and would otherwise be silently ignored (real kustomize v5 applies it); remove the key or use a supported kustomization field`
+      );
+    }
+    for (const key of Object.keys(kustomization)) {
+      if (!SUPPORTED_KUSTOMIZATION_KEYS.has(key)) {
+        warnings.push(`${kustomizationPath}: unsupported kustomization field "${key}" ignored`);
+      }
+    }
     const resources = [
       ...(Array.isArray(kustomization.resources) ? kustomization.resources : []),
       ...(Array.isArray(kustomization.bases) ? kustomization.bases : []),
@@ -918,34 +1211,55 @@ export class ManifestEngine {
             `${patchSource}: no resource matched the strategic merge patch for ${patchKind}/${patch.metadata.name}`
           );
         }
-        const merged = deepMerge(target, patch);
-        merged.kind = target.kind;
-        merged.apiVersion = target.apiVersion;
-        merged.metadata = { ...target.metadata, ...patch.metadata };
-        const index = objects.indexOf(target);
-        objects[index] = merged;
+        objects[objects.indexOf(target)] = this._mergeStrategicPatch(target, patch);
       }
     }
 
-    // patches: [{path, target:{kind,name}}] — subset of the newer field.
+    // patches: [{path | patch, target?}] — newer kustomize field. JSON6902 is
+    // not implemented; strategic-merge patches (with or without a target) are.
     const newerPatches = Array.isArray(kustomization.patches) ? kustomization.patches : [];
     for (const entry of newerPatches) {
-      if (!isPlainObject(entry) || !entry.path) {
-        warnings.push(`${kustomizationPath}: only file-based "patches" entries are supported`);
-        continue;
+      if (!isPlainObject(entry)) {
+        throw new Error(`${kustomizationPath}: "patches" entries must be mappings with a "path"/"patch" (and optional "target")`);
       }
-      const patchPath = resolvePath(normDir, entry.path);
-      if (!this.files.has(patchPath)) throw new Error(`${kustomizationPath}: patch "${entry.path}" not found`);
-      const patchDocs = parseYaml(this.files.get(patchPath), { file: patchPath });
+      const targetSpec = isPlainObject(entry.target) ? entry.target : null;
+      let patchDocs = [];
+      let patchSource = `${kustomizationPath} (inline patch)`;
+      if (typeof entry.path === 'string' && entry.path) {
+        const patchPath = resolvePath(normDir, entry.path);
+        if (!this.files.has(patchPath)) throw new Error(`${kustomizationPath}: patch "${entry.path}" not found`);
+        patchDocs = parseYaml(this.files.get(patchPath), { file: patchPath });
+        patchSource = patchPath;
+      } else if (typeof entry.patch === 'string') {
+        patchDocs = parseYaml(entry.patch, { file: `${kustomizationPath} (inline patch)` });
+      } else {
+        throw new Error(`${kustomizationPath}: "patches" entries need a "path" or an inline "patch"`);
+      }
+      if (patchDocs.some((doc) => Array.isArray(doc))) {
+        throw new Error(
+          `${patchSource}: JSON6902 patch lists are not supported by this simulator; use a strategic-merge patch (kind/metadata.name)`
+        );
+      }
       for (const patch of patchDocs) {
-        if (!isPlainObject(patch) || !patch.kind || !patch.metadata?.name) continue;
+        if (!isPlainObject(patch)) throw new Error(`${patchSource}: patch document must be a mapping`);
+        const patchKind = (targetSpec && targetSpec.kind) || patch.kind;
+        const patchName = (targetSpec && targetSpec.name) || patch.metadata?.name;
+        if (!patchKind || !patchName) {
+          throw new Error(`${patchSource}: strategic-merge patch needs kind and metadata.name (or target {kind, name})`);
+        }
+        if (targetSpec && (targetSpec.labelSelector || targetSpec.annotationSelector)) {
+          throw new Error(`${patchSource}: "patches" target selectors are not supported; use target {kind, name}`);
+        }
+        const canonicalPatchKind = this._canonicalKind(patchKind) || String(patchKind);
+        const targetNamespace = targetSpec && targetSpec.namespace ? String(targetSpec.namespace) : '';
         const target = objects.find(
           (obj) =>
-            (this._canonicalKind(obj.kind) || obj.kind) === (this._canonicalKind(patch.kind) || patch.kind) &&
-            obj.metadata?.name === patch.metadata.name
+            (this._canonicalKind(obj.kind) || obj.kind) === canonicalPatchKind &&
+            obj.metadata?.name === patchName &&
+            (!targetNamespace || obj.metadata?.namespace === targetNamespace)
         );
-        if (!target) throw new Error(`${patchPath}: no resource matched patch for ${patch.kind}/${patch.metadata.name}`);
-        objects[objects.indexOf(target)] = deepMerge(target, patch);
+        if (!target) throw new Error(`${patchSource}: no resource matched patch for ${patchKind}/${patchName}`);
+        objects[objects.indexOf(target)] = this._mergeStrategicPatch(target, patch);
       }
     }
 
@@ -1021,6 +1335,18 @@ export class ManifestEngine {
     return { objects, warnings, kustomizationPath };
   }
 
+  /** Merge a strategic-merge patch into a target object, preserving identity fields. */
+  _mergeStrategicPatch(target, patch) {
+    const merged = strategicMerge(target, patch);
+    merged.kind = target.kind;
+    merged.apiVersion = target.apiVersion;
+    const metadata = isPlainObject(merged.metadata) ? merged.metadata : { ...(target.metadata || {}) };
+    metadata.name = target.metadata?.name || metadata.name;
+    if (target.metadata?.namespace) metadata.namespace = target.metadata.namespace;
+    merged.metadata = metadata;
+    return merged;
+  }
+
   _addCommonLabelsToSelectors(obj, labels) {
     if (!labels || Object.keys(labels).length === 0) return;
     const kind = this._canonicalKind(obj.kind) || obj.kind;
@@ -1047,6 +1373,34 @@ export class ManifestEngine {
   _applyNameReferences(objects, nameMap) {
     if (nameMap.size === 0) return;
     const remap = (value) => (typeof value === 'string' && nameMap.has(value) ? nameMap.get(value) : value);
+    const remapPodSpec = (podSpec) => {
+      if (!isPlainObject(podSpec)) return;
+      if (podSpec.serviceAccountName) podSpec.serviceAccountName = remap(podSpec.serviceAccountName);
+      for (const secret of podSpec.imagePullSecrets || []) {
+        if (secret?.name) secret.name = remap(secret.name);
+      }
+      for (const key of ['containers', 'initContainers']) {
+        for (const container of podSpec[key] || []) {
+          if (!isPlainObject(container)) continue;
+          for (const envFrom of container.envFrom || []) {
+            if (envFrom?.configMapRef?.name) envFrom.configMapRef.name = remap(envFrom.configMapRef.name);
+            if (envFrom?.secretRef?.name) envFrom.secretRef.name = remap(envFrom.secretRef.name);
+          }
+          for (const env of container.env || []) {
+            if (env?.valueFrom?.configMapKeyRef?.name) env.valueFrom.configMapKeyRef.name = remap(env.valueFrom.configMapKeyRef.name);
+            if (env?.valueFrom?.secretKeyRef?.name) env.valueFrom.secretKeyRef.name = remap(env.valueFrom.secretKeyRef.name);
+          }
+        }
+      }
+      for (const volume of podSpec.volumes || []) {
+        if (volume?.configMap?.name) volume.configMap.name = remap(volume.configMap.name);
+        if (volume?.secret?.secretName) volume.secret.secretName = remap(volume.secret.secretName);
+        for (const source of volume?.projected?.sources || []) {
+          if (source?.configMap?.name) source.configMap.name = remap(source.configMap.name);
+          if (source?.secret?.name) source.secret.name = remap(source.secret.name);
+        }
+      }
+    };
     for (const obj of objects) {
       const kind = this._canonicalKind(obj.kind) || obj.kind;
       if (kind === 'Route') {
@@ -1067,6 +1421,9 @@ export class ManifestEngine {
           }
         }
       }
+      if (WORKLOAD_KINDS.has(kind)) remapPodSpec(obj.spec?.template?.spec);
+      if (kind === 'CronJob') remapPodSpec(obj.spec?.jobTemplate?.spec?.template?.spec);
+      if (kind === 'Pod') remapPodSpec(obj.spec);
     }
   }
 
@@ -1115,7 +1472,31 @@ export class ManifestEngine {
     visit(objects);
   }
 
-  applyKustomize(dirPath = '') {
+  /**
+   * `oc kustomize <dir>`: render the kustomization to YAML objects without
+   * touching the cluster (used by the CLI's render-only command).
+   * @returns {{ok: boolean, objects: object[], yaml: string, warnings: string[], error?: string}}
+   */
+  renderKustomize(dirPath = '') {
+    const dir = normalizePath(dirPath);
+    const kustomizationPath = this._findKustomization(dir);
+    if (!kustomizationPath) {
+      const message = `error: unable to find one of 'kustomization.yaml', 'kustomization.yml' or 'Kustomization' in directory '${
+        dir || '.'
+      }'`;
+      return { ok: false, objects: [], yaml: '', warnings: [], errors: [message], error: message };
+    }
+    try {
+      const loaded = this._loadKustomization(dir);
+      const yaml = loaded.objects.map((obj) => `---\n${stringifyYaml(obj)}`).join('');
+      return { ok: true, objects: loaded.objects, yaml, warnings: loaded.warnings, errors: [] };
+    } catch (err) {
+      const message = formatError(err, kustomizationPath);
+      return { ok: false, objects: [], yaml: '', warnings: [], errors: [message], error: message };
+    }
+  }
+
+  applyKustomize(dirPath = '', options = {}) {
     const dir = normalizePath(dirPath);
     const kustomizationPath = this._findKustomization(dir);
     if (!kustomizationPath) {
@@ -1137,6 +1518,8 @@ export class ManifestEngine {
       source: dir || '.',
       path: dir || '.',
       event: 'kustomize:applied',
+      namespace: options.namespace,
+      autoCreateProjects: options.autoCreateProjects,
     });
     result.warnings = [...loaded.warnings, ...(result.warnings || [])];
     if (result.ok) {
@@ -1257,7 +1640,7 @@ export class ManifestEngine {
    * Render an OpenShift Template. Does NOT apply anything: pipe the returned
    * objects/YAML to applyObjects() (CLI) or call applyTemplate().
    */
-  processTemplate(path, params = {}) {
+  processTemplate(path, params = {}, options = {}) {
     const norm = normalizePath(path);
     if (!this.files.has(norm)) {
       return {
@@ -1304,8 +1687,13 @@ export class ManifestEngine {
     const warnings = new Set();
     const values = {};
 
+    const ignoreUnknownParameters = options && options.ignoreUnknownParameters === true;
     for (const name of Object.keys(overrides)) {
-      if (!declared.has(name)) warnings.add(`unknown template parameter "${name}"`);
+      if (declared.has(name)) continue;
+      // Real `oc process` fails on undeclared -p parameters unless
+      // --ignore-unknown-parameters is passed.
+      if (ignoreUnknownParameters) warnings.add(`unknown template parameter "${name}"`);
+      else errors.push(`unknown parameter: ${name}`);
     }
 
     for (const def of defs) {
@@ -1412,7 +1800,7 @@ export class ManifestEngine {
 
   // ── oc delete -f ─────────────────────────────────────────────────────────
 
-  deleteFileObjects(path) {
+  deleteFileObjects(path, options = {}) {
     const norm = normalizePath(path);
     if (!this.files.has(norm)) {
       const error = `error: the path "${norm}" does not exist`;
@@ -1430,7 +1818,8 @@ export class ManifestEngine {
         errorDetails: [errorDetail(err, norm)],
       };
     }
-    const { docs: normalizedDocs, errors, details } = this._normalizeAll(docs, norm);
+    const normalizeOptions = options && options.namespace ? { namespace: String(options.namespace) } : {};
+    const { docs: normalizedDocs, errors, details } = this._normalizeAll(docs, norm, normalizeOptions);
     if (errors.length > 0) return { ok: false, deleted: [], errors, error: errors[0], errorDetails: details };
 
     const deleted = [];
@@ -1439,6 +1828,14 @@ export class ManifestEngine {
     const errorDetails = [...details];
     const cluster = this._cluster();
     for (const normalized of normalizedDocs) {
+      if (normalized && normalized.routed === 'project-config') {
+        // Never delete a real Project that happens to be named "cluster": the
+        // project configuration singleton is not a deletable resource here.
+        const message = 'Error from server (BadRequest): project.config.openshift.io "cluster" cannot be deleted in this simulator';
+        deleteErrors.push(message);
+        errorDetails.push({ file: norm, message });
+        continue;
+      }
       const { kind, name, namespace } = normalized;
       const resource = this._findResource(kind, name, namespace);
       if (!resource) {
@@ -1468,7 +1865,7 @@ export class ManifestEngine {
 
   // ── Helm ─────────────────────────────────────────────────────────────────
 
-  _readChart(chartDir, valuesPath, release, namespace) {
+  _readChart(chartDir, valuesPath, release, namespace, opts = {}) {
     const dir = normalizePath(chartDir);
     const chartPath = `${dir}/Chart.yaml`;
     if (!this.files.has(chartPath)) {
@@ -1506,7 +1903,9 @@ export class ManifestEngine {
       }
     }
 
-    const values = deepMerge(defaults, overrides);
+    let values = deepMerge(defaults, overrides);
+    const setValues = isPlainObject(opts.setValues) ? opts.setValues : isPlainObject(opts.values) ? opts.values : null;
+    if (setValues) values = deepMerge(values, setValues);
     const chartName = chart.name ? String(chart.name) : basename(dir);
     const chartVersion = chart.version ? String(chart.version) : '0.0.0';
     const templatePaths = this.listFiles().filter((path) => {
@@ -1563,6 +1962,8 @@ export class ManifestEngine {
 
   _evalTemplateExpression(expression, context) {
     const parts = expression.split('|').map((part) => part.trim());
+    // A missing value is allowed to flow through pipelines: `| default` exists
+    // precisely to replace nil values (Helm/Sprig semantics).
     let value = this._evalTemplateValue(parts[0], context);
     for (const part of parts.slice(1)) {
       if (part === 'quote') {
@@ -1597,7 +1998,6 @@ export class ManifestEngine {
         }
         current = current[segment];
       }
-      if (current === undefined) throw new Error(`no value for "${token}"`);
       return current;
     }
     if (/^-?\d+$/.test(token)) return parseInt(token, 10);
@@ -1624,23 +2024,77 @@ export class ManifestEngine {
     const invalid = this._validateReleaseName(release);
     if (invalid) return this._helmReleaseError(`Error: ${invalid}`);
     const namespace = opts.namespace || this._currentProject() || 'default';
-    const chart = this._readChart(chartDir, valuesPath, release, namespace);
+    const chart = this._readChart(chartDir, valuesPath, release, namespace, opts);
     if (!chart.ok) return { ...chart, released: null, resources: [], error: chart.errors?.[0] };
     return { ...chart, released: release, namespace };
+  }
+
+  _helmKey(namespace, name) {
+    return `${namespace || 'default'}/${name}`;
+  }
+
+  /** Release records are namespace-scoped in Helm 3. */
+  _helmMatches(name, opts = {}) {
+    if (opts.namespace) {
+      const record = this.helmReleases.get(this._helmKey(String(opts.namespace), name));
+      return record ? [record] : [];
+    }
+    return [...this.helmReleases.values()].filter((record) => record.name === name);
+  }
+
+  _pruneHelmResources(previousResources, nextResources) {
+    const refKey = (ref) => `${ref.kind}|${ref.namespace || ''}|${ref.name}`;
+    const nextKeys = new Set((nextResources || []).map(refKey));
+    const cluster = this._cluster();
+    const deleted = [];
+    for (const ref of previousResources || []) {
+      if (nextKeys.has(refKey(ref))) continue;
+      const resource = this._findResource(ref.kind, ref.name, ref.namespace);
+      if (!resource) continue;
+      try {
+        if (cluster && typeof cluster.remove === 'function') cluster.remove(resource.uid || resource.metadata?.uid);
+        else throw new Error('cluster does not support remove()');
+        deleted.push({ kind: resource.kind || ref.kind, name: resource.metadata?.name || ref.name, namespace: ref.namespace });
+      } catch (err) {
+        // Best effort: an upgrade still succeeds if a stale object cannot be pruned.
+        if (typeof console !== 'undefined') console.warn(`helm: could not prune ${ref.kind}/${ref.name}:`, err?.message || err);
+      }
+    }
+    return deleted;
   }
 
   installHelm(release, chartDir, valuesPath = null, opts = {}) {
     const invalid = this._validateReleaseName(release);
     if (invalid) return this._helmReleaseError(`Error: ${invalid}`);
-    if (this.helmReleases.has(release)) {
-      return this._helmReleaseError(`Error: release "${release}" already exists (use "helm upgrade ${release} ...")`);
+    const namespace = opts.namespace || this._currentProject() || 'default';
+    const key = this._helmKey(namespace, release);
+    if (this.helmReleases.has(key)) {
+      return this._helmReleaseError(`Error: release "${release}" already exists in namespace "${namespace}" (use "helm upgrade ${release} ...")`);
     }
-    const rendered = this.renderHelm(release, chartDir, valuesPath, opts);
+    const rendered = this.renderHelm(release, chartDir, valuesPath, { ...opts, namespace });
     if (!rendered.ok) return rendered;
+    if (opts.dryRun === true) {
+      return {
+        ok: true,
+        dryRun: true,
+        released: release,
+        name: release,
+        chart: rendered.chart.name,
+        chartVersion: rendered.chart.version,
+        namespace,
+        resources: [],
+        objects: rendered.objects,
+        values: clone(rendered.values),
+        errors: [],
+        errorDetails: [],
+        warnings: [],
+      };
+    }
     const result = this._applyDocuments(rendered.objects, {
       source: `helm:${release}`,
       path: `${normalizePath(chartDir)}`,
       event: null,
+      namespace,
     });
     if (!result.ok) {
       return {
@@ -1655,6 +2109,7 @@ export class ManifestEngine {
     }
     const resources = [...result.created, ...result.updated].map((ref) => ({ ...ref }));
     const record = {
+      key,
       name: release,
       chart: rendered.chart.name,
       chartVersion: rendered.chart.version,
@@ -1667,7 +2122,7 @@ export class ManifestEngine {
       values: clone(rendered.values),
       at: Date.now(),
     };
-    this.helmReleases.set(release, record);
+    this.helmReleases.set(key, record);
     this._emit('helm:installed', {
       release,
       name: release,
@@ -1680,6 +2135,7 @@ export class ManifestEngine {
       released: release,
       name: release,
       chart: record.chart,
+      chartVersion: record.chartVersion,
       namespace: record.namespace,
       resources,
       errors: [],
@@ -1690,16 +2146,42 @@ export class ManifestEngine {
   }
 
   upgradeHelm(release, chartDir, valuesPath = null, opts = {}) {
-    const existing = this.helmReleases.get(release);
-    if (!existing) return this._helmReleaseError(`Error: release "${release}" not found`);
+    const matches = this._helmMatches(release, opts);
+    if (matches.length === 0) return this._helmReleaseError(`Error: release "${release}" not found`);
+    if (matches.length > 1) {
+      return this._helmReleaseError(
+        `Error: release "${release}" is installed in multiple namespaces; specify -n/--namespace`
+      );
+    }
+    const existing = matches[0];
     const rendered = this.renderHelm(release, chartDir, valuesPath, {
-      namespace: opts.namespace || existing.namespace,
+      ...opts,
+      namespace: existing.namespace,
     });
     if (!rendered.ok) return rendered;
+    if (opts.dryRun === true) {
+      return {
+        ok: true,
+        dryRun: true,
+        released: release,
+        name: release,
+        chart: rendered.chart.name,
+        chartVersion: rendered.chart.version,
+        namespace: existing.namespace,
+        revision: existing.revision,
+        resources: [],
+        objects: rendered.objects,
+        values: clone(rendered.values),
+        errors: [],
+        errorDetails: [],
+        warnings: [],
+      };
+    }
     const result = this._applyDocuments(rendered.objects, {
       source: `helm:${release}`,
       path: normalizePath(chartDir),
       event: null,
+      namespace: existing.namespace,
     });
     if (!result.ok) {
       return {
@@ -1713,6 +2195,8 @@ export class ManifestEngine {
       };
     }
     const resources = [...result.created, ...result.updated].map((ref) => ({ ...ref }));
+    // Helm upgrades delete resources that were removed from the chart manifest.
+    const deleted = this._pruneHelmResources(existing.resources || [], resources);
     Object.assign(existing, {
       chart: rendered.chart.name,
       chartVersion: rendered.chart.version,
@@ -1736,8 +2220,11 @@ export class ManifestEngine {
       released: release,
       name: release,
       chart: existing.chart,
+      chartVersion: existing.chartVersion,
       namespace: existing.namespace,
+      revision: existing.revision,
       resources,
+      deleted,
       errors: [],
       errorDetails: [],
       warnings: [...(result.warnings || [])],
@@ -1745,9 +2232,12 @@ export class ManifestEngine {
     };
   }
 
-  /** @returns {Array<{name: string, chart: string, status: string, resources: object[]}>} */
-  listHelm() {
-    return [...this.helmReleases.values()].map((record) => ({
+  /** @param {{namespace?: string}} [opts] filter by release namespace (Helm 3 is namespace-scoped) */
+  listHelm(opts = {}) {
+    const records = opts.namespace
+      ? [...this.helmReleases.values()].filter((record) => record.namespace === String(opts.namespace))
+      : [...this.helmReleases.values()];
+    return records.map((record) => ({
       name: record.name,
       chart: record.chart,
       chartVersion: record.chartVersion,
@@ -1760,14 +2250,16 @@ export class ManifestEngine {
     }));
   }
 
-  getHelmRelease(name) {
-    const record = this.helmReleases.get(name);
-    return record ? { ...record, resources: (record.resources || []).map((ref) => ({ ...ref })) } : null;
+  getHelmRelease(name, opts = {}) {
+    const matches = this._helmMatches(name, opts);
+    if (matches.length !== 1) return null;
+    const record = matches[0];
+    return { ...record, resources: (record.resources || []).map((ref) => ({ ...ref })) };
   }
 
-  uninstallHelm(name) {
-    const record = this.helmReleases.get(name);
-    if (!record) {
+  uninstallHelm(name, opts = {}) {
+    const matches = this._helmMatches(name, opts);
+    if (matches.length === 0) {
       return {
         ok: false,
         deleted: [],
@@ -1777,6 +2269,11 @@ export class ManifestEngine {
         errorDetails: [],
       };
     }
+    if (matches.length > 1) {
+      const message = `Error: release "${name}" is installed in multiple namespaces; specify -n/--namespace`;
+      return { ok: false, deleted: [], notFound: [], error: message, errors: [message], errorDetails: [] };
+    }
+    const record = matches[0];
     const cluster = this._cluster();
     const deleted = [];
     const notFound = [];
@@ -1795,20 +2292,22 @@ export class ManifestEngine {
         errors.push(formatError(err));
       }
     }
-    this.helmReleases.delete(name);
-    this._emit('helm:uninstalled', { release: name, name, deleted: deleted.map((ref) => ({ ...ref })) });
-    return { ok: errors.length === 0, deleted, notFound, errors, errorDetails: [] };
+    this.helmReleases.delete(record.key || this._helmKey(record.namespace, name));
+    this._emit('helm:uninstalled', { release: name, name, namespace: record.namespace, deleted: deleted.map((ref) => ({ ...ref })) });
+    return { ok: errors.length === 0, deleted, notFound, errors, errorDetails: [], namespace: record.namespace };
   }
 
   // ── HTPasswd ─────────────────────────────────────────────────────────────
 
-  _htpasswdLines() {
-    const content = this.files.get('htpasswd') || '';
+  _htpasswdLines(file = 'htpasswd') {
+    const norm = normalizePath(file) || 'htpasswd';
+    const content = this.files.get(norm) || '';
     return content.split('\n').filter((line) => line.trim() !== '');
   }
 
-  _writeHtpasswdLines(lines) {
-    this.files.set('htpasswd', lines.length ? `${lines.join('\n')}\n` : '');
+  _writeHtpasswdLines(lines, file = 'htpasswd') {
+    const norm = normalizePath(file) || 'htpasswd';
+    this.files.set(norm, lines.length ? `${lines.join('\n')}\n` : '');
   }
 
   _parseHtpasswdUser(line) {
@@ -1817,10 +2316,10 @@ export class ManifestEngine {
     return { user: line.slice(0, colon), hash: line.slice(colon + 1) };
   }
 
-  /** @returns {string[]} usernames in file order */
-  htpasswdList() {
+  /** @param {string} [file] virtual htpasswd file path (default: root `htpasswd`) @returns {string[]} */
+  htpasswdList(file = 'htpasswd') {
     const users = [];
-    for (const line of this._htpasswdLines()) {
+    for (const line of this._htpasswdLines(file)) {
       if (line.trim().startsWith('#')) continue;
       const parsed = this._parseHtpasswdUser(line);
       if (parsed) users.push(parsed.user);
@@ -1835,26 +2334,29 @@ export class ManifestEngine {
     return null;
   }
 
-  htpasswdAdd(user, pass) {
+  /** Real htpasswd file paths are honoured; they default to the OAuth root file. */
+  htpasswdAdd(user, pass, file = 'htpasswd') {
+    const normFile = normalizePath(file) || 'htpasswd';
     const invalid = this._validateHtpasswdInput(user, pass);
-    if (invalid) return { ok: false, user, error: invalid, errors: [invalid] };
-    const lines = this._htpasswdLines();
+    if (invalid) return { ok: false, user, file: normFile, error: invalid, errors: [invalid] };
+    const lines = this._htpasswdLines(normFile);
     for (const line of lines) {
       const parsed = this._parseHtpasswdUser(line);
       if (parsed && parsed.user === user) {
-        const error = `user "${user}" already exists in htpasswd`;
-        return { ok: false, user, error, errors: [error] };
+        const error = `user "${user}" already exists in ${normFile}`;
+        return { ok: false, user, file: normFile, error, errors: [error] };
       }
     }
     lines.push(`${user}:${fakeHtpasswdHash(user, String(pass))}`);
-    this._writeHtpasswdLines(lines);
-    return { ok: true, user, file: 'htpasswd', errors: [] };
+    this._writeHtpasswdLines(lines, normFile);
+    return { ok: true, user, file: normFile, errors: [] };
   }
 
-  htpasswdUpdate(user, pass) {
+  htpasswdUpdate(user, pass, file = 'htpasswd') {
+    const normFile = normalizePath(file) || 'htpasswd';
     const invalid = this._validateHtpasswdInput(user, pass);
-    if (invalid) return { ok: false, user, error: invalid, errors: [invalid] };
-    const lines = this._htpasswdLines();
+    if (invalid) return { ok: false, user, file: normFile, error: invalid, errors: [invalid] };
+    const lines = this._htpasswdLines(normFile);
     let updated = false;
     for (let i = 0; i < lines.length; i++) {
       const parsed = this._parseHtpasswdUser(lines[i]);
@@ -1865,32 +2367,34 @@ export class ManifestEngine {
       }
     }
     if (!updated) lines.push(`${user}:${fakeHtpasswdHash(user, String(pass))}`);
-    this._writeHtpasswdLines(lines);
-    return { ok: true, user, updated, file: 'htpasswd', errors: [] };
+    this._writeHtpasswdLines(lines, normFile);
+    return { ok: true, user, updated, file: normFile, errors: [] };
   }
 
-  htpasswdDelete(user) {
-    if (!user) return { ok: false, error: 'user name is required', errors: ['user name is required'] };
-    const lines = this._htpasswdLines();
+  htpasswdDelete(user, file = 'htpasswd') {
+    const normFile = normalizePath(file) || 'htpasswd';
+    if (!user) return { ok: false, user, file: normFile, error: 'user name is required', errors: ['user name is required'] };
+    const lines = this._htpasswdLines(normFile);
     const next = lines.filter((line) => {
       const parsed = this._parseHtpasswdUser(line);
       return !(parsed && parsed.user === user);
     });
     if (next.length === lines.length) {
-      const error = `user "${user}" not found in htpasswd`;
-      return { ok: false, user, error, errors: [error] };
+      const error = `user "${user}" not found in ${normFile}`;
+      return { ok: false, user, file: normFile, error, errors: [error] };
     }
-    this._writeHtpasswdLines(next);
-    return { ok: true, user, file: 'htpasswd', errors: [] };
+    this._writeHtpasswdLines(next, normFile);
+    return { ok: true, user, file: normFile, errors: [] };
   }
 
   /**
-   * Verify an HTPasswd login without exposing stored hashes.
+   * Verify an HTPasswd login without exposing stored hashes. The OAuth provider
+   * reads the root `htpasswd` file; optional `file` probes another file.
    * @returns {boolean}
    */
-  htpasswdAuthenticate(user, pass) {
+  htpasswdAuthenticate(user, pass, file = 'htpasswd') {
     if (!user) return false;
-    for (const line of this._htpasswdLines()) {
+    for (const line of this._htpasswdLines(file)) {
       const parsed = this._parseHtpasswdUser(line);
       if (parsed && parsed.user === user) return parsed.hash === fakeHtpasswdHash(user, String(pass));
     }

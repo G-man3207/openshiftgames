@@ -50,6 +50,7 @@ class CampaignMode {
     this.ticker = null;
     this.hadFailures = false;
     this.usedHints = false;
+    this.campaignFinished = false;
     this.tutorialStep = 0;
     this.tutorialActive = false;
     this.levelRetryCount = 0;
@@ -123,6 +124,7 @@ class CampaignMode {
     this.state = CAMPAIGN_STATE.LOADING;
     this.hadFailures = false;
     this.usedHints = false;
+    this.campaignFinished = false;
     this.tutorialStep = 0;
     this.tutorialActive = false;
     this.pausedTime = 0;
@@ -465,6 +467,11 @@ class CampaignMode {
       efficiency: Math.round(efficiency * 100),
       hadFailures: this.hadFailures,
       nextLevel: this.currentLevelDef?.nextLevel ?? null,
+      // UI contract (HANDOFF GAME-014): relabel "Next Level" for the final
+      // level and return to the menu after `campaign:campaign-complete`.
+      isLastLevel: this.isLastLevel(),
+      totalLevels: CAMPAIGN_LEVELS.length,
+      state: this.state,
     };
 
     this.emit('campaign:level-completed', completionData);
@@ -519,10 +526,49 @@ class CampaignMode {
   nextLevel() {
     const nextId = this.currentLevelDef?.nextLevel;
     if (!nextId) {
-      this.exitToMenu();
+      // HANDOFF GAME-014 (frontend): the last level cannot advance. Keep the
+      // completed level visible (do NOT }clear currentLevelDef and leave the
+      // shell in an empty campaign view) and announce campaign completion so
+      // the shell can navigate to the menu / ending screen.
+      this.campaignFinished = true;
+      const payload = {
+        levelId: this.currentLevel,
+        title: this.currentLevelDef?.title || `Level ${this.currentLevel}`,
+        totalLevels: CAMPAIGN_LEVELS.length,
+        state: this.state,
+        message: 'Campaign complete — all 20 EX280 levels finished.',
+      };
+      this.emit('campaign:campaign-complete', payload);
+      this.emit('mode:campaign-complete', payload);
       return false;
     }
-    return this.startLevel(nextId);
+    const started = this.startLevel(nextId);
+    if (started === false) {
+      this.emit('campaign:next-level-unavailable', {
+        levelId: this.currentLevel,
+        nextLevel: nextId,
+      });
+    }
+    return started;
+  }
+
+  /** True when the current level is the last one in the campaign. */
+  isLastLevel() {
+    return !this.currentLevelDef?.nextLevel;
+  }
+
+  hasNextLevel() {
+    return Boolean(this.currentLevelDef?.nextLevel);
+  }
+
+  /** True while the level-completed state is showing (level is finished). */
+  isCompleted() {
+    return this.state === CAMPAIGN_STATE.COMPLETED;
+  }
+
+  /** True when the whole campaign has been finished and the menu is next. */
+  isCampaignComplete() {
+    return Boolean(this.campaignFinished) && this.isLastLevel();
   }
 
   exitToMenu() {
@@ -654,6 +700,9 @@ class CampaignMode {
       activeIncidents: this.getActiveIncidents().length,
       tutorialActive: this.tutorialActive,
       tutorialStep: this.tutorialStep,
+      isLastLevel: this.isLastLevel(),
+      hasNextLevel: this.hasNextLevel(),
+      campaignFinished: Boolean(this.campaignFinished),
       hints: this.currentLevelDef?.hints || [],
       availableResources: this.currentLevelDef?.availableResources || [],
       examObjectives: this.currentLevelDef?.examObjectives || [],

@@ -213,7 +213,6 @@ export class Deployment extends ResourceBase {
     const name = metadata.name || 'unnamed';
     const matchLabels = metadata.matchLabels || { app: name };
     const containers = normalizeContainers(metadata.containers);
-    const containerNames = containers.map((c) => c.name);
     const defaults = {
       replicas: metadata.replicas ?? 3,
       selector: { matchLabels: deepClone(matchLabels) },
@@ -228,16 +227,6 @@ export class Deployment extends ResourceBase {
         metadata: { labels: deepClone(matchLabels) },
         spec: { containers },
       },
-      triggers: [
-        {
-          type: 'ImageChange',
-          imageChangeParams: {
-            automatic: true,
-            containerNames,
-            from: { kind: 'ImageStreamTag', name: `${name}:latest` },
-          },
-        },
-      ],
       revisionHistoryLimit: 10,
       progressDeadlineSeconds: 600,
     };

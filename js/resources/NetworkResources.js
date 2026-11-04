@@ -35,10 +35,19 @@ export class Service extends ResourceBase {
       }));
     }
     if (type === 'LoadBalancer') defaults.allocateLoadBalancerNodePorts = true;
-    if (type !== 'ExternalName') defaults.clusterIP = metadata.clusterIP || this._generateClusterIP();
+    if (type !== 'ExternalName') {
+      defaults.clusterIP = metadata.clusterIP || this._generateClusterIP();
+      // The API defaults spec.clusterIPs to the allocated ClusterIP ([] when headless).
+      defaults.clusterIPs = defaults.clusterIP === 'None' ? [] : [defaults.clusterIP];
+    }
     if (metadata.externalIPs) defaults.externalIPs = deepClone(metadata.externalIPs);
     if (metadata.loadBalancerIP) defaults.loadBalancerIP = metadata.loadBalancerIP;
     this._initSpec(defaults, metadata.spec);
+    // Keep the API-defaulted clusterIPs list consistent with any overridden clusterIP.
+    if (this.spec.type !== 'ExternalName') {
+      if (this.spec.clusterIP === 'None') this.spec.clusterIPs = [];
+      else if (this.spec.clusterIP) this.spec.clusterIPs = [this.spec.clusterIP];
+    }
 
     this.endpoints = [];
     this.trafficRate = 0;
@@ -48,8 +57,9 @@ export class Service extends ResourceBase {
     this._setInitialStatus({ phase: 'Active', loadBalancer: { ingress: [] } });
   }
 
+  /** OCP 4.22 default serviceNetwork is 172.30.0.0/16 (not the kubeadm 10.96/12 range). */
   _generateClusterIP() {
-    return `10.${96 + randomInt(16)}.${randomInt(255)}.${randomInt(254) + 1}`;
+    return `172.30.${randomInt(256)}.${randomInt(254) + 1}`;
   }
 
   get type() {

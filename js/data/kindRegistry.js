@@ -141,23 +141,15 @@ K.Deployment = {
       metadata: { labels: { app: 'app' } },
       spec: { containers: [{ name: 'main', image: 'nginx:latest', ports: [{ containerPort: 8080 }] }] },
     },
-    triggers: [
-      {
-        type: 'ImageChange',
-        imageChangeParams: {
-          automatic: true,
-          containerNames: ['main'],
-          from: { kind: 'ImageStreamTag', name: 'app:latest' },
-        },
-      },
-    ],
     revisionHistoryLimit: 10,
     progressDeadlineSeconds: 600,
   }),
   explain:
     'Deployment declares a desired replica count and template; OpenShift creates\n' +
     'ReplicaSets and Pods, performs rolling updates and keeps rollout history for\n' +
-    'oc rollout undo. Image-change triggers can roll out new ImageStreamTags.',
+    'oc rollout undo. `apps/v1` Deployments have no spec.triggers field: image\n' +
+    'triggers are requested with the image.openshift.io/triggers annotation\n' +
+    '(`oc set triggers deploy/<name> --from-image=<image>:<tag> -c <container>`).',
 };
 K.ReplicaSet = {
   apiVersion: 'apps/v1',
@@ -255,19 +247,18 @@ K.BuildConfig = {
   minimapSize: 14,
   defaultSpec: () => ({
     source: { type: 'Git', git: { uri: '', ref: '' }, contextDir: '' },
-    strategy: {
-      type: 'Source',
-      sourceStrategy: { from: { kind: 'ImageStreamTag', name: 'nodejs:20', namespace: 'openshift' } },
-      dockerStrategy: { dockerfilePath: 'Dockerfile' },
-    },
+    // Exactly one strategy object; the resource class fills the concrete
+    // sourceStrategy/dockerStrategy/customStrategy for the selected type.
+    strategy: { type: 'Source' },
     output: { to: { kind: 'ImageStreamTag', name: 'app:latest' } },
     triggers: [{ type: 'ConfigChange' }, { type: 'ImageChange', imageChange: {} }],
     runPolicy: 'Serial',
   }),
   explain:
     'BuildConfig describes how to build an image from source (Source/S2I or Dockerfile)\n' +
-    'and where to push it (ImageStreamTag). oc start-build runs it; ImageChange triggers\n' +
-    'can roll out Deployments that use the resulting image stream tag.',
+    'and where to push it (ImageStreamTag). Exactly one strategy object must be set\n' +
+    '(sourceStrategy for Source, dockerStrategy for Docker). oc start-build runs it;\n' +
+    'ConfigChange/ImageChange triggers start new builds.',
 };
 K.Build = {
   apiVersion: 'build.openshift.io/v1',
@@ -282,7 +273,7 @@ K.Build = {
     source: { type: 'Git', git: { uri: '', ref: '' } },
     strategy: {
       type: 'Source',
-      sourceStrategy: { from: { kind: 'ImageStreamTag', name: 'nodejs:20', namespace: 'openshift' } },
+      sourceStrategy: { from: { kind: 'ImageStreamTag', name: 'nodejs:20-ubi9', namespace: 'openshift' } },
     },
     output: { to: { kind: 'ImageStreamTag', name: 'app:latest' } },
     serviceAccount: 'builder',
@@ -323,12 +314,12 @@ K.Route = {
   columns: 'NAME      HOST/PORT                              PATH      SERVICES   PORT   TERMINATION   WILDCARD',
   palette: { section: 'network', label: 'Route' },
   minimapSize: 14,
+  // Real oc expose routes omit `path` and `tls` (omitempty); the API assigns
+  // `host` on admission. Keep them absent unless the caller supplies them.
   defaultSpec: () => ({
     host: '',
-    path: '/',
     to: { kind: 'Service', name: 'app', weight: 100 },
     port: { targetPort: 'http' },
-    tls: null,
     wildcardPolicy: 'None',
   }),
   explain:
@@ -456,7 +447,7 @@ K.PersistentVolume = {
   apiVersion: 'v1',
   namespaced: false,
   aliases: ['persistentvolume', 'persistentvolumes', 'pv'],
-  columns: 'NAME      CAPACITY   ACCESS MODES   RECLAIM POLICY   STATUS      CLAIM   STORAGECLASS   AGE',
+  columns: 'NAME      CAPACITY   ACCESS MODES   RECLAIM POLICY   STATUS      CLAIM   STORAGECLASS   VOLUMEATTRIBUTESCLASS   REASON   AGE',
   palette: { section: 'storage', label: 'PV' },
   minimapSize: 14,
   defaultSpec: () => ({ capacity: { storage: '10Gi' }, accessModes: ['ReadWriteOnce'], persistentVolumeReclaimPolicy: 'Retain', storageClassName: '' }),
@@ -466,7 +457,7 @@ K.PersistentVolumeClaim = {
   apiVersion: 'v1',
   namespaced: true,
   aliases: ['persistentvolumeclaim', 'persistentvolumeclaims', 'pvc'],
-  columns: 'NAME      STATUS   VOLUME   CAPACITY   ACCESS MODES   STORAGECLASS   AGE',
+  columns: 'NAME      STATUS   VOLUME   CAPACITY   ACCESS MODES   STORAGECLASS   VOLUMEATTRIBUTESCLASS   AGE',
   palette: { section: 'storage', label: 'PVC' },
   minimapSize: 12,
   defaultSpec: () => ({ accessModes: ['ReadWriteOnce'], resources: { requests: { storage: '10Gi' } } }),
@@ -491,7 +482,7 @@ K.HorizontalPodAutoscaler = {
   columns: 'NAME      REFERENCE            TARGETS   MINPODS   MAXPODS   REPLICAS   AGE',
   palette: { section: 'scaling', label: 'HPA' },
   minimapSize: 12,
-  defaultSpec: () => ({ scaleTargetRef: { apiGroup: 'apps/v1', kind: 'Deployment', name: 'app' }, minReplicas: 2, maxReplicas: 10, metrics: [{ type: 'Resource', resource: { name: 'cpu', target: { type: 'Utilization', averageUtilization: 70 } } }] }),
+  defaultSpec: () => ({ scaleTargetRef: { apiVersion: 'apps/v1', kind: 'Deployment', name: 'app' }, minReplicas: 2, maxReplicas: 10, metrics: [{ type: 'Resource', resource: { name: 'cpu', target: { type: 'Utilization', averageUtilization: 70 } } }] }),
   explain: 'HPA scales a workload based on CPU/memory/custom metrics. Needs resource requests and the metrics server.',
 };
 K.PodDisruptionBudget = {
@@ -523,8 +514,12 @@ K.Role = {
   columns: 'NAME      CREATED AT',
   palette: { section: 'security', label: 'Role' },
   minimapSize: 10,
-  defaultSpec: () => ({ rules: [{ apiGroups: [''], resources: ['pods', 'services'], verbs: ['get', 'list', 'watch'] }] }),
-  explain: 'Role grants namespaced permissions; bind with RoleBinding. Avoid wildcard verbs/resources (least privilege).',
+  // Real API allows an empty rules list; `oc create role`/YAML fill it in.
+  defaultSpec: () => ({ rules: [] }),
+  explain:
+    'Role grants namespaced permissions; bind it with a RoleBinding. Set rules with\n' +
+    '`oc create role <name> --verb=<verbs> --resource=<resources>` or in YAML; avoid\n' +
+    'wildcard verbs/resources (least privilege).',
 };
 K.ClusterRole = {
   apiVersion: 'rbac.authorization.k8s.io/v1',
@@ -533,8 +528,11 @@ K.ClusterRole = {
   columns: 'NAME      CREATED AT',
   palette: { section: 'security', label: 'ClusterRole' },
   minimapSize: 10,
-  defaultSpec: () => ({ rules: [{ apiGroups: [''], resources: ['nodes'], verbs: ['get', 'list'] }] }),
-  explain: 'ClusterRole grants cluster-wide permissions; bind with ClusterRoleBinding or a namespaced RoleBinding.',
+  // Real API allows an empty rules list; `oc create clusterrole`/YAML fill it in.
+  defaultSpec: () => ({ rules: [] }),
+  explain:
+    'ClusterRole grants cluster-wide permissions; bind it with a ClusterRoleBinding or\n' +
+    'a namespaced RoleBinding. Rules are set with --verb/--resource or in YAML.',
 };
 K.RoleBinding = {
   apiVersion: 'rbac.authorization.k8s.io/v1',
@@ -563,10 +561,38 @@ K.SecurityContextConstraints = {
   columns: 'NAME              PRIV   CAPS   SELINUX    RUNASUSER   FSGROUP    SUPGROUP   PRIORITY   READONLYROOTFS   VOLUMES',
   palette: { section: 'security', label: 'SCC' },
   minimapSize: 14,
-  defaultSpec: () => ({ priority: 10, allowPrivilegedContainer: false, allowHostDirVolumePlugin: false, allowHostNetwork: false, allowHostPorts: false, allowHostPID: false, allowHostIPC: false, readOnlyRootFilesystem: false, runAsUser: { type: 'MustRunAsRange' }, seLinuxContext: { type: 'MustRunAs' }, fsGroup: { type: 'MustRunAs' }, supplementalGroups: { type: 'MustRunAs' }, users: [], groups: [] }),
+  // API-shaped default for an SCC created by an admin (docs restricted-style
+  // template). Defaults shipped by OpenShift 4.22 have API-shaped fields too;
+  // the exact per-SCC specs are seeded in ClusterState.defaultSCCDefinitions().
+  defaultSpec: () => ({
+    priority: null,
+    allowPrivilegedContainer: false,
+    allowHostDirVolumePlugin: false,
+    allowHostNetwork: false,
+    allowHostPorts: false,
+    allowHostPID: false,
+    allowHostIPC: false,
+    allowPrivilegeEscalation: false,
+    readOnlyRootFilesystem: false,
+    defaultAddCapabilities: null,
+    allowedCapabilities: ['NET_BIND_SERVICE'],
+    requiredDropCapabilities: ['ALL'],
+    runAsUser: { type: 'MustRunAsRange' },
+    seLinuxContext: { type: 'MustRunAs' },
+    fsGroup: { type: 'MustRunAs' },
+    supplementalGroups: { type: 'MustRunAs' },
+    seccompProfiles: ['runtime/default'],
+    volumes: ['configMap', 'csi', 'downwardAPI', 'emptyDir', 'ephemeral', 'image', 'persistentVolumeClaim', 'projected', 'secret'],
+    users: [],
+    groups: [],
+  }),
   explain:
     'SCC controls what Pods may do (privileged, hostPath, UID ranges, SELinux...).\n' +
-    'Default SCCs: restricted-v2, nonroot-v2, anyuid, privileged.\n' +
+    'The 4.22 default SCCs are: anyuid, hostaccess, hostmount-anyuid,\n' +
+    'hostmount-anyuid-v2, hostnetwork, hostnetwork-v2, nested-container, node-exporter,\n' +
+    'nonroot, nonroot-v2, privileged, restricted, restricted-v2, restricted-v3\n' +
+    '(restricted-v3 is the most restrictive and the default for authenticated users\n' +
+    'on new installs; node-exporter is installed by the monitoring operator).\n' +
     'Grant with oc adm policy add-scc-to-user <scc> -z <serviceaccount> -n <project>.',
 };
 K.User = {
@@ -681,20 +707,21 @@ export const KIND_ALIASES = (() => {
     map[`${kind.toLowerCase()}s`] = kind;
     for (const a of def.aliases || []) map[a.toLowerCase()] = kind;
   }
-  // App-specific aliases
-  map.dc = 'Deployment'; // DeploymentConfig is deprecated; warn in the CLI layer
+  // App-specific aliases. Only aliases whose real target is a different *game*
+  // kind are kept here; they must be a genuine API alias, never a different kind.
+  map.dc = 'Deployment'; // DeploymentConfig (apps.openshift.io/v1) is deprecated in 4.22; CLI layer warns
   map.deploymentconfig = 'Deployment';
   map.deploymentconfigs = 'Deployment';
-  map.istag = 'ImageStream';
+  map.istag = 'ImageStream'; // `oc get istag` is served by a virtual view in the CLI
   map.imagestreamtag = 'ImageStream';
   map.imagestreamtags = 'ImageStream';
-  map.csv = 'Subscription';
-  map.operatorgroup = 'Subscription';
-  map.operatorgroups = 'Subscription';
-  map.og = 'Subscription';
-  map.ic = 'Ingress';
+  map.ic = 'Ingress'; // IngressController (operator.openshift.io/v1) is served by a virtual view
   map.ingresscontroller = 'Ingress';
   map.ingresscontrollers = 'Ingress';
+  // NOTE: `csv`/`operatorgroup`/`og` intentionally do NOT alias to Subscription —
+  // they are distinct OLM kinds, and mapping them to Subscription made
+  // `oc apply -f operatorgroup.yaml` create a Subscription (see HANDOFF in the
+  // platform fix log; the kinds themselves are a follow-up feature).
   return map;
 })();
 

@@ -131,6 +131,22 @@ const DOCS = {
     'https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/operators/index',
   quotas:
     'https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/scalability_and_performance/compute-resource-quotas',
+  cliRef:
+    'https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/cli_tools/openshift-cli-oc',
+  projects:
+    'https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/building_applications/projects',
+  htpasswdIdp:
+    'https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/authentication_and_authorization/configuring-identity-providers',
+  sccDocs:
+    'https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/authentication_and_authorization/managing-pod-security-policies',
+  jobsDocs:
+    'https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/nodes/using-jobs-and-daemon-sets',
+  metallbDocs:
+    'https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/ingress_and_load_balancing/load-balancing-with-metallb',
+  operatorUserTasks:
+    'https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/operators/user-tasks',
+  operatorAdminTasks:
+    'https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/operators/administrator-tasks',
 };
 
 /* ────────────────────────────────────────────────────────────────────────────
@@ -146,7 +162,7 @@ export const EX280_OBJECTIVE_GROUPS = [
         id: 'manage-web-console',
         title: 'Use the web console to manage and configure an OpenShift cluster',
         summary:
-          'Navigate the Administrator and Developer perspectives: create projects, deploy from an image or Git, inspect workloads, manage users/operators and check cluster health.',
+          'Navigate the Administrator and Developer perspectives: create projects, deploy from an image or Git, inspect workloads, manage users/operators and check cluster health. The simulator has no web-console UI — use the docs link for the console walkthrough and drill the equivalent oc commands here.',
         docsUrl: DOCS.webConsole,
         levels: [1, 3, 20],
         challenges: [12],
@@ -162,7 +178,7 @@ export const EX280_OBJECTIVE_GROUPS = [
         title: 'Use the command-line interface to manage and configure an OpenShift cluster',
         summary:
           'Log in, select the working project, inspect context/status and run oc commands against the cluster.',
-        docsUrl: DOCS.cliTools,
+        docsUrl: DOCS.cliRef,
         levels: [1, 2, 4],
         challenges: [12],
         commands: [
@@ -179,7 +195,7 @@ export const EX280_OBJECTIVE_GROUPS = [
         title: 'Create and delete projects',
         summary:
           'Create projects with display name/description, switch between them and delete them. Projects are OpenShift API objects that wrap namespaces.',
-        docsUrl: DOCS.cliTools,
+        docsUrl: DOCS.projects,
         levels: [1, 15],
         challenges: [1, 12],
         quickLabs: ['lab-projects'],
@@ -196,7 +212,7 @@ export const EX280_OBJECTIVE_GROUPS = [
         title: 'Locate and examine container images',
         summary:
           'Find images and image streams, read pull specs and inspect tags, digests and image metadata.',
-        docsUrl: DOCS.images,
+        docsUrl: DOCS.imageStreams,
         levels: [9],
         challenges: [5],
         commands: [
@@ -215,8 +231,8 @@ export const EX280_OBJECTIVE_GROUPS = [
         levels: [9],
         challenges: [5],
         commands: [
-          `oc tag ruby:2.0 ruby:static-2.0`,
-          `oc tag --alias=true ruby:2.0 ruby:latest`,
+          `oc tag openshift/ruby:2.0 ruby:static-2.0`,
+          `oc tag --alias=true openshift/ruby:2.0 ruby:latest`,
           `oc import-image <imagestreamtag> --from=<image> --confirm`,
           `oc describe istag/<image-stream>:<tag>`,
           `oc get istag <image-stream>:<tag> -o jsonpath='{.image.dockerImageMetadata.Id}'`,
@@ -227,7 +243,7 @@ export const EX280_OBJECTIVE_GROUPS = [
         title: 'Query, format, and filter attributes of Kubernetes resources',
         summary:
           'Use output formats (wide, yaml, json, jsonpath, custom-columns), label selectors, field selectors and sorting to query resources precisely.',
-        docsUrl: DOCS.cliTools,
+        docsUrl: DOCS.cliRef,
         levels: [2],
         challenges: [12],
         commands: [
@@ -245,7 +261,7 @@ export const EX280_OBJECTIVE_GROUPS = [
         title: 'Import, export, and configure Kubernetes resources',
         summary:
           'Create/apply/replace resources from YAML, export a live object to a manifest and edit configuration declaratively. oc export does not exist in OpenShift 4.',
-        docsUrl: DOCS.buildingApps,
+        docsUrl: DOCS.cliRef,
         levels: [4],
         challenges: [4, 12],
         commands: [
@@ -489,18 +505,20 @@ export const EX280_OBJECTIVE_GROUPS = [
         id: 'deploy-templates-helm',
         title: 'Deploy applications from templates and Helm charts',
         summary:
-          'Process OpenShift templates with parameters and install Helm charts from the OpenShift chart repository, then verify the created resources.',
+          'Process OpenShift templates with parameters and install the shipped local Helm chart (`helm/webapp`) with install/upgrade/status/uninstall, then verify the created resources.',
         docsUrl: DOCS.buildingApps,
         levels: [8],
         challenges: [12],
         commands: [
           `oc get templates -n openshift`,
-          `oc process -f template.yaml --parameters`,
-          `oc process -f template.yaml -p REPLICA_COUNT=3 | oc create -f -`,
+          `oc process -f templates/webapp-template.yaml --parameters`,
+          `oc process -f templates/webapp-template.yaml -p REPLICA_COUNT=3 | oc create -f -`,
           `oc new-app --template=rails-postgresql-example --param=DATABASE_USER=app`,
-          `helm repo add openshift-helm-charts https://charts.openshift.io/`,
-          `helm install example-vault openshift-helm-charts/hashicorp-vault`,
+          `helm install shop helm/webapp`,
           `helm list`,
+          `helm upgrade shop helm/webapp`,
+          `helm status shop`,
+          `helm uninstall shop`,
         ],
       },
       {
@@ -594,14 +612,14 @@ export const EX280_OBJECTIVE_GROUPS = [
         title: 'Configure the HTPasswd identity provider for authentication',
         summary:
           'Create an htpasswd file, store it in the openshift-config secret and configure the OAuth CR to use it, then log in as a local user.',
-        docsUrl: DOCS.auth,
+        docsUrl: DOCS.htpasswdIdp,
         levels: [13],
         challenges: [11],
         quickLabs: ['lab-users-htpasswd'],
         commands: [
           `htpasswd -c -B -b users.htpasswd alice 'Passw0rd!'`,
           `oc create secret generic htpass-secret --from-file=htpasswd=users.htpasswd -n openshift-config`,
-          `oc apply -f oauth.yaml`,
+          `oc edit oauth cluster`,
           `oc login -u alice`,
         ],
       },
@@ -610,7 +628,7 @@ export const EX280_OBJECTIVE_GROUPS = [
         title: 'Create and delete users',
         summary:
           'Manage users through the configured identity provider and, as a power user, create/delete User and Identity objects correctly.',
-        docsUrl: DOCS.auth,
+        docsUrl: DOCS.htpasswdIdp,
         levels: [13],
         challenges: [11],
         commands: [
@@ -624,14 +642,17 @@ export const EX280_OBJECTIVE_GROUPS = [
         id: 'auth-passwords',
         title: 'Modify user passwords',
         summary:
-          'Change an htpasswd password, replace the secret safely and clean up the affected user/identity when removing accounts.',
-        docsUrl: DOCS.auth,
+          'Rotate an htpasswd password safely: extract the htpasswd file from the secret, change the hash, write it back with `oc set data`, wait for the OAuth rollout and log in with the new password; clean up the affected user/identity when removing accounts.',
+        docsUrl: DOCS.htpasswdIdp,
         levels: [13],
         challenges: [11],
         commands: [
-          `htpasswd -bB users.htpasswd alice 'NewPassw0rd!'`,
-          `oc create secret generic htpass-secret --from-file=htpasswd=users.htpasswd --dry-run=client -o yaml -n openshift-config`,
-          `oc replace -f -`,
+          `oc extract secret/htpass-secret -n openshift-config --to /tmp --confirm`,
+          `htpasswd -bB /tmp/htpasswd alice 'NewPassw0rd!'`,
+          `oc set data secret/htpass-secret -n openshift-config --from-file=htpasswd=/tmp/htpasswd`,
+          `oc get clusteroperator authentication`,
+          `oc login -u alice -p 'NewPassw0rd!'`,
+          `oc create secret generic htpass-secret --from-file=htpasswd=/tmp/htpasswd --dry-run=client -o yaml -n openshift-config | oc replace -f -`,
         ],
       },
       {
@@ -778,7 +799,7 @@ export const EX280_OBJECTIVE_GROUPS = [
         title: 'Configure a load balancer service',
         summary:
           'Create a Service with type LoadBalancer, obtain an external IP (cloud LB, or MetalLB on bare metal) and verify connectivity for non-HTTP protocols.',
-        docsUrl: DOCS.ingressLb,
+        docsUrl: DOCS.metallbDocs,
         levels: [12],
         challenges: [10],
         commands: [
@@ -866,7 +887,7 @@ export const EX280_OBJECTIVE_GROUPS = [
         challenges: [6],
         quickLabs: ['lab-quota'],
         commands: [
-          `oc create -f limitrange.yaml -n web`,
+          `oc create -f examples/limitrange.yaml -n web`,
           `oc get limits -n web`,
           `oc describe limits resource-limits -n web`,
         ],
@@ -875,15 +896,16 @@ export const EX280_OBJECTIVE_GROUPS = [
         id: 'selfservice-project-templates',
         title: 'Configure project templates',
         summary:
-          'Customize the default project-request template in openshift-config (e.g. add NetworkPolicies) and process uploaded templates with parameters.',
-        docsUrl: DOCS.buildingApps,
+          'Customize the template OpenShift uses for self-service project creation: generate the bootstrap `project-request` template, add guardrails (for example a NetworkPolicy) to its object list, store it in `openshift-config`, point the `project.config.openshift.io/cluster` singleton at it and verify that a new project inherits the objects. On a real cluster `oc edit` opens `$EDITOR` (vi/vim) in the terminal; the simulator opens its manifest editor instead.',
+        docsUrl: DOCS.projects,
         levels: [15, 8],
         challenges: [12],
         commands: [
-          `oc edit template project-request -n openshift-config`,
-          `oc create -f template.yaml -n openshift`,
-          `oc process -f template.yaml -p KEY=VALUE`,
-          `oc new-app --template=<template-name> --param=KEY=VALUE`,
+          `oc adm create-bootstrap-project-template -o yaml > template.yaml`,
+          `oc create -f template.yaml -n openshift-config`,
+          `oc get templates -n openshift-config`,
+          `oc edit project.config.openshift.io/cluster`,
+          `oc new-project template-check`,
         ],
       },
     ],
@@ -898,15 +920,15 @@ export const EX280_OBJECTIVE_GROUPS = [
         id: 'ops-install',
         title: 'Install an operator',
         summary:
-          'Install from OperatorHub or CLI: create an OperatorGroup (SingleNamespace) and a Subscription, approve an InstallPlan when manual and wait for the CSV to succeed.',
-        docsUrl: DOCS.operators,
+          'Install from OperatorHub or CLI: create an OperatorGroup only for SingleNamespace installs, create a Subscription, approve the InstallPlan when manual and wait for the CSV to succeed. The simulator ships a local Subscription example (`examples/subscription.yaml`).',
+        docsUrl: DOCS.operatorUserTasks,
         levels: [12, 18],
         challenges: [10],
         quickLabs: ['lab-operator'],
         commands: [
           `oc get packagemanifests -n openshift-marketplace`,
-          `oc apply -f operatorgroup.yaml`,
-          `oc apply -f subscription.yaml`,
+          `oc get operatorgroup -n <namespace>`,
+          `oc apply -f examples/subscription.yaml`,
           `oc get sub,csv,installplan -n <namespace>`,
           `oc describe sub <subscription> -n <namespace>`,
         ],
@@ -916,7 +938,7 @@ export const EX280_OBJECTIVE_GROUPS = [
         title: 'Uninstall an operator',
         summary:
           'Uninstall correctly by deleting the Subscription (or via the console) and removing an OperatorGroup created only for that operator.',
-        docsUrl: DOCS.operators,
+        docsUrl: DOCS.operatorAdminTasks,
         levels: [18],
         challenges: [10],
         commands: [
@@ -930,7 +952,7 @@ export const EX280_OBJECTIVE_GROUPS = [
         title: 'Delete an operator',
         summary:
           'Delete the ClusterServiceVersion associated with the removed subscription, clean up operands/CRs and confirm nothing remains.',
-        docsUrl: DOCS.operators,
+        docsUrl: DOCS.operatorAdminTasks,
         levels: [18],
         challenges: [10],
         commands: [
@@ -969,7 +991,7 @@ export const EX280_OBJECTIVE_GROUPS = [
         title: 'Run privileged applications',
         summary:
           'Run pods/deployments with privileged or host-level securityContext only after granting an SCC that allows it to the pod service account.',
-        docsUrl: DOCS.auth,
+        docsUrl: DOCS.sccDocs,
         levels: [17],
         challenges: [8],
         commands: [
@@ -983,7 +1005,7 @@ export const EX280_OBJECTIVE_GROUPS = [
         title: 'Manage and apply permissions using security context constraints',
         summary:
           'Inspect SCCs, grant/revoke SCCs to users, groups and service accounts, and troubleshoot Forbidden security context errors without editing default SCCs.',
-        docsUrl: DOCS.auth,
+        docsUrl: DOCS.sccDocs,
         levels: [17],
         challenges: [8],
         quickLabs: ['lab-scc'],
@@ -1031,7 +1053,7 @@ export const EX280_OBJECTIVE_GROUPS = [
         title: 'Deploy jobs to perform one-time tasks',
         summary:
           'Create batch/v1 Jobs with completions/parallelism/backoffLimit and verify successful completion and logs.',
-        docsUrl: DOCS.nodes,
+        docsUrl: DOCS.jobsDocs,
         levels: [19],
         challenges: [12],
         quickLabs: ['lab-jobs'],
@@ -1048,7 +1070,7 @@ export const EX280_OBJECTIVE_GROUPS = [
         title: 'Configure Kubernetes cron jobs',
         summary:
           'Create batch/v1 CronJobs with schedules, concurrency policy and deadline handling; verify spawned Jobs and suspend/resume.',
-        docsUrl: DOCS.nodes,
+        docsUrl: DOCS.jobsDocs,
         levels: [19],
         challenges: [12],
         commands: [
@@ -1101,18 +1123,23 @@ export const EX280_QUICK_LABS = [
     docsUrl: DOCS.auth,
     mode: 'sandbox',
     summary:
-      'Add a local user through the htpasswd secret and OAuth provider, then log in as that user.',
+      'Add a local user through the htpasswd secret and OAuth provider, log in, then rotate that user password the way the exam expects.',
     setup: { startingResources: [], manifestFiles: [] },
     check: [{ type: 'login', user: 'ex280-user' }, { type: 'user', name: 'ex280-user' }],
     hints: [
       'The htpasswd file key inside the secret must be named htpasswd.',
       'The OAuth CR is a cluster singleton named cluster.',
+      'After changing the secret, give the authentication operator a few seconds to roll out before logging in with the new password.',
     ],
     steps: [
       { command: `htpasswd -c -B -b users.htpasswd ex280-user 'Passw0rd!'`, text: 'Create the htpasswd file (bcrypt hashes).' },
       { command: `oc create secret generic htpass-secret --from-file=htpasswd=users.htpasswd -n openshift-config`, text: 'Store the file in the openshift-config project.' },
-      { command: `oc apply -f oauth.yaml`, text: 'Apply the OAuth CR with type HTPasswd and fileData.name htpass-secret.' },
+      { command: `oc edit oauth cluster`, text: 'Add an HTPasswd identityProvider to the OAuth cluster singleton: name htpasswd, fileData.name htpass-secret, mappingMethod claim.' },
       { command: `oc login -u ex280-user`, text: 'Log in as the new user and check oc whoami.' },
+      { command: `oc extract secret/htpass-secret -n openshift-config --to /tmp --confirm`, text: 'Rotate the password: extract the htpasswd file from the secret.' },
+      { command: `htpasswd -bB /tmp/htpasswd ex280-user 'Rotated0rd!'`, text: 'Set a new bcrypt hash in the extracted file.' },
+      { command: `oc set data secret/htpass-secret -n openshift-config --from-file=htpasswd=/tmp/htpasswd`, text: 'Write the updated file back into the secret and wait for the authentication operator rollout.' },
+      { command: `oc login -u ex280-user -p 'Rotated0rd!'`, text: 'Log in with the rotated password to verify it took effect.' },
     ],
   },
   {
@@ -1124,11 +1151,7 @@ export const EX280_QUICK_LABS = [
     mode: 'sandbox',
     summary: 'Expose a Service with an edge TLS Route using a certificate secret and verify it is admitted.',
     setup: {
-      startingResources: [
-        { kind: 'Project', name: 'web' },
-        { kind: 'Deployment', name: 'web', namespace: 'web' },
-        { kind: 'Service', name: 'web', namespace: 'web' },
-      ],
+      startingResources: [],
       manifestFiles: ['manifests/service.yaml', 'manifests/route.yaml'],
     },
     check: [
@@ -1188,12 +1211,11 @@ export const EX280_QUICK_LABS = [
     ],
     hints: [
       'kustomization.yaml lists resources and can set namespace, images and replicas.',
-      'Use oc kustomize to inspect the rendered YAML before applying it.',
+      'On a real cluster, `oc kustomize <dir>` renders the YAML without applying it; in the simulator the Files engine renders on `oc apply -k`.',
     ],
     steps: [
-      { command: `oc kustomize kustomize/overlays/prod`, text: 'Render the overlay to check the merged result.' },
-      { command: `oc apply -k kustomize/overlays/prod`, text: 'Apply the overlay into the prod namespace.' },
-      { command: `oc get deployment -n prod`, text: 'Verify the image tag and replica count match the overlay.' },
+      { command: `oc apply -k kustomize/overlays/prod`, text: 'Apply the overlay into the webapp-prod namespace (the Files engine renders the merged Kustomize output; on a real cluster you can preview it with `oc kustomize kustomize/overlays/prod`).' },
+      { command: `oc get deployment -n webapp-prod`, text: 'Verify the image tag and replica count match the overlay.' },
     ],
   },
   {
@@ -1219,7 +1241,7 @@ export const EX280_QUICK_LABS = [
     steps: [
       { command: `oc new-project quota-lab`, text: 'Create the project.' },
       { command: `oc create quota compute-quota --hard=pods=4,requests.cpu=1,requests.memory=1Gi --namespace=quota-lab`, text: 'Create a compute quota.' },
-      { command: `oc create -f limitrange.yaml -n quota-lab`, text: 'Create a LimitRange with defaults.' },
+      { command: `oc create -f examples/limitrange.yaml -n quota-lab`, text: 'Create a LimitRange with defaults.' },
       { command: `oc get quota,limits -n quota-lab`, text: 'Verify both objects exist.' },
     ],
   },
@@ -1232,12 +1254,11 @@ export const EX280_QUICK_LABS = [
     mode: 'sandbox',
     summary: 'Create a service account, grant it an SCC and validate the pod annotation that proves it took effect.',
     setup: {
-      startingResources: [{ kind: 'Project', name: 'scc-lab' }],
-      manifestFiles: ['examples/privileged-deployment.yaml'],
+      startingResources: [],
+      manifestFiles: [],
     },
     check: [
       { type: 'scc', scc: 'anyuid', subject: 'system:serviceaccount:scc-lab:robot' },
-      { type: 'privileged', count: 1 },
     ],
     hints: [
       'Grant the SCC to the workload service account with -z, not to default if you can avoid it.',
@@ -1257,24 +1278,24 @@ export const EX280_QUICK_LABS = [
     objectiveIds: ['ops-install', 'ops-uninstall', 'ops-delete'],
     docsUrl: DOCS.operators,
     mode: 'sandbox',
-    summary: 'Install an operator with OperatorGroup + Subscription, watch the CSV succeed and then uninstall it.',
+    summary: 'Install the MetalLB operator from a Subscription, watch the CSV succeed and then uninstall it.',
     setup: {
       startingResources: [{ kind: 'Project', name: 'operators-lab' }],
       manifestFiles: ['examples/subscription.yaml'],
     },
     check: [
-      { type: 'operator', name: 'web-terminal', installed: true },
+      { type: 'operator', name: 'metallb', installed: true },
     ],
     hints: [
-      'SingleNamespace installs need an OperatorGroup in the same project.',
-      'The Subscription needs channel, name, source and sourceNamespace.',
+      'The simulator installs into the openshift-operators project (AllNamespaces); a real cluster documents MetalLB in metallb-system.',
+      'The Subscription needs channel, name, source and sourceNamespace; the CSV (not the Subscription) reports Installing → Succeeded.',
     ],
     steps: [
-      { command: `oc new-project operators-lab`, text: 'Create the install project.' },
-      { command: `oc apply -f operatorgroup.yaml`, text: 'Create the SingleNamespace OperatorGroup.' },
+      { command: `oc new-project operators-lab`, text: 'Create a project to hold operator operands.' },
       { command: `oc get packagemanifests -n openshift-marketplace`, text: 'Find the operator package, channel and catalog source.' },
-      { command: `oc apply -f subscription.yaml`, text: 'Create the Subscription.' },
-      { command: `oc get sub,csv,installplan -n operators-lab`, text: 'Wait for the CSV to reach Succeeded.' },
+      { command: `oc apply -f examples/subscription.yaml`, text: 'First edit examples/subscription.yaml in the Files panel so metadata.name, spec.name and the package are metallb, then create the Subscription.' },
+      { command: `oc get sub,csv,installplan -n openshift-operators`, text: 'Wait for the CSV to reach Succeeded (oc describe sub metallb shows installedCSV).' },
+      { command: `oc delete subscription metallb -n openshift-operators`, text: 'Uninstall by deleting the Subscription, then the CSV it installed.' },
     ],
   },
   {
@@ -1350,6 +1371,10 @@ export const EX280_CHEATSHEET = [
       { cmd: `oc replace -f <file>`, note: 'Replace an existing object.' },
       { cmd: `oc get deploy web -o yaml > web.yaml`, note: 'Export a resource (oc export is removed).' },
       { cmd: `oc diff -f <file>`, note: 'Show differences before applying.' },
+      { cmd: `oc edit <kind>/<name>`, note: 'Live-edit an object. Real oc opens $EDITOR (vi/vim by default) in the terminal; the simulator opens its manifest editor.' },
+      { cmd: `oc extract secret/<name> -n <ns> --to <dir> --confirm`, note: 'Extract a secret (or configmap) to files, e.g. the htpasswd database.' },
+      { cmd: `oc set data secret/<name> -n <ns> --from-file=<key>=<path>`, note: 'Update one key in an existing secret/configmap (password rotation).' },
+      { cmd: `oc create secret generic <name> --from-file=<key>=<path> --dry-run=client -o yaml -n <ns> | oc replace -f -`, note: 'Alternative rotate pipeline — one correctly piped command.' },
       { cmd: `oc create secret generic <name> --from-literal=K=V --from-file=<key>=<path>`, note: 'Create an Opaque secret.' },
       { cmd: `oc create secret tls <name> --cert=tls.crt --key=tls.key`, note: 'Create a kubernetes.io/tls secret.' },
       { cmd: `oc create configmap <name> --from-literal=K=V --from-file=<path> --from-env-file=<file>`, note: 'Create a ConfigMap.' },
@@ -1392,7 +1417,7 @@ export const EX280_CHEATSHEET = [
       { cmd: `oc tag <source> <dest-is>:<tag>`, note: 'Create a permanent tag.' },
       { cmd: `oc tag --alias=true <source> <dest-is>:<tag>`, note: 'Create a tracking tag.' },
       { cmd: `oc import-image <istag> --from=<image> --confirm`, note: 'Import an external image.' },
-      { cmd: `oc delete bc <name>`, note: 'Delete a BuildConfig (add --cascade=false to keep builds).' },
+      { cmd: `oc delete bc <name>`, note: 'Delete a BuildConfig (add --cascade=orphan to avoid cascading dependent objects).' },
     ],
   },
   {
@@ -1402,7 +1427,7 @@ export const EX280_CHEATSHEET = [
     items: [
       { cmd: `htpasswd -c -B -b users.htpasswd <user> <password>`, note: 'Create the htpasswd file.' },
       { cmd: `oc create secret generic htpass-secret --from-file=htpasswd=users.htpasswd -n openshift-config`, note: 'HTPasswd secret.' },
-      { cmd: `oc apply -f oauth.yaml`, note: 'Configure the OAuth CR (type HTPasswd).' },
+      { cmd: `oc edit oauth cluster`, note: 'Configure the OAuth CR (type HTPasswd).' },
       { cmd: `oc create user <name> --full-name="..."`, note: 'Create a User object (power user).' },
       { cmd: `oc delete user <name>; oc delete identity <provider>:<name>`, note: 'Remove a user completely.' },
       { cmd: `oc adm groups new <group> <users...>`, note: 'Create a group.' },
@@ -1410,7 +1435,7 @@ export const EX280_CHEATSHEET = [
       { cmd: `oc adm policy add-role-to-user <role> <user> -n <ns>`, note: 'Namespace role binding.' },
       { cmd: `oc adm policy add-role-to-group <role> <group> -n <ns>`, note: 'Group role binding.' },
       { cmd: `oc adm policy add-cluster-role-to-user <role> <user>`, note: 'Cluster-wide role binding.' },
-      { cmd: `oc create role <name> --verb=get --resource=pod -n <ns>`, note: 'Custom namespaced role.' },
+      { cmd: `oc create role <name> --verb=get,list,watch --resource=pods,configmaps -n <ns>`, note: 'Custom namespaced role (comma-separated --verb/--resource flags).' },
       { cmd: `oc auth can-i <verb> <resource> -n <ns>`, note: 'Check permissions.' },
       { cmd: `oc auth can-i list pods --as=system:serviceaccount:<ns>:<sa>`, note: 'Check as a service account.' },
     ],
@@ -1442,10 +1467,14 @@ export const EX280_CHEATSHEET = [
       { cmd: `oc create quota <name> --hard=count/deployments.apps=2`, note: 'Object-count quota.' },
       { cmd: `oc create clusterquota <name> --project-label-selector=k=v --hard=pods=10`, note: 'ClusterResourceQuota by label.' },
       { cmd: `oc describe AppliedClusterResourceQuota -n <ns>`, note: 'Quota applied to a project.' },
-      { cmd: `oc create -f limitrange.yaml -n <ns>`, note: 'Create a LimitRange.' },
+      { cmd: `oc create -f examples/limitrange.yaml -n <ns>`, note: 'Create a LimitRange.' },
       { cmd: `oc get limits -n <ns>`, note: 'List LimitRanges.' },
       { cmd: `oc describe limits <name> -n <ns>`, note: 'Inspect limits/defaults.' },
-      { cmd: `oc edit template project-request -n openshift-config`, note: 'Customize the default project template.' },
+      { cmd: `oc adm create-bootstrap-project-template -o yaml > template.yaml`, note: 'Generate the default project-request template (4.22: a fresh cluster has no stored template until you create one).' },
+      { cmd: `oc create -f template.yaml -n openshift-config`, note: 'Store the customized project template.' },
+      { cmd: `oc get templates -n openshift-config`, note: 'Stored project templates.' },
+      { cmd: `oc edit project.config.openshift.io/cluster`, note: 'Point spec.projectRequestTemplate.name at project-request ($EDITOR=vi/vim on a real cluster; simulator opens the manifest editor).' },
+      { cmd: `oc new-project <name>`, note: 'New projects inherit the template objects.' },
     ],
   },
   {
@@ -1455,8 +1484,8 @@ export const EX280_CHEATSHEET = [
     items: [
       { cmd: `oc get packagemanifests -n openshift-marketplace`, note: 'Catalog packages.' },
       { cmd: `oc describe packagemanifests <operator> -n openshift-marketplace`, note: 'Channels/install modes.' },
-      { cmd: `oc apply -f operatorgroup.yaml`, note: 'Create an OperatorGroup (SingleNamespace).' },
-      { cmd: `oc apply -f subscription.yaml`, note: 'Subscribe to an operator.' },
+      { cmd: `oc get operatorgroup -n <ns>`, note: 'Inspect OperatorGroups (required for SingleNamespace installs).' },
+      { cmd: `oc apply -f examples/subscription.yaml`, note: 'Subscribe to an operator (shipped local example).' },
       { cmd: `oc get sub,csv,installplan -n <ns>`, note: 'Operator install status.' },
       { cmd: `oc describe sub <name> -n <ns>`, note: 'Conditions and installedCSV.' },
       { cmd: `oc delete subscription.operators.coreos.com <name> -n <ns>`, note: 'Uninstall: delete subscription.' },

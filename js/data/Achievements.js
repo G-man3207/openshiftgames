@@ -243,7 +243,7 @@ const ACHIEVEMENTS = [
   {
     id: 'rbac-architect',
     name: 'RBAC Architect',
-    description: 'Create 3 RoleBindings with least-privilege roles.',
+    description: 'Create 3 RoleBindings that grant access in your projects.',
     icon: 'key',
     category: 'Advanced',
     condition: (stats) => stat(stats, 'rolebindingsCreated', 'roleBindingsCreated') >= 3,
@@ -318,7 +318,7 @@ const ACHIEVEMENTS = [
   // ───────────────────────────────── EXPERT ────────────────────────────────
   {
     id: 'final-level',
-    name: 'EX280 Ready',
+    name: 'Campaign Graduate',
     description: 'Complete all 20 campaign levels, including the Production Platform capstone.',
     icon: 'trophy',
     category: 'Expert',
@@ -442,10 +442,10 @@ const ACHIEVEMENTS = [
   {
     id: 'oc-alias',
     name: 'Say It With oc',
-    description: 'Discover why OpenShift administrators type `oc` and not `kubectl`.',
+    description: 'Run 25 commands with the oc CLI — the command the exam asks for.',
     icon: 'terminal',
     category: 'Secret',
-    condition: (stats) => stats?.easterEggs?.['oc-alias'] === true,
+    condition: (stats) => stat(stats, 'commandsExecuted') >= 25,
     xpReward: 25,
   },
 ];

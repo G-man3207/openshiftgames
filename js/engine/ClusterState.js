@@ -21,6 +21,7 @@
  */
 
 import { ResourceBase } from '../resources/ResourceBase.js';
+import { normalizeManifestObject } from '../resources/ManifestSerializer.js';
 import {
   RESOURCE_KINDS as REGISTRY_RESOURCE_KINDS,
   CLUSTER_SCOPED_KINDS as REGISTRY_CLUSTER_SCOPED_KINDS,
@@ -89,94 +90,324 @@ export const CLUSTER_OPERATOR_NAMES = [
   'etcd',
 ];
 
-/** ImageStreams pre-installed in the `openshift` project. */
+/** ImageStreams pre-installed in the `openshift` project (OCP 4.22 samples).
+ * `latestVersion` is the UBI image the samples' `latest` tag resolves to. */
 export const DEFAULT_IMAGE_STREAMS = [
-  { name: 'nodejs', tags: ['20', '18'], repository: 'nodejs' },
-  { name: 'python', tags: ['3.12'], repository: 'python' },
-  { name: 'nginx', tags: ['1.26'], repository: 'nginx' },
+  { name: 'nodejs', tags: ['20-ubi9', '22-ubi9', 'latest'], repository: 'nodejs', latestVersion: '22' },
+  { name: 'python', tags: ['3.12-ubi9', 'latest'], repository: 'python', latestVersion: '3.12' },
+  { name: 'nginx', tags: ['1.26-ubi9', 'latest'], repository: 'nginx', latestVersion: '1.26' },
 ];
 
-/** Built-in SCC definitions seeded into every cluster. */
+/** Internal registry import reference for a 4.22 sample tag (registry.redhat.io/ubi9/<image>:latest). */
+export function sampleImageReference(imageStream, tag) {
+  const version = tag === 'latest' ? imageStream.latestVersion : tag.split('-')[0];
+  const imageVersion = String(version).replace(/\./g, '');
+  return `registry.redhat.io/ubi9/${imageStream.repository}-${imageVersion}:latest`;
+}
+
+/** Built-in SCC definitions seeded into every cluster.
+ *
+ * Specs mirror the real OCP 4.22 defaults shipped by the kube-apiserver operator
+ * (`bindata/bootkube/scc-manifests/..._00_scc-<name>.yaml` in
+ * openshift/cluster-kube-apiserver-operator release-4.22).
+ *
+ * Admission note: on a real 4.22 install, restricted-v2 AND restricted-v3 are
+ * granted to `system:authenticated` through ClusterRoleBindings, so admission
+ * normally selects the more restrictive restricted-v3. The game's SCC admission
+ * reads `spec.users/spec.groups` only (no RBAC-aware SCC grants), therefore
+ * restricted-v3 is seeded without the `system:authenticated` group here to keep
+ * the current effective admission (restricted-v2) used by existing labs. The
+ * object is still listed/describable by `oc get scc` / `oc describe scc`.
+ */
+const SCC_ALLOWED_VOLUMES = [
+  'configMap',
+  'csi',
+  'downwardAPI',
+  'emptyDir',
+  'ephemeral',
+  'image',
+  'persistentVolumeClaim',
+  'projected',
+  'secret',
+];
+const SCC_HOST_VOLUMES = [
+  'configMap',
+  'csi',
+  'downwardAPI',
+  'emptyDir',
+  'ephemeral',
+  'hostPath',
+  'image',
+  'persistentVolumeClaim',
+  'projected',
+  'secret',
+];
+const SCC_HOST_NFS_VOLUMES = [
+  'configMap',
+  'csi',
+  'downwardAPI',
+  'emptyDir',
+  'ephemeral',
+  'hostPath',
+  'image',
+  'nfs',
+  'persistentVolumeClaim',
+  'projected',
+  'secret',
+];
+
 export function defaultSCCDefinitions() {
+  // Fields shared by all default SCCs; each entry overrides what differs.
+  const baseSpec = {
+    priority: null,
+    allowPrivilegedContainer: false,
+    allowHostDirVolumePlugin: false,
+    allowHostNetwork: false,
+    allowHostPorts: false,
+    allowHostPID: false,
+    allowHostIPC: false,
+    allowPrivilegeEscalation: false,
+    readOnlyRootFilesystem: false,
+    defaultAddCapabilities: null,
+    allowedCapabilities: null,
+    requiredDropCapabilities: null,
+    runAsUser: { type: 'MustRunAsRange' },
+    seLinuxContext: { type: 'MustRunAs' },
+    fsGroup: { type: 'MustRunAs' },
+    supplementalGroups: { type: 'RunAsAny' },
+    seccompProfiles: null,
+    users: [],
+    groups: [],
+    volumes: [...SCC_ALLOWED_VOLUMES],
+  };
   return [
     {
-      name: 'restricted-v2',
-      priority: 10,
-      groups: ['system:authenticated'],
-      spec: {
-        allowPrivilegedContainer: false,
-        allowHostDirVolumePlugin: false,
-        allowHostNetwork: false,
-        allowHostPorts: false,
-        allowHostPID: false,
-        allowHostIPC: false,
-        readOnlyRootFilesystem: false,
-        runAsUser: { type: 'MustRunAsRange', uidRangeMin: 1000000000, uidRangeMax: 2147483647 },
-        seLinuxContext: { type: 'MustRunAs' },
-        fsGroup: { type: 'MustRunAs' },
-        supplementalGroups: { type: 'MustRunAs' },
-        users: [],
-        groups: ['system:authenticated'],
-      },
-    },
-    {
-      name: 'nonroot-v2',
-      priority: 10,
-      groups: ['system:authenticated'],
-      spec: {
-        allowPrivilegedContainer: false,
-        allowHostDirVolumePlugin: false,
-        allowHostNetwork: false,
-        allowHostPorts: false,
-        allowHostPID: false,
-        allowHostIPC: false,
-        readOnlyRootFilesystem: false,
-        runAsUser: { type: 'MustRunAsNonRoot' },
-        seLinuxContext: { type: 'MustRunAs' },
-        fsGroup: { type: 'MustRunAs' },
-        supplementalGroups: { type: 'MustRunAs' },
-        users: [],
-        groups: ['system:authenticated'],
-      },
-    },
-    {
       name: 'anyuid',
-      priority: 10,
-      groups: [],
       spec: {
-        allowPrivilegedContainer: false,
-        allowHostDirVolumePlugin: false,
-        allowHostNetwork: false,
-        allowHostPorts: false,
-        allowHostPID: false,
-        allowHostIPC: false,
-        readOnlyRootFilesystem: false,
+        ...baseSpec,
+        priority: 10,
+        groups: ['system:cluster-admins'],
+        allowPrivilegeEscalation: true,
+        allowedCapabilities: null,
+        requiredDropCapabilities: ['MKNOD'],
         runAsUser: { type: 'RunAsAny' },
         seLinuxContext: { type: 'MustRunAs' },
         fsGroup: { type: 'RunAsAny' },
         supplementalGroups: { type: 'RunAsAny' },
+        seccompProfiles: null,
+      },
+    },
+    {
+      name: 'hostaccess',
+      spec: {
+        ...baseSpec,
+        allowHostDirVolumePlugin: true,
+        allowHostIPC: true,
+        allowHostNetwork: true,
+        allowHostPID: true,
+        allowHostPorts: true,
+        allowPrivilegeEscalation: true,
+        requiredDropCapabilities: ['KILL', 'MKNOD', 'SETUID', 'SETGID'],
+        runAsUser: { type: 'MustRunAsRange' },
+        fsGroup: { type: 'MustRunAs' },
+        supplementalGroups: { type: 'RunAsAny' },
+        volumes: [...SCC_HOST_VOLUMES],
+      },
+    },
+    {
+      name: 'hostmount-anyuid',
+      spec: {
+        ...baseSpec,
+        allowHostDirVolumePlugin: true,
+        allowPrivilegeEscalation: true,
+        requiredDropCapabilities: ['MKNOD'],
+        runAsUser: { type: 'RunAsAny' },
+        seLinuxContext: { type: 'MustRunAs' },
+        fsGroup: { type: 'RunAsAny' },
+        supplementalGroups: { type: 'RunAsAny' },
+        users: ['system:serviceaccount:openshift-infra:pv-recycler-controller'],
+        volumes: [...SCC_HOST_NFS_VOLUMES],
+      },
+    },
+    {
+      name: 'hostmount-anyuid-v2',
+      spec: {
+        ...baseSpec,
+        allowHostDirVolumePlugin: true,
+        allowPrivilegeEscalation: true,
+        requiredDropCapabilities: ['MKNOD'],
+        runAsUser: { type: 'RunAsAny' },
+        seLinuxContext: { type: 'RunAsAny' },
+        fsGroup: { type: 'RunAsAny' },
+        supplementalGroups: { type: 'RunAsAny' },
+        volumes: [...SCC_HOST_NFS_VOLUMES],
+      },
+    },
+    {
+      name: 'hostnetwork',
+      spec: {
+        ...baseSpec,
+        allowHostNetwork: true,
+        allowHostPorts: true,
+        allowPrivilegeEscalation: true,
+        requiredDropCapabilities: ['KILL', 'MKNOD', 'SETUID', 'SETGID'],
+        runAsUser: { type: 'MustRunAsRange' },
+        fsGroup: { type: 'MustRunAs' },
+        supplementalGroups: { type: 'MustRunAs' },
+      },
+    },
+    {
+      name: 'hostnetwork-v2',
+      spec: {
+        ...baseSpec,
+        allowHostNetwork: true,
+        allowHostPorts: true,
+        allowPrivilegeEscalation: false,
+        allowedCapabilities: ['NET_BIND_SERVICE'],
+        requiredDropCapabilities: ['ALL'],
+        runAsUser: { type: 'MustRunAsRange' },
+        fsGroup: { type: 'MustRunAs' },
+        supplementalGroups: { type: 'MustRunAs' },
+        seccompProfiles: ['runtime/default'],
+      },
+    },
+    {
+      name: 'nested-container',
+      spec: {
+        ...baseSpec,
+        allowPrivilegeEscalation: true,
+        allowedCapabilities: ['SETUID', 'SETGID'],
+        requiredDropCapabilities: null,
+        runAsUser: { type: 'MustRunAsRange', uidRangeMin: 0, uidRangeMax: 65534 },
+        seLinuxContext: { type: 'MustRunAs', seLinuxOptions: { type: 'container_engine_t' } },
+        fsGroup: { type: 'MustRunAs', ranges: [{ min: 0, max: 65534 }] },
+        supplementalGroups: { type: 'MustRunAs', ranges: [{ min: 0, max: 65534 }] },
+        seccompProfiles: ['*'],
+        userNamespaceLevel: 'RequirePodLevel',
+      },
+    },
+    {
+      // Installed by the cluster-monitoring-operator, not the kube-apiserver
+      // operator bindata; listed as a default SCC in the OCP 4.22 docs.
+      // Spec from cluster-monitoring-operator release-4.22
+      // assets/node-exporter/security-context-constraints.yaml.
+      name: 'node-exporter',
+      spec: {
+        ...baseSpec,
+        allowHostDirVolumePlugin: true,
+        allowHostNetwork: true,
+        allowHostPID: true,
+        allowHostPorts: true,
+        allowPrivilegedContainer: true,
+        allowPrivilegeEscalation: true,
+        requiredDropCapabilities: null,
+        runAsUser: { type: 'RunAsAny' },
+        seLinuxContext: { type: 'RunAsAny' },
+        fsGroup: { type: 'RunAsAny' },
+        supplementalGroups: { type: 'RunAsAny' },
+        seccompProfiles: ['runtime/default'],
         users: [],
         groups: [],
+        volumes: ['*'],
+      },
+    },
+    {
+      name: 'nonroot',
+      spec: {
+        ...baseSpec,
+        allowPrivilegeEscalation: true,
+        requiredDropCapabilities: ['KILL', 'MKNOD', 'SETUID', 'SETGID'],
+        runAsUser: { type: 'MustRunAsNonRoot' },
+        seLinuxContext: { type: 'MustRunAs' },
+        fsGroup: { type: 'RunAsAny' },
+        supplementalGroups: { type: 'RunAsAny' },
+      },
+    },
+    {
+      name: 'nonroot-v2',
+      spec: {
+        ...baseSpec,
+        // Real object has groups: [] plus a system:authenticated SCC binding.
+        groups: ['system:authenticated'],
+        allowPrivilegeEscalation: false,
+        allowedCapabilities: ['NET_BIND_SERVICE'],
+        requiredDropCapabilities: ['ALL'],
+        runAsUser: { type: 'MustRunAsNonRoot' },
+        seLinuxContext: { type: 'MustRunAs' },
+        fsGroup: { type: 'RunAsAny' },
+        supplementalGroups: { type: 'RunAsAny' },
+        seccompProfiles: ['runtime/default'],
       },
     },
     {
       name: 'privileged',
-      priority: 10,
-      groups: [],
       spec: {
+        ...baseSpec,
         allowPrivilegedContainer: true,
         allowHostDirVolumePlugin: true,
         allowHostNetwork: true,
         allowHostPorts: true,
         allowHostPID: true,
         allowHostIPC: true,
-        readOnlyRootFilesystem: false,
+        allowPrivilegeEscalation: true,
+        allowedCapabilities: ['*'],
+        allowedUnsafeSysctls: ['*'],
+        requiredDropCapabilities: null,
         runAsUser: { type: 'RunAsAny' },
         seLinuxContext: { type: 'RunAsAny' },
         fsGroup: { type: 'RunAsAny' },
         supplementalGroups: { type: 'RunAsAny' },
-        users: [],
+        seccompProfiles: ['*'],
+        groups: ['system:cluster-admins', 'system:nodes', 'system:masters'],
+        users: ['system:admin', 'system:serviceaccount:openshift-infra:build-controller'],
+        volumes: ['*'],
+      },
+    },
+    {
+      name: 'restricted',
+      spec: {
+        ...baseSpec,
+        allowPrivilegeEscalation: true,
+        requiredDropCapabilities: ['KILL', 'MKNOD', 'SETUID', 'SETGID'],
+        runAsUser: { type: 'MustRunAsRange' },
+        seLinuxContext: { type: 'MustRunAs' },
+        fsGroup: { type: 'MustRunAs' },
+        supplementalGroups: { type: 'RunAsAny' },
+      },
+    },
+    {
+      name: 'restricted-v2',
+      spec: {
+        ...baseSpec,
+        // Real object has groups: [] and is granted to system:authenticated via
+        // the system:openshift:scc:restricted-v2 ClusterRoleBinding; the game's
+        // SCC admission model uses spec.groups directly, so keep the grant here.
+        groups: ['system:authenticated'],
+        allowPrivilegeEscalation: false,
+        allowedCapabilities: ['NET_BIND_SERVICE'],
+        requiredDropCapabilities: ['ALL'],
+        runAsUser: { type: 'MustRunAsRange' },
+        seLinuxContext: { type: 'MustRunAs' },
+        fsGroup: { type: 'MustRunAs' },
+        supplementalGroups: { type: 'RunAsAny' },
+        seccompProfiles: ['runtime/default'],
+      },
+    },
+    {
+      name: 'restricted-v3',
+      // Not granted to system:authenticated in-game (see admission note above).
+      spec: {
+        ...baseSpec,
         groups: [],
+        allowPrivilegeEscalation: false,
+        allowedCapabilities: ['NET_BIND_SERVICE'],
+        requiredDropCapabilities: ['ALL'],
+        runAsUser: { type: 'MustRunAsRange', uidRangeMin: 1000, uidRangeMax: 65534 },
+        seLinuxContext: { type: 'MustRunAs' },
+        fsGroup: { type: 'MustRunAs', ranges: [{ min: 1000, max: 65534 }] },
+        supplementalGroups: { type: 'MustRunAs', ranges: [{ min: 1000, max: 65534 }] },
+        seccompProfiles: ['runtime/default'],
+        userNamespaceLevel: 'RequirePodLevel',
       },
     },
   ];
@@ -315,6 +546,13 @@ export class ClusterState {
   constructor(eventBus) {
     this.eventBus = eventBus || null;
     this.resources = new Map();
+    /**
+     * config.openshift.io/v1 Project singleton (`project.config.openshift.io/cluster`).
+     * Kept OUT of the resource maps/indexes because its kind name ("Project")
+     * collides with the project.openshift.io Project game kind.
+     * @type {object|null}
+     */
+    this._projectConfig = null;
     this.relationships = new Map();
     this.reverseRelationships = new Map();
     this.kindIndex = new Map();
@@ -438,7 +676,8 @@ export class ClusterState {
       });
       for (const tag of imageStream.tags) {
         this.updateImageStreamTag('openshift', imageStream.name, tag, {
-          dockerImageReference: `quay.io/openshift/origin-${imageStream.repository}:latest`,
+          // Real 4.22 samples import from registry.redhat.io/ubi9/<image>-<ver>:latest.
+          dockerImageReference: sampleImageReference(imageStream, tag),
           isExternal: true,
           silent: true,
         });
@@ -446,23 +685,14 @@ export class ClusterState {
       is.recordEvent('Normal', 'Imported', `Imported ${imageStream.tags.length} tags`);
     }
 
-    // Project request template lives in openshift-config on real clusters.
-    this._seed('Template', 'project-request', {
-      namespace: 'openshift-config',
-      uid: 'seed-template-project-request',
-      spec: {
-        parameters: [
-          { name: 'PROJECT_NAME', displayName: 'Project name', required: true },
-          { name: 'PROJECT_DISPLAYNAME', displayName: 'Project display name', required: false },
-          { name: 'PROJECT_DESCRIPTION', displayName: 'Project description', required: false },
-          { name: 'PROJECT_ADMIN_USER', displayName: 'Project admin user', required: false },
-        ],
-        objects: [
-          { apiVersion: 'project.openshift.io/v1', kind: 'Project', metadata: { name: '${PROJECT_NAME}' }, spec: { displayName: '${PROJECT_DISPLAYNAME}' } },
-        ],
-        message: 'Your project ${PROJECT_NAME} has been created.',
-      },
-    });
+    // Project request template: a fresh OCP 4.22 cluster stores NO Template.
+    // When `spec.projectRequestTemplate` is unset on
+    // project.config.openshift.io/cluster the API server synthesises the default
+    // template; customisation is an admin opt-in flow:
+    //   oc adm create-bootstrap-project-template -o yaml > template.yaml
+    //   edit template.yaml && oc create -f template.yaml -n openshift-config
+    //   oc edit project.config.openshift.io/cluster  # spec.projectRequestTemplate.name
+    this._seedProjectConfig();
   }
 
   /**
@@ -1605,12 +1835,19 @@ export class ClusterState {
     for (const [uid, resource] of this.resources) {
       data[uid] = resource.toJSON();
     }
-    return { timestamp: Date.now(), resourceCount: this.resources.size, resources: data };
+    return {
+      timestamp: Date.now(),
+      resourceCount: this.resources.size,
+      resources: data,
+      // Project config singleton lives outside the resource maps (kind-name collision).
+      projectConfig: this._projectConfig ? deepClone(this._projectConfig) : null,
+    };
   }
 
   /** Reset the cluster to the default OpenShift state. */
   clear() {
     this.resources.clear();
+    this._projectConfig = null;
     this.relationships.clear();
     this.reverseRelationships.clear();
     this.nameIndex.clear();
@@ -1807,17 +2044,164 @@ export class ClusterState {
       this.addResource({
         kind: 'ServiceAccount',
         name: 'default',
-        metadata: { name: 'default', namespace: name, annotations: { 'openshift.io/requester': 'kubeadmin' } },
+        metadata: {
+          name: 'default',
+          namespace: name,
+          annotations: { 'openshift.io/requester': project.metadata.annotations?.['openshift.io/requester'] || 'kubeadmin' },
+        },
         spec: {},
       });
     }
   }
 
+  // ── Project config singleton (config.openshift.io/v1 Project "cluster") ──
+
+  /** Seed the `project.config.openshift.io/cluster` singleton (fresh 4.22: empty spec). */
+  _seedProjectConfig() {
+    this._projectConfig = {
+      apiVersion: 'config.openshift.io/v1',
+      kind: 'Project',
+      metadata: {
+        name: 'cluster',
+        uid: 'seed-project-config',
+        creationTimestamp: new Date().toISOString(),
+        resourceVersion: '1',
+        generation: 1,
+      },
+      spec: {},
+    };
+    return this._projectConfig;
+  }
+
   /**
-   * Create an OpenShift Project (and its default service account).
+   * The cluster-scoped project configuration (`oc get project.config.openshift.io/cluster`).
+   * Not registered in the normal resource indexes because its kind name collides
+   * with the project.openshift.io Project game kind.
+   * @returns {object|null}
+   */
+  getProjectConfig() {
+    return this._projectConfig || null;
+  }
+
+  /**
+   * Merge a patch into the project config `spec` (the `oc edit`/`oc patch`
+   * path for `spec.projectRequestTemplate.name`). Bumps resourceVersion and
+   * generation and emits `cluster:modified:ProjectConfig`.
+   * @param {object} [specPatch]
+   * @returns {object} the updated singleton
+   */
+  updateProjectConfig(specPatch = {}) {
+    if (!this._projectConfig) this._seedProjectConfig();
+    const config = this._projectConfig;
+    config.spec = deepMerge(config.spec || {}, specPatch || {});
+    const resourceVersion = parseInt(config.metadata.resourceVersion || '1', 10) || 1;
+    config.metadata.resourceVersion = String(resourceVersion + 1);
+    config.metadata.generation = (config.metadata.generation || 1) + 1;
+    this.eventBus?.emit('cluster:modified:ProjectConfig', {
+      kind: 'Project',
+      name: 'cluster',
+      namespace: '',
+      resource: config,
+    });
+    return config;
+  }
+
+  /**
+   * Process a project-request Template: resolve `${PARAM}`/`${{PARAM}}`
+   * substitutions in every string of its objects using the template parameter
+   * defaults overridden by `params`.
+   * @param {object} template Template resource (flat `.spec` model)
+   * @param {Record<string, string|undefined>} params
+   * @returns {{objects: object[], project: object|null, values: Record<string, string>}}
+   */
+  _processProjectTemplate(template, params = {}) {
+    const values = {};
+    for (const parameter of template?.spec?.parameters || []) {
+      if (!parameter?.name) continue;
+      values[parameter.name] = parameter.value !== undefined ? parameter.value : parameter.generate ?? '';
+    }
+    for (const [key, value] of Object.entries(params)) {
+      if (value === undefined || value === null) continue;
+      values[key] = String(value);
+    }
+    const substitute = (value) => {
+      if (typeof value === 'string') {
+        return value.replace(/\$\{\{?([A-Za-z_][A-Za-z0-9_]*)\}?\}/g, (match, key) =>
+          Object.prototype.hasOwnProperty.call(values, key) ? values[key] : match
+        );
+      }
+      if (Array.isArray(value)) return value.map(substitute);
+      if (value && typeof value === 'object') {
+        const out = {};
+        for (const [key, entry] of Object.entries(value)) out[key] = substitute(entry);
+        return out;
+      }
+      return value;
+    };
+    const objects = (template?.spec?.objects || []).map((object) => substitute(deepClone(object)));
+    return {
+      objects: objects.filter((object) => object?.kind !== 'Project'),
+      project: objects.find((object) => object?.kind === 'Project') || null,
+      values,
+    };
+  }
+
+  /**
+   * Create one non-Project object from a project-request Template inside the
+   * new project (namespaced objects only, namespace forced to the project).
+   * Objects are normalised first so flat API kinds (RoleBinding roleRef/subjects,
+   * ConfigMap data, Secret data, ...) are lifted into the game's `.spec` model.
+   * @param {object} object
+   * @param {string} namespace
+   * @returns {object|null}
+   */
+  _createProjectTemplateObject(object, namespace) {
+    if (!object || !object.kind || object.kind === 'Project') return null;
+    const normalized = normalizeManifestObject(object);
+    const canonical = this._canonicalKind(normalized.kind);
+    if (!canonical || !RESOURCE_KINDS.includes(canonical)) return null;
+    if (isClusterScopedKind(canonical)) return null;
+    if (!normalized.name) return null;
+    // The requester's admin RoleBinding is always created above; the bootstrap
+    // project template also carries one, so skip its duplicate.
+    if (canonical === 'RoleBinding' && normalized.name === 'admin') return null;
+    const created = this.addResource({
+      kind: canonical,
+      apiVersion: normalized.apiVersion || undefined,
+      metadata: {
+        name: normalized.name,
+        namespace,
+        labels: normalized.labels,
+        annotations: normalized.annotations,
+      },
+      spec: normalized.spec,
+    });
+    // Template objects are applied manifests: keep the exact spec from the
+    // template (addResource() would otherwise merge the game's class defaults
+    // into them, e.g. a NetworkPolicy podSelector, which the API never defaults).
+    if (created && normalized.spec && typeof normalized.spec === 'object') {
+      created.spec = deepClone(normalized.spec);
+    }
+    return created;
+  }
+
+  /**
+   * Create an OpenShift Project the way an API-server project request does:
+   *   - always create the requester's `admin` RoleBinding in the new project
+   *     (the real project request assigns the requesting user the admin role),
+   *   - when `project.config.openshift.io/cluster` sets
+   *     `spec.projectRequestTemplate.name`, instantiate that Template from
+   *     `openshift-config` with the standard PROJECT_* parameters; a missing
+   *     template fails the request and no project is created,
+   *   - create the template's non-Project objects in the new project namespace
+   *     (e.g. NetworkPolicy / ResourceQuota / LimitRange),
+   *   - use the template Project object's labels/annotations when present.
+   *
    * @param {string} name
-   * @param {{displayName?: string, description?: string, labels?: object, annotations?: object}} [options]
-   * @returns {{success: boolean, project?: object, message?: string, error?: boolean}}
+   * @param {{displayName?: string, description?: string, labels?: object,
+   *   annotations?: object, requester?: string}} [options]
+   * @returns {{success: boolean, project?: object, message?: string,
+   *   error?: boolean, createdObjects?: object[]}}
    */
   createProject(name, options = {}) {
     if (!isValidProjectName(name)) {
@@ -1826,19 +2210,79 @@ export class ClusterState {
     if (this.getProject(name)) {
       return { success: false, error: true, message: `Error from server (AlreadyExists): project.project.openshift.io "${name}" already exists` };
     }
+    const requester = String(options.requester || 'kubeadmin');
+    const templateName = this.getProjectConfig()?.spec?.projectRequestTemplate?.name || '';
+    let templateProject = null;
+    let templateObjects = [];
+    if (templateName) {
+      const template = this.getByName('Template', templateName, 'openshift-config');
+      if (!template) {
+        return {
+          success: false,
+          error: true,
+          message: `Error from server (NotFound): templates.template.openshift.io "${templateName}" not found in project "openshift-config"`,
+        };
+      }
+      const processed = this._processProjectTemplate(template, {
+        PROJECT_NAME: name,
+        PROJECT_DISPLAYNAME: options.displayName,
+        PROJECT_DESCRIPTION: options.description,
+        PROJECT_ADMIN_USER: requester,
+        PROJECT_REQUESTING_USER: requester,
+      });
+      templateProject = processed.project;
+      templateObjects = processed.objects;
+    }
+    const projectAnnotations = {
+      'openshift.io/display-name': options.displayName || name,
+      'openshift.io/requester': requester,
+      ...(options.annotations || {}),
+      ...(templateProject?.metadata?.annotations || {}),
+    };
+    const displayName = projectAnnotations['openshift.io/display-name'] || options.displayName || name;
     const project = this.addResource({
       kind: 'Project',
       metadata: {
         name,
-        labels: { 'kubernetes.io/metadata.name': name, ...(options.labels || {}) },
-        annotations: { 'openshift.io/display-name': options.displayName || name, 'openshift.io/requester': options.requester || 'kubeadmin', ...(options.annotations || {}) },
+        labels: {
+          'kubernetes.io/metadata.name': name,
+          ...(options.labels || {}),
+          ...(templateProject?.metadata?.labels || {}),
+        },
+        annotations: projectAnnotations,
       },
-      spec: { displayName: options.displayName || name, description: options.description || '' },
+      spec: { displayName, description: options.description || '' },
       status: { phase: 'Active' },
     });
     project.setPhase('Active');
-    this.eventBus?.emit('project:created', { name, namespace: name, resource: project, displayName: options.displayName || name });
-    return { success: true, project, message: `project.project.openshift.io/${name}` };
+    // Real project requests bind the requesting user to the admin ClusterRole
+    // in the new project (name "admin", roleRef admin, subject the requester).
+    this.addResource({
+      kind: 'RoleBinding',
+      metadata: { name: 'admin', namespace: name },
+      spec: {
+        roleRef: { apiGroup: 'rbac.authorization.k8s.io', kind: 'ClusterRole', name: 'admin' },
+        subjects: [{ apiGroup: 'rbac.authorization.k8s.io', kind: 'User', name: requester }],
+      },
+    });
+    const createdObjects = [];
+    for (const object of templateObjects) {
+      const created = this._createProjectTemplateObject(object, name);
+      if (created) createdObjects.push(created);
+    }
+    this.eventBus?.emit('project:created', {
+      name,
+      namespace: name,
+      resource: project,
+      displayName,
+      requester,
+    });
+    return {
+      success: true,
+      project,
+      createdObjects,
+      message: `project.project.openshift.io/${name}`,
+    };
   }
 
   /**

@@ -88,6 +88,8 @@ export class MetricsDashboard {
     this.container.id = 'metrics-dashboard';
     this.container.className = 'panel-dock';
     this.container.setAttribute('data-testid', 'metrics-dashboard');
+    this.container.setAttribute('role', 'region');
+    this.container.setAttribute('aria-label', 'Platform metrics dashboard');
     this.container.innerHTML = this._buildHTML();
     document.body.appendChild(this.container);
 

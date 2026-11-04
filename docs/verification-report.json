@@ -1,19 +1,19 @@
 {
-  "timestamp": "2026-11-04T02:24:08.095Z",
+  "timestamp": "2026-11-04T10:40:15.265Z",
   "environment": {
     "node": "v26.10.0",
     "chrome": "Chrome/156.0.8078.79",
-    "baseUrl": "http://127.0.0.1:34863",
+    "baseUrl": "http://127.0.0.1:33451",
     "viewport": {
       "width": 1600,
       "height": 900
     },
     "puppeteerCore": "/tmp/verify-tools",
-    "startedAt": "2026-11-04T02:20:24.764Z",
-    "durationSeconds": 223
+    "startedAt": "2026-11-04T10:31:53.659Z",
+    "durationSeconds": 502
   },
   "summary": {
-    "passes": 503,
+    "passes": 521,
     "failures": 0,
     "warnings": 0,
     "consoleErrors": 0,
@@ -71,13 +71,18 @@
       "failures": 0,
       "warnings": 0
     },
+    "followup": {
+      "passes": 26,
+      "failures": 0,
+      "warnings": 0
+    },
     "draw": {
       "passes": 10,
       "failures": 0,
       "warnings": 0
     },
     "shots": {
-      "passes": 10,
+      "passes": 2,
       "failures": 0,
       "warnings": 0
     }
@@ -91,7 +96,7 @@
       "path": "screenshot.png",
       "width": 1600,
       "height": 900,
-      "bytes": 777208
+      "bytes": 798642
     },
     "ogImage": {
       "path": "og-image.png",
@@ -101,52 +106,16 @@
     },
     "screenshots": [
       {
-        "path": "docs/screenshots/menu.png",
-        "width": 1600,
-        "height": 900,
-        "bytes": 325637
-      },
-      {
         "path": "docs/screenshots/exam-prep.png",
         "width": 1600,
         "height": 900,
         "bytes": 195955
       },
       {
-        "path": "docs/screenshots/sandbox.png",
-        "width": 1600,
-        "height": 900,
-        "bytes": 777224
-      },
-      {
         "path": "screenshot.png",
         "width": 1600,
         "height": 900,
-        "bytes": 777208
-      },
-      {
-        "path": "docs/screenshots/files-panel.png",
-        "width": 1600,
-        "height": 900,
-        "bytes": 217717
-      },
-      {
-        "path": "docs/screenshots/campaign-level-1.png",
-        "width": 1600,
-        "height": 900,
-        "bytes": 467996
-      },
-      {
-        "path": "docs/screenshots/draw.png",
-        "width": 1600,
-        "height": 900,
-        "bytes": 490609
-      },
-      {
-        "path": "og-image.png",
-        "width": 1200,
-        "height": 630,
-        "bytes": 184408
+        "bytes": 798642
       }
     ]
   },
@@ -417,7 +386,7 @@
     },
     {
       "section": "sandbox",
-      "name": "sandbox: seeded ~50 OpenShift resources"
+      "name": "sandbox: seeded platform resources"
     },
     {
       "section": "sandbox",
@@ -517,11 +486,11 @@
     },
     {
       "section": "files",
-      "name": "files: 19 default manifest files"
+      "name": "files: default manifest files seeded"
     },
     {
       "section": "files",
-      "name": "files: file tree lists 19 files"
+      "name": "files: file tree lists the default files"
     },
     {
       "section": "files",
@@ -2084,6 +2053,110 @@
       "name": "challenges: countdown runs again after Files closes"
     },
     {
+      "section": "followup",
+      "name": "followup: oc create role --verb/--resource"
+    },
+    {
+      "section": "followup",
+      "name": "followup: role rules exactly match the requested flags"
+    },
+    {
+      "section": "followup",
+      "name": "followup: bind the new role"
+    },
+    {
+      "section": "followup",
+      "name": "followup: role rules feed oc auth can-i (allow)"
+    },
+    {
+      "section": "followup",
+      "name": "followup: role rules feed oc auth can-i (deny)"
+    },
+    {
+      "section": "followup",
+      "name": "followup: dry-run secret YAML is API-shaped"
+    },
+    {
+      "section": "followup",
+      "name": "followup: dry-run | replace -f - pipeline"
+    },
+    {
+      "section": "followup",
+      "name": "followup: fresh cluster has no project template"
+    },
+    {
+      "section": "followup",
+      "name": "followup: create-bootstrap-project-template emits the canonical template"
+    },
+    {
+      "section": "followup",
+      "name": "followup: htpasswd file"
+    },
+    {
+      "section": "followup",
+      "name": "followup: htpasswd secret"
+    },
+    {
+      "section": "followup",
+      "name": "followup: baseline login"
+    },
+    {
+      "section": "followup",
+      "name": "followup: oc extract secret to virtual FS"
+    },
+    {
+      "section": "followup",
+      "name": "followup: rotate password in extracted file"
+    },
+    {
+      "section": "followup",
+      "name": "followup: oc set data secret updates the secret"
+    },
+    {
+      "section": "followup",
+      "name": "followup: old password rejected after rotation"
+    },
+    {
+      "section": "followup",
+      "name": "followup: new password accepted after rotation"
+    },
+    {
+      "section": "followup",
+      "name": "followup: project.config get"
+    },
+    {
+      "section": "followup",
+      "name": "followup: project.config patch projectRequestTemplate"
+    },
+    {
+      "section": "followup",
+      "name": "followup: create custom project template"
+    },
+    {
+      "section": "followup",
+      "name": "followup: new-project uses the configured template"
+    },
+    {
+      "section": "followup",
+      "name": "followup: new project inherits template objects"
+    },
+    {
+      "section": "followup",
+      "name": "followup: new project grants the requester admin"
+    },
+    {
+      "section": "followup",
+      "name": "followup: create deployment for edit note"
+    },
+    {
+      "section": "followup",
+      "name": "followup: oc edit mentions $EDITOR / vi"
+    },
+    {
+      "section": "followup",
+      "name": "followup: oc edit project.config opens editor"
+    },
+    {
       "section": "draw",
       "name": "draw: page loads with palette"
     },
@@ -2130,38 +2203,6 @@
     {
       "section": "shots",
       "name": "console: no unexpected console errors"
-    },
-    {
-      "section": "shots",
-      "name": "shots: screenshot.png is 1600x900"
-    },
-    {
-      "section": "shots",
-      "name": "shots: og-image.png is 1200x630"
-    },
-    {
-      "section": "shots",
-      "name": "shots: docs/screenshots/menu.png (1600x900)"
-    },
-    {
-      "section": "shots",
-      "name": "shots: docs/screenshots/sandbox.png (1600x900)"
-    },
-    {
-      "section": "shots",
-      "name": "shots: docs/screenshots/campaign-level-1.png (1600x900)"
-    },
-    {
-      "section": "shots",
-      "name": "shots: docs/screenshots/exam-prep.png (1600x900)"
-    },
-    {
-      "section": "shots",
-      "name": "shots: docs/screenshots/files-panel.png (1600x900)"
-    },
-    {
-      "section": "shots",
-      "name": "shots: docs/screenshots/draw.png (1600x900)"
     }
   ]
 }

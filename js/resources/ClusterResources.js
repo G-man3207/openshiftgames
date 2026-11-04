@@ -34,7 +34,8 @@ export class Node extends ResourceBase {
     const cpuCapacity = metadata.cpuCapacity || '4';
     const memoryCapacity = metadata.memoryCapacity || '8Gi';
     const defaults = {
-      podCIDR: metadata.podCIDR || `10.244.${Math.floor(Math.random() * 255)}.0/24`,
+      // OCP 4.22 default clusterNetwork is 10.128.0.0/14 (OVN-Kubernetes /23 per node).
+      podCIDR: metadata.podCIDR || `10.128.${Math.floor(Math.random() * 64) * 2}.0/23`,
       providerID: metadata.providerID || `baremetal://cluster/${metadata.name || 'node'}`,
       taints: deepClone(metadata.taints || []),
       unschedulable: metadata.unschedulable ?? false,
@@ -404,7 +405,9 @@ export class PodDisruptionBudget extends ResourceBase {
       selector: { matchLabels: deepClone(metadata.matchLabels || {}) },
       minAvailable: hasMin ? metadata.minAvailable : null,
       maxUnavailable: metadata.maxUnavailable !== undefined ? metadata.maxUnavailable : hasMin ? null : 1,
-      unhealthyPodEvictionPolicy: metadata.unhealthyPodEvictionPolicy || 'IfHealthy',
+      // API default when omitted is IfHealthyBudget; valid values are only
+      // IfHealthyBudget | AlwaysAllow. Omit unless the caller sets one.
+      ...(metadata.unhealthyPodEvictionPolicy ? { unhealthyPodEvictionPolicy: metadata.unhealthyPodEvictionPolicy } : {}),
     };
     this._initSpec(defaults, metadata.spec);
     this._setInitialStatus({

@@ -2072,7 +2072,7 @@ oc get scc
 oc describe scc restricted-v2
 oc adm policy add-scc-to-user privileged -z myapp
 oc adm policy add-scc-to-group anyuid group1
-oc adm policy who-can use scc/privileged
+oc adm policy who-can use scc privileged
 oc auth can-i use scc/privileged
 oc get pod <p> -o jsonpath='{.metadata.annotations.openshift\.io/scc}{"\n"}'
 

@@ -13,18 +13,18 @@ Verification legend: commands without a marker come from OCP 4.22 documentation 
 
 ## 1. How this guide maps to the game
 
-The game target (internal design, see `docs/CONVERSION-SPEC.md` §9–11) is 20 campaign levels in 5 chapters, 12 challenges, and an EX280 Prep mode that tracks all 9 groups / 55 bullets with `docsUrl` links. Current repository data already provides useful sandbox scenarios: 20 K8s campaign levels, 10 challenges, and 34 incidents in `js/data/IncidentDefs.js` (e.g. `CrashLoopBackOff`, `ImagePullBackOff`, `ResourceQuotaExceeded`, `LoadBalancerPending`, `CertificateExpiry`, `UnauthorizedAccess`, `NetworkPolicyBlocking`, `IngressMisconfigured`, `SecretExposed`, `JobDeadlineExceeded`, `CronJobMissedSchedule`).
+The game target (internal design, see `docs/CONVERSION-SPEC.md` §9–11) is 20 campaign levels in 5 chapters, 12 challenges, and an EX280 Prep mode that tracks all 9 groups / 55 bullets with `docsUrl` links. Current repository data already provides the real sandbox scenarios: the shipped **20 OpenShift campaign levels**, **12 timed challenge labs**, and **36 incident definitions** in `js/data/IncidentDefs.js` (e.g. `CrashLoopBackOff`, `ImagePullBackOff`, `ResourceQuotaExceeded`, `LoadBalancerPending`, `RouteTLSCertificateError`, `UnauthorizedAccess`, `NetworkPolicyBlocking`, `RouteNotAdmitted`, `SecretExposed`, `JobDeadlineExceeded`, `CronJobMissedSchedule`; pre-conversion names such as `CertificateExpiry` and `IngressMisconfigured` still resolve through `LEGACY_INCIDENT_ALIASES`).
 
-| EX280V422 group | Planned campaign levels | Planned challenges | Useful existing incidents / game concepts |
+| EX280V422 group | Campaign levels | Timed labs | Useful incidents / game concepts |
 |---|---|---|---|
-| Manage OpenShift Container Platform | 1 Your First Project; 2 Query, Format, Filter; 3 Logs, Events & Health; 4 Declarative Manifests | Fix CrashLoopBackOff; EX280 Speed Run | `CrashLoopBackOff`, `ImagePullBackOff`, `NodeNotReady`, `ServiceEndpointMissing`, `DeploymentStuckRollout` |
+| Manage OpenShift Container Platform | 1 Your First Project; 2 Query, Format, Filter; 3 Logs, Events & Health; 4 Declarative Manifests | Fix CrashLoopBackOff; EX280 Speed Run | `CrashLoopBackOff`, `ImagePullBackOff`, `NodeNotReady`, `ServiceNoEndpoints`, `DeploymentStuckRollout` |
 | Declarative Resource Management | 4 Declarative Manifests; 5 Kustomize Base; 6 Kustomize Overlays; 7 Secrets & ConfigMaps | Kustomize Prod Overlay; EX280 Speed Run | `SecretExposed`, `DeploymentStuckRollout`; game "Files" panel + manifest apply |
-| Deploy applications | 8 Templates & Helm; 9 Images, Builds & Image Streams; 10 Rolling Updates & Rollbacks; 11 Services & Routes | Three-Tier App; Build & Deploy from Source; Route with Edge TLS | `ImagePullBackOff`, `IngressMisconfigured`, `ServiceEndpointMissing`, `DeploymentStuckRollout` |
+| Deploy applications | 8 Templates & Helm; 9 Images, Builds & Image Streams; 10 Rolling Updates & Rollbacks; 11 Services & Routes | Three-Tier App; Build & Deploy from Source; Route with Edge TLS | `ImagePullBackOff`, `RouteNotAdmitted`, `ServiceNoEndpoints`, `DeploymentStuckRollout` |
 | Manage authentication and authorization | 13 HTPasswd & Users; 14 Groups & RBAC | RBAC for a New Teammate; HTPasswd Onboarding | `UnauthorizedAccess` |
-| Configure network security | 11 Services & Routes; 20 EX280 Final (NetworkPolicy step) | Network Isolation; Route with Edge TLS | `NetworkPolicyBlocking`, `DNSResolutionFailure`, `CertificateExpiry`, `WebhookAdmissionRejection` |
+| Configure network security | 11 Services & Routes; 20 EX280 Final (NetworkPolicy step) | Network Isolation; Route with Edge TLS | `NetworkPolicyBlocking`, `DNSResolutionFailure`, `RouteTLSCertificateError`, `SCCForbidden` |
 | Expose non-HTTP/SNI Applications | 12 Non-HTTP & Load Balancer | Install an Operator | `LoadBalancerPending` |
 | Enable developer self-service | 15 Quotas, LimitRanges & Templates | Quota Guardrail | `ResourceQuotaExceeded` |
-| Manage OpenShift operators | 12 Non-HTTP & Load Balancer; 18 Operators | Install an Operator | operator/subscription resolution kinds in the conversion spec |
+| Manage OpenShift operators | 12 Non-HTTP & Load Balancer; 18 Operators | Install an Operator | `OperatorInstallFailed`; Subscription/CSV resolution kinds in the conversion spec |
 | Configure application security | 16 Service Accounts & API Access; 17 SCC & Privileged Apps; 19 Jobs & CronJobs | SCC for a Privileged Workload; EX280 Speed Run | `UnauthorizedAccess`, `SecretExposed`, `JobDeadlineExceeded`, `CronJobMissedSchedule` |
 
 **EX280 Prep quick labs (recommended set, from the conversion spec):** projects/login · users+OAuth login · edge route with TLS secret · BuildConfig→ImageStream→Deployment · Kustomize overlay · ResourceQuota+LimitRange · SCC grant · Operator subscription · Job+CronJob. Each quick lab should show the exact `oc` command, an "Open Red Hat docs" link from the table in §4, and check state with the ObjectiveEvaluator types (`project`, `login`, `route`, `tls`, `build`, `imageStream`, `kustomize`, `quota`, `limitRange`, `scc`, `operator`, `complete`, `cronJob`).
@@ -365,7 +365,11 @@ oc describe AppliedClusterResourceQuota -n web
 oc adm policy remove-cluster-role-from-group self-provisioner system:authenticated:oauth   # † disable self-provisioning
 oc describe clusterrolebinding.rbac self-provisioners
 oc patch clusterrolebinding.rbac self-provisioners -p '{"subjects": null}'
-oc edit template project-request -n openshift-config
+# project templates (a fresh 4.22 cluster has no stored template):
+oc adm create-bootstrap-project-template -o yaml > template.yaml
+oc create -f template.yaml -n openshift-config
+oc edit project.config.openshift.io/cluster    # spec.projectRequestTemplate.name: project-request
+oc new-project template-check                  # verify the template objects are inherited
 ```
 
 LimitRange (verified docs YAML, trimmed):
@@ -384,9 +388,9 @@ spec:
     defaultRequest: {cpu: "200m", memory: "100Mi"}
 ```
 
-**One-screen lab.** Cap a project with a compute ResourceQuota, deploy above the quota and read the admission error, then add a LimitRange so pods get default requests/limits automatically. Create a ClusterResourceQuota for all projects with a label, then customize the default `project-request` template and prove a new project inherits it (e.g. a NetworkPolicy). Finally disable self-provisioning and confirm `oc new-project` is denied for a normal user.
+**One-screen lab.** Cap a project with a compute ResourceQuota, deploy above the quota and read the admission error, then add a LimitRange so pods get default requests/limits automatically. Create a ClusterResourceQuota for all projects with a label, then generate a custom project template (`oc adm create-bootstrap-project-template -o yaml`), add a NetworkPolicy object, create it in `openshift-config`, wire it through `project.config.openshift.io/cluster` and prove a new project inherits it. Finally disable self-provisioning and confirm `oc new-project` is denied for a normal user.
 
-**Common traps.** Once a compute quota exists, pods must set requests/limits (or a LimitRange default must supply them); quota admission errors mention the exceeded resource; scopes (`BestEffort`, `NotTerminating`, `Terminating`) matter; ClusterResourceQuota is cluster-scoped and selected by project labels/annotations; project template is `project-request` in `openshift-config` (older docs referenced other names); self-provisioner role binding is protected — patch the binding annotation before removing subjects.
+**Common traps.** Once a compute quota exists, pods must set requests/limits (or a LimitRange default must supply them); quota admission errors mention the exceeded resource; scopes (`BestEffort`, `NotTerminating`, `Terminating`) matter; ClusterResourceQuota is cluster-scoped and selected by project labels/annotations; a fresh 4.22 cluster has no stored project template — generate one with `oc adm create-bootstrap-project-template`, create it in `openshift-config`, and point `project.config.openshift.io/cluster` at it (`spec.projectRequestTemplate.name`); self-provisioner role binding is protected — patch the binding annotation before removing subjects.
 
 **Docs:** Using quotas and limit ranges <https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/scalability_and_performance/compute-resource-quotas> · Building applications <https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/building_applications/index>
 
@@ -583,7 +587,7 @@ spec:
 
 | Task | Command |
 |---|---|
-| Services | `oc expose deployment/<name> --port=<port>`, `oc create service clusterip|nodeport|loadbalancer` **verified forms:** `oc create service clusterip my-cs --tcp=5678:8080`, `oc create service nodeport my-ns --tcp=5678:8080`, `oc create service loadbalancer my-lbs --tcp=5678:8080` |
+| Services | `oc expose deployment/<name> --port=<port>`, `oc create service clusterip\|nodeport\|loadbalancer` **verified forms:** `oc create service clusterip my-cs --tcp=5678:8080`, `oc create service nodeport my-ns --tcp=5678:8080`, `oc create service loadbalancer my-lbs --tcp=5678:8080` |
 | Routes | `oc expose svc/<name>`, `oc expose service nginx --hostname=www.example.com --path=/nginx`, `oc create route edge --service=<svc> --cert=tls.crt --key=tls.key --ca-cert=ca.crt --hostname=<host>`, `oc create route passthrough <name> --service=<svc> --port=8080`, `oc create route reencrypt <name> --service=<svc> --cert=tls.crt --key=tls.key --dest-ca-cert=destca.crt` |
 | Route facts | default domain: `oc get ingresses.config/cluster -o jsonpath={.spec.domain}`; host: `oc get route <name> -o jsonpath='{.spec.host}'` |
 | NetworkPolicy | `oc apply -f <policy>.yaml -n <ns>`, `oc get networkpolicy`, `oc describe networkpolicy <name>`, `oc delete -f <policy>.yaml` |
@@ -625,10 +629,10 @@ spec:
 5. **DeploymentConfig habits.** If you learned old DO280 material: `oc rollout undo dc/<name>`, `oc set triggers dc/...` still exist, but new manifests should use apps/v1 Deployment; `oc logs -f dc/<name>` works for legacy only.
 6. **`oc export` does not exist.** Export with `oc get ... -o yaml`.
 7. **SA tokens.** Don't expect a token Secret to appear on `oc describe sa`; use `oc create token`.
-8. **Routes vs Services.** Routes attach to a Service; Services select pods; a Route with no endpoints shows errors in `oc describe route`/`oc get routes`. Edge needs cert+key; reencrypt needs destination CA.
+8. **Routes vs Services.** Routes attach to a Service; Services select pods; a Route with no endpoints shows errors in `oc describe route`/`oc get routes`. Edge can use a supplied cert+key or fall back to the router's default certificate; reencrypt needs a destination CA.
 9. **NetworkPolicy default-deny breaks DNS and ingress.** Allow DNS egress and ingress-controller traffic explicitly.
 10. **Quota requires requests/limits.** After a compute quota, pods without requests/limits are rejected unless a LimitRange supplies defaults.
-11. **Templates are namespace-scoped.** To make one available to developers, it must be in their project's namespace or the `openshift` namespace; the default project template is `project-request` in `openshift-config`.
+11. **Templates are namespace-scoped.** To make one available to developers, it must be in their project's namespace or the `openshift` namespace. The project-creation template is separate: a fresh 4.22 cluster stores none; generate one with `oc adm create-bootstrap-project-template`, create it in `openshift-config`, and reference it from `project.config.openshift.io/cluster`.
 12. **ClusterOperator ≠ OLM operator.** `oc get co` is CVO health; `oc get csv/sub` is OLM.
 13. **Verify, don't assume.** For every task: `oc get` the object, `oc describe` it, and test the externally visible behavior (curl route, connect NodePort, run job to completion).
 

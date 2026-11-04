@@ -49,6 +49,9 @@
   scroll-behavior: smooth;
   scrollbar-width: thin;
   scrollbar-color: #262c34 transparent;
+  /* The landing page is real copy: let learners select/quote it (the game shell
+     keeps its own select-none). */
+  user-select: text;
   transition: opacity 0.45s cubic-bezier(0.22, 1, 0.36, 1), transform 0.45s cubic-bezier(0.22, 1, 0.36, 1);
 }
 
@@ -1014,7 +1017,9 @@ html.sp-js #main-menu.sp .sp-reveal.is-in {
     gap: 16px;
   }
   #main-menu.sp .sp-footer-cols { grid-template-columns: minmax(0, 1.2fr) repeat(2, minmax(0, 0.85fr)); }
-  #main-menu.sp .sp-footer-col:last-child { display: none; }
+  /* Keep the Project column (Settings / Achievements / Stats) reachable; the
+     footer reflows to 2 columns below 960px instead of hiding its actions. */
+  #main-menu.sp .sp-footer-col:last-child { display: block; }
   #main-menu.sp .sp-exam-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr); }
 }
 

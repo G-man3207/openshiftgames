@@ -23,6 +23,7 @@
 
 import { KIND_DEFS, toManifestYAML } from '../data/kindRegistry.js';
 import { describeResource } from '../resources/ManifestSerializer.js';
+import { visualStatusFor } from '../rendering/ResourceStatus.js';
 
 const PLATFORM_LABEL = 'OpenShift 4.22';
 const SCALE_KINDS = new Set(['Deployment', 'ReplicaSet', 'StatefulSet']);
@@ -112,6 +113,11 @@ const PHASE_COLORS = {
   CrashLoopBackOff: 'bg-red-400',
   Rejected: 'bg-red-400',
   Degraded: 'bg-red-400',
+  Unavailable: 'bg-red-400',
+  NotReady: 'bg-red-400',
+  Suspended: 'bg-yellow-400',
+  Paused: 'bg-yellow-400',
+  Updating: 'bg-yellow-400',
 };
 
 export class InspectorPanel {
@@ -1275,14 +1281,21 @@ export class InspectorPanel {
 
   _phaseOf(resource) {
     if (!resource) return 'Unknown';
-    if (resource.kind === 'Route') {
-      return resource.status?.phase || (resource.isAdmitted?.() ? 'Admitted' : 'Pending');
+    // Same derivation as the 3D status ring and label dot: condition-based kinds
+    // (Route admission, ClusterOperator/ClusterVersion health, Node readiness)
+    // must not fall back to the often-static status.phase.
+    const status = visualStatusFor(resource, 'Active');
+    if (status === 'Admitted' && resource.kind === 'Route') {
+      try {
+        const cluster = this._cluster();
+        const service = cluster?.getRouteService?.(resource);
+        const endpoints = service ? cluster?.getServiceEndpoints?.(service) : null;
+        if (Array.isArray(endpoints) && endpoints.length === 0) return 'Pending';
+      } catch {
+        /* keep Admitted */
+      }
     }
-    if (resource.kind === 'Node') {
-      const ready = resource.status?.conditions?.find((condition) => condition.type === 'Ready');
-      if (ready) return ready.status === 'True' ? 'Ready' : 'NotReady';
-    }
-    return resource.status?.phase || resource.status?.state || resource.status?.conditions?.[0]?.type || 'Active';
+    return status;
   }
 
   _statusColor(phase) {

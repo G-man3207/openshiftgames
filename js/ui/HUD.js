@@ -232,7 +232,7 @@ export class HUD {
             <span id="hud-platform-count" class="hud-platform-count" data-testid="hud-platform-count">0</span>
           </button>
           <span class="hud-rule" aria-hidden="true"></span>
-          <button id="hud-health" class="hud-health" type="button" title="Cluster health" data-testid="hud-health" aria-expanded="false">
+          <button id="hud-health" class="hud-health" type="button" title="Cluster health" aria-label="Cluster health (open cluster stats)" data-testid="hud-health" aria-expanded="false">
             <span id="hud-health-dot" class="hud-health-dot"></span>
             <span id="hud-health-label" class="hud-health-label">Healthy</span>
           </button>
@@ -243,14 +243,14 @@ export class HUD {
             <button id="hud-speed-2" class="hud-speed-btn" type="button" title="Double speed" data-testid="hud-speed-2">2x</button>
             <button id="hud-speed-4" class="hud-speed-btn" type="button" title="Quadruple speed" data-testid="hud-speed-4">4x</button>
           </div>
-          <button id="hud-pause" class="hud-icon-btn" type="button" title="Pause simulation" data-testid="hud-pause">
+          <button id="hud-pause" class="hud-icon-btn" type="button" title="Pause simulation" aria-label="Pause simulation" data-testid="hud-pause">
             <span id="hud-pause-icon">${SVG.pause}</span>
           </button>
-          <button id="hud-alerts" class="hud-icon-btn hud-alert-btn" type="button" title="OpenShift incidents" data-testid="hud-alerts">
+          <button id="hud-alerts" class="hud-icon-btn hud-alert-btn" type="button" title="OpenShift incidents" aria-label="OpenShift incidents" data-testid="hud-alerts">
             ${SVG.bell}
             <span id="hud-alert-badge" class="hud-badge" data-testid="hud-alert-badge" hidden>0</span>
           </button>
-          <button id="hud-settings" class="hud-icon-btn" type="button" title="Settings" data-testid="hud-settings">
+          <button id="hud-settings" class="hud-icon-btn" type="button" title="Settings" aria-label="Settings" data-testid="hud-settings">
             ${SVG.gear}
           </button>
         </div>
@@ -601,11 +601,13 @@ export class HUD {
       badge.textContent = this.incidentCount > 99 ? '99+' : String(this.incidentCount);
       badge.title = `${this.incidentCount} active OpenShift incident${this.incidentCount === 1 ? '' : 's'}`;
       button?.classList.add('has-alert');
+      button?.setAttribute('aria-label', `${this.incidentCount} active OpenShift incident${this.incidentCount === 1 ? '' : 's'} (open incidents panel)`);
     } else {
       badge.hidden = true;
       badge.textContent = '0';
       badge.title = 'No active incidents';
       button?.classList.remove('has-alert');
+      button?.setAttribute('aria-label', 'OpenShift incidents');
     }
   }
 

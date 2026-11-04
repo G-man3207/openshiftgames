@@ -82,6 +82,8 @@ export class IncidentPanel {
     this.container.id = 'incident-panel';
     this.container.className =
       'panel-side panel-left';
+    this.container.setAttribute('role', 'region');
+    this.container.setAttribute('aria-label', 'OpenShift incidents');
     this.container.innerHTML = this._buildHTML();
     document.body.appendChild(this.container);
     this._bindEvents();
@@ -244,12 +246,16 @@ export class IncidentPanel {
   // ── Incident ingestion ───────────────────────────────────────────────────
   _formatStepCommand(command, incident) {
     const target = incident.target || 'unknown';
+    // Incidents whose target is a workload expose the actual damaged Pod; real
+    // diagnostics like `oc logs <pod>` need the Pod name, not the owner name.
+    const podTarget = incident.targetPod || target;
     const namespace =
       incident.namespace ||
       window.game?.gameEngine?.currentProject ||
       window.game?.cluster?.currentProject ||
       'default';
     return String(command || '')
+      .replace(/<pod>/g, podTarget)
       .replace(new RegExp(`<(${TARGET_TOKENS.join('|')})>`, 'g'), target)
       .replace(new RegExp(`<(${NAMESPACE_TOKENS.join('|')})>`, 'g'), namespace);
   }
@@ -280,6 +286,7 @@ export class IncidentPanel {
       category: payload.category || def?.category || 'Pod',
       severity: Number(payload.severity || def?.severity || 3),
       target: payload.target || 'unknown',
+      targetPod: payload.targetPod || null,
       namespace: payload.namespace || '',
       uid: payload.uid || null,
       message: payload.description || payload.message || def?.description || 'An incident occurred',

@@ -42,6 +42,7 @@ export class ContextMenu {
     this._resetHandler = null;
     this._stoppedHandler = null;
     this._ignoreNextContextMenu = false;
+    this._opener = null;
   }
 
   init() {
@@ -269,8 +270,10 @@ export class ContextMenu {
     this.container.style.visibility = '';
 
     this.visible = true;
+    this._opener = document.activeElement;
     document.addEventListener('click', this._boundClose);
     document.addEventListener('keydown', this._boundKeydown);
+    requestAnimationFrame(() => this.container?.querySelector('[data-action-id]')?.focus?.({ preventScroll: true }));
   }
 
   hide() {
@@ -280,6 +283,10 @@ export class ContextMenu {
     this.resource = null;
     document.removeEventListener('click', this._boundClose);
     document.removeEventListener('keydown', this._boundKeydown);
+    if (this._opener && this._opener.isConnected) {
+      try { this._opener.focus({ preventScroll: true }); } catch { /* detached */ }
+    }
+    this._opener = null;
   }
 
   _onClickOutside(event) {
@@ -301,6 +308,18 @@ export class ContextMenu {
   _onKeydown(event) {
     if (event.key === 'Escape') {
       this.hide();
+      return;
+    }
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp' || event.key === 'Home' || event.key === 'End') {
+      const items = [...(this.container?.querySelectorAll('[data-action-id]') || [])];
+      if (items.length === 0) return;
+      const index = items.indexOf(document.activeElement);
+      let next = 0;
+      if (event.key === 'ArrowDown') next = index < 0 ? 0 : (index + 1) % items.length;
+      else if (event.key === 'ArrowUp') next = index < 0 ? items.length - 1 : (index - 1 + items.length) % items.length;
+      else if (event.key === 'End') next = items.length - 1;
+      event.preventDefault();
+      items[next]?.focus?.({ preventScroll: true });
       return;
     }
     if (!this.resource) return;

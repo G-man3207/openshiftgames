@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 import { RESOURCE_KINDS, normalizeKind } from '../data/kindRegistry.js';
+import { visualStatusFor } from './ResourceStatus.js';
 
 /**
  * Kind → 3D model registry for OpenShift Games — "instrument diorama" language.
@@ -89,6 +90,9 @@ const STATUS_COLORS = {
   Paused: 0xffa657,
   Degraded: 0xd73a49,
   Unavailable: 0xd73a49,
+  Rejected: 0xd73a49,
+  NotReady: 0xd73a49,
+  NotAdmitted: 0xffa657,
   default: 0x58a6ff,
 };
 
@@ -96,6 +100,7 @@ const STATUS_COLORS = {
 const PULSING_STATUSES = new Set([
   'Pending', 'New', 'Progressing', 'Updating', 'Installing', 'Suspended', 'Paused',
   'Failed', 'CrashLoop', 'CrashLoopBackOff', 'Degraded', 'Unavailable',
+  'Rejected', 'NotReady', 'NotAdmitted',
 ]);
 
 export function getStatusColor(status) {
@@ -507,17 +512,30 @@ function resourceSpec(resource) {
 }
 
 function resourceStatus(resource) {
-  const status = resource?.status;
-  if (typeof status === 'string') return status;
-  const refStatus = resource?._ref?.status;
-  if (typeof refStatus === 'string') return refStatus;
-  return status?.phase || refStatus?.phase || null;
+  // Condition-derived kinds (ClusterOperator, Route, ClusterVersion, Node) must
+  // not fall back to the often-static `status.phase`; ResourceStatus owns the rules.
+  const fallback = typeof resource?.status === 'string' ? resource.status : null;
+  return visualStatusFor(resource, fallback);
 }
 
 function replicaCount(resource, fallback = 3) {
   const spec = resourceSpec(resource);
   const value = spec.replicas ?? resource?.replicas ?? fallback;
   return Math.max(1, Math.min(Number(value) || fallback, 5));
+}
+
+/** Show/centre the pre-built replica tick marks of a Deployment model. */
+function applyReplicaMarks(group, replicas) {
+  const marks = group?.userData?.replicaMarks;
+  if (!Array.isArray(marks) || marks.length === 0) return false;
+  const count = Math.max(0, Math.min(Number(replicas) || 0, marks.length));
+  for (let i = 0; i < marks.length; i += 1) {
+    const mark = marks[i];
+    mark.visible = i < count;
+    mark.position.x = (i - (count - 1) / 2) * 0.16;
+  }
+  group.userData.replicaCount = count;
+  return true;
 }
 
 // ── Kind creators ────────────────────────────────────────────────────────────
@@ -668,15 +686,21 @@ const CREATORS = {
     // Rollout chevron.
     strap(group, 0.32, 0.03, 0.02, HUE.ice, { y: top + 0.78, z: 0.16, rz: 0.6, opacity: 0.8 });
     strap(group, 0.32, 0.03, 0.02, HUE.ice, { y: top + 0.78, z: 0.16, rz: -0.6, opacity: 0.8 });
-    // Replica tick marks.
-    for (let i = 0; i < replicas; i++) {
-      strap(group, 0.04, 0.02, 0.04, HUE.sky, {
+    // Replica tick marks. Build the full range up-front so `oc scale` can show
+    // live desired replicas; ResourceMeshFactory#updateReplicaCount adjusts them.
+    const marks = [];
+    const maxMarks = 5;
+    for (let i = 0; i < maxMarks; i++) {
+      marks.push(strap(group, 0.04, 0.02, 0.04, HUE.sky, {
         x: (i - (replicas - 1) / 2) * 0.16,
         y: top + 0.1,
         z: 0.46,
         opacity: 0.85,
-      });
+      }));
     }
+    group.userData.replicaMarks = marks;
+    group.userData.replicaCount = replicas;
+    applyReplicaMarks(group, replicas);
     return finish(group);
   },
 
@@ -1085,18 +1109,55 @@ const CREATORS = {
       y: top + 0.74, z: 0.1,
     });
     disc(group, 0.09, 0.08, MAT.bodyDark, { y: top + 0.62, z: 0.1, rx: Math.PI / 2 });
+    // Gauge scale ticks along the same arc the needle sweeps.
+    const arcPosition = (utilization) => {
+      const t = Math.max(0, Math.min(100, utilization)) / 100;
+      const theta = Math.PI * 0.25 + t * Math.PI * 1.5;
+      return { x: Math.sin(theta) * 0.64, y: top + 0.62 + Math.cos(theta) * 0.64 };
+    };
     for (let i = 0; i < 5; i++) {
       strap(group, 0.02, 0.05, 0.02, HUE.violet, {
-        x: Math.sin(Math.PI * 0.25 + (i / 4) * Math.PI * 1.5) * 0.64,
-        y: top + 0.62 + Math.cos(Math.PI * 0.25 + (i / 4) * Math.PI * 1.5) * 0.64,
+        ...arcPosition((i / 4) * 100),
         z: 0.03,
         opacity: 0.55,
       });
     }
+    // Target marker: the configured CPU target for this autoscaler.
+    const targetMarker = addMesh(group, new THREE.SphereGeometry(0.045, 10, 8), glow(HUE.amber), {
+      y: top + 0.62, z: 0.04,
+    });
+    // The renderer passes a snapshot (`resource._ref` is the live simulation
+    // object). Read the live status metrics through the ref so the gauge tracks
+    // ticks instead of being baked in at creation time.
+    const liveRef = resource?._ref || resource;
+    const currentUtilizationOf = () => {
+      const metrics = liveRef?.status?.currentMetrics;
+      const fromMetrics = Array.isArray(metrics)
+        ? metrics.find((entry) => entry?.resource?.current?.averageUtilization !== undefined)
+        : null;
+      const raw = fromMetrics?.resource?.current?.averageUtilization
+        ?? liveRef?.status?.currentCPUUtilizationPercentage
+        ?? liveRef?.currentUtilization
+        ?? liveRef?.status?.currentUtilization
+        ?? 0;
+      const value = Number(raw);
+      return Number.isFinite(value) ? Math.max(0, Math.min(100, value)) : 0;
+    };
+    const targetUtilizationOf = () => {
+      const metric = (liveRef?.spec?.metrics || [])[0];
+      const raw = metric?.resource?.target?.averageUtilization
+        ?? metric?.resource?.targetAverageUtilization
+        ?? 50;
+      const value = Number(raw);
+      return Number.isFinite(value) ? Math.max(0, Math.min(100, value)) : 50;
+    };
     group.userData.animate = (time) => {
-      const utilization = resource.currentUtilization || 50;
-      const angle = (utilization / 100) * Math.PI * 1.5 - Math.PI * 0.75;
+      const current = currentUtilizationOf();
+      const target = targetUtilizationOf();
+      const angle = (current / 100) * Math.PI * 1.5 - Math.PI * 0.75;
       needle.rotation.z = angle + Math.sin(time * 1.2) * 0.02;
+      const marker = arcPosition(target);
+      targetMarker.position.set(marker.x, marker.y, 0.04);
     };
     return finish(group);
   },
@@ -1315,6 +1376,16 @@ export class ResourceMeshFactory {
       material.color.set(statusColor);
       material.opacity = group.userData.statusBaseOpacity ?? 0.62;
     }
+  }
+
+  /**
+   * Update the replica tick marks of a Deployment-like model after `oc scale`.
+   * @param {THREE.Group} group
+   * @param {number} replicas desired replica count
+   * @returns {boolean} true when the model has updatable marks
+   */
+  updateReplicaCount(group, replicas) {
+    return applyReplicaMarks(group, replicas);
   }
 
   dispose(group) {

@@ -544,13 +544,13 @@ const CHALLENGES = [
     id: 8,
     title: 'SCC for a Privileged Workload',
     description:
-      'Admit a workload that requests elevated security with a SecurityContextConstraint: apply the privileged app manifest, grant an SCC to the secure project ServiceAccount, and resolve the SCCForbidden incident.',
+      'Admit a workload that requests elevated security with a SecurityContextConstraint: apply the privileged app manifest, grant the privileged SCC to the secure project ServiceAccount, and resolve the SCCForbidden incident. anyuid allows an arbitrary UID but NOT privileged containers — privileged: true needs the privileged SCC.',
     timeLimit: 300,
     docsLinks: [DOCS.scc, DOCS.rbac],
     objectives: [
       { type: 'deploy', kind: 'Deployment', name: 'privileged-app', namespace: 'secure', label: 'Create privileged-app in project secure' },
-      { type: 'scc', scc: 'anyuid', subject: 'system:serviceaccount:secure:default', label: 'Grant anyuid to the secure default ServiceAccount' },
-      { type: 'privileged', count: 1, label: 'Run a workload that requests privileged: true' },
+      { type: 'scc', scc: 'privileged', subject: 'system:serviceaccount:secure:default', label: 'Grant the privileged SCC to the secure default ServiceAccount' },
+      { type: 'privileged', count: 1, label: 'Get a privileged: true Pod admitted and Running' },
       { type: 'resolve', incidentType: 'SCCForbidden', count: 1, label: 'Resolve SCCForbidden' },
       {
         type: 'command',
@@ -569,10 +569,10 @@ const CHALLENGES = [
     hints: [
       'Apply the workload: oc apply -f challenges/privileged-app.yaml',
       'Check the failed Pod events: oc get pods -n secure; oc describe pod -l app=privileged-app -n secure',
-      'Grant the SCC to the project ServiceAccount: oc adm policy add-scc-to-user anyuid -z default -n secure',
-      'Confirm the SCC users list: oc get scc anyuid -o yaml',
-      'A container that sets privileged: true also needs the privileged SCC (oc adm policy add-scc-to-user privileged -z default -n secure); anyuid alone covers uid-0/anyuid requests.',
-      'Resolve the SCCForbidden incident from the incident panel to apply the admission fix.',
+      'A container that sets privileged: true needs the privileged SCC, not anyuid: oc adm policy add-scc-to-user privileged -z default -n secure',
+      'Confirm the SCC users list: oc get scc privileged -o yaml',
+      'Wait for the Pod to be admitted and Running: oc get pods -n secure -w',
+      'If the SCCForbidden incident is still open, resolve it from the incident panel once the Pod is admitted.',
     ],
   },
   {
@@ -1144,6 +1144,15 @@ class ChallengeMode {
       xpEarned: result?.xpEarned || 0,
       completionPercentage: 100,
       usedHints: this.usedHints,
+      // End-state contract for the shell (HANDOFF GAME-014): when
+      // `isLastChallenge` is true the "Next Level" button must become
+      // "Finish"/"Menu"; otherwise `nextChallenge()` advances the lab.
+      completed: true,
+      failed: false,
+      endState: 'completed',
+      isLastChallenge: this.isLastChallenge(),
+      totalChallenges: CHALLENGES.length,
+      nextChallengeId: this.nextChallengeId(),
     };
 
     this.emit('challenge:completed', data);
@@ -1180,12 +1189,36 @@ class ChallengeMode {
       console.warn('ChallengeMode: completeChallenge (timeout) failed', error);
     }
 
-    this.emit('challenge:timeout', {
+    const payload = {
+      event: 'challenge:timeout',
+      mode: 'challenge',
       challengeId: this.currentChallenge,
       title: this.currentChallengeDef?.title || null,
       completionPercentage: percentage,
       xpEarned: result?.xpEarned || 0,
-    });
+      stars: result?.stars || 0,
+      timeLimit: this.currentChallengeDef?.timeLimit || 0,
+      completionTime: Math.round(this.elapsedTime),
+      usedHints: this.usedHints,
+      // Clear failure transition: the shell should show a "timed lab failed"
+      // modal with Retry / Menu (HANDOFF GAME-013). State is already FAILED and
+      // the ticker/incident engine are stopped.
+      completed: false,
+      failed: true,
+      endState: 'failed',
+      reason: 'timeout',
+      retryable: true,
+      isLastChallenge: this.isLastChallenge(),
+      totalChallenges: CHALLENGES.length,
+      nextChallengeId: this.nextChallengeId(),
+      objectives: this.objectiveProgress.map((objective) => ({
+        label: objective.label || objective.type,
+        completed: Boolean(objective.completed),
+        current: objective.current || 0,
+        target: objective.target || 1,
+      })),
+    };
+    this.emit('challenge:timeout', payload);
 
     return result;
   }
@@ -1231,6 +1264,50 @@ class ChallengeMode {
     return this.startChallenge(1);
   }
 
+  /** Next challenge id in the catalog, or null for the last lab. */
+  nextChallengeId() {
+    const index = CHALLENGES.findIndex(
+      (challenge) => challenge.id === this.currentChallenge || String(challenge.id) === String(this.currentChallenge)
+    );
+    if (index < 0 || index + 1 >= CHALLENGES.length) return null;
+    return CHALLENGES[index + 1].id;
+  }
+
+  isLastChallenge() {
+    return this.nextChallengeId() === null;
+  }
+
+  hasNextChallenge() {
+    return this.nextChallengeId() !== null;
+  }
+
+  isCompleted() {
+    return this.state === CHALLENGE_STATE.COMPLETED;
+  }
+
+  isFailed() {
+    return this.state === CHALLENGE_STATE.FAILED;
+  }
+
+  /** True for both terminal states (completed or timed out). */
+  isFinished() {
+    return this.isCompleted() || this.isFailed();
+  }
+
+  /** Advance to the next timed lab; emits an event instead of dead-ending at the last one. */
+  nextChallenge() {
+    const nextId = this.nextChallengeId();
+    if (nextId === null) {
+      this.emit('challenge:all-complete', {
+        challengeId: this.currentChallenge,
+        totalChallenges: CHALLENGES.length,
+        message: 'All timed labs complete.',
+      });
+      return false;
+    }
+    return this.startChallenge(nextId);
+  }
+
   useHint(index) {
     const hints = this.currentChallengeDef?.hints || [];
     const hint = hints[index];
@@ -1271,6 +1348,11 @@ class ChallengeMode {
   getStatus() {
     return {
       state: this.state,
+      finished: this.isFinished(),
+      completed: this.isCompleted(),
+      failed: this.isFailed(),
+      isLastChallenge: this.isLastChallenge(),
+      hasNextChallenge: this.hasNextChallenge(),
       challengeId: this.currentChallenge,
       title: this.currentChallengeDef?.title || null,
       description: this.currentChallengeDef?.description || '',

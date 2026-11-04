@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { getStatusColor } from './ResourceMeshes.js';
+import { visualStatusFor, isAttentionStatus } from './ResourceStatus.js';
 
 /**
  * Screen-space resource labels for the 3D cluster diorama.
@@ -213,12 +214,22 @@ export class ResourceLabelLayer {
       'background:#58a6ff',
     ].join(';');
     const text = document.createElement('span');
+    const status = document.createElement('span');
+    status.style.cssText = 'margin-left:5px;color:rgba(219,227,238,0.55);font-weight:500;';
     text.textContent = group.userData?.displayName || id;
     el.appendChild(dot);
     el.appendChild(text);
+    el.appendChild(status);
     this.layer.appendChild(el);
 
-    return {
+    // Labels are the most obvious affordance on a model: make the chip clickable
+    // so it selects the resource instead of falling through to the canvas and
+    // deselecting whatever the learner was inspecting.
+    el.style.pointerEvents = 'auto';
+    el.style.cursor = 'pointer';
+    el.title = `${group.userData?.resourceKind || 'Resource'}/${group.userData?.displayName || id}`;
+
+    const record = {
       id,
       kind: group.userData?.resourceKind || 'Unknown',
       name: group.userData?.displayName || id,
@@ -228,6 +239,7 @@ export class ResourceLabelLayer {
       el,
       dot,
       text,
+      statusEl: status,
       group,
       labelY: group.userData?.labelY ?? 2.2,
       width: 0,
@@ -238,6 +250,12 @@ export class ResourceLabelLayer {
       displayed: false,
       visibleNow: false,
     };
+    el.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      this.renderer?.selectResource?.(record.id);
+    });
+    return record;
   }
 
   _measure(info) {
@@ -301,13 +319,24 @@ export class ResourceLabelLayer {
   }
 
   _syncStatus(info, group) {
-    const status = group?.userData?.status;
+    // Prefer the status the renderer derived for this group (it is refreshed
+    // every tick and includes Route endpoint refinement); fall back to deriving
+    // it from the live resource when the renderer has not pushed one yet.
+    const status = group?.userData?.status
+      || visualStatusFor(group?.userData?.resourceRef || null, null)
+      || null;
     if (info.status === status) return;
     info.status = status;
-    if (!info.dot) return;
-    const color = hexToCss(getStatusColor(status));
-    info.dot.style.background = color;
-    info.dot.style.boxShadow = 'none';
+    if (info.dot) {
+      const color = hexToCss(getStatusColor(status));
+      info.dot.style.background = color;
+      info.dot.style.boxShadow = 'none';
+    }
+    if (info.text) {
+      info.text.textContent = info.name;
+      if (info.statusEl) info.statusEl.textContent = isAttentionStatus(status) ? `· ${status}` : '';
+      info.width = 0; // re-measure: the attention suffix changes the box
+    }
   }
 
   _syncName(info, group) {
@@ -315,6 +344,7 @@ export class ResourceLabelLayer {
     if (name && info.name !== name) {
       info.name = name;
       if (info.text) info.text.textContent = name;
+      if (info.el) info.el.title = `${group?.userData?.resourceKind || info.kind}/${name}`;
       info.width = 0;
     }
   }

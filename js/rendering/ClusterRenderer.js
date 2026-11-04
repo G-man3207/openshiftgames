@@ -5,6 +5,7 @@ import { ResourceLabelLayer } from './ResourceLabels.js';
 import { ConnectionLineManager } from './ConnectionLines.js';
 import { ParticleTrafficSystem } from './ParticleTraffic.js';
 import { computeConnections } from './RelationGraph.js';
+import { visualStatusFor } from './ResourceStatus.js';
 import { RESOURCE_KINDS, paletteMeta, KIND_SECTIONS } from '../data/kindRegistry.js';
 
 /**
@@ -437,7 +438,18 @@ export class ClusterRenderer {
     this._parallaxTarget = { x: 0, y: 0 };
     this._parallaxHandler = null;
     this._refitTimer = null;
-    this.autoRefitEnabled = true;
+    // Auto-refit is opt-in: controllers create/delete Pods continuously and a
+    // camera that re-frames after every event makes the diorama impossible to
+    // inspect. Launch/auto-align/reset call fitToView explicitly; callers that
+    // really want "always fit" can invoke setAutoRefit(true).
+    this.autoRefitEnabled = false;
+    // Creation "acknowledgment" tweens are also camera automation: off by
+    // default so creating resources (oc new-app, palette) never moves the view.
+    // Creation ring pulses still run — they are local to the model.
+    this.creationFocusEnabled = false;
+    this._lastConnectionSync = 0;
+    this._lastConnections = null;
+    this._contactShadowsDirty = true;
     this._labelContext = { menuMode: false };
     this._azimuth = BASE_AZIMUTH;
     this._elevation = BASE_ELEVATION;
@@ -905,6 +917,7 @@ export class ClusterRenderer {
     }
     mesh.count = index;
     mesh.instanceMatrix.needsUpdate = true;
+    this._contactShadowsDirty = false;
   }
 
   // ── Subsystems ───────────────────────────────────────────────────────────
@@ -991,6 +1004,7 @@ export class ClusterRenderer {
         if (group) {
           group.position.x = pos.x;
           group.position.z = pos.z;
+          this._contactShadowsDirty = true;
           this.connectionLines.updatePositions(this.resourceMeshes);
           this._refreshTierBands();
         }
@@ -1135,6 +1149,19 @@ export class ClusterRenderer {
     if (statusMaterial) {
       statusMaterial.opacity = (group.userData.statusBaseOpacity ?? 0.5) * (effect === 'default' ? 1 : 1.4);
     }
+  }
+
+  /**
+   * Select a resource from outside the canvas (e.g. clicking its HTML label).
+   * @param {string} resourceId
+   * @returns {boolean} true when the resource exists and is visible
+   */
+  selectResource(resourceId) {
+    if (!resourceId || this.menuMode) return false;
+    const group = this.resourceMeshes.get(resourceId);
+    if (!group || group.visible === false) return false;
+    this._setSelected(resourceId);
+    return true;
   }
 
   /** Legacy entry point used by draw.html. */
@@ -1584,7 +1611,7 @@ export class ClusterRenderer {
    * @returns {boolean}
    */
   focusResourceBriefly(uid, options = {}) {
-    if (this.menuMode || !this.camera) return false;
+    if (this.menuMode || !this.camera || !this.creationFocusEnabled) return false;
     const group = this.resourceMeshes.get(uid);
     if (!group || group.visible === false) return false;
     if (this._focusAnimation) this._cancelFocusAnimation(false);
@@ -1695,6 +1722,9 @@ export class ClusterRenderer {
     group.userData.resourceId = id;
     group.userData.resourceType = kind;
     group.userData.resourceKind = kind;
+    // Keep the live simulation object so condition-derived status (Route
+    // admission, ClusterOperator health, ...) can be re-read on every tick.
+    group.userData.resourceRef = normalized._ref || normalized;
     group.userData.resourceNamespace = normalized.namespace || normalized._ref?.metadata?.namespace || '';
     group.position.set(resource.x || 0, resource.y || 0, resource.z || 0);
 
@@ -1758,6 +1788,7 @@ export class ClusterRenderer {
 
     this.resourceMeshes.delete(resourceId);
     this.playerCreated.delete(resourceId);
+    this._contactShadowsDirty = true;
     this._rebuildPickableList();
     this._refreshTierBands();
     this._updateContactShadows();
@@ -1778,21 +1809,54 @@ export class ClusterRenderer {
     }, 420);
   }
 
+  /** @returns {number|null} ready endpoints behind a Route, when discoverable. */
+  _routeEndpointCount(route) {
+    try {
+      const cluster = typeof window !== 'undefined' ? window.game?.cluster : null;
+      if (!route || !cluster || typeof cluster.getRouteService !== 'function') return null;
+      const service = cluster.getRouteService(route);
+      if (!service || typeof cluster.getServiceEndpoints !== 'function') return null;
+      const endpoints = cluster.getServiceEndpoints(service);
+      return Array.isArray(endpoints) ? endpoints.length : null;
+    } catch {
+      return null;
+    }
+  }
+
   updateResource(resource) {
     const id = resource.id || uidOf(resource._ref) || uidOf(resource);
     const group = this.resourceMeshes.get(id);
     if (!group) return;
 
-    if (resource.x !== undefined) group.position.x = resource.x;
-    if (resource.y !== undefined) group.position.y = resource.y;
-    if (resource.z !== undefined) group.position.z = resource.z;
+    if (resource.x !== undefined || resource.y !== undefined || resource.z !== undefined) {
+      if (resource.x !== undefined) group.position.x = resource.x;
+      if (resource.y !== undefined) group.position.y = resource.y;
+      if (resource.z !== undefined) group.position.z = resource.z;
+      this._contactShadowsDirty = true;
+    }
 
-    const status = typeof resource.status === 'string'
+    // Resolve the live object (renderer snapshots keep `_ref`) and let the shared
+    // helper decide: condition-based kinds (ClusterOperator/Route/ClusterVersion/
+    // Node) must not fall back to the often-static `status.phase`.
+    const liveRef = group.userData.resourceRef || resource._ref || null;
+    const fallback = typeof resource.status === 'string'
       ? resource.status
-      : (resource.status?.phase || resource._ref?.status?.phase);
-    if (status) {
+      : (resource.status?.phase || resource._ref?.status?.phase || null);
+    let status = visualStatusFor(liveRef || resource, fallback);
+    // An admitted Route whose Service lost its endpoints is effectively down:
+    // amber instead of green (matches the no-traffic rule in RelationGraph).
+    if (status === 'Admitted' && group.userData.resourceKind === 'Route') {
+      const endpoints = this._routeEndpointCount(liveRef);
+      if (endpoints === 0) status = 'Pending';
+    }
+    if (status && status !== group.userData.status) {
       this.meshFactory.updateStatus(group, status);
-      group.userData.status = status;
+    }
+
+    // `oc scale` / HPA changes desired replicas: refresh the baked-in marks.
+    const replicaTarget = Number(liveRef?.spec?.replicas ?? resource._ref?.spec?.replicas);
+    if (Number.isFinite(replicaTarget) && replicaTarget !== group.userData.replicaCount) {
+      this.meshFactory.updateReplicaCount(group, replicaTarget);
     }
   }
 
@@ -1895,7 +1959,18 @@ export class ClusterRenderer {
    */
   syncConnectionsFromCluster(clusterState, options = {}) {
     if (!clusterState) return new Map();
+    // `index.html` calls this from every simulation tick (20 Hz). Rebuilding the
+    // whole relationship graph that often is pure CPU churn; the graph only needs
+    // to be a few hundred ms fresh for the lines/particles to look live. Callers
+    // that need an immediate rebuild (launch, auto-align) can pass { force: true }.
+    const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
+    const throttleMs = options.throttleMs ?? 250;
+    if (!options.force && this._lastConnections && now - this._lastConnectionSync < throttleMs) {
+      return this._lastConnections;
+    }
+    this._lastConnectionSync = now;
     const connections = computeConnections(clusterState, options);
+    this._lastConnections = connections;
     this.connectionLines.sync(connections, this.resourceMeshes);
     return connections;
   }
@@ -2177,12 +2252,10 @@ export class ClusterRenderer {
     const radius = Math.max(6, sphere.radius);
 
     // Keep content clear of the HUD (top) and command toolbar (bottom); in the
-    // start-page hero there are no overlays, so use the whole frame. When a
-    // presentation filter is active (clean session / Mine / Platform hidden) the
-    // palette dock is part of the safe area, so the working set is centred in the
-    // visible canvas instead of hiding behind it.
-    const presentationActive = this.highlightMine || (this.platformUids.size > 0 && !this.platformRevealed);
-    const leftInset = presentationActive ? this._uiLeftInset() : 0;
+    // start-page hero there are no overlays, so use the whole frame. The resource
+    // palette dock is part of the safe area in every non-menu view (it overlays
+    // the canvas in sandbox/chaos too), so always reserve its measured width.
+    const leftInset = this.menuMode ? 0 : this._uiLeftInset();
     const baseInsets = this.menuMode
       ? { top: 0, bottom: 0, left: 0, right: 0 }
       : { top: 52, bottom: 58, left: leftInset, right: 0 };
@@ -2363,6 +2436,11 @@ export class ClusterRenderer {
   /** Enable/disable the debounced auto-refit after resource changes. */
   setAutoRefit(enabled) {
     this.autoRefitEnabled = Boolean(enabled);
+  }
+
+  /** Enable/disable the transient creation-focus camera tween (off by default). */
+  setCreationFocus(enabled) {
+    this.creationFocusEnabled = Boolean(enabled);
   }
 
   // ── Resize ───────────────────────────────────────────────────────────────
@@ -2726,7 +2804,10 @@ export class ClusterRenderer {
         group.userData.animate(time, delta);
       }
     }
-    this._updateContactShadows();
+    // The instanced contact-shadow buffer only needs a rewrite when something
+    // moved (add/remove/drag/presentation); rebuilding 512 matrices every frame
+    // was pure CPU churn.
+    if (this._contactShadowsDirty) this._updateContactShadows();
   }
 
   // ── Picking helpers ──────────────────────────────────────────────────────

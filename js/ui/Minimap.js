@@ -57,6 +57,8 @@ export class Minimap {
     this.container = document.createElement('div');
     this.container.id = 'minimap';
     this.container.className = 'fixed bottom-4 right-4 z-20';
+    this.container.setAttribute('role', 'region');
+    this.container.setAttribute('aria-label', 'Cluster map');
     this.container.innerHTML = this._buildHTML();
     document.body.appendChild(this.container);
 
@@ -72,7 +74,7 @@ export class Minimap {
       <div class="backdrop-blur-xl bg-white/5 border border-white/10 rounded-lg overflow-hidden shadow-xl" style="width: ${MINIMAP_WIDTH}px; height: 140px;">
         <div class="flex items-center justify-between px-2 py-1 border-b border-white/5">
           <span class="text-white/30 text-[10px] font-mono">Cluster Map</span>
-          <button id="minimap-toggle" class="text-white/20 hover:text-white/40 text-[10px] transition-colors">-</button>
+          <button id="minimap-toggle" class="text-white/20 hover:text-white/40 text-[10px] transition-colors" type="button" aria-label="Collapse cluster map" aria-expanded="true">-</button>
         </div>
         <canvas id="minimap-canvas" style="width: ${MINIMAP_WIDTH}px; height: ${MINIMAP_HEIGHT}px;"></canvas>
       </div>
@@ -98,9 +100,13 @@ export class Minimap {
         body.style.display = '';
         this.container.querySelector('div').style.height = '';
         document.getElementById('minimap-toggle').textContent = '-';
+        document.getElementById('minimap-toggle').setAttribute('aria-label', 'Collapse cluster map');
+        document.getElementById('minimap-toggle').setAttribute('aria-expanded', 'true');
       } else {
         body.style.display = 'none';
         document.getElementById('minimap-toggle').textContent = '+';
+        document.getElementById('minimap-toggle').setAttribute('aria-label', 'Expand cluster map');
+        document.getElementById('minimap-toggle').setAttribute('aria-expanded', 'false');
       }
     });
 

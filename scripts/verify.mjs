@@ -444,9 +444,14 @@ if (seedMod?.ClusterState) {
         if (['restricted-v2', 'nonroot-v2'].includes(name) && !groups.includes('system:authenticated')) {
           fail('seed', `SCC ${name}: groups must include system:authenticated`);
         }
-        if (['anyuid', 'privileged'].includes(name)) {
-          const users = scc.users || scc.spec?.users || [];
-          if (users.length) fail('seed', `SCC ${name}: must start with no users`);
+        // OCP 4.22 ships API-shaped default SCCs: `privileged` is granted to
+        // system:admin / the build controller and to cluster-admins/nodes/masters,
+        // while `anyuid` starts with no users (only system:cluster-admins).
+        const users = scc.users || scc.spec?.users || [];
+        if (name === 'anyuid' && users.length) fail('seed', 'SCC anyuid: must start with no users');
+        if (name === 'privileged') {
+          if (!(scc.allowPrivilegedContainer || scc.spec?.allowPrivilegedContainer)) fail('seed', 'SCC privileged: allowPrivilegedContainer must be true');
+          if (!users.includes('system:admin')) fail('seed', 'SCC privileged: real 4.22 default grants the system:admin user');
         }
       }
     }
@@ -466,11 +471,24 @@ if (seedMod?.ClusterState) {
       const is = imageStreams.find((i) => i.metadata?.name === name);
       return (is?.spec?.tags || is?.status?.tags || []).map((t) => t.name || t.tag);
     };
-    for (const [name, tags] of [['nodejs', ['20', '18']], ['python', ['3.12']], ['nginx', ['1.26']]]) {
+    for (const [name, tags] of [['nodejs', ['20-ubi9', '22-ubi9']], ['python', ['3.12-ubi9']], ['nginx', ['1.26-ubi9']]]) {
       if (!imageStreams.some((is) => is.metadata?.name === name)) fail('seed', `ImageStream openshift/${name} missing`);
       for (const tag of tags) {
         if (!tagNames(name).includes(tag)) fail('seed', `ImageStream openshift/${name}: tag ${tag} missing`);
       }
+    }
+
+    // A fresh OCP 4.22 cluster stores no project template; the template is
+    // opt-in via `oc adm create-bootstrap-project-template` + project.config.
+    const projectTemplates = byKind('Template').filter((t) => (t.metadata?.namespace || '') === 'openshift-config');
+    if (projectTemplates.length) fail('seed', `fresh cluster must not seed project templates in openshift-config (found ${projectTemplates.map((t) => t.metadata?.name).join(', ')})`);
+    if (typeof cluster.getProjectConfig !== 'function') fail('seed', 'ClusterState.getProjectConfig() missing (project.config.openshift.io/cluster singleton)');
+    else {
+      const projectConfig = cluster.getProjectConfig();
+      if (projectConfig?.apiVersion !== 'config.openshift.io/v1' || projectConfig?.kind !== 'Project' || projectConfig?.metadata?.name !== 'cluster') {
+        fail('seed', 'project.config.openshift.io/cluster singleton has the wrong shape');
+      }
+      if (typeof cluster.updateProjectConfig !== 'function') fail('seed', 'ClusterState.updateProjectConfig() missing');
     }
 
     if (typeof cluster.addResource !== 'function') fail('seed', 'ClusterState.addResource() missing');
@@ -1147,10 +1165,10 @@ if (manifestFiles) {
     'kustomize/overlays/dev/kustomization.yaml', 'kustomize/overlays/prod/kustomization.yaml',
     'templates/webapp-template.yaml', 'helm/webapp/Chart.yaml', 'helm/webapp/values.yaml',
     'helm/webapp/templates/deployment.yaml', 'helm/webapp/templates/service.yaml', 'htpasswd',
-    'examples/quota.yaml', 'examples/limitrange.yaml', 'examples/subscription.yaml', 'examples/buildconfig.yaml',
+    'examples/quota.yaml', 'examples/limitrange.yaml', 'examples/privileged-deployment.yaml', 'examples/subscription.yaml', 'examples/buildconfig.yaml',
   ];
   for (const file of requiredManifests) if (!(file in manifestFiles)) fail('yaml', `default manifest file missing: ${file}`);
-  if (keys.length !== 19) warn('yaml', `expected 19 default manifest files, found ${keys.length}`);
+  if (keys.length < 19) warn('yaml', `expected at least 19 default manifest files, found ${keys.length}`);
   if (parserMod?.parseYaml) {
     for (const file of keys) {
       if (file === 'htpasswd' || file.includes('kustomization') || file.includes('Chart.yaml') || file.includes('values.yaml')) continue;
@@ -1250,6 +1268,11 @@ if (!/helm/.test(commandBarSrc)) fail('cli', 'CommandBar does not support helm')
 if (!/processTemplate|_cmdProcess/.test(commandBarSrc)) fail('cli', 'CommandBar does not support oc process');
 if (!/can-i|_cmdAuth/.test(commandBarSrc)) fail('cli', 'CommandBar does not support oc auth can-i');
 if (!/add-scc-to-user/.test(commandBarSrc)) fail('cli', 'CommandBar does not support add-scc-to-user');
+if (!/create-bootstrap-project-template/.test(commandBarSrc)) fail('cli', 'CommandBar does not support oc adm create-bootstrap-project-template');
+if (!/_cmdExtract|oc extract|extractSecret/.test(commandBarSrc)) fail('cli', 'CommandBar does not support oc extract');
+if (!/_setData|set data/.test(commandBarSrc)) fail('cli', 'CommandBar does not support oc set data');
+if (!/project\.config\.openshift\.io|projectConfig/i.test(commandBarSrc)) fail('cli', 'CommandBar does not support project.config.openshift.io');
+if (!/verb/.test(commandBarSrc) || !/resource-name/.test(commandBarSrc)) fail('cli', 'Handler for oc create role --verb/--resource flags missing');
 note('CommandBar: API + required command paths present');
 
 const expectedIndexIds = [

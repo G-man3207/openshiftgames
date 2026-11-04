@@ -573,7 +573,7 @@ export class ExamPrepUI {
             <div class="ep-subtitle">
               EX280V422 · OpenShift ${escapeHtml(EX280_EXAM_FACTS.ocpVersion)} ·
               ${escapeHtml(String(EX280_EXAM_FACTS.durationHours))} h performance-based ·
-              ${escapeHtml(String(EX280_OBJECTIVE_COUNT))} objectives in ${escapeHtml(String(EX280_OBJECTIVE_GROUPS.length))} groups
+              ${escapeHtml(String(EX280_OBJECTIVE_COUNT))} bullet points in ${escapeHtml(String(EX280_OBJECTIVE_GROUPS.length))} groups
             </div>
             <div class="ep-note">
               LMS objectives PDF name: Red Hat Certified Specialist in OpenShift Administration ·
@@ -598,7 +598,7 @@ export class ExamPrepUI {
 
         <div class="ep-progress-row">
           <div class="ep-progress-meta" data-testid="exam-prep-progress">
-            <span id="ep-progress-label"><strong>0 / ${escapeHtml(String(EX280_OBJECTIVE_COUNT))}</strong> objectives mastered</span>
+            <span id="ep-progress-label"><strong>0 / ${escapeHtml(String(EX280_OBJECTIVE_COUNT))}</strong> bullets mastered</span>
           </div>
           <div class="ep-progress-track" role="progressbar" aria-valuemin="0" aria-valuemax="${escapeHtml(String(EX280_OBJECTIVE_COUNT))}" aria-valuenow="0">
             <div class="ep-progress-fill" id="ep-progress-fill"></div>
@@ -611,7 +611,7 @@ export class ExamPrepUI {
             <div class="ep-toolbar">
               <input type="search" class="ep-search" id="ep-objective-search"
                 placeholder="Search objectives, commands or topics…" autocomplete="off" spellcheck="false" aria-label="Search objectives" />
-              <span class="ep-hint">Mastered = linked level/challenge completed, or a quick lab marked complete.</span>
+              <span class="ep-hint">Mastered = a linked level/challenge is completed, or the quick lab is marked complete.</span>
             </div>
             <div id="ep-objectives-list"></div>
           </section>
@@ -888,7 +888,7 @@ export class ExamPrepUI {
     this._renderAll();
     const lab = EX280_QUICK_LABS.find((entry) => entry.id === labId);
     const label = lab ? lab.title : objectiveId;
-    const message = `Marked “${label}” complete (${this.getProgressSummary().mastered}/${EX280_OBJECTIVE_COUNT} objectives mastered).`;
+    const message = `Marked “${label}” complete (${this.getProgressSummary().mastered}/${EX280_OBJECTIVE_COUNT} bullets mastered).`;
     this._liveMessage(message);
     try {
       this._app()?._showToast?.(message);
@@ -1193,14 +1193,14 @@ export class ExamPrepUI {
   _renderProgress() {
     const snapshot = this._computeSnapshot();
     if (this.progressFill) this.progressFill.style.width = `${snapshot.percent}%`;
-    if (this.progressLabel) this.progressLabel.innerHTML = `<strong>${snapshot.masteredCount} / ${EX280_OBJECTIVE_COUNT}</strong> objectives mastered · ${snapshot.percent}%`;
+    if (this.progressLabel) this.progressLabel.innerHTML = `<strong>${snapshot.masteredCount} / ${EX280_OBJECTIVE_COUNT}</strong> bullets mastered · ${snapshot.percent}%`;
     if (this.readinessBadge) {
       const ready = snapshot.ready;
       const almost = !ready && snapshot.percent >= 60;
       this.readinessBadge.classList.toggle('is-ready', ready);
       this.readinessBadge.classList.toggle('is-close', almost);
-      this.readinessBadge.textContent = ready ? 'Exam ready' : almost ? 'Almost there' : 'Keep going';
-      this.readinessBadge.title = `Readiness threshold: ${Math.round(EX280_READINESS_THRESHOLD * 100)}% of objectives mastered`;
+      this.readinessBadge.textContent = ready ? 'Exam-ready coverage' : almost ? 'Almost there' : 'Keep going';
+      this.readinessBadge.title = `Coverage threshold: ${Math.round(EX280_READINESS_THRESHOLD * 100)}% of bullets have a linked drill completed — tracked study coverage, not a Red Hat pass prediction.`;
     }
     const track = this.overlay?.querySelector('.ep-progress-track');
     if (track) track.setAttribute('aria-valuenow', String(snapshot.masteredCount));
@@ -1242,7 +1242,7 @@ export class ExamPrepUI {
     if (hint && query) {
       hint.textContent = `${visibleCount} of ${EX280_OBJECTIVE_COUNT} objectives match “${query}”.`;
     } else if (hint) {
-      hint.textContent = 'Mastered = linked level/challenge completed, or a quick lab marked complete.';
+      hint.textContent = 'Mastered = a linked level/challenge is completed, or the quick lab is marked complete.';
     }
   }
 

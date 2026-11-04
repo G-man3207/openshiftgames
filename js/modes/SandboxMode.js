@@ -21,6 +21,12 @@ import {
   toManifestObject,
   toManifestYAML,
 } from '../data/kindRegistry.js';
+import { MANIFEST_FILES } from '../data/ManifestFiles.js';
+import {
+  createObjectiveProgress,
+  evaluateObjectives,
+  getObjectiveSummary,
+} from '../engine/ObjectiveEvaluator.js';
 
 const SANDBOX_STATE = {
   IDLE: 'idle',
@@ -43,6 +49,8 @@ class SandboxMode {
     this.architectureScore = null;
     this.autoScoreInterval = null;
     this.nodeCount = 0;
+    /** Active EX280 quick lab (seeded via setupQuickLab from EX280 Prep). */
+    this.quickLab = null;
   }
 
   start(initialNodes) {
@@ -51,6 +59,7 @@ class SandboxMode {
     this.elapsedTime = 0;
     this.resourceCount = 0;
     this.architectureScore = null;
+    this.quickLab = null;
     this.nodeCount = Math.max(1, Number(initialNodes) || 3);
 
     this.setupCluster(this.nodeCount);
@@ -143,11 +152,16 @@ class SandboxMode {
       this.resourceCount = allResources.length;
     }
 
+    this._updateQuickLab();
+
     this.gameEngine?.emit?.('sandbox:update', {
       elapsedTime: Math.round(this.elapsedTime),
       resourceCount: this.resourceCount,
       nodeCount: this.nodeCount,
       architectureScore: this.architectureScore ? this.architectureScore.total : null,
+      quickLab: this.quickLab
+        ? { id: this.quickLab.id, title: this.quickLab.title, completed: this.quickLab.completed, summary: getObjectiveSummary(this.quickLab.progress) }
+        : null,
     });
   }
 
@@ -235,6 +249,146 @@ class SandboxMode {
       return true;
     }
     return false;
+  }
+
+  /**
+   * Seed an EX280 Prep "quick lab" into the live sandbox and track its check
+   * objectives. Called by ExamPrepMode after it launches the sandbox:
+   *   app.modeInstance.setupQuickLab(lab)
+   * The lab's `check` array is evaluated every second; when every check passes
+   * the linked EX280 objective is marked mastered (`scoring.markExamPrep`).
+   *
+   * @param {{id: string, title: string, objectiveId: string, setup?: {startingResources?: object[], manifestFiles?: string[]}, check?: object[]}} lab
+   * @returns {boolean}
+   */
+  setupQuickLab(lab) {
+    if (!lab || !lab.id) return false;
+    const clusterState = this.gameEngine?.cluster;
+    this.quickLab = {
+      id: lab.id,
+      title: lab.title || lab.id,
+      objectiveId: lab.objectiveId || null,
+      check: Array.isArray(lab.check) ? lab.check : [],
+      progress: createObjectiveProgress(Array.isArray(lab.check) ? lab.check : []),
+      completed: false,
+      startedAt: Date.now(),
+    };
+
+    // Seed starting resources (Projects first so namespaced objects resolve).
+    const resources = Array.isArray(lab.setup?.startingResources) ? lab.setup.startingResources : [];
+    const ordered = [
+      ...resources.filter((resource) => resource && resource.kind === 'Project'),
+      ...resources.filter((resource) => resource && resource.kind !== 'Project'),
+    ];
+    const defaultProject = ordered.find((resource) => resource.kind === 'Project')?.name
+      || this.gameEngine?.currentProject
+      || 'default';
+    for (const descriptor of ordered) {
+      try {
+        const namespace = descriptor.namespace
+          || descriptor.metadata?.namespace
+          || (descriptor.kind === 'Project' ? '' : defaultProject);
+        const added = clusterState?.addResource({
+          kind: descriptor.kind,
+          name: descriptor.name,
+          namespace,
+          labels: { app: descriptor.name, ...(descriptor.labels || {}) },
+          annotations: descriptor.annotations || {},
+          spec: descriptor.spec || {},
+          status: descriptor.kind === 'Project' ? { phase: 'Active', ...(descriptor.status || {}) } : (descriptor.status || {}),
+        });
+        if (added && descriptor.kind === 'Project' && typeof clusterState.ensureProjectDefaults === 'function') {
+          clusterState.ensureProjectDefaults(added);
+        }
+      } catch (error) {
+        console.warn(`SandboxMode: quick lab could not seed ${descriptor?.kind}/${descriptor?.name}`, error);
+      }
+    }
+
+    // Make sure the lab's referenced manifest files exist in the virtual FS.
+    const manifestEngine = this.gameEngine?.manifestEngine
+      || (typeof window !== 'undefined' ? window.game?.manifestEngine : null);
+    for (const path of Array.isArray(lab.setup?.manifestFiles) ? lab.setup.manifestFiles : []) {
+      try {
+        if (!manifestEngine || typeof manifestEngine.writeFile !== 'function') break;
+        if (typeof manifestEngine.readFile === 'function' && typeof manifestEngine.readFile(path) === 'string') continue;
+        const content = MANIFEST_FILES?.[path];
+        if (typeof content === 'string') manifestEngine.writeFile(path, content);
+      } catch {
+        /* virtual FS is optional */
+      }
+    }
+
+    this.gameEngine?.emit?.('quicklab:started', {
+      labId: this.quickLab.id,
+      title: this.quickLab.title,
+      objectiveId: this.quickLab.objectiveId,
+      check: this.quickLab.check,
+      startingResources: (lab.setup?.startingResources || []).map((resource) => ({ kind: resource.kind, name: resource.name, namespace: resource.namespace })),
+      manifestFiles: lab.setup?.manifestFiles || [],
+      steps: lab.steps || [],
+    });
+    return true;
+  }
+
+  /** @returns {{id:string,title:string,objectiveId:string|null,completed:boolean,checks:object[]}|null} */
+  getQuickLabStatus() {
+    if (!this.quickLab) return null;
+    return {
+      id: this.quickLab.id,
+      title: this.quickLab.title,
+      objectiveId: this.quickLab.objectiveId,
+      completed: this.quickLab.completed,
+      checks: this.quickLab.progress.map((objective) => ({
+        type: objective.type,
+        label: objective.label || objective.type,
+        completed: Boolean(objective.completed),
+        current: objective.current || 0,
+        target: objective.target || 1,
+      })),
+      summary: getObjectiveSummary(this.quickLab.progress),
+    };
+  }
+
+  /** Evaluate quick-lab check objectives; mark the linked EX280 bullet mastered. */
+  _updateQuickLab() {
+    const lab = this.quickLab;
+    if (!lab || lab.completed || lab.progress.length === 0) return;
+    const context = {
+      clusterState: this.gameEngine?.cluster || null,
+      gameEngine: this.gameEngine || null,
+      scoringEngine: this.scoringEngine || null,
+      manifestEngine: this.gameEngine?.manifestEngine || null,
+      incidentEngine: (typeof window !== 'undefined' ? window.game?.incidentEngine : null) || null,
+      objectiveProgress: lab.progress,
+      levelDef: null,
+    };
+    try {
+      evaluateObjectives(lab.check, context, { progress: lab.progress });
+    } catch (error) {
+      console.warn('SandboxMode: quick lab check evaluation failed', error);
+      return;
+    }
+    const summary = getObjectiveSummary(lab.progress);
+    if (!summary.allCompleted) return;
+    lab.completed = true;
+    lab.completedAt = Date.now();
+    let marked = null;
+    try {
+      if (lab.objectiveId && typeof this.scoringEngine?.markExamPrep === 'function') {
+        marked = this.scoringEngine.markExamPrep(lab.objectiveId, 'mastered');
+      }
+    } catch (error) {
+      console.warn('SandboxMode: could not mark quick lab objective', error);
+    }
+    this.gameEngine?.emit?.('quicklab:completed', {
+      labId: lab.id,
+      title: lab.title,
+      objectiveId: lab.objectiveId,
+      checks: this.getQuickLabStatus()?.checks || [],
+      marked,
+      message: `Quick lab complete: ${lab.title}. Objective ${lab.objectiveId || ''} marked mastered.`,
+    });
   }
 
   getArchitectureScore() {
@@ -349,6 +503,7 @@ class SandboxMode {
   exit() {
     this.stopTicking();
     this.state = SANDBOX_STATE.IDLE;
+    this.quickLab = null;
     this.gameEngine?.emit?.('sandbox:exited', {});
   }
 

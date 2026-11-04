@@ -75,6 +75,69 @@ export function isFlatKind(kind) {
   return Object.prototype.hasOwnProperty.call(FLAT_KINDS, kind);
 }
 
+// ─── API view metadata (for `oc get -o yaml/json`, not for apply-clean export) ──
+
+/**
+ * Kinds that have no `status` subresource in the real API. `oc get -o yaml`
+ * output must not invent a status block for them; the simulator's status
+ * skeleton (`phase/conditions/observedGeneration`) is internal bookkeeping.
+ * (Ingress is listed per the audit: the simulated Ingress status is simulator
+ * state, not the OCP ingress-controller status.)
+ */
+export const NO_STATUS_KINDS = Object.freeze(
+  new Set([
+    'ConfigMap',
+    'Secret',
+    'ServiceAccount',
+    'Role',
+    'ClusterRole',
+    'RoleBinding',
+    'ClusterRoleBinding',
+    'NetworkPolicy',
+    'LimitRange',
+    'Template',
+    'Ingress',
+    'Endpoints',
+    'StorageClass',
+    'User',
+    'Group',
+    'Identity',
+    'SecurityContextConstraints',
+    'IPAddressPool',
+    'L2Advertisement',
+  ])
+);
+
+/** True when the real API serves a `status` subresource for this kind. */
+export function kindHasStatus(kind) {
+  return !NO_STATUS_KINDS.has(kind);
+}
+
+/**
+ * Kinds where real objects carry `metadata.generation` (controllers/spec
+ * resources). Other kinds (ConfigMap, Secret, Pod, RBAC, ...) do not.
+ */
+export const GENERATION_KINDS = Object.freeze(
+  new Set([
+    'Deployment',
+    'ReplicaSet',
+    'StatefulSet',
+    'DaemonSet',
+    'Job',
+    'CronJob',
+    'HorizontalPodAutoscaler',
+    'PodDisruptionBudget',
+    'BuildConfig',
+    'Build',
+    'ImageStream',
+    'Route',
+    'ClusterResourceQuota',
+    'ResourceQuota',
+    'ClusterVersion',
+    'ClusterOperator',
+  ])
+);
+
 // ─── Basic helpers ──────────────────────────────────────────────────────────
 
 /** @param {*} value @returns {*} */
@@ -184,15 +247,24 @@ export function normalizeManifestObject(manifest = {}) {
 }
 
 /**
- * Build an apply-clean manifest object from a resource instance (or a plain
+ * Build a manifest object from a resource instance (or a plain
  * `{kind, apiVersion, metadata, spec, status}` object).
  *
- * Deterministic output: top-level keys are apiVersion → kind → metadata →
- * (kind payload) → status; label/annotation keys and any extra fields are
- * sorted; resources never expose simulator UIDs/timestamps/resourceVersions.
+ * Default behaviour is **apply-clean** (used by the Files/YAML exporters):
+ * deterministic output apiVersion → kind → metadata → (kind payload) → status;
+ * label/annotation keys and any extra fields are sorted; simulator-only
+ * metadata (uid, creationTimestamp, resourceVersion, generation,
+ * ownerReferences, finalizers) is never exposed and `status` only appears when
+ * `opts.includeStatus` is set.
+ *
+ * `opts.apiView` produces a **real-API-shaped view** for `oc get -o yaml/json`:
+ * the stored objectMeta (uid, creationTimestamp, resourceVersion, generation,
+ * deletionTimestamp, ownerReferences, finalizers) is kept and `status` is
+ * emitted only for kinds that actually have a status subresource
+ * (see NO_STATUS_KINDS). Callers that need apply-clean output must not pass it.
  *
  * @param {object} resource
- * @param {{includeStatus?: boolean}} [opts]
+ * @param {{includeStatus?: boolean, apiView?: boolean, includeObjectMeta?: boolean}} [opts]
  * @returns {object}
  */
 export function toManifestObject(resource, opts = {}) {
@@ -201,12 +273,26 @@ export function toManifestObject(resource, opts = {}) {
   const apiVersion = resource.apiVersion || 'v1';
   const md = isPlainObject(resource.metadata) ? resource.metadata : {};
   const spec = isPlainObject(resource.spec) ? resource.spec : {};
+  const apiView = opts.apiView === true || opts.includeObjectMeta === true;
 
   const metadata = { name: md.name || 'unnamed' };
   const namespace = md.namespace || '';
   if (namespace) metadata.namespace = namespace;
   if (hasKeys(md.labels)) metadata.labels = sortObjectKeys(deepClone(md.labels));
   if (hasKeys(md.annotations)) metadata.annotations = sortObjectKeys(deepClone(md.annotations));
+  if (apiView) {
+    if (md.uid) metadata.uid = String(md.uid);
+    if (md.creationTimestamp) metadata.creationTimestamp = md.creationTimestamp;
+    if (md.resourceVersion) metadata.resourceVersion = String(md.resourceVersion);
+    if (md.deletionTimestamp) metadata.deletionTimestamp = md.deletionTimestamp;
+    if (md.generation && GENERATION_KINDS.has(kind)) metadata.generation = md.generation;
+    if (Array.isArray(md.ownerReferences) && md.ownerReferences.length > 0) {
+      metadata.ownerReferences = deepClone(md.ownerReferences);
+    }
+    if (Array.isArray(md.finalizers) && md.finalizers.length > 0) {
+      metadata.finalizers = deepClone(md.finalizers);
+    }
+  }
 
   /** @type {Record<string, any>} */
   const obj = { apiVersion, kind, metadata };
@@ -228,7 +314,10 @@ export function toManifestObject(resource, opts = {}) {
     obj.spec = deepClone(spec);
   }
 
-  if (opts.includeStatus && isPlainObject(resource.status)) {
+  // In apiView mode status is part of the real object only for kinds that have
+  // a status subresource; otherwise it is simulator bookkeeping and is hidden.
+  const wantStatus = opts.apiView === true ? kindHasStatus(kind) : Boolean(opts.includeStatus);
+  if (wantStatus && isPlainObject(resource.status)) {
     obj.status = deepClone(resource.status);
   }
   return obj;
@@ -404,7 +493,7 @@ export function stringifyYAML(value) {
 /**
  * Serialise a resource (or plain manifest object) to a YAML string.
  * @param {object} resource
- * @param {{includeStatus?: boolean, trailingNewline?: boolean}} [opts]
+ * @param {{includeStatus?: boolean, apiView?: boolean, includeObjectMeta?: boolean, trailingNewline?: boolean}} [opts]
  * @returns {string}
  */
 export function toManifestYAML(resource, opts = {}) {
@@ -459,7 +548,10 @@ export function describeResource(resource) {
 
 export default {
   FLAT_KINDS,
+  NO_STATUS_KINDS,
+  GENERATION_KINDS,
   isFlatKind,
+  kindHasStatus,
   isPlainObject,
   deepClone,
   deepMerge,

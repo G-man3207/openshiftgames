@@ -17,7 +17,9 @@ docs (architecture map, conversion spec, declarative engine, research notes, ver
 [`docs/`](docs/).
 
 Target platform: **Red Hat OpenShift Container Platform 4.22** (Kubernetes 1.35, CRI-O) · Exam: **EX280V422**
-(Red Hat Certified Specialist in OpenShift Administration).
+(“Red Hat Certified System Administrator in OpenShift exam” on redhat.com; the LMS objectives PDF lists
+the credential as “Red Hat Certified Specialist in OpenShift Administration” — same objectives, both
+names are shown in EX280 Prep).
 
 ![OpenShift Games — 3D OpenShift cluster simulation in the browser](screenshot.png)
 
@@ -48,7 +50,8 @@ Target platform: **Red Hat OpenShift Container Platform 4.22** (Kubernetes 1.35,
   evaluation (`oc auth can-i`, `oc adm policy add-role-to-user`), SCC grants
   (`oc adm policy add-scc-to-user`), privileged-pod denial with real `Forbidden` semantics.
 - **Quotas & self-service** — Namespace/Project quotas, LimitRanges, ClusterResourceQuota, project
-  templates and self-provisioner concepts.
+  templates (`oc adm create-bootstrap-project-template` + `project.config.openshift.io/cluster`) and
+  self-provisioner concepts.
 - **Operators (OLM)** — Subscriptions install through CSV phases (`Installing → Succeeded`), then
   affect the cluster (e.g. MetalLB provides LoadBalancer IPs); uninstall by deleting the Subscription.
 - **20-level EX280 campaign (5 chapters)** — Manage OpenShift → Declarative & Kustomize →
@@ -58,7 +61,7 @@ Target platform: **Red Hat OpenShift Container Platform 4.22** (Kubernetes 1.35,
   Kustomize prod overlay, source-to-image, quota guardrail, RBAC onboarding, SCC, network isolation,
   operator install, HTPasswd onboarding and an EX280 speed run.
 - **EX280 Prep mode** — objective tracker for the official EX280V422 objective groups (with Red Hat
-  docs links), quick command labs, a searchable `oc` cheat sheet, exam facts and a readiness verdict.
+  docs links), quick command labs, a searchable `oc` cheat sheet, exam facts and a study-coverage verdict.
 - **Chaos mode** — endless incident survival; **Sandbox** — free build scored 0–100 by the
   Architecture Advisor (HA, security, networking, storage, scaling, RBAC, quotas, probes, config, cost).
 - **A start page worth opening** — a dark, premium landing screen with the live 3D cluster in the
@@ -93,41 +96,45 @@ Target platform: **Red Hat OpenShift Container Platform 4.22** (Kubernetes 1.35,
 | Input | Action |
 |-------|--------|
 | `/` | `oc` command bar |
-| `F` | Files / manifests panel (`apply -f`, `apply -k`, templates, Helm) |
+| `F` | Files / manifests panel (`apply -f`, `apply -k`, templates, Helm; New/Import/Delete files) |
 | `?` | EX280 Prep (objective tracker, quick labs, cheat sheet) |
 | `H` | Help / How to play |
 | `Space` | Pause / resume the simulation |
 | `M` | Metrics dashboard |
-| `Esc` | Close panel / open the pause menu (Resume, Restart, Main menu) |
-| `1–9` | Quick-select a palette resource |
+| `Esc` | Close the topmost panel/overlay; with nothing open, open the pause menu (Resume, Restart level, Main menu) |
+| `1–9` | Quick-place a resource from the palette (opens the name prompt) |
 | Left-click | Select resource |
 | Left-drag | Move resource or rotate camera |
 | Right-click | Context menu (Expose, Start Build, Scale, Rollout, Delete, …) |
 | Right-drag | Pan camera |
 | Scroll | Zoom |
 
-Bottom toolbar: **Auto-Align** | **Reset View** | **YAML** | **Files** | **EX280** | **Help**.
+Bottom toolbar: **Auto-align** | **Reset view** | **Terminal** | **Files** | **YAML** | **EX280** | **Help**.
 
 ---
 
 ## EX280 coverage
 
-The game is organised around the official EX280V422 objective groups. Every campaign level maps to
-one or more exam objectives (level/challenge data carries `examObjectives` and `docsLinks`; the
-in-app EX280 Prep tracker shows per-bullet coverage).
+The game is organised around the official EX280V422 objective groups. Campaign level data carries
+`examObjectives` and `docsLinks`; challenges and quick labs carry docs links; the in-app EX280 Prep
+tracker maps every bullet to its campaign levels, timed labs and quick labs. The table below is
+derived from that same data (9 objective groups, 55 bullets; *timed labs* are the 12 challenge drills):
 
-| EX280V422 objective group | Where it is practiced | Campaign chapter / labs |
-|---|---|---|
-| Manage OpenShift Container Platform (projects, `oc` CLI, querying, health) | Campaign ch. 1, Sandbox, `oc` terminal | Levels 1–4; Lab 1 |
-| Declarative resource management (manifests, Kustomize, Helm, templates) | Files panel, `oc apply -f/-k`, `oc process`, `helm` | Levels 4–8 |
-| Deploy applications (images, builds, ImageStreams, rollouts, scaling) | Builds/ImageStream controllers, `oc new-app`, `oc start-build`, `oc rollout` | Levels 9–10; Labs 3–5 |
-| Manage authentication and authorization (HTPasswd, users, groups, RBAC) | `oc login`, users/groups, `oc adm policy`, `oc auth can-i` | Levels 13–16; Labs 7–8, 11 |
-| Configure network security (Services, Routes, NetworkPolicy, non-HTTP/SNI) | Route admission, TLS edge/passthrough, default-deny NetworkPolicy | Levels 11–12; Labs 2–3, 9 |
-| Expose non-HTTP / SNI applications | passthrough/reencrypt Routes, LoadBalancer services | Level 12; Lab 10 |
-| Enable developer self-service (quotas, LimitRanges, project templates) | ResourceQuota/LimitRange/ClusterResourceQuota, templates | Level 15; Lab 6 |
-| Manage OpenShift operators (OLM) | Subscription → CSV phases, operator effects, uninstall | Level 18; Labs 10 |
-| Configure application security (SCCs, service accounts, privileged workloads) | SCC grants/denials, `oc set serviceaccount`, `oc debug` | Level 17; Lab 8 |
-| Troubleshooting & operations (logs, events, top, cordon/drain, jobs) | Incidents, Chaos mode, Jobs/CronJobs | Levels 3, 19, 20; Labs 2, 6, 12 |
+| EX280V422 objective group | Where it is practiced | Levels | Timed labs | Quick lab |
+|---|---|---|---|---|
+| Manage OpenShift Container Platform (projects, `oc` CLI, querying, health) | Campaign ch. 1, Sandbox, `oc` terminal | 1, 2, 3, 4, 9, 10, 15, 20 | 1, 2, 4, 5, 9, 12 | Projects & the oc CLI |
+| Declarative Resource Management (manifests, Kustomize, secrets/configmaps) | Files panel, `oc apply -f/-k`, `oc process` | 4, 5, 6, 7, 10, 11 | 1, 3, 4, 10, 11, 12 | Kustomize prod overlay |
+| Deploy applications (templates, Helm, builds, rollouts, Services, Routes) | Builds/ImageStream controllers, `oc new-app`, `oc start-build`, `oc rollout` | 2, 8, 10, 11, 12 | 1, 3, 5, 9, 10, 12 | Route with edge TLS |
+| Manage authentication and authorization (HTPasswd, users, groups, RBAC) | `oc login`, users/groups, `oc adm policy`, `oc auth can-i` | 13, 14, 16 | 7, 11, 12 | HTPasswd users & login |
+| Configure network security (Services, Routes, NetworkPolicy, TLS) | Route admission, TLS edge/passthrough, default-deny NetworkPolicy | 3, 11, 12, 20 | 3, 8, 9, 10 | — |
+| Expose non-HTTP/SNI Applications | passthrough Routes, LoadBalancer services | 12 | 10 | — |
+| Enable developer self-service (quotas, LimitRanges, project templates) | ResourceQuota/LimitRange/ClusterResourceQuota; project-request template flow (generate → edit → create in `openshift-config` → point `project.config.openshift.io/cluster` at it) | 8, 15, 20 | 6, 12 | ResourceQuota + LimitRange |
+| Manage OpenShift operators (OLM) | Subscription → CSV phases, operator effects, uninstall | 12, 18 | 10 | Install an operator |
+| Configure application security (SCCs, service accounts, jobs/cronjobs) | SCC grants/denials, `oc set serviceaccount`, `oc debug`, Jobs/CronJobs | 7, 16, 17, 19 | 3, 7, 8, 12 | Service account + SCC grant; Job + CronJob |
+
+Cross-cutting drills (not a separate V422 objective group): troubleshooting/operations content —
+logs, events, `oc adm top`, `oc adm cordon|drain`, Jobs/CronJobs — appears in levels 3, 19, 20 and
+timed labs 2, 6, 12, plus Chaos mode.
 
 Official sources (verify against these before your exam):
 

@@ -220,9 +220,11 @@ ingress, monitoring, network, image-registry, kube-apiserver, openshift-apiserve
 openshift-controller-manager, operator-lifecycle-manager, storage, etcd) with
 Available=True/Progressing=False/Degraded=False and version `4.22.0`; ClusterVersion `version`
 (desired.version `4.22.0`, channel `stable-4.22`); SCCs `restricted-v2` and `nonroot-v2` (groups
-`system:authenticated`), `anyuid` and `privileged` (no subjects); users `kubeadmin` (cluster-admin
-binding) and `admin`; ImageStreams in `openshift`: `nodejs` (tags 20, 18), `python` (tag 3.12),
-`nginx` (tag 1.26); Nodes as specified per level/mode.
+`system:authenticated`), `restricted-v3` (not granted to `system:authenticated` in the game's
+admission model), `anyuid` (no subjects) and `privileged` (platform-default admin/build subjects);
+users `kubeadmin` (cluster-admin binding) and `admin`; ImageStreams in `openshift`: `nodejs` (tags
+`20-ubi9`, `22-ubi9`, `latest`), `python` (`3.12-ubi9`, `latest`), `nginx` (`1.26-ubi9`, `latest`);
+Nodes as specified per level/mode.
 
 ---
 
@@ -358,7 +360,9 @@ Also expose `gameEngine.cluster` methods:
   (`system:serviceaccount:<ns>:<sa>`, `system:authenticated`, group names).
 - Helpers for commands: `grantSCC(scc, subject)`, `revokeSCC`, `addUserToGroup`, etc.
 Default state: kubeadmin has cluster-admin ClusterRoleBinding; `system:authenticated` group gets
-`restricted-v2` SCC; `default` ServiceAccount exists in each project. Password store: virtual
+`restricted-v2` SCC in the game's admission model (the 4.22 docs also describe `restricted-v3` as
+the default for authenticated users on new installs — verify on a live cluster); `default`
+ServiceAccount exists in each project. Password store: virtual
 `htpasswd` file in ManifestEngine (section 7) is the source of truth for HTPasswd logins; login
 succeeds only when `authProvider.ready` and the user/password match the file, creating/updating the
 User + Identity objects and setting `currentUser`. `oc delete user` removes bindings/identity too.
@@ -631,7 +635,8 @@ Contents:
    (Not started / In progress / Mastered), linked levels/challenges (click → start that level/challenge),
    key `oc` commands (copy-to-clipboard), command bar shortcut (`oc <cmd>` prefilled), "Open Red Hat docs" link.
    Mastered = linked campaign level completed OR linked challenge completed OR quick-lab passed.
-   Overall progress bar (X / 55 objectives) and readiness verdict (Ready ≥90% mastered).
+   Overall progress bar (X / 55 bullets) and a study-coverage verdict (≥90% of bullets have a linked
+drill completed — coverage of the game's drills, not a Red Hat pass prediction).
 2. **Quick labs** — 8-10 short "do it now" command drills with expected result, mapped to objectives:
    projects/users/route/build/kustomize/quota/scc/operator; each opens Sandbox with a seeded state and
    checks via `command`/state objectives; record pass in progress.examPrep.

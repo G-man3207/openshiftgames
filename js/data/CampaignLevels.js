@@ -121,10 +121,10 @@ const CAMPAIGN_LEVELS = [
     description:
       'Welcome to OpenShift. A Project is the OpenShift-facing representation of a Kubernetes namespace: it isolates your workloads and is what you create and switch between with `oc new-project` / `oc project`. In this level you will log in to the CLI, create your first Project, and deploy both a bare Pod and a Deployment.',
     examObjectives: [
+      'Manage OpenShift Container Platform > Use the web console to manage and configure an OpenShift cluster',
       'Manage OpenShift Container Platform > Use the command-line interface to manage and configure an OpenShift cluster',
       'Manage OpenShift Container Platform > Create and delete projects',
-      'Manage OpenShift Container Platform > Use the web console to manage and configure an OpenShift cluster',
-      'Deploy applications > Manage application deployments',
+      'Manage OpenShift Container Platform > Use product documentation',
     ],
     docsLinks: [DOCS.cli, DOCS.projects, DOCS.console],
     startingUser: null, // starts logged out: `oc login -u kubeadmin` is part of the level
@@ -179,9 +179,8 @@ const CAMPAIGN_LEVELS = [
     description:
       'Every EX280 task starts with `oc get`. Learn to query resources, filter them with label selectors, reshape output with `-o wide|yaml|json|jsonpath|custom-columns`, and ask the API for documentation with `oc explain`.',
     examObjectives: [
-      'Manage OpenShift Container Platform > Query, format, and filter attributes of Kubernetes resources',
       'Manage OpenShift Container Platform > Use the command-line interface to manage and configure an OpenShift cluster',
-      'Manage OpenShift Container Platform > Use product documentation',
+      'Manage OpenShift Container Platform > Query, format, and filter attributes of Kubernetes resources',
       'Deploy applications > Work with labels and selectors',
     ],
     docsLinks: [DOCS.cli, DOCS.deployments],
@@ -189,7 +188,7 @@ const CAMPAIGN_LEVELS = [
       node('node-1'),
       node('node-2'),
       project('query-lab'),
-      deployment('web', { replicas: 2, labels: { tier: 'frontend' } }),
+      deployment('web', { replicas: 2 }),
     ],
     availableResources: ['Project', 'Deployment', 'Pod', 'Service', 'Node'],
     objectives: [
@@ -225,18 +224,20 @@ const CAMPAIGN_LEVELS = [
     description:
       'Production OpenShift is about reading symptoms: `oc logs`, `oc describe`, `oc get events`, `oc adm top`, ClusterOperators and ClusterVersion. A hidden CrashLoopBackOff is breaking the web-app Deployment — investigate it and bring cluster health back to 90%+.',
     examObjectives: [
-      'Manage OpenShift Container Platform > View logs',
+      'Manage OpenShift Container Platform > Use the web console to manage and configure an OpenShift cluster',
+      'Manage OpenShift Container Platform > Examine resources and cluster status',
       'Manage OpenShift Container Platform > Monitor cluster events and alerts',
+      'Manage OpenShift Container Platform > View logs',
       'Manage OpenShift Container Platform > Assess the health of an OpenShift cluster',
       'Manage OpenShift Container Platform > Troubleshoot common container, pod, and cluster events and alerts',
-      'Manage OpenShift Container Platform > Examine resources and cluster status',
+      'Configure network security > Troubleshoot software defined networking',
     ],
     docsLinks: [DOCS.pods, DOCS.health, DOCS.cli],
     startingResources: [
       node('node-1'),
       node('node-2'),
       project('ops-lab'),
-      deployment('web-app', { replicas: 2, image: 'quay.io/openshift/origin-hello-openshift:bad-tag' }),
+      deployment('web-app', { replicas: 2, image: 'quay.io/openshift/origin-hello-openshift:latest' }),
     ],
     availableResources: ['Project', 'Deployment', 'Pod', 'Service', 'Node'],
     objectives: [
@@ -266,10 +267,11 @@ const CAMPAIGN_LEVELS = [
     description:
       'Stop typing commands and start applying YAML. Edit the provided `manifests/deployment.yaml` and `manifests/service.yaml` in the Files panel, apply them with `oc apply -f`, then export the live object with `oc get -o yaml`. This is the core V422 "Declarative Resource Management" workflow.',
     examObjectives: [
+      'Manage OpenShift Container Platform > Use the command-line interface to manage and configure an OpenShift cluster',
+      'Manage OpenShift Container Platform > Import, export, and configure Kubernetes resources',
       'Declarative Resource Management > Work with resource manifests',
       'Declarative Resource Management > Deploy applications from YAML resource manifests',
       'Declarative Resource Management > Update application deployments',
-      'Manage OpenShift Container Platform > Import, export, and configure Kubernetes resources',
     ],
     docsLinks: [DOCS.cli, DOCS.creating, DOCS.deployments],
     startingResources: [node('node-1'), node('node-2'), project('manifests-lab')],
@@ -304,8 +306,6 @@ const CAMPAIGN_LEVELS = [
       'Kustomize lets you own one base set of manifests and reuse it everywhere. Render the `kustomize/base` directory and apply it with `oc apply -k`, then verify the generated Deployment and Service.',
     examObjectives: [
       'Declarative Resource Management > Deploy applications using Kustomize',
-      'Declarative Resource Management > Work with resource manifests',
-      'Deploy applications > Manage application deployments',
     ],
     docsLinks: [DOCS.cli, DOCS.creating],
     startingResources: [node('node-1'), node('node-2'), project('kustomize-lab')],
@@ -319,7 +319,7 @@ const CAMPAIGN_LEVELS = [
     ],
     incidents: [],
     hints: [
-      'Switch projects: `oc project kustomize-lab`. Preview the render with `oc kustomize kustomize/base`.',
+      'Switch projects: `oc project kustomize-lab`. On a real cluster, preview the render with `oc kustomize kustomize/base`; the simulator renders the same tree when you apply it with `oc apply -k kustomize/base`.',
       'Apply the base: `oc apply -k kustomize/base`.',
       'Verify with `oc get deployments,services` — the base creates a Deployment and a Service both named webapp.',
       'Edit `kustomize/base/deployment.yaml` (for example replicas) and re-run `oc apply -k kustomize/base` to see the change.',
@@ -337,8 +337,6 @@ const CAMPAIGN_LEVELS = [
       'Overlays apply environment-specific changes on top of a base: namespace, name prefix, image tag, replica count and patches. Apply the prod overlay and verify the prefixed Deployment lands in the webapp-prod project with 3 replicas and the pinned image patch.',
     examObjectives: [
       'Declarative Resource Management > Work with Kustomize overlays',
-      'Declarative Resource Management > Deploy applications using Kustomize',
-      'Deploy applications > Work with replica sets',
     ],
     docsLinks: [DOCS.cli, DOCS.deployments],
     startingResources: [node('node-1'), node('node-2'), project('webapp-prod')],
@@ -354,7 +352,7 @@ const CAMPAIGN_LEVELS = [
     ],
     incidents: [],
     hints: [
-      'Render before applying: `oc kustomize kustomize/overlays/prod` — note the `prod-` name prefix, namespace webapp-prod, image tag and replicas.',
+      'On a real cluster, render before applying with `oc kustomize kustomize/overlays/prod` (note the `prod-` name prefix, namespace webapp-prod, image tag and replicas); the simulator renders on `oc apply -k kustomize/overlays/prod`.',
       'Apply the overlay: `oc apply -k kustomize/overlays/prod`.',
       'Verify the namespaced object: `oc get deployment -n webapp-prod` should show `prod-webapp` with 3 desired replicas.',
       'The strategic-merge patch in `patch-deployment.yaml` adds the APP_ENV=runtime env var and resource requests. Try `oc get deploy prod-webapp -n webapp-prod -o yaml`.',
@@ -411,8 +409,8 @@ const CAMPAIGN_LEVELS = [
       'OpenShift Templates are parameterised object lists; Helm charts package workloads. Process `templates/webapp-template.yaml` with `oc process`, apply the result, then install the `helm/webapp` chart and list the release.',
     examObjectives: [
       'Deploy applications > Deploy applications from templates and Helm charts',
-      'Declarative Resource Management > Deploy applications from YAML resource manifests',
       'Deploy applications > Manage application deployments',
+      'Enable developer self-service > Configure project templates',
     ],
     docsLinks: [DOCS.creating, DOCS.helm],
     startingResources: [node('node-1'), node('node-2'), project('template-lab')],
@@ -447,7 +445,6 @@ const CAMPAIGN_LEVELS = [
     examObjectives: [
       'Manage OpenShift Container Platform > Locate and examine container images',
       'Manage OpenShift Container Platform > Identify images using tags and digests',
-      'Deploy applications > Manage application deployments',
     ],
     docsLinks: [DOCS.builds, DOCS.startBuild, DOCS.imageStreams, DOCS.imageTriggers],
     startingResources: [node('node-1'), node('node-2'), project('build-lab')],
@@ -463,10 +460,10 @@ const CAMPAIGN_LEVELS = [
     ],
     incidents: [],
     hints: [
-      'Switch projects: `oc project build-lab`. Create the build from source with `oc new-app openshift/nodejs:20~https://github.com/openshift/nodejs-ex --name=webapp`.',
+      'Switch projects: `oc project build-lab`. Create the build from source with `oc new-app openshift/nodejs:20-ubi9~https://github.com/openshift/nodejs-ex --name=webapp` (OCP 4.22 sample builder tags carry the `-ubi9` suffix).',
       'Watch the build: `oc logs -f bc/webapp` or `oc start-build webapp --follow`. The Build runs New → Pending → Running → Complete.',
       'Inspect the ImageStream: `oc get is webapp`, `oc describe istag/webapp:latest` — note the digest and internal registry pull spec.',
-      'If your app came from the example BuildConfig instead, start it with `oc start-build webapp --follow` and then create a Deployment that references `image: webapp:latest`.',
+      'If your app came from the example BuildConfig instead, start it with `oc start-build webapp --follow`, then point a Deployment at the internal registry: `image: image-registry.openshift-image-registry.svc:5000/build-lab/webapp:latest` (a bare `image: webapp:latest` is not resolved to the project ImageStream without an image trigger).',
     ],
     starCriteria: { time: 480, efficiency: 0.7, noFailures: false },
     nextLevel: 10,
@@ -480,10 +477,10 @@ const CAMPAIGN_LEVELS = [
     description:
       'Deployments roll out image changes through ReplicaSets. Update `api-server` to a new image, watch the rollout, then discover the new image is bad (ImagePullBackOff) and roll back with `oc rollout undo` while keeping availability above 90%.',
     examObjectives: [
+      'Manage OpenShift Container Platform > Troubleshoot common container, pod, and cluster events and alerts',
+      'Declarative Resource Management > Update application deployments',
       'Deploy applications > Manage application deployments',
       'Deploy applications > Work with replica sets',
-      'Declarative Resource Management > Update application deployments',
-      'Configure application security > Deploy jobs to perform one-time tasks',
     ],
     docsLinks: [DOCS.deployments, DOCS.cli, DOCS.health],
     startingResources: [
@@ -522,11 +519,14 @@ const CAMPAIGN_LEVELS = [
     description:
       'Pods are ephemeral; Services give them stable endpoints and Routes expose them outside the cluster. Create a Service that selects your Deployment, expose it as an edge-TLS Route, verify it is Admitted, and store the TLS material in a Secret.',
     examObjectives: [
+      'Declarative Resource Management > Deploy applications from YAML resource manifests',
+      'Deploy applications > Work with labels and selectors',
       'Deploy applications > Configure services',
       'Deploy applications > Expose applications to external access',
+      'Configure network security > Configure networking components',
+      'Configure network security > Troubleshoot software defined networking',
       'Configure network security > Create and edit external routes',
       'Configure network security > Secure external and internal traffic using TLS certificates',
-      'Configure network security > Configure networking components',
     ],
     docsLinks: [DOCS.routes, DOCS.cli, DOCS.deployments],
     startingResources: [
@@ -563,10 +563,12 @@ const CAMPAIGN_LEVELS = [
     description:
       'HTTP Routes are not the only way to expose an app. Install the MetalLB operator, create a LoadBalancer Service that receives an EXTERNAL-IP, and expose a non-HTTP TLS service with a passthrough Route.',
     examObjectives: [
+      'Deploy applications > Expose applications to external access',
+      'Configure network security > Configure networking components',
+      'Configure network security > Create and edit external routes',
+      'Configure network security > Secure external and internal traffic using TLS certificates',
       'Expose non-HTTP/SNI Applications > Configure a load balancer service',
       'Expose non-HTTP/SNI Applications > Configure external application access',
-      'Configure network security > Configure application network policies',
-      'Configure network security > Troubleshoot software defined networking',
       'Manage OpenShift operators > Install an operator',
     ],
     docsLinks: [DOCS.metallb, DOCS.routes, DOCS.operatorOlm],
@@ -580,15 +582,15 @@ const CAMPAIGN_LEVELS = [
     manifestFiles: ['examples/subscription.yaml'],
     focusFiles: ['examples/subscription.yaml'],
     objectives: [
-      { type: 'operator', name: 'metallb', installed: true, label: 'Install the MetalLB operator (Subscription Succeeded)' },
+      { type: 'operator', name: 'metallb', installed: true, label: 'Install the MetalLB operator (CSV Succeeded)' },
       { type: 'serviceType', kind: 'LoadBalancer', count: 1, label: 'Create a Service of type LoadBalancer' },
       { type: 'route', name: 'tls-app', termination: 'passthrough', label: 'Expose tls-app with a passthrough Route' },
       { type: 'tls', enabled: true, termination: 'passthrough', label: 'Passthrough TLS termination is configured' },
     ],
     incidents: [],
     hints: [
-      'Switch projects: `oc project lb-lab`. Install MetalLB by editing `examples/subscription.yaml` (name/package `metallb`) and running `oc apply -f examples/subscription.yaml`.',
-      'Verify the operator: `oc get sub,csv -n openshift-operators` — wait for the Subscription phase to be Succeeded.',
+      'Switch projects: `oc project lb-lab`. Install MetalLB by editing `examples/subscription.yaml` (name/package `metallb`) and running `oc apply -f examples/subscription.yaml`. The simulator installs it into `openshift-operators`; on a real cluster the MetalLB operator docs use the `metallb-system` project.',
+      'Verify the operator: `oc get sub,csv -n openshift-operators` — the ClusterServiceVersion (not the Subscription) moves Installing → Succeeded; `oc describe sub metallb` shows `installedCSV`.',
       'Create the LoadBalancer Service: `oc create service loadbalancer lb --tcp=443:443` and check `oc get svc lb` for an EXTERNAL-IP.',
       'For the passthrough Route: create an IPAddressPool + L2Advertisement if needed, then `oc create route passthrough tls-app --service=tls-app`.',
       'Verify: `oc describe route tls-app` shows TLS termination passthrough and Admitted=True.',
@@ -615,15 +617,15 @@ const CAMPAIGN_LEVELS = [
     availableResources: ['Project', 'User', 'Identity', 'Secret', 'OAuth', 'Group'],
     objectives: [
       { type: 'command', pattern: 'htpasswd ', label: 'Add a user to the htpasswd file (htpasswd -c/-b)' },
-      { type: 'deploy', kind: 'Secret', name: 'htpasswd-secret', label: 'Create the htpasswd Secret' },
+      { type: 'deploy', kind: 'Secret', name: 'htpass-secret', label: 'Create the htpasswd Secret' },
       { type: 'user', name: 'alice', label: 'User "alice" exists after first login' },
       { type: 'login', user: 'alice', label: 'Log in to the CLI as alice' },
     ],
     incidents: [],
     hints: [
-      'Add a user to the virtual htpasswd file: `htpasswd -c -b htpasswd alice <password>` (or `htpasswd -b htpasswd alice <password>` to add another).',
-      'Create the Secret: `oc create secret generic htpasswd-secret --from-file=htpasswd -n openshift-config`. The key must be named `htpasswd`.',
-      'Configure the provider: `oc edit oauth cluster` and add an HTPasswd identityProvider referencing `htpasswd-secret` (mappingMethod: claim).',
+      'Add a user to the virtual htpasswd file with bcrypt hashes: `htpasswd -c -B -b htpasswd alice <password>` (or `htpasswd -B -b htpasswd alice <password>` to add another).',
+      'Create the Secret: `oc create secret generic htpass-secret --from-file=htpasswd -n openshift-config`. The key must be named `htpasswd`.',
+      'Configure the provider: `oc edit oauth cluster` and add an HTPasswd identityProvider referencing `htpass-secret` (mappingMethod: claim).',
       'Wait for the authentication operator to roll out, then `oc login -u alice -p <password>` and confirm with `oc whoami`.',
     ],
     starCriteria: { time: 420, efficiency: 0.7, noFailures: true },
@@ -640,8 +642,6 @@ const CAMPAIGN_LEVELS = [
     examObjectives: [
       'Manage authentication and authorization > Create and manage groups',
       'Manage authentication and authorization > Modify user and group permissions',
-      'Manage authentication and authorization > Create and delete users',
-      'Configure application security > Configure and manage service accounts',
     ],
     docsLinks: [DOCS.rbac, DOCS.usersGroups],
     startingResources: [
@@ -677,15 +677,16 @@ const CAMPAIGN_LEVELS = [
     chapter: 4,
     chapterName: 'Identity, RBAC & Self-service',
     description:
-      'Developer self-service needs guardrails. Apply a ResourceQuota and LimitRange from the example manifests, create a ClusterResourceQuota that spans projects, set resource requests/limits on the web Deployment, and resolve a ResourceQuotaExceeded incident.',
+      'Developer self-service needs guardrails. Apply a ResourceQuota and LimitRange from the example manifests, create a ClusterResourceQuota that spans projects, set resource requests/limits on the web Deployment, resolve a ResourceQuotaExceeded incident, then publish a project template: generate the bootstrap `project-request` template, add a guardrail object to it, store it in `openshift-config` and point `project.config.openshift.io/cluster` at it.',
     examObjectives: [
+      'Manage OpenShift Container Platform > Create and delete projects',
       'Enable developer self-service > Configure cluster resource quotas',
       'Enable developer self-service > Configure project quotas',
       'Enable developer self-service > Configure project resource requirements',
       'Enable developer self-service > Configure project limit ranges',
       'Enable developer self-service > Configure project templates',
     ],
-    docsLinks: [DOCS.quotas, DOCS.clusterResources],
+    docsLinks: [DOCS.quotas, DOCS.clusterResources, DOCS.projects],
     startingResources: [node('node-1'), node('node-2'), project('quota-lab'), deployment('web', { replicas: 2 })],
     availableResources: ['Project', 'ResourceQuota', 'ClusterResourceQuota', 'LimitRange', 'Deployment', 'Pod', 'Template'],
     manifestFiles: ['examples/quota.yaml', 'examples/limitrange.yaml'],
@@ -696,6 +697,9 @@ const CAMPAIGN_LEVELS = [
       { type: 'deploy', kind: 'ClusterResourceQuota', name: 'team-quota', label: 'Create the ClusterResourceQuota "team-quota"' },
       { type: 'resources', kind: 'Deployment', name: 'web', label: 'Set container requests+limits on the web Deployment' },
       { type: 'resolve', incidentType: 'ResourceQuotaExceeded', count: 1, label: 'Resolve the ResourceQuotaExceeded incident' },
+      { type: 'command', pattern: 'oc adm create-bootstrap-project-template', label: 'Generate the bootstrap project template' },
+      { type: 'deploy', kind: 'Template', name: 'project-request', namespace: 'openshift-config', label: 'Create the project-request Template in openshift-config' },
+      { type: 'command', pattern: 'oc (edit|patch) project\\.config', label: 'Point project.config.openshift.io/cluster at the template' },
     ],
     incidents: [{ type: 'ResourceQuotaExceeded', triggerTime: 20, target: 'quota-lab', severity: 3 }],
     hints: [
@@ -703,6 +707,8 @@ const CAMPAIGN_LEVELS = [
       'Create the multi-project quota: `oc create clusterquota team-quota --project-label-selector=name=quota-lab --hard=pods=10 --hard=secrets=20`.',
       'Set container resources: `oc set resources deployment/web --limits=cpu=500m,memory=512Mi --requests=cpu=100m,memory=128Mi`.',
       'Verify: `oc describe quota compute-quota`, `oc describe limits resource-limits`, `oc describe clusterresourcequota team-quota`. Then resolve the quota incident.',
+      'Publish a project template: `oc adm create-bootstrap-project-template -o yaml > template.yaml`, add a NetworkPolicy object to the template object list (edit `template.yaml` in the Files panel; the shipped `templates/webapp-template.yaml` shows the object-list shape), then `oc create -f template.yaml -n openshift-config` and check `oc get templates -n openshift-config`.',
+      'Point the cluster at the template: `oc edit project.config.openshift.io/cluster` and set `spec.projectRequestTemplate.name: project-request`, then `oc new-project template-check` and confirm the templated object was created. On a real cluster `oc edit` launches `$EDITOR` (vi/vim by default) in the terminal — the simulator opens its manifest editor; practise vim separately for the exam.',
     ],
     starCriteria: { time: 480, efficiency: 0.7, noFailures: false },
     nextLevel: 16,
@@ -716,9 +722,9 @@ const CAMPAIGN_LEVELS = [
     description:
       'Applications need their own identity when they call the Kubernetes API. Create a ServiceAccount, grant it read access with a RoleBinding, run the app as that ServiceAccount, and verify the access with `oc auth can-i --as=system:serviceaccount:...`.',
     examObjectives: [
+      'Manage authentication and authorization > Modify user and group permissions',
       'Configure application security > Configure and manage service accounts',
       'Configure application security > Configure application access to Kubernetes APIs',
-      'Manage authentication and authorization > Modify user and group permissions',
     ],
     docsLinks: [DOCS.serviceAccounts, DOCS.rbac, DOCS.cli],
     startingResources: [
@@ -752,11 +758,11 @@ const CAMPAIGN_LEVELS = [
     chapter: 5,
     chapterName: 'Security & Operations',
     description:
-      'Security Context Constraints are OpenShift\'s pod admission gate. A workload is being rejected because no SCC allows it. Grant a permissive SCC to the project ServiceAccount, run the privileged app, and clear the SCCForbidden incident.',
+      'Security Context Constraints are OpenShift\'s pod admission gate. A workload is being rejected because no SCC allows its requested securityContext. Grant the privileged SCC to the project ServiceAccount (anyuid allows arbitrary UIDs but not privileged containers), run the privileged app, and clear the SCCForbidden incident.',
     examObjectives: [
-      'Configure application security > Manage and apply permissions using security context constraints',
       'Configure application security > Run privileged applications',
-      'Configure application security > Configure and manage service accounts',
+      'Configure application security > Manage and apply permissions using security context constraints',
+      'Configure application security > Create and apply secrets to manage sensitive information',
     ],
     docsLinks: [DOCS.scc, DOCS.rbac, DOCS.serviceAccounts],
     startingResources: [
@@ -767,16 +773,16 @@ const CAMPAIGN_LEVELS = [
     ],
     availableResources: ['Project', 'Deployment', 'Pod', 'SecurityContextConstraints', 'ServiceAccount', 'RoleBinding'],
     objectives: [
-      { type: 'scc', scc: 'anyuid', subject: 'system:serviceaccount:*:default', expected: true, label: 'Grant anyuid SCC to the project default ServiceAccount' },
+      { type: 'scc', scc: 'privileged', subject: 'system:serviceaccount:*:default', expected: true, label: 'Grant the privileged SCC to the project default ServiceAccount' },
       { type: 'privileged', count: 1, label: 'Run a privileged workload container (or UID 0 app)' },
       { type: 'resolve', incidentType: 'SCCForbidden', count: 1, label: 'Resolve the SCCForbidden incident' },
     ],
     incidents: [{ type: 'SCCForbidden', triggerTime: 15, target: 'privileged-app', severity: 4 }],
     hints: [
-      'Check which SCC applied: `oc get scc`, then `oc adm policy who-can use scc/anyuid`.',
-      'Grant the SCC to the ServiceAccount: `oc adm policy add-scc-to-user anyuid -z default -n privileged-lab`.',
-      'Run privileged: `oc edit deployment/privileged-app`, then add `securityContext: {privileged: true}` to the container spec (or `oc patch deployment/privileged-app --type=merge -p \'{"spec":{"template":{"spec":{"containers":[{"name":"main","securityContext":{"privileged":true}}]}}}}\'`).',
-      'Verify with `oc describe scc anyuid | grep -A2 Users`, `oc get pods`, and resolve the SCCForbidden incident in the Incident panel.',
+      'Check which SCC applies: `oc get scc`, then `oc adm policy who-can use scc privileged`.',
+      'Grant the SCC to the ServiceAccount: `oc adm policy add-scc-to-user privileged -z default -n privileged-lab`.',
+      'Run privileged: `oc edit deployment/privileged-app`, then add `securityContext: {privileged: true}` to the container spec (or `oc patch deployment/privileged-app --type=merge -p \'{"spec":{"template":{"spec":{"containers":[{"name":"main","securityContext":{"privileged":true}}]}}}}\'`) — this only admits with the privileged SCC granted above.',
+      'Verify with `oc describe scc privileged | grep -A2 Users`, `oc get pods`, and resolve the SCCForbidden incident in the Incident panel.',
     ],
     starCriteria: { time: 420, efficiency: 0.7, noFailures: false },
     nextLevel: 18,
@@ -800,15 +806,15 @@ const CAMPAIGN_LEVELS = [
     manifestFiles: ['examples/subscription.yaml'],
     focusFiles: ['examples/subscription.yaml'],
     objectives: [
-      { type: 'operator', name: 'metallb', installed: true, label: 'Install operator "metallb" (Subscription Succeeded)' },
+      { type: 'operator', name: 'metallb', installed: true, label: 'Install operator "metallb" (CSV reaches Succeeded)' },
       { type: 'command', pattern: 'oc (get|describe) (sub|subscription|csv|installplan)', label: 'Verify the Subscription / CSV / InstallPlan' },
-      { type: 'operator', name: 'metallb', installed: false, label: 'Uninstall the operator (delete Subscription + CSV)' },
+      { type: 'operator', name: 'metallb', installed: false, label: 'After installing, uninstall the operator (delete Subscription + CSV)' },
     ],
     incidents: [],
     hints: [
       'Install: edit `examples/subscription.yaml` so metadata.name, spec.name and the package are `metallb`, then `oc apply -f examples/subscription.yaml`.',
-      'Watch OLM: `oc get sub,csv,installplan -n openshift-operators` — the Subscription goes Installing → Succeeded and a CSV appears.',
-      'Uninstall: `oc delete subscription metallb -n openshift-operators`, then delete the CSV shown by `oc get csv -n openshift-operators`.',
+      'Watch OLM: `oc get sub,csv,installplan -n openshift-operators` — the CSV goes Installing → Succeeded, and `oc get sub metallb -o yaml` then reports `status.installedCSV`.',
+      'Uninstall (only after the install above reached Succeeded): `oc delete subscription metallb -n openshift-operators`, then delete the CSV shown by `oc get csv -n openshift-operators`.',
       'Confirm removal with `oc get csv -n openshift-operators` and `oc get subscription -A`.',
     ],
     starCriteria: { time: 420, efficiency: 0.7, noFailures: true },
@@ -825,7 +831,6 @@ const CAMPAIGN_LEVELS = [
     examObjectives: [
       'Configure application security > Deploy jobs to perform one-time tasks',
       'Configure application security > Configure Kubernetes cron jobs',
-      'Manage OpenShift Container Platform > Troubleshoot common container, pod, and cluster events and alerts',
     ],
     docsLinks: [DOCS.jobs, DOCS.cli],
     startingResources: [node('node-1'), node('node-2'), project('batch-lab')],
@@ -853,21 +858,16 @@ const CAMPAIGN_LEVELS = [
     chapter: 5,
     chapterName: 'Security & Operations',
     description:
-      'Capstone. Build a complete production platform the way EX280 expects: a Project with quota and limits, the webapp Deployment + Service + TLS Route, a source Build feeding an ImageStream, a developer User/Group with a NetworkPolicy, MetalLB, a Job and a CronJob, and an Architecture Advisor score above 65 with an exam score above 75.',
+      'Capstone. Build a complete production platform the way EX280 expects: a Project with quota and limits, the webapp Deployment + Service + TLS Route, a source Build feeding an ImageStream, a developer User/Group with a NetworkPolicy, MetalLB, a Job and a CronJob, plus an Architecture Advisor score of 25 or more and a composite drill score of 75 or more (both are in-game metrics, not Red Hat exam scores).',
     examObjectives: [
+      'Manage OpenShift Container Platform > Use the web console to manage and configure an OpenShift cluster',
+      'Manage OpenShift Container Platform > Examine resources and cluster status',
+      'Manage OpenShift Container Platform > Assess the health of an OpenShift cluster',
+      'Manage OpenShift Container Platform > Use product documentation',
       'Manage OpenShift Container Platform > Be prepared to perform all tasks of a Red Hat Certified Technologist in OpenShift',
-      'Declarative Resource Management > Deploy applications from YAML resource manifests',
-      'Deploy applications > Manage application deployments',
-      'Deploy applications > Expose applications to external access',
       'Configure network security > Control cluster network ingress',
       'Configure network security > Configure application network policies',
-      'Enable developer self-service > Configure cluster resource quotas',
-      'Enable developer self-service > Configure project quotas',
       'Enable developer self-service > Configure project resource requirements',
-      'Enable developer self-service > Configure project limit ranges',
-      'Configure application security > Deploy jobs to perform one-time tasks',
-      'Configure application security > Configure Kubernetes cron jobs',
-      'Configure application security > Configure and manage service accounts',
     ],
     docsLinks: [DOCS.quotas, DOCS.deployments, DOCS.routes, DOCS.builds, DOCS.operators, DOCS.jobs, DOCS.networkSecurity],
     startingResources: [node('node-1', '16', '32Gi'), node('node-2', '16', '32Gi'), node('node-3', '16', '32Gi')],
@@ -877,8 +877,8 @@ const CAMPAIGN_LEVELS = [
       'Subscription', 'User', 'Group', 'RoleBinding', 'ServiceAccount', 'SecurityContextConstraints',
       'Job', 'CronJob', 'Node',
     ],
-    manifestFiles: ['manifests/deployment.yaml', 'manifests/service.yaml', 'manifests/route.yaml', 'examples/quota.yaml', 'examples/limitrange.yaml', 'examples/buildconfig.yaml', 'examples/subscription.yaml'],
-    focusFiles: ['manifests/deployment.yaml', 'manifests/route.yaml', 'examples/quota.yaml'],
+    manifestFiles: ['manifests/deployment.yaml', 'manifests/service.yaml', 'manifests/route.yaml', 'examples/quota.yaml', 'examples/limitrange.yaml', 'examples/buildconfig.yaml', 'examples/subscription.yaml', 'examples/default-deny.yaml'],
+    focusFiles: ['manifests/deployment.yaml', 'manifests/route.yaml', 'examples/quota.yaml', 'examples/default-deny.yaml'],
     objectives: [
       { type: 'project', name: 'prod-platform', label: 'Create the Project "prod-platform"' },
       { type: 'deploy', kind: 'ResourceQuota', name: 'compute-quota', label: 'Apply a project ResourceQuota' },
@@ -897,7 +897,7 @@ const CAMPAIGN_LEVELS = [
       // NOTE: threshold is deliberately modest versus the current ScoringEngine scale...
       // a solid capstone platform scores ~34 today; modes-dev's rewritten advisor may rescale.
       { type: 'architectureScore', minScore: 25, label: 'Architecture Advisor score >= 25' },
-      { type: 'examScore', minScore: 75, label: 'Composite EX280 exam score >= 75' },
+      { type: 'examScore', minScore: 75, label: 'Composite drill score >= 75 (in-game metric, not a Red Hat exam score)' },
     ],
     incidents: [
       { type: 'CrashLoopBackOff', triggerTime: 60, target: 'webapp', severity: 2 },
@@ -907,7 +907,7 @@ const CAMPAIGN_LEVELS = [
       'Create the platform project: `oc new-project prod-platform`, then apply the quota/limits with `oc apply -f examples/quota.yaml` and `oc apply -f examples/limitrange.yaml`.',
       'Deploy the app: `oc apply -f manifests/deployment.yaml`, `oc apply -f manifests/service.yaml`, then expose a Route: `oc create route edge webapp --service=webapp`. Enable ports/health probes in the YAML for a higher Architecture Advisor score.',
       'Build: `oc apply -f examples/buildconfig.yaml` (it already outputs ImageStreamTag `webapp:latest`), then `oc start-build webapp --follow` and watch the Build reach Complete.',
-      'Security/self-service: `oc create user developer`, `oc adm groups new developers developer`, create a default-deny policy with `oc create networkpolicy default-deny -n prod-platform`, and install MetalLB from `examples/subscription.yaml` (edit its name/package to metallb first).',
+      'Security/self-service: `oc create user developer`, `oc adm groups new developers developer`, apply the shipped `examples/default-deny.yaml` (a `networking.k8s.io/v1` NetworkPolicy that selects all pods) with `oc apply -f examples/default-deny.yaml -n prod-platform` — there is no `oc create networkpolicy` subcommand; use the Files panel New/Import buttons if you want to edit or add manifests. Install MetalLB from `examples/subscription.yaml` (edit its name/package to metallb first).',
       'Finish with a Job (`oc create job report-job --image=perl -- perl -e "print 42"`), a CronJob (`oc create cronjob nightly --image=busybox --schedule="*/5 * * * *" -- sh -c date`), then check `oc status` and the Architecture Advisor in the HUD.',
     ],
     starCriteria: { time: 900, efficiency: 0.6, noFailures: false },

@@ -376,14 +376,26 @@ export class ManifestPanel {
       return button;
     };
 
+    this.importInput = el('input', {
+      type: 'file',
+      accept: '.yaml,.yml,.json,text/plain',
+      style: { display: 'none' },
+      'data-testid': 'manifest-import-input',
+      onchange: (event) => this._importSelectedFile(event),
+    });
+
     const toolbar = el('div', { class: 'ogmf-toolbar' }, [
       this.pathLabel,
       this.dirtyBadge,
       el('span', { class: 'ogmf-spacer' }),
+      makeButton('manifest-new', 'New file', '', () => this._createNewFile(), 'Create a new virtual manifest file'),
+      makeButton('manifest-import', 'Import', '', () => this.importInput?.click(), 'Import a local YAML/JSON file into the virtual filesystem'),
+      makeButton('manifest-delete', 'Delete', '', () => this._deleteCurrentFile(), 'Delete the current virtual file (does not delete cluster objects)'),
       makeButton('manifest-save', 'Save', '', () => this._saveCurrent(), 'Write the editor content to the virtual file'),
       makeButton('manifest-reset', 'Reset', '', () => this._resetCurrent(), 'Discard unsaved edits and reload the file'),
       makeButton('manifest-apply', 'Apply -f', 'ogmf-btn-primary', () => this._applyCurrent(), 'oc apply -f <current file>'),
       makeButton('manifest-apply-kustomize', 'Apply -k', 'ogmf-btn-kustomize', () => this._applyKustomize(), 'oc apply -k <nearest kustomization directory>'),
+      this.importInput,
     ]);
 
     this.editor = el('textarea', {
@@ -597,7 +609,7 @@ export class ManifestPanel {
     this.pathLabel.textContent = this.currentPath || 'no file selected';
     const dirty = this._dirty();
     this.dirtyBadge.style.display = dirty ? 'inline' : 'none';
-    for (const key of ['manifest-save', 'manifest-reset', 'manifest-apply', 'manifest-apply-kustomize']) {
+    for (const key of ['manifest-save', 'manifest-reset', 'manifest-apply', 'manifest-apply-kustomize', 'manifest-delete']) {
       const button = this.buttons[key];
       if (button) button.disabled = !this.currentPath;
     }
@@ -608,10 +620,106 @@ export class ManifestPanel {
 
   _saveCurrent({ quiet = false } = {}) {
     if (!this.currentPath) return false;
-    this.manifestEngine.writeFile(this.currentPath, this.editor.value);
-    this._drafts.delete(this.currentPath);
-    this._updateToolbar();
-    if (!quiet) this._showSuccess(`Saved ${this.currentPath}`);
+    const path = this.currentPath;
+    const isEditBuffer = path.startsWith('.oc/edit-');
+    const previous = this.manifestEngine.readFile(path) ?? '';
+    this.manifestEngine.writeFile(path, this.editor.value);
+    this._drafts.delete(path);
+    if (!isEditBuffer) {
+      this._updateToolbar();
+      if (!quiet) this._showSuccess(`Saved ${path}`);
+      return true;
+    }
+    // Real `oc edit` applies the buffer when the editor is saved. The panel
+    // materialises the object under `.oc/edit-*`; Save must apply it, not just
+    // write the virtual file (the CLI reports "Save to apply changes").
+    let result;
+    try {
+      result = this.manifestEngine.applyFile(path);
+    } catch (err) {
+      result = { ok: false, errors: [err?.message || String(err)], created: [], updated: [] };
+    }
+    this._lastResult = result;
+    this._showResult(result);
+    if (!result.ok) {
+      // Keep the attempted YAML as an unsaved draft and restore the last good file.
+      this.manifestEngine.writeFile(path, previous);
+      this._drafts.set(path, this.editor.value);
+    }
+    this.refresh();
+    return Boolean(result.ok);
+  }
+
+  /** Create a new file in the virtual filesystem (manifest authoring in-game). */
+  _createNewFile() {
+    if (typeof window === 'undefined' || typeof window.prompt !== 'function') return false;
+    const baseDir = this.currentPath && this.currentPath.includes('/')
+      ? this.currentPath.slice(0, this.currentPath.lastIndexOf('/') + 1)
+      : 'manifests/';
+    const suggested = `${baseDir}new-app.yaml`;
+    const input = window.prompt('New virtual file path (created in-memory; not on the host)', suggested);
+    if (input === null || input === undefined) return false;
+    const path = String(input).trim();
+    if (!path) return false;
+    if (this.manifestEngine.exists(path)) {
+      this._showError(`A virtual file already exists at "${path}"`);
+      return false;
+    }
+    const starter = `# New manifest. Edit, Save, then Apply -f (oc apply -f ${path}).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: example
+data:
+  key: value
+`;
+    this.manifestEngine.writeFile(path, starter);
+    this._drafts.delete(path);
+    this.currentPath = this.manifestEngine.exists(path) ? path : null;
+    this.refresh();
+    this._showSuccess(`Created ${path} — edit it, then Apply -f`);
+    return true;
+  }
+
+  /** Import a local YAML/JSON file into the virtual filesystem. */
+  _importSelectedFile(event) {
+    const input = event?.target;
+    const file = input?.files && input.files[0];
+    if (!file) return false;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const text = String(reader.result ?? '');
+      const suggested = `imports/${file.name || 'imported.yaml'}`;
+      const target = typeof window.prompt === 'function'
+        ? window.prompt(`Import "${file.name}" as virtual path`, suggested)
+        : suggested;
+      if (target === null || target === undefined) return;
+      const path = String(target).trim();
+      if (!path) return;
+      this.manifestEngine.writeFile(path, text);
+      this._drafts.delete(path);
+      this.currentPath = path;
+      this.refresh();
+      this._showSuccess(`Imported ${path} (${text.split('\n').length} lines) — apply with Apply -f`);
+    };
+    reader.readAsText(file);
+    if (input) input.value = '';
+    return true;
+  }
+
+  /** Delete the current virtual file (cluster objects are not touched). */
+  _deleteCurrentFile() {
+    if (!this.currentPath) return false;
+    const path = this.currentPath;
+    const confirmed = typeof window.confirm === 'function'
+      ? window.confirm(`Delete virtual file "${path}"?\n\nCluster resources created from it are not deleted.`)
+      : true;
+    if (!confirmed) return false;
+    this.manifestEngine.deleteFile(path);
+    this._drafts.delete(path);
+    this.currentPath = null;
+    this.refresh();
+    this._showSuccess(`Deleted ${path} from the virtual filesystem`);
     return true;
   }
 
@@ -671,9 +779,11 @@ export class ManifestPanel {
       dir = dir.includes('/') ? dir.slice(0, dir.lastIndexOf('/')) : '';
     }
     for (const candidate of candidates) {
+      const prefix = candidate ? `${candidate}/` : '';
       if (
-        this.manifestEngine.exists(candidate ? `${candidate}/kustomization.yaml` : 'kustomization.yaml') ||
-        this.manifestEngine.exists(candidate ? `${candidate}/kustomization.yml` : 'kustomization.yml')
+        this.manifestEngine.exists(`${prefix}kustomization.yaml`) ||
+        this.manifestEngine.exists(`${prefix}kustomization.yml`) ||
+        this.manifestEngine.exists(`${prefix}Kustomization`)
       ) {
         return candidate;
       }
@@ -710,6 +820,11 @@ export class ManifestPanel {
     const lines = [];
     for (const ref of created) lines.push(`${this._refLabel(ref)} created`);
     for (const ref of updated) lines.push(`${this._refLabel(ref)} configured`);
+    // Some apply paths (the config.openshift.io Project singleton) report via a
+    // real-oc message instead of created/updated refs.
+    if (result?.ok && lines.length === 0 && typeof result?.message === 'string' && result.message.trim()) {
+      lines.push(result.message.trim());
+    }
     if (result?.ok && lines.length === 0) lines.push('apply complete: no changes');
     for (const warning of warnings) lines.push(`warning: ${warning}`);
     if (result?.ok) {
@@ -728,6 +843,12 @@ export class ManifestPanel {
     this.resultEl.textContent = message;
     this.errorEl.textContent = '';
     this.outputEl.className = 'ogmf-output has-result';
+  }
+
+  _showError(message) {
+    this.resultEl.textContent = '';
+    this.errorEl.textContent = String(message || 'error');
+    this.outputEl.className = 'ogmf-output has-error';
   }
 
   _refLabel(ref) {

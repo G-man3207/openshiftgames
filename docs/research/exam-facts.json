@@ -34,7 +34,7 @@
   "objective_counts": {
     "groups": 9,
     "bullets": 55,
-    "note": "Counted from the objective list in the current redhat.com exam page and cross-checked with the EX280V422 section of the Red Hat 'Exam Objectives by Version' PDF on 2026-11-03. docs/CONVERSION-SPEC.md states '104 objectives' in a few places; that number does not match the official V422 list (55 bullets / 9 groups) and should be treated as an internal estimate or typo."
+    "note": "Counted from the objective list in the current redhat.com exam page and cross-checked with the EX280V422 section of the Red Hat 'Exam Objectives by Version' PDF on 2026-11-03 (re-confirmed 2026-11-04). The earlier '104 objectives' figure in a draft of docs/CONVERSION-SPEC.md has been removed: the conversion spec, the game data and the EX280 Prep tracker now agree on 9 groups / 55 bullets."
   },
   "objectives": [
     {
@@ -195,13 +195,13 @@
       "docs_url": "https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/cli_tools/index"
     },
     {
-      "topic": "Default SCC is restricted-v2",
-      "detail": "All authenticated users are granted restricted-v2 by default; privileged is NOT granted by default. `oc adm policy add-scc-to-user privileged -z <sa>` is the documented way to allow a privileged workload. Setting privileged: true in a Pod spec does not by itself select the privileged SCC. SCCs still govern admission in 4.22 and are synchronized with Pod Security Admission labels.",
+      "topic": "Default SCC for authenticated users is restricted-v2 (restricted-v3 also documented for new 4.22 installs)",
+      "detail": "All authenticated users are granted restricted-v2 by default; privileged is NOT granted by default. The 4.22 SCC docs table also says restricted-v3 'is the most restrictive SCC provided by a new installation and will be used by default for authenticated users', so verify on the target cluster (`oc get scc`, `oc adm policy who-can use scc restricted-v3`). `oc adm policy add-scc-to-user privileged -z <sa>` is the documented way to allow a privileged workload. Setting privileged: true in a Pod spec does not by itself select the privileged SCC. SCCs still govern admission in 4.22 and are synchronized with Pod Security Admission labels.",
       "docs_url": "https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/authentication_and_authorization/index"
     },
     {
-      "topic": "Kustomize and Helm newly explicit in V422",
-      "detail": "V412K/V414K objectives did not name Kustomize or Helm. V422 explicitly requires deploying with Kustomize (including overlays) and deploying from templates and Helm charts. OCP 4.22 product docs contain only limited Kustomize coverage (CLI reference for `oc apply -k`/`oc kustomize` plus a MicroShift job page); Helm is documented through the Helm CLI install page, HelmChartRepository CR and web-console Helm releases.",
+      "topic": "Kustomize and Helm are explicit V422 bullets (already named in V412K/V414K)",
+      "detail": "The LMS PDF's V412K/V414K section already lists 'Use Kustomize overlays to modify application configurations' and 'Deploy applications from images, OpenShift templates, and Helm charts'. V422 splits these into the explicit bullets 'Deploy applications using Kustomize', 'Work with Kustomize overlays' and 'Deploy applications from templates and Helm charts' (plus the standalone 'Work with resource manifests' bullet). OCP 4.22 product docs contain only limited Kustomize coverage (CLI reference for `oc apply -k`/`oc kustomize` plus a MicroShift job page); Helm is documented through the Helm CLI install page, HelmChartRepository CR and web-console Helm releases.",
       "docs_url": "https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/building_applications/index"
     },
     {
@@ -226,7 +226,7 @@
     }
   ],
   "game_plan_reference": {
-    "note": "Internal, not an external citation: game curriculum/challenge/EX280 Prep design lives in docs/CONVERSION-SPEC.md sections 9-11 (20 campaign levels in 5 chapters, 12 challenges, EX280 Prep objective tracker schema {id,title,bullets,docsUrl} and quick labs). Existing K8s game content that can be repurposed: 20 campaign levels, 10 challenges, and 34 incident definitions (see js/data/CampaignLevels.js, js/modes/ChallengeMode.js, js/data/IncidentDefs.js).",
+    "note": "Internal, not an external citation: game curriculum/challenge/EX280 Prep design lives in docs/CONVERSION-SPEC.md sections 9-11. Current shipped content: 20 OpenShift campaign levels in 5 chapters, 12 timed challenge labs, and 36 incident definitions (see js/data/CampaignLevels.js, js/modes/ChallengeMode.js, js/data/IncidentDefs.js).",
     "planned_levels": [
       "1 Your First Project",
       "2 Query, Format, Filter",

@@ -329,7 +329,6 @@ export class SettingsPanel {
             <div class="text-white/60 text-xs font-semibold uppercase tracking-wider mb-1">Platform display</div>
             <p class="text-white/30 text-[10px] mb-2">Renderer and simulation overlays for the 3D OpenShift cluster.</p>
             <div class="space-y-2">
-              ${this._buildToggle('sound', 'Sound Effects', 'UI feedback sounds (browser audio)', 'toggle-sound')}
               ${this._buildToggle('particles', 'Particle Traffic', 'Animated traffic along Service and Route connections', 'toggle-particles')}
               ${this._buildToggle('shadows', 'Shadows', 'Dynamic shadows on the cluster view', 'toggle-shadows')}
               ${this._buildToggle('grid', 'Cluster Grid', 'Project/Node placement grid in the 3D view', 'toggle-grid')}
@@ -342,16 +341,8 @@ export class SettingsPanel {
             <div class="text-white/60 text-xs font-semibold uppercase tracking-wider mb-1">Gameplay</div>
             <div class="space-y-2">
               ${this._buildToggle('showHints', 'Show Hints', 'Show EX280 hints for campaign and timed-lab objectives')}
-              ${this._buildToggle('autoExpandIncidents', 'Auto-Expand Incidents', 'Open investigation steps automatically for new incidents')}
             </div>
-          </div>
-
-          <div>
-            <div class="text-white/60 text-xs font-semibold uppercase tracking-wider mb-2">Camera Speed</div>
-            <div class="flex items-center gap-3">
-              <input type="range" data-action="camera-speed" min="0.5" max="2.0" step="0.1" value="${this.settings.cameraSpeed}" class="flex-1 h-1 bg-white/10 rounded-full appearance-none cursor-pointer accent-openshift" data-testid="settings-camera-speed" aria-label="Camera speed">
-              <span data-label="camera-speed-val" class="text-white/60 text-xs font-mono w-10 text-right">${this.settings.cameraSpeed}x</span>
-            </div>
+            <p class="text-white/25 text-[10px] mt-2">Sound effects and camera-speed controls are not available in this build.</p>
           </div>
 
           <div>

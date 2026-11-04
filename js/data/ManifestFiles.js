@@ -219,6 +219,9 @@ patchesStrategicMerge:
   - patch-deployment.yaml
 `,
 
+  // A REAL strategic-merge patch: containers are merged by `name`, so the base
+  // container's ports survive; re-specify only the fields the overlay changes.
+  // (Over-specifying lists in patches is not how kustomize works.)
   'kustomize/overlays/prod/patch-deployment.yaml': `apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -230,9 +233,6 @@ spec:
       containers:
         - name: webapp
           image: quay.io/openshift/origin-hello-openshift:latest
-          ports:
-            - name: http
-              containerPort: 8080
           env:
             - name: APP_ENV
               value: production
@@ -460,6 +460,45 @@ spec:
         memory: 4Gi
 `,
 
+  'examples/default-deny.yaml': `# Default-deny ingress and egress for every Pod in the project.
+# NetworkPolicies are additive: add explicit allow rules for required traffic
+# (for example DNS egress on UDP/TCP 53 to the openshift-dns namespace).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+`,
+
+  'examples/privileged-deployment.yaml': `apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: privileged-app
+  labels:
+    app: privileged-app
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: privileged-app
+  template:
+    metadata:
+      labels:
+        app: privileged-app
+    spec:
+      # The SCC granted to this service account decides whether the pod is admitted.
+      serviceAccountName: robot
+      containers:
+        - name: app
+          image: quay.io/openshift/origin-hello-openshift:latest
+          securityContext:
+            privileged: true
+`,
+
   'examples/subscription.yaml': `apiVersion: operators.coreos.com/v1alpha1
 kind: Subscription
 metadata:
@@ -491,7 +530,7 @@ spec:
     sourceStrategy:
       from:
         kind: ImageStreamTag
-        name: nodejs:20
+        name: nodejs:20-ubi9
         namespace: openshift
   output:
     to:

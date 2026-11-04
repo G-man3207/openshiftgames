@@ -423,10 +423,16 @@ export class ParticleTrafficSystem {
     for (const [connectionId, connection] of connectionsMap) {
       const trafficType = CONNECTION_TRAFFIC_TYPES[connection.type];
       if (!trafficType) continue;
+      // Edges flagged non-live (e.g. a Route the router has not admitted, or a
+      // Service with zero ready endpoints) must not animate request traffic.
+      if (connection.traffic === false) continue;
 
       const sourceGroup = resourceMeshes.get(connection.sourceId);
       const targetGroup = resourceMeshes.get(connection.targetId);
       if (!sourceGroup || !targetGroup) continue;
+      // Hidden endpoints (clean-lab/Mine presentation) take their traffic with
+      // them, matching ConnectionLines.updatePositions().
+      if (sourceGroup.visible === false || targetGroup.visible === false) continue;
 
       const routeId = `traffic:${connectionId}`;
       desired.set(routeId, {

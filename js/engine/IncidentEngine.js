@@ -120,7 +120,15 @@ class Incident {
     this.createdAt = Date.now();
     this.activatedAt = null;
     this.resolvedAt = null;
+    // Simulation-time (IncidentEngine.elapsedTime, seconds) timestamps so
+    // pause/overlay freezes also freeze auto-resolve timers (GAME-015).
+    this.activatedGameSeconds = null;
+    this.resolvedGameSeconds = null;
     this.investigationProgress = 0;
+    // Actual damaged Pod (for investigation command substitution, GAME-016).
+    this.targetPod = null;
+    this.targetPodUid = null;
+    this.baseline = null;
     this.cascadeChildren = [];
     this.cascadeParent = null;
     this.comboEligible = true;
@@ -128,9 +136,10 @@ class Incident {
     this.effectApplied = null; // last resolution effect result
   }
 
-  activate() {
+  activate(gameSeconds = null) {
     this.state = INCIDENT_STATE.ACTIVE;
     this.activatedAt = Date.now();
+    this.activatedGameSeconds = Number.isFinite(Number(gameSeconds)) ? Number(gameSeconds) : null;
   }
 
   startInvestigation() {
@@ -145,18 +154,29 @@ class Incident {
     }
   }
 
-  resolve() {
+  resolve(gameSeconds = null) {
     this.state = INCIDENT_STATE.RESOLVED;
     this.resolvedAt = Date.now();
+    this.resolvedGameSeconds = Number.isFinite(Number(gameSeconds)) ? Number(gameSeconds) : null;
   }
 
   getResolutionTime() {
+    if (this.activatedGameSeconds !== null && this.resolvedGameSeconds !== null) {
+      return Math.max(0, this.resolvedGameSeconds - this.activatedGameSeconds);
+    }
     if (!this.activatedAt || !this.resolvedAt) return null;
     return (this.resolvedAt - this.activatedAt) / 1000;
   }
 
-  isExpired(currentTime) {
+  /**
+   * @param {number} currentTime wall-clock ms (legacy callers)
+   * @param {number} [currentGameSeconds] simulation seconds (pause-aware)
+   */
+  isExpired(currentTime, currentGameSeconds = null) {
     if (!this.autoResolveTime || !this.activatedAt) return false;
+    if (this.activatedGameSeconds !== null && Number.isFinite(Number(currentGameSeconds))) {
+      return Number(currentGameSeconds) - this.activatedGameSeconds >= this.autoResolveTime;
+    }
     return (currentTime - this.activatedAt) / 1000 >= this.autoResolveTime;
   }
 
@@ -172,6 +192,8 @@ class Incident {
       target: this.target,
       namespace: this.namespace,
       uid: this.uid,
+      targetPod: this.targetPod,
+      targetPodUid: this.targetPodUid,
       visualEffect: this.visualEffect,
       investigationProgress: this.investigationProgress,
       createdAt: this.createdAt,
@@ -179,6 +201,7 @@ class Incident {
       docsUrl: this.docsUrl,
       ocCommands: this.ocCommands,
       hasCascade: this.cascadeChildren.length > 0,
+      pendingTarget: Boolean(this.pendingTarget),
     };
   }
 }
@@ -197,8 +220,13 @@ class IncidentEngine {
     this.mode = 'sandbox';
     this.scriptedQueue = [];
     this.elapsedTime = 0;
+    // Number of incidents that have activated since the mode/level started.
+    // ObjectiveEvaluator uses this to gate "restore/keep health" objectives
+    // (GAME-001): they cannot be complete before an incident has happened.
+    this.activationCount = 0;
     this.comboCount = 0;
     this.lastResolveTime = 0;
+    this.lastResolveGameSeconds = null;
     this.comboWindow = 10000;
     this.maxCascadeDepth = 3;
     this.pendingCascadeTimers = [];
@@ -354,7 +382,9 @@ class IncidentEngine {
     this.paused = false;
     this.activeIncidents.clear();
     this.resolvedIncidents = [];
+    this.activationCount = 0;
     this.comboCount = 0;
+    this.lastResolveGameSeconds = null;
     this.incidentCounter = 0;
     this._resolving = false;
     this._externalTickSeen = false;
@@ -436,6 +466,8 @@ class IncidentEngine {
         this.spawnIncident(scripted.def, target, scripted.severity || scripted.def.severity, {
           namespace: scripted.namespace,
           scriptedFrom: scripted.originalType || scripted.def.name,
+          // Never invent a different target for a data-authored incident.
+          exactTarget: true,
         });
       }
     }
@@ -443,15 +475,20 @@ class IncidentEngine {
 
   processAutoResolve() {
     const now = Date.now();
+    const gameSeconds = this.elapsedTime / 1000;
     for (const [id, incident] of [...this.activeIncidents]) {
-      if (incident.isExpired(now)) this.resolveIncident(id, 'auto');
+      // Simulation time, so pausing the level (IncidentEngine.pause + no ticks)
+      // also pauses auto-resolve (GAME-015).
+      if (incident.isExpired(now, gameSeconds)) this.resolveIncident(id, 'auto');
     }
   }
 
   updateActiveIncidents() {
     for (const [, incident] of this.activeIncidents) {
       if (incident.state === INCIDENT_STATE.CREATED) {
-        incident.activate();
+        const gameSeconds = this.elapsedTime / 1000;
+        incident.activate(gameSeconds);
+        this.activationCount += 1;
         this.emit('incident:activated', incident.getSummary());
       }
     }
@@ -511,8 +548,14 @@ class IncidentEngine {
     const incident = new Incident(def, target || 'unknown', id);
     if (overrideSeverity) incident.severity = overrideSeverity;
 
-    let resolvedTarget = this._resolveTargetResource(incident) || this._findFallbackTarget(incident);
-    if (!resolvedTarget) resolvedTarget = this._ensureTargetResource(def, incident);
+    // Scripted incidents name a concrete target from level/challenge data; do
+    // not silently retarget a same-kind resource or fabricate `<kind>-incident-N`
+    // in another namespace (GAME-005). If the named object does not exist yet we
+    // keep the incident pending and attach damage when the learner creates it.
+    const exactTarget = opts.exactTarget === true;
+    let resolvedTarget = this._resolveTargetResource(incident);
+    if (!resolvedTarget && !exactTarget) resolvedTarget = this._findFallbackTarget(incident);
+    if (!resolvedTarget && !exactTarget) resolvedTarget = this._ensureTargetResource(def, incident);
     if (resolvedTarget) {
       incident.target = resolvedTarget.name;
       incident.uid = resolvedTarget.uid || resolvedTarget.metadata?.uid || null;
@@ -523,9 +566,19 @@ class IncidentEngine {
         this._defaultNamespaceFor(def) ||
         (this.gameEngine && this.gameEngine.currentProject) ||
         'default';
+      if (exactTarget && incident.target && incident.target !== 'unknown') {
+        incident.pendingTarget = true;
+      }
     }
 
     this.activeIncidents.set(id, incident);
+
+    // Resolve the concrete damaged Pod before announcing the incident so the
+    // payload carries `targetPod` for investigation-command substitution.
+    const affected = incident.affectedResourceTypes || [];
+    if (incident.resolution?.targetKind === 'Pod' || affected.includes('Pod')) {
+      this._safe(() => this._pickPodForIncident(incident));
+    }
 
     this.emit('incident:created', {
       ...incident.getSummary(),
@@ -631,7 +684,8 @@ class IncidentEngine {
 
     this._resolving = true;
     try {
-      incident.resolve();
+      const gameSeconds = this.elapsedTime / 1000;
+      incident.resolve(gameSeconds);
       this.activeIncidents.delete(incidentId);
       this.resolvedIncidents.push(incident);
 
@@ -640,12 +694,18 @@ class IncidentEngine {
       let xpEarned = severityInfo.xpReward;
 
       const now = Date.now();
-      if (now - this.lastResolveTime < this.comboWindow) {
+      // Combo window measured in simulation seconds so pausing does not grant
+      // free combo multipliers (GAME-015).
+      const comboElapsed = this.lastResolveGameSeconds === null
+        ? Infinity
+        : gameSeconds - this.lastResolveGameSeconds;
+      if (comboElapsed * 1000 < this.comboWindow) {
         this.comboCount++;
         xpEarned = Math.floor(xpEarned * (1 + this.comboCount * 0.25));
       } else {
         this.comboCount = 1;
       }
+      this.lastResolveGameSeconds = gameSeconds;
       this.lastResolveTime = now;
 
       if (resolutionTime !== null && resolutionTime < 30) {
@@ -670,6 +730,7 @@ class IncidentEngine {
         target: incident.target,
         namespace: incident.namespace,
         uid: incident.uid,
+        targetPod: incident.targetPod || null,
         resolutionTime,
         action: actionId,
         xpEarned,
@@ -808,12 +869,39 @@ class IncidentEngine {
   _pickPodForIncident(incident) {
     const target = this._resolveTargetResource(incident);
     if (!target) return null;
-    if (target.kind === 'Pod') return target;
-    const pods = this._workloadPods(target);
-    if (pods.length > 0) return pods[0];
-    const namespace = incident.namespace || target.namespace || this.gameEngine?.currentProject;
-    const all = this._safe(() => this.cluster?.getByKindAndNamespace('Pod', namespace)) || [];
-    return all.length > 0 ? all[0] : null;
+    let pod = null;
+    if (target.kind === 'Pod') pod = target;
+    else {
+      const pods = this._workloadPods(target);
+      if (pods.length > 0) pod = pods[0];
+    }
+    if (!pod) {
+      const namespace = incident.namespace || target.namespace || this.gameEngine?.currentProject;
+      const all = this._safe(() => this.cluster?.getByKindAndNamespace('Pod', namespace)) || [];
+      pod = all.length > 0 ? all[0] : null;
+    }
+    if (pod) {
+      // Expose the concrete Pod name so the Incident panel can render
+      // `oc logs <pod>` / `oc describe pod <pod>` with the real name (GAME-016).
+      incident.targetPod = pod.metadata?.name || pod.name || null;
+      incident.targetPodUid = pod.uid || pod.metadata?.uid || null;
+    }
+    return pod;
+  }
+
+  /** Is this Pod admitted by an SCC that allows its security context? */
+  _isPodAdmissible(pod) {
+    if (!pod || !this.cluster) return true;
+    try {
+      if (typeof this.cluster.resolveSCCForPod === 'function') {
+        const resolution = this.cluster.resolveSCCForPod(pod);
+        // `allowed === undefined` means "no opinion": do not block the heal.
+        return resolution?.allowed !== false;
+      }
+    } catch {
+      /* fall through */
+    }
+    return true;
   }
 
   // ── Low-level mutation primitives ────────────────────────────────────────
@@ -1051,6 +1139,16 @@ class IncidentEngine {
         this._setCondition(target, 'Available', 'False', 'MinimumReplicasUnavailable', 'The workload has unavailable replicas');
       }
       this._commit(target);
+      // Snapshot the template/generation AFTER the onset commit (update()
+      // bumps generation); a later real fix (oc set image, oc edit, rollout
+      // undo) changes it and is treated as the remediation even though the
+      // damaged pod object itself cannot recover (GAME-006).
+      incident.baseline = incident.baseline || {};
+      incident.baseline.workload = {
+        uid: target.uid || target.metadata?.uid || null,
+        generation: Number(target.metadata?.generation ?? 1),
+        template: this._safe(() => JSON.stringify(target.spec?.template || {}), '') || '',
+      };
     } else {
       this._markIncident(pod, incident);
     }
@@ -1089,6 +1187,16 @@ class IncidentEngine {
     const pod = this._pickPodForIncident(incident);
     if (pod) {
       this._setPhase(pod, 'Failed');
+      // Mark the real admission-denied pod the same way SimulationTick does, so
+      // granting a matching SCC (SCC dirty event) revives it instead of hiding
+      // the denial behind a fake "Failed" state.
+      this._annotate(pod, 'openshiftgames/scc-denied', 'true');
+      this._annotate(
+        pod,
+        'openshiftgames/denied-reason',
+        `pods "${pod.metadata?.name || pod.name}" is forbidden: unable to validate against any security context constraint`
+      );
+      this._setCondition(pod, 'Ready', 'False', 'SCCDenied', 'unable to validate against any security context constraint');
       this._recordEvent(
         pod,
         'Warning',
@@ -1475,16 +1583,29 @@ class IncidentEngine {
   }
 
   _damageOAuth(incident) {
+    const provider = this._safe(() => this.cluster.getAuthProviderConfig?.()) || null;
+    const providerConfig = provider || this.gameEngine?.authProvider || {
+      type: 'HTPasswd',
+      name: 'htpasswd',
+      secretName: 'htpasswd-secret',
+      namespace: 'openshift-config',
+    };
     if (this.gameEngine) {
-      if (!this.gameEngine.authProvider) {
-        this.gameEngine.authProvider = (this._safe(() => this.cluster.getAuthProviderConfig?.()) || {
-          type: 'HTPasswd',
-          name: 'htpasswd',
-          secretName: 'htpasswd-secret',
-          namespace: 'openshift-config',
-        });
-      }
-      this.gameEngine.authProvider.ready = false;
+      this.gameEngine.authProvider = { ...providerConfig, ready: false };
+    }
+    // Make the fault durable: the described symptom is a broken htpasswd
+    // Secret, so actually remove its `htpasswd` key (restored on heal) instead
+    // of relying on a provider flag that the OAuth rollout would reset (GAME-003).
+    const secretName = providerConfig?.secretName || 'htpasswd-secret';
+    const secret = this._findResource('Secret', secretName, 'openshift-config');
+    if (secret) {
+      const data = JSON.parse(JSON.stringify(secret.spec?.data || secret.data || {}));
+      this._saveRestore(incident, { ...(incident.restoreState || {}), oauthSecret: { uid: secret.uid, name: secretName, data } });
+      if (secret.spec) secret.spec.data = {};
+      else secret.data = {};
+      this._markIncident(secret, incident);
+      this._recordEvent(secret, 'Warning', 'InvalidHTPasswdSecret', `Secret "${secretName}" is missing the required "htpasswd" key`);
+      this._commit(secret);
     }
     const oauth = this._safe(() => this.cluster.getOAuth?.()) || this._findResource('OAuth', 'cluster', '');
     if (oauth) {
@@ -1493,17 +1614,12 @@ class IncidentEngine {
       this._markIncident(oauth, incident);
       this._commit(oauth);
     }
-    const secret = this._findResource('Secret', 'htpasswd-secret', 'openshift-config');
-    if (secret) {
-      this._markIncident(secret, incident);
-      this._commit(secret);
-    }
     const co = this._safe(() => this.cluster.getClusterOperator?.('authentication'));
     if (co) {
       this._setCondition(co, 'Degraded', 'True', 'OAuthServerNotReady', 'The authentication operator is not ready');
       this._commit(co);
     }
-    return { applied: !!oauth || !!co };
+    return { applied: !!oauth || !!co || !!secret };
   }
 
   _damageQuota(incident) {
@@ -1618,6 +1734,13 @@ class IncidentEngine {
     this._saveRestore(incident, { uid: sub.uid, status: JSON.parse(JSON.stringify(sub.status || {})) });
     sub.status = sub.status || {};
     sub.status.state = 'AtLatestKnown';
+    // Also flip the phase to Failed (unless the simulator owns it) so a
+    // Succeeded Subscription cannot satisfy the recovery check by accident.
+    if (sub.status.phase !== 'Failed') {
+      incident.baseline = incident.baseline || {};
+      incident.baseline.subscriptionPhase = sub.status.phase || null;
+      sub.status.phase = 'Failed';
+    }
     sub.status.conditions = [
       {
         type: 'CatalogSourcesUnhealthy',
@@ -1784,6 +1907,16 @@ class IncidentEngine {
       if (fallback) pods.push(fallback);
     }
 
+    // SCC incident: grant the SCC BEFORE healing so the admission check below
+    // can validate the request (GAME-002). We must not fabricate a Running
+    // privileged Pod that the SCC model still forbids: a privileged request
+    // needs the `privileged` SCC, not `anyuid`.
+    if (incident.name === 'SCCForbidden') {
+      this._grantSccTo(incident, this._requiredSccForIncident(incident));
+    } else if (incident.resolution?.grantScc) {
+      this._grantSccTo(incident, incident.resolution.grantScc);
+    }
+
     let healed = 0;
     for (const pod of pods) {
       // Stuck terminating: clear finalizers and delete the pod object.
@@ -1794,6 +1927,37 @@ class IncidentEngine {
         this._recordEvent(pod, 'Normal', 'Killing', 'Pod finalizers released; pod will be recreated by its controller');
         this._commit(pod);
         this._safe(() => this.cluster.remove(pod.uid));
+        healed++;
+        continue;
+      }
+      // SCC incident: only revive pods the granted SCC actually admits.
+      if (incident.name === 'SCCForbidden') {
+        if (!this._isPodAdmissible(pod)) {
+          this._clearAnnotation(pod, INCIDENT_ANNOTATION);
+          this._recordEvent(
+            pod,
+            'Warning',
+            'SCCDenied',
+            'Pod is still forbidden by security context constraints; grant an SCC that allows its securityContext'
+          );
+          this._commit(pod);
+          continue;
+        }
+        // Re-run admission for real instead of pretending the Pod runs: clear
+        // the denial marker and put the Pod back through scheduling/admission so
+        // `openshift.io/scc` is set by the simulator (GAME-002/GAME-017).
+        this._clearAnnotation(pod, 'openshiftgames/scc-denied');
+        this._clearAnnotation(pod, 'openshiftgames/denied-reason');
+        this._clearAnnotation(pod, INCIDENT_ANNOTATION);
+        pod._sccEvaluated = false;
+        if (pod.spec) delete pod.spec.nodeName;
+        pod.status = pod.status || {};
+        delete pod.status.podIP;
+        delete pod.status.hostIP;
+        pod.status.containerStatuses = [];
+        this._setPhase(pod, 'Pending');
+        this._recordEvent(pod, 'Normal', 'SCCGranted', 'Security context constraint granted; Pod will be re-admitted');
+        this._commit(pod);
         healed++;
         continue;
       }
@@ -1809,14 +1973,37 @@ class IncidentEngine {
     }
 
     // Also restore a broken Deployment template (rollout/config incidents).
-    if (target && (target.kind === 'Deployment' || target.kind === 'ReplicaSet' || target.kind === 'StatefulSet')) {
+    // SCC incidents are re-admitted by the simulator; do not fake availability.
+    if (
+      incident.name !== 'SCCForbidden'
+      && target
+      && (target.kind === 'Deployment' || target.kind === 'ReplicaSet' || target.kind === 'StatefulSet')
+    ) {
       this._healDeployment(incident, target);
     }
 
-    // SCC incident: grant the resolution SCC to the target ServiceAccount if possible.
-    if (incident.resolution?.grantScc) this._grantSccTo(incident, incident.resolution.grantScc);
-
     return { applied: healed > 0, kind: 'pod', healed };
+  }
+
+  /** SCC name required by the incident's damaged workload pods. */
+  _requiredSccForIncident(incident) {
+    const target = this._resolveTargetResource(incident);
+    let pods = [];
+    if (target?.kind === 'Pod') pods = [target];
+    else if (target) pods = this._workloadPods(target);
+    if (pods.length === 0 && incident.targetPodUid) {
+      const pod = this._safe(() => this.cluster.get?.(incident.targetPodUid));
+      if (pod) pods = [pod];
+    }
+    const needsPrivileged = pods.some((pod) => {
+      const spec = pod.spec || {};
+      return (
+        spec.securityContext?.privileged === true
+        || (spec.containers || []).some((container) => container?.securityContext?.privileged === true)
+      );
+    });
+    if (needsPrivileged) return 'privileged';
+    return incident.resolution?.grantScc || 'anyuid';
   }
 
   _healDeployment(incident, target) {
@@ -1832,10 +2019,30 @@ class IncidentEngine {
       deploy.spec.template = incident.restoreState.template;
     }
     const pods = this._workloadPods(deploy);
-    for (const pod of pods) this._healPodContainer(pod);
+    for (const pod of pods) {
+      if (incident.name === 'SCCForbidden' && !this._isPodAdmissible(pod)) continue;
+      this._healPodContainer(pod);
+    }
 
     const desired = deploy.spec?.replicas ?? 1;
+    const healthyPods = pods.filter(
+      (pod) => pod.status?.phase === 'Running' && (pod.isConditionTrue ? pod.isConditionTrue('Ready') : true)
+    ).length;
     deploy.status = deploy.status || {};
+    if (incident.name === 'SCCForbidden' && healthyPods < desired) {
+      // Keep reporting the real, still-forbidden state instead of claiming
+      // minimum availability after a heal that admission rejected.
+      deploy.status.replicas = Math.max(deploy.status.replicas || 0, pods.length);
+      deploy.status.readyReplicas = healthyPods;
+      deploy.status.availableReplicas = healthyPods;
+      deploy.status.updatedReplicas = pods.length;
+      deploy.status.observedGeneration = deploy.metadata?.generation || deploy.status.observedGeneration;
+      this._setCondition(deploy, 'Available', 'False', 'MinimumReplicasUnavailable', `${healthyPods}/${desired} replicas available (SCC denied)`);
+      this._setCondition(deploy, 'Progressing', 'True', 'ReplicaSetUpdated', 'waiting for pods to be admitted');
+      this._recordEvent(deploy, 'Warning', 'SCCDenied', 'Pods are still rejected by security context constraints');
+      this._commit(deploy);
+      return { applied: false, kind: 'deployment', target: deploy.name, pods: pods.length, reason: 'scc-denied' };
+    }
     deploy.status.replicas = Math.max(deploy.status.replicas || 0, desired);
     deploy.status.readyReplicas = desired;
     deploy.status.availableReplicas = desired;
@@ -1953,6 +2160,37 @@ class IncidentEngine {
         return { applied: true, kind: 'buildconfig', target: bc.name };
       }
       return { applied: false };
+    }
+
+    // Do not fabricate a Complete phase for a failed Build: a real retry starts
+    // a NEW Build from the BuildConfig and lets it run (GAME-003).
+    if (build.status?.phase === 'Failed' || build.status?.phase === 'Error') {
+      const bcName = build.spec?.buildConfig?.name
+        || (this._safe(() => this.cluster?.getByKind('BuildConfig')) || []).find(
+          (candidate) => candidate.namespace === build.namespace && build.metadata?.name?.startsWith(candidate.metadata?.name)
+        )?.metadata?.name;
+      const buildConfig = bcName ? this._findResource('BuildConfig', bcName, build.namespace) : null;
+      let retried = null;
+      if (buildConfig && typeof this.cluster?.startBuildFor === 'function') {
+        const result = this._safe(() => this.cluster.startBuildFor(buildConfig, { actor: 'kubeadmin', reason: 'Retry' }));
+        retried = result?.build || null;
+      }
+      this._clearAnnotation(build, INCIDENT_ANNOTATION);
+      if (retried) {
+        this._recordEvent(build, 'Normal', 'Retried', `New build ${retried.metadata?.name || retried.name} started from ${bcName}`);
+        this._recordEvent(retried, 'Normal', 'BuildStarted', 'Build retried after failure');
+        this._commit(build);
+        this._commit(retried);
+        return { applied: true, kind: 'build', target: build.name, retryBuild: retried.metadata?.name || retried.name };
+      }
+      // Fallback (no simulator build controller available): mark the failed
+      // build as cancelled rather than pretending it succeeded.
+      build.status.phase = 'Cancelled';
+      build.status.reason = 'Cancelled';
+      build.status.message = 'failed build cleared; start a new build to produce the image';
+      build.status.completionTimestamp = nowIso();
+      this._commit(build);
+      return { applied: true, kind: 'build', target: build.name, retryBuild: null };
     }
 
     build.status = build.status || {};
@@ -2462,6 +2700,25 @@ class IncidentEngine {
       this._commit(oauth);
     }
 
+    // Restore the htpasswd Secret content removed by onset damage.
+    const savedSecret = incident.restoreState?.oauthSecret;
+    if (savedSecret) {
+      const secret = (savedSecret.uid && this._safe(() => this.cluster.getResource?.(savedSecret.uid)))
+        || this._findResource('Secret', savedSecret.name || 'htpasswd-secret', 'openshift-config');
+      if (secret) {
+        secret.spec = secret.spec || {};
+        secret.spec.data = JSON.parse(JSON.stringify(savedSecret.data || {}));
+        if (!secret.spec.data.htpasswd) {
+          secret.spec.data.htpasswd = (typeof Buffer !== 'undefined')
+            ? Buffer.from('placeholder-user:{SHA}placeholder\n').toString('base64')
+            : 'cGxhY2Vob2xkZXI=';
+        }
+        this._clearAnnotation(secret, INCIDENT_ANNOTATION);
+        this._recordEvent(secret, 'Normal', 'HTPasswdRestored', 'htpasswd key restored from the identity-provider requirement');
+        this._commit(secret);
+      }
+    }
+
     // Re-sync the session-level provider and mark it ready.
     if (this.gameEngine) {
       if (typeof this.gameEngine._syncAuthProviderFromOAuth === 'function') {
@@ -2643,6 +2900,7 @@ class IncidentEngine {
     if (this.paused || this._resolving) return;
     if (this.activeIncidents.size === 0) return;
     const now = Date.now();
+    const gameSeconds = this.elapsedTime / 1000;
     for (const [id, incident] of [...this.activeIncidents]) {
       if (incident.state === INCIDENT_STATE.CREATED) continue;
 
@@ -2652,16 +2910,82 @@ class IncidentEngine {
         incident._retryingDamage = true;
         const damage = this._safe(() => this.applyIncidentEffects(incident));
         incident._retryingDamage = false;
-        if (damage && damage.applied !== false) incident.damageApplied = true;
+        if (damage && damage.applied !== false) {
+          incident.damageApplied = true;
+          incident.pendingTarget = false;
+        }
         continue;
       }
 
       if (!incident.damageApplied) continue;
+
+      // A real fix to the owning workload (oc set image / edit / rollout undo)
+      // replaces the faulty Pod in a real cluster. The damaged Pod object cannot
+      // recover on its own here, so treat a template change since onset as the
+      // canonical remediation (GAME-006).
+      if (!STATE_RESOLVABLE.has(incident.name) && incident.baseline?.workload) {
+        const healedByFix = this._safe(() => this._healPodIncidentFromWorkloadChange(incident, id), false);
+        if (healedByFix) continue;
+      }
       if (!STATE_RESOLVABLE.has(incident.name)) continue;
-      if (!incident.activatedAt || now - incident.activatedAt < 1500) continue;
+      // Activation grace period in simulation time (pauses do not count).
+      const activatedGame = Number(incident.activatedGameSeconds);
+      if (Number.isFinite(activatedGame)) {
+        if (gameSeconds - activatedGame < 1.5) continue;
+      } else if (!incident.activatedAt || now - incident.activatedAt < 1500) {
+        continue;
+      }
       const healed = this._safe(() => this._targetLooksHealthy(incident), false);
       if (healed) this.resolveIncident(id, 'resource-fixed');
     }
+  }
+
+  /**
+   * Pod/workload incidents: if the owning workload's template/generation changed
+   * after onset, replace the damaged Pod state (the learner fixed the workload).
+   * @returns {boolean} true when the incident was resolved.
+   */
+  _healPodIncidentFromWorkloadChange(incident, incidentId) {
+    if (this._resolving || incident._handlingWorkloadFix) return false;
+    incident._handlingWorkloadFix = true;
+    try {
+      return this._healPodIncidentFromWorkloadChangeInner(incident, incidentId);
+    } finally {
+      incident._handlingWorkloadFix = false;
+    }
+  }
+
+  _healPodIncidentFromWorkloadChangeInner(incident, incidentId) {
+    const target = this._resolveTargetResource(incident);
+    if (!target || target.kind === 'Pod') return false;
+    const base = incident.baseline?.workload;
+    if (!base) return false;
+    const currentTemplate = this._safe(() => JSON.stringify(target.spec?.template || {}), '') || '';
+    const currentGeneration = Number(target.metadata?.generation ?? 1);
+    const changed = currentTemplate !== base.template || currentGeneration > base.generation;
+    if (!changed) return false;
+
+    // Heal the damaged Pod(s) so the workload can report healthy replicas.
+    const damaged = incident.targetPodUid
+      ? this._safe(() => this.cluster.get?.(incident.targetPodUid))
+      : null;
+    const pods = damaged ? [damaged] : this._workloadPods(target);
+    for (const pod of pods) {
+      if (!pod) continue;
+      this._healPodContainer(pod);
+      this._clearAnnotation(pod, 'openshiftgames/scc-denied');
+      this._annotate(pod, HEAL_ANNOTATION, nowIso());
+    }
+    const healthy = this._workloadPods(target).every(
+      (pod) => pod.status?.phase === 'Running' && (pod.isConditionTrue ? pod.isConditionTrue('Ready') : true)
+    );
+    if (healthy) {
+      this._recordEvent(target, 'Normal', 'RolloutRecovered', 'Pod template updated; workload is healthy again');
+      this._commit(target);
+      this.resolveIncident(incidentId, 'resource-fixed');
+      return true;
+    }
+    return false;
   }
 
   /** Does the incident target look healthy enough to auto-clear the incident? */
@@ -2741,8 +3065,24 @@ class IncidentEngine {
         const bindings = this._safe(() => this.cluster?.getByKindAndNamespace('RoleBinding', sa.namespace)) || [];
         return bindings.some((rb) => (rb.spec?.subjects || []).some((sub) => sub.kind === 'ServiceAccount' && sub.name === sa.name));
       }
-      case 'HTPasswdAuthFailure':
-        return !!this.gameEngine?.authProvider?.ready;
+      case 'HTPasswdAuthFailure': {
+        // Provider must be ready AND the referenced htpasswd Secret must
+        // actually contain the `htpasswd` key; an OAuth rollout alone is not a fix.
+        const provider = this.gameEngine?.authProvider || this._safe(() => this.cluster.getAuthProviderConfig?.());
+        if (!provider?.ready) return false;
+        const secretName = provider.secretName || provider.htpasswd?.fileData?.name || 'htpasswd-secret';
+        const secret = this._findResource('Secret', secretName, 'openshift-config');
+        if (!secret) return false;
+        const data = secret.spec?.data || secret.data || {};
+        if (!data.htpasswd) return false;
+        const oauth = this._safe(() => this.cluster.getOAuth?.());
+        if (oauth && this._isConditionTrue(oauth, 'Available') === false) {
+          const conditions = oauth.status?.conditions || [];
+          const unavailable = conditions.some((c) => c.type === 'Available' && c.status === 'False');
+          if (unavailable) return false;
+        }
+        return true;
+      }
       case 'ResourceQuotaExceeded': {
         const ns = incident.namespace || target.namespace;
         const check = this._safe(() => this.cluster.checkQuota?.(ns, 0, 0));
@@ -2763,17 +3103,60 @@ class IncidentEngine {
         return target.kind === 'CronJob' && target.spec?.suspend !== true;
       case 'PVCPending':
         return target.kind === 'PersistentVolumeClaim' && target.status?.phase === 'Bound';
-      case 'ImageStreamTagMissing':
+      case 'ImageStreamTagMissing': {
+        if (target.kind !== 'ImageStream') return false;
+        const tag = incident.resolution?.tag || 'latest';
+        const tags = (target.status?.tags || []).map((entry) => entry.tag || entry.name);
+        const specTags = (target.spec?.tags || []).map((entry) => entry.name);
+        // Only THIS stream/tag counts; unrelated seeded ImageStreams (openshift
+        // namespace) must not auto-resolve the incident.
+        return tags.includes(tag) || specTags.includes(tag);
+      }
       case 'BuildFailed': {
+        const targetName = target.kind === 'Build' ? resourceName(target) : incident.target;
+        const bcName = target.kind === 'Build'
+          ? (target.spec?.buildConfig?.name || null)
+          : (targetName || null);
+        if (target.kind === 'Build' && target.status?.phase === 'Complete') return true;
         const builds = this._safe(() => this.cluster?.getByKind('Build')) || [];
-        if (builds.some((b) => b.status?.phase === 'Complete')) return true;
-        const streams = this._safe(() => this.cluster?.getByKind('ImageStream')) || [];
-        return streams.some((st) => (st.status?.tags || []).length > 0);
+        const onset = Number(incident.createdAt) || 0;
+        const succeededSinceOnset = builds.some((build) => {
+          if (build.status?.phase !== 'Complete') return false;
+          const sameConfig = bcName
+            && (build.spec?.buildConfig?.name === bcName
+              || resourceName(build).startsWith(`${bcName}-`));
+          if (bcName ? !sameConfig : true) return false;
+          const created = Date.parse(build.metadata?.creationTimestamp || '') || 0;
+          return created >= onset;
+        });
+        if (succeededSinceOnset) return true;
+        // BuildConfig target: a new completed build produced from it also counts.
+        if (target.kind === 'BuildConfig') {
+          return builds.some(
+            (build) =>
+              build.status?.phase === 'Complete'
+              && (build.spec?.buildConfig?.name === resourceName(target)
+                || resourceName(build).startsWith(`${resourceName(target)}-`))
+              && (Date.parse(build.metadata?.creationTimestamp || '') || 0) >= onset
+          );
+        }
+        return false;
       }
       case 'HPAUnableToScale':
         return this._isConditionTrue(target, 'AbleToScale');
-      case 'OperatorInstallFailed':
-        return target.kind === 'Subscription' && !!(target.status?.installedCSV || target.status?.phase === 'Succeeded');
+      case 'OperatorInstallFailed': {
+        if (target.kind !== 'Subscription') return false;
+        if (target.status?.phase !== 'Succeeded') return false;
+        if (!target.status?.installedCSV) return false;
+        const conditions = Array.isArray(target.status?.conditions) ? target.status.conditions : [];
+        const stillUnhealthy = conditions.some(
+          (condition) => condition?.type === 'CatalogSourcesUnhealthy' && String(condition.status) === 'True'
+        );
+        // The damaged condition must be cleared/replaced (panel heal, delete +
+        // recreate Subscription, or a successful OLM reconcile) — a Succeeded
+        // phase that was already there is not a fix.
+        return !stillUnhealthy;
+      }
       case 'SecretExposed':
         return target.metadata?.annotations?.['openshiftgames.io/exposed'] !== 'true';
       default:
@@ -2815,6 +3198,8 @@ class IncidentEngine {
       target: incident.target,
       namespace: incident.namespace,
       uid: incident.uid,
+      targetPod: incident.targetPod,
+      targetPodUid: incident.targetPodUid,
       visualEffect: incident.visualEffect,
       investigationSteps: incident.investigationSteps,
       resolutionActions: incident.resolutionActions,
@@ -2827,6 +3212,7 @@ class IncidentEngine {
       createdAt: incident.createdAt,
       activatedAt: incident.activatedAt,
       autoResolveTime: incident.autoResolveTime,
+      pendingTarget: Boolean(incident.pendingTarget),
     };
   }
 
@@ -2857,6 +3243,7 @@ class IncidentEngine {
       byCategory,
       cascadeCount,
       currentCombo: this.comboCount,
+      activationCount: this.activationCount,
       difficultyLevel: this.difficultyLevel,
       effectsApplied: this.resolvedIncidents.filter((i) => i.effectApplied?.applied).length,
     };
@@ -2879,8 +3266,10 @@ class IncidentEngine {
     this.resolvedIncidents = [];
     this.incidentCounter = 0;
     this.difficultyLevel = 1;
+    this.activationCount = 0;
     this.comboCount = 0;
     this.lastResolveTime = 0;
+    this.lastResolveGameSeconds = null;
     this.scriptedQueue = [];
     this.elapsedTime = 0;
     this._resolving = false;

@@ -4,6 +4,79 @@ All notable changes to OpenShift Games are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 aims to follow [Semantic Versioning](https://semver.org/).
 
+## [1.1.2] — 2026-11-04
+
+External-review follow-up: real project-template flow, HTPasswd password rotation, and the
+`oc extract` / `oc set data` / `oc create role` flag surface.
+
+### Fixed
+
+- **“Configure project templates” now teaches the real 4.22 flow** (objective tracker, cheat sheet and
+  campaign level 15 drill): `oc adm create-bootstrap-project-template -o yaml > template.yaml` →
+  add guardrail objects (e.g. a NetworkPolicy) → `oc create -f template.yaml -n openshift-config` →
+  `oc edit project.config.openshift.io/cluster` (`spec.projectRequestTemplate.name: project-request`)
+  → `oc new-project …` to verify inheritance. Removed the incorrect `oc edit template project-request`
+  recipe and the “simulator does not model …” disclaimer.
+- **“Modify user passwords” and the HTPasswd quick lab now use the documented rotation flow**:
+  `oc extract secret/htpass-secret -n openshift-config --to /tmp --confirm` → `htpasswd -bB` →
+  `oc set data secret/htpass-secret … --from-file=htpasswd=/tmp/htpasswd` → wait for the OAuth
+  rollout → log in with the new password. The `--dry-run=client -o yaml | oc replace -f -`
+  alternative is shown as one correctly piped command.
+- **Cheat sheet additions**: `oc extract`, `oc set data`, a generic `oc edit` row with the `$EDITOR`
+  (vi/vim) note for real clusters, `oc adm create-bootstrap-project-template`,
+  `oc get templates -n openshift-config`, `oc edit project.config.openshift.io/cluster`, and
+  `oc create role` with comma-separated `--verb`/`--resource` flags.
+- **Campaign level 15** now includes project-template objectives (generate the bootstrap template,
+  create `project-request` in `openshift-config`, point `project.config` at it) and matching hints,
+  so the “Configure project templates” objective is genuinely drilled; README coverage row updated.
+
+---
+
+## [1.1.1] — 2026-11-04
+
+Content-accuracy audit release. A read-only audit of the EX280 content and data (exam objectives,
+campaign, quick labs, incidents, achievements, README/wiki facts) against the live redhat.com exam
+page, the Red Hat LMS “Exam Objectives by Version” PDF and the OpenShift Container Platform 4.22
+documentation. The only behaviour change in this release is the pause/`Esc` flow noted below.
+
+### Fixed
+
+- **`Esc` closes the topmost surface first** — command bar → Files/manifests → inspector / metrics / incidents / context menus → level or timed-lab select → Help → EX280 Prep, then the pause overlay; the 1.1.0 note that listed “panels → Files → help → EX280 → pause” predates the docked command bar and in-game panels and is superseded.
+- **EX280V422 facts re-verified** — 9 objective groups / 55 bullets unchanged and byte-identical to
+  the official list (exam page + LMS PDF, 2026-11-04); EX280V422 is still the current version and
+  OCP 4.22 is still the current stable release (`4-stable` = 4.22.21; 4.23 is nightly/CI only).
+  README now shows both official exam names instead of only one.
+- **Per-bullet Red Hat docs links** — 17 bullets now link the 4.22 chapter that documents the task
+  (projects chapter, HTPasswd identity-provider chapter, SCC chapter, jobs/CronJob chapter,
+  MetalLB chapter, Operator user/administrator tasks) instead of only the guide index. All URLs
+  return HTTP 200 on the exact 4.22 path.
+- **Campaign → objective mapping is now generated from one source of truth** — every level’s
+  `examObjectives` is the exact reverse of the per-bullet level mapping (24 asymmetric claims removed),
+  and the README coverage table is derived from the same data instead of a hand-maintained summary.
+- **Level 2 “label Deployment web with tier=frontend”** no longer auto-completes: the seeded
+  Deployment no longer starts with the target label.
+- **Level 17 SCC lesson corrected** — a privileged workload now requires granting the `privileged`
+  SCC (not `anyuid`, which only allows arbitrary UIDs); description, objective label and hints fixed.
+- **Real OCP 4.22 command/reference fixes** — the capstone NetworkPolicy hint no longer uses the
+  nonexistent `oc create networkpolicy` (apply a YAML manifest instead); incident hints now use
+  `oc events --types=…`, `oc adm policy who-can use scc <name>` and FQDN `nslookup`; the cheat sheet
+  recommends `--cascade=orphan`; image-tag examples qualify `openshift/ruby:…`; the S2I builder tag
+  is `nodejs:20-ubi9`; level 13 htpasswd hints use bcrypt (`-B`) and the documented `htpass-secret`
+  name; the L9 hint explains the internal-registry image reference.
+- **Quick labs** — HTPasswd lab uses `oc edit oauth cluster` (no unseeded `oauth.yaml`), quota lab
+  applies `examples/limitrange.yaml`, operator lab installs the simulator-supported MetalLB package
+  and checks the CSV, and the route lab no longer seeds a Project that its first step creates.
+- **Incidents** — `RouteNotAdmitted` no longer lists “missing endpoints” as an admission cause;
+  `CronJobMissedSchedule` no longer claims an invalid cron expression can exist on a CronJob;
+  OLM guidance now says the **CSV** (not the Subscription) reports `Installing → Succeeded`;
+  level 3 uses a valid image so the CrashLoopBackOff lesson is not mixed with ImagePullBackOff.
+- **Achievements** — “EX280 Ready” renamed “Campaign Graduate” (completing levels is not exam
+  readiness), “Say It With oc” is now unlockable from `commandsExecuted`, and the RBAC description
+  matches its condition.
+- **EX280 Prep copy** — the 55 items are called bullet points (matching the official structure), and
+  the badge now reads “Exam-ready coverage” with a tooltip stating it measures tracked study
+  coverage, not a Red Hat pass prediction.
+
 ## [1.1.0] — 2026-11-04
 
 A presentation-and-feel release: a new start page, a rebuilt 3D cluster view, and an in-game design

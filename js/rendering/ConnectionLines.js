@@ -221,9 +221,15 @@ export class ConnectionLineManager {
 
     for (const [id, conn] of connectionsMap) {
       newIds.add(id);
-      if (!this.connections.has(id)) {
+      const existing = this.connections.get(id);
+      if (!existing) {
         this.addConnection(conn, resourceMeshes);
+        continue;
       }
+      // Refresh the payload of already-drawn edges: liveness flags (e.g. a Route
+      // losing admission → `traffic:false`) change at runtime and downstream
+      // consumers (particles/tooltips) read the stored connection object.
+      existing.connection = conn;
     }
 
     for (const id of [...this.connections.keys()]) {

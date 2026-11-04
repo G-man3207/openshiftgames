@@ -230,14 +230,50 @@ export function computeConnections(clusterState, options = {}) {
   };
 
   const edgeCounts = new Map();
-  const addEdge = (type, sourceId, targetId, trafficVolume = 1) => {
+  const addEdge = (type, sourceId, targetId, trafficVolume = 1, flags = null) => {
     if (!sourceId || !targetId || sourceId === targetId) return;
     const count = edgeCounts.get(type) || 0;
     if (count >= MAX_EDGES_PER_TYPE) return;
     const id = `${type}:${sourceId}:${targetId}`;
     if (map.has(id)) return;
     edgeCounts.set(type, count + 1);
-    map.set(id, { id, sourceId, targetId, type, trafficVolume });
+    const edge = { id, sourceId, targetId, type, trafficVolume };
+    if (flags) Object.assign(edge, flags);
+    map.set(id, edge);
+  };
+
+  /** Is a Route actually carrying traffic through the router right now? */
+  const routeIsLive = (route, service) => {
+    let admitted = false;
+    const ingress = route?.status?.ingress;
+    if (Array.isArray(ingress)) {
+      for (const entry of ingress) {
+        const conditions = Array.isArray(entry?.conditions) ? entry.conditions : [];
+        const condition = conditions.find((c) => c && c.type === 'Admitted');
+        if (condition) {
+          admitted = String(condition.status) === 'True';
+          break;
+        }
+      }
+    }
+    if (!admitted && typeof clusterState?.isRouteAdmitted === 'function') {
+      try {
+        admitted = Boolean(clusterState.isRouteAdmitted(route));
+      } catch {
+        admitted = false;
+      }
+    }
+    if (!admitted) return false;
+    // An admitted Route with zero ready endpoints would still 503: no particles.
+    if (service && typeof clusterState?.getServiceEndpoints === 'function') {
+      try {
+        const endpoints = clusterState.getServiceEndpoints(service);
+        if (Array.isArray(endpoints) && endpoints.length === 0) return false;
+      } catch {
+        /* endpoint helper unavailable — trust admission */
+      }
+    }
+    return true;
   };
 
   // Custom/user-drawn connections first (draw page), then derived edges.
@@ -280,12 +316,14 @@ export function computeConnections(clusterState, options = {}) {
     const toRef = spec.to || {};
     if (toRef.name && (!toRef.kind || String(toRef.kind).toLowerCase() === 'service')) {
       const svc = findByRef('Service', toRef.name, ns);
-      if (svc) addEdge('route', uidOf(route), uidOf(svc), 3);
+      // Keep the topology link, but only flag it live (particles) when the
+      // router admits it and the target Service has ready endpoints.
+      if (svc) addEdge('route', uidOf(route), uidOf(svc), 3, { traffic: routeIsLive(route, svc) });
     }
     for (const targetRef of spec.alternateBackends || []) {
       if (targetRef?.name) {
         const svc = findByRef('Service', targetRef.name, ns);
-        if (svc) addEdge('route', uidOf(route), uidOf(svc), 2);
+        if (svc) addEdge('route', uidOf(route), uidOf(svc), 2, { traffic: routeIsLive(route, svc) });
       }
     }
   }

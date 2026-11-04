@@ -290,6 +290,87 @@ function getCurrentProject(c) {
   return c.gameEngine?.currentProject || 'default';
 }
 
+/**
+ * The single Project a level seeds (when unambiguous). Used to scope objectives
+ * that were authored without a namespace: a level whose lab project is
+ * `rbac-lab`/`manifests-lab`/… must be completed in that project, not in the
+ * player's current project. Returns null for levels that seed 0 or 2+ Projects
+ * (e.g. the capstone or challenges where the player creates the project).
+ */
+function levelProjectNamespace(c) {
+  const resources = asArray(c?.levelDef?.startingResources);
+  const projects = resources.filter((resource) => resource && resource.kind === 'Project' && resource.name);
+  return projects.length === 1 ? projects[0].name : null;
+}
+
+/**
+ * Kinds that almost always live in the level's lab project. Used only as a
+ * fallback when the objective data does not carry a namespace. Config object
+ * kinds (Secret/ConfigMap) are deliberately excluded because they may belong to
+ * a shared namespace such as openshift-config.
+ */
+const LEVEL_SCOPED_KINDS = new Set([
+  'Deployment', 'StatefulSet', 'DaemonSet', 'Pod', 'ReplicaSet', 'Service',
+  'Route', 'Job', 'CronJob', 'Build', 'BuildConfig', 'ImageStream',
+  'ServiceAccount', 'ResourceQuota', 'LimitRange', 'NetworkPolicy', 'Template',
+]);
+
+function objectiveResourceNamespace(c, obj, kind = null) {
+  if (obj?.namespace) return obj.namespace;
+  const canonical = kind || canonicalKind(obj?.kind || '');
+  if (!LEVEL_SCOPED_KINDS.has(canonical)) return null;
+  return levelProjectNamespace(c);
+}
+
+/** Store a lazy per-objective baseline the first time an objective is evaluated. */
+function ensureBaseline(objective, factory) {
+  if (!objective._baseline || typeof objective._baseline !== 'object') {
+    try {
+      objective._baseline = factory();
+    } catch {
+      objective._baseline = {};
+    }
+  }
+  return objective._baseline;
+}
+
+/** Stable-ish fingerprint of a workload pod template (change detection). */
+function templateFingerprint(resource) {
+  try {
+    return JSON.stringify(resourceSpec(resource).template || {});
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * Incident activity for "restore/keep health" objectives.
+ * `activationCount` is incremented by IncidentEngine when an incident first
+ * activates; level start resets it, so objectives cannot be satisfied before
+ * the level's incident has actually happened.
+ */
+function incidentActivity(c) {
+  // Only level/challenge evaluation is gated; standalone objective checks that
+  // pass a bare ctx keep the historical behaviour.
+  if (!c.levelDef) return null;
+  const engine = c.incidentEngine;
+  if (!engine) return null;
+  const stats = (() => {
+    try {
+      return typeof engine.getStats === 'function' ? engine.getStats() : {};
+    } catch {
+      return {};
+    }
+  })();
+  const activations = asNumber(
+    engine.activationCount ?? stats.totalActivated ?? stats.totalResolved,
+    -1
+  );
+  if (activations < 0) return null;
+  const active = activeIncidents(c).length;
+  return { activations, active };
+}
+
 function quantityMatches(actual, expected) {
   if (actual === undefined || actual === null) return false;
   const left = String(actual).trim();
@@ -494,13 +575,43 @@ function objectivesCompletionPercent(c, excludeTypes = new Set()) {
 
 // ─── individual objective evaluators ──────────────────────────────────────
 
+
+/**
+ * The standard project-admin RoleBinding created automatically when a Project
+ * is provisioned (project template / requester: `RoleBinding admin` granting
+ * `ClusterRole admin` to the requester User). It is infrastructure, not the
+ * learner's work, so it must not satisfy campaign "create a RoleBinding"
+ * objectives (L14/L16).
+ */
+function isAutoProvisionedProjectAdminBinding(binding) {
+  if (!binding) return false;
+  const name = resourceName(binding);
+  if (name !== 'admin') return false;
+  const spec = resourceSpec(binding);
+  const roleRef = spec.roleRef || {};
+  if (roleRef.kind !== 'ClusterRole' || roleRef.name !== 'admin') return false;
+  return asArray(spec.subjects).some((subject) => subject && subject.kind === 'User');
+}
+
 function evaluateDeploy(obj, c) {
   const kind = canonicalKind(obj.kind);
   const name = obj.name;
-  const namespace = obj.namespace;
+  const namespace = objectiveResourceNamespace(c, obj, kind);
   if (name) return bool(Boolean(findResource(c.clusterState, kind, name, namespace)));
   let resources = listKind(c.clusterState, kind);
   if (namespace) resources = resources.filter((resource) => resourceNamespace(resource) === namespace);
+  // Count-only RBAC objectives ("bind a role in <project>") must be scoped to
+  // the level's project; otherwise any RoleBinding anywhere in the cluster counts.
+  if (!namespace && kind === 'RoleBinding') {
+    const expected = levelProjectNamespace(c);
+    if (expected) resources = resources.filter((resource) => resourceNamespace(resource) === expected);
+  }
+  // The auto-provisioned project `admin` binding is not learner-created: ignore
+  // it for every RoleBinding-count objective (L14/L16) so the checklist still
+  // requires a real `oc adm policy add-role-to-*`/RoleBinding manifest.
+  if (kind === 'RoleBinding') {
+    resources = resources.filter((resource) => !isAutoProvisionedProjectAdminBinding(resource));
+  }
   const target = Math.max(1, asNumber(obj.count, 1));
   const current = Math.min(resources.length, target);
   return result(resources.length >= target, current, target);
@@ -512,14 +623,34 @@ function evaluateLabel(obj, c) {
   const key = obj.key || obj.label;
   const value = obj.value;
   if (!key) return bool(false);
+  const namespace = objectiveResourceNamespace(c, obj, kind);
   let resources = listKind(c.clusterState, kind);
   if (name) resources = resources.filter((resource) => resourceName(resource) === name);
-  const match = resources.some((resource) => {
+  if (namespace) resources = resources.filter((resource) => resourceNamespace(resource) === namespace);
+  const matches = (resource) => {
     const labels = resourceLabels(resource);
     if (!hasOwn(labels, key)) return false;
     return value === undefined || String(labels[key]) === String(value);
+  };
+  const matching = resources.filter(matches);
+  // Do not credit a label that was already present when the level started:
+  // require either a label applied during this level (resourceVersion change)
+  // or a matching resource created during this level.
+  const baseline = ensureBaseline(obj, () => ({
+    matchedAtStart: matching.length > 0,
+    versions: Object.fromEntries(
+      resources.map((resource) => [
+        resource?.uid || resourceName(resource),
+        String(resource?.metadata?.resourceVersion || ''),
+      ])
+    ),
+  }));
+  const changed = matching.some((resource) => {
+    const keyId = resource?.uid || resourceName(resource);
+    if (!Object.prototype.hasOwnProperty.call(baseline.versions, keyId)) return true;
+    return String(resource?.metadata?.resourceVersion || '') !== baseline.versions[keyId];
   });
-  return bool(match);
+  return bool(matching.length > 0 && (!baseline.matchedAtStart || changed));
 }
 
 function evaluateScale(obj, c) {
@@ -527,6 +658,8 @@ function evaluateScale(obj, c) {
   const replicas = Math.max(1, asNumber(obj.replicas, 1));
   let resources = listKind(c.clusterState, kind);
   if (obj.name) resources = resources.filter((resource) => resourceName(resource) === obj.name);
+  const scaleNamespace = objectiveResourceNamespace(c, obj, kind);
+  if (scaleNamespace) resources = resources.filter((resource) => resourceNamespace(resource) === scaleNamespace);
   if (resources.length === 0) return result(false, 0, replicas);
   const maxReplicas = Math.max(...resources.map((resource) => asNumber(resourceSpec(resource).replicas, 0)));
   return result(maxReplicas >= replicas, Math.min(maxReplicas, replicas), replicas);
@@ -597,7 +730,10 @@ function evaluateGroup(obj, c) {
 function evaluateCanI(obj, c) {
   const verb = obj.verb || 'get';
   const resource = obj.resource || 'pods';
-  const namespace = obj.namespace;
+  // `oc auth can-i` is project-scoped. When the objective omits the project,
+  // use the level's single seeded Project rather than whatever `oc project`
+  // happens to be active when the next tick runs.
+  const namespace = obj.namespace || levelProjectNamespace(c);
   const user = obj.user;
   const expected = obj.expected !== false;
   const engine = c.gameEngine;
@@ -620,11 +756,19 @@ function evaluateServiceType(obj, c) {
   const wantedType = obj.kind || 'ClusterIP';
   const target = Math.max(1, asNumber(obj.count, 1));
   let services = listKind(c.clusterState, 'Service');
-  if (obj.namespace) services = services.filter((svc) => resourceNamespace(svc) === obj.namespace);
+  const namespace = objectiveResourceNamespace(c, obj, 'Service');
+  if (namespace) services = services.filter((svc) => resourceNamespace(svc) === namespace);
   const matching = services.filter((service) => {
     const spec = resourceSpec(service);
     const type = spec.type || 'ClusterIP';
-    return type === wantedType;
+    if (type !== wantedType) return false;
+    // A LoadBalancer Service is only "exposed" once MetalLB assigned an
+    // EXTERNAL-IP; the level text promises that, not just the service type.
+    if (wantedType === 'LoadBalancer') {
+      const ingress = asArray(resourceStatus(service).loadBalancer?.ingress);
+      if (ingress.length === 0) return false;
+    }
+    return true;
   }).length;
   return result(matching >= target, Math.min(matching, target), target);
 }
@@ -694,30 +838,37 @@ function routeAdmitted(route) {
 }
 
 function evaluateRoute(obj, c) {
-  const routes = listKind(c.clusterState, 'Route').filter((route) => routeMatches(route, obj));
+  let routes = listKind(c.clusterState, 'Route');
+  const namespace = obj.namespace || levelProjectNamespace(c);
+  if (namespace) routes = routes.filter((route) => resourceNamespace(route) === namespace);
+  routes = routes.filter((route) => routeMatches(route, obj));
   const admitted = routes.filter(routeAdmitted).length;
   const target = Math.max(1, asNumber(obj.count, 1));
   return result(admitted >= target, Math.min(admitted, target), target);
 }
 
 function evaluateTls(obj, c) {
+  let routes = listKind(c.clusterState, 'Route');
+  const namespace = obj.namespace || levelProjectNamespace(c);
+  if (namespace) routes = routes.filter((route) => resourceNamespace(route) === namespace);
   if (obj.enabled === false) {
-    const routes = listKind(c.clusterState, 'Route');
     const withTls = routes.filter((route) => Boolean(resourceSpec(route).tls?.termination));
     return bool(withTls.length === 0);
   }
-  const routes = listKind(c.clusterState, 'Route').filter((route) => {
+  const matching = routes.filter((route) => {
     const tls = resourceSpec(route).tls;
     if (!tls || !tls.termination) return false;
     if (obj.termination && tls.termination !== obj.termination) return false;
     if (obj.name && resourceName(route) !== obj.name) return false;
     return true;
   });
-  return bool(routes.length > 0);
+  return bool(matching.length > 0);
 }
 
 function evaluateBuild(obj, c) {
-  const builds = listKind(c.clusterState, 'Build');
+  let builds = listKind(c.clusterState, 'Build');
+  const buildNamespace = objectiveResourceNamespace(c, obj, 'Build');
+  if (buildNamespace) builds = builds.filter((build) => resourceNamespace(build) === buildNamespace);
   const complete = builds.filter((build) => resourceStatus(build).phase === 'Complete');
   if (obj.name) {
     const buildDirect = complete.some((build) => resourceName(build) === obj.name);
@@ -730,7 +881,7 @@ function evaluateBuild(obj, c) {
     // A completed build named `<buildconfig>-<n>` belongs to the named config.
     if (complete.some((build) => resourceName(build).startsWith(`${obj.name}-`))) return bool(true);
     // A named BuildConfig whose last build completed also satisfies `build`.
-    const bc = findResource(c.clusterState, 'BuildConfig', obj.name, obj.namespace);
+    const bc = findResource(c.clusterState, 'BuildConfig', obj.name, objectiveResourceNamespace(c, obj, 'BuildConfig'));
     if (!bc) return bool(false);
     return bool(asNumber(resourceStatus(bc).lastVersion, 0) > 0);
   }
@@ -742,12 +893,17 @@ function evaluateImageStream(obj, c) {
   const name = obj.name;
   if (!name) {
     const target = Math.max(1, asNumber(obj.count, 1));
-    const streams = listKind(c.clusterState, 'ImageStream');
+    let streams = listKind(c.clusterState, 'ImageStream');
+    const countNamespace = objectiveResourceNamespace(c, obj, 'ImageStream');
+    if (countNamespace) streams = streams.filter((stream) => resourceNamespace(stream) === countNamespace);
     return result(streams.length >= target, Math.min(streams.length, target), target);
   }
-  const stream =
-    findResource(c.clusterState, 'ImageStream', name, obj.namespace) ||
-    findByPrefix(c.clusterState, 'ImageStream', name);
+  const streamNamespace = objectiveResourceNamespace(c, obj, 'ImageStream');
+  let stream = findResource(c.clusterState, 'ImageStream', name, streamNamespace);
+  if (!stream) {
+    stream = findByPrefix(c.clusterState, 'ImageStream', name);
+    if (stream && streamNamespace && resourceNamespace(stream) !== streamNamespace) stream = null;
+  }
   if (!stream) return bool(false);
   if (!obj.tag) return bool(true);
   const statusTags = asArray(resourceStatus(stream).tags).map((tag) => tag?.tag);
@@ -759,6 +915,8 @@ function evaluateImage(obj, c) {
   const kind = canonicalKind(obj.kind || 'Deployment');
   let workloads = listKind(c.clusterState, kind);
   if (obj.name) workloads = workloads.filter((resource) => resourceName(resource) === obj.name);
+  const imageNamespace = objectiveResourceNamespace(c, obj, kind);
+  if (imageNamespace) workloads = workloads.filter((resource) => resourceNamespace(resource) === imageNamespace);
   const needle = String(obj.imageContains || obj.image || '');
   if (!needle) return bool(workloads.length > 0);
   const match = workloads.some((workload) =>
@@ -787,15 +945,21 @@ function evaluateTemplate(obj, c) {
       : matching;
     if (withParams.length > 0) return bool(true);
   }
-  // Fallback: a `oc process -f <path>` command was executed (and an apply followed).
+  // Fallback for CLI-only harnesses without ManifestEngine records: require a
+  // real `oc process … | oc apply …` pipeline (process alone is only a render,
+  // and merely creating a Template object is not processing it).
   if (wantedName) {
     const processed = matchCommands(c, `process\\s+(-f\\s+)?\\S*${escapeRegex(wantedName)}`);
-    if (processed.length > 0) return bool(true);
-  }
-  // Fallback: a Template resource with that name exists (not necessarily processed).
-  if (wantedName) {
-    const template = findResource(c.clusterState, 'Template', wantedName, obj.namespace);
-    if (template) return bool(true);
+    const applied = matchCommands(c, 'apply\\s+(-f|--filename)(=|\\s+)\\S+');
+    const paramsOk = !params || processed.some((entry) =>
+      Object.entries(params).every(([key, value]) =>
+        new RegExp(`${escapeRegex(key)}\\s*=\\s*${escapeRegex(String(value))}`, 'i').test(entry.raw)
+      )
+    );
+    const appliedAfterProcessing = applied.some((applyEntry) =>
+      processed.some((processEntry) => asNumber(applyEntry.timestamp, 0) >= asNumber(processEntry.timestamp, 0))
+    );
+    if (processed.length > 0 && appliedAfterProcessing && paramsOk) return bool(true);
   }
   return bool(false);
 }
@@ -849,7 +1013,13 @@ function evaluateOperator(obj, c) {
     const target = Math.max(1, asNumber(obj.count, 1));
     return result(succeeded >= target, Math.min(succeeded, target), target);
   }
-  return result(matching.length === 0, matching.length === 0 ? 1 : 0, 1);
+  // "Uninstall" only makes sense once the operator was present during this
+  // level; otherwise the objective would be complete at level start (L18).
+  if (matching.length > 0) obj._sawInstalled = true;
+  const target = Math.max(1, asNumber(obj.count, 1));
+  const levelContext = Boolean(c.levelDef);
+  const done = matching.length === 0 && (!levelContext || obj._sawInstalled === true);
+  return result(done, done ? target : 0, target);
 }
 
 function subjectMatches(subjectList, wanted) {
@@ -869,12 +1039,26 @@ function evaluateScc(obj, c) {
   const scc = findResource(c.clusterState, 'SecurityContextConstraints', name);
   if (!scc) return bool(false);
   const spec = resourceSpec(scc);
-  const subject = obj.subject;
+  let subject = obj.subject;
+  // A `*` project wildcard in the level data means "this lab's project", not
+  // "any project in the cluster": `system:serviceaccount:*:default` must match
+  // the level's seeded Project (e.g. privileged-lab), not the default project.
+  if (subject && String(subject).includes('*')) {
+    const namespace = obj.namespace || levelProjectNamespace(c);
+    if (namespace) subject = String(subject).split('*').join(namespace);
+  }
   const expected = obj.expected !== false;
   const present = subject
     ? subjectMatches(spec.users, subject) || subjectMatches(spec.groups, subject)
     : asArray(spec.users).length > 0 || asArray(spec.groups).length > 0;
   return bool(present === expected);
+}
+
+/** Does an SCC allow privileged containers? */
+function sccAllowsPrivileged(scc) {
+  if (!scc) return false;
+  if (resourceName(scc) === 'privileged') return true;
+  return resourceSpec(scc).allowPrivilegedContainer === true;
 }
 
 function workloadIsPrivileged(workload) {
@@ -884,18 +1068,33 @@ function workloadIsPrivileged(workload) {
   return containersOf(workload).some((container) => container?.securityContext?.privileged === true);
 }
 
-function evaluatePrivileged(obj, c) {
-  const pods = listKind(c.clusterState, 'Pod').filter((pod) => {
-    const spec = resourceSpec(pod);
-    if (spec.securityContext?.privileged === true) return true;
-    return asArray(spec.containers).some(
-      (container) => container?.securityContext?.privileged === true
-    );
-  });
-  const workloads = listKinds(c.clusterState, ['Deployment', 'StatefulSet', 'DaemonSet']).filter(
-    workloadIsPrivileged
+function podIsPrivileged(pod) {
+  const spec = resourceSpec(pod);
+  if (spec.securityContext?.privileged === true) return true;
+  return asArray(spec.containers).some(
+    (container) => container?.securityContext?.privileged === true
   );
-  const count = Math.max(pods.length, workloads.length);
+}
+
+function evaluatePrivileged(obj, c) {
+  // Per the objective contract this means "a Pod is RUNNING with a privileged
+  // container AND an SCC actually admitted it" — not merely that a workload
+  // template requests it (a privileged pod is denied under restricted-v2 /
+  // anyuid, so template-only credit would teach a false SCC model).
+  const sccs = listKind(c.clusterState, 'SecurityContextConstraints');
+  const sccByName = new Map(sccs.map((scc) => [resourceName(scc), scc]));
+  const privilegedNamespace = obj.namespace || levelProjectNamespace(c);
+  const pods = listKind(c.clusterState, 'Pod').filter((pod) => {
+    if (privilegedNamespace && resourceNamespace(pod) !== privilegedNamespace) return false;
+    if (!podIsPrivileged(pod)) return false;
+    if (resourceStatus(pod).phase !== 'Running') return false;
+    const ready = typeof pod.isConditionTrue === 'function' ? pod.isConditionTrue('Ready') : true;
+    if (!ready) return false;
+    const sccName = pod.metadata?.annotations?.['openshift.io/scc'] || pod.sccName || null;
+    if (!sccName) return false;
+    return sccAllowsPrivileged(sccByName.get(sccName));
+  });
+  const count = pods.length;
   const target = Math.max(1, asNumber(obj.count, 1));
   return result(count >= target, Math.min(count, target), target);
 }
@@ -926,6 +1125,8 @@ function evaluateComplete(obj, c) {
   const kind = canonicalKind(obj.kind || 'Job');
   let resources = listKind(c.clusterState, kind);
   if (obj.name) resources = resources.filter((resource) => resourceName(resource) === obj.name);
+  const completeNamespace = objectiveResourceNamespace(c, obj, kind);
+  if (completeNamespace) resources = resources.filter((resource) => resourceNamespace(resource) === completeNamespace);
   const complete = resources.filter((resource) => resourceStatus(resource).phase === 'Complete');
   const target = Math.max(1, asNumber(obj.count, 1));
   return result(complete.length >= target, Math.min(complete.length, target), target);
@@ -934,6 +1135,8 @@ function evaluateComplete(obj, c) {
 function evaluateCronJob(obj, c) {
   let cronJobs = listKind(c.clusterState, 'CronJob');
   if (obj.name) cronJobs = cronJobs.filter((cronJob) => resourceName(cronJob) === obj.name);
+  const cronNamespace = objectiveResourceNamespace(c, obj, 'CronJob');
+  if (cronNamespace) cronJobs = cronJobs.filter((cronJob) => resourceNamespace(cronJob) === cronNamespace);
   if (obj.suspended === false) {
     cronJobs = cronJobs.filter((cronJob) => resourceSpec(cronJob).suspend !== true);
   }
@@ -1133,8 +1336,27 @@ function collectRoleViolations(c) {
 }
 
 function evaluateLeastPrivilege(obj, c) {
+  // The auto-provisioned project `admin` bindings are infrastructure, and an
+  // empty cluster trivially has no violations: require the learner to have
+  // created at least one Role/ClusterRole/RoleBinding during this level before
+  // the guard can complete (L14/C7 otherwise start "done").
+  let createdDuringLevel = true;
+  if (c.levelDef) {
+    const baseline = ensureBaseline(obj, () => ({
+      roles: listKinds(c.clusterState, ['Role', 'ClusterRole']).map((role) => role?.uid || resourceName(role)),
+      bindings: listKinds(c.clusterState, ['RoleBinding', 'ClusterRoleBinding']).map((binding) => binding?.uid || resourceName(binding)),
+    }));
+    const knownRoles = new Set(baseline.roles);
+    const knownBindings = new Set(baseline.bindings);
+    createdDuringLevel =
+      listKinds(c.clusterState, ['Role', 'ClusterRole']).some((role) => !knownRoles.has(role?.uid || resourceName(role)))
+      || listKinds(c.clusterState, ['RoleBinding', 'ClusterRoleBinding']).some(
+        (binding) => !knownBindings.has(binding?.uid || resourceName(binding)),
+      );
+  }
   const violations = collectRoleViolations(c);
-  return result(violations.length === 0, violations.length === 0 ? 1 : 0, 1);
+  const done = violations.length === 0 && createdDuringLevel;
+  return result(done, done ? 1 : 0, 1);
 }
 
 function evaluateDistribute(obj, c) {
@@ -1165,27 +1387,35 @@ function evaluateCoverage(obj, c) {
   return result(covered.size >= nodes.length, Math.min(covered.size, nodes.length), nodes.length);
 }
 
-function workloadUpdated(workload) {
-  const status = resourceStatus(workload);
-  const metadata = workload?.metadata || {};
-  if (asNumber(status.updatedReplicas, 0) > 0) return true;
-  if (asNumber(status.observedGeneration, 0) > 1) return true;
-  if (asNumber(metadata.generation, 1) > 1) return true;
-  if (asNumber(status.availableReplicas, 0) > 0 && asNumber(status.replicas, 0) >= asNumber(resourceSpec(workload).replicas, 1)) {
-    // Fallback used only when the controllers expose availability but not
-    // updatedReplicas: a running, fully-available deployment is accepted.
-    return asNumber(metadata.generation, 1) > 1;
-  }
-  return false;
-}
-
 function evaluateUpdate(obj, c) {
   const kinds = resolveTargetKinds(obj, ['Deployment', 'StatefulSet', 'DaemonSet']);
   let workloads = listKinds(c.clusterState, kinds);
   if (obj.name) workloads = workloads.filter((workload) => resourceName(workload) === obj.name);
-  if (workloads.length === 0) return result(false, 0, Math.max(1, asNumber(obj.count, 1)));
-  const updated = workloads.filter(workloadUpdated).length;
-  const target = Math.max(asNumber(obj.count, 1), workloads.length > 0 ? 1 : 1);
+  if (obj.namespace) workloads = workloads.filter((workload) => resourceNamespace(workload) === obj.namespace);
+  const target = Math.max(1, asNumber(obj.count, 1));
+  if (workloads.length === 0) return result(false, 0, target);
+  // A controller writing status.updatedReplicas during the initial rollout is
+  // NOT a learner update. Capture the workload generation/template on the first
+  // evaluation after level start and credit only a real spec change.
+  const baseline = ensureBaseline(obj, () => ({ entries: {} }));
+  for (const workload of workloads) {
+    const id = workload?.uid || resourceName(workload);
+    if (!Object.prototype.hasOwnProperty.call(baseline.entries, id)) {
+      baseline.entries[id] = {
+        generation: asNumber(workload?.metadata?.generation, 1),
+        template: templateFingerprint(workload),
+      };
+    }
+  }
+  const updated = workloads.filter((workload) => {
+    const id = workload?.uid || resourceName(workload);
+    const base = baseline.entries[id];
+    if (!base) return true; // created during this level
+    return (
+      asNumber(workload?.metadata?.generation, 1) > base.generation ||
+      templateFingerprint(workload) !== base.template
+    );
+  }).length;
   return result(updated >= target, Math.min(updated, target), target);
 }
 
@@ -1220,12 +1450,32 @@ function evaluateInvestigate(obj, c) {
 function evaluateUptime(obj, c) {
   const percentage = asNumber(obj.percentage, 90);
   const health = clusterHealthPercent(c);
+  // "Restore/keep health ≥ N%" cannot be satisfied before the level's incident
+  // has actually happened. Require an incident activation after level start and
+  // all incidents cleared again (they are the only thing that lowers health).
+  const activity = incidentActivity(c);
+  if (activity) {
+    const baseline = ensureBaseline(obj, () => ({ activations: activity.activations }));
+    if (activity.activations <= baseline.activations) {
+      return result(false, Math.round(health), percentage);
+    }
+    if (activity.active > 0) {
+      return result(false, Math.round(health), percentage);
+    }
+  }
   return result(health >= percentage, Math.round(health), percentage);
 }
 
 function evaluateClusterHealth(obj, c) {
   const minPercent = asNumber(obj.minPercent, 90);
   const health = clusterHealthPercent(c);
+  const activity = incidentActivity(c);
+  if (activity) {
+    const baseline = ensureBaseline(obj, () => ({ activations: activity.activations }));
+    if (activity.activations <= baseline.activations || activity.active > 0) {
+      return result(false, Math.round(health), minPercent);
+    }
+  }
   let healthy = health >= minPercent;
   if (obj.allOperatorsAvailable) {
     const operators = listKind(c.clusterState, 'ClusterOperator');

@@ -744,7 +744,9 @@ await runSection('sandbox', async () => {
       currentMode: app.currentMode,
     };
   });
-  assert(state.resourceCount >= 45 && state.resourceCount <= 55, 'sandbox: seeded ~50 OpenShift resources', `got ${state.resourceCount}`);
+  // The seeded platform baseline grew when the real OCP 4.22 default SCC set
+  // (14 objects) replaced the old 4-object approximation.
+  assert(state.resourceCount >= 45 && state.resourceCount <= 65, 'sandbox: seeded platform resources', `got ${state.resourceCount}`);
   assert(state.meshCount >= 45 && Math.abs(state.meshCount - state.resourceCount) <= 2, 'sandbox: one mesh per seeded resource', `${state.meshCount} meshes / ${state.resourceCount} resources`);
   assert(state.palette.length === 37, 'sandbox: palette has 37 placeable kinds', `got ${state.palette.length}`);
   for (const kind of ['Project', 'Route', 'BuildConfig', 'ImageStream', 'Template', 'Subscription', 'SecurityContextConstraints', 'User', 'Group', 'IPAddressPool', 'L2Advertisement']) {
@@ -791,8 +793,8 @@ await runSection('files', async () => {
       visible: window.game.manifestPanel?.visible === true,
     };
   });
-  assert(files.count === 19, 'files: 19 default manifest files', `got ${files.count}`);
-  assert(files.tree >= 19, 'files: file tree lists 19 files', `got ${files.tree}`);
+  assert(files.count >= 19, 'files: default manifest files seeded', `got ${files.count}`);
+  assert(files.tree >= 19, 'files: file tree lists the default files', `got ${files.tree}`);
   assert(files.editor && files.buttons.apply && files.buttons.kustomize && files.buttons.save, 'files: editor and Apply -f/-k buttons present');
   for (const expected of ['manifests/deployment.yaml', 'kustomize/overlays/prod/kustomization.yaml', 'templates/webapp-template.yaml', 'helm/webapp/Chart.yaml', 'htpasswd']) {
     assert(files.names.includes(expected), `files: default file ${expected}`);
@@ -905,7 +907,7 @@ await runSection('cli', async () => {
   assert(
     !rawVersion.error &&
       /"gitVersion": "v4\.22\.0"/.test(rawVersion.message) &&
-      /"kubernetesVersion": "v1\.35\.0\+3f6a91c"/.test(rawVersion.message) &&
+      /"kubernetesVersion": "v1\.35\.2"/.test(rawVersion.message) &&
       /"platform": "linux\/amd64"/.test(rawVersion.message),
     'cli: oc get --raw /version returns server version JSON',
     rawVersion.message.slice(0, 200),
@@ -1286,28 +1288,36 @@ await runSection('ui', async () => {
   await evaluate(() => document.activeElement?.blur?.());
 
   // gamefeel: Esc now opens the pause overlay (never discards the run).
+  // Clear any overlay a previous assertion may have left half-open (Esc semantics
+  // are "close topmost first"), then poll for the pause card under software WebGL.
+  await closeOverlays();
+  await sleep(250);
   await page.keyboard.press('Escape');
-  await sleep(500);
+  const pauseOpened = await waitFor(
+    () => evaluate(() => document.getElementById('pause-overlay')?.classList.contains('active') === true),
+    6000,
+  );
   assert(
-    await evaluate(() =>
-      document.getElementById('pause-overlay')?.classList.contains('active') === true &&
-      document.getElementById('main-menu')?.classList.contains('hidden') === true
-    ),
+    pauseOpened && (await evaluate(() => document.getElementById('main-menu')?.classList.contains('hidden') === true)),
     'ui: Esc opens the pause overlay instead of discarding the run',
   );
   await evaluate(() => document.getElementById('pause-resume')?.click());
-  await sleep(250);
+  await waitFor(() => evaluate(() => document.getElementById('pause-overlay')?.classList.contains('active') === false), 4000);
   assert(
     await evaluate(() => document.getElementById('pause-overlay')?.classList.contains('active') === false),
     'ui: pause Resume returns to the run',
   );
 
   // Regression: Esc while the help modal is open closes help first (and resumes
-  // the sim) instead of opening the pause card behind it.
+  // the sim) instead of opening the pause card behind it. Blur first: a hidden
+  // resume button must not keep focus (the H shortcut targets the page body).
+  await evaluate(() => document.activeElement?.blur?.());
+  await sleep(250);
   await page.keyboard.press('h');
-  const helpOpenAgain = await waitFor(() => evaluate(() => !!document.getElementById('tutorial-overlay')), 5000);
+  const helpOpenAgain = await waitFor(() => evaluate(() => !!document.getElementById('tutorial-overlay')), 6000);
   assert(helpOpenAgain, 'ui: H opens help from a live sandbox');
-  assert(await evaluate(() => window.game.gameEngine.state === 'paused'), 'ui: help modal pauses the sandbox simulation');
+  const helpPaused = await waitFor(() => evaluate(() => window.game.gameEngine.state === 'paused'), 4000);
+  assert(helpPaused, 'ui: help modal pauses the sandbox simulation');
   await page.keyboard.press('Escape');
   const helpClosedByEsc = await waitFor(() => evaluate(() => !document.getElementById('tutorial-overlay')), 5000);
   assert(helpClosedByEsc, 'ui: Esc closes the help modal');
@@ -1493,13 +1503,119 @@ await runSection('challenges', async () => {
   await page.keyboard.press('Escape');
   const challengeFilesClosed = await waitFor(() => evaluate(() => window.game?.app?.manifestPanel?.visible === false), 5000);
   assert(challengeFilesClosed, 'challenges: Esc closes the Files panel');
-  await sleep(1300);
-  const challengeClockRunning = await evaluate(() => window.game.app.modeInstance.getStatus().timeRemaining);
-  assert(challengeClockRunning < challengeClockHeld, 'challenges: countdown runs again after Files closes', `${challengeClockHeld} -> ${challengeClockRunning}`);
+  // Under software WebGL the RAF-driven countdown can be slow to resume, so poll
+  // instead of relying on a single fixed sleep.
+  let challengeClockRunning = challengeClockHeld;
+  const clockResumed = await waitFor(async () => {
+    challengeClockRunning = await evaluate(() => window.game.app.modeInstance.getStatus().timeRemaining);
+    return challengeClockRunning < challengeClockHeld;
+  }, 8000, 250);
+  assert(clockResumed, 'challenges: countdown runs again after Files closes', `${challengeClockHeld} -> ${challengeClockRunning}`);
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
-// 10. DRAW PAGE
+// 10. EXTERNAL-REVIEW FOLLOW-UP (real project templates, password rotation, role flags)
+// ═══════════════════════════════════════════════════════════════════════════
+await runSection('followup', async () => {
+  await bootSandbox();
+  await openFilesPanel();
+  await evaluate(() => window.game.manifestPanel?.hide?.());
+  await sleep(300);
+
+  // oc create role/clusterrole must honour --verb/--resource (not registry defaults).
+  await expectCmd('followup: oc create role --verb/--resource', 'oc create role podread --verb=get,list --resource=pods -n default', /role\.rbac\.authorization\.k8s\.io\/podread created/);
+  const roleRules = await evaluate(() => window.game.cluster.getByKind('Role').find((r) => r.metadata.name === 'podread')?.spec?.rules);
+  assert(
+    JSON.stringify(roleRules) === JSON.stringify([{ apiGroups: [''], resources: ['pods'], verbs: ['get', 'list'] }]),
+    'followup: role rules exactly match the requested flags',
+    JSON.stringify(roleRules),
+  );
+  await expectCmd('followup: bind the new role', 'oc adm policy add-role-to-user podread alice -n default', /added|configured/i);
+  await expectCmd('followup: role rules feed oc auth can-i (allow)', 'oc auth can-i get pods --as=alice -n default', /yes/i);
+  await expectCmd('followup: role rules feed oc auth can-i (deny)', 'oc auth can-i delete pods --as=alice -n default', /no/i);
+
+  // Dry-run Secret output must be API-shaped and pipe into replace -f -.
+  const drySecret = await runCmd('oc create secret generic follow-secret --from-literal=a=b --dry-run=client -o yaml -n default');
+  assert(
+    !drySecret.error && /^type:/m.test(drySecret.message) && /^data:/m.test(drySecret.message) && !/^spec:/m.test(drySecret.message),
+    'followup: dry-run secret YAML is API-shaped',
+    drySecret.message.slice(0, 180),
+  );
+  await expectCmd('followup: dry-run | replace -f - pipeline', 'oc create secret generic follow-secret2 --from-literal=a=b --dry-run=client -o yaml -n default | oc replace -f -', /created|configured/);
+
+  // Real project-template flow: no stored template on a fresh cluster, generate one.
+  await expectCmd('followup: fresh cluster has no project template', 'oc get templates -n openshift-config', /No resources found/i);
+  const bootstrap = await runCmd('oc adm create-bootstrap-project-template -o yaml');
+  assert(
+    !bootstrap.error && /kind: Template/.test(bootstrap.message) && /PROJECT_REQUESTING_USER/.test(bootstrap.message) && /RoleBinding/.test(bootstrap.message),
+    'followup: create-bootstrap-project-template emits the canonical template',
+    bootstrap.message.slice(0, 200),
+  );
+
+  // HTPasswd password rotation: extract -> htpasswd -bB -> set data -> rollout -> login.
+  await expectCmd('followup: htpasswd file', 'htpasswd -c -B -b users.htpasswd rotate-user Passw0rd1', () => true);
+  await expectCmd('followup: htpasswd secret', 'oc create secret generic htpasswd-secret --from-file=htpasswd=users.htpasswd -n openshift-config', /created|configured/);
+  await evaluate(() => window.game.gameEngine.configureHTPasswdProvider({ secretName: 'htpasswd-secret' }));
+  await evaluate(() => { const sim = window.game.gameEngine.simulation; for (let i = 0; i < 160; i += 1) sim.tick(0.05); });
+  await waitFor(() => evaluate(() => window.game?.gameEngine?.authProvider?.ready === true), 8000);
+  await expectCmd('followup: baseline login', 'oc login -u rotate-user -p Passw0rd1', /Login successful|logged in/i, { wait: 300 });
+  await evaluate(() => window.game.app.commandBar.executeCommand('oc login -u kubeadmin'));
+  await expectCmd('followup: oc extract secret to virtual FS', 'oc extract secret/htpasswd-secret -n openshift-config --to /tmp --confirm', /tmp\/htpasswd/);
+  await expectCmd('followup: rotate password in extracted file', "htpasswd -bB /tmp/htpasswd rotate-user 'NewPassw0rd!'", () => true);
+  await expectCmd('followup: oc set data secret updates the secret', 'oc set data secret/htpasswd-secret -n openshift-config --from-file=htpasswd=/tmp/htpasswd', /data updated/i);
+  await evaluate(() => { const sim = window.game.gameEngine.simulation; for (let i = 0; i < 160; i += 1) sim.tick(0.05); });
+  await expectCmdError('followup: old password rejected after rotation', 'oc login -u rotate-user -p Passw0rd1', /Login failed|401/i);
+  await expectCmd('followup: new password accepted after rotation', 'oc login -u rotate-user -p NewPassw0rd!', /Login successful|logged in/i);
+  await evaluate(() => window.game.app.commandBar.executeCommand('oc login -u kubeadmin'));
+
+  // project.config singleton + new project inheriting the configured template.
+  await expectCmd('followup: project.config get', 'oc get project.config.openshift.io/cluster', /NAME|cluster/i);
+  await expectCmd(
+    'followup: project.config patch projectRequestTemplate',
+    'oc patch project.config.openshift.io/cluster --type=merge -p \'{"spec":{"projectRequestTemplate":{"name":"project-request"}}}\'',
+    /patched/i,
+  );
+  const customTemplate = `apiVersion: template.openshift.io/v1
+kind: Template
+metadata:
+  name: project-request
+  namespace: openshift-config
+parameters:
+  - name: PROJECT_NAME
+    required: true
+  - name: PROJECT_ADMIN_USER
+objects:
+  - apiVersion: project.openshift.io/v1
+    kind: Project
+    metadata:
+      name: \${PROJECT_NAME}
+  - apiVersion: networking.k8s.io/v1
+    kind: NetworkPolicy
+    metadata:
+      name: default-deny
+      namespace: \${PROJECT_NAME}
+    spec:
+      podSelector: {}
+      policyTypes: [Ingress, Egress]
+`;
+  await evaluate((text) => window.game.manifestEngine.writeFile('followup-template.yaml', text), customTemplate);
+  await expectCmd('followup: create custom project template', 'oc create -f followup-template.yaml -n openshift-config', /created|configured/);
+  await expectCmd('followup: new-project uses the configured template', 'oc new-project followup-check', /Now using project|created/i);
+  const templateInheritance = await evaluate(() => ({
+    networkPolicy: window.game.cluster.getByKind('NetworkPolicy').some((n) => n.metadata.name === 'default-deny' && n.metadata.namespace === 'followup-check'),
+    adminBinding: window.game.cluster.getByKind('RoleBinding').some((r) => r.metadata.name === 'admin' && r.metadata.namespace === 'followup-check'),
+  }));
+  assert(templateInheritance.networkPolicy, 'followup: new project inherits template objects', JSON.stringify(templateInheritance));
+  assert(templateInheritance.adminBinding, 'followup: new project grants the requester admin', JSON.stringify(templateInheritance));
+
+  // oc edit explains the real $EDITOR (vi/vim) difference.
+  await expectCmd('followup: create deployment for edit note', 'oc create deployment editnote --image=nginx:1.0 -n followup-check', /created/i);
+  await expectCmd('followup: oc edit mentions $EDITOR / vi', 'oc edit deployment/editnote -n followup-check', /(vi\b|vim|\$EDITOR)/i);
+  await expectCmd('followup: oc edit project.config opens editor', 'oc edit project.config.openshift.io/cluster', /manifest editor/i);
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 11. DRAW PAGE
 // ═══════════════════════════════════════════════════════════════════════════
 await runSection('draw', async () => {
   await goto('/draw');
