@@ -3423,6 +3423,9 @@ export class GameEngine {
     };
     if (env.length > 0) container.env = env;
     const labels = { app: name, 'app.kubernetes.io/name': name };
+    // `oc new-app` adds the OpenShift `deployment=<name>` pod-template label so
+    // `oc get pods -l deployment=<name>` finds the workload's Pods (#42).
+    const podTemplateLabels = { ...labels, deployment: name };
     const deploymentSpec = {
       replicas,
       selector: { matchLabels: { app: name } },
@@ -3431,7 +3434,7 @@ export class GameEngine {
         rollingUpdate: { maxSurge: '25%', maxUnavailable: '25%' },
       },
       template: {
-        metadata: { labels },
+        metadata: { labels: podTemplateLabels },
         spec: { containers: [container] },
       },
     };

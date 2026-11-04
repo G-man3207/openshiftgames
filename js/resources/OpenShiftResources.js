@@ -309,7 +309,15 @@ export class Route extends ResourceBase {
         const prefix = short ? '  ' : `  ${ingress.host}`;
         return `${prefix} exposed on router ${ingress.routerName || 'default'}${hostSuffix}${age}`;
       }
-      return `  rejected by router ${ingress.routerName || 'default'}${hostSuffix}: ${condition.reason || ''}${age}`;
+      // OCP 4.x rejected routes render the condition reason followed by every
+      // message line (e.g. ExternalCertificateValidationFailed, issue #39).
+      const rejectedLines = [
+        `  rejected by router ${ingress.routerName || 'default'}${hostSuffix}: ${
+          condition.reason || ''
+        } (${relativeAge(condition.lastTransitionTime)} ago)`,
+      ];
+      if (condition.message) rejectedLines.push(`    ${condition.message}`);
+      return rejectedLines.join('\n');
     };
     // The ingress whose host equals the requested host is shown short-form
     // under "Requested Host"; every other ingress gets its full host line.

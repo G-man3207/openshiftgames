@@ -152,17 +152,21 @@ const INCIDENT_DEFS = [
     ],
     // Per-Pod crash output rendered by `oc logs` (current) / `oc logs --previous`.
     // Tokens: <pod> <deployment> <image> <namespace> — substituted from the live Pod.
+    // Issue #42-3: the crash is caused ONLY by an invalid APP_MODE env value —
+    // the log must stay neutral about the image so a newcomer does not try
+    // `oc set image`. Real application log shape: a FATAL config-validation
+    // line plus the error detail, then the process exit status.
     logs: {
       container: 'main',
       current: [
         'Starting application...',
-        'FATAL: <deployment> failed to start: unsupported APP_MODE configuration value',
+        'FATAL: configuration validation failed (exit code 1)',
         'Error: configuration validation failed: APP_MODE has an unsupported value',
         'Process exited with status 1',
       ],
       previous: [
         'Starting application...',
-        'FATAL: <deployment> cannot start with image <image>: invalid configuration (exit code 1)',
+        'FATAL: configuration validation failed (exit code 1)',
         'Error: configuration validation failed: APP_MODE has an unsupported value',
         'Process exited with status 1',
       ],

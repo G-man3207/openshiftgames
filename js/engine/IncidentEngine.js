@@ -2686,12 +2686,29 @@ class IncidentEngine {
       'KubeletNotReady',
       'kubelet stopped posting node status'
     );
-    if (node.spec) node.spec.unschedulable = true;
+    // Issue #43: a real NotReady node is NOT cordoned. The node lifecycle
+    // controller adds node.kubernetes.io/unreachable / not-ready taints
+    // (NoSchedule + NoExecute) and `oc get nodes` STATUS stays plain NotReady.
+    const simulation = this.gameEngine?.simulation;
+    if (simulation?.applyNodeNotReadyTaints) {
+      simulation.applyNodeNotReadyTaints(node);
+    } else if (node.spec) {
+      node.spec.taints = [
+        ...(node.spec.taints || []).filter(
+          (taint) => !String(taint?.key || '').startsWith('node.kubernetes.io/')
+        ),
+        { key: 'node.kubernetes.io/unreachable', effect: 'NoSchedule' },
+        { key: 'node.kubernetes.io/unreachable', effect: 'NoExecute' },
+        { key: 'node.kubernetes.io/not-ready', effect: 'NoSchedule' },
+        { key: 'node.kubernetes.io/not-ready', effect: 'NoExecute' },
+      ];
+    }
+    if (node.spec) node.spec.unschedulable = false;
     this._recordEvent(
       node,
       'Warning',
       'NodeNotReady',
-      'Node became NotReady; workloads are being rescheduled'
+      `Node ${node.name} status is now: NodeNotReady`
     );
     this._markIncident(node, incident);
     this._commit(node);
@@ -3548,18 +3565,54 @@ class IncidentEngine {
 
     if (incident.restoreState?.memory && node.spec) node.spec.memory = incident.restoreState.memory;
     this._setPhase(node, 'Running');
-    if (node.spec) node.spec.unschedulable = false;
-    this._setCondition(node, 'Ready', 'True', 'KubeletReady', 'kubelet is posting ready status');
-    for (const pressure of [
-      'MemoryPressure',
-      'DiskPressure',
-      'PIDPressure',
-      'NetworkUnavailable',
-    ]) {
-      this._setCondition(node, pressure, 'False', 'KubeletHasSufficientResources', '');
+    // A healed node is Ready and schedulable again: clear the lifecycle taints
+    // the NotReady damage added (issue #43). Do not touch spec.unschedulable —
+    // the incident never cordoned the node, so a player's cordon is preserved.
+    const simulation = this.gameEngine?.simulation;
+    if (simulation?.clearNodeNotReadyTaints) {
+      simulation.clearNodeNotReadyTaints(node);
+    } else if (node.spec) {
+      node.spec.taints = (node.spec.taints || []).filter(
+        (taint) => !String(taint?.key || '').startsWith('node.kubernetes.io/not-ready')
+      );
+      node.spec.taints = (node.spec.taints || []).filter(
+        (taint) => !String(taint?.key || '').startsWith('node.kubernetes.io/unreachable')
+      );
     }
+    this._setCondition(node, 'Ready', 'True', 'KubeletReady', 'kubelet is posting ready status');
+    this._setCondition(
+      node,
+      'MemoryPressure',
+      'False',
+      'KubeletHasSufficientMemory',
+      'kubelet has sufficient memory available'
+    );
+    this._setCondition(
+      node,
+      'DiskPressure',
+      'False',
+      'KubeletHasNoDiskPressure',
+      'kubelet has no disk pressure'
+    );
+    this._setCondition(
+      node,
+      'PIDPressure',
+      'False',
+      'KubeletHasSufficientPID',
+      'kubelet has sufficient PID available'
+    );
+    // Real OCP nodes report NetworkUnavailable=False with reason
+    // NoNetworkPlugin (the kubelet has no network-plugin interface); the 4.22
+    // message is the kubelet's canonical "network plugin is not ready" text.
+    this._setCondition(
+      node,
+      'NetworkUnavailable',
+      'False',
+      'NoNetworkPlugin',
+      'network plugin is not ready'
+    );
     this._clearAnnotation(node, INCIDENT_ANNOTATION);
-    this._recordEvent(node, 'Normal', 'NodeReady', 'Node is ready and schedulable again');
+    this._recordEvent(node, 'Normal', 'NodeReady', `Node ${node.name} status is now: NodeReady`);
     this._commit(node);
 
     // Pods that were failed with the node come back through the scheduler.

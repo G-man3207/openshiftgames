@@ -32,7 +32,7 @@ import {
   parseCpuMillis,
   parseMemoryMi,
 } from './ClusterState.js';
-import { podSecurityRequest, runAsUserAllowed } from './RBACEngine.js';
+import { podSecurityRequest, ruleMatches, runAsUserAllowed } from './RBACEngine.js';
 import {
   validateCronSchedule,
   parseCronSchedule,
@@ -136,12 +136,28 @@ const SERVING_CERT_ANNOTATION = 'service.beta.openshift.io/serving-cert-secret-n
 const INJECT_CABUNDLE_ANNOTATION = 'service.beta.openshift.io/inject-cabundle';
 const INJECT_CABUNDLE_KEY = 'service-ca.crt';
 const ROUTER_NAMESPACE = 'openshift-ingress';
-const ROUTER_NAMESPACE_LABEL = 'policy-group.network.openshift.io/ingress';
 const ROUTER_DEFAULT_IP = '172.30.0.20';
 const ROUTER_404_BODY =
   '<html><body><h1>404 Not Found</h1>\nThe requested URL was not found on this server.</body></html>';
 const ROUTER_503_BODY =
   '<html><body><h1>503 Service Unavailable</h1>\nNo server is available to handle this request.</body></html>';
+
+/** Real service-account mount path + projected token lifetime (issue #42). */
+const SERVICE_ACCOUNT_MOUNT_PATH = '/var/run/secrets/kubernetes.io/serviceaccount';
+const SERVICE_ACCOUNT_TOKEN_SECONDS = 3607;
+/** k8s.io/apimachinery `rand.String` safe alphabet for generated volume suffixes. */
+const RAND_SAFE_ALPHABET = 'bcdfghjklmnpqrstvwxz2456789';
+
+/**
+ * Taints the real node lifecycle controller puts on a NotReady/unreachable
+ * node (issue #43). A NotReady node is NOT cordoned: `spec.unschedulable` stays
+ * false and `oc get nodes` shows STATUS `NotReady` (no SchedulingDisabled).
+ */
+const NODE_NOT_READY_TAINT_KEYS = [
+  'node.kubernetes.io/unreachable',
+  'node.kubernetes.io/not-ready',
+];
+const NODE_NOT_READY_TAINT_EFFECTS = ['NoSchedule', 'NoExecute'];
 
 /** Base64-encode UTF-8 text (Secret `data` values / CABundle keys). */
 function base64EncodeText(text) {
@@ -347,6 +363,7 @@ export class SimulationTick {
     this._tickLimitRanges(dt);
     this._tickQuotaEnforcement(dt);
     this._tickPodScheduling(dt);
+    this._tickPodServiceAccountMounts(dt);
     this._tickImagePulls(dt);
     this._tickPodLifecycle(dt);
     this._tickContainerResources(dt);
@@ -448,6 +465,11 @@ export class SimulationTick {
         isReady ? 'True' : 'False',
         isReady ? 'KubeletReady' : 'KubeletNotReady'
       );
+      // Issue #43: real nodes receive node.kubernetes.io/unreachable +
+      // not-ready taints (NoSchedule/NoExecute) instead of being cordoned; the
+      // node lifecycle controller removes them once the kubelet is Ready again
+      // (e.g. after `chroot /host systemctl restart kubelet`).
+      this._syncNodeNotReadyTaints(node, !isReady);
       const freeMemory = alloc.memory.capacity - alloc.memory.used;
       const memoryEvictionThreshold = Math.min(
         RESERVED_MEMORY_MIB,
@@ -461,9 +483,63 @@ export class SimulationTick {
           : 'KubeletHasSufficientMemory'
       );
       // PID exhaustion is not modelled; never derive it from CPU pressure.
-      node.setCondition('PIDPressure', 'False', 'KubeletHasSufficientPIDs');
+      node.setCondition('PIDPressure', 'False', 'KubeletHasSufficientPID');
       if (isReady) node.setCondition('DiskPressure', 'False', 'KubeletHasNoDiskPressure');
     }
+  }
+
+  /**
+   * Add/remove the real node-lifecycle taints for a node's Ready state.
+   * Idempotent; only writes when the taint set actually changes (issue #43).
+   * @param {object} node
+   * @param {boolean} notReady
+   * @returns {boolean} true when the node spec changed
+   */
+  _syncNodeNotReadyTaints(node, notReady) {
+    if (!node?.spec) return false;
+    const taints = Array.isArray(node.spec.taints) ? node.spec.taints : [];
+    const isLifecycleTaint = (taint) =>
+      NODE_NOT_READY_TAINT_KEYS.includes(String(taint?.key || ''));
+    if (!notReady) {
+      const next = taints.filter((taint) => !isLifecycleTaint(taint));
+      if (next.length === taints.length) return false;
+      node.spec.taints = next;
+      this.cluster.update(node.uid, node);
+      return true;
+    }
+    const next = [...taints];
+    let changed = false;
+    for (const key of NODE_NOT_READY_TAINT_KEYS) {
+      for (const effect of NODE_NOT_READY_TAINT_EFFECTS) {
+        if (next.some((taint) => taint?.key === key && taint?.effect === effect)) continue;
+        next.push({ key, effect });
+        changed = true;
+      }
+    }
+    if (!changed) return false;
+    node.spec.taints = next;
+    this.cluster.update(node.uid, node);
+    return true;
+  }
+
+  /**
+   * Apply the NotReady taints immediately (used by IncidentEngine damage, which
+   * may run between ticks).
+   * @param {object} node
+   * @returns {boolean}
+   */
+  applyNodeNotReadyTaints(node) {
+    return this._syncNodeNotReadyTaints(node, true);
+  }
+
+  /**
+   * Remove the node-lifecycle taints (used by IncidentEngine healing and the
+   * kubelet-restart repair path).
+   * @param {object} node
+   * @returns {boolean}
+   */
+  clearNodeNotReadyTaints(node) {
+    return this._syncNodeNotReadyTaints(node, false);
   }
 
   _tickPodScheduling(dt) {
@@ -1716,12 +1792,16 @@ export class SimulationTick {
         '';
       const rsAnnotations = { 'deployment.kubernetes.io/revision': String(revision) };
       if (changeCause) rsAnnotations['kubernetes.io/change-cause'] = changeCause;
+      // Real Deployment controller: the ReplicaSet copies the Pod template's
+      // labels (selector labels + extra template labels such as OpenShift
+      // new-app's `deployment=<name>`) and adds `pod-template-hash`.
+      const templateLabels = template?.metadata?.labels || {};
       rs = this.cluster.addResource({
         kind: 'ReplicaSet',
         metadata: {
           name,
           namespace,
-          labels: { ...selector, 'pod-template-hash': templateHash },
+          labels: { ...templateLabels, ...selector, 'pod-template-hash': templateHash },
           annotations: rsAnnotations,
         },
         spec: {
@@ -2443,10 +2523,24 @@ export class SimulationTick {
     return Number.isFinite(number) ? Math.max(0, Math.floor(number)) : 0;
   }
 
-  /** Deterministic 9-char `pod-template-hash` from a pod template. */
+  /**
+   * Deterministic `pod-template-hash` from a pod template, shaped exactly like
+   * the real Deployment controller's (issue #43):
+   *
+   *   pod-template-hash = rand.SafeEncodeString(fmt.Sprint(fnv32a(template)))
+   *
+   * The 32-bit FNV digest is rendered as 10 decimal digits and each digit is
+   * mapped through the k8s safe alphabet `bcdfghjklmnpqrstvwxz2456789`, which
+   * yields 10-char suffixes like `5d8f7c9b6` (only digits 4-9 and b/c/d/f
+   * appear). Same template → same hash, so names stay deterministic.
+   */
   _templateHash(template) {
     const digest = this._hashString(this._stableStringify(template || {}));
-    return digest.toString(36).padStart(9, '0').slice(-9);
+    return String(digest)
+      .padStart(10, '0')
+      .split('')
+      .map((digit) => RAND_SAFE_ALPHABET[digit.charCodeAt(0) % RAND_SAFE_ALPHABET.length])
+      .join('');
   }
 
   /** JSON with recursively sorted keys (stable across apply round-trips). */
@@ -2569,6 +2663,8 @@ export class SimulationTick {
       this.cluster.addRelationship(statefulSet.uid, pod.uid);
       // Admitted above (real admission runs before the object exists).
       pod.setAnnotation('openshiftgames/quota-admitted', 'true');
+      this._ensurePodServiceAccountTokenMount(pod);
+      this.cluster.update(pod.uid, pod);
       this._clearReplicaFailure(statefulSet);
     }
     return pod;
@@ -3480,9 +3576,22 @@ export class SimulationTick {
       let reason = 'ServiceUnavailable';
       let message = 'no endpoints available';
 
+      // Issue #39: a Route that references an external certificate is only
+      // admitted once the kubernetes.io/tls Secret exists AND the
+      // openshift-ingress router service account can get/list/watch it (the
+      // documented Role + RoleBinding grant). Until then the router reports
+      // Admitted=False, reason ExternalCertificateValidationFailed, with the
+      // same aggregate validation message a real 4.22 router records.
+      const externalCertificate = this._externalCertificateName(route);
+      const externalCertificateError = externalCertificate
+        ? this._externalCertificateValidationError(route, externalCertificate)
+        : null;
       if (route.spec.rejected === true || route._forceReject === true) {
         reason = 'Rejected';
         message = route._rejectMessage || 'the route has been rejected by the router configuration';
+      } else if (externalCertificateError) {
+        reason = 'ExternalCertificateValidationFailed';
+        message = externalCertificateError;
       } else if (!route.spec.to || route.spec.to.kind !== 'Service') {
         reason = 'InvalidTargetKind';
         message = 'route target must be a Service';
@@ -3501,21 +3610,33 @@ export class SimulationTick {
       const previous = route._admittedState;
       route._admittedState = admitted;
       route.status = route.status || {};
+      // lastTransitionTime only changes when the condition itself changes (a
+      // real router keeps republishing the same condition; `oc describe route`
+      // shows the age since the last actual transition).
+      const statusValue = admitted ? 'True' : 'False';
+      const priorCondition = route._admittedCondition;
+      const unchanged =
+        priorCondition &&
+        priorCondition.status === statusValue &&
+        priorCondition.reason === reason &&
+        priorCondition.message === message;
+      const condition = {
+        type: 'Admitted',
+        status: statusValue,
+        reason,
+        message,
+        lastTransitionTime: unchanged
+          ? priorCondition.lastTransitionTime
+          : new Date().toISOString(),
+      };
+      route._admittedCondition = condition;
       route.status.ingress = [
         {
           host,
           routerName: 'default',
           routerCanonicalHostname: `router-default.${APPS_DOMAIN}`,
           wildcardPolicy: route.spec.wildcardPolicy || 'None',
-          conditions: [
-            {
-              type: 'Admitted',
-              status: admitted ? 'True' : 'False',
-              reason,
-              message,
-              lastTransitionTime: new Date().toISOString(),
-            },
-          ],
+          conditions: [condition],
         },
       ];
       route.status.observedGeneration = route.metadata.generation;
@@ -3540,6 +3661,104 @@ export class SimulationTick {
         });
       }
     }
+  }
+
+  /**
+   * `spec.tls.externalCertificate.name` of a Route (OCP 4.22 external
+   * certificate management), or null when the route does not use one.
+   * @param {object} route
+   * @returns {string|null}
+   */
+  _externalCertificateName(route) {
+    const name = route?.spec?.tls?.externalCertificate?.name;
+    return name ? String(name) : null;
+  }
+
+  /**
+   * Aggregate validation error for a Route's external certificate, or null when
+   * the router can serve it. Mirrors OCP 4.22 `ValidateTLSExternalCertificate`:
+   * the `system:serviceaccount:openshift-ingress:router` subject must be allowed
+   * to get/watch/list the named Secret (SubjectAccessReviews run even when the
+   * Secret is missing), and the referenced Secret must exist with type
+   * kubernetes.io/tls.
+   *
+   * @param {object} route
+   * @param {string} secretName
+   * @returns {string|null}
+   */
+  _externalCertificateValidationError(route, secretName) {
+    const namespace = route.metadata.namespace;
+    const fldPath = 'spec.tls.externalCertificate';
+    const errors = [];
+    // Router service-account SARs, in the real order (get, watch, list).
+    for (const verb of ['get', 'watch', 'list']) {
+      if (!this._routerServiceAccountCan(namespace, verb, 'secrets', secretName)) {
+        errors.push(
+          `${fldPath}: Forbidden: router serviceaccount does not have permission to ${verb} this secret`
+        );
+      }
+    }
+    const secret = this.cluster.getByName('Secret', secretName, namespace);
+    if (!secret) {
+      errors.push(`${fldPath}: Not found: secrets "${secretName}" not found`);
+    } else if ((secret.spec?.type || secret.type) !== 'kubernetes.io/tls') {
+      errors.push(
+        `${fldPath}: Invalid value: "${secretName}": secret of type "kubernetes.io/tls" required`
+      );
+    }
+    return errors.length > 0 ? errors.join(', ') : null;
+  }
+
+  /**
+   * SubjectAccessReview-style check for the ingress router service account:
+   * does a RoleBinding/ClusterRoleBinding grant `verb` on `resource` named
+   * `resourceName` in `namespace` to `system:serviceaccount:openshift-ingress:router`?
+   * Honours `verbs`, `resources`, `apiGroups`, `resourceNames` (a rule without
+   * resourceNames grants every name, as the real authorizer does).
+   *
+   * @param {string} namespace
+   * @param {string} verb
+   * @param {string} resource e.g. `secrets`
+   * @param {string} resourceName
+   * @returns {boolean}
+   */
+  _routerServiceAccountCan(namespace, verb, resource, resourceName) {
+    const identitySubject = (subject) => {
+      if (!subject || String(subject.kind || '').toLowerCase() !== 'serviceaccount') return false;
+      if (String(subject.name || '') !== 'router') return false;
+      const subjectNamespace = subject.namespace || '';
+      // A missing namespace on a ServiceAccount subject means the binding's
+      // own project, but the router SA lives in openshift-ingress.
+      return subjectNamespace === ROUTER_NAMESPACE;
+    };
+    const rulesOf = (roleRef) => {
+      if (!roleRef || !roleRef.name) return [];
+      if (String(roleRef.kind) === 'Role') {
+        const role = this.cluster.getByName('Role', roleRef.name, namespace);
+        return role ? role.rules || role.spec?.rules || [] : [];
+      }
+      if (String(roleRef.kind) === 'ClusterRole') {
+        const role = this.cluster.getByName('ClusterRole', roleRef.name, '');
+        return role ? role.rules || role.spec?.rules || [] : [];
+      }
+      return [];
+    };
+    const grants = (binding) => {
+      const subjects = binding?.spec?.subjects || binding?.subjects || [];
+      if (!subjects.some(identitySubject)) return [];
+      return rulesOf(binding?.spec?.roleRef || binding?.roleRef);
+    };
+    const parsed = {
+      kind: 'Secret',
+      name: resourceName,
+      subresource: null,
+      tokens: new Set([resource, 'secret']),
+    };
+    const rules = [
+      ...(this.cluster.getByKindAndNamespace('RoleBinding', namespace) || []).flatMap(grants),
+      ...(this.cluster.getByKind('ClusterRoleBinding') || []).flatMap(grants),
+    ];
+    return rules.some((rule) => ruleMatches(rule, verb, parsed));
   }
 
   /**
@@ -4191,14 +4410,45 @@ export class SimulationTick {
         build._phase = build.status.phase || 'New';
         build._willFail = this._shouldBuildFail(build);
         build._failMessage = build._willFail ? this._buildFailureMessage(build) : '';
+        // Seeded/legacy objects used the non-API `startTime` field; keep the
+        // real `startTimestamp` populated for builds that already started.
+        if (build.status.phase !== 'New') {
+          if (!build.status.startTimestamp && build.status.startTime) {
+            build.status.startTimestamp = build.status.startTime;
+          }
+          delete build.status.startTime;
+        }
       }
       build._phaseElapsed += dt;
       const buildConfig = this._findBuildConfigForBuild(build);
+      const serial =
+        (buildConfig?.spec?.runPolicy || build.spec?.runPolicy || 'Serial') === 'Serial';
 
       if (build.status.phase === 'New') {
+        // A queued build keeps its (empty) startTimestamp: the API only sets it
+        // when the build actually starts.
+        delete build.status.startTimestamp;
+        delete build.status.startTime;
+        if (serial && buildConfig) {
+          const active = this._activeBuildsOfConfig(buildConfig, build).filter((entry) =>
+            ['Pending', 'Running'].includes(entry.status.phase)
+          );
+          const olderQueued = this.cluster
+            .getBuildsForConfig(buildConfig)
+            .filter(
+              (entry) =>
+                entry.uid !== build.uid &&
+                entry.status.phase === 'New' &&
+                this._buildIsOlder(entry, build)
+            );
+          // Issue #42: a Serial BuildConfig runs builds one at a time — stay
+          // queued behind the active build and behind older queued builds.
+          if (active.length > 0 || olderQueued.length > 0) continue;
+        }
         if (build._phaseElapsed >= BUILD_PHASE_NEW_SECONDS) {
           build.status.phase = 'Pending';
           build.status.reason = 'BuildPending';
+          build.status.startTimestamp = new Date().toISOString();
           build._phaseElapsed = 0;
           build.recordEvent('Normal', 'BuildStarted', `Build ${build.metadata.name} started`);
           this.cluster.update(build.uid, build);
@@ -4206,6 +4456,13 @@ export class SimulationTick {
         continue;
       }
       if (build.status.phase === 'Pending') {
+        // Only one build of a Serial BuildConfig may be Running at a time.
+        if (serial && buildConfig) {
+          const anotherRunning = this._activeBuildsOfConfig(buildConfig, build).some(
+            (entry) => entry.status.phase === 'Running'
+          );
+          if (anotherRunning) continue; // stay Pending behind the running build
+        }
         if (build._phaseElapsed >= BUILD_PHASE_PENDING_SECONDS) {
           build.status.phase = 'Running';
           build.status.reason = 'BuildRunning';
@@ -4224,6 +4481,29 @@ export class SimulationTick {
         this._completeBuildSuccess(build, buildConfig);
       }
     }
+  }
+
+  /** In-flight (New/Pending/Running) builds of a BuildConfig, excluding one. */
+  _activeBuildsOfConfig(buildConfig, exclude) {
+    return (this.cluster.getChildren(buildConfig.uid) || []).filter(
+      (child) =>
+        child.kind === 'Build' &&
+        child.uid !== exclude?.uid &&
+        ['New', 'Pending', 'Running'].includes(child.status?.phase)
+    );
+  }
+
+  /** Is Build `a` older (queued earlier) than Build `b` for Serial ordering? */
+  _buildIsOlder(a, b) {
+    const aTime = new Date(a.metadata?.creationTimestamp || 0).getTime();
+    const bTime = new Date(b.metadata?.creationTimestamp || 0).getTime();
+    if (aTime !== bTime) return aTime < bTime;
+    const aVersion = Number(a.metadata?.annotations?.['openshift.io/build.number']);
+    const bVersion = Number(b.metadata?.annotations?.['openshift.io/build.number']);
+    if (Number.isFinite(aVersion) && Number.isFinite(bVersion) && aVersion !== bVersion) {
+      return aVersion < bVersion;
+    }
+    return String(a.metadata?.name || '') < String(b.metadata?.name || '');
   }
 
   /** Deterministic 6–10s running duration based on the build name. */
@@ -4277,7 +4557,10 @@ export class SimulationTick {
 
   _completeBuildSuccess(build, buildConfig) {
     build.status.phase = 'Complete';
-    build.status.completionTime = new Date().toISOString();
+    // Real Build status uses `completionTimestamp` (RFC3339); `completionTime`
+    // is the legacy game-only field some old saves carry.
+    build.status.completionTimestamp = new Date().toISOString();
+    delete build.status.completionTime;
     build.status.reason = 'BuildComplete';
     build.status.message = 'Build completed successfully';
     build.setCondition('Complete', 'True', 'BuildComplete');
@@ -4324,7 +4607,8 @@ export class SimulationTick {
 
   _completeBuildWithFailure(build, buildConfig) {
     build.status.phase = 'Failed';
-    build.status.completionTime = new Date().toISOString();
+    build.status.completionTimestamp = new Date().toISOString();
+    delete build.status.completionTime;
     build.status.reason = 'BuildFailed';
     build.status.message = this._buildFailureMessage(build);
     build.setCondition('Complete', 'False', 'BuildFailed', build.status.message);
@@ -5511,12 +5795,133 @@ export class SimulationTick {
     // existed: record that fact so later quota edits never retroactively reject
     // a running Pod (a real cluster does not re-admit existing Pods).
     pod.setAnnotation('openshiftgames/quota-admitted', 'true');
+    this._ensurePodServiceAccountTokenMount(pod);
+    this.cluster.update(pod.uid, pod);
     this._clearReplicaFailure(parent);
     if (parent.kind === 'ReplicaSet') {
       parent.status.replicas = (parent.status.replicas || 0) + 1;
       parent.recordEvent('Normal', 'SuccessfulCreate', `Created pod: ${podName}`);
     }
     return pod;
+  }
+
+  // ── Service-account token mounts (issue #42) ───────────────────────────
+
+  /**
+   * A real API server / kubelet always injects the projected service-account
+   * token volume into every Pod unless `automountServiceAccountToken: false`:
+   *
+   *   volumes:
+   *   - name: kube-api-access-<rand5>
+   *     projected:
+   *       defaultMode: 420
+   *       sources:
+   *       - serviceAccountToken: {expirationSeconds: 3607, path: token}
+   *       - configMap: {name: kube-root-ca.crt, items: [{key: ca.crt, path: ca.crt}]}
+   *       - downwardAPI: {items: [{fieldRef: {fieldPath: metadata.namespace}, path: namespace}]}
+   *
+   * The container mounts it read-only at
+   * `/var/run/secrets/kubernetes.io/serviceaccount` so `oc exec` can read
+   * token, ca.crt, namespace (and the service-ca controller adds
+   * service-ca.crt). Idempotent; deterministic volume suffix per Pod name.
+   *
+   * @param {object} pod
+   * @returns {boolean} true when the Pod spec was changed
+   */
+  _ensurePodServiceAccountTokenMount(pod) {
+    if (!pod || pod.kind !== 'Pod' || !pod.metadata) return false;
+    const spec = pod.spec || (pod.spec = {});
+    // Pod-level opt-out wins over the ServiceAccount default (real semantics).
+    if (spec.automountServiceAccountToken === false) return false;
+    const namespace = pod.metadata.namespace || spec.namespace || 'default';
+    const serviceAccountName = spec.serviceAccountName || 'default';
+    const serviceAccount = this.cluster.getByName('ServiceAccount', serviceAccountName, namespace);
+    if (serviceAccount?.spec?.automountServiceAccountToken === false) return false;
+    spec.containers = Array.isArray(spec.containers) ? spec.containers : [];
+    spec.volumes = Array.isArray(spec.volumes) ? spec.volumes : [];
+    const mountPath = SERVICE_ACCOUNT_MOUNT_PATH;
+    let volume = spec.volumes.find(
+      (entry) => entry && /^kube-api-access-/.test(String(entry.name || ''))
+    );
+    let changed = false;
+    if (!volume) {
+      volume = {
+        name: this._serviceAccountVolumeName(pod.metadata.name || 'pod'),
+        projected: {
+          defaultMode: 420,
+          sources: [
+            {
+              serviceAccountToken: {
+                expirationSeconds: SERVICE_ACCOUNT_TOKEN_SECONDS,
+                path: 'token',
+              },
+            },
+            {
+              configMap: {
+                name: 'kube-root-ca.crt',
+                items: [{ key: 'ca.crt', path: 'ca.crt' }],
+              },
+            },
+            {
+              downwardAPI: {
+                items: [
+                  {
+                    fieldRef: { apiVersion: 'v1', fieldPath: 'metadata.namespace' },
+                    path: 'namespace',
+                  },
+                ],
+              },
+            },
+            // OpenShift's service-account admission plugin adds the service CA
+            // bundle to the same projected volume, which is how every Pod ends
+            // up with /var/run/secrets/kubernetes.io/serviceaccount/service-ca.crt.
+            {
+              configMap: {
+                name: 'openshift-service-ca.crt',
+                items: [{ key: 'service-ca.crt', path: 'service-ca.crt' }],
+              },
+            },
+          ],
+        },
+      };
+      spec.volumes.push(volume);
+      changed = true;
+    }
+    for (const container of spec.containers) {
+      if (!container || typeof container !== 'object') continue;
+      container.volumeMounts = Array.isArray(container.volumeMounts) ? container.volumeMounts : [];
+      if (container.volumeMounts.some((entry) => entry?.mountPath === mountPath)) continue;
+      container.volumeMounts.push({ name: volume.name, readOnly: true, mountPath });
+      changed = true;
+    }
+    if (!spec.serviceAccountName) {
+      spec.serviceAccountName = serviceAccountName;
+      changed = true;
+    }
+    return changed;
+  }
+
+  /** Deterministic 5-char kube-api-access volume suffix for a Pod name. */
+  _serviceAccountVolumeName(podName) {
+    let state = this._hashString(`${podName}:kube-api-access`) >>> 0;
+    let suffix = '';
+    for (let index = 0; index < 5; index += 1) {
+      state = (Math.imul(state, 1664525) + 1013904223) >>> 0;
+      suffix += RAND_SAFE_ALPHABET[state % RAND_SAFE_ALPHABET.length];
+    }
+    return `kube-api-access-${suffix}`;
+  }
+
+  /**
+   * Ensure every existing (including seeded/legacy) Pod has the injected
+   * service-account token mount. Idempotent per-tick safety net.
+   */
+  _tickPodServiceAccountMounts() {
+    for (const pod of this.cluster.getByKind('Pod')) {
+      if (pod.isDeleting) continue;
+      if (!this._ensurePodServiceAccountTokenMount(pod)) continue;
+      this.cluster.update(pod.uid, pod);
+    }
   }
 
   // ── NetworkPolicy traffic evaluation ───────────────────────────────────
@@ -5532,20 +5937,16 @@ export class SimulationTick {
   /** Labels used to match a namespace selector (Project labels + name label). */
   _namespaceLabels(namespace) {
     const project = this.cluster.getByName('Project', namespace, '');
-    const labels = {
+    // Real selector semantics: only labels that actually exist on the Namespace
+    // object are visible, plus Kubernetes' automatic
+    // `kubernetes.io/metadata.name=<namespace>` label (NamespaceDefaultLabelName,
+    // GA since 1.22). The ingress policy-group labels are seeded on the real
+    // `openshift-ingress` Project by ClusterState — nothing is fabricated here
+    // (issue #41).
+    return {
       'kubernetes.io/metadata.name': namespace,
       ...(project?.metadata?.labels || {}),
     };
-    // The ingress operator labels the router namespace so a NetworkPolicy can
-    // allow router traffic after a default-deny (#33b):
-    //   namespaceSelector: matchLabels: policy-group.network.openshift.io/ingress: ""
-    if (namespace === ROUTER_NAMESPACE || namespace === 'openshift-ingress-operator') {
-      if (labels[ROUTER_NAMESPACE_LABEL] === undefined) labels[ROUTER_NAMESPACE_LABEL] = '';
-      if (labels['network.openshift.io/policy-group'] === undefined) {
-        labels['network.openshift.io/policy-group'] = 'ingress';
-      }
-    }
-    return labels;
   }
 
   /** Match a LabelSelector ({matchLabels,matchExpressions}) against labels. */
@@ -6701,7 +7102,13 @@ export class SimulationTick {
   }
 
   _randomSuffix() {
-    return Math.random().toString(36).substring(2, 7);
+    // Real generateName suffix: rand.String(5) over the k8s safe alphabet,
+    // e.g. the `x2k4p` in `webapp-5d8f7c9b6-x2k4p` (issue #43).
+    let suffix = '';
+    for (let index = 0; index < 5; index += 1) {
+      suffix += RAND_SAFE_ALPHABET[Math.floor(Math.random() * RAND_SAFE_ALPHABET.length)];
+    }
+    return suffix;
   }
 
   /** FNV-1a hash used for deterministic pseudo-random behaviour. */
