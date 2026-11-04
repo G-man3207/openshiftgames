@@ -281,7 +281,8 @@ GameEngine helpers):
   `add-scc-to-group`, `remove-scc-from-user`, `oc auth can-i <verb> <resource> [--as=<user>]`,
   `oc auth can-i --list`, `oc adm policy who-can <verb> <resource>`.
 - Quotas/self-service: `oc create quota <name> --hard=pods=20,requests.cpu=4,requests.memory=8Gi`,
-  `oc create limitrange <name> --default=cpu=500m,memory=512Mi --default-request=... --max=...` (or -f),
+  LimitRanges are declarative — `oc apply -f examples/limitrange.yaml` (real `oc` has no
+  `create limitrange` subcommand; the simulator rejects it the same way),
   `oc create clusterquota <name> --project-label-selector=... --hard=...`,
   `oc describe quota|limitrange|clusterresourcequota`, `oc get quota|limitrange|clusterquota`.
 - Templates/Operators: `oc get templates -n openshift`, `oc process -f <file> [-p K=V] [-o yaml]`,
@@ -779,7 +780,8 @@ must read `docs/research/*.md` before finalizing copy; researchers will fact-che
   oc create deployment web --image=nginx:latest, oc expose svc/web, oc get routes, oc set env,
   oc apply -f manifests/deployment.yaml, oc apply -k kustomize/overlays/prod, oc process -f templates/webapp-template.yaml -p APP_NAME=web, helm install webapp helm/webapp, htpasswd + oauth + login,
   oc adm policy add-scc-to-user anyuid -z default -n demo, oc auth can-i --as=..., oc create user/group,
-  oc create quota/limitrange, oc get co, oc get clusterversion. Assert success/expected text.
+  oc create quota + oc apply -f examples/limitrange.yaml (no `oc create limitrange` subcommand),
+  oc get co, oc get clusterversion. Assert success/expected text.
 - Start campaign levels 1-20 via `new CampaignMode(...)`/app and assert objectiveProgress initializes;
   start challenges 1-12; open EX280 Prep overlay; open Files panel; load draw.html and assert palette +
   YAML export.

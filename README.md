@@ -31,7 +31,8 @@ names are shown in EX280 Prep).
   `new-app`, `new-project`, `expose`, `create route`, `start-build`, `set env|image|resources|volume`,
   `rollout` (`status --timeout|history|undo`), `logs` (Pods, Deployments, Jobs), `exec`, `rsh`, `cp`, `wait`,
   `diff -f`, `patch --type=strategic|merge|json`, `adm policy` (RBAC + SCC), `auth can-i`,
-  `adm top`, `adm cordon|drain`, `create quota|limitrange|clusterquota`, `create token`,
+  `adm top`, `adm cordon|drain`, `create quota|clusterquota` (LimitRanges are declarative —
+  `oc apply -f`, there is no `oc create limitrange` subcommand), `create token`,
   `image info`, `process`, `helm` (repo/search/install/upgrade/history/rollback), `htpasswd`,
   `debug node` (interactive `chroot /host` + `systemctl`/`journalctl` kubelet troubleshooting),
   `--dry-run=client|server`, `<resource>.<group>` tokens, escaped jsonpath keys, `custom-columns`,
@@ -46,8 +47,9 @@ names are shown in EX280 Prep).
   handling), `htpasswd`, `skopeo` — so exam workflows like writing YAML in the terminal,
   decoding a Secret and `oc apply -f -` work as on a real workstation. A workstation-side `curl`
   resolves Route hosts through the router model (edge/passthrough/reencrypt, http redirect and
-  NetworkPolicy reachability), and `oc exec`/`oc rsh` show the Pod's real volumes, ConfigMaps,
-  Secrets and env.
+  NetworkPolicy reachability), with real flags and `-w/--write-out` (`%{http_code}` etc.), and
+  `oc exec`/`oc rsh` show the Pod's real volumes, ConfigMaps, Secrets, service-account token and
+  env.
 - **First-class OpenShift resources** — Project, Pod, Deployment, ReplicaSet, StatefulSet, DaemonSet,
   Job, CronJob, Service, Route, Ingress, NetworkPolicy, ConfigMap, Secret, PVC, PV, StorageClass,
   HPA, PDB, ResourceQuota, LimitRange, ClusterResourceQuota, ServiceAccount, Role, RoleBinding,
@@ -79,7 +81,10 @@ names are shown in EX280 Prep).
   with `mkdir() "/var/cache/nginx/client_temp" failed (13: Permission denied)` in `oc logs` — the
   `ServiceAccount` + `anyuid` grant + `oc set serviceaccount` flow, or an explicit non-root
   `runAsUser`, is the escape hatch. `htpasswd -B` writes real-shaped bcrypt hashes and login
-  validates bcrypt and legacy `{SHA}` entries. The full exam identity lifecycle is practised:
+  validates bcrypt and legacy `{SHA}` entries. The installer-side kubeadmin password is discoverable
+  the real way: `cat ~/auth/kubeadmin-password` (or `oc extract secret/kubeadmin -n kube-system
+--to=-`), and `oc login -u kubeadmin` without `-p` prompts for it like real `oc`. The full exam
+  identity lifecycle is practised:
   rotate the HTPasswd password through the `openshift-config/htpass-secret` (`oc extract` →
   `htpasswd` → `oc set data`) and wait for the OAuth rollout, then delete a departing user and
   its Identity (`oc delete user` leaves the Identity behind).
