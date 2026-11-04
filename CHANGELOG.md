@@ -4,6 +4,90 @@ All notable changes to OpenShift Games are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 aims to follow [Semantic Versioning](https://semver.org/).
 
+## [1.1.7] — 2026-11-04
+
+QA-retest follow-up on 1.1.6: closes the five new report items (#22–#26) — a timed-lab
+soft-lock, lab-02 diagnostics fidelity, Helm 3 history/rollback semantics, the real
+restricted-v2 `nginx` runtime model and the remaining CLI fidelity leftovers — and adds a
+dev-only toolchain (Prettier + soft Knip + husky pre-commit gate) with a substantially larger
+browser regression suite.
+
+### Added
+
+- **A dev-only toolchain; the game stays no-build and dependency-free.** Prettier 3 formats the
+  whole repo; Knip 5 runs in "real garbage only" mode (dead files, unused/unlisted dependencies,
+  unresolved imports and binaries are errors; unused-export/duplicate-export rules are off by
+  design because the inline-HTML, `window.game` and browser-context API cannot be traced
+  statically); husky 9 installs a pre-commit gate that blocks a commit on either check. The new
+  `npm run format` / `format:check` / `knip` / `lint` scripts cover both gates,
+  `scripts/knip-entrypoints.mjs` mirrors the inline HTML modules' imports so dead-file detection
+  works, and `scripts/verify.mjs` now enforces the precise contract (private `package.json`,
+  dev-only dependencies `prettier`/`knip`/`husky`, no runtime dependencies, no bundler/build config,
+  `node_modules/` untracked, hook contents and entry-mirror coverage) instead of banning a manifest
+  outright. See README → Development tooling.
+- **Browser regression coverage grew from 566 to 685 checks:** timed lab 02 end-to-end plus its
+  diagnostics, campaign L3/L20 incident gates, the nginx admitted-then-crash-looping model and the
+  anyuid fix path, Helm history/rollback, `describe` fidelity and all the CLI leftovers below.
+
+### Fixed
+
+- **Timed lab 02 soft-lock** (issue #22): the uptime/cluster-health activation baseline is now
+  captured at level start (`IncidentEngine.start()`/`reset()`) instead of lazily at the first
+  objective evaluation, so the `triggerTime: 0` CrashLoopBackOff preload no longer counts against
+  the learner and "Restore cluster health to at least 90%" ticks after the documented image fix.
+  The same latent soft-lock on campaign L10 (a level with no incident plan) falls back to the plain
+  health check. Regression coverage completes lab 02 end to end (4/4 objectives, health ≥ 90,
+  3/3 Ready) and asserts the campaign L3 `clusterHealth` and L20 `resolve` gates.
+- **Lab 02 diagnostics fidelity** (issue #23): `oc describe pod` prints the live Pod spec image
+  (not a stale preload image), a real scheduled `Node:` (`name/ip`, never `<none>/<none>`) and no
+  longer leaks simulator-internal `openshiftgames*` annotations — they are also scrubbed from
+  `-o yaml`/`-o json` while genuine annotations (e.g. `openshift.io/scc`) stay visible.
+  `oc describe deployment` has a real `Pod Template:` (containers, image, env, limits) and a
+  `NewReplicaSet: <hash> (<n>/<n> replicas created)` line, and its `Available`/`Progressing`
+  conditions derive from real availability (`Available False MinimumReplicasUnavailable` while
+  crash-looping, `True` once healthy). The 3D Deployment label no longer sticks on "Pending", and
+  Pods damaged by a `triggerTime: 0` preload are bound to a real Node before the damage is applied.
+- **Helm 3 history/rollback semantics** (issue #24): only the latest revision is `deployed` and
+  older revisions are `superseded`; a rollback to revision N re-deploys **revision N's chart and
+  values** (the drill's `web` rolls back to `nginx-15.0.0`); the `CHART` column has no repository
+  prefix and `APP VERSION` matches the chart (`1.25.3`); `helm install`/`upgrade` print the real
+  NAME/LAST DEPLOYED/NAMESPACE/STATUS/REVISION/TEST SUITE shape with no `CHART:` line, and
+  `helm list` matches the deployed revision.
+- **`nginx:latest` under restricted-v2 is now the real runtime trap** (issue #25): SCC admission
+  is spec-based again, so a bare `nginx:latest` Pod (no `securityContext`) is **admitted** under
+  `restricted-v2` (`openshift.io/scc: restricted-v2`) and then crash-loops with
+  `nginx: [emerg] mkdir() "/var/cache/nginx/client_temp" failed (13: Permission denied)` in
+  `oc logs`, growing restart counts and `BackOff` events. The documented
+  `oc create sa` → `oc adm policy add-scc-to-user anyuid -z` → `oc set serviceaccount` fix path
+  re-admits the Pod under `anyuid` and it runs; an explicit `runAsUser: 0`/`privileged` spec still
+  gets a ReplicaSet `FailedCreate` with no Pod. L1 campaign copy teaches the corrected symptom.
+- **CLI fidelity leftovers** (issue #26): `oc exec`/`oc rsh` print the
+  `Defaulting container name` hint only for multi-container Pods; `htpasswd` prints the real
+  `Adding`/`Updating`/`Deleting password for user …` messages and honours `-c`/`-b`/`-D` semantics;
+  repeated `FailedCreate` retries aggregate into one Event row with an `(x10 over 1m)` LAST SEEN
+  suffix while `--field-selector` still filters; a minimal `sed` (`-n A,Bp`, `s///`, inside
+  `oc … | sed …` pipes and on virtual files) exists in the shell; `oc rollout status` on a rollout
+  whose new ReplicaSet is in `ImagePullBackOff` reports the
+  `… of … updated replicas are available…` line instead of the old-replica-termination one;
+  image-pull failure tokens are matched anywhere in the tag (`:v9-nope` now fails and recovers to
+  `:latest`, which still pulls); and OLM resolves per namespace, so an unresolvable package makes
+  **every** Subscription in that namespace report `ResolutionFailed/ConstraintsNotSatisfiable`
+  with no CSV/InstallPlan, while a healthy namespace still installs.
+
+### Tests
+
+- `npx prettier --check .` — 0 unformatted files; `npx knip` — 0 issues (dev-only toolchain).
+- `node scripts/verify.mjs` — **899 static checks**, 0 failures, 0 warnings (54 JS modules,
+  116 files).
+- `node scripts/browser-test.mjs` — **685 headless-browser checks**, 0 failures, 0 warnings,
+  0 console/page errors; verdict GO.
+- `node scripts/visual-qa.mjs --strict` — PASS, 96 checks, 0 failures (28 pre-existing
+  informational heuristics).
+- Per-issue headless repros for #22–#26 re-run green; the permanent browser suite now carries
+  their acceptance coverage.
+
+---
+
 ## [1.1.6] — 2026-11-04
 
 QA-retest follow-up on 1.1.5: closes the seven new report items (#15–#21) — image-pull

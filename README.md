@@ -40,9 +40,9 @@ names are shown in EX280 Prep).
   `Error from server (Forbidden): …` for reads and writes they are not allowed to perform.
   `oc` is the taught command; a leading `kubectl` is accepted as an alias with an educational hint.
 - **A real shell around `oc`** — `vim`/`vi` (opens the manifest editor), `cat`, `echo` with
-  `>`/`>>` redirects, heredocs, command substitution, and pipes through `grep`, `tail`, `head`,
-  `wc`, `sort`, `openssl`, `htpasswd`, `skopeo` (including `grep -A/-B/-C` context) — so exam
-  workflows like writing YAML in the terminal and `oc apply -f -` work exactly as on a real
+  `>`/`>>` redirects, heredocs, command substitution, and pipes through `grep`, `sed`, `tail`,
+  `head`, `wc`, `sort`, `openssl`, `htpasswd`, `skopeo` (including `grep -A/-B/-C` context) — so
+  exam workflows like writing YAML in the terminal and `oc apply -f -` work exactly as on a real
   workstation.
 - **First-class OpenShift resources** — Project, Pod, Deployment, ReplicaSet, StatefulSet, DaemonSet,
   Job, CronJob, Service, Route, Ingress, NetworkPolicy, ConfigMap, Secret, PVC, PV, StorageClass,
@@ -64,11 +64,14 @@ names are shown in EX280 Prep).
   `htpass-secret` Secret, like a real cluster), users/groups/identities, RBAC evaluation
   (`oc auth can-i`, `oc adm policy …`, `oc policy …`) enforced on every command, OCP 4.x SCC grants
   (RBAC bindings to `system:openshift:scc:<name>`, with the SCC users/groups lists left untouched
-  like 4.x), and privileged-pod rejection as a ReplicaSet `FailedCreate` — the Pod is never created.
-  This includes the classic exam trap: `nginx:latest` runs as root and binds port 80, so it is
-  rejected by `restricted-v2` (anyuid/privileged or an explicit non-root `runAsUser` are the escape
-  hatches). `htpasswd -B` writes real-shaped bcrypt hashes and login validates bcrypt and legacy
-  `{SHA}` entries.
+  like 4.x) and spec-based SCC admission: a Pod whose manifest explicitly requests
+  `runAsUser: 0`, `privileged: true` or `hostNetwork` is rejected as a ReplicaSet `FailedCreate`
+  and no Pod is created. The classic exam trap is modelled the way real OCP behaves: a bare
+  `nginx:latest` (no `securityContext`) is **admitted** under `restricted-v2` and then crash-loops
+  with `mkdir() "/var/cache/nginx/client_temp" failed (13: Permission denied)` in `oc logs` — the
+  `ServiceAccount` + `anyuid` grant + `oc set serviceaccount` flow, or an explicit non-root
+  `runAsUser`, is the escape hatch. `htpasswd -B` writes real-shaped bcrypt hashes and login
+  validates bcrypt and legacy `{SHA}` entries.
 - **Quotas & self-service** — Namespace/Project quotas, LimitRanges, ClusterResourceQuota, project
   templates (`oc adm create-bootstrap-project-template` + `project.config.openshift.io/cluster`) and
   the real `self-provisioners` ClusterRoleBinding (remove it and `oc new-project` returns Forbidden).
@@ -77,8 +80,10 @@ names are shown in EX280 Prep).
   operator effects (e.g. the MetalLB operator creates its controller/speaker pods and serves
   LoadBalancer IPs only once the MetalLB CR, IPAddressPool and L2Advertisement exist), and a correct
   two-step uninstall: deleting the Subscription keeps the CSV; deleting the CSV removes the operands.
-  The catalog package names follow OCP 4.x (`metallb-operator`), and a Subscription for a package
-  that is not in the catalog fails with `ResolutionFailed` instead of installing a fake CSV.
+  The catalog package names follow OCP 4.x (`metallb-operator`); OLM resolves per namespace, so a
+  Subscription for a package that is not in the catalog makes every Subscription in that namespace
+  report `ResolutionFailed` (with no fake CSV or InstallPlan), while other namespaces install
+  normally.
 - **20-level EX280 campaign (5 chapters)** — Manage OpenShift → Declarative & Kustomize →
   Deploy & Expose → Identity, RBAC & Self-service → Security & Operations, ending in a production
   platform build whose capstone only completes once its scheduled incidents are resolved.
