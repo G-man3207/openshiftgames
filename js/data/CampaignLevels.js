@@ -122,7 +122,7 @@ const CAMPAIGN_LEVELS = [
     chapter: 1,
     chapterName: 'Manage OpenShift',
     description:
-      'Welcome to OpenShift. A Project is the OpenShift-facing representation of a Kubernetes namespace: it isolates your workloads and is what you create and switch between with `oc new-project` / `oc project`. In this level you will log in to the CLI, create your first Project, and deploy both a bare Pod and a Deployment.',
+      'Welcome to OpenShift. A Project is the OpenShift-facing representation of a Kubernetes namespace: it isolates your workloads and is what you create and switch between with `oc new-project` / `oc project`. In this level you will log in to the CLI, create your first Project, and deploy both a bare Pod and a Deployment. Note the admission gate: `restricted-v2` rejects root-running images such as `nginx:latest` (classic EX280 trap) — use a non-root image like `quay.io/openshift/origin-hello-openshift:latest`.',
     examObjectives: [
       'Manage OpenShift Container Platform > Use the web console to manage and configure an OpenShift cluster',
       'Manage OpenShift Container Platform > Use the command-line interface to manage and configure an OpenShift cluster',
@@ -136,14 +136,14 @@ const CAMPAIGN_LEVELS = [
     objectives: [
       { type: 'login', user: 'kubeadmin', label: 'Log in to the CLI as kubeadmin (oc login)' },
       { type: 'project', name: 'first-project', label: 'Create the Project "first-project"' },
-      { type: 'deploy', kind: 'Pod', name: 'hello-pod', label: 'Run a bare Pod named "hello-pod"' },
-      { type: 'deploy', kind: 'Deployment', name: 'hello-deploy', label: 'Create the Deployment "hello-deploy"' },
+      { type: 'deploy', kind: 'Pod', name: 'hello-pod', running: true, label: 'Run a bare Pod named "hello-pod" that reaches Running' },
+      { type: 'deploy', kind: 'Deployment', name: 'hello-deploy', running: true, label: 'Create the Deployment "hello-deploy" with an available replica' },
     ],
     incidents: [],
     hints: [
       'Log in first: `oc login -u kubeadmin` (or `oc login --username=kubeadmin`), then check `oc whoami`.',
       'Create the project: `oc new-project first-project --display-name="First Project"`. `oc project` shows the current project.',
-      'Run a Pod with an image that runs as a non-root user: `oc run hello-pod --image=quay.io/openshift/origin-hello-openshift:latest`. Watch it with `oc get pods -o wide`. A Pod that *requests* `runAsUser: 0`, a `privileged: true` container or a host port is rejected by the default `restricted-v2` SCC at admission — the Pod never appears in `oc get pods` (see Level 17).',
+      'Run a Pod with a non-root image: `oc run hello-pod --image=quay.io/openshift/origin-hello-openshift:latest`. Watch it with `oc get pods -o wide`. Trap: `oc run hello-pod --image=nginx:latest` is REJECTED under `restricted-v2` because nginx runs as root — the Pod is never created (`oc get pods` stays empty) and the ReplicaSet shows FailedCreate "unable to validate against any security context constraint". A Pod that requests `runAsUser: 0`, a `privileged: true` container or a host port is likewise rejected at admission. If you tried the nginx trap and got a Failed pod, remove it before re-running with the supported image: `oc delete pod hello-pod`.',
       'Create a Deployment: `oc create deployment hello-deploy --image=quay.io/openshift/origin-hello-openshift:latest`, then verify `oc get deployments,pods`.',
     ],
     starCriteria: { time: 240, efficiency: 0.75, noFailures: true },
@@ -588,16 +588,17 @@ const CAMPAIGN_LEVELS = [
     manifestFiles: ['examples/subscription.yaml', 'examples/operatorgroup.yaml', 'examples/metallb.yaml'],
     focusFiles: ['examples/operatorgroup.yaml', 'examples/subscription.yaml', 'examples/metallb.yaml'],
     objectives: [
-      { type: 'operator', name: 'metallb', installed: true, label: 'Install the MetalLB operator (CSV Succeeded)' },
+      { type: 'operator', name: 'metallb-operator', installed: true, label: 'Install the MetalLB operator (CSV metallb-operator.v0.14.9 Succeeded)' },
       { type: 'serviceType', kind: 'LoadBalancer', count: 1, label: 'Create a Service of type LoadBalancer' },
       { type: 'route', name: 'tls-app', termination: 'passthrough', label: 'Expose tls-app with a passthrough Route' },
       { type: 'tls', enabled: true, termination: 'passthrough', label: 'Passthrough TLS termination is configured' },
     ],
     incidents: [],
     hints: [
+      'Find the catalog package: `oc get packagemanifests -n openshift-marketplace` lists `metallb-operator` (the redhat-operators package name is `metallb-operator`, not `metallb`); `oc describe packagemanifests metallb-operator -n openshift-marketplace` shows channel `stable` and currentCSV.',
       'Install the operator the 4.x way: `oc new-project metallb-system`, then apply the shipped single-namespace OperatorGroup: `oc apply -f examples/operatorgroup.yaml`. A Subscription without a matching OperatorGroup never installs.',
-      'Edit `examples/subscription.yaml` so metadata.name and spec.name are `metallb` and metadata.namespace is `metallb-system`, then `oc apply -f examples/subscription.yaml`. OLM creates an InstallPlan and then the operator ClusterServiceVersion (shown by `oc get csv -n metallb-system`) in metallb-system.',
-      'Verify OLM: `oc get sub,csv,installplan -n metallb-system` — the ClusterServiceVersion (not the Subscription) moves Installing → Succeeded; `oc get subscription -n metallb-system -o yaml` shows `status.installedCSV`.',
+      'Edit `examples/subscription.yaml` so `spec.name` is `metallb-operator`, metadata.name is `metallb-operator` and metadata.namespace is `metallb-system`, then `oc apply -f examples/subscription.yaml`. OLM creates an InstallPlan and then the CSV `metallb-operator.v0.14.9` in metallb-system. A misspelled/old package (`metallb`) fails with ResolutionFailed "no operators found in package".',
+      'Verify OLM: `oc get sub,csv,installplan -n metallb-system` — the ClusterServiceVersion (not the Subscription) moves Installing → Succeeded; `oc get csv -n metallb-system` shows `metallb-operator.v0.14.9` and `oc get subscription -n metallb-system -o yaml` shows `status.installedCSV`.',
       'Create the operand: `oc apply -f examples/metallb.yaml` (MetalLB CR + IPAddressPool + L2Advertisement in metallb-system), then `oc get pods -n metallb-system` shows the controller/speaker Pods.',
       'Create the LoadBalancer Service in lb-lab: `oc project lb-lab` then `oc create service loadbalancer lb --tcp=443:443`; `oc get svc lb` now gets an EXTERNAL-IP from the pool.',
       'Expose the non-HTTP app with a passthrough Route: `oc create route passthrough tls-app --service=tls-app`, then confirm `oc describe route tls-app` shows passthrough TLS and Admitted=True (the Service tls-app is already seeded in lb-lab).',
@@ -820,17 +821,18 @@ const CAMPAIGN_LEVELS = [
     manifestFiles: ['examples/subscription.yaml', 'examples/operatorgroup.yaml'],
     focusFiles: ['examples/operatorgroup.yaml', 'examples/subscription.yaml'],
     objectives: [
-      { type: 'operator', name: 'metallb', installed: true, label: 'Install operator "metallb" (CSV reaches Succeeded)' },
+      { type: 'operator', name: 'metallb-operator', installed: true, label: 'Install operator "metallb-operator" (CSV reaches Succeeded)' },
       { type: 'command', pattern: 'oc (get|describe) (sub|subscription|csv|installplan)', label: 'Verify the Subscription / CSV / InstallPlan' },
-      { type: 'operator', name: 'metallb', installed: false, label: 'After installing, uninstall the operator (delete Subscription + CSV)' },
+      { type: 'operator', name: 'metallb-operator', installed: false, label: 'After installing, uninstall the operator (delete Subscription + CSV)' },
     ],
     incidents: [],
     hints: [
       'Create the operator namespace and its OperatorGroup: `oc new-project metallb-system`, then `oc apply -f examples/operatorgroup.yaml` (single-namespace OperatorGroup targeting metallb-system). A Subscription with no matching OperatorGroup never resolves.',
-      'Install: edit `examples/subscription.yaml` so metadata.name and spec.name are `metallb` and metadata.namespace is `metallb-system`, then `oc apply -f examples/subscription.yaml`.',
-      'Watch OLM: `oc get sub,csv,installplan -n metallb-system` — an InstallPlan appears, then the operator CSV (shown by `oc get csv -n metallb-system`) goes Installing → Succeeded; `oc get subscription -n metallb-system -o yaml` reports `status.installedCSV`.',
-      'Uninstall (only after the install above reached Succeeded): `oc delete subscription metallb -n metallb-system`, then confirm the CSV is STILL there with `oc get csv -n metallb-system` — deleting the Subscription does not remove the operator.',
-      'Finish the uninstall by deleting the CSV itself — read its name from `oc get csv -n metallb-system`, then e.g. `oc delete csv metallb-operator.v1.0.0 -n metallb-system` (typing `clusterserviceversion`/`csv` is the uninstall step), then confirm with `oc get csv -n metallb-system` and `oc get subscription -A`.',
+      'Find the package: `oc get packagemanifests -n openshift-marketplace` lists `metallb-operator` — the redhat-operators package name is `metallb-operator` (an old/misspelled package fails with ResolutionFailed "no operators found in package").',
+      'Install: edit `examples/subscription.yaml` so `spec.name` is `metallb-operator`, metadata.name is `metallb-operator` and metadata.namespace is `metallb-system`, then `oc apply -f examples/subscription.yaml`.',
+      'Watch OLM: `oc get sub,csv,installplan -n metallb-system` — an InstallPlan appears, then the CSV `metallb-operator.v0.14.9` goes Installing → Succeeded; `oc get subscription -n metallb-system -o yaml` reports `status.installedCSV`.',
+      'Uninstall (only after the install above reached Succeeded): `oc delete subscription metallb-operator -n metallb-system`, then confirm the CSV is STILL there with `oc get csv -n metallb-system` — deleting the Subscription does not remove the operator.',
+      'Finish the uninstall by deleting the CSV itself: `oc delete csv metallb-operator.v0.14.9 -n metallb-system` (typing `clusterserviceversion`/`csv` is the uninstall step), then confirm with `oc get csv -n metallb-system` and `oc get subscription -A`.',
     ],
     starCriteria: { time: 420, efficiency: 0.7, noFailures: true },
     nextLevel: 19,
@@ -906,14 +908,14 @@ const CAMPAIGN_LEVELS = [
       { type: 'deploy', kind: 'NetworkPolicy', name: 'default-deny', label: 'Add a default-deny NetworkPolicy' },
       { type: 'user', name: 'developer', label: 'Create the User "developer"' },
       { type: 'group', name: 'developers', users: ['developer'], label: 'Create Group "developers" containing developer' },
-      { type: 'operator', name: 'metallb', installed: true, label: 'Install the MetalLB operator' },
+      { type: 'operator', name: 'metallb-operator', installed: true, label: 'Install the MetalLB operator (CSV metallb-operator.v0.14.9)' },
       { type: 'complete', kind: 'Job', count: 1, label: 'Run a Job to phase Complete' },
       { type: 'cronJob', name: 'nightly', suspended: false, label: 'Create the CronJob "nightly"' },
-      // Capstone gating: the scheduled incidents must actually fire (60 s and
-      // 120 s into the run) before the level can complete — the level cannot be
-      // finished by following the hints in under a minute.
-      { type: 'incident', incidentType: 'CrashLoopBackOff', min: 1, label: 'Scheduled incident gate: CrashLoopBackOff fires 60 s into the capstone' },
-      { type: 'incident', incidentType: 'NodeNotReady', min: 1, label: 'Scheduled incident gate: NodeNotReady fires 120 s into the capstone' },
+      // Capstone gating (#20): the scheduled incidents must be RESOLVED, not
+      // merely fired — finishing with CrashLoopBackOff/NodeNotReady still
+      // active is impossible, and the level cannot be rushed in under 2 min.
+      { type: 'resolve', incidentType: 'CrashLoopBackOff', count: 1, label: 'Resolve the scheduled CrashLoopBackOff (fires 60 s into the capstone)' },
+      { type: 'resolve', incidentType: 'NodeNotReady', count: 1, label: 'Resolve the scheduled NodeNotReady (fires 120 s into the capstone)' },
       // NOTE: threshold is deliberately modest versus the current ScoringEngine scale...
       // a solid capstone platform scores ~34 today; modes-dev's rewritten advisor may rescale.
       { type: 'architectureScore', minScore: 25, label: 'Architecture Advisor score >= 25' },
@@ -928,8 +930,8 @@ const CAMPAIGN_LEVELS = [
       'Deploy the app: `oc apply -f manifests/deployment.yaml`, `oc apply -f manifests/service.yaml`, then expose a Route: `oc create route edge webapp --service=webapp`. Enable ports/health probes in the YAML for a higher Architecture Advisor score.',
       'Build: `oc apply -f examples/buildconfig.yaml` (it already outputs ImageStreamTag `webapp:latest`), then `oc start-build webapp --follow` and watch the Build reach Complete.',
       'Security/self-service: `oc create user developer`, `oc adm groups new developers developer`, apply the shipped `examples/default-deny.yaml` (a `networking.k8s.io/v1` NetworkPolicy that selects all pods) with `oc apply -f examples/default-deny.yaml -n prod-platform` — there is no oc create networkpolicy subcommand; use the Files panel New/Import buttons if you want to edit or add manifests.',
-      'Install MetalLB the 4.x OLM way: `oc new-project metallb-system`, `oc apply -f examples/operatorgroup.yaml`, edit `examples/subscription.yaml` (name/package `metallb`, namespace `metallb-system`) and apply it, wait for the operator CSV (`oc get csv -n metallb-system`) to reach Succeeded, then `oc apply -f examples/metallb.yaml` (MetalLB CR + IP pool + L2 advertisement).',
-      'Finish with a Job (`oc create job report-job --image=perl -- perl -e "print 42"`), a CronJob (`oc create cronjob nightly --image=busybox --schedule="*/5 * * * *" -- sh -c date`), then check `oc status` and the Architecture Advisor in the HUD. The capstone is gated on the scheduled incidents: one fires 60 s in (CrashLoopBackOff on webapp) and the other 120 s in (NodeNotReady on node-2) — diagnose and resolve both; you cannot finish in under two minutes.',
+      'Install MetalLB the 4.x OLM way: `oc new-project metallb-system`, `oc apply -f examples/operatorgroup.yaml`, edit `examples/subscription.yaml` (spec.name/metadata.name `metallb-operator`, namespace `metallb-system`) and apply it, wait for the CSV `metallb-operator.v0.14.9` (`oc get csv -n metallb-system`) to reach Succeeded, then `oc apply -f examples/metallb.yaml` (MetalLB CR + IP pool + L2 advertisement).',
+      'Finish with a Job (`oc create job report-job --image=perl -- perl -e "print 42"`), a CronJob (`oc create cronjob nightly --image=busybox --schedule="*/5 * * * *" -- sh -c date`), then check `oc status` and the Architecture Advisor in the HUD. The capstone is gated on the scheduled incidents being RESOLVED: CrashLoopBackOff fires 60 s in on webapp and NodeNotReady fires 120 s in on node-2. Fix the workload / restore the node (or use the Incidents panel resolution actions) and confirm both are gone from the Incidents panel — the level cannot complete while either is still active.',
     ],
     starCriteria: { time: 900, efficiency: 0.6, noFailures: false },
     nextLevel: null,

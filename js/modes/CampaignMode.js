@@ -154,6 +154,13 @@ class CampaignMode {
 
     this.state = CAMPAIGN_STATE.PLAYING;
     this.startTime = Date.now();
+    // Readiness evidence is scoped to this drill run (#20): only commands typed
+    // while the level is active count for its bullets.
+    try {
+      this.scoringEngine?.beginDrillEvidence?.('campaign', levelDef.id);
+    } catch (error) {
+      console.warn('CampaignMode: beginDrillEvidence failed', error);
+    }
     try {
       this.incidentEngine?.start?.('campaign');
     } catch (error) {

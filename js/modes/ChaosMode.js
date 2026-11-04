@@ -154,6 +154,11 @@ class ChaosMode {
     this.resetState();
     this.state = CHAOS_STATE.PLAYING;
     this.startTime = Date.now();
+    try {
+      this.scoringEngine?.endDrillEvidence?.();
+    } catch {
+      /* non-fatal */
+    }
 
     this.setupCluster();
     this.incidentEngine?.reset?.();

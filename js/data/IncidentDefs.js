@@ -129,7 +129,7 @@ const INCIDENT_DEFS = [
       'oc logs <pod> --previous',
       'oc describe pod <pod>',
       'oc get pods -l app=<deployment>',
-      'oc set image deployment/<deployment> main=<good-image>',
+      'oc edit deployment/<deployment>',
       'oc rollout status deployment/<deployment>',
     ],
     // Per-Pod crash output rendered by `oc logs` (current) / `oc logs --previous`.
@@ -144,8 +144,8 @@ const INCIDENT_DEFS = [
       ],
       previous: [
         'Starting application...',
-        'FATAL: <deployment> cannot start with image <image>',
-        'exec: "/opt/app-root/src/start": stat /opt/app-root/src/start: no such file or directory',
+        'FATAL: <deployment> cannot start with image <image>: invalid configuration (exit code 1)',
+        'Error: configuration validation failed: APP_MODE has an unsupported value',
         'Process exited with status 1',
       ],
     },

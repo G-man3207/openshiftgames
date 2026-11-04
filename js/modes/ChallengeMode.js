@@ -366,7 +366,7 @@ const CHALLENGES = [
     id: 2,
     title: 'Fix CrashLoopBackOff',
     description:
-      'The payment-service Deployment is crash looping and the platform health is dropping. Read the container crash output with oc logs/describe on the real Pods, fix the workload (image/command/env — restarting does not help), and restore health to at least 90%.',
+      'The payment-service Deployment is crash looping: image `quay.io/example/payments:v2-bad-config` pulls fine but the app exits with status 1 on an invalid configuration. Read the crash output with oc logs/describe on the real Pods, fix the workload (image/command/env — restarting does not help), and restore health to at least 90%.',
     timeLimit: 240,
     docsLinks: [DOCS.health, DOCS.cli],
     objectives: [
@@ -385,18 +385,20 @@ const CHALLENGES = [
       deployment('payment-service', {
         namespace: 'default',
         replicas: 3,
-        image: 'quay.io/example/payments:broken',
+        image: 'quay.io/example/payments:v2-bad-config',
       }),
     ],
+    // Fire immediately: the image pulls but the app crashes on startup, so the
+    // pre-start/lab state is CrashLoopBackOff (never ImagePullBackOff, #15).
     preloadIncidents: [
-      { type: 'CrashLoopBackOff', target: 'payment-service', severity: 3, triggerTime: 2 },
+      { type: 'CrashLoopBackOff', target: 'payment-service', severity: 3, triggerTime: 0 },
     ],
     availableResources: ['Pod', 'Deployment', 'Service', 'ConfigMap', 'Secret'],
     hints: [
       'Open the incident bell (the suggested commands use the real Pod name), or list the replicas first: oc get pods -l app=payment-service',
-      'Read the crash output: oc logs deployment/payment-service --previous — the container exits with status 1 on the broken image.',
-      'Describe the workload: oc describe deployment/payment-service; the new Pods show CrashLoopBackOff and a growing restart count.',
-      'Fix the root cause, not the symptom: oc set image deployment/payment-service main=quay.io/openshift/origin-hello-openshift:latest (or use the incident panel). oc delete pod / oc rollout restart alone only brings the same broken image back.',
+      'Read the crash output: oc logs deployment/payment-service --previous — the app exits with status 1 because :v2-bad-config ships an invalid configuration. The image pulls fine, so this is a CrashLoopBackOff, not ImagePullBackOff.',
+      'Describe the workload: oc describe deployment/payment-service; the Pods show CrashLoopBackOff and a growing restart count, and the Events show Back-off restarting failed container (not Failed to pull image).',
+      'Fix the root cause, not the symptom: oc set image deployment/payment-service main=quay.io/openshift/origin-hello-openshift:latest (or use the incident panel). oc delete pod / oc rollout restart alone only brings the same bad configuration back.',
       'Confirm recovery: oc get pods -l app=payment-service (all Running, 0 restarts) and check the health bar is back to 90%+.',
     ],
   },
@@ -645,14 +647,14 @@ const CHALLENGES = [
     timeLimit: 360,
     docsLinks: [DOCS.operators, DOCS.metallb],
     objectives: [
-      { type: 'operator', name: 'metallb', installed: true, label: 'MetalLB Subscription reaches Succeeded' },
+      { type: 'operator', name: 'metallb-operator', installed: true, label: 'MetalLB operator CSV (metallb-operator.v0.14.9) reaches Succeeded' },
       { type: 'deploy', kind: 'IPAddressPool', name: 'metallb-pool', namespace: 'metallb-system', label: 'Create IPAddressPool metallb-pool' },
       { type: 'deploy', kind: 'L2Advertisement', name: 'metallb-l2', namespace: 'metallb-system', label: 'Create L2Advertisement metallb-l2' },
       { type: 'serviceType', kind: 'LoadBalancer', count: 1, label: 'Create a LoadBalancer Service' },
       { type: 'operator', name: 'ansible-automation-platform', installed: false, label: 'Uninstall the old AAP operator Subscription' },
       {
         type: 'command',
-        pattern: '(metallb|loadbalancer|delete\\s+subscription)',
+        pattern: '(metallb-operator|loadbalancer|delete\\s+subscription)',
         count: 1,
         label: 'Use oc apply/oc get for the operator or Service',
       },
@@ -680,11 +682,11 @@ const CHALLENGES = [
     focusFiles: ['challenges/metallb-operator.yaml'],
     availableResources: ['Project', 'Subscription', 'IPAddressPool', 'L2Advertisement', 'Service', 'Deployment'],
     hints: [
-      'Apply the whole OLM manifest set (OperatorGroup + Subscription + MetalLB CR + IPAddressPool + L2Advertisement, all in metallb-system): oc apply -f challenges/metallb-operator.yaml',
-      'Watch OLM: oc get sub,csv,installplan -n metallb-system — an InstallPlan appears, then the operator CSV (oc get csv -n metallb-system) reaches Succeeded; oc get subscription -n metallb-system -o yaml shows status.installedCSV.',
+      'Apply the whole OLM manifest set (OperatorGroup + Subscription for package metallb-operator + MetalLB CR + IPAddressPool + L2Advertisement, all in metallb-system): oc apply -f challenges/metallb-operator.yaml',
+      'Watch OLM: oc get sub,csv,installplan -n metallb-system — an InstallPlan appears, then the CSV metallb-operator.v0.14.9 reaches Succeeded; oc get subscription -n metallb-system -o yaml shows status.installedCSV (redhat-operators package name is metallb-operator).',
       'Create a LoadBalancer Service in the store project: oc create service loadbalancer web-lb --tcp=80:8080 -n store',
       'Check the EXTERNAL-IP column: oc get svc web-lb -n store (MetalLB assigns it from metallb-pool/L2Advertisement).',
-      'Uninstall the old AAP operator properly: oc delete subscription ansible-automation-platform-operator -n openshift-operators, then delete its CSV with oc delete csv ansible-automation-platform-operator.v1.0.0 -n openshift-operators — deleting the Subscription alone leaves the operator installed.',
+      'Uninstall the old AAP operator properly: oc delete subscription ansible-automation-platform-operator -n openshift-operators, then delete its CSV — read the name from oc get csv -n openshift-operators (aap-operator.v2.6.0) and run oc delete csv aap-operator.v2.6.0 -n openshift-operators — deleting the Subscription alone leaves the operator installed.',
       'Confirm: oc get csv,sub -n openshift-operators is empty (CSV gone = uninstalled).',
     ],
   },
@@ -859,6 +861,12 @@ class ChallengeMode {
     this.state = CHALLENGE_STATE.PLAYING;
     this.startTime = Date.now();
 
+    // Readiness evidence is scoped to this timed-lab run (#20).
+    try {
+      this.scoringEngine?.beginDrillEvidence?.('challenge', def.id);
+    } catch (error) {
+      console.warn('ChallengeMode: beginDrillEvidence failed', error);
+    }
     try {
       this.incidentEngine?.start?.('challenge');
     } catch (error) {

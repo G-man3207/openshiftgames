@@ -1188,7 +1188,12 @@ export class ExamPrepUI {
     return {
       campaignProgress: progress?.campaignProgress || {},
       challengeProgress: progress?.challengeProgress || {},
-      commandEvidence: Array.isArray(progress?.commandEvidence) ? progress.commandEvidence : [],
+      // Drill-run-scoped command evidence (#20): { 'campaign:12': [...], ... }.
+      // Sandbox/chaos commands never appear here, so free play cannot inflate
+      // the EX280 readiness verdict.
+      drillCommandEvidence: progress?.drillCommandEvidence && typeof progress.drillCommandEvidence === 'object'
+        ? progress.drillCommandEvidence
+        : {},
       objectiveEvidence: progress?.objectiveEvidence && typeof progress.objectiveEvidence === 'object'
         ? progress.objectiveEvidence
         : {},
@@ -1241,16 +1246,19 @@ export class ExamPrepUI {
   }
 
   /**
-   * Evidence-based bullet status (#14):
-   *  - mastered: quick-lab check passed, OR a linked level/challenge was
-   *    completed AND one of the bullet's own commands was exercised.
-   *  - practiced: linked level/challenge completed (no per-bullet proof) or the
-   *    bullet's commands were exercised outside a completed drill.
-   *  - todo: no evidence.
-   * Console-only bullets can never be "mastered" here (no console UI shipped).
+   * Evidence-based bullet status (#14 + #20):
+   *  - mastered: a quick lab linked to the bullet passed its live check, OR a
+   *    LINKED level/challenge was completed AND at least one of the bullet's own
+   *    commands was run *during that drill's run* (drillCommandEvidence).
+   *  - practiced: a linked level/challenge is completed but no per-run command
+   *    evidence exists (e.g. console shortcut), or the bulletin was only started.
+   *  - todo: no evidence at all.
+   * Commands typed in Sandbox/Chaos are never recorded against a drill, so free
+   * play cannot inflate the verdict. Console-only bullets can never be
+   * "mastered" here (the simulator has no web console UI).
    */
   _bulletStatus(bullet, examPrep, campaignProgress, challengeProgress, progressData = {}) {
-    const commandEvidence = progressData.commandEvidence || [];
+    const drillEvidence = progressData.drillCommandEvidence || {};
     const examState = examPrep[bullet.id];
     // 1) Explicit quick-lab check evidence (objectiveId + objectiveIds links).
     if (examState === 'mastered') return 'mastered';
@@ -1264,27 +1272,34 @@ export class ExamPrepUI {
       }
     }
     const consoleOnly = this._isConsoleOnlyBullet(bullet);
-    const hasCommandEvidence = this._bulletHasCommandEvidence(bullet, commandEvidence);
+    // 2) Per-run evidence from a LINKED, completed drill.
     let drillCompleted = false;
+    let hasDrillEvidence = false;
     for (const levelId of bullet.levels || []) {
       const entry = campaignProgress[levelId] ?? campaignProgress[String(levelId)];
-      if (entry?.completed) {
-        drillCompleted = true;
+      if (!entry?.completed) continue;
+      drillCompleted = true;
+      const evidence = drillEvidence[`campaign:${levelId}`] || [];
+      if (this._bulletHasCommandEvidence(bullet, evidence)) {
+        hasDrillEvidence = true;
         break;
       }
     }
-    if (!drillCompleted) {
+    if (!hasDrillEvidence) {
       for (const challengeId of bullet.challenges || []) {
         const entry = challengeProgress[challengeId] ?? challengeProgress[String(challengeId)];
-        if (entry?.completed) {
-          drillCompleted = true;
+        if (!entry?.completed) continue;
+        drillCompleted = true;
+        const evidence = drillEvidence[`challenge:${challengeId}`] || [];
+        if (this._bulletHasCommandEvidence(bullet, evidence)) {
+          hasDrillEvidence = true;
           break;
         }
       }
     }
-    if (!consoleOnly && drillCompleted && hasCommandEvidence) return 'mastered';
+    if (!consoleOnly && drillCompleted && hasDrillEvidence) return 'mastered';
     if (examState === 'practiced') return 'practiced';
-    if (drillCompleted || hasCommandEvidence) return 'practiced';
+    if (drillCompleted || hasDrillEvidence) return 'practiced';
     for (const levelId of bullet.levels || []) {
       if (campaignProgress[levelId] ?? campaignProgress[String(levelId)]) return 'practiced';
     }

@@ -1328,13 +1328,21 @@ class IncidentEngine {
     const def = this._defsById.get(incident.defId) || null;
     const profile = def?.logs;
     if (!profile) return;
-    const container =
-      profile.container
-      || (pod.spec?.containers || [])[0]?.name
+    const containers = pod.spec?.containers || [];
+    // Prefer the Pod's ACTUAL container name: deployments created from literal
+    // manifests (e.g. L20 webapp uses `name: webapp`) are not `main`, and the cli
+    // only applies these logs when the requested container matches.
+    let container = profile.container;
+    if (container && containers.length > 0 && !containers.some((entry) => entry.name === container)) {
+      container = '';
+    }
+    container =
+      container
+      || containers[0]?.name
       || (pod.status?.containerStatuses || [])[0]?.name
+      || profile.container
       || 'main';
     const podName = pod.metadata?.name || pod.name || incident.target || 'pod';
-    const containers = pod.spec?.containers || [];
     const containerSpec = containers.find((entry) => entry.name === container) || containers[0] || {};
     const image = containerSpec.image || (pod.status?.containerStatuses || [])[0]?.image || '';
     const workloadName = this._workloadNameForPod(pod) || incident.target || podName;
@@ -2642,7 +2650,7 @@ class IncidentEngine {
       policy.spec.egress = [
         {
           to: [{ namespaceSelector: { matchLabels: { 'kubernetes.io/metadata.name': 'openshift-dns' } } }],
-          ports: [{ protocol: 'UDP', port: 53 }, { protocol: 'TCP', port: 53 }],
+          ports: [{ protocol: 'UDP', port: 5353 }, { protocol: 'TCP', port: 5353 }],
         },
         { to: [{ podSelector: {} }] },
       ];

@@ -594,11 +594,42 @@ function isAutoProvisionedProjectAdminBinding(binding) {
   return asArray(spec.subjects).some((subject) => subject && subject.kind === 'User');
 }
 
+/**
+ * Does a resource exist AND count as up? Used by `deploy` objectives that set
+ * `running: true` (L1: a Pod rejected by restricted-v2 is created in `Failed`
+ * state, so mere existence must not tick "run a Pod").
+ */
+function resourceIsUp(resource) {
+  if (!resource) return false;
+  const kind = String(resource.kind || '');
+  if (kind === 'Pod') {
+    const phase = resourceStatus(resource).phase;
+    if (phase === 'Running') {
+      return typeof resource.isConditionTrue === 'function' ? resource.isConditionTrue('Ready') : true;
+    }
+    return false;
+  }
+  if (kind === 'Deployment' || kind === 'ReplicaSet' || kind === 'StatefulSet' || kind === 'DaemonSet') {
+    const status = resourceStatus(resource);
+    return asNumber(status.availableReplicas ?? status.readyReplicas, 0) > 0;
+  }
+  if (kind === 'Job') {
+    const phase = resourceStatus(resource).phase;
+    return phase === 'Complete' || phase === 'Succeeded';
+  }
+  return true;
+}
+
 function evaluateDeploy(obj, c) {
   const kind = canonicalKind(obj.kind);
   const name = obj.name;
   const namespace = objectiveResourceNamespace(c, obj, kind);
-  if (name) return bool(Boolean(findResource(c.clusterState, kind, name, namespace)));
+  const requireRunning = obj.running === true || obj.phase === 'Running';
+  if (name) {
+    const resource = findResource(c.clusterState, kind, name, namespace);
+    if (!resource) return bool(false);
+    return bool(!requireRunning || resourceIsUp(resource));
+  }
   let resources = listKind(c.clusterState, kind);
   if (namespace) resources = resources.filter((resource) => resourceNamespace(resource) === namespace);
   // Count-only RBAC objectives ("bind a role in <project>") must be scoped to
@@ -613,6 +644,7 @@ function evaluateDeploy(obj, c) {
   if (kind === 'RoleBinding') {
     resources = resources.filter((resource) => !isAutoProvisionedProjectAdminBinding(resource));
   }
+  if (requireRunning) resources = resources.filter((resource) => resourceIsUp(resource));
   const target = Math.max(1, asNumber(obj.count, 1));
   const current = Math.min(resources.length, target);
   return result(resources.length >= target, current, target);

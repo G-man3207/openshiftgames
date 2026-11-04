@@ -56,6 +56,12 @@ class SandboxMode {
   start(initialNodes) {
     this.state = SANDBOX_STATE.PLAYING;
     this.startTime = Date.now();
+    // Free-play commands must not count towards the EX280 readiness verdict (#20).
+    try {
+      this.scoringEngine?.endDrillEvidence?.();
+    } catch {
+      /* non-fatal */
+    }
     this.elapsedTime = 0;
     this.resourceCount = 0;
     this.architectureScore = null;

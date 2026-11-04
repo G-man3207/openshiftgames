@@ -466,12 +466,20 @@ class ScoringEngine {
     const campaignProgress = { ...(source.campaignProgress || {}) };
     const challengeProgress = { ...(source.challengeProgress || {}) };
     const examPrep = this._normalizeExamPrepStore(source.examPrep);
-    // Per-bullet evidence for the readiness verdict: successful commands the
-    // learner actually ran (normalised, capped). A completed level alone is NOT
-    // mastery — the bullet's own commands must have been exercised.
-    const commandEvidence = Array.isArray(source.commandEvidence)
-      ? source.commandEvidence.filter((entry) => typeof entry === 'string' && entry).slice(-400)
-      : [];
+    // Per-bullet readiness evidence is scoped to the linked drill RUN (#20):
+    // only commands executed while that campaign level / challenge was active
+    // count, so sandbox exploration cannot inflate the EX280 verdict.
+    // Shape: { 'campaign:12': ['oc get sub,csv -n metallb-system', ...], ... }
+    const drillCommandEvidence = {};
+    if (source.drillCommandEvidence && typeof source.drillCommandEvidence === 'object') {
+      for (const [key, entries] of Object.entries(source.drillCommandEvidence)) {
+        if (!/^(campaign|challenge):\d+$/.test(key)) continue;
+        if (!Array.isArray(entries)) continue;
+        drillCommandEvidence[key] = entries
+          .filter((entry) => typeof entry === 'string' && entry)
+          .slice(-200);
+      }
+    }
     // Levels/challenges completed through live objective evaluation (not a
     // console shortcut): their examObjectives bullets may count as evidence.
     const objectiveEvidence = source.objectiveEvidence && typeof source.objectiveEvidence === 'object'
@@ -486,7 +494,7 @@ class ScoringEngine {
       campaignProgress,
       challengeProgress,
       examPrep,
-      commandEvidence,
+      drillCommandEvidence,
       objectiveEvidence,
     };
 
@@ -799,20 +807,38 @@ class ScoringEngine {
   }
 
   /**
-   * Record a successful learner command as EX280 readiness evidence.
-   * Stores the normalised command (deduped, capped) so `ExamPrepMode` can match
-   * it against each official bullet's own example commands.
+   * Begin recording drill-scoped readiness evidence for a campaign level or
+   * challenge. Commands run in sandbox/chaos have no active drill and therefore
+   * never count towards the EX280 readiness verdict (#20).
+   */
+  beginDrillEvidence(scope, id) {
+    if (!scope || id === undefined || id === null) return;
+    const key = `${scope}:${id}`;
+    if (!this.progress.drillCommandEvidence) this.progress.drillCommandEvidence = {};
+    if (!Array.isArray(this.progress.drillCommandEvidence[key])) this.progress.drillCommandEvidence[key] = [];
+    this._activeDrillKey = key;
+  }
+
+  /** Stop recording drill evidence (entering sandbox/chaos/menu). */
+  endDrillEvidence() {
+    this._activeDrillKey = null;
+  }
+
+  /**
+   * Record a successful learner command as EX280 readiness evidence, scoped to
+   * the currently active drill run. Stores the normalised command (deduped,
+   * capped) so `ExamPrepMode` can match it against the bullet's own commands.
    */
   _recordCommandEvidence(data = {}) {
+    if (!this._activeDrillKey) return;
     const raw = String(data.raw || data.command || '').trim().replace(/\s+/g, ' ');
     if (!raw || raw.length > 220) return;
-    if (!this.progress.commandEvidence) this.progress.commandEvidence = [];
+    if (!this.progress.drillCommandEvidence) this.progress.drillCommandEvidence = {};
+    const list = this.progress.drillCommandEvidence[this._activeDrillKey] || [];
     const entry = raw.toLowerCase();
-    if (this.progress.commandEvidence.includes(entry)) return;
-    this.progress.commandEvidence.push(entry);
-    if (this.progress.commandEvidence.length > 400) {
-      this.progress.commandEvidence = this.progress.commandEvidence.slice(-400);
-    }
+    if (list.includes(entry)) return;
+    list.push(entry);
+    this.progress.drillCommandEvidence[this._activeDrillKey] = list.slice(-200);
   }
 
   /**
@@ -832,8 +858,27 @@ class ScoringEngine {
     this.progress.objectiveEvidence[key] = [...seen].slice(-40);
   }
 
+  /** Drill-scoped evidence map: { 'campaign:12': [...], 'challenge:2': [...] }. */
+  getDrillCommandEvidence() {
+    const source = this.progress.drillCommandEvidence;
+    const out = {};
+    if (source && typeof source === 'object') {
+      for (const [key, entries] of Object.entries(source)) {
+        if (Array.isArray(entries)) out[key] = entries.slice();
+      }
+    }
+    return out;
+  }
+
+  /** Single drill bucket (empty array when none recorded). */
+  getDrillEvidenceFor(scope, id) {
+    const key = `${scope}:${id}`;
+    return this.getDrillCommandEvidence()[key] || [];
+  }
+
+  /** @deprecated flattened drill evidence (kept for older callers). */
   getCommandEvidence() {
-    return Array.isArray(this.progress.commandEvidence) ? this.progress.commandEvidence.slice() : [];
+    return Object.values(this.getDrillCommandEvidence()).flat();
   }
 
   getObjectiveEvidence() {
@@ -1847,7 +1892,7 @@ class ScoringEngine {
       campaignProgress: { ...this.progress.campaignProgress },
       challengeProgress: { ...this.progress.challengeProgress },
       examPrep: this.getExamPrepProgress(),
-      commandEvidence: this.getCommandEvidence(),
+      drillCommandEvidence: this.getDrillCommandEvidence(),
       objectiveEvidence: this.getObjectiveEvidence(),
       achievementsUnlocked: this.unlockedAchievements.size,
       achievementsTotal: ACHIEVEMENTS.length,
@@ -1901,7 +1946,7 @@ class ScoringEngine {
         campaignProgress: this.progress.campaignProgress,
         challengeProgress: this.progress.challengeProgress,
         examPrep: this.progress.examPrep,
-        commandEvidence: this.progress.commandEvidence || [],
+        drillCommandEvidence: this.progress.drillCommandEvidence || {},
         objectiveEvidence: this.progress.objectiveEvidence || {},
       }));
     } catch {
