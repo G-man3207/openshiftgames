@@ -1282,10 +1282,34 @@ export class ExamPrepUI {
   }
 
   /**
-   * Evidence-based bullet status (#14 + #20):
+   * Issue #42-5: objective-level evidence. A linked drill completed through live
+   * objective evaluation records the objective TYPES it satisfied
+   * (`level:<id>` / `challenge:<id>`). Bullets that declare `objectiveTypes`
+   * (e.g. the SCC bullets after L17, the Job/CronJob bullets after L19/L20) are
+   * evidenced by those completed objectives even when the learner used the
+   * incident-panel resolution action instead of typing the exact command.
+   */
+  _bulletHasObjectiveEvidence(bullet, objectiveEvidence, scope, id) {
+    const wanted = Array.isArray(bullet?.objectiveTypes) ? bullet.objectiveTypes : [];
+    if (wanted.length === 0 || !objectiveEvidence || typeof objectiveEvidence !== 'object')
+      return false;
+    const keys = [`${scope}:${id}`, scope === 'level' ? `campaign:${id}` : `level:${id}`];
+    const types = new Set();
+    for (const key of keys) {
+      for (const entry of Array.isArray(objectiveEvidence[key]) ? objectiveEvidence[key] : []) {
+        types.add(String(entry).toLowerCase());
+      }
+    }
+    return wanted.some((type) => types.has(String(type).toLowerCase()));
+  }
+
+  /**
+   * Evidence-based bullet status (#14 + #20 + #42-5):
    *  - mastered: a quick lab linked to the bullet passed its live check, OR a
    *    LINKED level/challenge was completed AND at least one of the bullet's own
-   *    commands was run *during that drill's run* (drillCommandEvidence).
+   *    commands was run *during that drill's run* (drillCommandEvidence), OR the
+   *    completed drill recorded one of the bullet's `objectiveTypes` as satisfied
+   *    through live objective evaluation (objectiveEvidence).
    *  - practiced: a linked level/challenge is completed but no per-run command
    *    evidence exists (e.g. console shortcut), or the bulletin was only started.
    *  - todo: no evidence at all.
@@ -1295,6 +1319,7 @@ export class ExamPrepUI {
    */
   _bulletStatus(bullet, examPrep, campaignProgress, challengeProgress, progressData = {}) {
     const drillEvidence = progressData.drillCommandEvidence || {};
+    const objectiveEvidence = progressData.objectiveEvidence || {};
     const examState = examPrep[bullet.id];
     // 1) Explicit quick-lab check evidence (objectiveId + objectiveIds links).
     if (examState === 'mastered') return 'mastered';
@@ -1317,7 +1342,10 @@ export class ExamPrepUI {
       if (!entry?.completed) continue;
       drillCompleted = true;
       const evidence = drillEvidence[`campaign:${levelId}`] || [];
-      if (this._bulletHasCommandEvidence(bullet, evidence)) {
+      if (
+        this._bulletHasCommandEvidence(bullet, evidence) ||
+        this._bulletHasObjectiveEvidence(bullet, objectiveEvidence, 'level', levelId)
+      ) {
         hasDrillEvidence = true;
         break;
       }
@@ -1328,7 +1356,15 @@ export class ExamPrepUI {
         if (!entry?.completed) continue;
         drillCompleted = true;
         const evidence = drillEvidence[`challenge:${challengeId}`] || [];
-        if (this._bulletHasCommandEvidence(bullet, evidence)) {
+        if (
+          this._bulletHasCommandEvidence(bullet, evidence) ||
+          this._bulletHasObjectiveEvidence(
+            bullet,
+            { ...objectiveEvidence },
+            'challenge',
+            challengeId
+          )
+        ) {
           hasDrillEvidence = true;
           break;
         }

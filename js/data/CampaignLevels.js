@@ -243,7 +243,7 @@ const CAMPAIGN_LEVELS = [
     ],
     incidents: [],
     hints: [
-      'Log in first: `oc login -u kubeadmin` (or `oc login --username=kubeadmin`), then check `oc whoami`.',
+      'Log in first. The installer saves the kubeadmin password in its auth directory: `cat ~/auth/kubeadmin-password`, then `oc login -u kubeadmin` and type (paste) that password at the `Password:` prompt — or pass it directly with `oc login -u kubeadmin -p <password>`. On a real cluster the same value is in the kubeadmin secret: `oc extract secret/kubeadmin -n kube-system --to=-`. Check `oc whoami` afterwards.',
       'Create the project: `oc new-project first-project --display-name="First Project"`. `oc project` shows the current project.',
       'Create a Deployment: `oc create deployment hello-deploy --image=quay.io/openshift/origin-hello-openshift:latest`, then verify `oc get deployments,pods`. The level also asks for a bare Pod — `oc run hello-pod --image=quay.io/openshift/origin-hello-openshift:latest` deploys one, and the Pod view mirrors `oc describe pod`.',
       'Trap worth knowing (not required here): a bare `oc run hello-pod --image=nginx:latest` is ADMITTED by `restricted-v2` — admission only validates the pod spec, not the image USER — and then crashes, because nginx cannot write `/var/cache/nginx` under the arbitrary non-root UID it is assigned. Use a non-root image like `quay.io/openshift/origin-hello-openshift:latest` for a healthy workload.',
@@ -255,7 +255,7 @@ const CAMPAIGN_LEVELS = [
       steps: [
         {
           target: 'command-bar',
-          text: 'Press / to open the command bar. OpenShift commands start with oc. Log in with: oc login -u kubeadmin',
+          text: 'Press / to open the command bar. OpenShift commands start with oc. Read the kubeadmin password with cat ~/auth/kubeadmin-password, then log in with: oc login -u kubeadmin (type the password at the Password: prompt).',
         },
         {
           target: 'command-bar',
@@ -375,7 +375,8 @@ const CAMPAIGN_LEVELS = [
       project('ops-lab'),
       deployment('web-app', {
         replicas: 2,
-        image: 'quay.io/example/webapp:v2-bad-config',
+        // Issue #42-3: keep a neutral image — the crash cause is only the
+        // invalid APP_MODE env var, and the log must not blame the image.
         env: [{ name: 'APP_MODE', value: 'debug-invalid' }],
       }),
     ],
@@ -1055,6 +1056,7 @@ const CAMPAIGN_LEVELS = [
       'Create the Secret: `oc create secret generic htpass-secret --from-file=htpasswd -n openshift-config`. The key must be named `htpasswd`.',
       'Configure the provider: `oc edit oauth cluster` and add an HTPasswd identityProvider referencing `htpass-secret` (mappingMethod: claim).',
       'Wait for the authentication operator to roll out, then `oc login -u alice -p <password>` and confirm with `oc whoami`.',
+      'Going back to cluster-admin after logging in as alice: the installer keeps the kubeadmin password in its auth directory — `cat ~/auth/kubeadmin-password`, then `oc login -u kubeadmin -p <password>` (or log in without `-p` and type it at the `Password:` prompt). On a real cluster the value is also in the kubeadmin secret: `oc extract secret/kubeadmin -n kube-system --to=-`.',
       'Rotate the password the exam way: `oc extract secret/htpass-secret -n openshift-config --to /tmp --confirm`, then `htpasswd -bB /tmp/htpasswd alice "NewPassw0rd!"`, then `oc set data secret/htpass-secret -n openshift-config --from-file=htpasswd=/tmp/htpasswd`. The authentication operator watches the secret, restarts the oauth-openshift pods and keeps the old password until the rollout completes — logging in too early is rejected, so wait for `oc get clusteroperators authentication` and then `oc login -u alice -p "NewPassw0rd!"`.',
       'Clean up the departing user: `oc delete user bob` removes the User but leaves the Identity `htpasswd:bob` behind (a stale login mapping), so finish with `oc delete identity htpasswd:bob` and verify `oc get users` / `oc get identities` are clean.',
     ],
@@ -1297,7 +1299,7 @@ const CAMPAIGN_LEVELS = [
     chapter: 5,
     chapterName: 'Security & Operations',
     description:
-      "Security Context Constraints are OpenShift's pod admission gate. A workload is being rejected because no SCC allows its requested securityContext. Create a dedicated ServiceAccount for the app, grant the privileged SCC to that ServiceAccount with an OCP 4.x RBAC binding (anyuid allows arbitrary UIDs but not privileged containers), run the privileged app, and clear the SCCForbidden incident. Do not grant privileged to the project default ServiceAccount.",
+      "Security Context Constraints are OpenShift's pod admission gate. A workload is being rejected because no SCC allows its requested securityContext. The workload already runs as the shipped dedicated ServiceAccount priv-sa — grant the privileged SCC to that ServiceAccount with an OCP 4.x RBAC binding (anyuid allows arbitrary UIDs but not privileged containers), run the privileged app, and clear the SCCForbidden incident. Do not grant privileged to the project default ServiceAccount.",
     examObjectives: [
       'Configure application security > Run privileged applications',
       'Configure application security > Manage and apply permissions using security context constraints',
@@ -1565,6 +1567,7 @@ const CAMPAIGN_LEVELS = [
       'manifests/deployment.yaml',
       'manifests/service.yaml',
       'manifests/route.yaml',
+      'examples/route-external-cert-rbac.yaml',
       'examples/quota.yaml',
       'examples/limitrange.yaml',
       'examples/buildconfig.yaml',
@@ -1577,22 +1580,25 @@ const CAMPAIGN_LEVELS = [
     focusFiles: [
       'manifests/deployment.yaml',
       'manifests/route.yaml',
+      'examples/route-external-cert-rbac.yaml',
       'examples/quota.yaml',
       'examples/default-deny.yaml',
       'examples/allow-from-router.yaml',
     ],
     objectives: [
       { type: 'project', name: 'prod-platform', label: 'Create the Project "prod-platform"' },
+      // Issue #37: the capstone grades quota/limits/default-deny on PROJECT
+      // STATE, not on hidden object names the level never states. Any
+      // ResourceQuota / LimitRange in prod-platform counts, and so does any
+      // NetworkPolicy that selects every Pod for Ingress with no allow rules.
       {
-        type: 'deploy',
-        kind: 'ResourceQuota',
-        name: 'compute-quota',
+        type: 'quota',
+        namespace: 'prod-platform',
         label: 'Apply a project ResourceQuota',
       },
       {
-        type: 'deploy',
-        kind: 'LimitRange',
-        name: 'resource-limits',
+        type: 'limitRange',
+        namespace: 'prod-platform',
         label: 'Apply a project LimitRange',
       },
       {
@@ -1616,14 +1622,15 @@ const CAMPAIGN_LEVELS = [
         label: 'ImageStream webapp has the :latest tag',
       },
       {
-        type: 'deploy',
-        kind: 'NetworkPolicy',
-        name: 'default-deny',
+        type: 'networkPolicy',
+        probe: 'ingress-isolation',
+        namespace: 'prod-platform',
         label: 'Add a default-deny NetworkPolicy',
       },
       {
         type: 'routeAccess',
         name: 'webapp',
+        requireIsolation: true,
         label: 'Route webapp is reachable from the workstation (router allowed by NetworkPolicy)',
       },
       { type: 'user', name: 'developer', label: 'Create the User "developer"' },
@@ -1667,16 +1674,17 @@ const CAMPAIGN_LEVELS = [
     ],
     incidents: [
       // Capstone CrashLoopBackOff (#31): the incident SEEDS the faulty
-      // configuration into the webapp Deployment (bad image + APP_MODE) when it
-      // fires, then damages the Pods. Resolution requires correcting APP_MODE —
-      // an unrelated env var or `oc rollout restart` does not heal it.
+      // configuration into the webapp Deployment when it fires, then damages the
+      // Pods. Issue #42-3: only APP_MODE is wrong — the image stays neutral, so
+      // the crash log blames the env var instead of teaching `oc set image`.
+      // Resolution requires correcting APP_MODE; an unrelated env var or
+      // `oc rollout restart` does not heal it.
       {
         type: 'CrashLoopBackOff',
         triggerTime: 60,
         target: 'webapp',
         severity: 2,
         seed: {
-          image: 'quay.io/example/webapp:v2-bad-config',
           env: { name: 'APP_MODE', value: 'debug-invalid' },
         },
         fix: {
@@ -1690,9 +1698,13 @@ const CAMPAIGN_LEVELS = [
     ],
     hints: [
       'Create the platform project: `oc new-project prod-platform`, then apply the quota/limits with `oc apply -f examples/quota.yaml` and `oc apply -f examples/limitrange.yaml`.',
-      'Deploy the app: `oc apply -f manifests/deployment.yaml`, `oc apply -f manifests/service.yaml`, then expose a Route: `oc create route edge webapp --service=webapp`. Enable ports/health probes in the YAML for a higher Architecture Advisor score.',
+      'Deploy the app: `oc apply -f manifests/deployment.yaml` and `oc apply -f manifests/service.yaml`. Enable ports/health probes in the YAML for a higher Architecture Advisor score.',
+      // Issue #39: manifests/route.yaml uses tls.externalCertificate, which real
+      // OCP 4.22 only admits once the Secret AND the router RBAC exist. Teach
+      // that order instead of letting the Route look admitted with nothing behind it.
+      'TLS Route with `tls.externalCertificate` (manifests/route.yaml): real OCP 4.22 admits it only after the referenced Secret exists AND the ingress router can read it - a Route applied without both stays rejected with `ExternalCertificateValidationFailed`. (1) Create the Secret in prod-platform: `openssl req -x509 -newkey rsa:2048 -nodes -keyout tls.key -out tls.crt -days 365 -subj "/CN=webapp.apps.cluster.example.com"`, then `oc create secret tls webapp-tls --cert=tls.crt --key=tls.key -n prod-platform`. (2) Grant the router read access in the same project: `oc apply -f examples/route-external-cert-rbac.yaml -n prod-platform` (a Role with get/list/watch on the named Secret plus a RoleBinding to system:serviceaccount:openshift-ingress:router). (3) Only then apply the Route: `oc apply -f manifests/route.yaml -n prod-platform`, and confirm `oc get route webapp -n prod-platform` reports Admitted. A plain `oc create route edge webapp --service=webapp` embeds no externalCertificate and needs none of this.',
       'Build: `oc apply -f examples/buildconfig.yaml` (it already outputs ImageStreamTag `webapp:latest`), then `oc start-build webapp --follow` and watch the Build reach Complete.',
-      'NetworkPolicy + ingress: apply the shipped `examples/default-deny.yaml` (`networking.k8s.io/v1`, selects all Pods) with `oc apply -f examples/default-deny.yaml -n prod-platform`, then verify from the workstation: `curl -k https://webapp-prod-platform.apps.cluster.example.com` now fails with 503 even though the Route is Admitted. Allow the router with an ingress NetworkPolicy whose `namespaceSelector.matchLabels` is `policy-group.network.openshift.io/ingress: ""` (the shipped `examples/allow-from-router.yaml`, `oc apply -f examples/allow-from-router.yaml -n prod-platform`) and re-run `curl` — it must answer again. There is no `oc create networkpolicy` subcommand; use the Files panel New/Import buttons for other policies. Also create `oc create user developer` and `oc adm groups new developers developer`.',
+      'NetworkPolicy + ingress: apply the shipped `examples/default-deny.yaml` (`networking.k8s.io/v1`, selects all Pods) with `oc apply -f examples/default-deny.yaml -n prod-platform`, then verify from the workstation: `HOST=$(oc get route webapp -n prod-platform -o jsonpath="{.spec.host}"); curl -k https://$HOST` now fails with 503 even though the Route is Admitted. Allow the router with an ingress NetworkPolicy whose `namespaceSelector.matchLabels` is `policy-group.network.openshift.io/ingress: ""` (the shipped `examples/allow-from-router.yaml`, `oc apply -f examples/allow-from-router.yaml -n prod-platform`) and re-run `curl` — it must answer again. There is no `oc create networkpolicy` subcommand; use the Files panel New/Import buttons for other policies. Also create `oc create user developer` and `oc adm groups new developers developer`.',
       'Install MetalLB the 4.x OLM way: `oc new-project metallb-system`, `oc apply -f examples/operatorgroup.yaml`, edit `examples/subscription.yaml` (spec.name/metadata.name `metallb-operator`, namespace `metallb-system`) and apply it, wait for the CSV `metallb-operator.v0.14.9` (`oc get csv -n metallb-system`) to reach Succeeded, then `oc apply -f examples/metallb.yaml` (MetalLB CR + IP pool + L2 advertisement).',
       'Finish with a Job (`oc create job report-job --image=perl -- perl -e "print 42"`) and a CronJob (`oc create cronjob nightly --image=busybox --schedule="*/5 * * * *" -- sh -c date`), then check `oc status` and the Architecture Advisor in the HUD. The capstone is gated on the scheduled incidents being RESOLVED: CrashLoopBackOff fires 60 s in on webapp and NodeNotReady fires 120 s in on worker-1. For the CrashLoopBackOff, run `oc logs <pod> -n prod-platform --previous` (the crash names the invalid `APP_MODE`) and correct it with `oc set env deployment/webapp APP_MODE=production -n prod-platform` — an unrelated env var or `oc rollout restart` will NOT clear it. Restore the node (`oc debug node/worker-1`, then `chroot /host systemctl restart kubelet`) and confirm both incidents are gone from the Incidents panel — the level cannot complete while either is still active.',
     ],

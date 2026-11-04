@@ -657,9 +657,12 @@ const CHALLENGES = [
       },
       {
         type: 'command',
-        pattern: '(create\\s+(quota|limitrange))|(apply.*(quota|limitrange))',
+        // Issue #38: `oc create limitrange` does not exist (the CLI rejects it
+        // like real oc), so only real forms count: `oc create quota` or YAML
+        // applied with `oc apply`.
+        pattern: '(create\\s+quota)|(apply.*(quota|limitrange))',
         count: 1,
-        label: 'Create the guardrails with oc create or oc apply',
+        label: 'Create the guardrails with oc apply (or oc create quota)',
       },
     ],
     startingResources: [...nodes(2), project('quota-lab', 'Quota lab')],
@@ -686,7 +689,9 @@ const CHALLENGES = [
     hints: [
       'Switch to the project: oc project quota-lab',
       'Create the project quota: oc create quota team-quota --hard=pods=10,requests.cpu=4,requests.memory=8Gi',
-      'Create the LimitRange: oc create limitrange team-limits --default=cpu=500m,memory=512Mi --default-request=cpu=100m,memory=128Mi --max=cpu=2,memory=4Gi',
+      // Issue #38: real oc/kubectl have no `create limitrange` subcommand. Teach
+      // the declarative path instead (the shipped example sets default/defaultRequest/min/max).
+      'Create the LimitRange from YAML (there is no `oc create limitrange` subcommand): oc apply -f examples/limitrange.yaml — it sets default cpu 500m/memory 512Mi, defaultRequest cpu 100m/memory 128Mi and max cpu 2/memory 4Gi. Any LimitRange in quota-lab counts, so a heredoc such as `oc apply -f - <<EOF … EOF` works too.',
       'Deploy within the guardrails: oc create deployment api --image=quay.io/openshift/origin-hello-openshift:latest',
       'Set requests/limits: oc set resources deployment/api --requests=cpu=100m,memory=128Mi --limits=cpu=500m,memory=512Mi',
       'Resolve the ResourceQuotaExceeded incident from the incident panel (raise the quota or right-size requests).',
@@ -1141,8 +1146,18 @@ const CHALLENGES = [
       },
     ],
     startingResources: nodes(3),
-    manifestFiles: ['manifests/deployment.yaml', 'manifests/service.yaml', 'manifests/route.yaml'],
-    focusFiles: ['manifests/deployment.yaml', 'manifests/service.yaml', 'manifests/route.yaml'],
+    manifestFiles: [
+      'manifests/deployment.yaml',
+      'manifests/service.yaml',
+      'manifests/route.yaml',
+      'examples/route-external-cert-rbac.yaml',
+    ],
+    focusFiles: [
+      'manifests/deployment.yaml',
+      'manifests/service.yaml',
+      'manifests/route.yaml',
+      'examples/route-external-cert-rbac.yaml',
+    ],
     availableResources: [
       'Project',
       'Deployment',
@@ -1157,7 +1172,12 @@ const CHALLENGES = [
     ],
     hints: [
       'Create and switch to the project: oc new-project prod',
-      'Apply the app manifests in order: oc apply -f manifests/deployment.yaml; oc apply -f manifests/service.yaml; oc apply -f manifests/route.yaml',
+      'Apply the app manifests in order: oc apply -f manifests/deployment.yaml; oc apply -f manifests/service.yaml.',
+      // Issue #39: manifests/route.yaml uses tls.externalCertificate. Real OCP 4.22
+      // only admits it once the referenced Secret exists AND the ingress router can
+      // read it, so the Route step must come after these two prerequisites.
+      'TLS Route prerequisites (manifests/route.yaml uses tls.externalCertificate): create the Secret and the router read RBAC first - openssl req -x509 -newkey rsa:2048 -nodes -keyout tls.key -out tls.crt -days 365 -subj "/CN=webapp.apps.cluster.example.com"; oc create secret tls webapp-tls --cert=tls.crt --key=tls.key -n prod; oc apply -f examples/route-external-cert-rbac.yaml -n prod. Without both the Route stays Admitted=False (ExternalCertificateValidationFailed).',
+      'Then apply the Route: oc apply -f manifests/route.yaml -n prod; oc get route webapp -n prod and confirm Admitted.',
       'Create and start a build: oc new-build nodejs:20-ubi9 --name=builder; oc start-build builder',
       'Create the quota: oc create quota prod-quota --hard=pods=20,requests.cpu=4,requests.memory=8Gi',
       'Run the Job: oc create job db-migrate --image=busybox:latest. Trap: a compute quota without a LimitRange rejects a Pod that omits requests — no Pod is created and oc describe job db-migrate -n prod shows a FailedCreate event ("failed quota: prod-quota: must specify requests.cpu,requests.memory"). Add the requests to the Job template (or apply a Job manifest that sets them): oc set resources job/db-migrate -n prod --requests=cpu=100m,memory=128Mi, then watch it Complete with oc get job db-migrate -w.',

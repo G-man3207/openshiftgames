@@ -1227,8 +1227,10 @@
             <span class="handover-check-progress" id="handover-checklist-progress"></span>
           </div>
           <p class="handover-section-sub">
-            Set up OpenShift Local or the Developer Sandbox, then redo these levels against a real
-            cluster. Ticks are saved in this browser.
+            Stand up a full cluster — OpenShift Local (crc) or your own single-node OpenShift — then
+            redo these levels against a real API server. The Developer Sandbox only gives you
+            project-scoped access (L1–L11-style work); L13/L14/L17 need cluster-admin. Ticks are
+            saved in this browser.
           </p>
           <ul class="handover-checklist" id="handover-checklist"></ul>
         </section>
@@ -1412,7 +1414,11 @@
       const HANDOVER_CHECKLIST_KEY = 'openshiftgames_handover_checklist';
       /** Levels worth re-doing on a real cluster after finishing the campaign. */
       const HANDOVER_LEVEL_IDS = [5, 9, 13, 14, 17];
-      /** Developer Sandbox entry point offered in the handover checklist. */
+      /** Levels whose redo workflow needs cluster-admin, not just a Sandbox project. */
+      const HANDOVER_CLUSTER_ADMIN_LEVEL_IDS = new Set([13, 14, 17]);
+      /** Full-cluster option: OpenShift Local (crc) — the honest choice for exam redo. */
+      const OPENSHIFT_LOCAL_URL = 'https://developers.redhat.com/products/openshift-local/overview';
+      /** Developer Sandbox: project-scoped only, so never for cluster-admin redo items. */
       const DEVELOPER_SANDBOX_URL = 'https://developers.redhat.com/developer-sandbox';
 
       // Palette shortcuts 1-9 (valid kinds only; registry shortcuts 1-7 align with this).
@@ -3611,19 +3617,30 @@
           const items = [
             {
               id: 'cluster',
-              title: 'Set up a real cluster',
+              title: 'Set up a full cluster (OpenShift Local or your own SNO)',
               detail:
-                'Install OpenShift Local (crc) on your workstation, or open the free Developer Sandbox in your browser.',
+                'Install OpenShift Local (crc start) or use a self-managed single-node OpenShift cluster: the redo items below edit cluster-scoped configuration (oauth.config.openshift.io, Users/Groups, SCCs), which needs cluster-admin. The kubeadmin password comes from `crc console --credentials`; log in with `oc login -u kubeadmin -p <password>`.',
+              href: OPENSHIFT_LOCAL_URL,
+              linkLabel: 'Get OpenShift Local (crc) →',
+            },
+            {
+              id: 'sandbox-note',
+              title: 'Developer Sandbox: project-scoped work only',
+              detail:
+                'The free Developer Sandbox gives you a few projects, not cluster-admin. Use it for L1–L11-style project work only — not for the L13/L14/L17 redo items (those need OpenShift Local or SNO).',
               href: DEVELOPER_SANDBOX_URL,
               linkLabel: 'Open the Developer Sandbox →',
             },
           ];
           for (const id of HANDOVER_LEVEL_IDS) {
             const level = CAMPAIGN_LEVELS.find((entry) => entry.id === id);
+            const needsClusterAdmin = HANDOVER_CLUSTER_ADMIN_LEVEL_IDS.has(id);
             items.push({
               id: `level-${id}`,
               title: `Redo L${id} — ${level?.title || `Campaign level ${id}`}`,
-              detail: 'Replay the same workflow against a real API server and watch the console.',
+              detail: needsClusterAdmin
+                ? 'Cluster-admin on a real cluster (not the Developer Sandbox): replay the same workflow and watch the console.'
+                : 'Replay the same workflow against a real API server and watch the console.',
             });
           }
           return items;

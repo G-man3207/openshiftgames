@@ -103,12 +103,53 @@ spec:
   tls:
     termination: edge
     insecureEdgeTerminationPolicy: Redirect
-    # OCP 4.22: reference a kubernetes.io/tls secret instead of inlining PEM data.
-    # Create it first:
-    #   oc create secret tls webapp-tls --cert=tls.crt --key=tls.key
+    # OCP 4.22: reference a kubernetes.io/tls Secret instead of inlining PEM data.
+    # The Secret must live in this Route's project and the ingress router must be
+    # allowed to read it, or admission fails with reason
+    # ExternalCertificateValidationFailed (Route Admitted=False). Real order:
+    #   1. oc create secret tls webapp-tls --cert=tls.crt --key=tls.key -n prod-platform
+    #   2. grant the router ServiceAccount read access in the SAME project:
+    #      Role (verbs get,list,watch; resourceNames webapp-tls; resources secrets)
+    #      + RoleBinding to system:serviceaccount:openshift-ingress:router
+    #      (see the L20 capstone hint for the full manifest)
+    #   3. oc apply -f manifests/route.yaml -n prod-platform, then confirm
+    #      oc get route webapp -n prod-platform reports Admitted.
     externalCertificate:
       name: webapp-tls
   wildcardPolicy: None
+`,
+
+  // ── OCP 4.22 externalCertificate prerequisite RBAC (issue #39) ────────────
+  // A Route that references `spec.tls.externalCertificate.name` is not admitted
+  // until the ingress router can get/list/watch that named Secret in the
+  // Route's project. Apply this in the Route's project (it carries no
+  // metadata.namespace so `-n <project>` applies to both objects):
+  //   oc apply -f examples/route-external-cert-rbac.yaml -n <project>
+  'examples/route-external-cert-rbac.yaml': `# Router ServiceAccount read access for a Route's externalCertificate Secret.
+# Apply it in the Route's own project, after creating the kubernetes.io/tls
+# Secret that spec.tls.externalCertificate.name points at.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: read-webapp-tls
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames: ["webapp-tls"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: read-webapp-tls
+subjects:
+  - kind: ServiceAccount
+    name: router
+    namespace: openshift-ingress
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: read-webapp-tls
 `,
 
   // ─── Kustomize base + overlays: oc apply -k kustomize/overlays/prod ───────

@@ -180,7 +180,7 @@ export const EX280_OBJECTIVE_GROUPS = [
         levels: [1, 2, 4],
         challenges: [12],
         commands: [
-          `oc login -u <user>`,
+          `oc login -u <user> -p '<password>'`,
           `oc whoami`,
           `oc status`,
           `oc project <project>`,
@@ -610,7 +610,7 @@ export const EX280_OBJECTIVE_GROUPS = [
           `htpasswd -c -B -b users.htpasswd alice 'Passw0rd!'`,
           `oc create secret generic htpass-secret --from-file=htpasswd=users.htpasswd -n openshift-config`,
           `oc edit oauth cluster`,
-          `oc login -u alice`,
+          `oc login -u alice -p '<password>'`,
         ],
       },
       {
@@ -985,6 +985,9 @@ export const EX280_OBJECTIVE_GROUPS = [
         docsUrl: DOCS.sccDocs,
         levels: [17],
         challenges: [8],
+        // Issue #42-5: completing L17's `privileged` objective is drill evidence
+        // even when the learner resolved SCCForbidden from the incident panel.
+        objectiveTypes: ['privileged'],
         commands: [
           `oc adm policy add-scc-to-user privileged -z robot -n web`,
           `oc get pod <pod> -o jsonpath='{.metadata.annotations.openshift\\.io/scc}'`,
@@ -1000,6 +1003,8 @@ export const EX280_OBJECTIVE_GROUPS = [
         levels: [17],
         challenges: [8],
         quickLabs: ['lab-scc'],
+        // Issue #42-5: L17's `scc` objective is drill evidence for this bullet.
+        objectiveTypes: ['scc'],
         commands: [
           `oc get scc`,
           `oc describe scc restricted-v2`,
@@ -1045,9 +1050,12 @@ export const EX280_OBJECTIVE_GROUPS = [
         summary:
           'Create batch/v1 Jobs with completions/parallelism/backoffLimit and verify successful completion and logs.',
         docsUrl: DOCS.jobsDocs,
-        levels: [19],
+        // Issue #42-5: the capstone also requires a Job to phase Complete, so a
+        // completed L20 is evidence for this bullet (not only L19).
+        levels: [19, 20],
         challenges: [12],
         quickLabs: ['lab-jobs'],
+        objectiveTypes: ['complete'],
         commands: [
           `oc create job pi --image=perl -- perl -Mbignum=bpi -wle 'print bpi(2000)'`,
           `oc get jobs`,
@@ -1062,8 +1070,10 @@ export const EX280_OBJECTIVE_GROUPS = [
         summary:
           'Create batch/v1 CronJobs with schedules, concurrency policy and deadline handling; verify spawned Jobs and suspend/resume.',
         docsUrl: DOCS.jobsDocs,
-        levels: [19],
+        // Issue #42-5: L20 requires the nightly CronJob too.
+        levels: [19, 20],
         challenges: [12],
+        objectiveTypes: ['cronjob'],
         commands: [
           `oc create cronjob pi --image=perl --schedule='*/1 * * * *' -- perl -Mbignum=bpi -wle 'print bpi(2000)'`,
           `oc get cronjobs`,
@@ -1145,7 +1155,10 @@ export const EX280_QUICK_LABS = [
         command: `oc edit oauth cluster`,
         text: 'Add an HTPasswd identityProvider to the OAuth cluster singleton: name htpasswd, fileData.name htpass-secret, mappingMethod claim.',
       },
-      { command: `oc login -u ex280-user`, text: 'Log in as the new user and check oc whoami.' },
+      {
+        command: `oc login -u ex280-user -p 'Passw0rd!'`,
+        text: 'Log in as the new user (or type the password at the Password: prompt) and check oc whoami.',
+      },
       {
         command: `oc extract secret/htpass-secret -n openshift-config --to /tmp --confirm`,
         text: 'Rotate the password: extract the htpasswd file from the secret.',
@@ -1504,7 +1517,10 @@ export const EX280_CHEATSHEET = [
     title: 'CLI & projects',
     docsUrl: DOCS.cliTools,
     items: [
-      { cmd: `oc login -u <user>`, note: 'Interactive login (or oc login --token=<token>).' },
+      {
+        cmd: `oc login -u <user> -p '<password>'`,
+        note: 'Log in. Omit -p and oc prompts for the password; the installer stores the kubeadmin password in ~/auth/kubeadmin-password (or oc extract secret/kubeadmin -n kube-system --to=-).',
+      },
       { cmd: `oc whoami`, note: 'Current user.' },
       { cmd: `oc status`, note: 'Quick overview of the current project.' },
       {

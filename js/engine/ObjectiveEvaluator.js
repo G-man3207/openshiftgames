@@ -984,6 +984,51 @@ function namespaceIsolationActive(c, namespace) {
   return external !== null && external.allowed === false;
 }
 
+// ─── policy-shape grading for the capstone (#37) ───────────────────────────
+//
+// L20 must grade "add a default-deny NetworkPolicy" on the policy's behaviour
+// in the project, not on a hidden `metadata.name` — a hand-written policy that
+// isolates all Pods for Ingress is exactly as valid as the shipped example.
+// These helpers mirror the simulator's own policy parsing (policyTypes defaults
+// to Ingress; an empty podSelector selects every Pod).
+
+function networkPolicyTypesOf(policy) {
+  const spec = resourceSpec(policy);
+  if (Array.isArray(spec.policyTypes) && spec.policyTypes.length > 0) {
+    return spec.policyTypes.map((entry) => String(entry));
+  }
+  const types = ['Ingress'];
+  if (asArray(spec.egress).length > 0) types.push('Egress');
+  return types;
+}
+
+/** Does this podSelector match every Pod in the namespace (`{}`-equivalent)? */
+function podSelectorMatchesAll(selector) {
+  if (selector === undefined || selector === null) return true;
+  if (typeof selector !== 'object') return false;
+  const matchLabels = selector.matchLabels;
+  const matchExpressions = selector.matchExpressions;
+  const labelsEmpty = !matchLabels || Object.keys(matchLabels).length === 0;
+  const expressionsEmpty = !matchExpressions || asArray(matchExpressions).length === 0;
+  return labelsEmpty && expressionsEmpty;
+}
+
+/** A default-deny: selects all Pods, isolates Ingress and allows no ingress. */
+function isIngressIsolationPolicy(policy) {
+  const spec = resourceSpec(policy);
+  if (!networkPolicyTypesOf(policy).includes('Ingress')) return false;
+  if (!podSelectorMatchesAll(spec.podSelector)) return false;
+  return asArray(spec.ingress).length === 0;
+}
+
+/** Any NetworkPolicy in the project isolates all Pods for Ingress (#37). */
+function namespaceHasIngressIsolation(c, namespace) {
+  if (!namespace) return false;
+  return listKind(c.clusterState, 'NetworkPolicy')
+    .filter((policy) => resourceNamespace(policy) === namespace)
+    .some(isIngressIsolationPolicy);
+}
+
 function probeDnsEgress(c, obj, namespace) {
   const sim = simulationOf(c);
   if (!sim || typeof sim.canResolveDNS !== 'function') return false;
@@ -1032,6 +1077,11 @@ function evaluateNetworkPolicy(obj, c) {
   switch (probe) {
     case 'default-deny':
       return bool(namespaceIsolationActive(c, namespace));
+    // Capstone variant (#37): only the Ingress direction is isolated. L20's
+    // shipped default-deny also blocks Egress, but a player-written
+    // `policyTypes: [Ingress]` deny-all satisfies the objective just as well.
+    case 'ingress-isolation':
+      return bool(namespaceHasIngressIsolation(c, namespace));
     case 'dns-egress':
       return bool(probeDnsEgress(c, obj, namespace));
     case 'reach':
@@ -1604,6 +1654,17 @@ function evaluateRouteAccess(obj, c) {
     ? findResource(c.clusterState, 'Route', obj.name, namespace || undefined)
     : null;
   if (!route) return result(false, 0, 1);
+  // Capstone hardening (#37): before any NetworkPolicy exists the router can
+  // trivially reach the Route, so "reachable through the router" must not tick.
+  // With `requireIsolation` the project has to be ingress-isolated first (any
+  // default-deny policy) and a router-allowing ingress policy still has to let
+  // the end-to-end request through before this objective counts.
+  if (
+    obj.requireIsolation === true &&
+    !namespaceHasIngressIsolation(c, resourceNamespace(route) || namespace)
+  ) {
+    return result(false, 0, 1);
+  }
   const sim = c.gameEngine?.simulation || c.gameEngine?.engine?.simulation || null;
   if (!sim || typeof sim.canRouterReach !== 'function') return result(false, 0, 1);
   let reach = null;
