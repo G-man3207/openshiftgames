@@ -69,7 +69,6 @@ import {
   visibleFinalizers,
   isInternalMetadataKey,
   describeEventLines,
-  formatDescribeDuration,
 } from '../resources/WorkloadResources.js';
 import { ShellTools, SHELL_COMMANDS, SHELL_FILE_COMMANDS } from './ShellTools.js';
 
@@ -2928,6 +2927,12 @@ export class CommandBar {
     this.shellTools = new ShellTools(this);
     /** Set by the last authorizeCommand gate call (#2). */
     this._gate = null;
+    /**
+     * Pending interactive `oc login` password prompt (#42): the next terminal
+     * line is the password, never echoed and never stored in history.
+     * @type {{user: string, server: string}|null}
+     */
+    this._pendingLogin = null;
 
     this._boundKeydown = this._onGlobalKeydown.bind(this);
     this._boundShowCommandBar = () => this.show();
@@ -3052,6 +3057,13 @@ export class CommandBar {
     for (const eventName of ['project:switched', 'login', 'logout']) {
       this.eventBus?.on?.(eventName, () => this._updateContextLabel());
     }
+    // A pending `oc login` password prompt must never survive a cluster/level
+    // reset or an external session change (it would swallow the next command).
+    for (const eventName of ['cluster:reset', 'login', 'logout']) {
+      this.eventBus?.on?.(eventName, () => {
+        if (this._pendingLogin) this._closeLoginPrompt();
+      });
+    }
   }
 
   _onGlobalKeydown(e) {
@@ -3067,6 +3079,26 @@ export class CommandBar {
   }
 
   _onInputKeydown(e) {
+    // While the `oc login` password prompt is waiting for input, the terminal
+    // behaves like a TTY password read: no completion/history, Enter submits,
+    // Ctrl+C cancels (#42).
+    if (this._pendingLogin) {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        this._executeCommand(this.input.value);
+        return;
+      }
+      if (e.ctrlKey && /^[cC]$/.test(e.key)) {
+        e.preventDefault();
+        this._executeCommand('\u0003');
+        return;
+      }
+      if (e.key === 'Tab' || e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+        e.preventDefault();
+        return;
+      }
+      return;
+    }
     if (e.key === 'Enter') {
       e.preventDefault();
       if (this.selectedSuggestion >= 0 && this.suggestions.length > 0) {
@@ -3100,6 +3132,12 @@ export class CommandBar {
   }
 
   _onInputChange() {
+    if (this._pendingLogin) {
+      this.suggestions = [];
+      this.selectedSuggestion = -1;
+      this.suggestionsEl?.classList.add('hidden');
+      return;
+    }
     this._updateSuggestions();
   }
 
@@ -3283,14 +3321,21 @@ export class CommandBar {
   executeCommand(raw) {
     let result;
     try {
-      // `oc debug node/…` opens a small node-debug session (#28): while it is
-      // active the terminal input is fed to the debug container / host shell
-      // (`chroot /host`, `systemctl status|restart kubelet`, `journalctl`,
-      // `exit`) instead of to `oc`. `oc debug …` itself still resolves through
-      // the normal command path and opens/closes the session.
-      result = this._debugSession
-        ? this._runDebugSessionLine(String(raw ?? ''))
-        : this._runCommandLine(raw);
+      // An `oc login` password prompt owns the next terminal line (#42): the
+      // password is consumed here before any shell/oc parsing and is never
+      // echoed or stored in history.
+      if (this._pendingLogin) {
+        result = this._submitLoginPassword(String(raw ?? ''));
+      } else if (this._debugSession) {
+        // `oc debug node/…` opens a small node-debug session (#28): while it is
+        // active the terminal input is fed to the debug container / host shell
+        // (`chroot /host`, `systemctl status|restart kubelet`, `journalctl`,
+        // `exit`) instead of to `oc`. `oc debug …` itself still resolves through
+        // the normal command path and opens/closes the session.
+        result = this._runDebugSessionLine(String(raw ?? ''));
+      } else {
+        result = this._runCommandLine(raw);
+      }
     } catch (error) {
       const message = `error: internal command failure: ${error && error.message ? error.message : error}`;
       this._appendOutput(message, 'text-red-400');
@@ -3936,6 +3981,7 @@ export class CommandBar {
   }
 
   destroy() {
+    if (this._pendingLogin) this._closeLoginPrompt();
     this._clearRolloutWatches?.();
     this._clearBuildWatches?.();
     if (typeof document !== 'undefined')
@@ -5349,7 +5395,9 @@ Object.assign(CommandBar.prototype, {
 
   _labelString(resource) {
     const labels = resource?.metadata?.labels || resource?.labels || {};
-    const entries = Object.entries(labels);
+    // Real oc prints label sets sorted by key (`labels.FormatLabels`), with an
+    // empty value rendered as `key=` (#41/#43).
+    const entries = Object.entries(labels).sort(([left], [right]) => left.localeCompare(right));
     if (!entries.length) return '';
     return entries.map(([key, value]) => `${key}=${value}`).join(',');
   },
@@ -6283,6 +6331,9 @@ Object.assign(CommandBar.prototype, {
       showLabels: Boolean(flags['show-labels']),
       noHeaders: Boolean(flags['no-headers']),
       namespaceColumn: Boolean(options.allNamespaces) && this._isNamespaced(kind),
+      // Multi-type requests print `<resource>.<group>/<name>` in the NAME cell
+      // (`deployment.apps/web`, `job.batch/nightly`) like real oc (#43).
+      namePrefix: Boolean(options.namePrefix),
     });
   },
 
@@ -6335,6 +6386,23 @@ Object.assign(CommandBar.prototype, {
       const b = resolvePathValue(right, segments);
       if (typeof a === 'number' && typeof b === 'number') return a - b;
       return String(a ?? '').localeCompare(String(b ?? ''));
+    });
+  },
+
+  /**
+   * Default ordering of a list request: the API server returns objects sorted
+   * by namespace/name (etcd key order), so `oc get secrets`, `oc get pods`, …
+   * are always name-sorted like a real cluster (#43). `--sort-by` overrides it.
+   * @param {any[]} resources
+   * @returns {any[]}
+   */
+  _sortResourcesByName(resources) {
+    return [...resources].sort((left, right) => {
+      const leftNamespace = String(left.metadata?.namespace || '');
+      const rightNamespace = String(right.metadata?.namespace || '');
+      if (leftNamespace !== rightNamespace) return leftNamespace.localeCompare(rightNamespace);
+      // Plain lexicographic order, like the API server's namespace/name sort.
+      return String(left.metadata?.name || '').localeCompare(String(right.metadata?.name || ''));
     });
   },
 
@@ -6598,6 +6666,11 @@ Object.assign(CommandBar.prototype, {
           /FailedCreate/i.test(String(condition.reason || '')) ||
           (condition.type === 'ReplicaFailure' && condition.status === 'True');
         if (!failedCreate) continue;
+        // Real ReplicaSet-controller FailedCreate events always carry the
+        // `Error creating: ` prefix (the RS condition message does not) (#43).
+        const conditionMessage = String(
+          condition.message || `pods for ${name} were rejected`
+        ).replace(/^Error creating:\s*/, '');
         push({
           lastTimestamp: condition.lastTransitionTime
             ? new Date(condition.lastTransitionTime).getTime()
@@ -6607,7 +6680,7 @@ Object.assign(CommandBar.prototype, {
           object: `replicaset/${name}`,
           subobject: '',
           source: 'replicaset-controller',
-          message: condition.message || `Error creating: pods for ${name} were rejected`,
+          message: `Error creating: ${conditionMessage}`,
           namespace: replicaNamespace,
         });
       }
@@ -6652,9 +6725,11 @@ Object.assign(CommandBar.prototype, {
   },
 
   /**
-   * Aggregate identical events (same TYPE/OBJECT/REASON) into one row, the way
-   * a real event recorder folds retries into a single Event series (#26).
-   * Keeps the newest message + last/first timestamps and sums the counts.
+   * Aggregate repeated events of the same TYPE/OBJECT/REASON into one series row,
+   * the way a controller retry burst is folded into a single Event (#26). The
+   * LAST SEEN column then shows `(xN over <age of first occurrence>)` — the real
+   * K8s aggregation format, not a first→last delta (which printed the bogus
+   * `(x2 over 0s)`, #43).
    */
   _aggregateEvents(events) {
     const groups = new Map();
@@ -6681,6 +6756,36 @@ Object.assign(CommandBar.prototype, {
       }
     }
     return [...groups.values()].sort((left, right) => left.lastTimestamp - right.lastTimestamp);
+  },
+
+  /**
+   * Merge synthetic lifecycle events with the runtime event recorder (which is
+   * authoritative for controller-recorded events). A runtime event wins over
+   * the synthetic reconstruction of the same event (same TYPE/OBJECT/REASON),
+   * so e.g. the quota FailedCreate is described once, with the real
+   * `Error creating: …` message (#43).
+   * @param {object[]} synthetic
+   * @param {object[]} runtime
+   * @returns {object[]}
+   */
+  _mergeEventStreams(synthetic, runtime) {
+    const runtimeKeys = new Set(
+      (runtime || []).map(
+        (event) => `${event.type || 'Normal'}|${event.object || ''}|${event.reason || ''}`
+      )
+    );
+    const merged = (synthetic || []).filter(
+      (event) =>
+        !runtimeKeys.has(`${event.type || 'Normal'}|${event.object || ''}|${event.reason || ''}`)
+    );
+    merged.push(...(runtime || []));
+    const seen = new Set();
+    return merged.filter((event) => {
+      const key = `${event.type || 'Normal'}|${event.object || ''}|${event.reason || ''}|${event.source || ''}|${event.message || ''}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
   },
 
   _eventTimestamp(value, fallback = Date.now()) {
@@ -6748,15 +6853,16 @@ Object.assign(CommandBar.prototype, {
     }
     // Real oc/K8s 1.35 event printer: LAST SEEN, TYPE, REASON, OBJECT, MESSAGE
     // (SUBOBJECT/SOURCE/NAMESPACE are only shown in wide/all-namespaces output).
-    // Real events are aggregated per TYPE/OBJECT/REASON: a controller retrying
-    // ten times prints as one row with a `(x10 over 1m)` age suffix (#26).
+    // Repeated occurrences of the same Event are folded into one Event series,
+    // shown as `LAST SEEN (xN over <age of first occurrence>)` — never a
+    // first→last delta, which printed the bogus `(x2 over 0s)` (#43).
     const aggregated = this._aggregateEvents(events);
     const wideEvents = output.format === 'wide' || Boolean(options.namespaceColumn);
     const headers = ['LAST SEEN', 'TYPE', 'REASON', 'OBJECT', 'MESSAGE'];
     const rows = aggregated.map((event) => {
       let lastSeen = formatAge(event.lastTimestamp);
       if (event.count > 1) {
-        lastSeen = `${lastSeen} (x${event.count} over ${formatDescribeDuration(Math.max(0, event.lastTimestamp - event.firstTimestamp))})`;
+        lastSeen = `${lastSeen} (x${event.count} over ${formatAge(event.firstTimestamp)})`;
       }
       return [
         lastSeen,
@@ -6815,11 +6921,11 @@ Object.assign(CommandBar.prototype, {
     const object = `${String(kind).toLowerCase()}/${name}`;
     const namespace = resource.metadata?.namespace;
     // Synthetic lifecycle events + runtime controller events (SCC FailedCreate …).
-    const events = [
-      ...this._syntheticEvents({ namespace }),
-      ...this._runtimeEvents({ namespace, allNamespaces: false }),
-    ];
-    const seen = new Set();
+    // Runtime wins for the same event, so describe shows it once (#43).
+    const events = this._mergeEventStreams(
+      this._syntheticEvents({ namespace }),
+      this._runtimeEvents({ namespace, allNamespaces: false })
+    );
     return events.filter((event) => {
       const eventObject = event.object || '';
       let related = eventObject === object;
@@ -6829,11 +6935,7 @@ Object.assign(CommandBar.prototype, {
         const rsName = eventObject.slice('replicaset/'.length);
         related = Boolean(name) && rsName.startsWith(`${name}-`);
       }
-      if (!related) return false;
-      const key = `${event.type}|${event.reason}|${event.message}`;
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
+      return related;
     });
   },
 
@@ -6858,15 +6960,21 @@ Object.assign(CommandBar.prototype, {
     if (!output || typeof output !== 'string')
       output = this._describeLines(kind, resource).join('\n');
     output = scrubInternalAnnotationsText(output);
-    if (!/^Events:/m.test(output)) {
-      output += `\n${this._eventsSection(kind, resource)}`;
-    } else if (/^Events:\s+<none>\s*$/m.test(output)) {
-      // Rich resource describes hard-code an empty events block; fill it with
-      // the real synthetic/runtime events when there are any (#36).
-      const liveSection = this._eventsSection(kind, resource);
-      if (!/Events:\s+<none>/.test(liveSection))
-        output = output.replace(/^Events:\s+<none>\s*$/m, liveSection);
+    // Real 4.22 `oc describe quota` prints only the Resource/Used/Hard table —
+    // no Events section (#43).
+    if (kind === 'ResourceQuota' || kind === 'ClusterResourceQuota') {
+      const eventsAt = output.search(/^Events:/m);
+      if (eventsAt >= 0) output = output.slice(0, eventsAt).replace(/\s+$/, '');
+      return output;
     }
+    // The Events table is always the last block of a describe. Rich resource
+    // describes hard-code a placeholder (`Events:  <none>`) or their own table;
+    // replace everything from that header to the end with the live events block
+    // so the table can never be printed twice (#36/#43).
+    const liveSection = this._eventsSection(kind, resource);
+    const eventsAt = output.search(/^Events:/m);
+    if (eventsAt < 0) output += `\n${liveSection}`;
+    else output = `${output.slice(0, eventsAt)}${liveSection}`;
     return output;
   },
 
@@ -7626,9 +7734,11 @@ Object.assign(CommandBar.prototype, {
     const deprecationWarning = ['dc', 'deploymentconfig', 'deploymentconfigs'].includes(lower)
       ? 'warning: DeploymentConfig (dc) is deprecated in OpenShift 4.x — showing Deployments instead.\n'
       : '';
-    const multiKindStructured =
-      kinds.length > 1 &&
-      ['yaml', 'json', 'name', 'jsonpath', 'custom-columns'].includes(output.format);
+    // Real oc prefixes the NAME cell with `deployment.apps/`, `job.batch/`, … when
+    // more than one resource type is requested (#43).
+    const multiKind = kinds.length > 1;
+    const structuredFormats = ['yaml', 'json', 'name', 'jsonpath', 'custom-columns'];
+    const multiKindStructured = multiKind && structuredFormats.includes(output.format);
     const combinedResources = [];
     const sections = [];
     let singleResource = null;
@@ -7670,15 +7780,19 @@ Object.assign(CommandBar.prototype, {
         singleResource = matched.length === 1 ? matched[0] : null;
       }
       if (flags['sort-by']) resources = this._sortResources(resources, flags['sort-by']);
+      else resources = this._sortResourcesByName(resources);
       if (!resources.length) {
         if (multiKindStructured) continue;
-        if (['yaml', 'json', 'name', 'jsonpath', 'custom-columns'].includes(output.format)) {
+        if (structuredFormats.includes(output.format)) {
           sections.push(this._formatGetResult(kind, [], flags, { singleName: Boolean(name) }));
-        } else {
+        } else if (!multiKind) {
           const scope =
             allNamespaces || !this._isNamespaced(kind) ? '' : ` in ${namespace} namespace`;
           sections.push(`No resources found${scope}.`);
         }
+        // Multi-type tabular output: real oc omits an empty type entirely when
+        // other types have rows; the "No resources found" message is only
+        // printed when nothing at all was written (handled after the loop).
         continue;
       }
       if (multiKindStructured) {
@@ -7688,6 +7802,7 @@ Object.assign(CommandBar.prototype, {
       const rendered = this._formatGetResult(kind, resources, flags, {
         singleName: Boolean(name) && resources.length === 1,
         allNamespaces,
+        namePrefix: multiKind,
       });
       if (rendered && typeof rendered === 'object' && rendered.error) return rendered;
       sections.push(rendered);
@@ -7700,10 +7815,19 @@ Object.assign(CommandBar.prototype, {
           deprecationWarning + this._formatResourcesStructured(combinedResources, flags, output),
       };
     }
-    return {
-      error: false,
-      message: deprecationWarning + sections.filter((section) => section !== '').join('\n\n'),
-    };
+    let body = sections.filter((section) => section !== '').join('\n\n');
+    if (!body && structuredFormats.includes(output.format)) {
+      // Structured empty output is still written (an empty List/table); do not
+      // append a human-readable message for -o name/yaml/json (#43).
+    } else if (!body) {
+      // Real kubectl only prints this once, after every requested type produced
+      // no output: "No resources found in <ns> namespace." when all requested
+      // types are namespaced, plain "No resources found" otherwise.
+      const allNamespaced = kinds.every((entry) => this._isNamespaced(entry.kind));
+      const scope = allNamespaced && !allNamespaces ? ` in ${namespace} namespace` : '';
+      body = `No resources found${scope}.`;
+    }
+    return { error: false, message: deprecationWarning + body };
   },
 
   /** `oc get ns/namespaces` — real K8s table/object shape (NAME STATUS AGE). */
@@ -7714,6 +7838,9 @@ Object.assign(CommandBar.prototype, {
       if (!projects.length)
         return this._err(`Error from server (NotFound): namespaces "${name}" not found`);
     }
+    // #41: `oc get ns -l <selector>` filters on the real Namespace labels
+    // (key-only existence, `!key`, `key in (...)`/`notin`, equality).
+    projects = this._filterResources(projects, 'Project', flags);
     projects.sort((left, right) =>
       String(left.metadata?.name || '').localeCompare(String(right.metadata?.name || ''))
     );
@@ -7785,6 +7912,11 @@ Object.assign(CommandBar.prototype, {
     const showLabels = Boolean(flags['show-labels']);
     const headers = ['NAME', 'STATUS', 'AGE'];
     if (showLabels) headers.push('LABELS');
+    if (!objects.length) {
+      // `oc get ns -l <selector>` with no match prints the standard empty-list
+      // message (cluster-scoped, so no namespace suffix).
+      return this._ok('No resources found');
+    }
     const rows = objects.map((object) => {
       const project = projects.find((entry) => entry.metadata?.name === object.metadata.name);
       const row = [object.metadata.name, object.status.phase, this._creationAge(project)];
@@ -8390,18 +8522,12 @@ Object.assign(CommandBar.prototype, {
       if (namespaceError) return namespaceError;
     }
     // `oc events` and `oc get events` both arrive here (the get path passes the full token list).
-    let events = this._syntheticEvents({ namespace });
-    // Merge runtime-recorded events (resource .events arrays: SCC FailedCreate,
-    // OLM, Route/Build…), de-duplicating what the synthetic stream already shows.
-    const seenEvents = new Set(
-      events.map((event) => `${event.object}|${event.reason}|${event.message}`)
+    // Runtime-recorded events win over the synthetic lifecycle reconstruction
+    // of the same event, so each controller event appears exactly once (#43).
+    let events = this._mergeEventStreams(
+      this._syntheticEvents({ namespace }),
+      this._runtimeEvents({ namespace, allNamespaces })
     );
-    for (const runtimeEvent of this._runtimeEvents({ namespace, allNamespaces })) {
-      const key = `${runtimeEvent.object}|${runtimeEvent.reason}|${runtimeEvent.message}`;
-      if (seenEvents.has(key)) continue;
-      seenEvents.add(key);
-      events.push(runtimeEvent);
-    }
     if (!allNamespaces) {
       events = events.filter((event) => event.namespace === namespace);
     }
@@ -9017,7 +9143,7 @@ Object.assign(CommandBar.prototype, {
       longBools: [],
     });
     let user = flags.username && flags.username !== true ? String(flags.username) : null;
-    let password = flags.password && flags.password !== true ? String(flags.password) : null;
+    const password = flags.password && flags.password !== true ? String(flags.password) : null;
     let server = flags.server && flags.server !== true ? String(flags.server) : OC_SERVER_URL;
     const token = flags.token && flags.token !== true ? String(flags.token) : null;
     for (const positional of positionals) {
@@ -9032,6 +9158,122 @@ Object.assign(CommandBar.prototype, {
       );
     }
 
+    // #42: real oc prompts for the password interactively when neither `-p` nor
+    // `--token` was given. Prompt only for users whose password the simulated
+    // cluster actually knows (kubeadmin/HTPasswd identities); switching to
+    // scripted simulator users without a password keeps working and gets a
+    // clearly marked simulator hint instead of a misleading silent login.
+    if (password === null && !token && this._loginPasswordKnown(user)) {
+      return this._promptLoginPassword(user, server);
+    }
+    const result = this._completeLogin({ user, password, token, server });
+    if (!result.error && password === null && !token) {
+      return this._ok(
+        `${result.message}\n\nSimulator hint: on a real cluster \`oc login\` prompts for the password interactively; this simulated account does not use one.`
+      );
+    }
+    return result;
+  },
+
+  /** True when the simulated cluster can verify this user's password (#42). */
+  _loginPasswordKnown(user) {
+    const normalized = String(user || '');
+    // Only kubeadmin has a real password (the kube-system/kubeadmin Secret).
+    // `admin`/`system:admin` are simulator convenience accounts used for user
+    // switching; prompting for them would break those flows (see the simulator
+    // hint branch in _cmdLogin).
+    if (normalized === 'kubeadmin') return true;
+    const ge = this.gameEngine;
+    try {
+      if (ge && typeof ge._getHtpasswdEntries === 'function') {
+        const entries = ge._getHtpasswdEntries();
+        if (Array.isArray(entries) && entries.some((entry) => entry?.user === normalized))
+          return true;
+      }
+    } catch {
+      /* fall through to the virtual htpasswd file */
+    }
+    return this._htpasswdUsers().includes(normalized);
+  },
+
+  /**
+   * Start the real `oc login` password prompt (#42): print the authentication
+   * banner plus a bare `Password: ` line, switch the terminal input to masked
+   * mode and consume the next entered line as the password.
+   * @param {string} user
+   * @param {string} server
+   */
+  _promptLoginPassword(user, server) {
+    this._pendingLogin = { user, server };
+    if (this.input) {
+      this.input.type = 'password';
+      this.input.placeholder = 'Password';
+      this.input.value = '';
+    }
+    this.suggestions = [];
+    this.selectedSuggestion = -1;
+    this.suggestionsEl?.classList.add('hidden');
+    return this._ok(`Authentication required for ${server} (openshift)\nPassword: `);
+  },
+
+  /** Leave the password prompt and restore the normal terminal input. */
+  _closeLoginPrompt() {
+    this._pendingLogin = null;
+    if (this.input) {
+      this.input.type = 'text';
+      this.input.placeholder = "Type a command — the 'oc ' prefix is optional";
+      this.input.value = '';
+    }
+  },
+
+  /**
+   * Handle the line entered at the `oc login` password prompt (#42). Mirrors a
+   * TTY: the entry is masked/not echoed, Ctrl+C (`\u0003`) or an empty line
+   * cancels, and the session only changes on a successful login.
+   * @param {string} rawInput
+   */
+  _submitLoginPassword(rawInput) {
+    const pending = this._pendingLogin || { user: 'kubeadmin', server: OC_SERVER_URL };
+    const raw = String(rawInput ?? '');
+    const cancelled = raw === '\u0003' || raw.trim() === '';
+    this._closeLoginPrompt();
+    this._clearInput();
+    const commandLine = `oc login -u ${pending.user}`;
+    const result = cancelled
+      ? this._err('error: interrupted')
+      : this._completeLogin({
+          user: pending.user,
+          password: raw,
+          token: null,
+          server: pending.server,
+        });
+    if (result.message)
+      this._appendOutput(result.message, result.error ? 'text-red-400' : 'text-white/70');
+    this._recordCommand(commandLine, 'login', !result.error);
+    this._emit('command:executed', {
+      command: commandLine,
+      raw: commandLine,
+      baseCommand: 'login',
+      success: !result.error,
+      timestamp: Date.now(),
+    });
+    return {
+      error: Boolean(result.error),
+      message: result.message || '',
+      raw: commandLine,
+      normalized: commandLine,
+      baseCommand: 'login',
+      success: !result.error,
+    };
+  },
+
+  /**
+   * Authenticate and render the real `oc login` result banner. Shared by the
+   * `-p`/`--token` path and the interactive password prompt (#42).
+   * @param {{user: string, password: string|null, token: string|null, server: string}} params
+   * @returns {{error: boolean, message: string}}
+   */
+  _completeLogin({ user, password, token, server }) {
     const ge = this.gameEngine;
     let success = false;
     let message = '';
@@ -9080,6 +9322,20 @@ Object.assign(CommandBar.prototype, {
           message =
             'Login failed (401 Unauthorized)\nVerify you have provided the correct credentials.';
         }
+      }
+      // #43: real oc only prints the generic 401 wording. Keep the rollout
+      // learning aid, but mark it as a simulator hint so it is never mistaken
+      // for real `oc` output.
+      const rolloutHint = String(message).match(
+        /^Login failed \(401 Unauthorized\)\n(The HTPasswd identity provider is not ready yet:[\s\S]*)$/
+      );
+      if (rolloutHint) {
+        message = [
+          'Login failed (401 Unauthorized)',
+          'Verify you have provided the correct credentials.',
+          '',
+          `Simulator hint: ${rolloutHint[1]}`,
+        ].join('\n');
       }
       return this._err(message);
     }
@@ -9707,7 +9963,6 @@ Object.assign(CommandBar.prototype, {
           '  oc create secret generic <name> --from-literal=key=value\n' +
           '  oc create configmap <name> --from-literal=key=value\n' +
           '  oc create quota <name> --hard=pods=20,requests.cpu=4\n' +
-          '  oc create limitrange <name> --default=cpu=500m,memory=512Mi\n' +
           '  oc create clusterquota <name> --project-label-selector=env=dev --hard=pods=10\n' +
           '  oc create job <name> --image=<image> -- <command>\n' +
           '  oc create cronjob <name> --image=<image> --schedule="*/5 * * * *" -- <command>\n' +
@@ -9735,7 +9990,21 @@ Object.assign(CommandBar.prototype, {
       case 'resourcequota':
         return this._createQuota(rest, flags);
       case 'limitrange':
-        return this._createLimitRange(rest, flags);
+        // #38: real oc has no `create limitrange` subcommand — it is a cobra
+        // unknown-command error, not a silent success. LimitRanges are created
+        // from YAML: `oc apply -f examples/limitrange.yaml`.
+        return this._err(
+          [
+            'error: unknown command "limitrange" for "oc create"',
+            '',
+            'Valid subcommands:',
+            '  clusterrole, clusterrolebinding, configmap, cronjob, deployment, ingress, job, namespace, pdb, priorityclass, quota, role, rolebinding, secret, service, serviceaccount, token',
+            '',
+            'To create a LimitRange, apply a manifest instead: oc apply -f examples/limitrange.yaml (or oc create -f <file>).',
+            '',
+            "Run 'oc create --help' for usage.",
+          ].join('\n')
+        );
       case 'clusterquota':
       case 'clusterresourcequota':
         return this._createClusterQuota(rest, flags);
@@ -10017,54 +10286,6 @@ Object.assign(CommandBar.prototype, {
       return this._ok(result.message || `resourcequota/${name} created`);
     }
     return this._finishCreateObject(object, flags);
-  },
-
-  _createLimitRange(rest, flags) {
-    const name = rest[0];
-    if (!name)
-      return this._usageError(
-        'create',
-        'name is required\n\n  oc create limitrange <name> --default=cpu=500m,memory=512Mi --default-request=cpu=100m --max=cpu=2,memory=4Gi'
-      );
-    const namespace = this._namespaceFromFlags(flags);
-    const options = {
-      namespace,
-      type: flags.type && flags.type !== true ? String(flags.type) : 'Container',
-      default: parseCommaAssignments(this._arrayFlag(flags, 'default')),
-      defaultRequest: parseCommaAssignments(this._arrayFlag(flags, 'default-request')),
-      min: parseCommaAssignments(this._arrayFlag(flags, 'min')),
-      max: parseCommaAssignments(this._arrayFlag(flags, 'max')),
-    };
-    if (flags['max-limit-request-ratio']) {
-      options.maxLimitRequestRatio = parseCommaAssignments(
-        this._arrayFlag(flags, 'max-limit-request-ratio')
-      );
-    }
-    const ge = this.gameEngine;
-    if (ge && typeof ge.createLimitRange === 'function') {
-      const result = ge.createLimitRange(name, options);
-      if (result.success === false) return this._err(result.message);
-      return this._ok(result.message || `limitrange/${name} created`);
-    }
-    return this._finishCreateObject(
-      {
-        apiVersion: 'v1',
-        kind: 'LimitRange',
-        metadata: { name, namespace },
-        spec: {
-          limits: [
-            {
-              type: options.type,
-              default: options.default,
-              defaultRequest: options.defaultRequest,
-              min: options.min,
-              max: options.max,
-            },
-          ],
-        },
-      },
-      flags
-    );
   },
 
   _createClusterQuota(rest, flags) {
@@ -11139,12 +11360,15 @@ Object.assign(CommandBar.prototype, {
     });
     const { kind, name } = this._resolveRef(positionals);
     if (!kind) return this._resourceTypeError(positionals[0] || '');
-    if (!name)
+    const namespace = this._namespaceFromFlags(flags);
+    // `oc set env <type> --all` selects every resource of that type in the
+    // namespace (real oc supports --all for set env) (#43).
+    const allResources = Boolean(flags.all) && !name;
+    if (!name && !allResources)
       return this._usageError(
         'set',
         'resource name is required\n\n  oc set env <resource>/<name> KEY=VALUE'
       );
-    const namespace = this._namespaceFromFlags(flags);
     const env = {};
     const remove = [];
     const startIndex = positionals[0].includes('/') ? 1 : 2;
@@ -11195,13 +11419,9 @@ Object.assign(CommandBar.prototype, {
         .replace(/[^A-Za-z0-9_]/g, '_')
         .toUpperCase()}`;
 
-    if (flags.list) {
-      const resource = this._findResource(kind, name, {
-        namespace: flags.namespace,
-        explicitNamespace: Boolean(flags.namespace),
-        allowPrefix: false,
-      });
-      if (!resource) return this._err(this._notFoundMessage(kind, name));
+    /** `--list` block for one resource, real oc's `# kind/name, container x`. */
+    const renderEnvList = (resource) => {
+      const resourceName = resource.metadata?.name || '';
       const spec = JSON.parse(JSON.stringify(resource.spec || {}));
       const arrays = envArraysForSpec(spec);
       const resourceContainers =
@@ -11212,7 +11432,7 @@ Object.assign(CommandBar.prototype, {
           : kind === 'BuildConfig'
             ? spec.strategy?.sourceStrategy?.from?.name || 'main'
             : resourceContainers[0]?.name || this._containerList(resource)[0]?.name || 'main';
-      const lines = [`# ${this._resourceRef(kind)}/${name}, container ${containerName}`];
+      const lines = [`# ${this._resourceRef(kind)}/${resourceName}, container ${containerName}`];
       let count = 0;
       for (const envArray of arrays) {
         for (const entry of envArray) {
@@ -11234,7 +11454,36 @@ Object.assign(CommandBar.prototype, {
         }
       }
       if (count === 0) lines.push('<none>');
-      return this._ok(lines.join('\n'));
+      return lines;
+    };
+
+    if (allResources) {
+      if (!flags.list) {
+        return this._err(
+          `error: bulk env edits (oc set env ${this._resourceRef(kind)} --all KEY=VALUE) are not simulated: use --all --list or target resources by name`
+        );
+      }
+      if (this._isNamespaced(kind)) {
+        const namespaceError = this._requireNamespace(namespace);
+        if (namespaceError) return namespaceError;
+      }
+      let targets = this._resources(kind);
+      if (this._isNamespaced(kind)) {
+        targets = targets.filter((resource) => resource.metadata?.namespace === namespace);
+      }
+      targets = this._sortResourcesByName(targets);
+      if (!targets.length) return this._ok(`No resources found in ${namespace} namespace.`);
+      return this._ok(targets.map((resource) => renderEnvList(resource).join('\n')).join('\n'));
+    }
+
+    if (flags.list) {
+      const resource = this._findResource(kind, name, {
+        namespace: flags.namespace,
+        explicitNamespace: Boolean(flags.namespace),
+        allowPrefix: false,
+      });
+      if (!resource) return this._err(this._notFoundMessage(kind, name));
+      return this._ok(renderEnvList(resource).join('\n'));
     }
     if (!Object.keys(env).length && !remove.length && !fromList.length) {
       return this._err(
@@ -12594,9 +12843,12 @@ Object.assign(CommandBar.prototype, {
       if (sub === 'status' && result.status) {
         return this._ok(result.message || `${refLine} successfully rolled out`);
       }
-      return this._ok(
-        result.message || `${refLine} ${sub === 'restart' ? 'restarted' : 'rolled back'}`
-      );
+      if (sub === 'restart') {
+        // Real oc: `deployment.apps/web restarted` — resource/name form, no
+        // quoted name (#43). Keep the engine's success/failure decision.
+        return this._ok(`${refLine} restarted`);
+      }
+      return this._ok(result.message || `${refLine} rolled back`);
     }
     return this._err(`error: rollout ${sub} is not available in this build`);
   },
@@ -13073,6 +13325,11 @@ Object.assign(CommandBar.prototype, {
       ]);
     }
     if (name === 'curl') {
+      // #43: real curl flag handling (`-s -o /dev/null -w "%{http_code}"`,
+      // scheme-default ports, NetworkPolicy drops → (28) timeout) lives in
+      // ShellTools.runExecCurl so the workstation shell and `oc exec` agree.
+      const rendered = this.shellTools?.runExecCurl?.(args, context);
+      if (rendered) return rendered;
       const sim = this.gameEngine?.simulation || this.gameEngine?.sim || null;
       const argv = args.filter((token) => token && !token.startsWith('-'));
       const rawTarget = argv[argv.length - 1] || '';
@@ -13219,6 +13476,9 @@ Object.assign(CommandBar.prototype, {
         addFile(`${mountPath}/${entryName}`, content);
       }
     }
+    // #42: every Pod (unless automountServiceAccountToken:false) exposes the
+    // projected service-account tree under /var/run/secrets/kubernetes.io/serviceaccount.
+    this._appendServiceAccountFiles(pod, namespace, container, { addDir, addFile });
     const env = this._podEnvironment(pod, container, namespace);
     const podScc = String(pod.metadata?.annotations?.['openshift.io/scc'] || 'restricted-v2');
     return {
@@ -13233,6 +13493,118 @@ Object.assign(CommandBar.prototype, {
       dirs,
       env,
     };
+  },
+
+  /**
+   * Add the projected service-account tree to the simulated Pod filesystem (#42):
+   * `token` (JWT-shaped bound token), `ca.crt` (kube-root-ca.crt), `namespace`
+   * (downwardAPI) and `service-ca.crt` (openshift-service-ca.crt), mounted at the
+   * `kube-api-access-*` projected volume's mountPath when the Pod spec carries it.
+   * @param {object} pod
+   * @param {string} namespace
+   * @param {object} container
+   * @param {{addDir: Function, addFile: Function}} fs
+   */
+  _appendServiceAccountFiles(pod, namespace, container, { addDir, addFile }) {
+    const automount = pod.spec?.automountServiceAccountToken !== false;
+    let mountPath = null;
+    for (const mount of container.volumeMounts || []) {
+      const volume = (pod.spec?.volumes || []).find((entry) => entry.name === mount.name);
+      const sources = volume?.projected?.sources || [];
+      if (sources.some((source) => source?.serviceAccountToken)) {
+        mountPath = String(mount.mountPath || '').replace(/\/+$/, '');
+        break;
+      }
+    }
+    // Real Pods always mount it unless automountServiceAccountToken is false;
+    // seeded/legacy Pods in the simulator keep the standard path as a fallback.
+    if (!mountPath) {
+      if (!automount) return;
+      mountPath = '/var/run/secrets/kubernetes.io/serviceaccount';
+    }
+    if (!mountPath) return;
+    const segments = this._podExecNormalizePath(mountPath).split('/').filter(Boolean);
+    let current = '';
+    for (const segment of segments) {
+      current += `/${segment}`;
+      addDir(current);
+    }
+    addFile(`${mountPath}/namespace`, `${namespace}\n`);
+    addFile(`${mountPath}/token`, this._serviceAccountToken(pod, namespace));
+    addFile(`${mountPath}/ca.crt`, this._serviceAccountCaBundle(namespace));
+    addFile(`${mountPath}/service-ca.crt`, this._serviceCaBundle(namespace));
+  },
+
+  /**
+   * A realistic bound service-account token: three base64url JWT segments whose
+   * payload carries the real 4.x bound-token claims (aud/exp/iat/iss/jti/
+   * kubernetes.io namespace/pod/serviceaccount, sub) (#42).
+   * @param {object} pod
+   * @param {string} namespace
+   * @returns {string}
+   */
+  _serviceAccountToken(pod, namespace) {
+    const now = Math.floor(Date.now() / 1000);
+    const serviceAccount = pod.spec?.serviceAccountName || pod.spec?.serviceAccount || 'default';
+    const podName = pod.metadata?.name || 'pod';
+    const uid = pod.uid || pod.metadata?.uid || this._imageDigest(podName).slice(0, 8);
+    const header = this._base64Url(
+      JSON.stringify({ alg: 'RS256', kid: this._imageDigest('sa-signing-key').slice(7, 27) })
+    );
+    const payload = this._base64Url(
+      JSON.stringify({
+        aud: ['https://kubernetes.default.svc'],
+        exp: now + 3607,
+        iat: now,
+        iss: 'https://kubernetes.default.svc',
+        jti: this._imageDigest(`${namespace}/${podName}/${now}`).slice(7, 39),
+        kubernetes: {
+          namespace,
+          node: {
+            name: pod.spec?.nodeName || 'worker-1',
+            uid: this._imageDigest(`node-${pod.spec?.nodeName || 'worker-1'}`).slice(0, 8),
+          },
+          pod: { name: podName, uid },
+          serviceaccount: {
+            name: serviceAccount,
+            uid: this._imageDigest(`${namespace}/${serviceAccount}`).slice(0, 8),
+          },
+        },
+        nbf: now,
+        sub: `system:serviceaccount:${namespace}:${serviceAccount}`,
+      })
+    );
+    const signature = this._base64Url(
+      `${this._imageDigest(`sa-sig-${namespace}/${podName}`).slice(7)}${this._imageDigest(`sa-sig2-${namespace}/${podName}`).slice(7)}${this._imageDigest(`sa-sig3-${namespace}/${podName}`).slice(7)}`
+    );
+    return `${header}.${payload}.${signature}\n`;
+  },
+
+  /** PEM-formatted bundle for the SA directory; real ConfigMap contents win. */
+  _serviceAccountCaBundle(namespace) {
+    const configMap = this.cluster?.getByName?.('ConfigMap', 'kube-root-ca.crt', namespace);
+    const data = configMap?.spec?.data || configMap?.data || {};
+    const bundle = data['ca.crt'];
+    if (typeof bundle === 'string' && bundle.includes('BEGIN CERTIFICATE'))
+      return bundle.endsWith('\n') ? bundle : `${bundle}\n`;
+    return this._fakePem('kube-root-ca', namespace);
+  },
+
+  /** `openshift-service-ca.crt` bundle for the SA directory (#42). */
+  _serviceCaBundle(namespace) {
+    const configMap = this.cluster?.getByName?.('ConfigMap', 'openshift-service-ca.crt', namespace);
+    const data = configMap?.spec?.data || configMap?.data || {};
+    const bundle = data['service-ca.crt'];
+    if (typeof bundle === 'string' && bundle.includes('BEGIN CERTIFICATE'))
+      return bundle.endsWith('\n') ? bundle : `${bundle}\n`;
+    return this._fakePem('openshift-service-ca', namespace);
+  },
+
+  /** Deterministic PEM-looking certificate (fallback when the CA ConfigMap is absent). */
+  _fakePem(label, seed) {
+    const body = `${this._imageDigest(`pem-${label}-${seed}`)}${this._imageDigest(`pem2-${label}-${seed}`)}${this._imageDigest(`pem3-${label}-${seed}`)}`;
+    const chunks = body.match(/.{1,64}/g) || [];
+    return `-----BEGIN CERTIFICATE-----\n${chunks.join('\n')}\n-----END CERTIFICATE-----\n`;
   },
 
   /** Files contributed by a Pod volume (configMap / secret / projected / downwardAPI). */
@@ -14079,6 +14451,16 @@ Object.assign(CommandBar.prototype, {
       };
       const result = ge.newApp(options);
       if (result.success === false) return this._err(result.message);
+      // #42: real `oc new-app --image=…` creates the ImageStreamTag target for
+      // the deployed image; create and print it before the workload resources.
+      if (resolvedImage) {
+        const deployment = (result.resources || []).find((entry) => entry.kind === 'Deployment');
+        const appName =
+          deployment?.metadata?.name || this._appNameFromSource(String(resolvedImage || 'app'));
+        const imageStream = this._ensureImageStream(namespace, appName, 'latest', resolvedImage);
+        if (imageStream)
+          result.resources = [imageStream, ...(result.resources || []).filter(Boolean)];
+      }
       return this._ok(
         this._formatNewAppOutput(result, {
           namespace,
@@ -14247,16 +14629,78 @@ Object.assign(CommandBar.prototype, {
       });
       if (result.success === false) return this._err(result.message);
       const buildConfig = result.buildConfig;
+      const buildConfigName = buildConfig?.metadata?.name || name;
       const lines = ['--> Creating resources ...'];
+      // #42: real `oc new-build` creates and prints the output ImageStream up
+      // front (the build later pushes the built image into it).
+      const imageStreamResource = buildConfigName
+        ? this._ensureImageStream(namespace, buildConfigName, buildConfig?.spec?.output?.to?.name)
+        : null;
+      if (imageStreamResource)
+        lines.push(
+          `    imagestream.image.openshift.io "${imageStreamResource.metadata?.name}" created`
+        );
       if (buildConfig)
-        lines.push(`    buildconfig.build.openshift.io "${buildConfig.metadata?.name}" created`);
+        lines.push(`    buildconfig.build.openshift.io "${buildConfigName}" created`);
       lines.push(
         '--> Success',
-        "    Run 'oc start-build <name>' to start a build, or 'oc logs -f bc/<name>' once scheduled."
+        `    Build scheduled, use 'oc logs -f bc/${buildConfigName}' to track its progress.`,
+        "    Run 'oc status' to view your app."
       );
       return this._ok(lines.join('\n'));
     }
     return this._err('error: oc new-build requires the game engine to be initialised');
+  },
+
+  /**
+   * Create an output ImageStream if it does not exist yet (#42). Real
+   * `oc new-build`/`oc new-app` create the ImageStreamTag target before the
+   * first build/image import runs.
+   * @param {string} namespace
+   * @param {string} name
+   * @param {string} [tagName] `name:latest` / `web:latest`
+   * @returns {object|null} the ImageStream resource
+   */
+  _ensureImageStream(namespace, name, tagName, imageRef) {
+    if (!name) return null;
+    const existing = this.cluster?.getByName?.('ImageStream', name, namespace);
+    if (existing) return existing;
+    const tag = String(tagName || 'latest').includes(':')
+      ? String(tagName).split(':').pop()
+      : 'latest';
+    const applied = this._applyObject({
+      apiVersion: 'image.openshift.io/v1',
+      kind: 'ImageStream',
+      metadata: { name, namespace, labels: { app: name } },
+      spec: {
+        lookupPolicy: { local: false },
+        tags: [
+          {
+            name: tag,
+            generation: 1,
+            ...(imageRef
+              ? { from: { kind: 'DockerImage', name: String(imageRef) }, importPolicy: {} }
+              : {}),
+          },
+        ],
+      },
+    });
+    if (applied.error) return null;
+    const imageStream = applied.resource || null;
+    // Real `oc new-app --image=…` imports the image into the ImageStreamTag.
+    if (imageStream && imageRef && typeof this.cluster?.updateImageStreamTag === 'function') {
+      try {
+        this.cluster.updateImageStreamTag(namespace, name, tag, {
+          dockerImageReference: String(imageRef),
+          image: undefined,
+          isExternal: true,
+          silent: true,
+        });
+      } catch {
+        /* status is cosmetic; keep the created object */
+      }
+    }
+    return imageStream;
   },
 
   _cmdStartBuild(tokens) {
@@ -15361,7 +15805,9 @@ Object.assign(CommandBar.prototype, {
   _debugPrompt() {
     const session = this._debugSession;
     if (!session) return '$';
-    return session.chroot ? 'sh-4.4#' : `(node/${session.name}) $`;
+    // After `chroot /host` you are in the RHCOS 9 host's bash 5.1 shell, whose
+    // root prompt is `sh-5.1#` (real `oc debug node/… -- chroot /host`) (#43).
+    return session.chroot ? 'sh-5.1#' : `(node/${session.name}) $`;
   },
 
   /** Split `cmd1; cmd2 && cmd3` into individual debug-shell commands. */
@@ -15472,7 +15918,14 @@ Object.assign(CommandBar.prototype, {
     const first = (tokens[0] || '').toLowerCase();
     if (first === 'chroot' && (tokens[1] || '') === '/host') {
       session.chroot = true;
-      return { message: '', error: false };
+      // `chroot /host <cmd>` runs <cmd> in the host shell immediately (the L20
+      // hint uses `chroot /host systemctl restart kubelet`); it must not be
+      // dropped after switching the session (#43).
+      const remainder = String(commandLine || '')
+        .replace(/^\s*chroot\s+\/host\b/i, '')
+        .trim();
+      if (!remainder) return { message: '', error: false };
+      return this._runDebugHostCommand(session, remainder);
     }
     if (first === 'chroot') {
       return {
@@ -15525,9 +15978,15 @@ Object.assign(CommandBar.prototype, {
       return this._applyDebugFilters(session.name, filters);
     }
     if (first === 'uname') {
-      return this._applyDebugFilters(
-        'Linux worker 5.14.0-427.el9.x86_64 #1 SMP x86_64 GNU/Linux',
-        filters
+      // `uname -a` reports the actual node hostname (worker-0/worker-1/…), not a
+      // generic `worker` (#43).
+      const unameFlags = tokens.slice(1).filter((token) => token.startsWith('-'));
+      const join = (line) => this._applyDebugFilters(line, filters);
+      if (unameFlags.includes('-r')) return join(NODE_KERNEL_VERSION);
+      if (unameFlags.includes('-n')) return join(session.name);
+      if (unameFlags.includes('-m')) return join('x86_64');
+      return join(
+        `Linux ${session.name} ${NODE_KERNEL_VERSION} #1 SMP PREEMPT_DYNAMIC x86_64 GNU/Linux`
       );
     }
     if (first === 'df') {
@@ -15629,30 +16088,77 @@ Object.assign(CommandBar.prototype, {
     };
   },
 
+  /**
+   * journalctl timestamp: short syslog form `Nov 04 20:00:01`, or the long
+   * header form `Wed 2026-11-04 20:00:00 UTC` (real journalctl preamble).
+   * @param {number|Date} value
+   * @param {boolean} [long]
+   */
+  _journalTimestamp(value, long = false) {
+    const date = value instanceof Date ? value : new Date(value ?? Date.now());
+    const safe = Number.isFinite(date.getTime()) ? date : new Date();
+    const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+    const months = [
+      'Jan',
+      'Feb',
+      'Mar',
+      'Apr',
+      'May',
+      'Jun',
+      'Jul',
+      'Aug',
+      'Sep',
+      'Oct',
+      'Nov',
+      'Dec',
+    ];
+    const pad = (number) => String(number).padStart(2, '0');
+    const clock = `${pad(safe.getUTCHours())}:${pad(safe.getUTCMinutes())}:${pad(safe.getUTCSeconds())}`;
+    if (long) {
+      return `${days[safe.getUTCDay()]} ${safe.getUTCFullYear()}-${pad(safe.getUTCMonth() + 1)}-${pad(safe.getUTCDate())} ${clock} UTC`;
+    }
+    return `${months[safe.getUTCMonth()]} ${pad(safe.getUTCDate())} ${clock}`;
+  },
+
+  /** kubelet's Go-log prefix (`I1104 20:00:05.301`). */
+  _klogTimestamp(value) {
+    const date = value instanceof Date ? value : new Date(value ?? Date.now());
+    const safe = Number.isFinite(date.getTime()) ? date : new Date();
+    const pad = (number) => String(number).padStart(2, '0');
+    return `I${pad(safe.getUTCMonth() + 1)}${pad(safe.getUTCDate())} ${pad(safe.getUTCHours())}:${pad(safe.getUTCMinutes())}:${pad(safe.getUTCSeconds())}.${String(safe.getUTCMilliseconds()).padStart(3, '0')}`;
+  },
+
   /** `journalctl -u kubelet …` on the host. */
   _debugJournalctl(session, tokens, filters = []) {
-    const joined = tokens.join(' ');
-    if (!/-u\s+kubelet|--unit[= ]kubelet/i.test(joined)) {
+    // Real journalctl: `-u <unit>` filters to that unit; an unknown unit prints
+    // `-- No entries --`. With no `-u` the whole journal is shown.
+    const unitMatch = tokens.join(' ').match(/(?:-u\s+|--unit[= ])([^\s|]+)/i);
+    const unit = unitMatch ? unitMatch[1].replace(/\.service$/, '') : null;
+    if (unit && unit !== 'kubelet') {
       return { message: '-- No entries --', error: false };
     }
     const node = this._findDebugNode(session.name);
+    const hostname = session?.name || 'worker-1';
     const nodeReady = Boolean(
       node &&
       (node.status?.phase || 'Running') !== 'NotReady' &&
       (typeof node.isConditionTrue === 'function' ? node.isConditionTrue('Ready') : true)
     );
+    const now = Date.now();
+    const begin = now - 10 * 60 * 1000;
+    const header = `-- Logs begin at ${this._journalTimestamp(begin, true)}, end at ${this._journalTimestamp(now, true)}. --`;
     const lines = nodeReady
       ? [
-          '-- Logs begin at Mon 2026-11-04 20:00:00 UTC, end at Mon 2026-11-04 20:10:00 UTC. --',
-          'Nov 04 20:00:01 worker systemd[1]: Starting kubelet: The Kubernetes Node Agent...',
-          'Nov 04 20:00:02 worker systemd[1]: Started kubelet: The Kubernetes Node Agent.',
-          'Nov 04 20:00:05 worker kubelet[2841]: I1104 20:00:05.301 kubelet.go:2457] "Node status is Ready"',
+          header,
+          `${this._journalTimestamp(begin + 1000)} ${hostname} systemd[1]: Starting kubelet: The Kubernetes Node Agent...`,
+          `${this._journalTimestamp(begin + 2000)} ${hostname} systemd[1]: Started kubelet: The Kubernetes Node Agent.`,
+          `${this._journalTimestamp(begin + 5000)} ${hostname} kubelet[2841]: ${this._klogTimestamp(begin + 5000)} kubelet.go:2457] "Node status is Ready"`,
         ]
       : [
-          '-- Logs begin at Mon 2026-11-04 20:00:00 UTC, end at Mon 2026-11-04 20:10:00 UTC. --',
-          'Nov 04 20:08:10 worker systemd[1]: kubelet.service: Main process exited, code=exited, status=1/FAILURE',
-          "Nov 04 20:08:10 worker systemd[1]: kubelet.service: Failed with result 'exit-code'.",
-          'Nov 04 20:08:10 worker systemd[1]: Failed to start kubelet: The Kubernetes Node Agent.',
+          header,
+          `${this._journalTimestamp(now - 120000)} ${hostname} systemd[1]: kubelet.service: Main process exited, code=exited, status=1/FAILURE`,
+          `${this._journalTimestamp(now - 120000)} ${hostname} systemd[1]: kubelet.service: Failed with result 'exit-code'.`,
+          `${this._journalTimestamp(now - 120000)} ${hostname} systemd[1]: Failed to start kubelet: The Kubernetes Node Agent.`,
         ];
     return this._applyDebugFilters(lines.join('\n'), filters);
   },

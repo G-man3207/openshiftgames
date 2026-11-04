@@ -985,12 +985,13 @@ await runSection('sandbox', async () => {
   // The seeded platform baseline grew when the real OCP 4.22 default SCC set
   // (14 objects) replaced the old 4-object approximation, again when the OLM
   // software catalog (PackageManifests + global-operators OperatorGroup) and
-  // the default self-provisioner RBAC objects were seeded, and again with the
+  // the default self-provisioner RBAC objects were seeded, again with the
   // 1.1.8 platform-detail seeds (default SAs/RoleBindings/dockercfg secrets,
-  // oauth pods, alerting rules + Alertmanager). The bound is a sanity envelope,
-  // not an exact count.
+  // oauth pods, alerting rules + Alertmanager), and again with the 1.3.0
+  // namespace bootstrap (kube-root-ca.crt / openshift-service-ca.crt in every
+  // namespace, #43). The bound is a sanity envelope, not an exact count.
   assert(
-    state.resourceCount >= 45 && state.resourceCount <= 100,
+    state.resourceCount >= 45 && state.resourceCount <= 125,
     'sandbox: seeded platform resources',
     `got ${state.resourceCount}`
   );
@@ -2182,13 +2183,21 @@ spec:
     `oc create quota demo-quota --hard=pods=20,requests.cpu=4 -n ${project}`,
     /resourcequota\/demo-quota created/i
   );
-  await expectCmd(
-    'cli: oc create limitrange',
+  // #38: real oc (and kubectl) have no `create limitrange` subcommand, so the
+  // simulator must reject it with the unknown-subcommand error; a LimitRange is
+  // created declaratively with `oc apply -f`.
+  await expectCmdError(
+    'cli: oc create limitrange is rejected like real oc (#38)',
     `oc create limitrange demo-limit --default=cpu=500m,memory=512Mi -n ${project}`,
-    /limitrange\/demo-limit created/i
+    /unknown command ["']?limitrange/i
+  );
+  await expectCmd(
+    'cli: oc apply a LimitRange from YAML',
+    `oc apply -f examples/limitrange.yaml -n ${project}`,
+    /limitrange.*(created|configured)/i
   );
   await expectCmd('cli: oc get quota', `oc get quota -n ${project}`, /demo-quota/);
-  await expectCmd('cli: oc get limitrange', `oc get limitrange -n ${project}`, /demo-limit/);
+  await expectCmd('cli: oc get limitrange', `oc get limitrange -n ${project}`, /resource-limits/);
   await expectCmd(
     'cli: oc create clusterquota',
     'oc create clusterquota team-quota --project-label-selector=team=dev --hard=pods=10',
@@ -2297,7 +2306,11 @@ spec:
       /Login successful/i
     );
     await expectCmd('auth: oc whoami admin', 'oc whoami', /^admin/im);
-    await expectCmd('auth: login back as kubeadmin', 'oc login -u kubeadmin', /Login successful/i);
+    await expectCmd(
+      'auth: login back as kubeadmin',
+      'oc login -u kubeadmin -p kubeadmin',
+      /Login successful/i
+    );
     await expectCmd(
       'auth: htpasswd creates alice',
       'htpasswd -c htpasswd alice Passw0rd',
@@ -2397,7 +2410,7 @@ spec:
     await expectCmd('auth: logout', 'oc logout', /logged .* out|logged out/i);
     await expectCmd(
       'auth: login back as kubeadmin',
-      'oc login -u kubeadmin',
+      'oc login -u kubeadmin -p kubeadmin',
       /logged in|Login successful/i
     );
   } else {
@@ -2789,9 +2802,9 @@ spec:
   );
   assert(sccGrant.granted, 'cli: add-scc-to-user grants anyuid', JSON.stringify(sccGrant));
   const quota = await findResource('ResourceQuota', 'demo-quota', project);
-  const limitRange = await findResource('LimitRange', 'demo-limit', project);
+  const limitRange = await findResource('LimitRange', 'resource-limits', project);
   assert(!!quota, 'cli: ResourceQuota demo-quota exists');
-  assert(!!limitRange, 'cli: LimitRange demo-limit exists');
+  assert(!!limitRange, 'cli: LimitRange resource-limits exists (#38 YAML flow)');
   const crq = await findResource('ClusterResourceQuota', 'team-quota');
   assert(!!crq, 'cli: ClusterResourceQuota team-quota exists');
   const buildFinal = await evaluate(() => {
@@ -3225,7 +3238,7 @@ await runSection('campaign', async () => {
 
   await expectCmd(
     'campaign L1: oc login',
-    'oc login -u kubeadmin',
+    'oc login -u kubeadmin -p kubeadmin',
     /logged in|Login successful|kubeadmin/i
   );
   await expectCmd(
@@ -3952,7 +3965,9 @@ await runSection('followup', async () => {
     /Login successful|logged in/i,
     { wait: 300 }
   );
-  await evaluate(() => window.game.app.commandBar.executeCommand('oc login -u kubeadmin'));
+  await evaluate(() =>
+    window.game.app.commandBar.executeCommand('oc login -u kubeadmin -p kubeadmin')
+  );
   await expectCmd(
     'followup: oc extract secret to virtual FS',
     'oc extract secret/htpasswd-secret -n openshift-config --to /tmp --confirm',
@@ -3982,7 +3997,9 @@ await runSection('followup', async () => {
     'oc login -u rotate-user -p NewPassw0rd!',
     /Login successful|logged in/i
   );
-  await evaluate(() => window.game.app.commandBar.executeCommand('oc login -u kubeadmin'));
+  await evaluate(() =>
+    window.game.app.commandBar.executeCommand('oc login -u kubeadmin -p kubeadmin')
+  );
 
   // project.config singleton + new project inheriting the configured template.
   await expectCmd(
@@ -4897,11 +4914,10 @@ await runSection('qa-incidents', async () => {
     300
   );
   assert(!step.error, 'qa-incidents: lab 6 create quota team-quota', step.message);
-  step = await runCmd(
-    'oc create limitrange team-limits --default=cpu=500m,memory=512Mi --default-request=cpu=100m,memory=128Mi --max=cpu=2,memory=4Gi',
-    300
-  );
-  assert(!step.error, 'qa-incidents: lab 6 create LimitRange', step.message);
+  // #38: there is no `oc create limitrange` subcommand — the LimitRange comes
+  // from the shipped YAML manifest, exactly as the lab hint now teaches.
+  step = await runCmd('oc apply -f examples/limitrange.yaml -n quota-lab', 300);
+  assert(!step.error, 'qa-incidents: lab 6 apply the LimitRange YAML (#38)', step.message);
   step = await runCmd(
     'oc create deployment api --image=quay.io/openshift/origin-hello-openshift:latest -n quota-lab',
     300
@@ -4993,10 +5009,21 @@ await runSection('qa-incidents', async () => {
   assert(Boolean(broken), 'qa-incidents: one node is NotReady', JSON.stringify(nodeList));
   const brokenName = broken?.name;
   nodesText = await runCmd('oc get nodes', 250);
+  // #43: the real node lifecycle controller does not cordon a NotReady node —
+  // it taints it (unreachable/not-ready) and the STATUS column stays `NotReady`.
+  const brokenNode = await findResource('Node', brokenName);
+  const brokenTaints = (brokenNode?.spec?.taints || []).map((taint) => String(taint.key));
   assert(
-    new RegExp(`${brokenName}\\s+NotReady,SchedulingDisabled\\s`).test(nodesText.message),
-    'qa-incidents: cordoned NotReady node shows NotReady,SchedulingDisabled',
+    new RegExp(`${brokenName}\\s+NotReady\\s`).test(nodesText.message) &&
+      !new RegExp(`${brokenName}\\s+NotReady,SchedulingDisabled`).test(nodesText.message),
+    'qa-incidents: NotReady node STATUS is NotReady without SchedulingDisabled (#43)',
     nodesText.message
+  );
+  assert(
+    brokenTaints.some((key) => /node\.kubernetes\.io\/unreachable/.test(key)) &&
+      brokenTaints.some((key) => /node\.kubernetes\.io\/not-ready/.test(key)),
+    'qa-incidents: NotReady node carries the real unreachable + not-ready taints (#43)',
+    JSON.stringify(brokenTaints)
   );
 
   step = await runCmd(`oc debug node/${brokenName}`, 250);
@@ -5294,9 +5321,13 @@ await runSection('qa-scenarios', async () => {
   await closeOverlays();
   await command('oc project ops-lab');
   const l3Container = await deploymentContainer('web-app', 'ops-lab');
+  // #42-3: the crash cause is the env var alone; the image stays the neutral
+  // origin-hello one so the log cannot blame the image.
   assert(
-    !!l3Container && /v2-bad-config/.test(l3Container.image || ''),
-    'scenarios: L3 broken Deployment uses its own bad image (not the healthy origin-hello image)',
+    !!l3Container &&
+      /origin-hello-openshift/.test(l3Container.image || '') &&
+      !/v2-bad-config/.test(l3Container.image || ''),
+    'scenarios: L3 broken Deployment keeps a neutral image (#42-3)',
     l3Container?.image
   );
   assert(
@@ -5619,7 +5650,7 @@ await runSection('qa-scenarios', async () => {
   );
   const quotaEventMatch = quotaModel.replicaSetEvents
     .map((message) =>
-      /exceeded quota: compute-quota, requested: pods=1, used: pods=(\d+), limited: (\d+)/.exec(
+      /exceeded quota: compute-quota, requested: pods=1, used: pods=(\d+), limited: pods=(\d+)/.exec(
         message
       )
     )
@@ -5675,10 +5706,12 @@ await runSection('qa-scenarios', async () => {
     'scenarios: L20 incident seeds the faulty APP_MODE into the live Deployment',
     JSON.stringify(l20Container?.env)
   );
+  // #42-3: the L20 crash seed leaves the image neutral (origin-hello from
+  // manifests/deployment.yaml) and only the invalid APP_MODE causes the crash.
   assert(
-    /v2-bad-config/.test(l20Container?.image || '') &&
-      !/origin-hello-openshift/.test(l20Container?.image || ''),
-    'scenarios: L20 broken Deployment image is seeded and is not L1s healthy origin-hello image',
+    /origin-hello-openshift/.test(l20Container?.image || '') &&
+      !/v2-bad-config/.test(l20Container?.image || ''),
+    'scenarios: L20 broken Deployment keeps the neutral image (#42-3)',
     l20Container?.image
   );
   const l20Unrelated = await command('oc set env deployment/webapp FOO=bar -n prod-platform');
@@ -7421,10 +7454,18 @@ await runSection('qa-openshift', async () => {
     Boolean(kubeadminSecret?.spec?.data?.kubeadmin),
     'openshift: kube-system/kubeadmin Secret seeds the kubeadmin password'
   );
+  // #42-4: real oc prompts for the kubeadmin password instead of logging in
+  // silently; the next terminal line is the (un-echoed) password.
   result = await runCmd('oc login -u kubeadmin');
   assert(
+    !result.error && /Password:/i.test(result.message) && !/Login successful/.test(result.message),
+    'openshift: oc login -u kubeadmin prompts for the password (#42-4)',
+    result.message.slice(0, 160)
+  );
+  result = await runCmd('kubeadmin');
+  assert(
     !result.error && /Login successful/.test(result.message),
-    'openshift: passwordless kubeadmin login still works',
+    'openshift: typing the kubeadmin password at the prompt logs in (#42-4)',
     result.message.slice(0, 160)
   );
   result = await runCmd('oc login -u kubeadmin -p wrong-password');
@@ -7537,8 +7578,10 @@ await runSection('qa-openshift', async () => {
     JSON.stringify(clusterQuota?.status?.namespaces || null)
   );
   await runCmd(`oc project ${project}`);
+  // #43: the requester annotation belongs on the namespace/Project, not on the
+  // default ServiceAccount; the escaped-dot jsonpath still has to resolve it.
   result = await runCmd(
-    "oc get sa default -o jsonpath='{.metadata.annotations.openshift\\.io/requester}'"
+    `oc get project ${project} -o jsonpath='{.metadata.annotations.openshift\\.io/requester}'`
   );
   assert(
     !result.error && result.message.trim() === 'kubeadmin',
@@ -7617,7 +7660,7 @@ await runSection('qa-openshift', async () => {
     'openshift: first login creates the Identity',
     JSON.stringify(aliceIdentity)
   );
-  await runCmd('oc login -u kubeadmin');
+  await runCmd('oc login -u kubeadmin -p kubeadmin');
   result = await runCmd('oc get rolebinding -n openshift-qa -o name');
   assert(!result.error, 'openshift: session restored to kubeadmin', result.message);
 
@@ -7663,7 +7706,7 @@ await runSection('qa-openshift', async () => {
   );
   // Rotating the htpasswd Secret triggers the same rollout wait that lab 11
   // teaches (the authentication operator watches the referenced Secret).
-  await runCmd('oc login -u kubeadmin');
+  await runCmd('oc login -u kubeadmin -p kubeadmin');
   await runCmd('htpasswd -B -b htpasswd carol carolpass2');
   await runCmd('oc set data secret/htpass-secret --from-file=htpasswd -n openshift-config');
   result = await runCmd('oc login -u carol -p carolpass2');
@@ -7965,7 +8008,7 @@ spec:
     objectiveByLabel(results, /Log in as alice/i)?.completed === true,
     'qa-grading #30c: login objective ticks on a successful login'
   );
-  command = await runCmd('oc login -u kubeadmin', 320);
+  command = await runCmd('oc login -u kubeadmin -p kubeadmin', 320);
   assert(!command.error, 'qa-grading #30c: log back in as kubeadmin', command.message);
   results = await objectiveResults();
   assert(
@@ -8007,7 +8050,7 @@ spec:
   command = await runCmd('oc login -u alice -p openshift', 500);
   assert(!command.error, 'qa-grading #30e: L13 log in as alice', command.message);
   await runCmd('oc whoami', 120);
-  command = await runCmd('oc login -u kubeadmin', 320);
+  command = await runCmd('oc login -u kubeadmin -p kubeadmin', 320);
   assert(!command.error, 'qa-grading #30e: L13 switch back to kubeadmin', command.message);
   const loginEvidence = await evaluate(() => {
     const def = window.game.app.modeInstance?.currentLevelDef;
@@ -8458,7 +8501,9 @@ await runSection('qa-coverage', async () => {
   const checkProgress = await evaluate(
     () => document.getElementById('handover-checklist-progress')?.textContent || ''
   );
-  assert(/1\/6/.test(checkProgress), 'coverage: checklist progress counter updates', checkProgress);
+  // #40: the handover checklist grew to 7 items (full cluster + Sandbox scope
+  // note + the five redo levels).
+  assert(/1\/7/.test(checkProgress), 'coverage: checklist progress counter updates', checkProgress);
 
   await evaluate(() => document.getElementById('handover-menu')?.click());
   const handoverClosed = await evaluate(() => ({
@@ -8619,7 +8664,7 @@ spec:
     'coverage: L13 alice can log in with the initial HTPasswd password',
     aliceInitialLogin.message.slice(0, 220)
   );
-  await runCmd('oc login -u kubeadmin');
+  await runCmd('oc login -u kubeadmin -p kubeadmin');
   await runCmd('oc extract secret/htpass-secret -n openshift-config --to /tmp --confirm');
   await runCmd(`htpasswd -bB /tmp/htpasswd alice 'NewPassw0rd!'`);
   await runCmd(
@@ -8656,7 +8701,7 @@ spec:
     'coverage: L13 password objective completes after rotation + login with the new password'
   );
 
-  await runCmd('oc login -u kubeadmin');
+  await runCmd('oc login -u kubeadmin -p kubeadmin');
   await expectCmd('coverage: oc delete user bob', 'oc delete user bob', /deleted/i);
   const afterUserDelete = await evaluate(() =>
     (window.game.app.modeInstance.objectiveProgress || [])
