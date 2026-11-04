@@ -39,8 +39,10 @@ export class Minimap {
   constructor() {
     this.container = null;
     this.canvas = null;
+    this.toggleButton = null;
     this.ctx = null;
     this.visible = true;
+    this._collapsed = false;
     this.viewport = { x: 0, y: 0, w: 1, h: 1 };
     this.resourcePositions = new Map();
     this.incidentResources = new Set();
@@ -54,6 +56,8 @@ export class Minimap {
   }
 
   init() {
+    // Every run builds a fresh card: start expanded, like the DOM markup below.
+    this._collapsed = false;
     this.container = document.createElement('div');
     this.container.id = 'minimap';
     this.container.className = 'fixed bottom-4 right-4 z-20';
@@ -63,15 +67,17 @@ export class Minimap {
     document.body.appendChild(this.container);
 
     this.canvas = document.getElementById('minimap-canvas');
+    this.toggleButton = document.getElementById('minimap-toggle');
     this.ctx = this.canvas.getContext('2d');
     this._setupCanvas();
     this._bindEvents();
+    this._applyCollapsed();
     this._startAnimation();
   }
 
   _buildHTML() {
     return `
-      <div class="backdrop-blur-xl bg-white/5 border border-white/10 rounded-lg overflow-hidden shadow-xl" style="width: ${MINIMAP_WIDTH}px; height: 140px;">
+      <div class="backdrop-blur-xl bg-white/5 border border-white/10 rounded-lg overflow-hidden shadow-xl" style="width: ${MINIMAP_WIDTH}px;">
         <div class="flex items-center justify-between px-2 py-1 border-b border-white/5">
           <span class="text-white/30 text-[10px] font-mono">Cluster Map</span>
           <button id="minimap-toggle" class="text-white/20 hover:text-white/40 text-[10px] transition-colors" type="button" aria-label="Collapse cluster map" aria-expanded="true">-</button>
@@ -94,21 +100,7 @@ export class Minimap {
     this.canvas.addEventListener('mouseup', () => this._onMouseUp());
     this.canvas.addEventListener('mouseleave', () => this._onMouseUp());
 
-    document.getElementById('minimap-toggle').addEventListener('click', () => {
-      const body = this.canvas;
-      if (body.style.display === 'none') {
-        body.style.display = '';
-        this.container.querySelector('div').style.height = '';
-        document.getElementById('minimap-toggle').textContent = '-';
-        document.getElementById('minimap-toggle').setAttribute('aria-label', 'Collapse cluster map');
-        document.getElementById('minimap-toggle').setAttribute('aria-expanded', 'true');
-      } else {
-        body.style.display = 'none';
-        document.getElementById('minimap-toggle').textContent = '+';
-        document.getElementById('minimap-toggle').setAttribute('aria-label', 'Expand cluster map');
-        document.getElementById('minimap-toggle').setAttribute('aria-expanded', 'false');
-      }
-    });
+    this.toggleButton.addEventListener('click', () => this._toggleCollapsed());
 
     const engine = window.game?.engine;
     if (engine) {
@@ -116,6 +108,25 @@ export class Minimap {
       engine.on('incident:created', this._boundIncident);
       engine.on('incident:resolved', this._boundResolve);
       engine.on('viewport:change', this._boundViewport);
+    }
+  }
+
+  _toggleCollapsed() {
+    this._collapsed = !this._collapsed;
+    this._applyCollapsed();
+  }
+
+  /**
+   * Single source of truth for the collapsed state: the card is content-sized
+   * (no fixed inline height), so hiding the canvas collapses it to the header
+   * on the very first click. Text/aria are kept in sync in one place.
+   */
+  _applyCollapsed() {
+    if (this.canvas) this.canvas.style.display = this._collapsed ? 'none' : '';
+    if (this.toggleButton) {
+      this.toggleButton.textContent = this._collapsed ? '+' : '-';
+      this.toggleButton.setAttribute('aria-label', this._collapsed ? 'Expand cluster map' : 'Collapse cluster map');
+      this.toggleButton.setAttribute('aria-expanded', this._collapsed ? 'false' : 'true');
     }
   }
 

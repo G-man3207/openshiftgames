@@ -4,6 +4,35 @@ All notable changes to OpenShift Games are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 aims to follow [Semantic Versioning](https://semver.org/).
 
+## [1.1.4] — 2026-11-04
+
+Two interaction fixes: the cluster map now collapses on the first click, and restarting a level
+(or retrying / advancing) lays the cluster out exactly like a fresh start.
+
+### Fixed
+
+- **The cluster map collapses on the first click.** The minimap card carried a fixed 140px inline
+  height while the collapse handler only hid its canvas, so the first click removed the dots but
+  left an empty 180×140 panel behind; only a later expand/collapse cycle shrank it. The card is now
+  content-sized, and a single `_collapsed` state drives canvas visibility plus the `-`/`+` glyph,
+  `aria-label` and `aria-expanded` together, so the very first click shrinks it to the header. This
+  also removes the pre-existing 2px canvas clipping in the expanded card (180×142).
+- **Restarting a level auto-aligns the cluster again.** Fresh launches ran the renderer's
+  registry-derived auto-align after the mode seeded the cluster, but restart/retry/next-level
+  rebuilt the cluster through `cluster.clear()` without it: the ~56 seeded OpenShift resources
+  stacked on one random point and the level resources landed on a ring, so users had to press Auto
+  Align by hand to recover the original layout. The post-launch layout is now a shared
+  `_layoutClusterAfterModeStart()` step used by fresh launch, campaign/chaos/challenge restart, the
+  game-over Retry action and Next Level; it re-creates any missing meshes, auto-aligns, refits the
+  camera, syncs connections and records the final positions. On campaign level 1 the restarted
+  layout matches a fresh launch exactly (58/58 unique positions, position-multiset delta 0.0000,
+  camera within 0.002 units).
+- Added a `regressions` section to `scripts/browser-test.mjs`
+  (`node scripts/browser-test.mjs --only=regressions`) covering both: the first-click collapse and
+  toggle state/anchoring, plus restart/next-level layout fidelity against the fresh-launch layout.
+
+---
+
 ## [1.1.3] — 2026-11-04
 
 Laptop-layout release: the open `oc` terminal dock and the view toolbar no longer bury the

@@ -8,7 +8,7 @@
  * (or point PUPPETEER_CORE_DIR at any directory containing node_modules/puppeteer-core)
  *
  * Usage:
- *   node scripts/browser-test.mjs [--only=menu,tutorial,sandbox,cli,files,ui,campaign,challenges,exam,draw,responsive,shots]
+ *   node scripts/browser-test.mjs [--only=menu,tutorial,sandbox,cli,files,ui,campaign,challenges,exam,draw,responsive,regressions,shots]
  *                                [--no-shots] [--headful]
  *
  * Serves the repo on a random localhost port, drives headless Chrome with
@@ -1612,6 +1612,178 @@ objects:
   await expectCmd('followup: create deployment for edit note', 'oc create deployment editnote --image=nginx:1.0 -n followup-check', /created/i);
   await expectCmd('followup: oc edit mentions $EDITOR / vi', 'oc edit deployment/editnote -n followup-check', /(vi\b|vim|\$EDITOR)/i);
   await expectCmd('followup: oc edit project.config opens editor', 'oc edit project.config.openshift.io/cluster', /manifest editor/i);
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 10b. REGRESSIONS (cluster map collapse; restart auto-align)
+// ═══════════════════════════════════════════════════════════════════════════
+// These two are user-reported bugs that the per-feature sections above do not
+// cover:
+//   1. The cluster map's first collapse click used to hide only the canvas and
+//      leave the fixed-height empty card behind; only a later expand/collapse
+//      cycle shrank it. The first click must collapse the card immediately.
+//   2. Restarting a level rebuilds the cluster from scratch, and that rebuild
+//      used to skip the post-launch layout step, stacking 50+ seeded resources
+//      at one random point. Restart (and next level) must auto-align exactly
+//      like a fresh launch — no manual Auto Align required.
+await runSection('regressions', async () => {
+  // ── 1. Cluster map collapses on the first click ──────────────────────────
+  await bootSandbox();
+  const minimap = () =>
+    evaluate(() => {
+      const container = document.getElementById('minimap');
+      if (!container) return { missing: true };
+      const card = container.querySelector(':scope > div');
+      const canvas = document.getElementById('minimap-canvas');
+      const toggle = document.getElementById('minimap-toggle');
+      const rect = container.getBoundingClientRect();
+      const cardRect = card?.getBoundingClientRect();
+      return {
+        containerBottom: rect.bottom,
+        containerRight: rect.right,
+        cardH: cardRect?.height,
+        canvasDisplay: canvas ? getComputedStyle(canvas).display : 'missing',
+        toggleText: toggle?.textContent,
+        ariaExpanded: toggle?.getAttribute('aria-expanded'),
+        ids: document.querySelectorAll('#minimap-toggle').length,
+      };
+    });
+
+  const expanded = await minimap();
+  assert(!expanded.missing && expanded.cardH > 120, 'regressions: cluster map starts expanded', JSON.stringify(expanded));
+  await evaluate(() => document.getElementById('minimap-toggle')?.click());
+  await sleep(250);
+  const collapsedFirst = await minimap();
+  assert(
+    collapsedFirst.canvasDisplay === 'none' && collapsedFirst.cardH > 16 && collapsedFirst.cardH < 60,
+    'regressions: first collapse click shrinks the cluster map immediately',
+    JSON.stringify(collapsedFirst),
+  );
+  assert(
+    collapsedFirst.toggleText === '+' && collapsedFirst.ariaExpanded === 'false',
+    'regressions: collapse click updates the cluster map toggle state',
+    JSON.stringify({ text: collapsedFirst.toggleText, ariaExpanded: collapsedFirst.ariaExpanded }),
+  );
+  assert(
+    Math.abs(collapsedFirst.containerBottom - expanded.containerBottom) < 1 &&
+      Math.abs(collapsedFirst.containerRight - expanded.containerRight) < 1,
+    'regressions: collapsed cluster map stays anchored bottom-right',
+    JSON.stringify({ before: [expanded.containerBottom, expanded.containerRight], after: [collapsedFirst.containerBottom, collapsedFirst.containerRight] }),
+  );
+  assert(collapsedFirst.ids === 1, 'regressions: cluster map keeps a single toggle', `got ${collapsedFirst.ids}`);
+  const minimapCollapsedShot = await shot('regressions-minimap-collapsed.png');
+  if (minimapCollapsedShot) shotsTaken.push(minimapCollapsedShot);
+
+  await evaluate(() => document.getElementById('minimap-toggle')?.click());
+  await sleep(250);
+  const expandedAgain = await minimap();
+  assert(
+    expandedAgain.canvasDisplay === 'block' && expandedAgain.cardH > 120 && expandedAgain.toggleText === '-' && expandedAgain.ariaExpanded === 'true',
+    'regressions: cluster map expands again with the canvas visible',
+    JSON.stringify(expandedAgain),
+  );
+  await evaluate(() => document.getElementById('minimap-toggle')?.click());
+  await sleep(250);
+  const collapsedSecond = await minimap();
+  assert(
+    collapsedSecond.cardH > 16 && collapsedSecond.cardH < 60,
+    'regressions: second collapse still shrinks the cluster map',
+    JSON.stringify(collapsedSecond),
+  );
+
+  // ── 2. Restart level auto-aligns the rebuilt cluster ─────────────────────
+  const readScene = () =>
+    evaluate(() => {
+      const app = window.game?.app;
+      const renderer = app?.renderer;
+      if (!renderer?.camera) return null;
+      const positions = [];
+      for (const group of renderer.resourceMeshes.values()) {
+        positions.push([
+          Math.round(group.position.x * 100) / 100,
+          Math.round(group.position.y * 100) / 100,
+          Math.round(group.position.z * 100) / 100,
+        ]);
+      }
+      positions.sort((a, b) => a[0] - b[0] || a[2] - b[2] || a[1] - b[1]);
+      const counts = new Map();
+      for (const position of positions) {
+        const key = position.join(',');
+        counts.set(key, (counts.get(key) || 0) + 1);
+      }
+      return {
+        count: positions.length,
+        unique: counts.size,
+        // Controller-created children (ReplicaSet/Pods) can legitimately share a
+        // spawn slot on a genuine fresh launch; the restart bug stacked 50+ seeds.
+        maxShared: Math.max(0, ...counts.values()),
+        signature: positions.map((p) => p.join(',')).join('|'),
+        camera: [
+          Math.round(renderer.camera.position.x * 100) / 100,
+          Math.round(renderer.camera.position.y * 100) / 100,
+          Math.round(renderer.camera.position.z * 100) / 100,
+        ],
+        menuMode: Boolean(renderer.menuMode),
+      };
+    });
+  const cameraDistance = (a, b) => Math.hypot((a?.[0] ?? 0) - (b?.[0] ?? 0), (a?.[1] ?? 0) - (b?.[1] ?? 0), (a?.[2] ?? 0) - (b?.[2] ?? 0));
+
+  await bootCampaign(1);
+  await sleep(1800); // let the launch layout + camera fit finish
+  const launchScene = await readScene();
+  assert(
+    launchScene && launchScene.count > 20 && launchScene.unique === launchScene.count && !launchScene.menuMode,
+    'regressions: fresh campaign level starts auto-aligned',
+    JSON.stringify({ count: launchScene?.count, unique: launchScene?.unique }),
+  );
+
+  // Drive the real pause-card button, not the internal method.
+  await evaluate(() => window.game.app.showPause());
+  await sleep(400);
+  assert(
+    await evaluate(() => document.getElementById('pause-overlay')?.classList.contains('active') === true),
+    'regressions: pause card opens before restart',
+  );
+  await evaluate(() => document.getElementById('pause-restart')?.click());
+  await sleep(3200); // 600ms layout + 820ms camera fit with headroom
+  const restartScene = await readScene();
+  const stableScene = await readScene();
+  assert(restartScene?.count === launchScene?.count, 'regressions: restart keeps every cluster resource rendered', `${launchScene?.count} -> ${restartScene?.count}`);
+  assert(
+    restartScene && restartScene.unique === restartScene.count,
+    'regressions: restart auto-aligns the rebuilt cluster (no stacked resources)',
+    JSON.stringify({ count: restartScene?.count, unique: restartScene?.unique }),
+  );
+  assert(
+    restartScene?.signature === launchScene?.signature,
+    'regressions: restarted layout matches the fresh-launch layout',
+    `camera delta ${cameraDistance(restartScene?.camera, launchScene?.camera)}`,
+  );
+  assert(
+    cameraDistance(restartScene?.camera, launchScene?.camera) < 2,
+    'regressions: restart refits the camera to the fresh-launch view',
+    JSON.stringify({ launch: launchScene?.camera, restart: restartScene?.camera }),
+  );
+  assert(stableScene?.signature === restartScene?.signature, 'regressions: restarted layout settles and stays put');
+  const restartShot = await shot('regressions-campaign-restart.png');
+  if (restartShot) shotsTaken.push(restartShot);
+
+  // ── 3. "Next Level" uses the same post-launch layout ─────────────────────
+  await evaluate(() => {
+    const app = window.game.app;
+    app.scoringEngine.progress.campaignProgress[1] = { completed: true, stars: 3 };
+    document.getElementById('level-complete-next')?.click();
+  });
+  const level2Started = await waitFor(() => evaluate(() => window.game.app.modeInstance?.currentLevel === 2), 10000);
+  assert(level2Started, 'regressions: next level starts from the level-complete action');
+  await sleep(2200); // let the next level's layout + camera fit finish
+  const level2Scene = await readScene();
+  assert(
+    level2Scene && level2Scene.count > 20 && level2Scene.maxShared <= 4,
+    'regressions: next level starts auto-aligned (no stacked pile)',
+    JSON.stringify({ count: level2Scene?.count, unique: level2Scene?.unique, maxShared: level2Scene?.maxShared }),
+  );
+  await returnToMenu();
 });
 
 // ═══════════════════════════════════════════════════════════════════════════

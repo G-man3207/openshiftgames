@@ -1000,6 +1000,9 @@
           if (advanced === false) { this.returnToMenu(); return; }
           this._challengeTimedOut = false;
           this._initObjectivesPanel(this.currentMode);
+          // The next level starts from a cleared/re-seeded cluster, so lay it out
+          // like a fresh launch before the coach marks target resources again.
+          this._layoutClusterAfterModeStart();
           this._startLevelTutorialFromMode();
         });
         document.getElementById('game-over-menu')?.addEventListener('click', () => {
@@ -1016,7 +1019,10 @@
           if (this.modeInstance && typeof this.modeInstance.restart === 'function') {
             this.modeInstance.restart();
             this._initObjectivesPanel(this.currentMode);
+            this._layoutClusterAfterModeStart();
           } else {
+            // startMode() for sandbox runs launchGame(), which lays the cluster out
+            // itself; campaign/challenge only open their level select (no live run).
             this.startMode(this.currentMode);
           }
         });
@@ -1456,6 +1462,9 @@
         if (this.modeInstance && typeof this.modeInstance.restart === 'function') {
           this.modeInstance.restart();
           this._initObjectivesPanel(this.currentMode);
+          // Restarting clears and re-seeds the cluster: lay it out again exactly
+          // like a fresh launch instead of leaving the seeded pile stacked.
+          this._layoutClusterAfterModeStart();
           this._startLevelTutorialFromMode();
         } else {
           this.startMode(this.currentMode);
@@ -2420,22 +2429,7 @@
         try { skipTutorial = new URLSearchParams(window.location.search).get('tutorial') === '0'; } catch {}
         if (!skipTutorial) this.showTutorial(mode);
 
-        // Lay out everything present after mode setup: seeded OpenShift defaults plus the
-        // mode's starting resources. Uses the renderer's registry-derived tiers and the
-        // shared RelationGraph so Route→Service→Pod / Build→ImageStream edges are visible.
-        try {
-          for (const resource of this.engine.cluster.getAllResources?.() || []) {
-            const uid = resource.uid;
-            if (!uid || this.renderer.resourceMeshes.has(uid)) continue;
-            const pos = this.placedPositions.get(uid) || this.getPlacementPosition();
-            this.placedPositions.set(uid, pos);
-            this.renderer.addResource(toRenderable(resource, pos.x, pos.y, pos.z));
-          }
-          if (typeof this.renderer.autoAlign === 'function') this.renderer.autoAlign(this.engine.cluster, { duration: 600 });
-          if (typeof this.renderer.syncConnectionsFromCluster === 'function') this.renderer.syncConnectionsFromCluster(this.engine.cluster);
-        } catch (err) {
-          console.warn(`${APP_NAME}: post-launch layout failed`, err);
-        }
+        this._layoutClusterAfterModeStart();
 
         // Files/Manifests panel is instantiated and initialised with the game session.
         this._ensureManifestPanel()
@@ -2454,6 +2448,39 @@
           this._startLevelTutorialFromMode();
         } else {
           this._pendingLevelTutorial = !!(this._getLevelDef()?.tutorial?.steps?.length);
+        }
+      }
+
+      /**
+       * Lay out everything present after mode setup: seeded OpenShift defaults plus
+       * the mode's starting resources. Uses the renderer's registry-derived tiers and
+       * the shared RelationGraph so Route→Service→Pod / Build→ImageStream edges are
+       * visible. Shared by fresh launch and by restart/retry/next-level: those paths
+       * clear() the cluster, which re-seeds every default resource at the same
+       * getPlacementPosition(), so without this the restarted run would be a stacked
+       * pile instead of the fresh-launch layout.
+       * Must run AFTER _initObjectivesPanel() so the camera fit sees the inset.
+       */
+      _layoutClusterAfterModeStart({ duration = 600 } = {}) {
+        const cluster = this.engine?.cluster;
+        const renderer = this.renderer;
+        // No live run / start-page diorama: the menu owns its own showcase layout.
+        if (!cluster || !renderer || !this.modeInstance || renderer.menuMode) return;
+        try {
+          for (const resource of cluster.getAllResources?.() || []) {
+            const uid = resource.uid;
+            if (!uid || renderer.resourceMeshes.has(uid)) continue;
+            const pos = this.placedPositions.get(uid) || this.getPlacementPosition();
+            this.placedPositions.set(uid, pos);
+            renderer.addResource(toRenderable(resource, pos.x, pos.y, pos.z));
+          }
+          if (typeof renderer.autoAlign === 'function') {
+            const targets = renderer.autoAlign(cluster, { duration });
+            for (const [uid, pos] of targets || []) this.placedPositions.set(uid, pos);
+          }
+          if (typeof renderer.syncConnectionsFromCluster === 'function') renderer.syncConnectionsFromCluster(cluster);
+        } catch (err) {
+          console.warn(`${APP_NAME}: post-launch layout failed`, err);
         }
       }
 
