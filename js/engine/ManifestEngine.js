@@ -40,6 +40,9 @@ import {
   toYamlError,
   YamlParseError,
 } from './YamlParser.js';
+// htpasswd hashing/verification helpers (shared with the engine's login flow).
+// GameEngine does not import ManifestEngine, so this is cycle-free.
+import { hashHtpasswdEntry, verifyHtpasswdPasswordHash } from './GameEngine.js';
 import { MANIFEST_FILES } from '../data/ManifestFiles.js';
 import {
   createResource,
@@ -2335,7 +2338,7 @@ export class ManifestEngine {
   }
 
   /** Real htpasswd file paths are honoured; they default to the OAuth root file. */
-  htpasswdAdd(user, pass, file = 'htpasswd') {
+  htpasswdAdd(user, pass, file = 'htpasswd', options = {}) {
     const normFile = normalizePath(file) || 'htpasswd';
     const invalid = this._validateHtpasswdInput(user, pass);
     if (invalid) return { ok: false, user, file: normFile, error: invalid, errors: [invalid] };
@@ -2347,12 +2350,12 @@ export class ManifestEngine {
         return { ok: false, user, file: normFile, error, errors: [error] };
       }
     }
-    lines.push(`${user}:${fakeHtpasswdHash(user, String(pass))}`);
+    lines.push(`${user}:${hashHtpasswdEntry(user, String(pass), { bcrypt: Boolean(options.bcrypt) })}`);
     this._writeHtpasswdLines(lines, normFile);
-    return { ok: true, user, file: normFile, errors: [] };
+    return { ok: true, user, file: normFile, bcrypt: Boolean(options.bcrypt), errors: [] };
   }
 
-  htpasswdUpdate(user, pass, file = 'htpasswd') {
+  htpasswdUpdate(user, pass, file = 'htpasswd', options = {}) {
     const normFile = normalizePath(file) || 'htpasswd';
     const invalid = this._validateHtpasswdInput(user, pass);
     if (invalid) return { ok: false, user, file: normFile, error: invalid, errors: [invalid] };
@@ -2361,14 +2364,14 @@ export class ManifestEngine {
     for (let i = 0; i < lines.length; i++) {
       const parsed = this._parseHtpasswdUser(lines[i]);
       if (parsed && parsed.user === user) {
-        lines[i] = `${user}:${fakeHtpasswdHash(user, String(pass))}`;
+        lines[i] = `${user}:${hashHtpasswdEntry(user, String(pass), { bcrypt: Boolean(options.bcrypt) })}`;
         updated = true;
         break;
       }
     }
-    if (!updated) lines.push(`${user}:${fakeHtpasswdHash(user, String(pass))}`);
+    if (!updated) lines.push(`${user}:${hashHtpasswdEntry(user, String(pass), { bcrypt: Boolean(options.bcrypt) })}`);
     this._writeHtpasswdLines(lines, normFile);
-    return { ok: true, user, updated, file: normFile, errors: [] };
+    return { ok: true, user, updated, file: normFile, bcrypt: Boolean(options.bcrypt), errors: [] };
   }
 
   htpasswdDelete(user, file = 'htpasswd') {
@@ -2396,7 +2399,7 @@ export class ManifestEngine {
     if (!user) return false;
     for (const line of this._htpasswdLines(file)) {
       const parsed = this._parseHtpasswdUser(line);
-      if (parsed && parsed.user === user) return parsed.hash === fakeHtpasswdHash(user, String(pass));
+      if (parsed && parsed.user === user) return verifyHtpasswdPasswordHash(user, parsed.hash, String(pass));
     }
     return false;
   }

@@ -13,9 +13,10 @@
  *   - command substitution:  oc create secret generic s --from-literal=password=$(openssl rand -hex 16)
  *   - pipelines/redirects:  handled by CommandBar's splitPipeline (this module
  *                           only executes a single stage, stdin → stdout)
+ *   - grep context:          grep -A2/-A 2/-B/-C (real grep semantics, `--` group separators)
  *   - commands:            cat, echo, grep, tail, head, wc, vim/vi, sort, uniq,
  *                          cut, tr, ls, rm, cp, mv, touch, pwd, which, env,
- *                          openssl, skopeo, htpasswd
+ *                          openssl, skopeo, htpasswd (-B forwarded to bcrypt hashing)
  *
  * The CommandBar calls `isShellLine()` to decide whether an input line is shell
  * (no `oc` prefix is added), `preprocess()` for heredocs/substitutions, and
@@ -298,10 +299,18 @@ export class ShellTools {
   // ── grep / head / tail / wc ──────────────────────────────────────────────
 
   _cmd_grep(args, stdin) {
-    const flags = { ignoreCase: false, invert: false, lineNumbers: false, count: false, filesWithMatches: false, onlyMatching: false };
+    const flags = {
+      ignoreCase: false, invert: false, lineNumbers: false, count: false,
+      filesWithMatches: false, onlyMatching: false,
+      after: 0, before: 0,
+    };
     let pattern = null;
     let fromPatternFlag = false;
     const files = [];
+    const parseContext = (value, setter) => {
+      const parsed = Number.parseInt(String(value), 10);
+      if (Number.isFinite(parsed) && parsed >= 0) setter(parsed);
+    };
     for (let i = 0; i < args.length; i += 1) {
       const arg = args[i];
       if (arg === '-e' || arg === '--regexp') {
@@ -309,16 +318,39 @@ export class ShellTools {
         fromPatternFlag = true;
         continue;
       }
-      if (/^-[A-Za-z]+$/.test(arg)) {
-        for (const char of arg.slice(1)) {
+      if (/^-[A-Za-z]/.test(arg) && !arg.startsWith('--')) {
+        // Handle combined short flags incl. attached context counts:
+        // -iA2, -A2, -B 2 (value in the next argv), -C1 …
+        let rest = arg.slice(1);
+        let consumedNext = false;
+        while (rest.length > 0) {
+          const char = rest[0];
+          if (char === 'A' || char === 'B' || char === 'C') {
+            const attached = rest.slice(1);
+            const setter = char === 'A' ? (value) => { flags.after = value; } : char === 'B' ? (value) => { flags.before = value; } : (value) => { flags.after = value; flags.before = value; };
+            if (attached) {
+              parseContext(attached, setter);
+              rest = '';
+            } else if (i + 1 < args.length && /^\d+$/.test(args[i + 1])) {
+              parseContext(args[++i], setter);
+              rest = '';
+              consumedNext = true;
+            } else {
+              setter(0);
+              rest = rest.slice(1);
+            }
+            continue;
+          }
           if (char === 'i') flags.ignoreCase = true;
           else if (char === 'v') flags.invert = true;
           else if (char === 'n') flags.lineNumbers = true;
           else if (char === 'c') flags.count = true;
           else if (char === 'l') flags.filesWithMatches = true;
           else if (char === 'o') flags.onlyMatching = true;
-          // -E/-F/-r/-q/--color are accepted and treated as plain text
+          // -E/-F/-r/-q/--color etc. accepted; treated as plain-text matching
+          rest = rest.slice(1);
         }
+        void consumedNext;
         continue;
       }
       if (arg.startsWith('--')) continue;
@@ -328,13 +360,14 @@ export class ShellTools {
       }
       files.push(arg);
     }
-    if (pattern === null) return this._err('usage: grep [-ivnc] pattern [file ...]');
+    if (pattern === null) return this._err('usage: grep [-ivnc] [-A num] [-B num] [-C num] pattern [file ...]');
     let matcher;
     try {
       matcher = new RegExp(pattern, flags.ignoreCase ? 'i' : '');
     } catch {
       matcher = new RegExp(pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), flags.ignoreCase ? 'i' : '');
     }
+    const hasContext = flags.after > 0 || flags.before > 0;
     const sources = files.length
       ? files.map((file) => ({ label: file, content: this._readFile(file) }))
       : [{ label: null, content: stdin === null ? '' : stdin }];
@@ -343,31 +376,53 @@ export class ShellTools {
     for (const source of sources) {
       if (source.content === null) return this._err(`grep: ${source.label}: No such file or directory`);
       const lines = String(source.content).split('\n');
-      const hits = [];
+      if (lines.length && lines[lines.length - 1] === '') lines.pop();
+      const matchedIndexes = [];
       lines.forEach((line, index) => {
-        const match = matcher.test(line);
-        if (match !== flags.invert) hits.push({ line, number: index + 1 });
+        const isMatch = matcher.test(line);
+        if (isMatch !== flags.invert) matchedIndexes.push(index);
       });
-      if (hits.length) matchedAny = true;
+      if (matchedIndexes.length) matchedAny = true;
       if (flags.filesWithMatches) {
-        if (hits.length && source.label) output.push(source.label);
+        if (matchedIndexes.length && source.label) output.push(source.label);
         continue;
       }
       if (flags.count) {
-        output.push(sources.length > 1 && source.label ? `${source.label}:${hits.length}` : String(hits.length));
+        output.push(sources.length > 1 && source.label ? `${source.label}:${matchedIndexes.length}` : String(matchedIndexes.length));
         continue;
       }
-      for (const hit of hits) {
-        const prefix = [sources.length > 1 && source.label ? source.label : null, flags.lineNumbers ? String(hit.number) : null].filter(Boolean).join(':');
-        if (flags.onlyMatching) {
-          const matches = [...String(hit.line).matchAll(new RegExp(matcher.source, flags.ignoreCase ? 'gi' : 'g'))].map((entry) => entry[0]);
-          for (const value of matches) output.push(prefix ? `${prefix}:${value}` : value);
-        } else {
-          output.push(prefix ? `${prefix}:${hit.line}` : hit.line);
+      const multiFilePrefix = sources.length > 1 && source.label ? `${source.label}:` : '';
+      if (!hasContext) {
+        for (const index of matchedIndexes) {
+          const line = lines[index];
+          const prefix = `${multiFilePrefix}${flags.lineNumbers ? `${index + 1}:` : ''}`;
+          if (flags.onlyMatching) {
+            const matches = [...line.matchAll(new RegExp(matcher.source, flags.ignoreCase ? 'gi' : 'g'))].map((entry) => entry[0]);
+            for (const value of matches) output.push(`${prefix}${value}`);
+          } else {
+            output.push(`${prefix}${line}`);
+          }
+        }
+        continue;
+      }
+      // Context groups (-A/-B/-C): include surrounding lines, separated by `--`
+      // between non-contiguous groups, exactly like real grep.
+      const selected = new Set();
+      for (const index of matchedIndexes) {
+        for (let cursor = index - flags.before; cursor <= index + flags.after; cursor += 1) {
+          if (cursor >= 0 && cursor < lines.length) selected.add(cursor);
         }
       }
+      const indexes = [...selected].sort((a, b) => a - b);
+      let previous = -1;
+      for (const index of indexes) {
+        if (previous >= 0 && index !== previous + 1) output.push('--');
+        const prefix = `${multiFilePrefix}${flags.lineNumbers ? `${index + 1}:` : ''}`;
+        output.push(`${prefix}${lines[index]}`);
+        previous = index;
+      }
     }
-    if (flags.count || flags.filesWithMatches) return this._ok(output.join('\n'));
+    if ((flags.count || flags.filesWithMatches) && output.length) return this._ok(output.join('\n'));
     if (!matchedAny) this.lastExitCode = 1;
     return this._ok(output.join('\n'));
   }

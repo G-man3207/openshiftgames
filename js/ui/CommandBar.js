@@ -109,12 +109,12 @@ export const BASE_COMMANDS = {
   login: { summary: 'Log in to a server', usage: 'oc login [--username=<user>] [--password=<pass>] [server]' },
   logout: { summary: 'Log out of the current session', usage: 'oc logout' },
   whoami: { summary: 'Return the current user', usage: 'oc whoami' },
-  project: { summary: 'Switch to another project', usage: 'oc project [<project>]' },
+  project: { summary: 'Switch to another project', usage: 'oc project [<project>] [-q]  # -q prints only the project name' },
   projects: { summary: 'Display existing projects', usage: 'oc projects' },
   'new-project': { summary: 'Create a new project and switch to it', usage: 'oc new-project <name> [--display-name=] [--description=]' },
   status: { summary: 'Show an overview of the current project', usage: 'oc status [-n <project>]' },
   get: { summary: 'Display one or many resources', usage: 'oc get <resource> [<name>] [-n <project>] [-A] [-o wide|yaml|json|name|jsonpath=...|custom-columns=...]' },
-  describe: { summary: 'Show details of a specific resource or group of resources', usage: 'oc describe <resource> [<name>]' },
+  describe: { summary: 'Show details of a specific resource or group of resources', usage: 'oc describe <resource> [<name>] [-l <selector>]' },
   logs: { summary: 'Print the logs for a container, build or deployment', usage: 'oc logs <pod|deployment/name|build/name|bc/name> [-f] [--previous] [-c <container>] [--tail=<n>]' },
   events: { summary: 'List recent events in the current project', usage: 'oc events [-n <project>] [--field-selector=...]' },
   explain: { summary: 'Document fields of a resource', usage: 'oc explain <resource>[.<field>]' },
@@ -128,7 +128,7 @@ export const BASE_COMMANDS = {
   annotate: { summary: 'Update the annotations on a resource', usage: 'oc annotate <resource>/<name> <key>=<value> [--overwrite]' },
   patch: { summary: 'Update fields of a resource using a JSON patch', usage: "oc patch <resource>/<name> -p '<json>' [--type=merge|strategic|json]" },
   set: { summary: 'Set specific features on objects (env, image, resources, probes, data, ...)', usage: 'oc set <env|image|resources|probe|serviceaccount|triggers|selector|volumes|data> ...' },
-  rollout: { summary: 'Manage the rollout of a resource', usage: 'oc rollout <status|history|undo|restart|pause|resume> <resource>/<name>' },
+  rollout: { summary: 'Manage the rollout of a resource', usage: 'oc rollout <status|history|undo|restart|pause|resume> <resource>/<name> [--timeout=<duration>]' },
   expose: { summary: 'Expose a replicated application as a Route', usage: 'oc expose <svc|deployment>/<name> [--name=] [--hostname=] [--path=]' },
   run: { summary: 'Run a particular image in a pod', usage: 'oc run <name> --image=<image> [--port=]' },
   exec: { summary: 'Execute a command in a container', usage: 'oc exec -it <pod> -- <command>' },
@@ -152,7 +152,7 @@ export const BASE_COMMANDS = {
   wait: { summary: 'Experimental: Wait for a specific condition on one or many resources', usage: 'oc wait --for=condition=Ready pod/<name> --timeout=60s' },
   diff: { summary: 'Diff the live version against a would-be applied version', usage: 'oc diff -f <file> [-n <project>]' },
   autoscale: { summary: 'Autoscale a deployment, replica set, replication controller or stateful set', usage: 'oc autoscale <resource>/<name> --min=<n> --max=<n> [--cpu-percent=<percent>]' },
-  htpasswd: { summary: 'Manage the virtual HTPasswd identity-provider file', usage: 'htpasswd [-c|-b|-D] <file> <user> [password]' },
+  htpasswd: { summary: 'Manage the virtual HTPasswd identity-provider file', usage: 'htpasswd [-c] [-b] [-B] [-D] <file> <user> [password]  # -B writes bcrypt ($2y$…)' },
   config: { summary: 'Modify kubeconfig files (contexts)', usage: 'oc config <current-context|view|get-contexts>' },
   version: { summary: 'Print the client and server versions', usage: 'oc version' },
   'api-resources': { summary: 'Print the supported API resources on the server', usage: 'oc api-resources' },
@@ -338,7 +338,7 @@ const KNOWN_LONG_FLAGS = new Set([
   'sort-by', 'source', 'source-secret', 'stdin', 'strategy', 'sub-path', 'subresource', 'suspend',
   'tail', 'target-port', 'template', 'timeout', 'timestamps', 'to-revision', 'tty', 'type', 'user',
   'username', 'validate', 'values', 'values-file', 'verb', 'verbs', 'version', 'wait', 'watch',
-  'wildcard-policy', 'working-dir',
+  'wildcard-policy', 'working-dir', 'versions',
   // flags implemented by individual handlers (must stay accepted by validation)
   'as-root', 'atomic', 'attach', 'auto', 'binary', 'client', 'delete', 'delete-local-data',
   'disable-eviction', 'duration', 'enable-alpha-plugins', 'field-manager', 'generate-name',
@@ -2872,8 +2872,16 @@ Object.assign(CommandBar.prototype, {
         return this._err(`error: error validating "${options.source || '<stdin>'}": metadata.name: Required value`);
       }
       if (this._isNamespaced(kind)) {
-        object.metadata.namespace = namespaceOverride || object.metadata.namespace || this.currentProject;
-        if (mode === 'server') {
+        const manifestNamespace = object.metadata.namespace;
+        if (mode === 'server' || namespaceOverride || manifestNamespace) {
+          // Real client-side dry-run omits metadata.namespace unless the object
+          // (or an explicit -n) carries one; server dry-run lets the API server
+          // fill it in.
+          object.metadata.namespace = namespaceOverride || manifestNamespace || this.currentProject;
+        } else {
+          delete object.metadata.namespace;
+        }
+        if (mode === 'server' && object.metadata.namespace) {
           const namespaceError = this._requireNamespace(object.metadata.namespace);
           if (namespaceError) return namespaceError;
         }
@@ -3144,7 +3152,7 @@ Object.assign(CommandBar.prototype, {
     }
   },
 
-  _htpasswdCall(action, user, password, file = 'htpasswd') {
+  _htpasswdCall(action, user, password, file = 'htpasswd', options = {}) {
     const me = this.manifestEngine;
     if (!me) return this._manifestNotReady();
     const method = { add: 'htpasswdAdd', update: 'htpasswdUpdate', remove: 'htpasswdDelete', list: 'htpasswdList' }[action];
@@ -3157,7 +3165,7 @@ Object.assign(CommandBar.prototype, {
           ? me[method](file)
           : action === 'remove'
             ? me[method](user, file)
-            : me[method](user, password, file);
+            : me[method](user, password, file, options);
       if (result && result.error) return this._err(typeof result.error === 'string' ? result.error : result.message || 'error: htpasswd failed');
       return { ok: true, result };
     } catch (error) {
@@ -3495,6 +3503,23 @@ Object.assign(CommandBar.prototype, {
     return formatAge(resource?.metadata?.creationTimestamp || resource?.creationTimestamp);
   },
 
+  /**
+   * Container name real `oc create deployment --image=<ref>` derives from an
+   * image: basename after the last `/`, tag/digest stripped, RFC-1123 sanitised.
+   * @param {string} image
+   * @returns {string}
+   */
+  _containerNameForImage(image) {
+    let name = String(image ?? '').trim().split('@')[0];
+    const slash = name.lastIndexOf('/');
+    if (slash >= 0) name = name.slice(slash + 1);
+    const colon = name.lastIndexOf(':');
+    if (colon > 0) name = name.slice(0, colon);
+    name = name.toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '');
+    if (name && !/^[a-z0-9]/.test(name)) name = `c-${name}`;
+    return (name || 'app').slice(0, 63).replace(/-+$/g, '') || 'app';
+  },
+
   _containerList(resource) {
     return resource?.spec?.template?.spec?.containers || resource?.spec?.containers || [];
   },
@@ -3781,7 +3806,7 @@ Object.assign(CommandBar.prototype, {
         return {
           NAME: name,
           'HOST/PORT': this._routeHost(resource),
-          PATH: resource.spec?.path || '/',
+          PATH: resource.spec?.path || '',
           SERVICES: resource.spec?.to?.name || '<none>',
           PORT: resource.spec?.port?.targetPort ?? '<all>',
           TERMINATION: tls ? tls.termination || '' : '',
@@ -3848,11 +3873,14 @@ Object.assign(CommandBar.prototype, {
       case 'HorizontalPodAutoscaler': {
         const target = resource.spec?.scaleTargetRef || {};
         const targetMetric = resource.spec?.metrics?.[0]?.resource?.target?.averageUtilization;
-        const current = resource.status?.currentCPUUtilizationPercentage ?? targetMetric ?? 0;
+        const metrics = resource.status?.currentMetrics || [];
+        const sampled = metrics[0]?.resource?.current?.averageUtilization
+          ?? resource.status?.currentCPUUtilizationPercentage;
+        const current = sampled === undefined || sampled === null ? '<unknown>' : `${sampled}%`;
         return {
           NAME: name,
           REFERENCE: `${(target.kind || 'Deployment').toLowerCase()}/${target.name || 'app'}`,
-          TARGETS: `${current}%/${targetMetric || 70}%`,
+          TARGETS: `${current}/${targetMetric ?? 50}%`,
           MINPODS: String(resource.spec?.minReplicas ?? 1),
           MAXPODS: String(resource.spec?.maxReplicas ?? 10),
           REPLICAS: String(resource.status?.currentReplicas ?? resource.status?.replicas ?? resource.spec?.minReplicas ?? 1),
@@ -4393,8 +4421,63 @@ Object.assign(CommandBar.prototype, {
       });
     }
 
+    // 7. ReplicaSet admission/creation failures (e.g. restricted-v2 SCC
+    // rejection) are real Warning FailedCreate events; surface them so
+    // `oc get events --field-selector reason=FailedCreate` returns data.
+    for (const replicaSet of this._getKindList('ReplicaSet')) {
+      const name = replicaSet.metadata?.name;
+      if (!name) continue;
+      const replicaNamespace = replicaSet.metadata?.namespace || 'default';
+      const created = replicaSet.metadata?.creationTimestamp ? new Date(replicaSet.metadata.creationTimestamp).getTime() : Date.now() - 60000;
+      for (const condition of replicaSet.status?.conditions || []) {
+        const failedCreate = /FailedCreate/i.test(String(condition.reason || ''))
+          || (condition.type === 'ReplicaFailure' && condition.status === 'True');
+        if (!failedCreate) continue;
+        push({
+          lastTimestamp: condition.lastTransitionTime ? new Date(condition.lastTransitionTime).getTime() : created + 5000,
+          type: 'Warning',
+          reason: condition.reason || 'FailedCreate',
+          object: `replicaset/${name}`,
+          subobject: '',
+          source: 'replicaset-controller',
+          message: condition.message || `Error creating: pods for ${name} were rejected`,
+          namespace: replicaNamespace,
+        });
+      }
+    }
+
     events.sort((a, b) => a.lastTimestamp - b.lastTimestamp);
     return events.slice(-40);
+  },
+
+  /** Merge runtime-recorded events (issue #21: SCC FailedCreate etc.). */
+  _runtimeEvents({ namespace, allNamespaces }) {
+    const sim = this.gameEngine?.simulation;
+    if (!sim || typeof sim.getEvents !== 'function') return [];
+    let raw = [];
+    try {
+      raw = sim.getEvents({ namespace, allNamespaces: Boolean(allNamespaces) }) || [];
+    } catch {
+      raw = [];
+    }
+    if (!Array.isArray(raw)) return [];
+    return raw.map((event) => {
+      const involved = event.involvedObject || {};
+      const object = event.object
+        || (involved.kind ? `${String(involved.kind).toLowerCase()}/${involved.name || ''}` : '');
+      const timestamp = event.lastTimestamp ? new Date(event.lastTimestamp).getTime() : Date.now();
+      return {
+        lastTimestamp: Number.isFinite(timestamp) ? timestamp : Date.now(),
+        type: event.type || 'Normal',
+        reason: event.reason || '',
+        object,
+        subobject: '',
+        source: event.source || involved.kind || '',
+        message: event.message || '',
+        namespace: event.namespace || involved.namespace || namespace,
+        count: event.count,
+      };
+    });
   },
 
   _filterEvents(events, flags) {
@@ -4551,7 +4634,7 @@ Object.assign(CommandBar.prototype, {
           `Annotations:            ${annotations}`,
           `Requested Host:         ${spec.host || '<auto-generated>'}`,
           `Admitted:               ${admitted}`,
-          `Path:                   ${spec.path || '/'}`,
+          `Path:                   ${spec.path || ''}`,
           `TLS Termination:        ${spec.tls?.termination || '<none>'}`,
           `Insecure Policy:        ${spec.tls?.insecureEdgeTerminationPolicy || 'None'}`,
           `Endpoint Port:          ${spec.port?.targetPort ?? '<all>'}`,
@@ -5183,6 +5266,11 @@ Object.assign(CommandBar.prototype, {
     if (this._isProjectConfigToken(lower)) {
       return this._getProjectConfigView({ name: name || 'cluster', flags, output });
     }
+    // `oc get ns` prints the Kubernetes Namespace layout (NAME STATUS AGE),
+    // while `oc get projects` keeps the OpenShift Project layout.
+    if (['ns', 'namespace', 'namespaces'].includes(lower)) {
+      return this._getNamespaceView({ name, output, flags });
+    }
 
     // Real oc: a namespaced request scoped to a nonexistent namespace fails with
     // the API server's namespace NotFound before any empty-list rendering.
@@ -5270,6 +5358,49 @@ Object.assign(CommandBar.prototype, {
       return { error: false, message: deprecationWarning + this._formatResourcesStructured(combinedResources, flags, output) };
     }
     return { error: false, message: deprecationWarning + sections.filter((section) => section !== '').join('\n\n') };
+  },
+
+  /** `oc get ns/namespaces` — real K8s table/object shape (NAME STATUS AGE). */
+  _getNamespaceView({ name, output, flags }) {
+    let projects = this._resources('Project').slice();
+    if (name) {
+      projects = projects.filter((project) => project.metadata?.name === name);
+      if (!projects.length) return this._err(`Error from server (NotFound): namespaces "${name}" not found`);
+    }
+    projects.sort((left, right) => String(left.metadata?.name || '').localeCompare(String(right.metadata?.name || '')));
+    const objects = projects.map((project) => ({
+      apiVersion: 'v1',
+      kind: 'Namespace',
+      metadata: {
+        name: project.metadata?.name,
+        labels: { ...(project.metadata?.labels || {}) },
+        annotations: { ...(project.metadata?.annotations || {}) },
+        creationTimestamp: project.metadata?.creationTimestamp,
+      },
+      spec: { finalizers: ['kubernetes'] },
+      status: { phase: 'Active' },
+    }));
+    if (output.format === 'yaml') return this._ok(toYamlDocument(name && objects.length === 1 ? objects[0] : { apiVersion: 'v1', kind: 'List', items: objects }));
+    if (output.format === 'json') return this._ok(JSON.stringify(name && objects.length === 1 ? objects[0] : { apiVersion: 'v1', kind: 'List', items: objects }, null, 4));
+    if (output.format === 'name') return this._ok(objects.map((object) => `namespace/${object.metadata.name}`).join('\n'));
+    if (output.format === 'jsonpath') {
+      if (!output.arg) return this._err("error: jsonpath requires a template, e.g. -o jsonpath='{.items[*].metadata.name}'");
+      return this._ok(evaluateJsonPath(name && objects.length === 1 ? objects[0] : { kind: 'List', items: objects }, output.arg));
+    }
+    if (output.format === 'custom-columns') {
+      const columns = String(output.arg || '')
+        .split(',')
+        .map((entry) => {
+          const colon = entry.indexOf(':');
+          return colon < 0 ? null : { header: entry.slice(0, colon), path: entry.slice(colon + 1) };
+        })
+        .filter(Boolean);
+      if (!columns.length) return this._err('error: invalid custom-columns specification');
+      const rows = objects.map((object) => columns.map((column) => String(evaluateJsonPath(object, `{${column.path.trim()}}`) || '<none>')));
+      return this._ok(padTable(columns.map((column) => column.header), rows));
+    }
+    const rows = objects.map((object) => [object.metadata.name, object.status.phase, this._creationAge(projects.find((project) => project.metadata?.name === object.metadata.name))]);
+    return this._ok(padTable(['NAME', 'STATUS', 'AGE'], rows));
   },
 
   _cmdGetAll({ flags, output, allNamespaces, namespace }) {
@@ -5612,6 +5743,15 @@ Object.assign(CommandBar.prototype, {
     }
     // `oc events` and `oc get events` both arrive here (the get path passes the full token list).
     let events = this._syntheticEvents({ namespace });
+    // Merge runtime-recorded events (resource .events arrays: SCC FailedCreate,
+    // OLM, Route/Build…), de-duplicating what the synthetic stream already shows.
+    const seenEvents = new Set(events.map((event) => `${event.object}|${event.reason}|${event.message}`));
+    for (const runtimeEvent of this._runtimeEvents({ namespace, allNamespaces })) {
+      const key = `${runtimeEvent.object}|${runtimeEvent.reason}|${runtimeEvent.message}`;
+      if (seenEvents.has(key)) continue;
+      seenEvents.add(key);
+      events.push(runtimeEvent);
+    }
     if (!allNamespaces) {
       events = events.filter((event) => event.namespace === namespace);
     }
@@ -5630,8 +5770,8 @@ Object.assign(CommandBar.prototype, {
 Object.assign(CommandBar.prototype, {
   _cmdDescribe(tokens) {
     const { positionals, flags } = parseArgs(tokens, {
-      shortValues: { '-n': 'namespace' },
-      longValues: ['namespace'],
+      shortValues: { '-n': 'namespace', '-l': 'selector' },
+      longValues: ['namespace', 'selector'],
       longBools: ['show-events'],
     });
     if (!positionals.length) {
@@ -5643,6 +5783,19 @@ Object.assign(CommandBar.prototype, {
     if (projectConfigRef) return this._describeProjectConfig(projectConfigRef);
     let { kind, name } = this._resolveRef(positionals);
     if (!kind) return this._resourceTypeError(positionals[0]);
+    // `oc describe rs -l app=web` describes every resource matching the selector.
+    if (flags.selector && flags.selector !== true && !name) {
+      const namespace = flags.namespace || this.currentProject;
+      if (this._isNamespaced(kind)) {
+        const namespaceError = this._requireNamespace(namespace);
+        if (namespaceError) return namespaceError;
+      }
+      let resources = this._resources(kind);
+      if (this._isNamespaced(kind)) resources = resources.filter((resource) => resource.metadata?.namespace === namespace);
+      resources = this._filterResources(resources, kind, flags);
+      if (!resources.length) return this._ok(`No resources found in ${namespace} namespace.`);
+      return this._ok(resources.map((resource) => this._describeResource(kind, resource)).join('\n\n'));
+    }
     if (!name) {
       if (kind === 'Project') {
         name = this.currentProject;
@@ -6155,6 +6308,18 @@ Object.assign(CommandBar.prototype, {
 
     const projects = this._visibleProjectNames();
     const current = this.currentProject;
+    if (!projects.length) {
+      return this._ok(
+        [
+          'Login successful.',
+          '',
+          "You don't have any projects. You can try to create a new project, by running",
+          '',
+          '    oc new-project <projectname>',
+          '',
+        ].join('\n'),
+      );
+    }
     const lines = [
       'Login successful.',
       '',
@@ -6163,7 +6328,7 @@ Object.assign(CommandBar.prototype, {
       '',
     ];
     if (projects.includes(current)) lines.push(`Using project "${current}".`);
-    else if (projects.length) lines.push(`Using project "${projects[0]}".`);
+    else lines.push(`Using project "${projects[0]}".`);
     return this._ok(lines.join('\n'));
   },
 
@@ -6205,8 +6370,13 @@ Object.assign(CommandBar.prototype, {
   },
 
   _cmdProject(tokens) {
-    const { positionals, flags } = parseArgs(tokens, { longBools: ['short'] });
+    const { positionals, flags } = parseArgs(tokens, {
+      shortBools: { '-q': 'short' },
+      longBools: ['short', 'quiet'],
+    });
+    const shortOnly = Boolean(flags.short || flags.quiet);
     if (!positionals.length) {
+      if (shortOnly) return this._ok(this.currentProject);
       return this._ok(`Using project "${this.currentProject}" on server "${OC_SERVER_URL}".`);
     }
     const name = positionals[0];
@@ -6500,6 +6670,11 @@ Object.assign(CommandBar.prototype, {
       // (top-level type/data), so `--dry-run=client -o yaml | oc replace -f -`
       // round-trips like a real cluster.
       const displayObject = this._apiShapedDryRunObject(object);
+      // Real `--dry-run=client` output omits metadata.namespace unless -n was
+      // given (the namespace is applied to the request, not the manifest).
+      if (dryRun === 'client' && !(flags.namespace && flags.namespace !== true)) {
+        delete displayObject.metadata.namespace;
+      }
       const suffix = dryRun === 'server' ? ' (server dry run)' : ' (dry run)';
       if (output.format === 'yaml') return this._ok([...warnings, toYamlDocument(displayObject)].filter(Boolean).join('\n'));
       if (output.format === 'json') return this._ok([...warnings, JSON.stringify(displayObject, null, 4)].filter(Boolean).join('\n'));
@@ -6626,13 +6801,19 @@ Object.assign(CommandBar.prototype, {
     if (spec.selector?.matchLabels) spec.selector.matchLabels = { app: name };
     if (spec.template?.metadata && kind !== 'Pod') spec.template.metadata.labels = { app: name };
     if (image) {
+      // Real oc names the generated container after the image basename
+      // (`--image=quay.io/openshift/origin-hello-openshift:latest` → container
+      // `origin-hello-openshift`), never the generic `main`.
+      const containerName = this._containerNameForImage(image);
       const containers = kind === 'Pod' ? spec.containers : spec.template?.spec?.containers;
-      if (Array.isArray(containers) && containers.length) containers[0].image = image;
-      else if (kind === 'Pod') spec.containers = [{ name: 'main', image }];
+      if (Array.isArray(containers) && containers.length) {
+        containers[0].image = image;
+        containers[0].name = containerName;
+      } else if (kind === 'Pod') spec.containers = [{ name: containerName, image }];
       else {
         spec.template = spec.template || { metadata: { labels: { app: name } }, spec: {} };
         spec.template.spec = spec.template.spec || {};
-        spec.template.spec.containers = [{ name: 'main', image }];
+        spec.template.spec.containers = [{ name: containerName, image }];
       }
     }
     if (flags.replicas && flags.replicas !== true) spec.replicas = Number(flags.replicas);
@@ -7644,23 +7825,46 @@ Object.assign(CommandBar.prototype, {
     const { kind, name } = this._resolveRef(positionals);
     if (!kind) return this._resourceTypeError(positionals[0] || '');
     if (!name) return this._usageError('set', 'resource name is required\n\n  oc set image <resource>/<name> <container>=<image>');
-    const assignment = positionals[positionals[0].includes('/') ? 1 : 2];
-    if (!assignment) return this._err('error: you must specify an image assignment (<container>=<image>)');
-    const eq = assignment.indexOf('=');
-    const container = eq >= 0 ? assignment.slice(0, eq) : undefined;
-    const image = eq >= 0 ? assignment.slice(eq + 1) : assignment;
+    const assignments = positionals.slice(positionals[0].includes('/') ? 1 : 2);
+    if (!assignments.length) return this._err('error: you must specify an image assignment (<container>=<image>)');
     const namespace = this._namespaceFromFlags(flags);
+    const resource = this._findResource(kind, name, { namespace: flags.namespace, explicitNamespace: Boolean(flags.namespace), allowPrefix: false });
+    if (!resource) return this._err(this._notFoundMessage(kind, name));
+    const containers = this._containerList(resource);
+    if (!containers.length) return this._err(`error: unable to find any containers in ${this._resourceRef(kind)}/${name}`);
+    const containerNames = containers.map((container) => container.name);
+    const updates = [];
+    for (const assignment of assignments) {
+      const eq = String(assignment).indexOf('=');
+      if (eq <= 0) return this._err('error: invalid image format: must be of the form <container>=<image>');
+      const containerName = String(assignment).slice(0, eq);
+      const image = String(assignment).slice(eq + 1);
+      if (containerName === '*') {
+        for (const entry of containerNames) updates.push({ container: entry, image });
+        continue;
+      }
+      // Real oc hard-errors on unknown container names and never adds one.
+      if (!containerNames.includes(containerName)) {
+        return this._err(`error: unable to find container named "${containerName}"`);
+      }
+      updates.push({ container: containerName, image });
+    }
     const ge = this.gameEngine;
-    if (ge && typeof ge.setImage === 'function') {
-      const result = ge.setImage(kind, name, { container, image }, { namespace });
-      if (result.success === false) return this._err(result.message);
+    const useEngine = ge && typeof ge.setImage === 'function' && updates.every((update) => update.container !== '*');
+    if (useEngine) {
+      for (const update of updates) {
+        const result = ge.setImage(kind, name, { container: update.container, image: update.image }, { namespace });
+        if (result.success === false) return this._err(result.message);
+      }
       return this._ok(`${this._resourceRef(kind)}/${name} image updated`);
     }
     const result = this._updateResource(kind, name, (spec) => {
-      const containers = spec.template?.spec?.containers || spec.containers || [];
-      const targets = container ? containers.filter((entry) => entry.name === container) : containers;
-      if (!targets.length) return { error: this._err(`error: container "${container}" not found`) };
-      for (const target of targets) target.image = image;
+      const targetContainers = spec.template?.spec?.containers || spec.containers || [];
+      for (const update of updates) {
+        for (const target of targetContainers) {
+          if (target.name === update.container) target.image = update.image;
+        }
+      }
       return {};
     }, { namespace: flags.namespace, explicitNamespace: Boolean(flags.namespace) });
     if (result.error) return result.error;
@@ -7749,18 +7953,35 @@ Object.assign(CommandBar.prototype, {
     if (!name) return this._usageError('set', 'resource name is required\n\n  oc set serviceaccount <resource>/<name> <serviceaccount>');
     const serviceAccount = positionals[positionals[0].includes('/') ? 1 : 2];
     if (!serviceAccount) return this._err('error: you must specify a service account name');
-    // kubectl's polymorphic helper: CronJob has no pod template (it wraps a Job).
-    if (!['Deployment', 'DeploymentConfig', 'StatefulSet', 'DaemonSet', 'Job', 'Pod', 'ReplicationController'].includes(kind)) {
-      return this._err(`error: the ${kind} ${name} is not a pod or does not have a pod template`);
-    }
+    // oc's polymorphic pod-spec helper supports every workload with a pod
+    // template, including CronJob (`spec.jobTemplate.spec.template.spec`).
+    // Paths are relative to the resource's own `spec` (the mutator receives it).
+    const podSpecPaths = {
+      Deployment: ['template', 'spec'],
+      StatefulSet: ['template', 'spec'],
+      DaemonSet: ['template', 'spec'],
+      Job: ['template', 'spec'],
+      CronJob: ['jobTemplate', 'spec', 'template', 'spec'],
+      ReplicationController: ['template', 'spec'],
+      Pod: [],
+    };
+    const path = podSpecPaths[kind];
+    if (!path) return this._err(`error: the ${kind} ${name} is not a pod or does not have a pod template`);
     const namespace = this._namespaceFromFlags(flags);
-    const ge = this.gameEngine;
-    if (ge && typeof ge.setServiceAccount === 'function') {
-      const result = ge.setServiceAccount(kind, name, serviceAccount, { namespace });
-      if (result.success === false) return this._err(result.message);
-      return this._ok(`${this._resourceRef(kind)}/${name} service account updated`);
-    }
-    return this._err('error: service account updates are not available in this build');
+    const resource = this._findResource(kind, name, { namespace: flags.namespace, explicitNamespace: Boolean(flags.namespace), allowPrefix: false });
+    if (!resource) return this._err(this._notFoundMessage(kind, name));
+    const result = this._updateResource(kind, name, (spec) => {
+      let target = spec;
+      for (const segment of path) {
+        target[segment] = target[segment] || {};
+        target = target[segment];
+      }
+      target.serviceAccountName = serviceAccount;
+      delete target.serviceAccount;
+      return {};
+    }, { namespace: flags.namespace, explicitNamespace: Boolean(flags.namespace) });
+    if (result.error) return result.error;
+    return this._ok(`${this._resourceRef(kind)}/${name} service account updated`);
   },
 
   _setTriggers(rest) {
@@ -8370,7 +8591,7 @@ Object.assign(CommandBar.prototype, {
   _cmdRollout(tokens) {
     const { positionals, flags } = parseArgs(tokens, {
       shortValues: { '-n': 'namespace' },
-      longValues: ['namespace', 'revision', 'to-revision'],
+      longValues: ['namespace', 'revision', 'to-revision', 'timeout'],
       longBools: ['watch', 'dry-run', 'paused'],
     });
     const sub = (positionals[0] || '').toLowerCase();
@@ -8404,7 +8625,13 @@ Object.assign(CommandBar.prototype, {
       }
       if (status && status.complete) return this._ok(status.message || `${this._singularName(kind)} "${name}" successfully rolled out`);
       const pending = status?.message || `Waiting for ${this._singularName(kind)} "${name}" rollout to finish...`;
-      this._watchRolloutStatus(kind, name, namespace, sim);
+      // `--timeout=<duration>` is CLI-side (real oc blocks, then fails with
+      // `error: timed out waiting for the condition` if the rollout never lands).
+      const timeoutMs = flags.timeout !== undefined && flags.timeout !== true ? this._parseTimeoutMs(String(flags.timeout)) : 0;
+      if (flags.timeout !== undefined && flags.timeout !== true && timeoutMs === null) {
+        return this._err(`error: invalid timeout "${flags.timeout}": must be a duration such as 30s, 5m or 0`);
+      }
+      this._watchRolloutStatus(kind, name, namespace, sim, { timeoutMs: timeoutMs || 0 });
       return this._ok(pending);
     }
     if (sub === 'history' && sim && typeof sim.getRolloutHistory === 'function') {
@@ -8463,9 +8690,24 @@ Object.assign(CommandBar.prototype, {
    * current Waiting line and then appends the final state from runtime's
    * deployment controller (progress-deadline-exceeded / complete).
    */
-  _watchRolloutStatus(kind, name, namespace, sim) {
+  /** Parse `--timeout` durations (`30s`, `5m`, `1h`, bare seconds, `0`). */
+  _parseTimeoutMs(value) {
+    const text = String(value ?? '').trim().toLowerCase();
+    if (!text) return null;
+    if (text === '0') return 0;
+    const match = text.match(/^(\d+(?:\.\d+)?)(ms|s|m|h)?$/);
+    if (!match) return null;
+    const amount = Number.parseFloat(match[1]);
+    if (!Number.isFinite(amount) || amount < 0) return null;
+    const unit = match[2] || 's';
+    const multiplier = unit === 'ms' ? 1 : unit === 'h' ? 3600000 : unit === 'm' ? 60000 : 1000;
+    return Math.round(amount * multiplier);
+  },
+
+  _watchRolloutStatus(kind, name, namespace, sim, options = {}) {
     this._clearRolloutWatches();
-    const state = { stopped: false, timer: null, offs: [] };
+    const timeoutMs = Number(options.timeoutMs) || 0;
+    const state = { stopped: false, timer: null, offs: [], startedAt: Date.now(), timeoutMs };
     const finish = (message, tone) => {
       if (state.stopped) return;
       state.stopped = true;
@@ -8490,6 +8732,13 @@ Object.assign(CommandBar.prototype, {
         status = null;
       }
       if (!status) return;
+      const timedOutByCli = timeoutMs > 0 && Date.now() - state.startedAt >= timeoutMs;
+      if (timedOutByCli && !status.timedOut && !status.complete) {
+        // Real oc's client-side wait timeout (distinct from the deployment's
+        // progress deadline): `error: timed out waiting for the condition`.
+        finish('error: timed out waiting for the condition', 'text-red-400');
+        return;
+      }
       if (status.timedOut) {
         const text = /^error:/.test(status.message || '') ? status.message : `error: ${status.message || `${this._singularName(kind)} "${name}" exceeded its progress deadline`}`;
         finish(text, 'text-red-400');
@@ -8543,7 +8792,8 @@ Object.assign(CommandBar.prototype, {
     const port = flags.port && flags.port !== true ? Number(flags.port) : null;
     const env = parseCommaAssignments(this._arrayFlag(flags, 'env'));
     const labels = { run: name, ...parseCommaAssignments(flags.labels && flags.labels !== true ? String(flags.labels) : []) };
-    const container = { name: 'main', image, resources: { requests: { cpu: '100m', memory: '128Mi' }, limits: { cpu: '500m', memory: '512Mi' } } };
+    // Real `kubectl/oc run <name> --image=…` names the container after the run name.
+    const container = { name, image, resources: { requests: { cpu: '100m', memory: '128Mi' }, limits: { cpu: '500m', memory: '512Mi' } } };
     if (port) container.ports = [{ containerPort: port, protocol: 'TCP' }];
     if (Object.keys(env).length) container.env = Object.entries(env).map(([key, value]) => ({ name: key, value }));
     const restartPolicy = flags.restart && flags.restart !== true ? String(flags.restart) : 'Always';
@@ -8610,9 +8860,18 @@ Object.assign(CommandBar.prototype, {
 
   _simulateExecCommand(command, pod, containerName) {
     const text = String(command).trim();
+    // restricted-v2 runs containers with an arbitrary, passwd-less UID, so
+    // `whoami` fails exactly like a real RHEL UBI container on OCP 4.22.
+    const podScc = String(pod.metadata?.annotations?.['openshift.io/scc'] || 'restricted-v2');
+    const restricted = /^restricted/.test(podScc);
+    const runtimeUid = 1000000000 + stableHash(`${pod.metadata?.namespace}/${pod.metadata?.name}`, 8999999);
     if (/^(hostname|hostname -f)$/.test(text)) return [pod.metadata?.name || 'pod'];
-    if (/^whoami$/.test(text)) return ['default'];
-    if (/^id$/.test(text)) return ['uid=1000840000(default) gid=0(root) groups=0(root),1000840000'];
+    if (/^whoami$/.test(text)) return restricted ? [`whoami: cannot find name for user ID ${runtimeUid}`] : ['default'];
+    if (/^id$/.test(text)) {
+      return restricted
+        ? [`uid=${runtimeUid} gid=0(root) groups=0(root),${runtimeUid}`]
+        : ['uid=1000840000(default) gid=0(root) groups=0(root),1000840000'];
+    }
     if (/^(env|printenv)$/.test(text)) {
       return [
         'PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
@@ -9404,9 +9663,7 @@ Object.assign(CommandBar.prototype, {
         }
         if (!result) return notAvailable();
         if (result.success === false) return this._err(result.message);
-        const subjectText = saName ? `system:serviceaccount:${namespace}:${saName}` : target;
-        const kindLine = isClusterWide ? 'clusterrole.rbac.authorization.k8s.io' : 'role.rbac.authorization.k8s.io';
-        return this._ok(`${kindLine}/${role} added: "${subjectText}"`);
+        return this._ok(`${this._rbacRoleRefLine(result, role, isClusterWide)} added: "${this._rbacSubjectLabel(result, saName, target)}"`);
       }
       case 'remove-role-from-user':
       case 'remove-cluster-role-from-user':
@@ -9427,8 +9684,7 @@ Object.assign(CommandBar.prototype, {
         const result = engineCall(methodMap[sub], [role, subject, { namespace }]);
         if (!result) return notAvailable();
         if (result.success === false) return this._err(result.message);
-        const kindLine = isClusterWide ? 'clusterrole.rbac.authorization.k8s.io' : 'role.rbac.authorization.k8s.io';
-        return this._ok(`${kindLine}/${role} removed: "${subject}"`);
+        return this._ok(`${this._rbacRoleRefLine(result, role, isClusterWide)} removed: "${this._rbacSubjectLabel(result, null, subject)}"`);
       }
       case 'add-scc-to-user':
       case 'add-scc-to-group': {
@@ -9520,6 +9776,22 @@ Object.assign(CommandBar.prototype, {
           `error: unknown policy subcommand "${sub || ''}"\n\nValid subcommands:\n  add-role-to-user, add-cluster-role-to-user, add-role-to-group, add-cluster-role-to-group\n  remove-role-from-user, remove-cluster-role-from-user, remove-role-from-group, remove-cluster-role-from-group\n  add-scc-to-user, add-scc-to-group, remove-scc-from-user, remove-scc-from-group\n  who-can, scc-review, scc-subject-review`,
         );
     }
+  },
+
+  /** `clusterrole.rbac.authorization.k8s.io/view` style role reference for policy output. */
+  _rbacRoleRefLine(result, role, isClusterWide) {
+    const roleKind = result?.roleKind || (isClusterWide ? 'ClusterRole' : null)
+      || (this._resources('ClusterRole').some((entry) => entry.metadata?.name === role) ? 'ClusterRole' : 'Role');
+    const resource = roleKind === 'ClusterRole' ? 'clusterrole' : 'role';
+    const group = result?.roleRefApiGroup || 'rbac.authorization.k8s.io';
+    return `${resource}.${group}/${role}`;
+  },
+
+  /** Real oc's subject label: bare SA name for `-z`, the user/group name otherwise. */
+  _rbacSubjectLabel(result, saName, fallback) {
+    if (result?.subjectLabel) return result.subjectLabel;
+    if (saName) return saName;
+    return fallback;
   },
 
   /** Minimal who-can fallback used before/without the engine RBAC implementation. */
@@ -9904,11 +10176,38 @@ Object.assign(CommandBar.prototype, {
     return this._helmRepoState;
   },
 
+  /**
+   * Simulated software-catalog entries for a Helm repository. Real repos differ;
+   * the simulator serves the same common catalog from every added repo so
+   * `helm search repo nginx` finds `bitnami/nginx` after `helm repo add bitnami …`.
+   * @param {string} repo
+   * @returns {Array<{repo:string,name:string,versions:string[],version:string,appVersion:string,description:string,path:string}>}
+   */
+  _helmChartCatalog(repo) {
+    const catalog = [
+      { name: 'nginx', versions: ['15.1.0', '15.0.0'], appVersion: '1.25.3', description: 'NGINX Open Source is a web server that can be also used as a reverse proxy, load balancer, and HTTP cache' },
+      { name: 'webapp', versions: ['0.1.0'], appVersion: '1.0.0', description: 'A Helm chart for OpenShift Games sample web applications (bundled simulator chart)' },
+      { name: 'postgresql', versions: ['12.1.0', '12.0.0'], appVersion: '15.4.0', description: 'PostgreSQL (Postgres) is an open source object-relational database' },
+      { name: 'redis', versions: ['17.0.0', '16.0.0'], appVersion: '7.0.5', description: 'Redis(R) is an open source, advanced key-value store' },
+    ];
+    return catalog.map((chart) => ({
+      ...chart,
+      repo,
+      version: chart.versions[0],
+      path: 'helm/webapp',
+    }));
+  },
+
   _helmAvailableChart(repo, chartName) {
     if (!repo) return null;
+    const match = this._helmChartCatalog(repo).find((chart) => chart.name === chartName);
+    if (match) return match;
+    // Unknown chart names stay installable (the simulator renders the bundled
+    // chart) but are absent from `helm search`, matching a repo index.
     return {
       repo,
       name: chartName,
+      versions: ['0.1.0'],
       version: '0.1.0',
       appVersion: '1.0.0',
       description: `A Helm chart for ${chartName} (bundled simulator chart)`,
@@ -9924,22 +10223,39 @@ Object.assign(CommandBar.prototype, {
     return { releases };
   },
 
+  /** Stored (non-seeded) release history, or null when none recorded yet. */
+  _helmStoredHistory(release) {
+    this._helmState();
+    const stored = this._helmReleaseHistory.get(release);
+    return Array.isArray(stored) ? stored : null;
+  },
+
+  /** Append a history entry, replacing any entry with the same revision. */
+  _helmPushHistory(release, entry) {
+    this._helmState();
+    const history = this._helmStoredHistory(release) || [];
+    const next = history.filter((existing) => Number(existing.revision) !== Number(entry.revision));
+    next.push(entry);
+    next.sort((left, right) => Number(left.revision) - Number(right.revision));
+    this._helmReleaseHistory.set(release, next);
+    return next;
+  },
+
   _helmHistoryFor(release, record) {
     this._helmState();
-    let history = this._helmReleaseHistory.get(release);
-    if (!history) {
-      const meta = this._helmReleasesMeta.get(release) || {};
-      history = [{
-        revision: Number(record?.revision || 1),
-        updatedAt: record?.updatedAt || Date.now(),
-        status: record?.status || 'deployed',
-        chart: meta.chart || record?.chart || 'webapp',
-        chartVersion: meta.chartVersion || record?.chartVersion || '0.1.0',
-        appVersion: meta.appVersion || record?.appVersion || '1.0.0',
-        description: 'Install complete',
-      }];
-      this._helmReleaseHistory.set(release, history);
-    }
+    const stored = this._helmStoredHistory(release);
+    if (stored) return stored;
+    const meta = this._helmReleasesMeta.get(release) || {};
+    const history = [{
+      revision: Number(record?.revision || 1),
+      updatedAt: record?.updatedAt || Date.now(),
+      status: record?.status || 'deployed',
+      chart: meta.chart || record?.chart || 'webapp',
+      chartVersion: meta.chartVersion || record?.chartVersion || '0.1.0',
+      appVersion: meta.appVersion || record?.appVersion || '1.0.0',
+      description: 'Install complete',
+    }];
+    this._helmReleaseHistory.set(release, history);
     return history;
   },
 
@@ -9993,7 +10309,7 @@ Object.assign(CommandBar.prototype, {
       shortValues: { '-n': 'namespace', '-f': 'values', '-o': 'output' },
       longValues: ['namespace', 'values', 'values-file', 'set', 'version', 'repo', 'output', 'history-max', 'timeout', 'max'],
       multi: ['set'],
-      longBools: ['dry-run', 'wait', 'atomic', 'generate-name', 'install', 'devel', 'skip-crds'],
+      longBools: ['dry-run', 'wait', 'atomic', 'generate-name', 'install', 'devel', 'skip-crds', 'versions'],
     });
     const namespace = this._namespaceFromFlags(flags);
     const me = this.manifestEngine;
@@ -10005,18 +10321,35 @@ Object.assign(CommandBar.prototype, {
       case 'search': {
         const searchArgs = positionals[0] === 'repo' ? positionals.slice(1) : positionals;
         const keyword = String(searchArgs[0] || '').toLowerCase();
-        const charts = [];
-        for (const repo of repos.keys()) {
-          const chart = this._helmAvailableChart(repo, 'webapp');
-          charts.push(chart);
-        }
-        if (!charts.length) return this._err('Error: no repositories configured');
+        const reposAvailable = [...repos.keys()];
+        if (!reposAvailable.length) return this._err('Error: no repositories configured');
         if (keyword === 'hub' || keyword === 'artifacts') return this._ok('No results found');
-        const filtered = charts.filter((chart) => !keyword || chart.name.toLowerCase().includes(keyword) || chart.description.toLowerCase().includes(keyword));
-        if (!filtered.length) return this._ok('No results found');
-        const rows = filtered.map((chart) => [`${chart.repo}/${chart.name}`, chart.version, chart.appVersion, chart.description]);
+        let repoFilter = null;
+        let chartFilter = keyword;
+        if (keyword.includes('/')) {
+          repoFilter = keyword.slice(0, keyword.indexOf('/'));
+          chartFilter = keyword.slice(keyword.indexOf('/') + 1);
+        }
+        const charts = [];
+        for (const repo of reposAvailable) {
+          if (repoFilter && repo.toLowerCase() !== repoFilter) continue;
+          for (const chart of this._helmChartCatalog(repo)) {
+            if (chartFilter && !chart.name.toLowerCase().includes(chartFilter)) continue;
+            charts.push(chart);
+          }
+        }
+        if (!charts.length) return this._ok('No results found');
+        const showVersions = Boolean(flags.versions);
+        const rows = [];
+        for (const chart of charts) {
+          const versions = showVersions ? chart.versions : [chart.version];
+          for (const version of versions) {
+            rows.push([`${chart.repo}/${chart.name}`, version, chart.appVersion, chart.description]);
+          }
+        }
         return this._ok(padTable(['NAME', 'CHART VERSION', 'APP VERSION', 'DESCRIPTION'], rows));
       }
+
       case 'list':
       case 'ls': {
         const { releases, error } = this._helmReleaseList(namespace);
@@ -10073,10 +10406,10 @@ Object.assign(CommandBar.prototype, {
         const displayChart = chartRepo ? `${chartRepo}/${chartName}` : record.chart || chart;
         this._helmReleasesMeta.set(release, { chart: displayChart, chartVersion, appVersion: '1.0.0' });
         if (!dryRun) {
-          const history = this._helmHistoryFor(release, record);
-          const previousRevision = history.reduce((max, entry) => Math.max(max, Number(entry.revision) || 0), 0);
+          const prior = this._helmStoredHistory(release) || [];
+          const previousRevision = prior.reduce((max, entry) => Math.max(max, Number(entry.revision) || 0), 0);
           const revision = sub === 'install' ? 1 : previousRevision + 1;
-          history.push({
+          this._helmPushHistory(release, {
             revision,
             updatedAt: Date.now(),
             status: 'deployed',
@@ -10085,7 +10418,6 @@ Object.assign(CommandBar.prototype, {
             appVersion: '1.0.0',
             description: sub === 'install' ? 'Install complete' : 'Upgrade complete',
           });
-          this._helmReleaseHistory.set(release, history);
         }
         return this._ok(
           [
@@ -10094,7 +10426,7 @@ Object.assign(CommandBar.prototype, {
             `LAST DEPLOYED: ${new Date().toISOString()}`,
             `NAMESPACE: ${record.namespace || namespace}`,
             `STATUS: ${dryRun ? 'pending-install' : record.status || 'deployed'}`,
-            `REVISION: ${sub === 'install' ? 1 : this._helmHistoryFor(release, record).length}`,
+            `REVISION: ${sub === 'install' ? 1 : (this._helmStoredHistory(release)?.length || 1)}`,
             `CHART: ${displayChart}-${chartVersion}`,
             'APP VERSION: 1.0.0',
             '',
@@ -10170,7 +10502,7 @@ Object.assign(CommandBar.prototype, {
         const result = this._helmCall('upgradeHelm', [release, 'helm/webapp', null, { namespace }]);
         if (result.error) return result;
         const meta = this._helmReleasesMeta?.get(release) || {};
-        history.push({
+        this._helmPushHistory(release, {
           revision: history.reduce((max, entry) => Math.max(max, Number(entry.revision) || 0), 0) + 1,
           updatedAt: Date.now(),
           status: 'deployed',
@@ -10179,7 +10511,6 @@ Object.assign(CommandBar.prototype, {
           appVersion: meta.appVersion || targetEntry.appVersion || '1.0.0',
           description: `Rollback to ${targetRevision}`,
         });
-        this._helmReleaseHistory.set(release, history);
         return this._ok('Rollback was a success! Happy Helming!');
       }
       default:
@@ -10193,6 +10524,7 @@ Object.assign(CommandBar.prototype, {
     let create = false;
     let batch = false;
     let remove = false;
+    let bcrypt = false;
     const positionals = [];
     for (const token of tokens) {
       if (/^-[A-Za-z]+$/.test(token)) {
@@ -10200,7 +10532,8 @@ Object.assign(CommandBar.prototype, {
           if (char === 'c') create = true;
           else if (char === 'b') batch = true;
           else if (char === 'D') remove = true;
-          // -B (bcrypt), -n (stdout), -v (verify) are accepted and ignored
+          else if (char === 'B') bcrypt = true; // real htpasswd -B writes a $2y$ bcrypt hash
+          // -n (stdout), -v (verify) are accepted and ignored
         }
         continue;
       }
@@ -10210,7 +10543,7 @@ Object.assign(CommandBar.prototype, {
     const user = positionals[1];
     const password = positionals[2];
     if (!user) {
-      return this._err('error: user is required\n\n  htpasswd [-c] [-b] <file> <user> [password]\n  htpasswd -D <file> <user>');
+      return this._err('error: user is required\n\n  htpasswd [-c] [-b] [-B] <file> <user> [password]\n  htpasswd -D <file> <user>');
     }
     const me = this.manifestEngine;
     if (!me) return this._manifestNotReady();
@@ -10220,7 +10553,7 @@ Object.assign(CommandBar.prototype, {
       return this._ok('');
     }
     if (!password) {
-      return this._err('error: password is required when using -b\n\n  htpasswd -c -b <file> <user> <password>');
+      return this._err('error: password is required when using -b\n\n  htpasswd -c -b [-B] <file> <user> <password>');
     }
     const existingUsers = typeof me.htpasswdList === 'function' ? (() => {
       try {
@@ -10230,7 +10563,7 @@ Object.assign(CommandBar.prototype, {
       }
     })() : [];
     if (!create && existingUsers.includes(user) && typeof me.htpasswdUpdate === 'function') {
-      const result = this._htpasswdCall('update', user, password, file);
+      const result = this._htpasswdCall('update', user, password, file, { bcrypt });
       if (result.error) return result;
       return this._ok('');
     }
@@ -10249,7 +10582,7 @@ Object.assign(CommandBar.prototype, {
         /* ignore */
       }
     }
-    const result = this._htpasswdCall('add', user, password, file);
+    const result = this._htpasswdCall('add', user, password, file, { bcrypt });
     if (result.error) return result;
     return this._ok('');
   },
@@ -11477,6 +11810,18 @@ Object.assign(CommandBar.prototype, {
     } else if (colon > 0) {
       repo = raw.slice(0, colon);
       tag = raw.slice(colon + 1) || 'latest';
+    }
+    const cluster = this.cluster;
+    const stream = typeof cluster?.getImageStream === 'function' ? cluster.getImageStream(namespace, repo) : null;
+    if (!stream) {
+      return this._err(`Error from server (NotFound): imagestreamtags.image.openshift.io "${raw}" not found`);
+    }
+    const knownTags = [
+      ...(stream.status?.tags || []).map((entry) => entry.tag),
+      ...(stream.spec?.tags || []).map((entry) => entry.name),
+    ].filter(Boolean);
+    if (!knownTags.includes(tag)) {
+      return this._err(`Error from server (NotFound): imagestreamtags.image.openshift.io "${raw}" not found`);
     }
     const info = this._imageInfoFor(`istag/${repo}:${tag}`, namespace);
     const lines = [
