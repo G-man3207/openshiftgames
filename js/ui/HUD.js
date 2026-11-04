@@ -246,7 +246,7 @@ export class HUD {
           <button id="hud-pause" class="hud-icon-btn" type="button" title="Pause simulation" aria-label="Pause simulation" data-testid="hud-pause">
             <span id="hud-pause-icon">${SVG.pause}</span>
           </button>
-          <button id="hud-alerts" class="hud-icon-btn hud-alert-btn" type="button" title="OpenShift incidents" aria-label="OpenShift incidents" data-testid="hud-alerts">
+          <button id="hud-alerts" class="hud-icon-btn hud-alert-btn" type="button" title="OpenShift incidents" aria-label="OpenShift incidents" aria-expanded="false" aria-controls="incident-panel" data-testid="hud-alerts">
             ${SVG.bell}
             <span id="hud-alert-badge" class="hud-badge" data-testid="hud-alert-badge" hidden>0</span>
           </button>

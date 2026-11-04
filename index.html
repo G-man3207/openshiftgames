@@ -46,7 +46,7 @@
       }
     }
   </script>
-  <link rel="stylesheet" href="style.css?v=1.2.1">
+  <link rel="stylesheet" href="style.css?v=1.2.2">
   <link rel="stylesheet" href="start.css?v=1.1.0">
   <!-- Pinned dependency: Three.js r152 (ES modules, no build step) -->
   <script type="importmap">
@@ -1138,18 +1138,6 @@
         this.engine.eventBus.on('settings:changed', (data = {}) => {
           this.settings = { ...this.settings, ...(data || {}) };
           this._applyUiFromSettings();
-        });
-
-        this.engine.eventBus.on('incident:created', (data) => {
-          const inc = data.incident || data;
-          if (!inc) return;
-          this.incidentPanel?.addIncident?.(
-            inc.name || inc.defId || 'Unknown',
-            inc.severity || 3,
-            inc.target || null,
-            inc.description || '',
-            inc.id,
-          );
         });
 
         this.engine.eventBus.on('ui:run-command', (data) => {

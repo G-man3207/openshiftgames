@@ -77,7 +77,27 @@ export class IncidentPanel {
   }
 
   // ── Lifecycle ─────────────────────────────────────────────────────────────
+  /**
+   * Build the panel for a fresh run.
+   *
+   * `launchGame()` calls `init()` again on every level change, retry and
+   * restart. The old implementation appended a second `#incident-panel`
+   * without tearing the previous one down, so a frozen copy with stale HTML
+   * (header "0", "No active incidents", resolved cards from the previous
+   * level) stayed in the DOM next to the live one — GitHub issue #1. init()
+   * is therefore idempotent: it replaces the previous panel, its listeners,
+   * its timer and its per-run incident list.
+   */
   init() {
+    this.destroy();
+    // Defensive: also remove any stale copies left by an earlier run.
+    document.querySelectorAll('#incident-panel').forEach((el) => el.remove());
+    this.incidents = [];
+    this.nextId = 1;
+    this.visible = false;
+    this.statusFilter = 'active';
+    this.categoryFilter = 'all';
+    this._recentCommands = [];
     this.container = document.createElement('div');
     this.container.id = 'incident-panel';
     this.container.className =
@@ -105,12 +125,23 @@ export class IncidentPanel {
     this._timerInterval = null;
     this.container?.remove();
     this.container = null;
+    this.visible = false;
+    document.body.classList.remove('side-panel-left-open');
+    this._syncHudButton(false);
   }
 
   show() {
     if (!this.container) return;
+    // The engine is the source of truth: reconcile in case an incident event
+    // was emitted while the panel was being rebuilt (never show "0 active"
+    // while the engine tracks an incident — GitHub issue #1).
+    if (this._reconcileWithEngine()) this._renderList();
     this.visible = true;
     this.container.classList.add('is-open');
+    // The objective/mission card steps aside instead of being covered by the
+    // left drawer (style.css `body.side-panel-left-open #objectives-panel`).
+    document.body.classList.add('side-panel-left-open');
+    this._syncHudButton(true);
     this._renderList();
   }
 
@@ -118,6 +149,51 @@ export class IncidentPanel {
     if (!this.container) return;
     this.visible = false;
     this.container.classList.remove('is-open');
+    document.body.classList.remove('side-panel-left-open');
+    this._syncHudButton(false);
+  }
+
+  /** Keep the HUD bell's aria state in sync with the drawer. */
+  _syncHudButton(open) {
+    const button = document.getElementById('hud-alerts');
+    if (!button) return;
+    button.setAttribute('aria-expanded', String(Boolean(open)));
+    button.setAttribute('aria-controls', 'incident-panel');
+  }
+
+  /**
+   * Merge the engine's live incident summaries into the panel state. This is a
+   * safety net for missed `incident:created` events (level restarts, panel
+   * re-init, page reload + Continue): the panel must never blank out an
+   * incident that still exists in the engine.
+   * @returns {boolean} whether the panel state changed
+   */
+  _reconcileWithEngine() {
+    const engine = window.game?.incidentEngine;
+    if (!engine || typeof engine.getActiveIncidents !== 'function') return false;
+    let changed = false;
+    let active = [];
+    try {
+      active = engine.getActiveIncidents() || [];
+    } catch {
+      return false;
+    }
+    const activeIds = new Set(active.map((summary) => summary?.id).filter(Boolean));
+    for (const summary of active) {
+      if (!summary || (summary.id && this._findByEngineId(summary.id))) continue;
+      this.incidents.unshift(this._incidentFromEvent(summary));
+      changed = true;
+    }
+    for (const incident of this.incidents) {
+      if (incident.status !== 'active') continue;
+      if (!incident.engineIncidentId || activeIds.has(incident.engineIncidentId)) continue;
+      incident.status = 'resolved';
+      incident.resolvedAt = incident.resolvedAt || Date.now();
+      incident.lastAction = typeof incident.lastAction === 'string' ? incident.lastAction : 'manual';
+      changed = true;
+    }
+    if (changed) this._loadInvestigationProgress();
+    return changed;
   }
 
   toggle() {
@@ -202,25 +278,33 @@ export class IncidentPanel {
   }
 
   // ── Filters ──────────────────────────────────────────────────────────────
-  _setStatusFilter(filter) {
-    this.statusFilter = filter || 'active';
+  _syncStatusTabs() {
     this.container?.querySelectorAll('[data-filter]').forEach((btn) => {
       const active = btn.dataset.filter === this.statusFilter;
       btn.className = active
         ? 'flex-1 px-3 py-2 text-xs text-red-400 border-b-2 border-red-400 font-medium transition-colors'
         : 'flex-1 px-3 py-2 text-xs text-white/40 border-b-2 border-transparent hover:text-white/60 transition-colors';
     });
-    this._renderList();
   }
 
-  _setCategoryFilter(category) {
-    this.categoryFilter = category || 'all';
+  _syncCategoryTabs() {
     this.container?.querySelectorAll('[data-category-filter]').forEach((btn) => {
       const active = btn.dataset.categoryFilter === this.categoryFilter;
       btn.className = active
         ? 'px-2 py-0.5 rounded-full text-[10px] border bg-white/10 border-white/25 text-white/80 transition-colors'
         : 'px-2 py-0.5 rounded-full text-[10px] border border-white/10 text-white/40 hover:text-white/70 hover:border-white/25 transition-colors';
     });
+  }
+
+  _setStatusFilter(filter) {
+    this.statusFilter = filter || 'active';
+    this._syncStatusTabs();
+    this._renderList();
+  }
+
+  _setCategoryFilter(category) {
+    this.categoryFilter = category || 'all';
+    this._syncCategoryTabs();
     this._renderList();
   }
 
@@ -313,15 +397,27 @@ export class IncidentPanel {
     const engineIncidentId = data.id || data.engineIncidentId || null;
     const existing = this._findByEngineId(engineIncidentId);
     if (existing) {
-      // The shell also calls addIncident() from its own incident:created
-      // listener — update instead of duplicating the card.
-      existing.lastAction = data;
+      // A second announcement for the same engine incident (the shell used to
+      // mirror incident:created through addIncident). Update in place instead
+      // of duplicating the card — and never store the raw payload in
+      // `lastAction` (it rendered as "Resolved ([object Object])").
+      if (typeof data.action === 'string') existing.lastAction = data.action;
       this._renderList();
       return;
     }
     const incident = this._incidentFromEvent(data);
     this.incidents.unshift(incident);
+    this._loadInvestigationProgress();
     this._emitCount();
+    // A new incident must be visible in the drawer even when the player left
+    // the Resolved/All tab or a category filter selected. The reported bug was
+    // "Incidents 0 / No active incidents" while the engine tracked one.
+    if (this.statusFilter !== 'active' || this.categoryFilter !== 'all') {
+      this.statusFilter = 'active';
+      this.categoryFilter = 'all';
+      this._syncStatusTabs();
+      this._syncCategoryTabs();
+    }
     this.show();
     this._renderList();
   }
@@ -336,7 +432,7 @@ export class IncidentPanel {
     if (!incident) return;
     incident.status = 'resolved';
     incident.resolvedAt = Date.now();
-    incident.lastAction = data.action || 'manual';
+    incident.lastAction = typeof data.action === 'string' ? data.action : 'manual';
     if (typeof data.xpEarned === 'number') incident.xpEarned = data.xpEarned;
     this._emitCount();
     if (this.visible) this._renderList();
@@ -414,7 +510,7 @@ export class IncidentPanel {
       // Engine emits incident:resolved → _onIncidentResolved updates the card.
       incident.status = 'resolved';
       incident.resolvedAt = Date.now();
-      incident.lastAction = actionId || 'manual';
+      incident.lastAction = typeof actionId === 'string' ? actionId : 'manual';
       this._emitCount();
       if (this.visible) this._renderList();
       return true;
@@ -576,7 +672,7 @@ export class IncidentPanel {
                             </span>`
                      }
                    </div>`
-                : `<span class="ml-auto text-[10px] text-green-400/50">Resolved${incident.lastAction ? ` (${this._escapeHTML(incident.lastAction)})` : ''}</span>`
+                : `<span class="ml-auto text-[10px] text-green-400/50">Resolved${this._formatActionLabel(incident.lastAction) ? ` (${this._escapeHTML(this._formatActionLabel(incident.lastAction))})` : ''}</span>`
             }
           </div>
         </div>
@@ -655,6 +751,13 @@ export class IncidentPanel {
     const mins = Math.floor(secs / 60);
     if (mins < 60) return `${mins}m ${secs % 60}s`;
     return `${Math.floor(mins / 60)}h ${mins % 60}m`;
+  }
+
+  /** Resolution actions are strings; guard against legacy object payloads. */
+  _formatActionLabel(value) {
+    if (typeof value === 'string') return value;
+    if (typeof value === 'number') return String(value);
+    return '';
   }
 
   _updateTimers() {

@@ -2921,6 +2921,9 @@ body.terminal-open #game-container #resource-palette { bottom: var(--bottom-dock
   -webkit-backdrop-filter: none;
   color: var(--text);
   font-family: var(--font-sans);
+  /* The mission card steps right while the incidents drawer is open; the
+     transition matches the drawer's 240ms slide (see .panel-side). */
+  transition: left 240ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 #objectives-panel[style*="display: none"] { display: none !important; }
 .mission-head {
@@ -3111,9 +3114,21 @@ body.metrics-open .hint-list { max-height: min(18vh, 160px); }
   box-shadow: none;
   backdrop-filter: none;
   -webkit-backdrop-filter: none;
-  transition: bottom 220ms cubic-bezier(0.22, 1, 0.36, 1);
+  transition: bottom 220ms cubic-bezier(0.22, 1, 0.36, 1),
+    left 240ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 body.terminal-open #view-toolbar { bottom: calc(var(--dock-h) + var(--s3)); }
+/* The left incidents drawer also covered the left buttons of the view toolbar
+   (Auto-align / Reset view were under the 360px drawer). Slide the toolbar
+   next to the drawer and let it scroll when the viewport is narrow. */
+body.side-panel-left-open #view-toolbar {
+  left: calc(360px + var(--s4));
+  max-width: calc(100vw - 360px - var(--s4) * 2);
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+}
+body.side-panel-left-open #view-toolbar::-webkit-scrollbar { display: none; }
 .tb-btn {
   display: inline-flex;
   align-items: center;
@@ -3941,6 +3956,15 @@ body.terminal-open {
 .panel-right { right: 0; border-left: 1px solid var(--line); transform: translateX(100%); }
 .panel-left { left: 0; border-right: 1px solid var(--line); transform: translateX(-100%); }
 .panel-side.is-open { transform: translateX(0); }
+/* A left drawer (incidents) is 360px wide. The mission card used to sit at
+   --palette-w + 16px (264px) under the drawer, so opening Incidents buried the
+   level objectives and the "Show hint" footer. Slide the mission card to the
+   right of the drawer while it is open. Narrow viewports (< 900px) can't fit
+   both, so there the drawer simply covers the mission card (see the responsive
+   block below). */
+body.side-panel-left-open #objectives-panel {
+  left: calc(360px + var(--s4));
+}
 /* Dock-aware side panels: stop above the open terminal/metrics dock instead of
    sliding under it. */
 body.metrics-open .panel-side,
@@ -4228,6 +4252,10 @@ body.terminal-open .panel-dock { display: none; }
   body.terminal-open #view-toolbar { bottom: calc(var(--dock-h) + var(--s3)) !important; }
   #inspector-panel { width: min(400px, 92vw) !important; top: var(--hud-h) !important; right: 0 !important; left: auto !important; }
   #incident-panel { width: min(340px, 88vw) !important; top: var(--hud-h) !important; }
+  /* Narrow viewports can't fit the incidents drawer next to the mission card:
+     let the drawer cover it (Esc or the bell closes it) instead of the two
+     colliding sideways. */
+  body.side-panel-left-open #objectives-panel { display: none !important; }
   #minimap, #minimap-container { display: none !important; }
   #hud { height: var(--hud-h) !important; }
   #hud > .hud-bar { height: var(--hud-h) !important; padding: 0 var(--s2) !important; gap: var(--s2) !important; }
