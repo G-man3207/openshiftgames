@@ -369,7 +369,33 @@ function incidentActivity(c) {
   );
   if (activations < 0) return null;
   const active = activeIncidents(c).length;
-  return { activations, active };
+  // Level-start epoch captured by IncidentEngine.start()/reset(). A lazily
+  // captured "first evaluation" baseline is wrong: one-shot preloads with
+  // `triggerTime: 0` activate on the first tick after start(), i.e. BEFORE the
+  // 1 s objective loop first runs, which soft-locked timed lab 02 at 3/4 (#22).
+  const levelStart = (() => {
+    try {
+      if (typeof engine.getActivationEpoch === 'function') {
+        return asNumber(engine.getActivationEpoch(), 0);
+      }
+    } catch {
+      /* fall through */
+    }
+    return asNumber(engine.levelStartActivationCount, 0);
+  })();
+  // Does this level still have incidents that can fire? If not and none ever
+  // activated, an "incident must happen" gate can never be satisfied (campaign
+  // L10's rollout fault is modelled by SimulationTick, not a scripted incident):
+  // fall back to the plain health check instead of soft-locking the level.
+  const hasPlan = (() => {
+    try {
+      if (typeof engine.hasIncidentPlan === 'function') return Boolean(engine.hasIncidentPlan());
+    } catch {
+      /* fall through */
+    }
+    return asArray(engine.scriptedQueue).length > 0;
+  })();
+  return { activations, active, levelStart, hasPlan, gated: hasPlan || activations > levelStart };
 }
 
 function quantityMatches(actual, expected) {
@@ -1659,12 +1685,14 @@ function evaluateUptime(obj, c) {
   const percentage = asNumber(obj.percentage, 90);
   const health = clusterHealthPercent(c);
   // "Restore/keep health ≥ N%" cannot be satisfied before the level's incident
-  // has actually happened. Require an incident activation after level start and
-  // all incidents cleared again (they are the only thing that lowers health).
+  // has actually happened. The baseline is the activation epoch captured at
+  // level start — NOT the activation count at the first evaluation, because
+  // `triggerTime: 0` preloads activate between start() and the first tick and
+  // would otherwise be baked into the baseline forever (#22). Incidents that
+  // fire later still gate completion until they activate and clear again.
   const activity = incidentActivity(c);
-  if (activity) {
-    const baseline = ensureBaseline(obj, () => ({ activations: activity.activations }));
-    if (activity.activations <= baseline.activations) {
+  if (activity && activity.gated) {
+    if (activity.activations <= activity.levelStart) {
       return result(false, Math.round(health), percentage);
     }
     if (activity.active > 0) {
@@ -1677,10 +1705,11 @@ function evaluateUptime(obj, c) {
 function evaluateClusterHealth(obj, c) {
   const minPercent = asNumber(obj.minPercent, 90);
   const health = clusterHealthPercent(c);
+  // Same level-start activation epoch gate as evaluateUptime (#22) so campaign
+  // and timed-lab paths stay symmetric.
   const activity = incidentActivity(c);
-  if (activity) {
-    const baseline = ensureBaseline(obj, () => ({ activations: activity.activations }));
-    if (activity.activations <= baseline.activations || activity.active > 0) {
+  if (activity && activity.gated) {
+    if (activity.activations <= activity.levelStart || activity.active > 0) {
       return result(false, Math.round(health), minPercent);
     }
   }

@@ -230,6 +230,11 @@ class IncidentEngine {
     // ObjectiveEvaluator uses this to gate "restore/keep health" objectives
     // (GAME-001): they cannot be complete before an incident has happened.
     this.activationCount = 0;
+    // Activation epoch captured by start()/reset() at level start. Preloaded
+    // incidents with `triggerTime: 0` activate after start(), so objective
+    // baselines must compare against THIS value, never against the count seen
+    // at the first evaluation (that was #22: lab 02 soft-locked at 3/4).
+    this.levelStartActivationCount = 0;
     this.comboCount = 0;
     this.lastResolveTime = 0;
     this.lastResolveGameSeconds = null;
@@ -397,6 +402,9 @@ class IncidentEngine {
     this.activeIncidents.clear();
     this.resolvedIncidents = [];
     this.activationCount = 0;
+    // Level-start epoch (#22): one-shot incident preloads (triggerTime: 0) fire
+    // on the first tick AFTER start(), so they are counted after this snapshot.
+    this.levelStartActivationCount = 0;
     this.incidentHistory = [];
     this.comboCount = 0;
     this.lastResolveGameSeconds = null;
@@ -1256,9 +1264,84 @@ class IncidentEngine {
     return { applied: true, kind: 'pod', target: incident.targetPod || pods[0].name, pods: pods.length };
   }
 
+  /**
+   * Bind an unbound Pod to a schedulable Node before the incident damages it.
+   *
+   * A CrashLoopBackOff/ImagePullBackOff Pod must have been scheduled by the
+   * kubelet: it has `spec.nodeName`, `status.hostIP`/`podIP`, `startTime` and a
+   * `Scheduled` event. Controller-created Pods are bound by
+   * SimulationTick._tickPodScheduling, but a `triggerTime: 0` preload can run
+   * its damage pass BEFORE that scheduler tick (#23: crash-looping
+   * payment-service Pods showed `Node: <none>` in get/describe). Bind them here
+   * using the simulator's own picker so the placement matches normal scheduling;
+   * fall back to the first Ready, uncordoned Node (name-sorted, deterministic).
+   *
+   * Mutates the Pod only — the caller commits it with the damage, so this never
+   * re-enters the cluster:modified watcher mid-onset.
+   */
+  _bindDamagedPodToNode(pod) {
+    if (!pod || pod.spec?.nodeName) return null;
+    const cluster = this.cluster;
+    if (!cluster || typeof cluster.getByKind !== 'function') return null;
+    const nodes = this._safe(() => cluster.getByKind('Node'), []) || [];
+    if (nodes.length === 0) return null;
+
+    const simulation = this.gameEngine?.simulation || null;
+    let node = null;
+    if (simulation && typeof simulation._findBestNode === 'function') {
+      node = this._safe(() => simulation._findBestNode(pod, nodes), null);
+    }
+    if (!node) {
+      node = nodes
+        .filter(
+          (candidate) =>
+            candidate
+            && candidate.status?.phase !== 'Terminating'
+            && candidate.spec?.unschedulable !== true
+            && !candidate.isCordon
+            && (typeof candidate.isConditionTrue === 'function' ? candidate.isConditionTrue('Ready') : true)
+        )
+        .sort((left, right) =>
+          String(left.metadata?.name || left.name || '').localeCompare(String(right.metadata?.name || right.name || ''))
+        )[0] || null;
+    }
+    if (!node) return null;
+    const nodeName = node.metadata?.name || node.name;
+    if (!nodeName) return null;
+
+    const podName = pod.metadata?.name || pod.name || 'pod';
+    const namespace = pod.metadata?.namespace || pod.namespace || 'default';
+    pod.spec = pod.spec || {};
+    pod._nodeBound = true;
+    pod.spec.nodeName = nodeName;
+    pod.status = pod.status || {};
+    pod.status.startTime = pod.status.startTime || nowIso();
+    pod.status.hostIP = pod.status.hostIP || node.status?.addresses?.[0]?.address || '10.0.0.1';
+    if (!pod.status.podIP) {
+      const generated = simulation && typeof simulation._generatePodIP === 'function'
+        ? this._safe(() => simulation._generatePodIP(), null)
+        : null;
+      pod.status.podIP = generated || '10.244.0.10';
+    }
+    const message = `Successfully assigned ${namespace}/${podName} to ${nodeName}`;
+    if (typeof pod.setCondition === 'function') {
+      pod.setCondition('PodScheduled', 'True', 'Scheduled', message);
+      pod.setCondition('Initialized', 'True', 'PodInitialized');
+    }
+    if (typeof pod.recordEvent === 'function') {
+      pod.recordEvent('Normal', 'Scheduled', message);
+    }
+    return nodeName;
+  }
+
   /** Mutate one Pod's container status + per-Pod crash log annotations. */
   _damagePodObject(incident, pod, opts) {
     if (!pod) return;
+    // #23: a crash-looping/pulling Pod must have been scheduled. Only skip
+    // binding for the unschedulable-Pending flavour (PendingScheduling's
+    // fallback damage), which is *supposed* to have no node.
+    const unschedulablePending = opts?.phase === 'Pending' && !opts?.waitingReason;
+    if (!unschedulablePending) this._safe(() => this._bindDamagedPodToNode(pod));
     const containers = pod.status?.containerStatuses || [];
     const first = containers[0] || { name: 'main', ready: true, started: true, state: {}, lastState: {}, restartCount: 0 };
     const newState = { ...first };
@@ -3780,6 +3863,29 @@ class IncidentEngine {
     };
   }
 
+  /**
+   * Activation epoch of the current level/challenge. Captured when the level
+   * started (start()/reset()) BEFORE one-shot `triggerTime: 0` preloads fire,
+   * so ObjectiveEvaluator can tell "an incident happened during this level"
+   * apart from "an incident was already counted when the first evaluation ran"
+   * (#22: timed lab 02 soft-lock).
+   */
+  getActivationEpoch() {
+    return Number.isFinite(this.levelStartActivationCount) ? this.levelStartActivationCount : 0;
+  }
+
+  /**
+   * Whether the current level still has scripted incidents that can activate.
+   * When the queue is empty (and none ever activated) an activation gate can
+   * never be satisfied — e.g. campaign L10's bad-image rollout is modelled by
+   * SimulationTick, not by a scripted IncidentEngine incident — so the
+   * ObjectiveEvaluator must fall back to the health check instead of waiting
+   * forever for an incident that cannot happen.
+   */
+  hasIncidentPlan() {
+    return this.scriptedQueue.length > 0;
+  }
+
   getStats() {
     const total = this.resolvedIncidents.length;
     const avgResolveTime =
@@ -3833,6 +3939,7 @@ class IncidentEngine {
     this.incidentCounter = 0;
     this.difficultyLevel = 1;
     this.activationCount = 0;
+    this.levelStartActivationCount = 0;
     this.comboCount = 0;
     this.lastResolveTime = 0;
     this.lastResolveGameSeconds = null;
