@@ -62,6 +62,22 @@ import { RESOURCE_KINDS, paletteMeta, KIND_SECTIONS } from '../data/kindRegistry
  *   • HTML overlay (ResourceLabels.js): 11.5px Inter, dark scrim, status dot,
  *     priority + collision culling, distance fade, max ~26 in game / 9 in menu.
  *     Constant screen size — labels never scale into mush again.
+ *
+ * OWNERSHIP / PRESENTATION (v3)
+ *   • "Mine": resources the player created carry one thin OpenShift-red floor ring
+ *     just outside the pedestal + a very low warm underglow, breathing once every
+ *     ~8s. Seeded defaults keep their status halos only. `playerCreated` is a uid
+ *     Set and the treatment lives on child meshes, so it survives layout tweens,
+ *     status updates and selection; it casts no shadows and adds no label boxes.
+ *   • Mine-only focus (`setHighlightMine`) hides everything else and frames the
+ *     player's set; "Platform" presentation (`setPlatformPresentation`) hides or
+ *     dims the seeded platform defaults while the level's working set stays lit.
+ *     Both are presentation-only: positions, connections, autoAlign and cluster
+ *     state are untouched; hidden groups simply leave picking, labels and fit
+ *     bounds (all of which already read `group.visible`).
+ *   • Creation spotlight: `pulseResource` (expanding rings) and
+ *     `focusResourceBriefly` (ease in/hold/return) are transient and cancelled by
+ *     user camera input, a new fit, menu mode or teardown.
  */
 
 // ── Palette / constants ──────────────────────────────────────────────────────
@@ -257,6 +273,29 @@ _sharedRingGeometry.userData.shared = true;
 const _sharedSelectRingGeometry = new THREE.RingGeometry(1.0, 1.16, 64);
 _sharedSelectRingGeometry.userData.shared = true;
 
+/**
+ * "Yours" signature for player-created resources: one thin OpenShift-red floor
+ * ring just outside the pedestal plus a warm, very low underglow. It is
+ * deliberately different from the status halo (which sits inside the footprint
+ * and changes colour with phase): the mine ring never changes colour, breathes
+ * very slowly, casts no shadow and does not affect labels' collision boxes.
+ */
+const MINE_ACCENT = 0xff3529;
+const MINE_RING_OPACITY = 0.34;
+const MINE_POOL_OPACITY = 0.1;
+const MINE_BREATH_SPEED = 0.8;
+/** Seeded platform defaults that are revealed are dimmed, not hidden: they are
+ *  context, not the working set. Dimming multiplies material colours so no
+ *  transparency sorting / shadow changes are introduced. */
+const PLATFORM_DIM_FACTOR = 0.32;
+const PLATFORM_DIM_STATUS = 0.34;
+
+const _sharedMineRingGeometry = new THREE.RingGeometry(1.0, 1.062, 72);
+_sharedMineRingGeometry.userData.shared = true;
+const _sharedMinePoolGeometry = new THREE.PlaneGeometry(1, 1);
+_sharedMinePoolGeometry.rotateX(-Math.PI / 2);
+_sharedMinePoolGeometry.userData.shared = true;
+
 function kindOf(resource) {
   return resource?.kind || resource?.type || resource?._ref?.kind || 'Unknown';
 }
@@ -354,6 +393,22 @@ export class ClusterRenderer {
     this.projectPlanes = new Map();
     // Backwards-compatible alias (old code/minimap paths used namespacePlanes).
     this.namespacePlanes = this.projectPlanes;
+    // Ownership: resources the player creates during the run (palette / oc /
+    // manifests) are "mine", seeded OpenShift defaults are not. Members are uids,
+    // so the marks survive layout animation, status updates and camera moves.
+    this.playerCreated = new Set();
+    this.highlightMine = false;
+    // Presentation filter: seeded platform defaults can be hidden/dimmed while
+    // the working set (level starting resources + Nodes + player creations) stays
+    // legible. Hidden groups leave picking, labels and fitToView automatically
+    // (everything reads group.visible), so autoAlign/connections are unaffected.
+    this.platformUids = new Set();
+    this.platformRevealed = true;
+    this.platformDimmed = false;
+    this.autoRevealUids = new Set();
+    this._minePoolTexture = null;
+    this._minePulses = [];
+    this._focusAnimation = null;
     this.selectedResource = null;
     this.hoveredResource = null;
     this.mouse = new THREE.Vector2(-999, -999);
@@ -882,6 +937,9 @@ export class ClusterRenderer {
       this._dragCandidate = null;
       this.controls.enabled = !this.menuMode;
     };
+    this._onWheel = () => {
+      if (this._focusAnimation) this._cancelFocusAnimation(true);
+    };
     this._onContextMenu = (event) => {
       event.preventDefault();
       event.stopPropagation();
@@ -908,6 +966,7 @@ export class ClusterRenderer {
     this.canvas.addEventListener('mouseup', this._onMouseUp);
     this.canvas.addEventListener('mouseleave', this._onMouseLeave);
     this.canvas.addEventListener('contextmenu', this._onContextMenu);
+    this.canvas.addEventListener('wheel', this._onWheel, { passive: true });
     window.addEventListener('resize', this._onResize);
     window.addEventListener('blur', this._onWindowBlur);
 
@@ -956,6 +1015,7 @@ export class ClusterRenderer {
 
   _handleMouseDown(event) {
     if (event.button !== 0 || this.menuMode) return;
+    if (this._focusAnimation) this._cancelFocusAnimation(true);
     const rect = this.canvas.getBoundingClientRect();
     this.mouse.x = ((event.clientX - rect.left) / Math.max(1, rect.width)) * 2 - 1;
     this.mouse.y = -((event.clientY - rect.top) / Math.max(1, rect.height)) * 2 + 1;
@@ -1087,6 +1147,537 @@ export class ClusterRenderer {
     this._setHovered(null);
   }
 
+  // ── Ownership ("mine") ───────────────────────────────────────────────────
+  /**
+   * Mark a resource uid as player-created ("yours"). Safe to call before the
+   * mesh exists (launchGame re-adds renderables from a snapshot); the visual is
+   * applied when addResource() runs. The treatment is a persistent thin red
+   * ring + warm underglow at pedestal level — no shadows, no label boxes.
+   * @param {string} uid
+   * @returns {boolean} true when the uid was newly marked
+   */
+  markPlayerCreated(uid) {
+    if (!uid) return false;
+    const isNew = !this.playerCreated.has(uid);
+    this.playerCreated.add(uid);
+    const group = this.resourceMeshes.get(uid);
+    if (group) this._applyOwnershipVisual(group, true);
+    if (isNew && this.highlightMine) {
+      this._rebuildPickableList();
+      this._updateContactShadows();
+    }
+    return isNew;
+  }
+
+  /**
+   * Remove the "yours" treatment for one uid (e.g. the resource was deleted).
+   * @param {string} uid
+   */
+  unmarkPlayerCreated(uid) {
+    if (!uid || !this.playerCreated.has(uid)) return;
+    this.playerCreated.delete(uid);
+    const group = this.resourceMeshes.get(uid);
+    if (group) this._applyOwnershipVisual(group, false);
+    if (this.highlightMine) {
+      this._rebuildPickableList();
+      this._updateContactShadows();
+    }
+  }
+
+  /** Drop every ownership mark (cluster reset / returning to the start page). */
+  clearPlayerCreated() {
+    for (const uid of [...this.playerCreated]) {
+      const group = this.resourceMeshes.get(uid);
+      if (group) this._applyOwnershipVisual(group, false);
+    }
+    this.playerCreated.clear();
+    this._clearMinePulses();
+    if (this.highlightMine) this._applyMineEmphasis({ fit: false });
+  }
+
+  /**
+   * Replace the whole ownership set in one call (used by ResourceSpotlight when
+   * re-syncing after a reset).
+   * @param {Iterable<string>} uids
+   */
+  setPlayerCreated(uids) {
+    const next = new Set(uids || []);
+    for (const uid of [...this.playerCreated]) {
+      if (!next.has(uid)) this.unmarkPlayerCreated(uid);
+    }
+    for (const uid of next) this.markPlayerCreated(uid);
+  }
+
+  /** @param {string} uid @returns {boolean} */
+  isPlayerCreated(uid) {
+    return Boolean(uid && this.playerCreated.has(uid));
+  }
+
+  /** @returns {string[]} */
+  getPlayerCreatedUids() {
+    return [...this.playerCreated];
+  }
+
+  /**
+   * Focus mode: keep the player's resources lit while the seeded defaults are
+   * hidden (calm "only what I made" stage) and frame the camera on them. Turning
+   * it off restores every object and the full view.
+   * @param {boolean} enabled
+   * @param {{fit?:boolean}} [options]
+   * @returns {boolean} the resulting mode
+   */
+  setHighlightMine(enabled, options = {}) {
+    const next = Boolean(enabled) && !this.menuMode;
+    const changed = this.highlightMine !== next;
+    this.highlightMine = next;
+    this._applyMineEmphasis({ fit: changed && options.fit !== false });
+    return this.highlightMine;
+  }
+
+  /** Frame only the player-created resources (falls back to false when none). */
+  framePlayerCreated(options = {}) {
+    if (this.menuMode) return false;
+    const mineVisible = [...this.playerCreated].some((uid) => {
+      const group = this.resourceMeshes.get(uid);
+      return group && group.visible !== false;
+    });
+    if (!mineVisible) return false;
+    return this.fitToView({
+      animate: true,
+      duration: 760,
+      padding: 1.24,
+      minDistance: 18,
+      ...options,
+      filter: (group) => this.playerCreated.has(group.userData.resourceId),
+    });
+  }
+
+  /** Apply/remove the persistent "yours" visual on a resource group. */
+  _applyOwnershipVisual(group, mine) {
+    if (!group) return;
+    group.userData.isMine = Boolean(mine);
+    if (mine) {
+      this._ensureMineAccent(group);
+      if (group.userData.mineRing) group.userData.mineRing.visible = true;
+      if (group.userData.minePool) group.userData.minePool.visible = true;
+      if (this.highlightMine) group.visible = true;
+    } else {
+      this._removeMineAccent(group);
+      if (this.highlightMine) group.visible = false;
+    }
+  }
+
+  _ensureMinePoolTexture() {
+    if (!this._minePoolTexture) {
+      this._minePoolTexture = this._createRadialTexture([
+        [0, 'rgba(255,255,255,0.92)'],
+        [0.42, 'rgba(255,255,255,0.34)'],
+        [0.78, 'rgba(255,255,255,0.08)'],
+        [1, 'rgba(255,255,255,0)'],
+      ]);
+      this._minePoolTexture.userData.shared = true;
+    }
+    return this._minePoolTexture;
+  }
+
+  /** Lazily add the ring + underglow children to a marked group. */
+  _ensureMineAccent(group) {
+    if (!group || group.userData.mineRing) return;
+    const footprint = group.userData?.footprint || 1.1;
+
+    const ringMaterial = new THREE.MeshBasicMaterial({
+      color: MINE_ACCENT,
+      transparent: true,
+      opacity: MINE_RING_OPACITY,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+    });
+    const ring = new THREE.Mesh(_sharedMineRingGeometry, ringMaterial);
+    ring.rotation.x = -Math.PI / 2;
+    ring.position.y = 0.017;
+    ring.scale.setScalar(footprint * 1.2);
+    ring.renderOrder = 3;
+    ring.castShadow = false;
+    ring.receiveShadow = false;
+    ring.userData.isGlow = true;
+    ring.userData.noPick = true;
+    group.add(ring);
+
+    const poolMaterial = new THREE.MeshBasicMaterial({
+      map: this._ensureMinePoolTexture(),
+      color: MINE_ACCENT,
+      transparent: true,
+      opacity: MINE_POOL_OPACITY,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+    });
+    const pool = new THREE.Mesh(_sharedMinePoolGeometry, poolMaterial);
+    pool.position.y = 0.006;
+    pool.scale.setScalar(footprint * 4.6);
+    pool.renderOrder = 2;
+    pool.castShadow = false;
+    pool.receiveShadow = false;
+    pool.userData.isGlow = true;
+    pool.userData.noPick = true;
+    group.add(pool);
+
+    group.userData.mineRing = ring;
+    group.userData.minePool = pool;
+    group.userData.minePhase = ((group.position.x * 12.9898 + group.position.z * 78.233) % (Math.PI * 2)) || 0;
+  }
+
+  _removeMineAccent(group) {
+    if (!group) return;
+    for (const key of ['mineRing', 'minePool']) {
+      const mesh = group.userData[key];
+      if (!mesh) continue;
+      group.remove(mesh);
+      mesh.material?.dispose?.();
+      group.userData[key] = null;
+    }
+  }
+
+  // ── Presentation filter (working set vs seeded platform) ─────────────────
+  /**
+   * Configure the working-set presentation.
+   *
+   * @param {{uids?:Iterable<string>, revealed?:boolean, dim?:boolean,
+   *          autoReveal?:Iterable<string>}} [state]
+   *   uids       — seeded platform defaults (everything not in the working set)
+   *   revealed   — show platform defaults at all (false = working set only)
+   *   dim        — draw revealed platform defaults dimmed (clean-lab sessions)
+   *   autoReveal — platform uids that must stay visible because the current
+   *                objective or an active incident refers to them
+   * @param {{fit?:boolean}} [options] fit the camera after applying
+   */
+  setPlatformPresentation(state = {}, options = {}) {
+    if (state.uids !== undefined) this.platformUids = new Set(state.uids || []);
+    if (state.revealed !== undefined) this.platformRevealed = Boolean(state.revealed);
+    if (state.dim !== undefined) this.platformDimmed = Boolean(state.dim);
+    if (state.autoReveal !== undefined) this.autoRevealUids = new Set(state.autoReveal || []);
+    this._applyPresentation({ fit: options.fit === true });
+  }
+
+  /** Drop the presentation filter and show the full diorama (start-page hero). */
+  clearPlatformPresentation() {
+    this.platformUids = new Set();
+    this.platformRevealed = true;
+    this.platformDimmed = false;
+    this.autoRevealUids = new Set();
+    this._applyPresentation({ fit: false });
+  }
+
+  /** @returns {string[]} */
+  getPlatformUids() {
+    return [...this.platformUids];
+  }
+
+  /** @param {string} uid @returns {boolean} */
+  isPlatformResource(uid) {
+    return Boolean(uid && this.platformUids.has(uid));
+  }
+
+  /** @returns {boolean} */
+  isPlatformRevealed() {
+    return this.platformRevealed;
+  }
+
+  /**
+   * One place that derives visibility/dim for every group. Precedence:
+   *   menu showcase > Mine-only emphasis > platform filter.
+   * Hidden groups are excluded from picking (rebuilt), labels (they skip
+   * hidden groups), camera fit and tier bands because everything reads
+   * `group.visible`. Positions, connections and layout are untouched.
+   */
+  _applyPresentation({ fit = false } = {}) {
+    for (const [id, group] of this.resourceMeshes) {
+      if (this.menuMode) {
+        this._setGroupDim(group, false);
+        continue;
+      }
+      const placement = this._computeGroupPresentation(id);
+      group.visible = placement.visible;
+      this._setGroupDim(group, placement.dimmed);
+    }
+
+    if (!this.menuMode) {
+      const visible = (uid) => {
+        const group = this.resourceMeshes.get(uid);
+        return Boolean(group && group.visible !== false);
+      };
+      if (this.selectedResource && !visible(this.selectedResource)) this._setSelected(null);
+      if (this.hoveredResource && !visible(this.hoveredResource)) this._setHovered(null);
+    }
+
+    this._rebuildPickableList();
+    this.connectionLines?.updatePositions?.(this.resourceMeshes);
+    this._refreshTierBands();
+    this._updateContactShadows();
+    if (!fit || this.menuMode) return;
+    if (this.highlightMine) this.framePlayerCreated({ animate: true, duration: 720 });
+    else this.fitToView({ animate: true, duration: 640 });
+  }
+
+  /** @param {string} id @returns {{visible:boolean, dimmed:boolean}} */
+  _computeGroupPresentation(id) {
+    const isMine = this.playerCreated.has(id);
+    const isPlatform = this.platformUids.has(id);
+    const autoRevealed = this.autoRevealUids.has(id);
+    let visible = true;
+    if (this.highlightMine) visible = isMine;
+    else if (isPlatform && !this.platformRevealed && !autoRevealed) visible = false;
+    const dimmed = visible && isPlatform && this.platformDimmed && !this.highlightMine;
+    return { visible, dimmed };
+  }
+
+  /** Apply the presentation to one group (used by addResource). */
+  _applyGroupPresentation(group) {
+    if (!group) return;
+    const id = group.userData?.resourceId;
+    if (this.menuMode) {
+      this._setGroupDim(group, false);
+      return;
+    }
+    const { visible, dimmed } = this._computeGroupPresentation(id);
+    group.visible = visible;
+    this._setGroupDim(group, dimmed);
+  }
+
+  /**
+   * Dim/un-dim a group by multiplying its material colours (no transparency
+   * flag flips, no shadow changes). Originals are kept on the materials so the
+   * operation is idempotent and reversible.
+   */
+  _setGroupDim(group, dimmed) {
+    if (!group) return;
+    const next = Boolean(dimmed);
+    if (Boolean(group.userData.dimmed) === next) return;
+    group.userData.dimmed = next;
+    if (next) {
+      const touched = [];
+      group.traverse((child) => {
+        if (!child.isMesh) return;
+        const materials = Array.isArray(child.material) ? child.material : [child.material];
+        for (const material of materials) {
+          if (!material || !material.color) continue;
+          if (material.userData?._platformDim) continue;
+          material.userData = material.userData || {};
+          material.userData._platformDim = {
+            color: material.color.getHex(),
+            emissive: material.emissive?.getHex?.(),
+            emissiveIntensity: material.emissiveIntensity,
+          };
+          material.color.multiplyScalar(PLATFORM_DIM_FACTOR);
+          if (material.emissive) material.emissive.multiplyScalar(0.35);
+          touched.push(material);
+        }
+      });
+      group.userData._dimMaterials = touched;
+    } else {
+      for (const material of group.userData._dimMaterials || []) {
+        const backup = material.userData?._platformDim;
+        if (!backup) continue;
+        material.color.setHex(backup.color);
+        if (material.emissive && backup.emissive !== undefined) material.emissive.setHex(backup.emissive);
+        if (backup.emissiveIntensity !== undefined) material.emissiveIntensity = backup.emissiveIntensity;
+        delete material.userData._platformDim;
+      }
+      group.userData._dimMaterials = [];
+    }
+  }
+
+  /** @deprecated alias kept for the Mine toggle; now shared with the filter. */
+  _applyMineEmphasis({ fit = false } = {}) {
+    this._applyPresentation({ fit });
+  }
+
+  // ── Creation spotlight ───────────────────────────────────────────────────
+  /**
+   * One-shot expanding-ring pulse on a resource so a newcomer can see where a
+   * freshly created object landed. Uses shared geometry and a short-lived
+   * material; no shadows and nothing persists after the pulse.
+   * @param {string} uid
+   * @param {{duration?:number, rings?:number, delay?:number}} [options]
+   * @returns {boolean}
+   */
+  pulseResource(uid, options = {}) {
+    const group = this.resourceMeshes.get(uid);
+    if (!group || !this.running || group.visible === false) return false;
+    const { duration = 2200, rings = 2, delay = 0 } = options;
+    const base = Math.max(1.2, (group.userData?.footprint || 1.1) * 1.45);
+    const pulse = { uid, group, start: performance.now() + delay, duration, rings: [] };
+    for (let index = 0; index < rings; index += 1) {
+      const material = new THREE.MeshBasicMaterial({
+        color: MINE_ACCENT,
+        transparent: true,
+        opacity: 0,
+        side: THREE.DoubleSide,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+      });
+      const mesh = new THREE.Mesh(_sharedMineRingGeometry, material);
+      mesh.rotation.x = -Math.PI / 2;
+      mesh.position.y = 0.019 + index * 0.0005;
+      mesh.scale.setScalar(base);
+      mesh.visible = false;
+      mesh.renderOrder = 4;
+      mesh.castShadow = false;
+      mesh.receiveShadow = false;
+      mesh.userData.isGlow = true;
+      mesh.userData.noPick = true;
+      group.add(mesh);
+      pulse.rings.push({ mesh, material, base, delay: index * 240 });
+    }
+    this._minePulses.push(pulse);
+    return true;
+  }
+
+  _updateMinePulses(now) {
+    if (!this._minePulses.length) return;
+    for (let index = this._minePulses.length - 1; index >= 0; index -= 1) {
+      const pulse = this._minePulses[index];
+      const elapsed = now - pulse.start;
+      let alive = elapsed < pulse.duration;
+      for (const ring of pulse.rings) {
+        const t = (elapsed - ring.delay) / 1000;
+        if (t < 0) {
+          ring.mesh.visible = false;
+          alive = true;
+          continue;
+        }
+        if (t >= 1) {
+          ring.mesh.visible = false;
+          continue;
+        }
+        alive = true;
+        const ease = 1 - Math.pow(1 - t, 3);
+        ring.mesh.visible = true;
+        ring.mesh.scale.setScalar(ring.base * (1 + ease * 1.7));
+        ring.material.opacity = 0.62 * Math.pow(1 - t, 2);
+      }
+      if (!alive) {
+        this._disposePulse(pulse);
+        this._minePulses.splice(index, 1);
+      }
+    }
+  }
+
+  _disposePulse(pulse) {
+    for (const ring of pulse.rings || []) {
+      ring.mesh.parent?.remove(ring.mesh);
+      ring.material?.dispose?.();
+    }
+  }
+
+  _clearMinePulses() {
+    for (const pulse of this._minePulses) this._disposePulse(pulse);
+    this._minePulses = [];
+  }
+
+  /**
+   * Brief, calm camera acknowledgment: ease in toward a freshly created object,
+   * hold for a beat, then return to the exact previous view. Cancelled by any
+   * user canvas interaction or by a new fit. No-op in menu/showcase mode.
+   * @param {string} uid
+   * @param {{duration?:number, hold?:number, returnDuration?:number}} [options]
+   * @returns {boolean}
+   */
+  focusResourceBriefly(uid, options = {}) {
+    if (this.menuMode || !this.camera) return false;
+    const group = this.resourceMeshes.get(uid);
+    if (!group || group.visible === false) return false;
+    if (this._focusAnimation) this._cancelFocusAnimation(false);
+
+    const { duration = 520, hold = 700, returnDuration = 760 } = options;
+    const savedPosition = this.camera.position.clone();
+    const savedTarget = this.controls.target.clone();
+    const offset = savedPosition.clone().sub(savedTarget);
+    const currentDistance = Math.max(this.controls.minDistance || 6, offset.length());
+    const direction = offset.normalize();
+
+    const height = group.userData?.height || 1.8;
+    const footprint = group.userData?.footprint || 1.1;
+    const focusTarget = new THREE.Vector3(
+      group.position.x,
+      Math.max(0.25, height * 0.35),
+      group.position.z,
+    );
+    // Gentle acknowledgement, not a jump cut: ~1/3 closer than the fitted view,
+    // and never closer than a comfortable read distance.
+    const framedDistance = clamp(Math.max(footprint * 9, 18), 14, 30);
+    const endDistance = Math.min(currentDistance, framedDistance);
+    const endPosition = focusTarget.clone().addScaledVector(direction, endDistance);
+
+    const animation = {
+      id: null,
+      phase: 'in',
+      phaseStart: performance.now(),
+      duration: Math.max(1, duration),
+      hold: Math.max(0, hold),
+      returnDuration: Math.max(1, returnDuration),
+      savedPosition,
+      savedTarget,
+      endPosition,
+      endTarget: focusTarget,
+    };
+    this._focusAnimation = animation;
+    this.controls.enabled = false;
+
+    const step = () => {
+      const active = this._focusAnimation;
+      if (!active) return;
+      const now = performance.now();
+      if (active.phase === 'in') {
+        const t = Math.min(1, (now - active.phaseStart) / active.duration);
+        const ease = easeOutCubic(t);
+        this.camera.position.lerpVectors(active.savedPosition, active.endPosition, ease);
+        this.controls.target.lerpVectors(active.savedTarget, active.endTarget, ease);
+        if (t >= 1) {
+          active.phase = 'hold';
+          active.phaseStart = now;
+        }
+      } else if (active.phase === 'hold') {
+        if (now - active.phaseStart >= active.hold) {
+          active.phase = 'out';
+          active.phaseStart = now;
+          active.holdPosition = this.camera.position.clone();
+          active.holdTarget = this.controls.target.clone();
+        }
+      } else {
+        const t = Math.min(1, (now - active.phaseStart) / active.returnDuration);
+        const ease = easeOutCubic(t);
+        this.camera.position.lerpVectors(active.holdPosition, active.savedPosition, ease);
+        this.controls.target.lerpVectors(active.holdTarget, active.savedTarget, ease);
+        if (t >= 1) {
+          this._focusAnimation = null;
+          this.controls.enabled = !this.menuMode;
+          this.controls.update();
+          return;
+        }
+      }
+      this.camera.lookAt(this.controls.target);
+      active.id = requestAnimationFrame(step);
+    };
+    animation.id = requestAnimationFrame(step);
+    return true;
+  }
+
+  _cancelFocusAnimation(restore = false) {
+    const animation = this._focusAnimation;
+    if (!animation) return false;
+    if (animation.id) cancelAnimationFrame(animation.id);
+    this._focusAnimation = null;
+    if (restore) {
+      this.camera.position.copy(animation.savedPosition);
+      this.controls.target.copy(animation.savedTarget);
+      this.camera.lookAt(this.controls.target);
+    }
+    this.controls.enabled = !this.menuMode;
+    this.controls.update();
+    return true;
+  }
+
   // ── Resource lifecycle ───────────────────────────────────────────────────
   /**
    * @param {{id:string, kind?:string, type?:string, name?:string, namespace?:string,
@@ -1136,6 +1727,16 @@ export class ClusterRenderer {
 
     this.scene.add(group);
     this.resourceMeshes.set(id, group);
+
+    // Player-created resources carry the persistent "yours" signature. The uid
+    // may already be marked before the mesh exists (launchGame re-adds meshes
+    // from a cluster snapshot without events), hence the set lookup here.
+    const mine = resource.playerCreated === true || this.playerCreated.has(id);
+    if (resource.playerCreated === true) this.playerCreated.add(id);
+    if (mine) this._applyOwnershipVisual(group, true);
+    if (this.menuMode) group.visible = true;
+    else this._applyGroupPresentation(group);
+
     this._rebuildPickableList();
     this._refreshTierBands();
     this._updateContactShadows();
@@ -1156,6 +1757,7 @@ export class ClusterRenderer {
     this.meshFactory.dispose(group);
 
     this.resourceMeshes.delete(resourceId);
+    this.playerCreated.delete(resourceId);
     this._rebuildPickableList();
     this._refreshTierBands();
     this._updateContactShadows();
@@ -1434,6 +2036,32 @@ export class ClusterRenderer {
   }
 
   // ── Camera framing ───────────────────────────────────────────────────────
+  /** Width of the left UI dock that overlays the canvas (0 when hidden). */
+  _uiLeftInset() {
+    if (this.menuMode || typeof document === 'undefined') return 0;
+    const { width } = this._viewportSize();
+    let inset = 0;
+    const rightOf = (id) => {
+      try {
+        const element = document.getElementById(id);
+        if (!element) return 0;
+        const rect = element.getBoundingClientRect();
+        if (!rect.width || rect.height < 10) return 0;
+        const style = window.getComputedStyle(element);
+        if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') return 0;
+        return rect.right;
+      } catch {
+        return 0;
+      }
+    };
+    inset = Math.max(inset, rightOf('resource-palette'));
+    // Campaign/timed-lab objectives float over the left of the canvas; the level
+    // furniture should not hide behind them. Capped so narrow viewports do not
+    // squeeze the diorama into a sliver.
+    inset = Math.max(inset, Math.min(rightOf('objectives-panel'), width * 0.28));
+    return Math.max(0, Math.min(inset, width * 0.45));
+  }
+
   _viewportSize() {
     return {
       width: Math.max(1, this.canvas.clientWidth || window.innerWidth || 1),
@@ -1463,13 +2091,14 @@ export class ClusterRenderer {
    * Fit points: model bounds + label anchors + floor section names. Labels and
    * floor names are part of the composition, so the fit must not crop them.
    */
-  _computeFitPoints() {
+  _computeFitPoints(filter = null) {
     const points = [];
     const box = new THREE.Box3();
     let count = 0;
 
     for (const group of this.resourceMeshes.values()) {
       if (group.visible === false) continue;
+      if (filter && !filter(group)) continue;
       const footprint = group.userData?.footprint || 1.1;
       const height = group.userData?.height || 1.8;
       const labelY = group.position.y + (group.userData?.labelY ?? height + 0.4);
@@ -1487,7 +2116,7 @@ export class ClusterRenderer {
       box.set(new THREE.Vector3(-15, 0, -16), new THREE.Vector3(15, 3, 27));
     }
 
-    for (const band of this.tierBands?.values?.() || []) {
+    for (const band of filter ? [] : (this.tierBands?.values?.() || [])) {
       if (!band.group.visible) continue;
       // The tinted zone itself must stay inside the frame, otherwise a tier row
       // visually runs off the edge even when its models are framed.
@@ -1522,7 +2151,7 @@ export class ClusterRenderer {
    * Frame every resource inside the current canvas aspect.
    * @param {{padding?:number, animate?:boolean, duration?:number,
    *          insets?:{top?:number,bottom?:number,left?:number,right?:number},
-   *          intro?:boolean}} [options]
+   *          intro?:boolean, filter?:(group:THREE.Group)=>boolean}} [options]
    */
   fitToView(options = {}) {
     const {
@@ -1530,20 +2159,33 @@ export class ClusterRenderer {
       animate = false,
       duration = 820,
       intro = false,
+      filter = null,
+      // A clean session can legitimately contain only two Nodes: without a floor
+      // the fit would push the camera into the pedestals. The sandbox/menu fits
+      // are already far away, so this only affects small working sets.
+      minDistance = this.menuMode ? 0 : 30,
     } = options;
     const { width, height } = this._viewportSize();
     if (width < 4 || height < 4 || !this.camera) return;
 
-    const { box, points } = this._computeFitPoints();
+    // A fresh fit always wins over a creation focus tween.
+    if (this._focusAnimation) this._cancelFocusAnimation(false);
+
+    const { box, points } = this._computeFitPoints(typeof filter === 'function' ? filter : null);
     const sphere = box.getBoundingSphere(new THREE.Sphere());
     const center = box.getCenter(new THREE.Vector3());
     const radius = Math.max(6, sphere.radius);
 
     // Keep content clear of the HUD (top) and command toolbar (bottom); in the
-    // start-page hero there are no overlays, so use the whole frame.
+    // start-page hero there are no overlays, so use the whole frame. When a
+    // presentation filter is active (clean session / Mine / Platform hidden) the
+    // palette dock is part of the safe area, so the working set is centred in the
+    // visible canvas instead of hiding behind it.
+    const presentationActive = this.highlightMine || (this.platformUids.size > 0 && !this.platformRevealed);
+    const leftInset = presentationActive ? this._uiLeftInset() : 0;
     const baseInsets = this.menuMode
       ? { top: 0, bottom: 0, left: 0, right: 0 }
-      : { top: 52, bottom: 58, left: 0, right: 0 };
+      : { top: 52, bottom: 58, left: leftInset, right: 0 };
     const insetScale = Math.min(1, height / 780);
     const insets = {
       top: (options.insets?.top ?? baseInsets.top) * insetScale,
@@ -1630,6 +2272,14 @@ export class ClusterRenderer {
     }
 
     distance = clamp(distance, this.controls.minDistance, maxDistance);
+    if (minDistance > 0) distance = Math.max(distance, Math.min(minDistance, maxDistance));
+
+    // Centre the composition inside the *usable* rect, not the raw viewport: with
+    // the palette dock on the left the working set should sit right of it.
+    const rectCentreX = (insets.left + usableWidth / 2) / width * 2 - 1;
+    if (Math.abs(rectCentreX) > 0.001) {
+      target.addScaledVector(right, -rectCentreX * tanH * distance);
+    }
 
     const cameraPosition = target.clone().addScaledVector(direction, distance);
 
@@ -1832,6 +2482,7 @@ export class ClusterRenderer {
     this._refreshTierBands();
     this._updateContactShadows();
     this._rebuildPickableList();
+    if (!this.menuMode) this._applyPresentation({ fit: false });
   }
 
   /** Toggle the hero subsetting (default on). */
@@ -1857,6 +2508,12 @@ export class ClusterRenderer {
     this.menuMode = next;
 
     if (next) {
+      this._cancelFocusAnimation(true);
+      this._clearMinePulses();
+      // The start-page hero owns its own showcase subset; never leave the
+      // mine-only filter or platform dimming active behind it.
+      this.highlightMine = false;
+      for (const group of this.resourceMeshes.values()) this._setGroupDim(group, false);
       this.deselectAll();
       this.controls.enabled = false;
       this.controls.autoRotate = true;
@@ -1952,6 +2609,8 @@ export class ClusterRenderer {
 
   stop() {
     this.running = false;
+    this._cancelFocusAnimation(false);
+    this._clearMinePulses();
     if (this._refitTimer) {
       clearTimeout(this._refitTimer);
       this._refitTimer = null;
@@ -1977,8 +2636,8 @@ export class ClusterRenderer {
       if (this.keyLight.castShadow !== shadowsOn) this.keyLight.castShadow = shadowsOn;
     }
 
-    if (this._fitAnimation) {
-      // Camera is driven by the fit tween.
+    if (this._fitAnimation || this._focusAnimation) {
+      // Camera is driven by the fit/focus tweens.
     } else {
       if (this.menuMode) this._updateParallax(delta);
       this.controls.update();
@@ -1996,6 +2655,7 @@ export class ClusterRenderer {
     this.connectionLines.update(delta);
     this.particleTraffic.update(delta);
     this._animateResources(delta, now);
+    this._updateMinePulses(now);
 
     const focus = this._lastFit?.center || this.controls.target;
     this._labelContext.menuMode = this.menuMode;
@@ -2033,12 +2693,26 @@ export class ClusterRenderer {
         group.scale.setScalar(targetScale);
       }
 
+      const isMine = this.playerCreated.has(group.userData.resourceId);
+
+      // "Yours": a very slow breath on the red ring/underglow (never a chase light).
+      const mineRing = group.userData.mineRing;
+      if (mineRing) {
+        const phase = group.userData.minePhase || 0;
+        const breathe = 0.5 + 0.5 * Math.sin(time * MINE_BREATH_SPEED + phase);
+        mineRing.material.opacity = MINE_RING_OPACITY - 0.1 + 0.16 * breathe;
+        if (group.userData.minePool) {
+          group.userData.minePool.material.opacity = MINE_POOL_OPACITY - 0.04 + 0.09 * breathe;
+        }
+      }
+
       const statusMaterial = group.userData.statusMaterial;
       if (statusMaterial) {
         const base = group.userData.statusBaseOpacity ?? 0.5;
         const hovered = group.userData.resourceId === this.hoveredResource;
         const selected = group.userData.resourceId === this.selectedResource;
-        const boost = selected ? 1.45 : hovered ? 1.2 : 1;
+        const boost = (selected ? 1.45 : hovered ? 1.2 : 1) * (isMine ? 1.12 : 1)
+          * (group.userData.dimmed ? PLATFORM_DIM_STATUS : 1);
         if (group.userData.statusPulse) {
           const pulse = 0.68 + 0.32 * Math.sin(time * (this.menuMode ? 1.1 : 1.9) + group.position.x * 0.7);
           statusMaterial.opacity = base * boost * pulse;
@@ -2114,12 +2788,17 @@ export class ClusterRenderer {
     this._resizeObserver?.disconnect?.();
 
     this.controls.dispose();
+    this._cancelFocusAnimation(false);
+    this._clearMinePulses();
+    this._minePoolTexture?.dispose?.();
+    this._minePoolTexture = null;
 
     this.canvas.removeEventListener('mousemove', this._onMouseMove);
     this.canvas.removeEventListener('mousedown', this._onMouseDown);
     this.canvas.removeEventListener('mouseup', this._onMouseUp);
     this.canvas.removeEventListener('mouseleave', this._onMouseLeave);
     this.canvas.removeEventListener('contextmenu', this._onContextMenu);
+    this.canvas.removeEventListener('wheel', this._onWheel);
     window.removeEventListener('resize', this._onResize);
     window.removeEventListener('blur', this._onWindowBlur);
 

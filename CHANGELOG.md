@@ -59,6 +59,29 @@ system. Gameplay, the engine and the EX280 content are unchanged apart from the 
 
 ### Fixed
 
+- **`oc` fidelity (namespaces and auth)** — namespaced requests against a project that does not exist
+  now fail like the real CLI (`Error from server (NotFound): namespaces "<ns>" not found`) across
+  `get`/`describe`/`delete`/`apply -f`/`create`/`status`/`logs`, while cluster-scoped kinds and `-A`
+  are unaffected. `-n` now re-targets `apply/create/replace -f` objects (including multi-document files
+  and piped `-f -`) into the requested namespace. `oc login` failures use real `oc` wording
+  (401 + "not known to the configured identity provider" / "Verify you have provided the correct
+  credentials") instead of blaming HTPasswd, and failed logins never change the session.
+  `oc get --raw /version` returns the server version JSON.
+- **Every full-screen surface pauses the mission clock** — help (`H`), EX280 Prep (`?`) and the Files &
+  Manifests panel (`F`) now freeze the campaign elapsed time and the timed-lab countdown, and resume
+  exactly once when the last of them closes. `Esc` closes them in order (panels → Files → help → EX280
+  → pause) instead of opening the pause card behind an open overlay; launch and quit clear all pause
+  state.
+- **A campaign session starts clean** — campaign and timed-lab levels now open with only their own
+  working set (level starting resources + Nodes) instead of ~47 seeded platform objects. The seeded
+  platform defaults are one click away behind a `Platform 47` HUD toggle and are dimmed when revealed;
+  anything the current objective or an active incident references is auto-revealed. Sandbox and Chaos
+  keep the full scene.
+- **You can always find your own resources** — player-created resources carry a persistent red "yours"
+  accent, are labelled with a stronger priority, and a `Mine N` HUD control emphasises/frames them
+  (with an empty-state hint). Creating a resource gives a short pulse + gentle camera focus so a
+  newcomer sees where it landed.
+
 - **Platform version consistency** — a new `js/data/platformVersions.js` is the single source of truth
   for the emulated release (OCP 4.22.0, Kubernetes 1.35, CRI-O, RHCOS image and kernel). The pre-fork
   Kubernetes relic in the node model (`kubeletVersion v1.29.2`, `containerd://1.7.11`) is gone:

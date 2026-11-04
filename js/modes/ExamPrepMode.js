@@ -429,6 +429,7 @@ export class ExamPrepUI {
   show() {
     this.init();
     if (!this.overlay) return this;
+    const wasVisible = this.visible;
     this._previousFocus = typeof document !== 'undefined' ? document.activeElement : null;
     this.visible = true;
     this.overlay.classList.add('active');
@@ -439,7 +440,9 @@ export class ExamPrepUI {
     } catch {
       /* ignore */
     }
-    this._emit('ui:exam-prep-opened', { tab: this.activeTab });
+    // Emit only on the hidden → visible transition: the shell listens to this
+    // event to pause the mission clocks, and duplicate opens must not stack.
+    if (!wasVisible) this._emit('ui:exam-prep-opened', { tab: this.activeTab });
     return this;
   }
 
@@ -448,6 +451,7 @@ export class ExamPrepUI {
       this.visible = false;
       return this;
     }
+    const wasVisible = this.visible;
     this.visible = false;
     this.overlay.classList.remove('active');
     this.overlay.setAttribute('aria-hidden', 'true');
@@ -459,7 +463,8 @@ export class ExamPrepUI {
       /* ignore */
     }
     this._previousFocus = null;
-    this._emit('ui:exam-prep-closed', {});
+    // Emit only on the visible → hidden transition (no duplicate closes).
+    if (wasVisible) this._emit('ui:exam-prep-closed', {});
     return this;
   }
 

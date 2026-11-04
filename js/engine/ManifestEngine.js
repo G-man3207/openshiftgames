@@ -387,9 +387,13 @@ export class ManifestEngine {
 
   /**
    * Expand `kind: List` wrappers and validate a raw manifest object.
+   * @param {object} raw
+   * @param {string} source
+   * @param {{namespace?: string}} [options] explicit namespace override
+   *   (`oc apply -f … -n <project>`); applies to every namespaced object.
    * @returns {{ok: true, doc: object} | {ok: false, error: string, detail: object}}
    */
-  _normalizeDoc(raw, source) {
+  _normalizeDoc(raw, source, options = {}) {
     if (!isPlainObject(raw)) {
       return { ok: false, error: `${source}: document is not a mapping`, detail: { file: source, message: 'document is not a mapping' } };
     }
@@ -403,7 +407,7 @@ export class ManifestEngine {
     const kind = String(raw.kind);
     if (kind === 'List') {
       const items = Array.isArray(raw.items) ? raw.items : [];
-      return { ok: true, list: items.map((item, index) => this._normalizeDoc(item, `${source}[items ${index}]`)) };
+      return { ok: true, list: items.map((item, index) => this._normalizeDoc(item, `${source}[items ${index}]`, options)) };
     }
     const canonical = this._canonicalKind(kind);
     if (!canonical) {
@@ -430,7 +434,10 @@ export class ManifestEngine {
     metadata.name = name;
     const namespaced = !isClusterScopedKind(canonical);
     if (namespaced) {
-      metadata.namespace = metadata.namespace ? String(metadata.namespace) : this._currentProject();
+      // An explicit `-n/--namespace` overrides manifest metadata like oc's
+      // EnforceNamespace; otherwise the manifest value (or current project) wins.
+      const override = options && options.namespace ? String(options.namespace) : '';
+      metadata.namespace = override || (metadata.namespace ? String(metadata.namespace) : this._currentProject());
     } else {
       metadata.namespace = '';
     }
@@ -473,12 +480,12 @@ export class ManifestEngine {
   }
 
   /** Flatten List wrappers into individual validated docs. */
-  _normalizeAll(rawDocs, source) {
+  _normalizeAll(rawDocs, source, options = {}) {
     const out = [];
     const errors = [];
     const details = [];
     for (const raw of rawDocs) {
-      const normalized = this._normalizeDoc(raw, source);
+      const normalized = this._normalizeDoc(raw, source, options);
       if (!normalized.ok) {
         errors.push(normalized.error);
         details.push(normalized.detail);
@@ -596,11 +603,12 @@ export class ManifestEngine {
   /**
    * Apply already-parsed YAML documents.
    * @param {object[]} rawDocs
-   * @param {{source?: string, event?: string|null, path?: string}} [opts]
+   * @param {{source?: string, event?: string|null, path?: string, namespace?: string}} [opts]
    */
   _applyDocuments(rawDocs, opts = {}) {
     const source = opts.source || '<input>';
-    const { docs, errors, details } = this._normalizeAll(rawDocs, source);
+    const normalizeOptions = opts.namespace ? { namespace: String(opts.namespace) } : {};
+    const { docs, errors, details } = this._normalizeAll(rawDocs, source, normalizeOptions);
     if (errors.length > 0) {
       return this._emptyResult({ errors, errorDetails: details, source });
     }
@@ -687,8 +695,14 @@ export class ManifestEngine {
 
   // ── oc apply -f / oc create -f ───────────────────────────────────────────
 
-  /** @returns {ReturnType<ManifestEngine['_emptyResult']> & {created: object[], updated: object[]}} */
-  applyFile(path) {
+  /**
+   * `oc apply -f` / `oc create -f` for a virtual file.
+   * @param {string} path
+   * @param {{namespace?: string}} [options] explicit `-n/--namespace` override:
+   *   additive and optional, so the Files panel's applyFile(path) is unchanged.
+   * @returns {ReturnType<ManifestEngine['_emptyResult']> & {created: object[], updated: object[]}}
+   */
+  applyFile(path, options = {}) {
     const norm = normalizePath(path);
     if (!this.files.has(norm)) {
       return this._emptyResult({
@@ -709,7 +723,7 @@ export class ManifestEngine {
         errorDetails: [{ file: norm, message: 'no objects passed to apply' }],
       });
     }
-    const result = this._applyDocuments(docs, { source: norm, path: norm, event: 'manifest:applied' });
+    const result = this._applyDocuments(docs, { source: norm, path: norm, event: 'manifest:applied', namespace: options.namespace });
     if (result.ok) {
       const templateMatch = this._matchPendingTemplate(docs);
       if (templateMatch) {
@@ -736,8 +750,13 @@ export class ManifestEngine {
     return result;
   }
 
-  /** Parse + apply an array of objects (used by `oc process ... | oc apply -f -`). */
-  applyObjects(objects, source = '<stdin>') {
+  /**
+   * Parse + apply an array of objects (used by `oc process ... | oc apply -f -`).
+   * @param {object[]} objects
+   * @param {string} [source]
+   * @param {{namespace?: string}} [options] explicit `-n/--namespace` override
+   */
+  applyObjects(objects, source = '<stdin>', options = {}) {
     if (!Array.isArray(objects)) {
       return this._emptyResult({
         errors: [`error: no objects supplied to apply (expected an array, got ${typeof objects})`],
@@ -750,7 +769,7 @@ export class ManifestEngine {
         errorDetails: [{ message: 'no objects passed to apply' }],
       });
     }
-    const result = this._applyDocuments(docs, { source, path: source, event: 'manifest:applied' });
+    const result = this._applyDocuments(docs, { source, path: source, event: 'manifest:applied', namespace: options.namespace });
 
     // If the objects are the output of processTemplate(), record/emit the
     // template application (oc process ... | oc apply -f -).

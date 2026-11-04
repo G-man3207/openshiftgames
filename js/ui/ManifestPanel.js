@@ -141,6 +141,7 @@ export class ManifestPanel {
   show(resource) {
     this.init();
     if (!this.initialized) return this;
+    const wasVisible = this.visible;
     const editingResource = Boolean(resource && typeof resource === 'object');
     if (editingResource) this._openResourceForEdit(resource);
     this.refresh();
@@ -159,12 +160,19 @@ export class ManifestPanel {
         }
       });
     }
+    // The shell listens to this to freeze the mission clock while the modal is
+    // up; emit only on the hidden → visible transition so re-opens cannot stack.
+    if (!wasVisible) this._emit('ui:manifest-opened', { path: this.currentPath });
     return this;
   }
 
   hide() {
+    const wasVisible = this.visible;
     this.visible = false;
     if (this.root) this.root.style.display = 'none';
+    // Emit only on the visible → hidden transition (close button, backdrop,
+    // Esc key handler, programmatic hide and destroy all funnel through here).
+    if (wasVisible) this._emit('ui:manifest-closed', { path: this.currentPath });
     return this;
   }
 
@@ -453,6 +461,17 @@ export class ManifestPanel {
     window.game = window.game || {};
     window.game.manifestPanel = this;
     window.game.manifestEngine = this.manifestEngine;
+  }
+
+  /** Emit a shell event (best effort: the panel also runs in Node harnesses). */
+  _emit(event, data) {
+    try {
+      const bus = this.game?.eventBus
+        || (typeof window !== 'undefined' ? window.game?.gameEngine?.eventBus : null);
+      bus?.emit?.(event, data);
+    } catch {
+      /* ignore event wiring failures */
+    }
   }
 
   // ── file tree / editor ───────────────────────────────────────────────────

@@ -581,6 +581,29 @@ await runSection('tutorial', async () => {
   await evaluate(() => document.getElementById('coach-skip')?.click());
   const skipped = await waitFor(() => evaluate(() => !document.querySelector('.coach-card-wrap')), 4000);
   assert(skipped, 'tutorial: skip clears the coach card');
+
+  // Regression: the help modal covers a live run. Opening it must freeze the
+  // campaign clock + simulation, and closing it must resume exactly once.
+  await page.keyboard.press('h');
+  const helpForClock = await waitFor(() => evaluate(() => !!document.getElementById('tutorial-overlay')), 5000);
+  assert(helpForClock, 'tutorial: H reopens help for the clock check');
+  await sleep(400);
+  const clockOpen = await evaluate(() => window.game.app.modeInstance.elapsedTime);
+  assert(await evaluate(() => window.game.gameEngine.state === 'paused'), 'tutorial: opening help pauses the simulation');
+  await sleep(2000);
+  const clockHeld = await evaluate(() => window.game.app.modeInstance.elapsedTime);
+  assert(clockHeld === clockOpen, 'tutorial: campaign clock frozen while help is open', `${clockOpen} -> ${clockHeld}`);
+  await page.keyboard.press('Escape');
+  const escClosedHelp = await waitFor(() => evaluate(() => !document.getElementById('tutorial-overlay')), 5000);
+  assert(escClosedHelp, 'tutorial: Esc closes the help modal');
+  assert(
+    await evaluate(() => document.getElementById('pause-overlay')?.classList.contains('active') !== true),
+    'tutorial: Esc closes help instead of opening the pause overlay behind it',
+  );
+  assert(await evaluate(() => window.game.gameEngine.state === 'running'), 'tutorial: closing help resumes the simulation');
+  await sleep(1300);
+  const clockResumed = await evaluate(() => window.game.app.modeInstance.elapsedTime);
+  assert(clockResumed > clockHeld, 'tutorial: campaign clock runs again after help closes', `${clockHeld} -> ${clockResumed}`);
   await closeOverlays();
 });
 
@@ -806,6 +829,24 @@ await runSection('files', async () => {
   assert(kustomizeResult.hasProd, 'files: Apply -k creates Deployment/prod-webapp', kustomizeResult.errorText.slice(0, 200));
   assert(kustomizeResult.applied !== false, 'files: Apply -k records the prod overlay');
   await evaluate(() => window.game.manifestPanel?.hide?.());
+
+  // Regression: Files is a full-screen surface. It pauses the simulation while
+  // open, and its own Esc handler closes it (no pause card) and resumes once.
+  await evaluate(() => document.activeElement?.blur?.());
+  await page.keyboard.press('f');
+  const filesReopened = await waitFor(() => evaluate(() => window.game?.manifestPanel?.visible === true), 5000);
+  assert(filesReopened, 'files: F reopens the panel for the pause check');
+  assert(await evaluate(() => window.game.gameEngine.state === 'paused'), 'files: opening the panel pauses the simulation');
+  await evaluate(() => document.activeElement?.blur?.());
+  await page.keyboard.press('Escape');
+  const filesClosedByEsc = await waitFor(() => evaluate(() => window.game?.manifestPanel?.visible === false), 5000);
+  assert(filesClosedByEsc, 'files: Esc closes the panel');
+  assert(
+    await evaluate(() => document.getElementById('pause-overlay')?.classList.contains('active') !== true),
+    'files: Esc closing Files does not open the pause overlay',
+  );
+  await sleep(350);
+  assert(await evaluate(() => window.game.gameEngine.state === 'running'), 'files: closing the panel resumes the simulation');
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -838,6 +879,63 @@ await runSection('cli', async () => {
   await expectCmd('cli: oc set resources', `oc set resources deployment/web --limits=cpu=500m,memory=512Mi --requests=cpu=100m,memory=128Mi -n ${project}`, /resource requirements updated|updated/i);
   await expectCmd('cli: oc create configmap', `oc create configmap app-config --from-literal=APP_ENV=dev -n ${project}`, /configmap\/app-config created/i);
   await expectCmd('cli: oc create secret', `oc create secret generic app-secret --from-literal=password=s3cret -n ${project}`, /secret\/app-secret created/i);
+
+  // CLI fidelity: a namespaced request against a nonexistent project must fail
+  // like a real API server instead of rendering an empty table/list.
+  await expectCmdError('cli: get pods in missing namespace → NotFound', 'oc get pods -n does-not-exist', /Error from server \(NotFound\): namespaces "does-not-exist" not found/);
+  await expectCmdError('cli: get multiple kinds in missing namespace → NotFound', 'oc get deployments,services -n does-not-exist', /namespaces "does-not-exist" not found/);
+  await expectCmdError('cli: get all in missing namespace → NotFound', 'oc get all -n does-not-exist', /namespaces "does-not-exist" not found/);
+  await expectCmdError('cli: get events in missing namespace → NotFound', 'oc get events -n does-not-exist', /namespaces "does-not-exist" not found/);
+  await expectCmdError('cli: get -o yaml in missing namespace → NotFound', 'oc get pods -n does-not-exist -o yaml', /namespaces "does-not-exist" not found/);
+  await expectCmdError('cli: describe in missing namespace → NotFound', 'oc describe pod nope -n does-not-exist', /namespaces "does-not-exist" not found/);
+  await expectCmdError('cli: delete in missing namespace → NotFound', 'oc delete pod nope -n does-not-exist', /namespaces "does-not-exist" not found/);
+  await expectCmdError('cli: delete --all in missing namespace → NotFound', 'oc delete pods --all -n does-not-exist', /namespaces "does-not-exist" not found/);
+  await expectCmdError('cli: create in missing namespace → NotFound', 'oc create deployment nope --image=nginx:latest -n does-not-exist', /namespaces "does-not-exist" not found/);
+  await expectCmdError('cli: apply -f in missing namespace → NotFound', 'oc apply -f manifests/deployment.yaml -n does-not-exist', /namespaces "does-not-exist" not found/);
+  await expectCmdError('cli: status in missing namespace → NotFound', 'oc status -n does-not-exist', /namespaces "does-not-exist" not found/);
+  await expectCmd('cli: get -A ignores a missing -n namespace', 'oc get pods --all-namespaces -n does-not-exist', /No resources found|NAME/);
+  await expectCmd('cli: cluster-scoped get ignores -n', 'oc get nodes -n does-not-exist', /Ready/);
+  const projectNotFound = await runCmd('oc project does-not-exist', 120);
+  assert(
+    projectNotFound.error && /A project named "does-not-exist" does not exist/.test(projectNotFound.message),
+    'cli: oc project reports a sensible project-not-found error',
+    projectNotFound.message.slice(0, 200),
+  );
+  const rawVersion = await runCmd('oc get --raw /version', 120);
+  assert(
+    !rawVersion.error &&
+      /"gitVersion": "v4\.22\.0"/.test(rawVersion.message) &&
+      /"kubernetesVersion": "v1\.35\.0\+3f6a91c"/.test(rawVersion.message) &&
+      /"platform": "linux\/amd64"/.test(rawVersion.message),
+    'cli: oc get --raw /version returns server version JSON',
+    rawVersion.message.slice(0, 200),
+  );
+
+  // CLI fidelity: `-n` on apply/create/replace -f re-targets every object
+  // (like oc's EnforceNamespace), including multi-document files, manifest
+  // metadata.namespace and `-f -` stdin; no `-n` keeps using the current project.
+  await expectCmd('cli: apply -f -n retargets to project', 'oc apply -f manifests/deployment.yaml -n openshift', /created|configured|unchanged/i);
+  const retargetedDeploy = await findResource('Deployment', 'webapp', 'openshift');
+  assert(!!retargetedDeploy, 'cli: apply -f -n puts Deployment/webapp in the -n project');
+  await expectCmd('cli: create -f -n retargets to project', 'oc create -f manifests/service.yaml -n openshift', /created|configured|unchanged/i);
+  const retargetedService = await findResource('Service', 'webapp', 'openshift');
+  assert(!!retargetedService, 'cli: create -f -n puts Service/webapp in the -n project');
+  await expectCmd('cli: replace -f -n retargets to project', 'oc replace -f manifests/deployment.yaml -n openshift', /replaced|configured|created/i);
+  await evaluate(() => {
+    window.game?.manifestEngine?.writeFile?.(
+      'manifests/fidelity-multi.yaml',
+      'apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: fidelity-multi-cm\n  namespace: openshift-operators\n---\napiVersion: v1\nkind: Secret\nmetadata:\n  name: fidelity-multi-secret\n',
+    );
+  });
+  await expectCmd('cli: apply multi-doc -f -n overrides manifest namespaces', 'oc apply -f manifests/fidelity-multi.yaml -n openshift', /created|configured|unchanged/i);
+  const multiCm = await findResource('ConfigMap', 'fidelity-multi-cm', 'openshift');
+  const multiSecret = await findResource('Secret', 'fidelity-multi-secret', 'openshift');
+  assert(!!multiCm && !!multiSecret, 'cli: multi-doc apply -f -n overrides manifest metadata.namespace');
+  await expectCmd('cli: process | apply -f - -n retargets stdin objects', 'oc process -f templates/webapp-template.yaml -p APP_NAME=retarget-demo | oc apply -f - -n openshift', /created|configured|unchanged/i);
+  const retargetedStdin = await findResource('Deployment', 'retarget-demo', 'openshift');
+  assert(!!retargetedStdin, 'cli: apply -f - -n puts stdin objects in the -n project');
+  await expectCmdError('cli: new-app in missing namespace → NotFound', 'oc new-app --image=nginx:latest --name=missing-ns-app -n does-not-exist', /Error from server \(NotFound\): namespaces "does-not-exist" not found/);
+  await expectCmdError('cli: expose in missing namespace → NotFound', 'oc expose svc/web -n does-not-exist', /Error from server \(NotFound\): namespaces "does-not-exist" not found/);
 
   const podReady = await waitFor(async () => {
     return evaluate((ns) => {
@@ -917,6 +1015,23 @@ await runSection('cli', async () => {
     configure: typeof window.game?.gameEngine?.configureHTPasswdProvider === 'function',
   }));
   if (authApis.manifest && authApis.login && authApis.configure) {
+    // Before any identity provider is configured: an unknown user must fail like
+    // a real authentication attempt (401 wording) and name the configuration gap
+    // instead of the old misleading "HTPasswd … not configured" auth error.
+    const unknownLogin = await runCmd('oc login -u wrong-user', 150);
+    assert(
+      unknownLogin.error &&
+        /Login failed \(401 Unauthorized\)/.test(unknownLogin.message) &&
+        /is not known to the configured identity provider/.test(unknownLogin.message) &&
+        !/HTPasswd identity provider is not configured/.test(unknownLogin.message),
+      'auth: unknown user is rejected as an auth failure',
+      unknownLogin.message.slice(0, 240),
+    );
+    const whoamiAfterUnknown = await runCmd('oc whoami', 100);
+    assert(/^kubeadmin/im.test(whoamiAfterUnknown.message), 'auth: failed login leaves the session unchanged', whoamiAfterUnknown.message.slice(0, 120));
+    await expectCmd('auth: admin login works without an IdP', 'oc login -u admin', /Login successful/i);
+    await expectCmd('auth: oc whoami admin', 'oc whoami', /^admin/im);
+    await expectCmd('auth: login back as kubeadmin', 'oc login -u kubeadmin', /Login successful/i);
     await expectCmd('auth: htpasswd creates alice', 'htpasswd -c htpasswd alice Passw0rd', () => true);
     await expectCmd('auth: create htpasswd secret', 'oc create secret generic htpasswd-secret --from-file=htpasswd -n openshift-config', /secret\/htpasswd-secret created|configured/i);
     const oauth = await evaluate(() => window.game.gameEngine.configureHTPasswdProvider({ secretName: 'htpasswd-secret' }));
@@ -926,6 +1041,8 @@ await runSection('cli', async () => {
     await expectCmd('auth: oc login as alice', 'oc login -u alice -p Passw0rd', /logged in|Login successful/i, { wait: 300 });
     await expectCmd('auth: oc whoami alice', 'oc whoami', /^alice/im);
     await expectCmdError('auth: wrong password rejected', 'oc login -u alice -p wrong-password', /Login failed|401|incorrect/i);
+    const whoamiAfterWrongPassword = await runCmd('oc whoami', 100);
+    assert(/^alice/im.test(whoamiAfterWrongPassword.message), 'auth: wrong password leaves the session unchanged', whoamiAfterWrongPassword.message.slice(0, 120));
     const authState = await evaluate(() => ({
       currentUser: window.game?.gameEngine?.currentUser,
       user: !!window.game?.cluster?.getUser?.('alice'),
@@ -1184,6 +1301,32 @@ await runSection('ui', async () => {
     await evaluate(() => document.getElementById('pause-overlay')?.classList.contains('active') === false),
     'ui: pause Resume returns to the run',
   );
+
+  // Regression: Esc while the help modal is open closes help first (and resumes
+  // the sim) instead of opening the pause card behind it.
+  await page.keyboard.press('h');
+  const helpOpenAgain = await waitFor(() => evaluate(() => !!document.getElementById('tutorial-overlay')), 5000);
+  assert(helpOpenAgain, 'ui: H opens help from a live sandbox');
+  assert(await evaluate(() => window.game.gameEngine.state === 'paused'), 'ui: help modal pauses the sandbox simulation');
+  await page.keyboard.press('Escape');
+  const helpClosedByEsc = await waitFor(() => evaluate(() => !document.getElementById('tutorial-overlay')), 5000);
+  assert(helpClosedByEsc, 'ui: Esc closes the help modal');
+  assert(
+    await evaluate(() => document.getElementById('pause-overlay')?.classList.contains('active') !== true),
+    'ui: help-dismissing Esc does not open the pause overlay',
+  );
+  assert(await evaluate(() => window.game.gameEngine.state === 'running'), 'ui: closing help resumes the sandbox simulation');
+
+  // Regression: EX280 Prep is a full-screen surface — it pauses the sim while
+  // open and a single Esc closes it and resumes without double-resuming.
+  const prepOpened = await openExamPrep();
+  assert(prepOpened, 'ui: EX280 Prep opens from a live sandbox');
+  assert(await evaluate(() => window.game.gameEngine.state === 'paused'), 'ui: EX280 Prep pauses the simulation');
+  await page.keyboard.press('Escape');
+  const prepClosed = await waitFor(() => evaluate(() => window.game.examPrepUI?.visible === false), 5000);
+  assert(prepClosed, 'ui: Esc closes EX280 Prep');
+  await sleep(300);
+  assert(await evaluate(() => window.game.gameEngine.state === 'running'), 'ui: closing EX280 Prep resumes the simulation');
   await returnToMenu();
 });
 
@@ -1222,6 +1365,31 @@ await runSection('campaign', async () => {
   await sleep(350);
   const levelShot = await shot('campaign-level-1.png');
   if (levelShot) shotsTaken.push(levelShot);
+
+  // Regression: Files & Manifests freezes the campaign clock while open and
+  // resumes it when Esc closes the panel (without opening the pause card).
+  await evaluate(() => document.activeElement?.blur?.());
+  await page.keyboard.press('f');
+  const filesForClock = await waitFor(() => evaluate(() => window.game?.app?.manifestPanel?.visible === true), 8000);
+  assert(filesForClock, 'campaign: Files panel opens from F');
+  await sleep(400);
+  const filesClockOpen = await evaluate(() => window.game.app.modeInstance.elapsedTime);
+  assert(await evaluate(() => window.game.gameEngine.state === 'paused'), 'campaign: Files panel pauses the simulation');
+  await sleep(2000);
+  const filesClockHeld = await evaluate(() => window.game.app.modeInstance.elapsedTime);
+  assert(filesClockHeld === filesClockOpen, 'campaign: campaign clock frozen while Files is open', `${filesClockOpen} -> ${filesClockHeld}`);
+  await evaluate(() => document.activeElement?.blur?.());
+  await page.keyboard.press('Escape');
+  const filesClockClosed = await waitFor(() => evaluate(() => window.game?.app?.manifestPanel?.visible === false), 5000);
+  assert(filesClockClosed, 'campaign: Esc closes the Files panel');
+  assert(
+    await evaluate(() => document.getElementById('pause-overlay')?.classList.contains('active') !== true),
+    'campaign: closing Files does not open the pause overlay',
+  );
+  assert(await evaluate(() => window.game.gameEngine.state === 'running'), 'campaign: closing Files resumes the simulation');
+  await sleep(1300);
+  const filesClockRunning = await evaluate(() => window.game.app.modeInstance.elapsedTime);
+  assert(filesClockRunning > filesClockHeld, 'campaign: campaign clock runs again after Files closes', `${filesClockHeld} -> ${filesClockRunning}`);
 
   await expectCmd('campaign L1: oc login', 'oc login -u kubeadmin', /logged in|Login successful|kubeadmin/i);
   await expectCmd('campaign L1: create project', 'oc new-project first-project', /Now using project/i);
@@ -1309,6 +1477,25 @@ await runSection('challenges', async () => {
     assert(info.statusObjectives >= 1, `challenges: challenge ${id} getStatus works`);
     await closeOverlays();
   }
+
+  // Regression: the timed-lab countdown is frozen while Files is open.
+  await evaluate(() => document.activeElement?.blur?.());
+  await page.keyboard.press('f');
+  const filesForChallenge = await waitFor(() => evaluate(() => window.game?.app?.manifestPanel?.visible === true), 8000);
+  assert(filesForChallenge, 'challenges: Files panel opens from F');
+  await sleep(400);
+  const challengeClockOpen = await evaluate(() => window.game.app.modeInstance.getStatus().timeRemaining);
+  assert(await evaluate(() => window.game.gameEngine.state === 'paused'), 'challenges: Files panel pauses the simulation');
+  await sleep(2000);
+  const challengeClockHeld = await evaluate(() => window.game.app.modeInstance.getStatus().timeRemaining);
+  assert(challengeClockHeld === challengeClockOpen, 'challenges: timeRemaining frozen while Files is open', `${challengeClockOpen} -> ${challengeClockHeld}`);
+  await evaluate(() => document.activeElement?.blur?.());
+  await page.keyboard.press('Escape');
+  const challengeFilesClosed = await waitFor(() => evaluate(() => window.game?.app?.manifestPanel?.visible === false), 5000);
+  assert(challengeFilesClosed, 'challenges: Esc closes the Files panel');
+  await sleep(1300);
+  const challengeClockRunning = await evaluate(() => window.game.app.modeInstance.getStatus().timeRemaining);
+  assert(challengeClockRunning < challengeClockHeld, 'challenges: countdown runs again after Files closes', `${challengeClockHeld} -> ${challengeClockRunning}`);
 });
 
 // ═══════════════════════════════════════════════════════════════════════════

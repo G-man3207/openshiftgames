@@ -60,6 +60,7 @@ import {
   OCP_GIT_VERSION,
   OCP_VERSION,
 } from '../data/platformVersions.js';
+import { parseYaml } from '../engine/YamlParser.js';
 
 // ────────────────────────────────────────────────────────────────────────────
 // Constants
@@ -158,6 +159,14 @@ const MUTATING_COMMANDS = new Set([
   'login', 'logout', 'new-project', 'htpasswd',
 ]);
 
+/** Virtual `oc get` views implemented locally that still target a namespace. */
+const NAMESPACED_VIRTUAL_GET_TOKENS = new Set([
+  'csv', 'csvs', 'clusterserviceversion', 'clusterserviceversions',
+  'operatorgroup', 'operatorgroups', 'og',
+  'istag', 'istags', 'imagestreamtag', 'imagestreamtags',
+  'endpoints', 'endslices', 'endpointslices', 'ep',
+]);
+
 /** Namespace-scoped completion subcommands. */
 const SUBCOMMANDS = {
   set: ['env', 'image', 'resources', 'probe', 'serviceaccount', 'triggers', 'selector', 'volumes'],
@@ -182,7 +191,7 @@ const SUBCOMMANDS = {
 
 /** Flag completion hints per base command. */
 const COMMAND_FLAGS = {
-  get: ['-n', '--namespace', '-A', '--all-namespaces', '-o', '--output', '-l', '--selector', '--field-selector', '--sort-by', '--show-labels', '--no-headers', '-w', '--watch'],
+  get: ['-n', '--namespace', '-A', '--all-namespaces', '-o', '--output', '-l', '--selector', '--field-selector', '--sort-by', '--show-labels', '--no-headers', '-w', '--watch', '--raw'],
   describe: ['-n', '--namespace', '--show-events'],
   logs: ['-n', '--namespace', '-f', '--follow', '--previous', '-c', '--container', '--tail', '--since', '--timestamps'],
   create: ['-f', '--filename', '-n', '--namespace', '--image', '--replicas', '--dry-run', '-o', '--output', '-l', '--labels'],
@@ -2142,6 +2151,105 @@ Object.assign(CommandBar.prototype, {
     return flags.namespace || this.currentProject;
   },
 
+  // ── Namespace existence (namespace NotFound fidelity) ─────────────────────
+  // A real API server rejects a namespaced request whose namespace does not
+  // exist with `Error from server (NotFound): namespaces "<name>" not found`.
+  // Cluster-scoped kinds, `-A/--all-namespaces`, and requests that only resolve
+  // unknown resource types are unaffected (the client-side type error wins).
+
+  /** @returns {{error:true,message:string}|null} the error object, or null when valid. */
+  _namespaceNotFoundError(namespace) {
+    return this._err(`Error from server (NotFound): namespaces "${namespace}" not found`);
+  },
+
+  /**
+   * Validate a namespace resolved from `-n/--namespace` or the current project.
+   * @param {string} namespace
+   * @returns {{error:true,message:string}|null}
+   */
+  _requireNamespace(namespace) {
+    const name = String(namespace || '');
+    if (!name) return null;
+    if (this._projectExists(name)) return null;
+    return this._namespaceNotFoundError(name);
+  },
+
+  /**
+   * True when an `oc get <token…>` request is namespace-scoped like real oc.
+   */
+  _getRequestUsesNamespace(resourceToken) {
+    const lower = String(resourceToken || '').toLowerCase();
+    if (!lower) return false;
+    for (const token of lower.split(',')) {
+      if (NAMESPACED_VIRTUAL_GET_TOKENS.has(token) || ['event', 'events', 'ev', 'all'].includes(token)) return true;
+      if (['ingresscontroller', 'ingresscontrollers', 'ic'].includes(token)) continue;
+      let kind = resolveKindToken(token);
+      if (!kind && ['dc', 'deploymentconfig', 'deploymentconfigs'].includes(token)) kind = 'Deployment';
+      // Unknown resource type: `oc get` reports the type error, not the namespace.
+      if (!kind) return false;
+      if (this._isNamespaced(kind)) return true;
+    }
+    return false;
+  },
+
+  /**
+   * Namespaces an `oc apply/create/replace/delete -f` request will touch:
+   * an explicit `-n/--namespace` is enforced on every object (like kubectl's
+   * EnforceNamespace); otherwise each namespaced manifest's metadata.namespace
+   * is used, falling back to the current project.
+   * Returns [] when the input can't be parsed — the Files engine owns those
+   * parse/path errors.
+   * @param {string} path '-' for stdin
+   * @param {Record<string, any>} flags
+   * @param {string|null} stdinText
+   * @returns {string[]}
+   */
+  _manifestNamespaces(path, flags, stdinText) {
+    const override = flags && flags.namespace && flags.namespace !== true ? String(flags.namespace) : null;
+    if (override) return [override];
+    let text = null;
+    if (path === '-' && typeof stdinText === 'string') text = stdinText;
+    else text = this._readVirtualFile(String(path));
+    if (typeof text !== 'string') return [];
+    let docs = [];
+    try {
+      docs = parseYaml(text);
+    } catch {
+      return [];
+    }
+    if (!Array.isArray(docs)) return [];
+    const namespaces = new Set();
+    const visit = (doc) => {
+      if (!doc || typeof doc !== 'object') return;
+      if (doc.kind === 'List' && Array.isArray(doc.items)) {
+        for (const item of doc.items) visit(item);
+        return;
+      }
+      if (!doc.kind) return;
+      const kind = resolveKindToken(String(doc.kind));
+      if (kind && isClusterScopedKind(kind)) return;
+      const namespace = doc.metadata && doc.metadata.namespace ? String(doc.metadata.namespace) : this.currentProject;
+      if (namespace) namespaces.add(namespace);
+    };
+    for (const doc of docs) visit(doc);
+    return [...namespaces];
+  },
+
+  /**
+   * Fail like real oc when a manifest targets a missing project.
+   * @param {string} path '-' for stdin
+   * @param {Record<string, any>} flags
+   * @param {string|null} stdinText
+   * @returns {{error:true,message:string}|null}
+   */
+  _requireManifestNamespaces(path, flags, stdinText) {
+    for (const namespace of this._manifestNamespaces(path, flags, stdinText)) {
+      const error = this._requireNamespace(namespace);
+      if (error) return error;
+    }
+    return null;
+  },
+
   /** Resolve `describe route/web`, `logs pod/web`, or `logs web` forms. */
   _resolveRef(positionals) {
     if (!positionals.length) return { kind: null, name: null };
@@ -2326,13 +2434,19 @@ Object.assign(CommandBar.prototype, {
 
   _applyFileDelegated(path, options = {}) {
     if (!this._manifestReady()) return this._manifestNotReady();
+    const namespaceError = this._requireManifestNamespaces(path, options.flags || {}, options.stdinText ?? null);
+    if (namespaceError) return namespaceError;
     const resolved = this._resolveInputFile(path, options.stdinText);
     if (resolved.error) return resolved.error;
     const me = this.manifestEngine;
     if (typeof me.applyFile !== 'function') return this._manifestNotReady();
+    // Real oc's `-n` sets the namespace for every applied object (kubectl's
+    // EnforceNamespace); the Files panel keeps calling applyFile(path) unchanged.
+    const namespaceOverride =
+      options.flags && options.flags.namespace && options.flags.namespace !== true ? String(options.flags.namespace) : null;
     let result;
     try {
-      result = me.applyFile(resolved.file);
+      result = namespaceOverride ? me.applyFile(resolved.file, { namespace: namespaceOverride }) : me.applyFile(resolved.file);
     } catch (error) {
       return this._err(`error: ${error && error.message ? error.message : error}`);
     }
@@ -2356,6 +2470,8 @@ Object.assign(CommandBar.prototype, {
 
   _deleteFileDelegated(path, options = {}) {
     if (!this._manifestReady()) return this._manifestNotReady();
+    const namespaceError = this._requireManifestNamespaces(path, options.flags || {}, options.stdinText ?? null);
+    if (namespaceError) return namespaceError;
     const me = this.manifestEngine;
     const resolved = this._resolveInputFile(path, options.stdinText ?? null);
     if (resolved.error) return resolved.error;
@@ -2535,6 +2651,10 @@ Object.assign(CommandBar.prototype, {
     const namespace = this._isNamespaced(kind)
       ? object.metadata.namespace || this.currentProject
       : object.metadata.namespace || '';
+    if (this._isNamespaced(kind) && namespace) {
+      const namespaceError = this._requireNamespace(namespace);
+      if (namespaceError) return { error: namespaceError };
+    }
     const existing = this._findResourceExact(kind, name, namespace);
     const cluster = this.cluster;
     if (!cluster) return { error: this._err('Error: cluster is not initialised') };
@@ -4377,13 +4497,41 @@ Object.assign(CommandBar.prototype, {
     return {
       shortValues: { '-n': 'namespace', '-o': 'output', '-l': 'selector' },
       shortBools: { '-A': 'all-namespaces', '-w': 'watch' },
-      longValues: ['namespace', 'output', 'selector', 'field-selector', 'sort-by'],
+      longValues: ['namespace', 'output', 'selector', 'field-selector', 'sort-by', 'raw'],
       longBools: ['all-namespaces', 'show-labels', 'no-headers', 'watch', 'all', 'ignore-not-found'],
     };
   },
 
+  /** `oc get --raw <path>` — direct API-server request (only `/version` is simulated). */
+  _cmdGetRaw(path) {
+    const clean = String(path || '').trim();
+    if (clean === '/version') {
+      // Kubernetes Info JSON as returned by the API server's /version endpoint.
+      const version = {
+        apiVersion: 'v1',
+        major: '4',
+        minor: '22',
+        gitVersion: OCP_GIT_VERSION,
+        gitCommit: '3f6a91c',
+        gitTreeState: 'clean',
+        buildDate: '2026-10-28T15:03:00Z',
+        goVersion: 'go1.24.6',
+        compiler: 'gc',
+        platform: 'linux/amd64',
+        kubernetesVersion: KUBERNETES_GIT_VERSION,
+      };
+      return this._ok(JSON.stringify(version, null, 2));
+    }
+    return this._err('Error from server (NotFound): the server could not find the requested resource');
+  },
+
   _cmdGet(tokens) {
     const { positionals, flags, tokens: rawTokens } = parseArgs(tokens, this._getFlagSpec());
+    const rawPath = flags.raw && flags.raw !== true ? String(flags.raw) : null;
+    if (rawPath) return this._cmdGetRaw(rawPath);
+    if (flags.raw === true) {
+      return this._err('error: --raw requires a server path (for example: oc get --raw /version)');
+    }
     if (!positionals.length) {
       return this._err('error: You must specify the type of resource to get.\n\nUsage:\n  oc get <resource> [<name>] [flags]\n\nRun \'oc get --help\' for details.');
     }
@@ -4399,6 +4547,13 @@ Object.assign(CommandBar.prototype, {
     const allNamespaces = this._isAllNamespaces(flags, rawTokens);
     const namespace = flags.namespace || this.currentProject;
     const lower = resourceToken.toLowerCase();
+
+    // Real oc: a namespaced request scoped to a nonexistent namespace fails with
+    // the API server's namespace NotFound before any empty-list rendering.
+    if (!allNamespaces && this._getRequestUsesNamespace(resourceToken)) {
+      const namespaceError = this._requireNamespace(namespace);
+      if (namespaceError) return namespaceError;
+    }
 
     if (['event', 'events', 'ev'].includes(lower)) return this._cmdGetEvents(tokens);
 
@@ -4713,6 +4868,10 @@ Object.assign(CommandBar.prototype, {
     const allNamespaces = this._isAllNamespaces(flags, rawTokens);
     const namespace = flags.namespace || this.currentProject;
     const output = this._outputFormat(flags);
+    if (!allNamespaces) {
+      const namespaceError = this._requireNamespace(namespace);
+      if (namespaceError) return namespaceError;
+    }
     // `oc events` and `oc get events` both arrive here (the get path passes the full token list).
     let events = this._syntheticEvents({ namespace });
     if (!allNamespaces) {
@@ -4749,6 +4908,11 @@ Object.assign(CommandBar.prototype, {
         return this._err('error: You must specify the name of the resource to describe.\n\nUsage:\n  oc describe <resource>/<name>');
       }
     }
+    if (this._isNamespaced(kind)) {
+      const namespace = flags.namespace || this.currentProject;
+      const namespaceError = this._requireNamespace(namespace);
+      if (namespaceError) return namespaceError;
+    }
     const resource = this._findResource(kind, name, {
       namespace: flags.namespace,
       explicitNamespace: Boolean(flags.namespace),
@@ -4770,6 +4934,8 @@ Object.assign(CommandBar.prototype, {
     }
     const namespace = flags.namespace || this.currentProject;
     const explicitNamespace = Boolean(flags.namespace);
+    const namespaceError = this._requireNamespace(namespace);
+    if (namespaceError) return namespaceError;
     const tail = flags.tail !== undefined && flags.tail !== true ? parseInt(flags.tail, 10) : null;
     const { kind, name } = this._resolveRef(positionals);
     const targetKind = kind || 'Pod';
@@ -4991,6 +5157,8 @@ Object.assign(CommandBar.prototype, {
   _cmdStatus(tokens) {
     const { flags } = parseArgs(tokens, { shortValues: { '-n': 'namespace' }, longValues: ['namespace'] });
     const namespace = flags.namespace || this.currentProject;
+    const namespaceError = this._requireNamespace(namespace);
+    if (namespaceError) return namespaceError;
     const inScope = (resource) => resource.metadata?.namespace === namespace;
     const deployments = this._resources('Deployment').filter(inScope);
     const services = this._resources('Service').filter(inScope);
@@ -5142,17 +5310,20 @@ Object.assign(CommandBar.prototype, {
       } else if (token) {
         success = true;
       } else {
-        message = 'Login failed (401 Unauthorized): HTPasswd identity provider is not configured';
+        message = `Login failed (401 Unauthorized)\nThe user "${user}" is not known to the configured identity provider: no identity provider is configured on this cluster.`;
       }
     }
 
     if (!success) {
       if (!message) {
         const providerReady = Boolean(ge?.authProvider?.ready);
-        const known = this._htpasswdUsers();
-        if (known.length && !known.includes(user)) message = 'Login failed (401 Unauthorized): Invalid username or password';
-        else if (!providerReady && !known.length) message = 'Login failed (401 Unauthorized): HTPasswd identity provider is not configured';
-        else message = 'Login failed (401 Unauthorized): Invalid username or password';
+        if (!providerReady) {
+          message = ge?.authProvider
+            ? 'Login failed (401 Unauthorized)\nThe HTPasswd identity provider is not ready yet: wait for the OAuth rollout to complete (oc get clusteroperators authentication) and try again.'
+            : `Login failed (401 Unauthorized)\nThe user "${user}" is not known to the configured identity provider: no identity provider is configured on this cluster.`;
+        } else {
+          message = 'Login failed (401 Unauthorized)\nVerify you have provided the correct credentials.';
+        }
       }
       return this._err(message);
     }
@@ -5447,14 +5618,32 @@ Object.assign(CommandBar.prototype, {
     return this._ok([...warnings, `${this._resourceRef(object.kind)}/${name} ${result.created === false ? 'configured' : 'created'}`].filter(Boolean).join('\n'));
   },
 
-  _createFromFile(filename, ctx, command = 'create') {
+  _createFromFile(filename, ctx, command = 'create', flags = {}) {
     const path = filename && filename !== true ? String(filename) : '-';
-    return this._applyFileDelegated(path, { stdinText: ctx?.stdin ?? null, command });
+    return this._applyFileDelegated(path, { stdinText: ctx?.stdin ?? null, command, flags });
+  },
+
+  /**
+   * True when `oc create <subcommand>` creates a namespaced resource, so the
+   * request needs a real Project (like the API server's namespace NotFound).
+   */
+  _createCommandUsesNamespace(sub) {
+    if (!sub) return false;
+    const text = String(sub).toLowerCase();
+    if (['user', 'group', 'clusterrolebinding', 'clusterquota', 'clusterresourcequota', 'project', 'namespace', 'ns'].includes(text)) {
+      return false;
+    }
+    if (['route', 'secret', 'configmap', 'cm', 'quota', 'resourcequota', 'limitrange', 'serviceaccount', 'sa', 'service', 'job', 'rolebinding'].includes(text)) {
+      return true;
+    }
+    const kind = resolveKindToken(text);
+    if (!kind) return false;
+    return this._isNamespaced(kind);
   },
 
   _cmdCreate(tokens, ctx) {
     const { positionals, flags } = parseArgs(tokens, this._createFlagSpec());
-    if (flags.filename) return this._createFromFile(flags.filename, ctx, 'create');
+    if (flags.filename) return this._createFromFile(flags.filename, ctx, 'create', flags);
     if (!positionals.length) {
       return this._err(
         'error: must specify a resource type or -f <filename>.\n\n' +
@@ -5472,6 +5661,11 @@ Object.assign(CommandBar.prototype, {
     }
     const sub = positionals[0].toLowerCase();
     const rest = positionals.slice(1);
+    // A real API server rejects namespaced creates whose project does not exist.
+    if (this._createCommandUsesNamespace(sub)) {
+      const namespaceError = this._requireNamespace(this._namespaceFromFlags(flags));
+      if (namespaceError) return namespaceError;
+    }
     switch (sub) {
       case 'route':
         return this._createRouteCommand(rest, flags);
@@ -5938,7 +6132,7 @@ Object.assign(CommandBar.prototype, {
       return this._err('error: --dry-run is not supported for manifests in the simulator; open the file in the Files panel to inspect it, then apply without --dry-run.');
     }
     if (kustomize) return this._applyKustomizeDelegated(kustomize);
-    return this._applyFileDelegated(String(filename), { stdinText: ctx?.stdin ?? null, command: 'apply' });
+    return this._applyFileDelegated(String(filename), { stdinText: ctx?.stdin ?? null, command: 'apply', flags });
   },
 
   _cmdReplace(tokens, ctx) {
@@ -5949,7 +6143,7 @@ Object.assign(CommandBar.prototype, {
     });
     const filename = flags.filename || positionals[0];
     if (!filename) return this._err('error: must specify -f <filename>\n\n  oc replace -f <file>');
-    return this._applyFileDelegated(String(filename), { stdinText: ctx?.stdin ?? null, command: 'replace' });
+    return this._applyFileDelegated(String(filename), { stdinText: ctx?.stdin ?? null, command: 'replace', flags });
   },
 
   _cmdDelete(tokens, ctx) {
@@ -5958,7 +6152,7 @@ Object.assign(CommandBar.prototype, {
       longValues: ['filename', 'kustomize', 'namespace', 'selector', 'grace-period', 'cascade', 'field-selector'],
       longBools: ['all', 'force', 'ignore-not-found', 'now', 'wait'],
     });
-    if (flags.filename) return this._deleteFileDelegated(String(flags.filename), { stdinText: ctx?.stdin ?? null });
+    if (flags.filename) return this._deleteFileDelegated(String(flags.filename), { stdinText: ctx?.stdin ?? null, flags });
     if (flags.kustomize) {
       return this._err('error: oc delete -k is not supported in the simulator; delete the created resources by name or delete -f the manifests.');
     }
@@ -5972,6 +6166,11 @@ Object.assign(CommandBar.prototype, {
     const lowerKind = kind.toLowerCase();
     const ignoreNotFound = Boolean(flags['ignore-not-found']);
     const rawResourceToken = String(positionals[0] || '').toLowerCase();
+
+    if (this._isNamespaced(kind)) {
+      const namespaceError = this._requireNamespace(namespace);
+      if (namespaceError) return namespaceError;
+    }
 
     // `oc delete csv <name>` maps to the owning subscription (must run before
     // the generic Subscription branch because the registry aliases csv→Subscription).
@@ -6743,6 +6942,8 @@ Object.assign(CommandBar.prototype, {
     if (!kind) kind = 'Service';
     if (!name) return this._usageError('expose', 'resource name is required\n\n  oc expose svc/<name> [--hostname=] [--path=]');
     const namespace = this._namespaceFromFlags(flags);
+    const namespaceError = this._requireNamespace(namespace);
+    if (namespaceError) return namespaceError;
     const ge = this.gameEngine;
     const options = {
       namespace,
@@ -7021,6 +7222,8 @@ Object.assign(CommandBar.prototype, {
       longBools: ['build', 'dockerfile', 'binary', 'source'],
     });
     const namespace = this._namespaceFromFlags(flags);
+    const namespaceError = this._requireNamespace(namespace);
+    if (namespaceError) return namespaceError;
     const env = parseCommaAssignments(this._arrayFlag(flags, 'env'));
     const params = parseCommaAssignments(this._arrayFlag(flags, 'param'));
     const name = flags.name && flags.name !== true ? String(flags.name) : undefined;

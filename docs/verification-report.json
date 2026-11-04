@@ -1,19 +1,19 @@
 {
-  "timestamp": "2026-11-04T01:05:42.537Z",
+  "timestamp": "2026-11-04T02:24:08.095Z",
   "environment": {
     "node": "v26.10.0",
     "chrome": "Chrome/156.0.8078.79",
-    "baseUrl": "http://127.0.0.1:45941",
+    "baseUrl": "http://127.0.0.1:34863",
     "viewport": {
       "width": 1600,
       "height": 900
     },
     "puppeteerCore": "/tmp/verify-tools",
-    "startedAt": "2026-11-04T01:02:51.203Z",
-    "durationSeconds": 171
+    "startedAt": "2026-11-04T02:20:24.764Z",
+    "durationSeconds": 223
   },
   "summary": {
-    "passes": 438,
+    "passes": 503,
     "failures": 0,
     "warnings": 0,
     "consoleErrors": 0,
@@ -32,7 +32,7 @@
       "warnings": 0
     },
     "tutorial": {
-      "passes": 10,
+      "passes": 17,
       "failures": 0,
       "warnings": 0
     },
@@ -47,27 +47,27 @@
       "warnings": 0
     },
     "files": {
-      "passes": 13,
+      "passes": 18,
       "failures": 0,
       "warnings": 0
     },
     "cli": {
-      "passes": 103,
+      "passes": 135,
       "failures": 0,
       "warnings": 0
     },
     "ui": {
-      "passes": 19,
+      "passes": 28,
       "failures": 0,
       "warnings": 0
     },
     "campaign": {
-      "passes": 128,
+      "passes": 135,
       "failures": 0,
       "warnings": 0
     },
     "challenges": {
-      "passes": 72,
+      "passes": 77,
       "failures": 0,
       "warnings": 0
     },
@@ -91,62 +91,62 @@
       "path": "screenshot.png",
       "width": 1600,
       "height": 900,
-      "bytes": 772793
+      "bytes": 777208
     },
     "ogImage": {
       "path": "og-image.png",
       "width": 1200,
       "height": 630,
-      "bytes": 183556
+      "bytes": 184408
     },
     "screenshots": [
       {
         "path": "docs/screenshots/menu.png",
         "width": 1600,
         "height": 900,
-        "bytes": 325180
+        "bytes": 325637
       },
       {
         "path": "docs/screenshots/exam-prep.png",
         "width": 1600,
         "height": 900,
-        "bytes": 208424
+        "bytes": 195955
       },
       {
         "path": "docs/screenshots/sandbox.png",
         "width": 1600,
         "height": 900,
-        "bytes": 773900
+        "bytes": 777224
       },
       {
         "path": "screenshot.png",
         "width": 1600,
         "height": 900,
-        "bytes": 772793
+        "bytes": 777208
       },
       {
         "path": "docs/screenshots/files-panel.png",
         "width": 1600,
         "height": 900,
-        "bytes": 215565
+        "bytes": 217717
       },
       {
         "path": "docs/screenshots/campaign-level-1.png",
         "width": 1600,
         "height": 900,
-        "bytes": 699726
+        "bytes": 467996
       },
       {
         "path": "docs/screenshots/draw.png",
         "width": 1600,
         "height": 900,
-        "bytes": 391551
+        "bytes": 490609
       },
       {
         "path": "og-image.png",
         "width": 1200,
         "height": 630,
-        "bytes": 183556
+        "bytes": 184408
       }
     ]
   },
@@ -306,6 +306,34 @@
     {
       "section": "tutorial",
       "name": "tutorial: skip clears the coach card"
+    },
+    {
+      "section": "tutorial",
+      "name": "tutorial: H reopens help for the clock check"
+    },
+    {
+      "section": "tutorial",
+      "name": "tutorial: opening help pauses the simulation"
+    },
+    {
+      "section": "tutorial",
+      "name": "tutorial: campaign clock frozen while help is open"
+    },
+    {
+      "section": "tutorial",
+      "name": "tutorial: Esc closes the help modal"
+    },
+    {
+      "section": "tutorial",
+      "name": "tutorial: Esc closes help instead of opening the pause overlay behind it"
+    },
+    {
+      "section": "tutorial",
+      "name": "tutorial: closing help resumes the simulation"
+    },
+    {
+      "section": "tutorial",
+      "name": "tutorial: campaign clock runs again after help closes"
     },
     {
       "section": "exam",
@@ -536,6 +564,26 @@
       "name": "files: Apply -k records the prod overlay"
     },
     {
+      "section": "files",
+      "name": "files: F reopens the panel for the pause check"
+    },
+    {
+      "section": "files",
+      "name": "files: opening the panel pauses the simulation"
+    },
+    {
+      "section": "files",
+      "name": "files: Esc closes the panel"
+    },
+    {
+      "section": "files",
+      "name": "files: Esc closing Files does not open the pause overlay"
+    },
+    {
+      "section": "files",
+      "name": "files: closing the panel resumes the simulation"
+    },
+    {
       "section": "cli",
       "name": "cli: oc whoami"
     },
@@ -590,6 +638,110 @@
     {
       "section": "cli",
       "name": "cli: oc create secret"
+    },
+    {
+      "section": "cli",
+      "name": "cli: get pods in missing namespace → NotFound"
+    },
+    {
+      "section": "cli",
+      "name": "cli: get multiple kinds in missing namespace → NotFound"
+    },
+    {
+      "section": "cli",
+      "name": "cli: get all in missing namespace → NotFound"
+    },
+    {
+      "section": "cli",
+      "name": "cli: get events in missing namespace → NotFound"
+    },
+    {
+      "section": "cli",
+      "name": "cli: get -o yaml in missing namespace → NotFound"
+    },
+    {
+      "section": "cli",
+      "name": "cli: describe in missing namespace → NotFound"
+    },
+    {
+      "section": "cli",
+      "name": "cli: delete in missing namespace → NotFound"
+    },
+    {
+      "section": "cli",
+      "name": "cli: delete --all in missing namespace → NotFound"
+    },
+    {
+      "section": "cli",
+      "name": "cli: create in missing namespace → NotFound"
+    },
+    {
+      "section": "cli",
+      "name": "cli: apply -f in missing namespace → NotFound"
+    },
+    {
+      "section": "cli",
+      "name": "cli: status in missing namespace → NotFound"
+    },
+    {
+      "section": "cli",
+      "name": "cli: get -A ignores a missing -n namespace"
+    },
+    {
+      "section": "cli",
+      "name": "cli: cluster-scoped get ignores -n"
+    },
+    {
+      "section": "cli",
+      "name": "cli: oc project reports a sensible project-not-found error"
+    },
+    {
+      "section": "cli",
+      "name": "cli: oc get --raw /version returns server version JSON"
+    },
+    {
+      "section": "cli",
+      "name": "cli: apply -f -n retargets to project"
+    },
+    {
+      "section": "cli",
+      "name": "cli: apply -f -n puts Deployment/webapp in the -n project"
+    },
+    {
+      "section": "cli",
+      "name": "cli: create -f -n retargets to project"
+    },
+    {
+      "section": "cli",
+      "name": "cli: create -f -n puts Service/webapp in the -n project"
+    },
+    {
+      "section": "cli",
+      "name": "cli: replace -f -n retargets to project"
+    },
+    {
+      "section": "cli",
+      "name": "cli: apply multi-doc -f -n overrides manifest namespaces"
+    },
+    {
+      "section": "cli",
+      "name": "cli: multi-doc apply -f -n overrides manifest metadata.namespace"
+    },
+    {
+      "section": "cli",
+      "name": "cli: process | apply -f - -n retargets stdin objects"
+    },
+    {
+      "section": "cli",
+      "name": "cli: apply -f - -n puts stdin objects in the -n project"
+    },
+    {
+      "section": "cli",
+      "name": "cli: new-app in missing namespace → NotFound"
+    },
+    {
+      "section": "cli",
+      "name": "cli: expose in missing namespace → NotFound"
     },
     {
       "section": "cli",
@@ -785,6 +937,26 @@
     },
     {
       "section": "cli",
+      "name": "auth: unknown user is rejected as an auth failure"
+    },
+    {
+      "section": "cli",
+      "name": "auth: failed login leaves the session unchanged"
+    },
+    {
+      "section": "cli",
+      "name": "auth: admin login works without an IdP"
+    },
+    {
+      "section": "cli",
+      "name": "auth: oc whoami admin"
+    },
+    {
+      "section": "cli",
+      "name": "auth: login back as kubeadmin"
+    },
+    {
+      "section": "cli",
       "name": "auth: htpasswd creates alice"
     },
     {
@@ -810,6 +982,10 @@
     {
       "section": "cli",
       "name": "auth: wrong password rejected"
+    },
+    {
+      "section": "cli",
+      "name": "auth: wrong password leaves the session unchanged"
     },
     {
       "section": "cli",
@@ -1024,6 +1200,42 @@
       "name": "ui: pause Resume returns to the run"
     },
     {
+      "section": "ui",
+      "name": "ui: H opens help from a live sandbox"
+    },
+    {
+      "section": "ui",
+      "name": "ui: help modal pauses the sandbox simulation"
+    },
+    {
+      "section": "ui",
+      "name": "ui: Esc closes the help modal"
+    },
+    {
+      "section": "ui",
+      "name": "ui: help-dismissing Esc does not open the pause overlay"
+    },
+    {
+      "section": "ui",
+      "name": "ui: closing help resumes the sandbox simulation"
+    },
+    {
+      "section": "ui",
+      "name": "ui: EX280 Prep opens from a live sandbox"
+    },
+    {
+      "section": "ui",
+      "name": "ui: EX280 Prep pauses the simulation"
+    },
+    {
+      "section": "ui",
+      "name": "ui: Esc closes EX280 Prep"
+    },
+    {
+      "section": "ui",
+      "name": "ui: closing EX280 Prep resumes the simulation"
+    },
+    {
       "section": "campaign",
       "name": "campaign: level 1 starts"
     },
@@ -1038,6 +1250,34 @@
     {
       "section": "campaign",
       "name": "campaign: objectives panel visible/populated"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign: Files panel opens from F"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign: Files panel pauses the simulation"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign: campaign clock frozen while Files is open"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign: Esc closes the Files panel"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign: closing Files does not open the pause overlay"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign: closing Files resumes the simulation"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign: campaign clock runs again after Files closes"
     },
     {
       "section": "campaign",
@@ -1822,6 +2062,26 @@
     {
       "section": "challenges",
       "name": "challenges: challenge 12 getStatus works"
+    },
+    {
+      "section": "challenges",
+      "name": "challenges: Files panel opens from F"
+    },
+    {
+      "section": "challenges",
+      "name": "challenges: Files panel pauses the simulation"
+    },
+    {
+      "section": "challenges",
+      "name": "challenges: timeRemaining frozen while Files is open"
+    },
+    {
+      "section": "challenges",
+      "name": "challenges: Esc closes the Files panel"
+    },
+    {
+      "section": "challenges",
+      "name": "challenges: countdown runs again after Files closes"
     },
     {
       "section": "draw",

@@ -724,33 +724,59 @@ export class GameEngine {
   /**
    * `oc login -u <user> -p <password>`.
    *
-   * kubeadmin can always log in (as on a real cluster where kubeadmin uses its
-   * own kubeconfig); other users require a ready HTPasswd identity provider and
-   * a matching entry in the virtual htpasswd file (CONVERSION-SPEC §6).
+   * kubeadmin (and the simulator's built-in `admin` account) can always log in:
+   * on a real cluster they authenticate with bootstrap kubeconfig credentials
+   * rather than an identity provider. Any other user needs a ready HTPasswd
+   * identity provider plus a matching entry in the virtual htpasswd file
+   * (CONVERSION-SPEC §6).
+   *
+   * Failure messages mirror real `oc`:
+   *  - wrong credentials / unknown user with a working IdP:
+   *    `Login failed (401 Unauthorized)` + `Verify you have provided the correct
+   *    credentials.` (openshift/oc prints this for a 401 from the OAuth server).
+   *  - no identity provider configured: a configuration message naming the user
+   *    instead of a misleading "HTPasswd … not configured" auth-error suffix.
    *
    * @param {string} username
    * @param {string} [password]
-   * @returns {{success: boolean, message: string, user?: string}}
+   * @returns {{success: boolean, message: string, user?: string, reason?: string}}
    */
   login(username, password) {
     const user = String(username || '').trim();
     if (!user) return { success: false, message: 'error: you must specify a username with -u' };
 
-    if (user === 'kubeadmin' || user === 'system:admin') {
-      this.currentUser = 'kubeadmin';
+    if (user === 'kubeadmin' || user === 'system:admin' || user === 'admin') {
+      this.currentUser = user === 'admin' ? 'admin' : 'kubeadmin';
       this._ensureUserResource(this.currentUser, null);
       if (!this.cluster.getProject(this.currentProject)) this.currentProject = 'default';
       this.eventBus.emit('login', { user: this.currentUser, provider: 'kubeadmin', project: this.currentProject });
       return { success: true, user: this.currentUser, message: "Login successful.\n\nYou have access to 0 projects, the server console URL for the cluster is https://console-openshift-console.apps.cluster.example.com." };
     }
 
-    if (!this.authProvider || !this.authProvider.ready) {
-      return { success: false, message: 'Login failed (401 Unauthorized): HTPasswd identity provider is not configured' };
+    if (!this.authProvider) {
+      // The cluster has an OAuth server but no configured identity provider:
+      // report the configuration gap without pretending credentials were checked.
+      return {
+        success: false,
+        reason: 'no-identity-provider',
+        message: `Login failed (401 Unauthorized)\nThe user "${user}" is not known to the configured identity provider: no identity provider is configured on this cluster.`,
+      };
+    }
+    if (!this.authProvider.ready) {
+      return {
+        success: false,
+        reason: 'identity-provider-not-ready',
+        message: 'Login failed (401 Unauthorized)\nThe HTPasswd identity provider is not ready yet: wait for the OAuth rollout to complete (oc get clusteroperators authentication) and try again.',
+      };
     }
 
     const verification = this._verifyHtpasswdCredential(user, password);
     if (!verification.ok) {
-      return { success: false, message: `Login failed (401 Unauthorized)\n${verification.reason || 'Verify you have provided the correct credentials.'}` };
+      return {
+        success: false,
+        reason: 'invalid-credentials',
+        message: 'Login failed (401 Unauthorized)\nVerify you have provided the correct credentials.',
+      };
     }
 
     const providerName = this.authProvider.name || 'htpasswd';

@@ -2387,6 +2387,175 @@ kbd {
 .hud-badge[hidden] { display: none; }
 .hud-icon-btn.is-paused { color: var(--warning); }
 
+/* ── "Mine" control — find the resources you created among the seeded cluster ──
+   A compact pill in the right cluster: one red keyline dot, the count, and a
+   separate frame action next to it. It reads as a view filter, not a mode. */
+.hud-mine-group { display: flex; align-items: center; gap: 2px; }
+.hud-mine {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 8px 0 7px;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  font-family: var(--font-sans);
+  font-size: var(--fs-11);
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  cursor: pointer;
+  transition: color 140ms ease, background-color 140ms ease, border-color 140ms ease;
+}
+.hud-mine:hover { color: var(--text); background: var(--raised-2); border-color: #3A434F; }
+.hud-mine:focus-visible { outline: 2px solid var(--accent-soft); outline-offset: 2px; }
+.hud-mine-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 3px rgba(238, 0, 0, 0.12);
+  transition: box-shadow 160ms ease, background-color 160ms ease;
+}
+.hud-mine-label { line-height: 1; }
+.hud-mine-count {
+  min-width: 15px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: var(--raised-2);
+  color: var(--faint);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 16px;
+  text-align: center;
+}
+.hud-mine.is-empty { color: var(--faint); }
+.hud-mine.is-empty .hud-mine-dot { background: #4B545F; box-shadow: none; }
+.hud-mine.is-empty .hud-mine-count { color: var(--faint); }
+.hud-mine.is-active {
+  color: var(--text);
+  border-color: rgba(238, 0, 0, 0.55);
+  background: rgba(238, 0, 0, 0.1);
+}
+.hud-mine.is-active .hud-mine-dot { background: var(--accent-soft); box-shadow: 0 0 0 3px rgba(238, 0, 0, 0.24); }
+.hud-mine.is-active .hud-mine-count { background: var(--accent); color: #fff; }
+.hud-mine-focus { width: 26px; height: 26px; }
+.hud-mine-focus svg { width: 14px; height: 14px; }
+.hud-mine-focus.is-empty { color: var(--faint); opacity: 0.7; }
+
+/* Platform control — the seeded OpenShift defaults, deliberately neutral so it
+   never competes with the red "Mine" signal. Hidden = working set only. */
+.hud-platform {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 8px 0 7px;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  font-family: var(--font-sans);
+  font-size: var(--fs-11);
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  cursor: pointer;
+  transition: color 140ms ease, background-color 140ms ease, border-color 140ms ease;
+}
+.hud-platform:hover { color: var(--text); background: var(--raised-2); border-color: #3A434F; }
+.hud-platform:focus-visible { outline: 2px solid var(--accent-soft); outline-offset: 2px; }
+.hud-platform-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #7C93AD;
+  box-shadow: 0 0 0 3px rgba(124, 147, 173, 0.14);
+}
+.hud-platform-label { line-height: 1; }
+.hud-platform-count {
+  min-width: 15px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: var(--raised-2);
+  color: var(--faint);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 16px;
+  text-align: center;
+}
+.hud-platform.is-hidden { color: var(--faint); }
+.hud-platform.is-hidden .hud-platform-dot { background: transparent; box-shadow: inset 0 0 0 1.5px #5A6675; }
+.hud-platform.is-hidden .hud-platform-count { background: transparent; box-shadow: inset 0 0 0 1px #333C47; }
+.hud-platform.is-revealed { color: var(--muted); }
+.hud-platform.is-empty { opacity: 0.65; }
+
+/* Creation spotlight — a quiet one-line receipt under the HUD, never clickable,
+   so it can never block the level coach marks or the command bar. */
+.spotlight-toast {
+  position: fixed;
+  top: calc(var(--hud-h) + var(--s3));
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 260;
+  display: flex;
+  align-items: flex-start;
+  gap: var(--s3);
+  max-width: min(420px, 90vw);
+  padding: 9px 14px 9px 12px;
+  background: rgba(20, 24, 31, 0.95);
+  border: 1px solid rgba(238, 0, 0, 0.32);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-float);
+  pointer-events: none;
+  animation: spotlight-toast-in 220ms ease-out;
+}
+.spotlight-toast-out {
+  opacity: 0;
+  transform: translateX(-50%) translateY(-6px);
+  transition: opacity 240ms ease, transform 240ms ease;
+}
+/* Transform-only intro: the toast must never depend on an animation frame to
+   become readable (screenshots, reduced motion, background tabs). */
+@keyframes spotlight-toast-in {
+  from { transform: translateX(-50%) translateY(-6px); }
+  to { transform: translateX(-50%) translateY(0); }
+}
+.spotlight-toast-mark {
+  position: relative;
+  flex: 0 0 auto;
+  width: 14px;
+  height: 14px;
+  margin-top: 1px;
+  border-radius: 50%;
+  border: 2px solid var(--accent);
+}
+.spotlight-toast-mark > span {
+  position: absolute;
+  inset: 3px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+.spotlight-toast-body { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.spotlight-toast-kicker {
+  color: var(--accent-soft);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+.spotlight-toast-title {
+  color: var(--text);
+  font-size: var(--fs-13);
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.spotlight-toast-meta { color: var(--faint); font-size: var(--fs-11); }
+
 /* Cluster popover — counters as type, not a wall of chrome. */
 .hud-pop {
   position: absolute;
@@ -3640,6 +3809,10 @@ body.terminal-open #minimap-container { bottom: calc(var(--dock-h) + var(--s3)) 
   body.continue-anyway .hud-speed,
   body.continue-anyway .hud-center { display: none !important; }
   .hud-word { display: none; }
+  .hud-mine { padding: 0 7px; }
+  .hud-mine-label { display: none; }
+  .hud-platform { padding: 0 7px; }
+  .hud-platform-label { display: none; }
   .hud-bar { gap: var(--s2); padding: 0 var(--s2) !important; }
   #game-container #resource-palette { width: 64px; }
   #game-container .palette-head, .palette-foot { display: none; }

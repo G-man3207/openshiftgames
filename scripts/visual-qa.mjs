@@ -1273,22 +1273,40 @@ if (should('game')) {
     }
     check('metrics dashboard opens ("M")', visible);
     await sleep(500);
+    // The dock slides up from translateY(100%) with a 240ms transition. Headless
+    // SwiftShader WebGL can delay the first transition frame by ~1.5s, so the
+    // wrapper rect is still at y=viewportHeight right after open. Wait for the
+    // visible panel (#metrics-panel) to settle inside the viewport, then measure
+    // that panel — not the animated wrapper — so a slow headless compositor is
+    // not reported as a layout failure.
+    const panelSettled = await waitFor(() => evaluate(() => {
+      const panel = document.querySelector('#metrics-panel') || document.querySelector('#metrics-dashboard');
+      if (!panel) return false;
+      const r = panel.getBoundingClientRect();
+      return r.width > 0 && r.height > 0
+        && r.left >= -2 && r.right <= innerWidth + 2
+        && r.top >= -2 && r.bottom <= innerHeight + 2;
+    }), 6000, 100);
     const info = await evaluate(() => {
-      const all = [...document.querySelectorAll('#metrics-dashboard')];
-      const visibleEl = all.find((el) => {
-        const r = el.getBoundingClientRect();
-        return r.width > 0 && r.height > 0 && r.top < innerHeight - 4 && r.bottom > 4;
-      }) || all[0];
-      const r = visibleEl?.getBoundingClientRect();
+      const wrapper = document.querySelector('#metrics-dashboard');
+      const panel = document.querySelector('#metrics-panel') || wrapper;
+      const r = panel?.getBoundingClientRect();
+      const wr = wrapper?.getBoundingClientRect();
       return {
         visible: window.game?.app?.metrics?.visible === true,
-        instances: all.length,
+        instances: document.querySelectorAll('#metrics-dashboard').length,
         canvases: document.querySelectorAll('#metrics-dashboard canvas').length,
+        panelSettled: (() => {
+          if (!r) return false;
+          return r.width > 0 && r.height > 0 && r.top >= -2 && r.bottom <= innerHeight + 2;
+        })(),
         bounds: r ? { x: Math.round(r.x), y: Math.round(r.y), right: Math.round(r.right), bottom: Math.round(r.bottom), vw: innerWidth, vh: innerHeight } : null,
+        wrapperBounds: wr ? { x: Math.round(wr.x), y: Math.round(wr.y), right: Math.round(wr.right), bottom: Math.round(wr.bottom) } : null,
       };
     });
+    info.settled = panelSettled;
     check('metrics dashboard renders charts', info.canvases >= 4, JSON.stringify(info));
-    check('metrics dashboard inside viewport', Boolean(info.bounds && info.bounds.right <= info.bounds.vw + 2 && info.bounds.bottom <= info.bounds.vh + 2), JSON.stringify(info.bounds));
+    check('metrics dashboard inside viewport', Boolean(info.settled && info.bounds && info.bounds.x >= -2 && info.bounds.y >= -2 && info.bounds.right <= info.bounds.vw + 2 && info.bounds.bottom <= info.bounds.vh + 2), JSON.stringify({ bounds: info.bounds, wrapperBounds: info.wrapperBounds, settled: info.settled }));
     return info;
   });
 

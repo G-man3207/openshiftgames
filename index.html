@@ -45,7 +45,7 @@
       }
     }
   </script>
-  <link rel="stylesheet" href="style.css?v=1.1.0">
+  <link rel="stylesheet" href="style.css?v=1.2.0">
   <link rel="stylesheet" href="start.css?v=1.1.0">
   <!-- Pinned dependency: Three.js r152 (ES modules, no build step) -->
   <script type="importmap">
@@ -741,6 +741,12 @@
         this._webglFailed = false;
         this._tutorialQueue = null;
         this._pendingLevelTutorial = false;
+        this._closeTutorialOverlay = null;
+        // Surfaces that cover a live run (pause card, help modal, EX280 Prep)
+        // register a reason here instead of tracking their own pause flag, so
+        // overlapping overlays pause once and resume exactly once.
+        this._clockPauseReasons = new Set();
+        this._clockPausedByOverlay = false;
         this.settings = this.loadSettings();
       }
 
@@ -1043,6 +1049,15 @@
         this.engine.eventBus.on('ui:scale-dialog', (data) => this._showScaleDialog(data));
         this.engine.eventBus.on('ui:show-manifests', () => this.showFiles());
         this.engine.eventBus.on('ui:show-exam-prep', () => this.showExamPrep());
+        // EX280 Prep is a full-screen surface: while it covers a live run the
+        // mission clocks must freeze, and closing it (Esc, close button, launch
+        // chip) resumes them. ExamPrepUI emits these on its real show/hide paths.
+        this.engine.eventBus.on('ui:exam-prep-opened', () => this._pauseClocksFor('examprep'));
+        this.engine.eventBus.on('ui:exam-prep-closed', () => this._resumeClocksFor('examprep'));
+        // The Files & Manifests panel is a full-screen surface as well: the shell
+        // freezes the mission clocks while it is open and resumes them on hide.
+        this.engine.eventBus.on('ui:manifest-opened', () => this._pauseClocksFor('files'));
+        this.engine.eventBus.on('ui:manifest-closed', () => this._resumeClocksFor('files'));
         this.engine.eventBus.on('ui:start-level', (data) => {
           if (data?.levelId) this.launchGame('campaign', data.levelId);
         });
@@ -1101,10 +1116,8 @@
         // One Escape = close the topmost surface. In-game with nothing open it
         // opens Pause instead of silently discarding the run.
         if (this.commandBar?.visible) { this.commandBar.hide?.(); return; }
-        if (document.getElementById('pause-overlay')?.classList.contains('active')) { this.hidePause({ resume: true }); return; }
         if (document.getElementById('desktop-notice')?.classList.contains('active')) { return; }
         if (this.manifestPanel?.visible) { this.manifestPanel.hide?.(); return; }
-        if (this.examPrepUI?.visible) { this.examPrepUI.hide?.(); return; }
         for (const panelId of ['settings-panel', 'achievements-panel', 'stats-panel']) {
           const panel = document.getElementById(panelId);
           if (panel?.classList.contains('active')) {
@@ -1121,7 +1134,75 @@
           document.getElementById('challenge-select')?.classList.remove('active');
           return;
         }
+        // Help renders above the pause card, so Esc must dismiss it instead of
+        // opening Pause underneath it (and it must release its clock pause).
+        if (document.getElementById('tutorial-overlay')) { this.hideTutorial(); return; }
+        // EX280 Prep handles Esc itself; this fallback covers the case where the
+        // overlay is open but its capture-phase listener is not bound yet.
+        if (this.examPrepUI?.visible) {
+          this.examPrepUI.hide?.();
+          this._resumeClocksFor('examprep');
+          return;
+        }
+        if (document.getElementById('pause-overlay')?.classList.contains('active')) {
+          this.hidePause({ resume: true });
+          return;
+        }
         if (this.currentMode) this.showPause();
+      }
+
+      // ── Overlay clock arbitration ───────────────────────────────────────────
+      // The pause card, the help modal and EX280 Prep all cover a live run, and
+      // they can overlap (Space while help is open). Each surface registers a
+      // reason: the engine + mission clock stop once, and resume exactly once,
+      // when the last reason is released.
+
+      _isSimRunning() {
+        const state = this.engine?.state;
+        return state === GAME_STATES.RUNNING || state === 'running';
+      }
+
+      /** Freeze the sim for `reason`; no-op when already paused or not in a run. */
+      _pauseClocksFor(reason) {
+        if (!this.currentMode || !this._clockPauseReasons) return false;
+        if (this._clockPauseReasons.has(reason)) return false;
+        this._clockPauseReasons.add(reason);
+        // Menu, level-complete or an overlay that already owns the pause: the
+        // clocks are already stopped, so this reason only needs to hold them.
+        if (this._clockPausedByOverlay || !this._isSimRunning()) return false;
+        this._clockPausedByOverlay = true;
+        try { this.engine.pause(); } catch { /* engine mid-reset */ }
+        // Timed modes track elapsed time from the wall clock: they need pause too.
+        try {
+          if (typeof this.modeInstance?.pause === 'function') this.modeInstance.pause();
+        } catch { /* mode instance may be restarting */ }
+        return true;
+      }
+
+      /** Release `reason`; resumes the clocks only if it was the last one. */
+      _resumeClocksFor(reason) {
+        if (!this._clockPauseReasons?.has?.(reason)) return false;
+        this._clockPauseReasons.delete(reason);
+        if (this._clockPauseReasons.size > 0 || !this._clockPausedByOverlay) return false;
+        this._clockPausedByOverlay = false;
+        try {
+          if (typeof this.modeInstance?.resume === 'function') this.modeInstance.resume();
+        } catch { /* mode instance may have been replaced */ }
+        try { this.engine.resume(); } catch { /* engine may be stopped */ }
+        return true;
+      }
+
+      /** Drop a reason without resuming (the run is about to be replaced). */
+      _releaseClockPause(reason) {
+        if (!this._clockPauseReasons?.has?.(reason)) return;
+        this._clockPauseReasons.delete(reason);
+        if (this._clockPauseReasons.size === 0) this._clockPausedByOverlay = false;
+      }
+
+      /** Forget every overlay-held pause (new run / return to menu). */
+      _clearClockPauseReasons() {
+        this._clockPauseReasons?.clear?.();
+        this._clockPausedByOverlay = false;
       }
 
       // ── Pause overlay ───────────────────────────────────────────────────────
@@ -1161,18 +1242,10 @@
         if (confirm) confirm.hidden = true;
         const quit = document.getElementById('pause-quit');
         if (quit) quit.hidden = false;
-        const engine = this.engine;
-        this._pausedByOverlay = engine?.state === GAME_STATES.RUNNING || engine?.state === 'running';
-        try { if (this._pausedByOverlay) engine.pause(); } catch { /* ignore */ }
         // Timed modes track their own elapsed time from the wall clock, so the
-        // overlay must pause them as well or the clock keeps ticking while the
-        // pause card says it is paused.
-        try {
-          if (typeof this.modeInstance?.pause === 'function') {
-            this.modeInstance.pause();
-            this._modePausedByOverlay = true;
-          }
-        } catch { /* ignore */ }
+        // pause card freezes the engine and the mission clock through the shared
+        // reason set (overlapping overlays therefore resume exactly once).
+        this._pauseClocksFor('pause');
         overlay.classList.add('active');
         overlay.setAttribute('aria-hidden', 'false');
         requestAnimationFrame(() => document.getElementById('pause-resume')?.focus());
@@ -1184,21 +1257,19 @@
         overlay.classList.remove('active');
         overlay.setAttribute('aria-hidden', 'true');
         if (resume) {
-          try {
-            if (this._modePausedByOverlay) this.modeInstance?.resume?.();
-          } catch { /* ignore */ }
-          this._modePausedByOverlay = false;
-          try { if (this._pausedByOverlay) this.engine.resume(); } catch { /* ignore */ }
-          this._pausedByOverlay = false;
+          this._resumeClocksFor('pause');
         } else {
           // Quit/restart from the pause card: the mode instance is replaced anyway.
-          this._modePausedByOverlay = false;
-          this._pausedByOverlay = false;
+          this._releaseClockPause('pause');
         }
       }
 
       restartCurrentLevel() {
-        this.hidePause();
+        // The new run must start unpaused: drop the card's pause and resume the
+        // swapped-in mode instead of inheriting the frozen state.
+        this.hidePause({ resume: true });
+        this._clearClockPauseReasons();
+        try { this.engine.resume(); } catch { /* engine may be stopped */ }
         if (this.modeInstance && typeof this.modeInstance.restart === 'function') {
           this.modeInstance.restart();
           this._initObjectivesPanel(this.currentMode);
@@ -1959,6 +2030,9 @@
           console.warn(`${APP_NAME}: Files panel setContext failed`, err);
         }
         panel.show();
+        // ManifestPanel emits ui:manifest-opened, which freezes the mission clock
+        // through the shared coordinator; belt-and-braces for stub panels.
+        if (panel.visible) this._pauseClocksFor('files');
       }
 
       async showExamPrep() {
@@ -1968,6 +2042,10 @@
           return;
         }
         ui.show();
+        // ExamPrepUI emits ui:exam-prep-opened synchronously and the EventBus hook
+        // in bindGameEvents pauses the clocks; this is belt-and-braces for UI
+        // implementations that do not emit.
+        if (ui.visible) this._pauseClocksFor('examprep');
       }
 
       _showToast(message, tone = 'info', options = {}) {
@@ -2052,7 +2130,14 @@
         } catch (err) {
           console.warn(`${APP_NAME}: start page teardown failed`, err);
         }
+        // A fresh run must not inherit an overlay-held pause from the surface we
+        // are leaving (e.g. launching a level from the EX280 Prep overlay).
+        this._clearClockPauseReasons();
+        this._closeTutorialOverlay = null;
+        document.getElementById('tutorial-overlay')?.remove();
         this.examPrepUI?.hide?.();
+        // A new run must also not leave the Files modal covering the fresh game.
+        this.manifestPanel?.hide?.();
         this.hidePause();
         this.currentMode = mode;
 
@@ -2309,6 +2394,10 @@
           this._objUpdateInterval = null;
         }
         this.hidePause();
+        // Dropping an overlay-held pause must not leak into the next run.
+        this._clearClockPauseReasons();
+        this._closeTutorialOverlay = null;
+        document.getElementById('tutorial-overlay')?.remove();
         const notice = document.getElementById('desktop-notice');
         notice?.classList.remove('active');
         notice?.setAttribute('aria-hidden', 'true');
@@ -2491,8 +2580,28 @@
       }
 
       // ── Help / tutorial ────────────────────────────────────────────────────
+      /** Close the help / level-intro modal (Esc, or a surface reset). */
+      hideTutorial() {
+        const overlay = document.getElementById('tutorial-overlay');
+        if (!overlay) {
+          this._closeTutorialOverlay = null;
+          this._resumeClocksFor('tutorial');
+          return false;
+        }
+        if (typeof this._closeTutorialOverlay === 'function') {
+          this._closeTutorialOverlay();
+          return true;
+        }
+        overlay.remove();
+        this._resumeClocksFor('tutorial');
+        return true;
+      }
+
       showTutorial(mode) {
+        // A re-open replaces the current modal; the new overlay inherits the
+        // clock-pause reason, so only its close handler may release it.
         document.getElementById('tutorial-overlay')?.remove();
+        this._closeTutorialOverlay = null;
         const modeNames = {
           sandbox: 'Sandbox',
           chaos: 'Chaos mode',
@@ -2598,6 +2707,10 @@
         const close = () => {
           if (overlay.dataset.closing === '1') return;
           overlay.dataset.closing = '1';
+          if (this._closeTutorialOverlay === close) this._closeTutorialOverlay = null;
+          // The modal no longer covers the run: let the mission clock tick again
+          // (no-op when the modal was opened outside a live run — menu, intro).
+          this._resumeClocksFor('tutorial');
           overlay.classList.add('fade-out');
           setTimeout(() => {
             overlay.remove();
@@ -2609,6 +2722,10 @@
         };
         document.getElementById('tutorial-start').addEventListener('click', close);
         overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+        this._closeTutorialOverlay = close;
+        // Help and the level intro cover a live run: freeze the engine + mission
+        // clock while they are up. Opening from the menu is a no-op.
+        this._pauseClocksFor('tutorial');
       }
 
       _startLevelTutorialFromMode() {

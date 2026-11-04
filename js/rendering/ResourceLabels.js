@@ -223,6 +223,8 @@ export class ResourceLabelLayer {
       kind: group.userData?.resourceKind || 'Unknown',
       name: group.userData?.displayName || id,
       status: undefined,
+      mine: false,
+      dimmed: false,
       el,
       dot,
       text,
@@ -254,6 +256,7 @@ export class ResourceLabelLayer {
     if (!info.el || info.state === state) return;
     info.state = state;
     const el = info.el;
+    const mine = Boolean(info.mine);
     if (state === 'selected') {
       el.style.borderColor = 'rgba(255,166,87,0.55)';
       el.style.background = 'rgba(22,15,9,0.76)';
@@ -262,11 +265,39 @@ export class ResourceLabelLayer {
       el.style.borderColor = 'rgba(120,170,255,0.45)';
       el.style.background = 'rgba(10,14,22,0.74)';
       el.style.color = '#eef4ff';
+    } else if (mine) {
+      el.style.borderColor = 'rgba(238,0,0,0.42)';
+      el.style.background = 'rgba(24,10,11,0.78)';
+      el.style.color = '#ffe9e6';
+    } else if (info.dimmed) {
+      el.style.borderColor = 'rgba(255,255,255,0.035)';
+      el.style.background = 'rgba(10,13,19,0.44)';
+      el.style.color = '#8b939d';
     } else {
       el.style.borderColor = 'rgba(255,255,255,0.06)';
       el.style.background = 'rgba(10,13,19,0.62)';
       el.style.color = '#dbe3ee';
     }
+    // The inset bar is independent of state so a "yours" label stays recognisable
+    // while selected/hovered. It never changes the label's measured box.
+    el.style.boxShadow = mine ? 'inset 2px 0 0 0 #ee0000' : 'none';
+  }
+
+  /** Sync the dimmed state (seeded platform defaults revealed in a clean lab). */
+  _syncDim(info, group) {
+    const dimmed = Boolean(group?.userData?.dimmed);
+    if (info.dimmed === dimmed) return;
+    info.dimmed = dimmed;
+    info.state = '';
+  }
+
+  /** Sync the "yours" label accent (player-created resources only). */
+  _syncMine(info, group) {
+    const mineSet = this.renderer?.playerCreated;
+    const mine = mineSet instanceof Set ? mineSet.has(info.id) : Boolean(group?.userData?.isMine);
+    if (info.mine === mine) return;
+    info.mine = mine;
+    info.state = '';
   }
 
   _syncStatus(info, group) {
@@ -302,6 +333,8 @@ export class ResourceLabelLayer {
       info.labelY = group.userData?.labelY ?? 2.2;
       this._syncName(info, group);
       this._syncStatus(info, group);
+      this._syncMine(info, group);
+      this._syncDim(info, group);
     }
     for (const [id, info] of [...this.labels]) {
       if (!resources.has(id)) {
@@ -373,9 +406,13 @@ export class ResourceLabelLayer {
       const isHovered = id === hovered;
       const kindBias = KIND_BIAS[info.kind] || 0;
       const dFocus = Math.hypot(worldX - focus.x, worldZ - focus.z);
+      const isMine = Boolean(info.mine);
+      // Player-created objects win label collisions against seeded defaults: the
+      // label layer is the first place a newcomer looks for "the thing I made".
       const priority = isSelected ? -1e6
         : isHovered ? -9e5
-          : dFocus * 1.35 + camDistance * 0.22 - kindBias * 2;
+          : dFocus * 1.35 + camDistance * 0.22 - kindBias * 2 - (isMine ? 26 : 0)
+            + (info.dimmed ? 18 : 0);
 
       // Distance fade relative to the framed camera distance — depth, not haze.
       const ratio = camDistance / focusDistance;
@@ -384,8 +421,10 @@ export class ResourceLabelLayer {
       // The hero window is small: keep its labels confidently present instead of
       // fading them like distant game labels.
       if (menuMode) opacity = Math.max(0.64, opacity);
+      // Revealed platform labels recede: the working set is the foreground.
+      if (info.dimmed) opacity *= 0.6;
 
-      candidates.push({ info, ndcX, ndcY, priority, opacity, isSelected, isHovered });
+      candidates.push({ info, ndcX, ndcY, priority, opacity, isSelected, isHovered, isMine });
     }
 
     // One label per resource name in every mode (a Project, Deployment and Service
@@ -396,6 +435,8 @@ export class ResourceLabelLayer {
       ...candidate,
       rank: (candidate.isSelected ? 1000 : 0)
         + (candidate.isHovered ? 900 : 0)
+        + (candidate.isMine ? 140 : 0)
+        - (candidate.info.dimmed ? 60 : 0)
         + (KIND_DEDUPE_PRIORITY[candidate.info.kind] || 0),
     }));
     ranked.sort((a, b) => (b.rank - a.rank) || (a.priority - b.priority));

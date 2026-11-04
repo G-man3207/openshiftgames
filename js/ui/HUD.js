@@ -14,6 +14,13 @@
  * `hud-pods-running/pending/failed`, `hud-deployments`, `hud-services`,
  * `hud-cpu-bar/text`, `hud-mem-bar/text`.
  *
+ * The bar also carries two compact view controls — "Mine N" (+ frame action) for
+ * the resources the player created, and "Platform N" for the seeded OpenShift
+ * defaults (hidden by default in campaign/timed-lab sessions). `ResourceSpotlight`
+ * owns both presentation rules, the counts and the creation feedback. `destroy()`
+ * tears the spotlight down too (dropping the renderer's ownership/platform chrome
+ * before the start-page hero is rebuilt).
+ *
  * All engine subscriptions are idempotent: `init()` re-creates the DOM and
  * re-binds; `destroy()` removes every listener. The HUD also consumes
  * `engine:stopped` so `returnToMenu()` / `engine.reset()` never leak listeners.
@@ -21,6 +28,7 @@
 
 import { XP_LEVELS } from '../engine/ScoringEngine.js';
 import { SettingsPanel } from './SettingsPanel.js';
+import { ResourceSpotlight } from './ResourceSpotlight.js';
 
 const PLATFORM_LABEL = 'OpenShift 4.22';
 const MODE_LABELS = {
@@ -39,6 +47,7 @@ const SVG = {
   gear: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><circle cx="8" cy="8" r="2.1"/><path d="M8 1.9v1.5M8 12.6v1.5M1.9 8h1.5M12.6 8h1.5M3.7 3.7l1 1M11.3 11.3l1 1M12.3 3.7l-1 1M4.7 11.3l-1 1" stroke-linecap="round"/></svg>',
   mark: '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="2.4" stroke-opacity=".28"/><circle cx="12" cy="12" r="3.4" fill="currentColor"/></svg>',
   chevron: '<svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M4 7l2-2 2 2" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  frame: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M2.4 5.4V3.9a1.5 1.5 0 0 1 1.5-1.5h1.5M10.6 2.4h1.5a1.5 1.5 0 0 1 1.5 1.5v1.5M13.6 10.6v1.5a1.5 1.5 0 0 1-1.5 1.5h-1.5M5.4 13.6H3.9a1.5 1.5 0 0 1-1.5-1.5v-1.5" stroke-linecap="round"/><circle cx="8" cy="8" r="2.1" fill="currentColor" stroke="none"/></svg>',
 };
 
 export class HUD {
@@ -54,6 +63,11 @@ export class HUD {
     this.xpToNextLevel = 100;
     this.xpProgress = 0;
     this.settingsPanel = null;
+    this.spotlight = null;
+    this.mineCount = 0;
+    this.mineMode = false;
+    this.platformCount = 0;
+    this.platformRevealed = true;
     this._popOpen = false;
 
     this._boundTick = this._onTick.bind(this);
@@ -105,6 +119,17 @@ export class HUD {
     this.settingsPanel = new SettingsPanel();
     this.settingsPanel.init();
 
+    // "Mine" discovery layer: ownership rule + creation spotlight. Created from
+    // HUD.init() so index.html needs no extra wiring; safe when there is no 3D
+    // renderer (the count still works, the 3D calls are no-ops).
+    try {
+      this.spotlight = new ResourceSpotlight(this);
+      this.spotlight.init();
+    } catch (err) {
+      console.warn('HUD: ResourceSpotlight failed to initialise', err);
+      this.spotlight = null;
+    }
+
     document.addEventListener('click', this._boundDocumentClick);
     document.addEventListener('keydown', this._boundKeydown, true);
   }
@@ -112,6 +137,14 @@ export class HUD {
   destroy() {
     clearTimeout(this._logoClickTimer);
     clearTimeout(this._partyModeTimeout);
+    try {
+      this.spotlight?.destroy();
+    } catch (err) {
+      console.warn('HUD: ResourceSpotlight teardown failed', err);
+    }
+    this.spotlight = null;
+    this.mineCount = 0;
+    this.mineMode = false;
     this._unbindGameEvents();
     this.settingsPanel?.destroy();
     this.settingsPanel = null;
@@ -183,6 +216,22 @@ export class HUD {
         </div>
 
         <div class="hud-right">
+          <div class="hud-mine-group">
+            <button id="hud-mine" class="hud-mine" type="button" data-testid="hud-mine" aria-pressed="false" title="Show only resources you created" aria-label="Show only resources you created">
+              <span class="hud-mine-dot" aria-hidden="true"></span>
+              <span class="hud-mine-label">Mine</span>
+              <span id="hud-mine-count" class="hud-mine-count" data-testid="hud-mine-count">0</span>
+            </button>
+            <button id="hud-mine-focus" class="hud-icon-btn hud-mine-focus" type="button" data-testid="hud-mine-focus" title="Frame my resources" aria-label="Frame my resources">
+              ${SVG.frame}
+            </button>
+          </div>
+          <button id="hud-platform" class="hud-platform" type="button" data-testid="hud-platform" aria-pressed="true" title="Hide seeded OpenShift platform defaults" aria-label="Hide seeded OpenShift platform defaults">
+            <span class="hud-platform-dot" aria-hidden="true"></span>
+            <span class="hud-platform-label">Platform</span>
+            <span id="hud-platform-count" class="hud-platform-count" data-testid="hud-platform-count">0</span>
+          </button>
+          <span class="hud-rule" aria-hidden="true"></span>
           <button id="hud-health" class="hud-health" type="button" title="Cluster health" data-testid="hud-health" aria-expanded="false">
             <span id="hud-health-dot" class="hud-health-dot"></span>
             <span id="hud-health-label" class="hud-health-label">Healthy</span>
@@ -253,6 +302,7 @@ export class HUD {
       'hud-level', 'hud-xp-bar', 'hud-pause', 'hud-pause-icon', 'hud-speed-1', 'hud-speed-2',
       'hud-speed-4', 'hud-alert-badge', 'hud-alerts', 'hud-xp-container', 'hud-logo-text',
       'hud-mission', 'hud-mission-count', 'hud-mission-fill', 'hud-level-name', 'hud-cluster-pop',
+      'hud-mine', 'hud-mine-count', 'hud-mine-focus', 'hud-platform', 'hud-platform-count',
     ];
     for (const id of ids) {
       this.elements[id] = this.container?.querySelector(`#${id}`) || document.getElementById(id) || null;
@@ -282,6 +332,18 @@ export class HUD {
         /* no incident panel */
       }
     });
+    on('hud-mine', 'click', () => {
+      this._closePopover();
+      this.spotlight?.toggleMineMode();
+    });
+    on('hud-mine-focus', 'click', () => {
+      this._closePopover();
+      this.spotlight?.frameMine();
+    });
+    on('hud-platform', 'click', () => {
+      this._closePopover();
+      this.spotlight?.togglePlatform();
+    });
     on('hud-health', 'click', (event) => {
       event.stopPropagation();
       this._togglePopover();
@@ -306,10 +368,20 @@ export class HUD {
   }
 
   _onKeydown(event) {
-    if (event.key !== 'Escape' || !this._popOpen) return;
-    this._closePopover();
-    event.stopPropagation();
-    event.preventDefault();
+    if (event.key !== 'Escape') return;
+    if (this._popOpen) {
+      this._closePopover();
+      event.stopPropagation();
+      event.preventDefault();
+      return;
+    }
+    // Esc exits the mine-only focus before it opens the pause menu: the mode is
+    // a view filter, and leaving it should not cost the player their flow.
+    if (this.mineMode) {
+      this.spotlight?.setMineMode(false);
+      event.stopPropagation();
+      event.preventDefault();
+    }
   }
 
   _togglePopover() {
@@ -651,6 +723,71 @@ export class HUD {
       nameEl.textContent = label;
       this.elements['hud-mode-name'] = nameEl;
     }
+  }
+
+  // ─── "Mine" ownership affordance ───────────────────────────────────────
+
+  /** @param {number} count */
+  setMineCount(count) {
+    const next = Math.max(0, Number(count) || 0);
+    this.mineCount = next;
+    this._setText('hud-mine-count', next > 99 ? '99+' : next);
+    const button = this.elements['hud-mine'];
+    if (button) {
+      const noun = next === 1 ? 'resource' : 'resources';
+      const copy = next === 0
+        ? 'Show only resources you created (none yet)'
+        : `Show only the ${next} ${noun} you created`;
+      button.title = copy;
+      button.setAttribute('aria-label', copy);
+      button.classList.toggle('is-empty', next === 0);
+    }
+    const focus = this.elements['hud-mine-focus'];
+    if (focus) {
+      const copy = next === 0 ? 'Frame my resources (none yet)' : 'Frame my resources';
+      focus.title = copy;
+      focus.setAttribute('aria-label', copy);
+      focus.classList.toggle('is-empty', next === 0);
+    }
+  }
+
+  /** @param {boolean} active */
+  setMineActive(active) {
+    this.mineMode = Boolean(active);
+    const button = this.elements['hud-mine'];
+    if (!button) return;
+    button.classList.toggle('is-active', this.mineMode);
+    button.setAttribute('aria-pressed', String(this.mineMode));
+  }
+
+  /** @param {number} count */
+  setPlatformCount(count) {
+    this.platformCount = Math.max(0, Number(count) || 0);
+    this._setText('hud-platform-count', this.platformCount > 99 ? '99+' : this.platformCount);
+    this._syncPlatformCopy();
+  }
+
+  /** @param {boolean} revealed */
+  setPlatformRevealed(revealed) {
+    this.platformRevealed = Boolean(revealed);
+    const button = this.elements['hud-platform'];
+    if (!button) return;
+    button.classList.toggle('is-revealed', this.platformRevealed);
+    button.classList.toggle('is-hidden', !this.platformRevealed);
+    button.setAttribute('aria-pressed', String(this.platformRevealed));
+    this._syncPlatformCopy();
+  }
+
+  _syncPlatformCopy() {
+    const button = this.elements['hud-platform'];
+    if (!button) return;
+    const count = this.platformCount;
+    const copy = count === 0
+      ? 'No seeded platform defaults in the cluster'
+      : `${this.platformRevealed ? 'Hide' : 'Show'} ${count} seeded OpenShift platform default${count === 1 ? '' : 's'}`;
+    button.title = copy;
+    button.setAttribute('aria-label', copy);
+    button.classList.toggle('is-empty', count === 0);
   }
 
   // ─── Pause / speed ─────────────────────────────────────────────────────

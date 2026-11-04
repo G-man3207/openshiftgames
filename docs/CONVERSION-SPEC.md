@@ -362,8 +362,12 @@ Default state: kubeadmin has cluster-admin ClusterRoleBinding; `system:authentic
 `htpasswd` file in ManifestEngine (section 7) is the source of truth for HTPasswd logins; login
 succeeds only when `authProvider.ready` and the user/password match the file, creating/updating the
 User + Identity objects and setting `currentUser`. `oc delete user` removes bindings/identity too.
-`oc login` as a user without OAuth configured fails with
-`Login failed (401 Unauthorized): HTPasswd identity provider is not configured`.
+`oc login` failures follow real `oc` wording (updated 2026-11-04): unknown user with no identity
+provider configured → `Login failed (401 Unauthorized)` plus "The user \"<user>\" is not known to the
+configured identity provider: no identity provider is configured on this cluster."; bad credentials
+with an identity provider configured → `Login failed (401 Unauthorized)` plus "Verify you have provided
+the correct credentials."; provider configured but OAuth rollout not ready → a dedicated wait message.
+Failed logins never change the current session. Built-in seeded `kubeadmin`/`admin` accounts still log in.
 
 ---
 
