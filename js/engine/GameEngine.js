@@ -40,7 +40,6 @@ import {
   createResource,
   normalizeKind,
 } from '../data/kindRegistry.js';
-import { applyKnownImageSecurityProfiles } from '../resources/ImageSecurityProfiles.js';
 
 // ─── SHA1 + base64 helpers (for the simulated {SHA} htpasswd hashes) ──────
 
@@ -2460,12 +2459,13 @@ export class GameEngine {
     // is rejected with `pods "<name>" is forbidden`. Controllers creating pods
     // for Deployments/ReplicaSets go through SimulationTick admission instead.
     if (kind === 'Pod') {
-      // Known root images (e.g. `nginx:latest`) count as requesting the UID they
-      // actually run as; SCC admission itself only sees explicit pod requests.
-      const admissionSpec = applyKnownImageSecurityProfiles(deepClone(normalised.spec || {}));
+      // SCC admission is spec-based: a bare `nginx:latest` Pod with no explicit
+      // securityContext is ADMITTED by restricted-v2 and crashes at runtime
+      // (kubelet lifecycle, issue #25). Never fold image personalities into the
+      // admission spec — only explicit requests are evaluated here.
       const candidate = {
         metadata: { name, namespace },
-        spec: admissionSpec,
+        spec: deepClone(normalised.spec || {}),
       };
       const resolution = this.cluster.resolveSCCForPod(candidate);
       if (!resolution.allowed) {

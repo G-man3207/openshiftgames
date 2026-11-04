@@ -122,7 +122,7 @@ const CAMPAIGN_LEVELS = [
     chapter: 1,
     chapterName: 'Manage OpenShift',
     description:
-      'Welcome to OpenShift. A Project is the OpenShift-facing representation of a Kubernetes namespace: it isolates your workloads and is what you create and switch between with `oc new-project` / `oc project`. In this level you will log in to the CLI, create your first Project, and deploy both a bare Pod and a Deployment. Note the admission gate: `restricted-v2` rejects root-running images such as `nginx:latest` (classic EX280 trap) — use a non-root image like `quay.io/openshift/origin-hello-openshift:latest`.',
+      'Welcome to OpenShift. A Project is the OpenShift-facing representation of a Kubernetes namespace: it isolates your workloads and is what you create and switch between with `oc new-project` / `oc project`. In this level you will log in to the CLI, create your first Project, and deploy both a bare Pod and a Deployment. Note the runtime trap: `restricted-v2` ADMITS a bare `nginx:latest` Pod (SCC admission only sees the pod spec) but nginx cannot run under the arbitrary non-root UID it is assigned — it crashes with "Permission denied" and the Pod ends up CrashLoopBackOff. Use a non-root image like `quay.io/openshift/origin-hello-openshift:latest` for a healthy workload.',
     examObjectives: [
       'Manage OpenShift Container Platform > Use the web console to manage and configure an OpenShift cluster',
       'Manage OpenShift Container Platform > Use the command-line interface to manage and configure an OpenShift cluster',
@@ -143,7 +143,7 @@ const CAMPAIGN_LEVELS = [
     hints: [
       'Log in first: `oc login -u kubeadmin` (or `oc login --username=kubeadmin`), then check `oc whoami`.',
       'Create the project: `oc new-project first-project --display-name="First Project"`. `oc project` shows the current project.',
-      'Run a Pod with a non-root image: `oc run hello-pod --image=quay.io/openshift/origin-hello-openshift:latest`. Watch it with `oc get pods -o wide`. Trap: `oc run hello-pod --image=nginx:latest` is REJECTED under `restricted-v2` because nginx runs as root — the Pod is never created (`oc get pods` stays empty) and the ReplicaSet shows FailedCreate "unable to validate against any security context constraint". A Pod that requests `runAsUser: 0`, a `privileged: true` container or a host port is likewise rejected at admission. If you tried the nginx trap and got a Failed pod, remove it before re-running with the supported image: `oc delete pod hello-pod`.',
+      'Run a Pod with a non-root image: `oc run hello-pod --image=quay.io/openshift/origin-hello-openshift:latest`. Watch it with `oc get pods -o wide`. Trap: `oc run hello-pod --image=nginx:latest` is ADMITTED by `restricted-v2` (SCC admission only checks the pod spec, not the image\'s USER), then the container crashes — `oc logs hello-pod` shows `nginx: [emerg] mkdir() "/var/cache/nginx/client_temp" failed (13: Permission denied)` and `oc get pods` reports CrashLoopBackOff with a growing RESTARTS count. What IS rejected at admission: a Pod that explicitly requests `runAsUser: 0`, a `privileged: true` container or a host port (the controller shows FailedCreate and no Pod exists). If you tried the nginx trap, delete it before re-running with the supported image: `oc delete pod hello-pod`.',
       'Create a Deployment: `oc create deployment hello-deploy --image=quay.io/openshift/origin-hello-openshift:latest`, then verify `oc get deployments,pods`.',
     ],
     starCriteria: { time: 240, efficiency: 0.75, noFailures: true },

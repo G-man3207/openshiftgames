@@ -1,22 +1,21 @@
 /**
  * ImageSecurityProfiles — known container-image security personalities.
  *
- * OpenShift SCC admission looks at the *Pod spec*, not at the image, so a bare
- * `nginx:latest` container (no securityContext) passes `restricted-v2`
- * admission on paper. On a real cluster the classic exam trap is that the
- * nginx image still tries to run as root (UID 0) and bind port 80, which
- * restricted-v2 rejects — the workload never becomes healthy.
+ * OpenShift SCC admission looks at the *Pod spec*, not at the image. A bare
+ * `nginx:latest` container (no `securityContext`) therefore PASSES
+ * `restricted-v2` admission and gets an arbitrary UID from the namespace
+ * range; the image then fails at RUNTIME because it expects to start as UID 0
+ * and write to root-owned paths (`/var/cache/nginx`, port 80). The classic exam
+ * trap is therefore NOT an admission rejection: the Pod is admitted
+ * (`openshift.io/scc: restricted-v2`) and ends up CrashLoopBackOff with
+ * `nginx: [emerg] mkdir() "/var/cache/nginx/client_temp" failed (13: Permission
+ * denied)` in `oc logs` (issue #25).
  *
- * The simulator models this as an *effective* security request: images in this
- * table are treated as requesting `runAsUser: 0` unless the Pod/container
- * explicitly overrides the UID. The normal SCC admission path then rejects
- * them for restricted-v2/nonroot SCCs and admits them only under anyuid /
- * privileged (like a real cluster).
- *
- * This is deliberately separate from `js/engine/RBACEngine.js`'s
- * `podSecurityRequest()`: that function must keep honouring only *explicit*
- * pod-spec requests (SCC admission is spec-based). The image profile is an
- * engine-level heuristic layered in front of it.
+ * This module is the single source of truth for those image personalities. It
+ * is consumed by the kubelet-side pod lifecycle, never by SCC admission:
+ * admission must keep honouring only *explicit* pod-spec requests
+ * (`js/engine/RBACEngine.js` `podSecurityRequest()`). An image that needs root
+ * only runs once the Pod is admitted by an anyuid/privileged-style SCC.
  */
 
 /**
@@ -26,6 +25,11 @@
  *   runAsUser: number,
  *   ports: number[],
  *   matches: (image: string) => boolean,
+ *   runtimeFailure: {
+ *     exitCode: number,
+ *     lastStateReason: string,
+ *     logLines: string[],
+ *   },
  * }} KnownImageSecurityProfile
  */
 
@@ -55,16 +59,28 @@ function isNginxImage(image) {
 
 /**
  * Known root images. Keep this list intentionally tiny; it models the classic
- * exam traps only (nginx runs as UID 0 and binds port 80).
+ * exam traps only (nginx runs as UID 0 and owns /var/cache/nginx + port 80).
  * @type {KnownImageSecurityProfile[]}
  */
 export const KNOWN_IMAGE_SECURITY_PROFILES = Object.freeze([
   {
     id: 'nginx-root-port80',
-    description: 'nginx runs as UID 0 and binds port 80',
+    description: 'nginx runs as UID 0 and writes to root-owned /var/cache/nginx',
     runAsUser: 0,
     ports: [80],
     matches: isNginxImage,
+    // What actually happens when the image starts under a non-root SCC: the
+    // kubelet starts the container with the namespace UID, nginx cannot create
+    // its temp dir and exits 1 — `oc logs` shows the permission-denied emerge
+    // line. This is the runtime half of the classic EX280 nginx trap (#25).
+    runtimeFailure: {
+      exitCode: 1,
+      lastStateReason: 'Error',
+      logLines: [
+        '/docker-entrypoint.sh: 68: /docker-entrypoint.sh: mkdir: cannot create directory \'/var/cache/nginx/client_temp\': Permission denied',
+        'nginx: [emerg] mkdir() "/var/cache/nginx/client_temp" failed (13: Permission denied)',
+      ],
+    },
   },
 ]);
 
@@ -79,58 +95,15 @@ export function knownImageSecurityProfile(image) {
 }
 
 /**
- * Build the Pod spec the SCC admission path should evaluate: known root images
- * contribute an effective `runAsUser: 0` unless the Pod/container overrides it.
- * Returns a new spec object (the caller's spec is never mutated).
+ * The runtime failure persona of an image that must start as root (nginx).
+ * Returns null for images with no known runtime personality.
  *
- * @param {object} podSpec
- * @returns {object}
+ * @param {string} image
+ * @returns {KnownImageSecurityProfile['runtimeFailure']|null}
  */
-export function applyKnownImageSecurityProfiles(podSpec) {
-  const spec = podSpec && typeof podSpec === 'object' ? podSpec : {};
-  const containers = Array.isArray(spec.containers) ? spec.containers : [];
-  if (containers.length === 0) return spec;
-
-  const podRunAsUser = spec.securityContext && typeof spec.securityContext.runAsUser === 'number'
-    ? spec.securityContext.runAsUser
-    : undefined;
-  if (podRunAsUser !== undefined) return spec; // explicit Pod-level UID wins
-
-  let changed = false;
-  const effectiveContainers = containers.map((container) => {
-    if (!container || typeof container !== 'object') return container;
-    const explicitRunAsUser = container.securityContext && typeof container.securityContext.runAsUser === 'number'
-      ? container.securityContext.runAsUser
-      : undefined;
-    if (explicitRunAsUser !== undefined) return container;
-    const profile = knownImageSecurityProfile(container.image);
-    if (!profile) return container;
-    changed = true;
-    return {
-      ...container,
-      securityContext: {
-        ...(container.securityContext || {}),
-        runAsUser: profile.runAsUser,
-      },
-    };
-  });
-  if (!changed) return spec;
-  return { ...spec, containers: effectiveContainers };
+export function knownImageRuntimeFailure(image) {
+  const profile = knownImageSecurityProfile(image);
+  return profile?.runtimeFailure || null;
 }
 
-/**
- * Message fragment describing why a known image is not admissible under the
- * resolved SCC (used to enrich controller events when useful).
- * @param {object} podSpec
- * @returns {string}
- */
-export function knownImageSecurityProfileViolation(podSpec) {
-  const containers = (podSpec && Array.isArray(podSpec.containers) ? podSpec.containers : []);
-  for (const container of containers) {
-    const profile = knownImageSecurityProfile(container?.image);
-    if (profile) return `image ${container.image} ${profile.description}`;
-  }
-  return '';
-}
-
-export default { KNOWN_IMAGE_SECURITY_PROFILES, knownImageSecurityProfile, applyKnownImageSecurityProfiles, knownImageSecurityProfileViolation };
+export default { KNOWN_IMAGE_SECURITY_PROFILES, knownImageSecurityProfile, knownImageRuntimeFailure };

@@ -32,13 +32,13 @@ import {
   parseCpuMillis,
   parseMemoryMi,
 } from './ClusterState.js';
-import { podSecurityRequest } from './RBACEngine.js';
+import { podSecurityRequest, runAsUserAllowed } from './RBACEngine.js';
 import {
   validateCronSchedule,
   parseCronSchedule,
   nextCronOccurrence,
 } from '../resources/WorkloadResources.js';
-import { applyKnownImageSecurityProfiles } from '../resources/ImageSecurityProfiles.js';
+import { knownImageRuntimeFailure } from '../resources/ImageSecurityProfiles.js';
 
 /** Fixed controller timings in game seconds (1 tick = 0.05 s at 20 TPS). */
 const BUILD_PHASE_NEW_SECONDS = 1;
@@ -109,9 +109,10 @@ const RESERVED_MEMORY_MIB = 1024;
  * Image references the simulated registries cannot resolve. A tag such as
  * `quay.io/openshift/origin-hello-openshift:does-not-exist` is exactly the L10
  * rolling-update scenario; `:not-found` is used by the DeploymentStuckRollout
- * incident. Public images are otherwise assumed pullable.
+ * incident. The token may appear ANYWHERE in the tag (`:v9-nope` is also
+ * unpullable, issue #26); public images are otherwise assumed pullable.
  */
-const IMAGE_PULL_FAILURE_TAG_RE = /^(does-not-exist|doesnotexist|doesnt-exist|nonexistent|no-such|not-found|notfound|missing|invalid|bogus|nope|broken)/i;
+const IMAGE_PULL_FAILURE_TAG_RE = /(does-not-exist|doesnotexist|doesnt-exist|nonexistent|no-such|not-found|notfound|missing|invalid|bogus|nope|broken)/i;
 const IMAGE_PULL_FAILURE_REPO_RE = /(^|[\/])(does-not-exist|doesnotexist|nonexistent|no-such-repo|missing-repo)([\/:.]|$)/i;
 
 export class SimulationTick {
@@ -837,6 +838,94 @@ export class SimulationTick {
     return Boolean(pod?.metadata?.annotations?.['openshiftgames.io/incident']);
   }
 
+  /** Does an SCC's runAsUser strategy permit UID 0? (anyuid/privileged yes,
+   * restricted-v2/nonroot no). Used by the known-root-image runtime model. */
+  _sccAllowsUidZero(scc) {
+    if (!scc) return false;
+    return runAsUserAllowed(scc.spec?.runAsUser, 0);
+  }
+
+  /**
+   * The SCC that admitted a Pod. `openshift.io/scc` is written by `_tickSCC` for
+   * every admitted Pod; a Pod created between controller ticks (bare `oc run`)
+   * is resolved exactly like admission would, without mutating anything.
+   * @param {object} pod
+   * @returns {object|null}
+   */
+  _podScc(pod) {
+    const admittedName = pod?.metadata?.annotations?.['openshift.io/scc'];
+    if (admittedName) {
+      const admitted = this.cluster.getSCC(admittedName);
+      if (admitted) return admitted;
+    }
+    const resolution = this.cluster.resolveSCCForPod(pod);
+    return resolution.allowed ? resolution.scc : null;
+  }
+
+  /**
+   * Known root-image personality at runtime (issue #25): an image that starts as
+   * UID 0 (nginx) is happily ADMITTED by a non-root SCC — admission only checks
+   * the explicit pod spec — but the container cannot run with the arbitrary UID
+   * and exits immediately with "Permission denied". Returns the image runtime
+   * failure persona when the Pod is in that state, otherwise null.
+   *
+   * @param {object} pod
+   * @param {object} container
+   * @returns {{exitCode: number, lastStateReason: string, logLines: string[]}|null}
+   */
+  _knownRootImageRuntimeFailure(pod, container) {
+    const failure = knownImageRuntimeFailure(container?.image);
+    if (!failure) return null;
+    const scc = this._podScc(pod);
+    if (!scc) return null;
+    // anyuid/privileged admit the root UID the image expects: it runs normally.
+    if (this._sccAllowsUidZero(scc)) return null;
+    return failure;
+  }
+
+  /**
+   * Model the kubelet-side crash of a known root image admitted under a non-root
+   * SCC: the container terminates (exit 1, Permission denied), the Pod keeps its
+   * Running phase with a CrashLoopBackOff container state, the restart count
+   * grows on every kubelet retry and the crash output is available to
+   * `oc logs` / `oc logs --previous` (issue #25).
+   */
+  _crashKnownRootImageContainer(pod, status, failure) {
+    const now = new Date().toISOString();
+    status.restartCount = (status.restartCount || 0) + 1;
+    status.ready = false;
+    status.started = false;
+    status.lastState = {
+      terminated: {
+        exitCode: failure.exitCode ?? 1,
+        reason: failure.lastStateReason || 'Error',
+        startedAt: now,
+        finishedAt: now,
+      },
+    };
+    status.state = { waiting: { reason: 'CrashLoopBackOff' } };
+    const lines = Array.isArray(failure.logLines) ? failure.logLines : [];
+    if (lines.length > 0) {
+      // The CLI renders these annotations for `oc logs`/`oc logs --previous`
+      // (same mechanism as the IncidentEngine's scripted crash logs).
+      pod.setAnnotation('openshiftgames.io/logs', JSON.stringify(lines));
+      pod.setAnnotation('openshiftgames.io/logs-previous', JSON.stringify(lines));
+      pod.setAnnotation('openshiftgames.io/logs-container', status.name);
+    }
+    // Real kubelet BackOff events are aggregated; throttle duplicates the same
+    // way the FailedCreate recorder does.
+    const previousEventAt = pod._knownImageCrashEventAt;
+    if (typeof previousEventAt !== 'number' || this.gameSeconds - previousEventAt >= 10) {
+      pod._knownImageCrashEventAt = this.gameSeconds;
+      pod.recordEvent(
+        'Warning',
+        'BackOff',
+        `Back-off restarting failed container ${status.name} in pod ${pod.metadata.name}_${pod.metadata.namespace || 'default'}`
+      );
+    }
+    this.cluster.update(pod.uid, pod);
+  }
+
   _tickPodLifecycle(dt) {
     const runningPods = this.cluster.getByKind('Pod').filter(
       (pod) => pod.status.phase === 'Running' && !this._isIncidentControlled(pod)
@@ -850,6 +939,17 @@ export class SimulationTick {
       for (let index = 0; index < pod.status.containerStatuses.length; index++) {
         const status = pod.status.containerStatuses[index];
         const container = containers[index] || {};
+        // Known root images admitted by a non-root SCC crash as soon as the
+        // container starts (issue #25): nginx is admitted under restricted-v2
+        // and immediately exits with Permission denied. The retry loop is the
+        // normal CrashLoopBackOff one; only actual start attempts crash.
+        const runtimeFailure = this._knownRootImageRuntimeFailure(pod, container);
+        if (runtimeFailure
+          && (status.state.running || status.state.waiting?.reason === 'ContainerCreating')) {
+          this._crashKnownRootImageContainer(pod, status, runtimeFailure);
+          allReady = false;
+          continue;
+        }
         if (status.state.waiting) {
           if (status.state.waiting.reason === 'ContainerCreating') {
             status.state = { running: { startedAt: new Date().toISOString() } };
@@ -1363,6 +1463,10 @@ export class SimulationTick {
         this.cluster.update(rs.uid, rs);
       }
     }
+    // A ReplicaSet scaled to zero is no longer trying (and failing) to create
+    // Pods: drop its stale ReplicaFailure condition so a fixed Deployment does
+    // not keep reporting the old admission failure (#25 fix path).
+    if (rs.spec.replicas === 0) this._clearReplicaFailure(rs);
     const target = Math.max(0, Number(rs.spec.replicas ?? 0) || 0);
     const pods = this._activePodsOf(rs);
     const blockedPod = pods.find((pod) => this._isPodBlocked(pod));
@@ -1468,8 +1572,26 @@ export class SimulationTick {
         }
         deploy.setCondition('Available', available >= minAvailable ? 'True' : 'False', available >= minAvailable ? 'MinimumReplicasAvailable' : 'MinimumReplicasUnavailable', `${available}/${desiredReplicas} replicas available`);
       } else {
-        deploy.setCondition('Available', 'True', 'MinimumReplicasAvailable', '');
-        deploy.setCondition('Progressing', 'True', 'NewReplicaSetAvailable', '');
+        // The rollout has no pending ReplicaSet scale-up, but the Deployment can
+        // still be unhealthy (crash-looping / unschedulable / unready Pods).
+        // Real clusters only report MinimumReplicasAvailable when enough
+        // replicas are actually available (issue #23: `0 available | 3
+        // unavailable` must read Available False MinimumReplicasUnavailable).
+        const minimumAvailable = available >= minAvailable;
+        deploy.setCondition(
+          'Available',
+          minimumAvailable ? 'True' : 'False',
+          minimumAvailable ? 'MinimumReplicasAvailable' : 'MinimumReplicasUnavailable',
+          `${available}/${desiredReplicas} replicas available`
+        );
+        // Progressing only becomes NewReplicaSetAvailable once every desired
+        // replica is available; a new ReplicaSet whose Pods exist but never
+        // become Ready is still being updated.
+        if (desiredReplicas > 0 && available < desiredReplicas) {
+          deploy.setCondition('Progressing', 'True', 'ReplicaSetUpdated', `${available} out of ${desiredReplicas} new replicas are available`);
+        } else {
+          deploy.setCondition('Progressing', 'True', 'NewReplicaSetAvailable', '');
+        }
       }
     }
 
@@ -3298,7 +3420,49 @@ export class SimulationTick {
 
   // ── OpenShift: OLM subscriptions ───────────────────────────────────────
 
+  /** Latch ResolutionFailed on a Subscription (idempotent, event + bus hook). */
+  _failSubscriptionResolution(subscription, packageName, resolutionMessage) {
+    if (subscription.status.reason === 'ConstraintsNotSatisfiable') return;
+    subscription.status.phase = 'UpgradePending';
+    subscription.status.reason = 'ConstraintsNotSatisfiable';
+    subscription.status.message = resolutionMessage;
+    subscription.setCondition('ResolutionFailed', 'True', 'ConstraintsNotSatisfiable', resolutionMessage);
+    subscription.setCondition('InstallPlanPending', 'False', 'NoInstallPlan', '');
+    this.cluster.update(subscription.uid, subscription);
+    subscription.recordEvent('Warning', 'ResolutionFailed', resolutionMessage);
+    this.cluster.update(subscription.uid, subscription);
+    this.eventBus?.emit('operator:resolution-failed', {
+      name: subscription.metadata.name,
+      namespace: subscription.metadata.namespace,
+      packageName,
+      message: resolutionMessage,
+    });
+  }
+
+  /**
+   * OLM resolves Subscription dependencies per namespace / OperatorGroup, not
+   * per Subscription: if any package in a namespace is absent from the catalog,
+   * the namespace's resolution fails as a unit, so EVERY Subscription sharing
+   * that OperatorGroup reports ResolutionFailed (issue #26).
+   *
+   * @returns {Map<string, {packageName: string, subscriptionName: string}>}
+   *   namespace → the first unresolved package it tracks
+   */
+  _resolutionFailuresByNamespace() {
+    const failures = new Map();
+    for (const subscription of this.cluster.getByKind('Subscription')) {
+      if (subscription.metadata.deletionTimestamp) continue;
+      const namespace = subscription.metadata.namespace;
+      if (failures.has(namespace)) continue;
+      const packageName = this._packageNameForSubscription(subscription);
+      if (this.cluster.getByName('PackageManifest', packageName, '')) continue;
+      failures.set(namespace, { packageName, subscriptionName: subscription.metadata.name });
+    }
+    return failures;
+  }
+
   _tickSubscriptions(dt) {
+    const resolutionFailures = this._resolutionFailuresByNamespace();
     for (const subscription of this.cluster.getByKind('Subscription')) {
       if (subscription.metadata.deletionTimestamp) continue;
       const namespace = subscription.metadata.namespace;
@@ -3354,28 +3518,30 @@ export class SimulationTick {
       }
       subscription._noNamespaceLogged = false;
 
-      // Catalog resolution (issue #18): a Subscription whose package is not in
-      // the software catalog never installs. Real OLM reports ConstraintsNotSatisfiable
-      // / ResolutionFailed and creates no InstallPlan/CSV — no phantom CSV.
+      // Catalog resolution (issues #18/#26): OLM resolves the namespace's
+      // dependency set as a whole, so when any Subscription in this namespace
+      // tracks a package that is missing from the catalog, every Subscription
+      // sharing the OperatorGroup reports ConstraintsNotSatisfiable /
+      // ResolutionFailed and nothing is installed in that namespace — no
+      // phantom CSV, and a healthy sibling is not silently ignored.
+      const resolutionFailure = resolutionFailures.get(namespace);
+      if (resolutionFailure) {
+        const ownPackageMissing = resolutionFailure.subscriptionName === subscription.metadata.name;
+        const resolutionMessage = ownPackageMissing
+          ? `constraints not satisfiable: no operators found in package "${resolutionFailure.packageName}" in the catalog referenced by the subscription`
+          : `constraints not satisfiable: no operators found in package "${resolutionFailure.packageName}" in the catalog referenced by the namespace; OLM resolves namespace "${namespace}" as a unit`;
+        this._failSubscriptionResolution(subscription, packageName, resolutionMessage);
+        continue;
+      }
+      // Safety net if the namespace-level snapshot missed a package (e.g. the
+      // catalog changed between the map build and this iteration).
       const catalogEntry = this.cluster.getByName('PackageManifest', packageName, '');
       if (!catalogEntry) {
-        const resolutionMessage = `constraints not satisfiable: no operators found in package "${packageName}" in the catalog referenced by the subscription`;
-        if (subscription.status.reason !== 'ConstraintsNotSatisfiable') {
-          subscription.status.phase = 'UpgradePending';
-          subscription.status.reason = 'ConstraintsNotSatisfiable';
-          subscription.status.message = resolutionMessage;
-          subscription.setCondition('ResolutionFailed', 'True', 'ConstraintsNotSatisfiable', resolutionMessage);
-          subscription.setCondition('InstallPlanPending', 'False', 'NoInstallPlan', '');
-          this.cluster.update(subscription.uid, subscription);
-          subscription.recordEvent('Warning', 'ResolutionFailed', resolutionMessage);
-          this.cluster.update(subscription.uid, subscription);
-          this.eventBus?.emit('operator:resolution-failed', {
-            name: subscription.metadata.name,
-            namespace,
-            packageName,
-            message: resolutionMessage,
-          });
-        }
+        this._failSubscriptionResolution(
+          subscription,
+          packageName,
+          `constraints not satisfiable: no operators found in package "${packageName}" in the catalog referenced by the subscription`
+        );
         continue;
       }
       if (subscription.status.reason === 'ConstraintsNotSatisfiable') {
@@ -3678,13 +3844,13 @@ export class SimulationTick {
    * @returns {{allowed: boolean, scc: object|null, candidates: object[], message?: string}}
    */
   _resolveAdmissionForSpec(podSpec, namespace) {
-    // Known root images (e.g. nginx) contribute an effective runAsUser: 0 so
-    // the default restricted-v2 SCC rejects them exactly like the classic
-    // real-cluster trap (#20). Explicit runAsUser overrides win.
-    const effectivePodSpec = applyKnownImageSecurityProfiles(podSpec || {});
+    // SCC admission only sees the explicit pod spec (RBACEngine.podSecurityRequest):
+    // a bare `nginx:latest` with no securityContext is ADMITTED by restricted-v2
+    // and only fails later at runtime (issue #25). Known-image personalities are
+    // therefore NOT folded into the admission spec.
     const candidate = {
       metadata: { name: 'admission-candidate', namespace, labels: {} },
-      spec: effectivePodSpec,
+      spec: podSpec || {},
     };
     const resolution = this.cluster.resolveSCCForPod(candidate);
     if (resolution.allowed) return resolution;
@@ -3695,14 +3861,14 @@ export class SimulationTick {
     // No SCC bound to the service account at all (e.g. a custom namespace the
     // player just created): restricted pods are still admitted, elevated ones
     // are not (matches the real default `system:authenticated` binding).
-    const request = podSecurityRequest(effectivePodSpec);
+    const request = podSecurityRequest(podSpec || {});
     const elevated = request.privileged || request.hostNetwork || request.hostPID || request.hostIPC || request.hostPath
       || request.hostPorts.length > 0 || request.runAsUsers.includes(0);
     if (elevated) {
       return { ...resolution, allowed: false, message: 'unable to validate against any security context constraint' };
     }
     const restricted = this.cluster.getSCC('restricted-v2') || this.cluster.getSCCs()[0] || null;
-    if (restricted && this.cluster.sccAllowsPod(restricted, effectivePodSpec)) {
+    if (restricted && this.cluster.sccAllowsPod(restricted, podSpec || {})) {
       return { allowed: true, scc: restricted, candidates: [restricted] };
     }
     return { ...resolution, message: 'unable to validate against any security context constraint' };

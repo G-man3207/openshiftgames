@@ -12,6 +12,10 @@
  *   • Route            — `status.ingress[].conditions[]` type=Admitted
  *                        (`status.phase` is not updated by the route controller)
  *   • Node             — Ready condition
+ *   • Deployment       — Available/Progressing conditions
+ *                        (`status.phase` is only the constructor default
+ *                        "Pending" and is never updated by the controller —
+ *                        issue #23: the 3D label stayed "Pending" forever)
  *
  * `visualStatusFor(resource)` is the single source of truth for the visual
  * layer: it resolves the live resource (`resource._ref` for renderer
@@ -141,6 +145,30 @@ export function visualStatusFor(resource, fallback = null) {
       if (ready === 'True') return 'Ready';
       if (ready === 'False' || ready === 'Unknown') return 'NotReady';
       return phase === 'Running' ? 'Ready' : (phase || fallback || 'Unknown');
+    }
+
+    case 'Deployment': {
+      // Deployment.status.phase is never updated by the controller (it stays at
+      // the constructor's "Pending"), so the visual layer must derive the real
+      // state from the Available/Progressing conditions + replica counts (#23).
+      const desired = Math.max(0, Number(ref?.spec?.replicas ?? 1) || 0);
+      const available = Number(ref?.status?.availableReplicas ?? 0) || 0;
+      const progressing = Array.isArray(conditions)
+        ? conditions.find((condition) => condition && condition.type === 'Progressing')
+        : null;
+      if (hasCondition(conditions, 'ReplicaFailure', 'True')) return 'Failed';
+      if (hasCondition(conditions, 'Available', 'True')) {
+        // A mid-rollout Deployment is Available but not yet fully updated.
+        return desired === 0 || available >= desired ? 'Running' : 'Progressing';
+      }
+      if (hasCondition(conditions, 'Available', 'False')) {
+        const deadlineExceeded = String(progressing?.status) === 'False'
+          && String(progressing?.reason) === 'ProgressDeadlineExceeded';
+        return deadlineExceeded ? 'Failed' : 'Progressing';
+      }
+      // No controller conditions yet (freshly applied object): keep the honest
+      // phase rather than inventing a state.
+      return phase && phase !== 'Pending' ? phase : (fallback || 'Pending');
     }
 
     default:
