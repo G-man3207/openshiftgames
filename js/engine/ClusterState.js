@@ -1906,13 +1906,16 @@ export class ClusterState {
       const usedList = exceeded
         .map((entry) => `${entry.key}=${formatValue(entry.key, entry.used)}`)
         .join(',');
+      // Real API-server wording prints the LIMIT as the bare quantity (the
+      // resource name is already in `requested`/`used`):
+      //   exceeded quota: compute-quota, requested: pods=1, used: pods=1, limited: 1
       const limitedList = exceeded
         .map((entry) =>
           entry.key.endsWith('.cpu')
-            ? `${entry.key}=${formatValue(entry.key, parseCpuMillis(entry.hard))}`
+            ? formatValue(entry.key, parseCpuMillis(entry.hard))
             : entry.key.endsWith('.memory')
-              ? `${entry.key}=${formatValue(entry.key, parseMemoryMi(entry.hard))}`
-              : `${entry.key}=${entry.hard}`
+              ? formatValue(entry.key, parseMemoryMi(entry.hard))
+              : String(entry.hard)
         )
         .join(',');
       violations.push(

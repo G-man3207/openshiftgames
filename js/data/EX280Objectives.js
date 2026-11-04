@@ -92,6 +92,7 @@ export const EX280_CHALLENGE_TITLES = {
   10: 'Install an Operator',
   11: 'HTPasswd Onboarding',
   12: 'EX280 Speed Run',
+  13: 'Production Network Policies',
 };
 
 /* ────────────────────────────────────────────────────────────────────────────
@@ -759,6 +760,7 @@ export const EX280_OBJECTIVE_GROUPS = [
           `oc create route reencrypt reenc --service=reenc --cert=tls.crt --key=tls.key --dest-ca-cert=destca.crt`,
           `oc get route web -o yaml`,
         ],
+        quickLabs: ['lab-serving-cert-reencrypt'],
       },
       {
         id: 'net-network-policies',
@@ -767,7 +769,7 @@ export const EX280_OBJECTIVE_GROUPS = [
           'Write NetworkPolicies with pod/namespace selectors and ports: default deny, allow same namespace, allow a labelled namespace, and restore DNS/ingress access.',
         docsUrl: DOCS.networkPolicy,
         levels: [20],
-        challenges: [9],
+        challenges: [9, 13],
         commands: [
           `oc apply -f allow-frontend.yaml -n web`,
           `oc label namespace prod purpose=production`,
@@ -1074,7 +1076,7 @@ export const EX280_OBJECTIVE_GROUPS = [
 ];
 
 /* ────────────────────────────────────────────────────────────────────────────
- * Quick labs — 9 short do-it-now drills (CONVERSION-SPEC §11 quick labs).
+ * Quick labs — 10 short do-it-now drills (CONVERSION-SPEC §11 quick labs).
  * setup.startingResources is a seed hint; the UI launches Sandbox and shows the
  * steps even when the engine seeding hooks are not available yet.
  * ──────────────────────────────────────────────────────────────────────────── */
@@ -1123,6 +1125,7 @@ export const EX280_QUICK_LABS = [
     check: [
       { type: 'login', user: 'ex280-user' },
       { type: 'user', name: 'ex280-user' },
+      { type: 'password', user: 'ex280-user', password: 'Rotated0rd!' },
     ],
     hints: [
       'The htpasswd file key inside the secret must be named htpasswd.',
@@ -1195,6 +1198,81 @@ export const EX280_QUICK_LABS = [
       {
         command: `oc get route web -o yaml`,
         text: 'Check status.ingress conditions for Admitted=True.',
+      },
+    ],
+  },
+  {
+    id: 'lab-serving-cert-reencrypt',
+    title: 'Service serving cert → reencrypt Route',
+    objectiveId: 'net-tls',
+    objectiveIds: ['net-tls', 'net-routes', 'net-network-policies'],
+    docsUrl: DOCS.routes,
+    mode: 'sandbox',
+    summary:
+      'Let the service-ca controller mint a serving certificate for a Service, extract the certificate and CA bundle, create a reencrypt Route, then default-deny the project and re-open only the ingress router.',
+    setup: {
+      startingResources: [],
+      manifestFiles: ['examples/default-deny.yaml', 'examples/allow-from-router.yaml'],
+    },
+    check: [
+      { type: 'route', name: 'api', termination: 'reencrypt' },
+      { type: 'tls', enabled: true, termination: 'reencrypt' },
+    ],
+    hints: [
+      'The service-ca controller watches the Service annotation: service.beta.openshift.io/serving-cert-secret-name=<secret> creates a kubernetes.io/tls secret (<secret>) with tls.crt and tls.key.',
+      'A ConfigMap annotated with service.beta.openshift.io/inject-cabundle=true gets the service-ca.crt trust bundle injected — extract it with the same oc extract flow.',
+      'Reencrypt Routes validate the backend certificate against --dest-ca-cert=service-ca.crt; the router terminates TLS and re-encrypts to the Service.',
+      'After oc apply -f examples/default-deny.yaml the Route turns 503 even though it is still Admitted — re-open only the router path with examples/allow-from-router.yaml (namespaceSelector policy-group.network.openshift.io/ingress: "").',
+    ],
+    steps: [
+      { command: `oc new-project serving-cert`, text: 'Create the project for the app.' },
+      {
+        command: `oc create deployment api --image=quay.io/openshift/origin-hello-openshift:latest -n serving-cert`,
+        text: 'Deploy the backend workload.',
+      },
+      {
+        command: `oc create service clusterip api --tcp=8080:8080 -n serving-cert`,
+        text: 'Expose it as Service api on port 8080.',
+      },
+      {
+        command: `oc annotate svc/api service.beta.openshift.io/serving-cert-secret-name=api-tls -n serving-cert`,
+        text: 'Ask the service-ca controller for a serving certificate.',
+      },
+      {
+        command: `oc get secret api-tls -n serving-cert`,
+        text: 'The controller creates the kubernetes.io/tls secret with tls.crt/tls.key.',
+      },
+      {
+        command: `oc create configmap ca -n serving-cert`,
+        text: 'Create the ConfigMap that will receive the CA bundle.',
+      },
+      {
+        command: `oc annotate configmap/ca service.beta.openshift.io/inject-cabundle=true -n serving-cert`,
+        text: 'Inject the service CA into the service-ca.crt key.',
+      },
+      {
+        command: `oc extract secret/api-tls -n serving-cert --to /tmp/serving-cert --confirm`,
+        text: 'Extract the serving certificate and key.',
+      },
+      {
+        command: `oc extract configmap/ca -n serving-cert --to /tmp/serving-cert --confirm`,
+        text: 'Extract the service CA bundle.',
+      },
+      {
+        command: `oc create route reencrypt api --service=api --port=8080 --cert=/tmp/serving-cert/tls.crt --key=/tmp/serving-cert/tls.key --dest-ca-cert=/tmp/serving-cert/service-ca.crt -n serving-cert`,
+        text: 'Create the reencrypt Route with the serving cert and destination CA.',
+      },
+      {
+        command: `oc apply -f examples/default-deny.yaml -n serving-cert`,
+        text: 'Deny all traffic: the router can no longer reach the backend.',
+      },
+      {
+        command: `oc apply -f examples/allow-from-router.yaml -n serving-cert`,
+        text: 'Allow only the ingress router namespace back in.',
+      },
+      {
+        command: `curl -k https://api-serving-cert.apps.cluster.example.com`,
+        text: 'The Route serves TLS again through the router.',
       },
     ],
   },

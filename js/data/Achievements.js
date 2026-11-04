@@ -392,10 +392,10 @@ const ACHIEVEMENTS = [
   {
     id: 'challenge-veteran',
     name: 'Lab Veteran',
-    description: 'Complete all 12 challenge labs.',
+    description: 'Complete all 13 challenge labs.',
     icon: 'flask',
     category: 'Expert',
-    condition: (stats) => stat(stats, 'challengesCompleted') >= 12,
+    condition: (stats) => stat(stats, 'challengesCompleted') >= 13,
     xpReward: 750,
   },
   {

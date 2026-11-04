@@ -10,7 +10,7 @@
  *   templates/          `oc process -f ... | oc apply -f -`
  *   helm/webapp/        a local chart for `helm install webapp helm/webapp`
  *   htpasswd            HTPasswd identity-provider user database
- *   examples/           quotas, LimitRange, Subscription, BuildConfig
+ *   examples/           quotas, LimitRange, Subscriptions (incl. OLM variants), BuildConfig
  *
  * All files in this map parse with js/engine/YamlParser.js (helm templates are
  * valid YAML before Go-template rendering because their expressions are quoted).
@@ -479,7 +479,8 @@ spec:
 
   'examples/default-deny.yaml': `# Default-deny ingress and egress for every Pod in the project.
 # NetworkPolicies are additive: add explicit allow rules for required traffic
-# (for example DNS egress on UDP/TCP 53 to the openshift-dns namespace).
+# (for example DNS egress on UDP/TCP 5353 to the openshift-dns namespace — the
+# dns-default Pods listen on 5353, not on port 53).
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -489,6 +490,25 @@ spec:
   policyTypes:
     - Ingress
     - Egress
+`,
+
+  // Paired with examples/default-deny.yaml: keep the project isolated but let
+  // the ingress router through. The router Pods run in a namespace labelled
+  // policy-group.network.openshift.io/ingress="", so this single ingress policy
+  // re-opens only the router → Pod path (Routes keep working after default-deny).
+  'examples/allow-from-router.yaml': `apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-from-router
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              policy-group.network.openshift.io/ingress: ""
 `,
 
   'examples/privileged-deployment.yaml': `apiVersion: apps/v1
@@ -525,6 +545,41 @@ spec:
   channel: stable
   installPlanApproval: Automatic
   name: ansible-automation-platform-operator
+  source: redhat-operators
+  sourceNamespace: openshift-marketplace
+`,
+
+  // L18 operator variants: AllNamespaces install (global OperatorGroup in
+  // openshift-operators) with Manual approval and a pinned startingCSV.
+  // Apply it, then approve the InstallPlan by hand:
+  //   oc patch installplan <name> -n openshift-operators --type=merge \
+  //     -p '{"spec":{"approved":true}}'
+  'examples/subscription-manual-pinned.yaml': `apiVersion: operators.coreos.com/v1alpha1
+kind: Subscription
+metadata:
+  name: cert-manager-operator
+  namespace: openshift-operators
+spec:
+  channel: stable
+  installPlanApproval: Manual
+  name: cert-manager-operator
+  source: redhat-operators
+  sourceNamespace: openshift-marketplace
+  # Pin a specific CSV instead of installing the channel head.
+  startingCSV: cert-manager-operator.v1.15.0
+`,
+
+  // Lab 10 AllNamespaces variant: the global-operators OperatorGroup already
+  // exists in openshift-operators, so no new OperatorGroup is needed.
+  'examples/subscription-pipelines.yaml': `apiVersion: operators.coreos.com/v1alpha1
+kind: Subscription
+metadata:
+  name: openshift-pipelines-operator-rh
+  namespace: openshift-operators
+spec:
+  channel: latest
+  installPlanApproval: Automatic
+  name: openshift-pipelines-operator-rh
   source: redhat-operators
   sourceNamespace: openshift-marketplace
 `,

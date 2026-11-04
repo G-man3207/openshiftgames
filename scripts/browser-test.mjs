@@ -4445,7 +4445,769 @@ await runSection('regressions', async () => {
 // QA ROUND 1.1.8 — issue #27/#28: incident self-healing and node recovery
 // ═══════════════════════════════════════════════════════════════════════════
 await runSection('qa-incidents', async () => {
-  // QA-27-28-TESTS: owned by teammate `incidents` — replace this comment.
+  // Bug #27: incidents must heal from the resulting cluster STATE on the
+  // simulation tick (not only after an unrelated write), quota incidents must
+  // be bound to the quota actually damaged, and a state-driven SCCForbidden
+  // resolution must not bounce a healthy running Pod back to Pending.
+  // Bug #28: NodeNotReady must be fixable with the real node-troubleshooting
+  // routine (`oc debug node/x` → `chroot /host` → `systemctl restart kubelet`),
+  // and `oc get nodes` must show realistic names/ROLES/status.
+  // Cross-checks for #31 A1/A2 live in this section too because the state
+  // healing contract lives in IncidentEngine.
+
+  /** Advance the controller AND incident clocks together (0.05 s steps). */
+  const advanceGame = async (seconds) =>
+    evaluate((secs) => {
+      const sim = window.game?.gameEngine?.simulation;
+      const engine = window.game?.incidentEngine;
+      if (!sim || typeof sim.tick !== 'function') return false;
+      const steps = Math.ceil(secs / 0.05);
+      for (let index = 0; index < steps; index += 1) {
+        sim.tick(0.05);
+        if (engine && typeof engine.tick === 'function') engine.tick(0.05);
+      }
+      return true;
+    }, seconds);
+
+  /** Advance until predicate() is true (or `maxSeconds` of game time). */
+  const advanceUntil = async (predicate, maxSeconds = 60, step = 2) => {
+    for (let played = 0; played < maxSeconds; played += step) {
+      await advanceGame(step);
+      if (await predicate()) return true;
+    }
+    return false;
+  };
+
+  /** Leave the current run and launch a campaign level / timed lab. */
+  const startLevel = async (mode, id) => {
+    await returnToMenu();
+    await sleep(250);
+    const started = await launch(mode, id);
+    await closeOverlays();
+    await sleep(400);
+    return started;
+  };
+
+  const incidentNames = () =>
+    evaluate(() =>
+      [...(window.game?.incidentEngine?.activeIncidents?.values?.() || [])].map(
+        (incident) => incident.name
+      )
+    );
+
+  const activeIncident = (name) =>
+    evaluate((incidentName) => {
+      const engine = window.game?.incidentEngine;
+      const incident = [...(engine?.activeIncidents?.values?.() || [])].find(
+        (entry) => entry.name === incidentName
+      );
+      if (!incident) return null;
+      return {
+        id: incident.id,
+        name: incident.name,
+        target: incident.target,
+        namespace: incident.namespace,
+        damageApplied: incident.damageApplied,
+        pendingTarget: Boolean(incident.pendingTarget),
+        investigationProgress: incident.investigationProgress,
+        steps: incident.investigationSteps.map((step) => ({
+          command: step.command,
+          completed: step.completed,
+        })),
+      };
+    }, name);
+
+  const resolvedNames = () =>
+    evaluate(() =>
+      (window.game?.incidentEngine?.resolvedIncidents || []).map((incident) => incident.name)
+    );
+
+  const podsIn = (namespace) =>
+    evaluate((ns) => {
+      const cluster = window.game?.cluster;
+      return (cluster?.getByKind('Pod') || [])
+        .filter((pod) => (pod.metadata?.namespace || '') === ns)
+        .map((pod) => ({
+          name: pod.metadata?.name,
+          phase: pod.status?.phase,
+          ready:
+            (pod.status?.conditions || []).find((condition) => condition.type === 'Ready')
+              ?.status || null,
+          scc: pod.metadata?.annotations?.['openshift.io/scc'] || null,
+          owner: (pod.metadata?.ownerReferences || []).map((ref) => ref.kind).join(','),
+        }));
+    }, namespace);
+
+  const levelStatus = () =>
+    evaluate(() => {
+      const mode = window.game?.app?.modeInstance;
+      try {
+        return mode?.getStatus ? JSON.parse(JSON.stringify(mode.getStatus())) : null;
+      } catch (error) {
+        return null;
+      }
+    });
+
+  const allObjectivesComplete = (status) =>
+    Array.isArray(status?.objectives) &&
+    status.objectives.every((objective) => objective.completed);
+
+  const nodesInfo = () =>
+    evaluate(() =>
+      (window.game?.cluster?.getByKind('Node') || []).map((node) => ({
+        name: node.metadata?.name || node.name,
+        phase: node.status?.phase || node.phase,
+        ready:
+          (node.status?.conditions || []).find((condition) => condition.type === 'Ready')?.status ||
+          null,
+        unschedulable: node.spec?.unschedulable === true,
+        roles: Object.keys(node.metadata?.labels || {})
+          .filter((key) => key.startsWith('node-role.kubernetes.io/'))
+          .map((key) => key.slice('node-role.kubernetes.io/'.length))
+          .sort()
+          .join(','),
+      }))
+    );
+
+  const damagedNode = (list) =>
+    list.find((node) => node.phase === 'NotReady' || node.ready === 'False') || null;
+
+  const quotaState = (namespace, quotaName) =>
+    evaluate(
+      ({ ns, name }) => {
+        const cluster = window.game?.cluster;
+        const quota = (cluster?.getByKind('ResourceQuota') || []).find(
+          (entry) => entry.metadata?.name === name && entry.metadata?.namespace === ns
+        );
+        const usage = cluster?.getQuotaUsage?.(ns) || {};
+        const events = [];
+        for (const kind of ['ReplicaSet', 'Deployment', 'Pod', 'ResourceQuota']) {
+          for (const resource of cluster?.getByKind?.(kind) || []) {
+            if (resource.metadata?.namespace !== ns) continue;
+            for (const event of resource.events || []) {
+              events.push({
+                kind,
+                name: resource.metadata.name,
+                type: event.type,
+                reason: event.reason,
+                message: event.message,
+              });
+            }
+          }
+        }
+        return {
+          hard: JSON.parse(JSON.stringify(quota?.spec?.hard || {})),
+          used: { pods: usage.pods, cpu: usage['requests.cpu'], memory: usage['requests.memory'] },
+          events,
+          pods: (cluster?.getByKind('Pod') || [])
+            .filter((pod) => pod.metadata?.namespace === ns)
+            .map((pod) => ({ name: pod.metadata?.name, phase: pod.status?.phase })),
+        };
+      },
+      { ns: namespace, name: quotaName }
+    );
+
+  // ── 1. L17: SCCForbidden heals from state, CLI-only (issue #27a + #27c) ──
+  section('incidents: L17 SCCForbidden self-heals from state (CLI-only)');
+  assert(await startLevel('campaign', 17), 'qa-incidents: L17 launches');
+  await advanceGame(17);
+  let scc = await activeIncident('SCCForbidden');
+  assert(
+    Boolean(scc),
+    'qa-incidents: L17 SCCForbidden activates',
+    JSON.stringify(await incidentNames())
+  );
+  assert(
+    (await podsIn('privileged-lab')).length === 0,
+    'qa-incidents: SCC-rejected Pod is never created on 4.x'
+  );
+
+  const progressBefore = scc?.investigationProgress ?? 0;
+  await runCmd('oc get sa -n default -o name', 150);
+  const afterWrongNamespace = await activeIncident('SCCForbidden');
+  assert(
+    afterWrongNamespace?.investigationProgress === progressBefore,
+    'qa-incidents: investigation ignores a wrong-namespace command',
+    `${progressBefore} -> ${afterWrongNamespace?.investigationProgress}`
+  );
+  await runCmd('oc get sa -n privileged-lab -o name', 200);
+  const afterGetSa = await activeIncident('SCCForbidden');
+  assert(
+    (afterGetSa?.investigationProgress ?? 0) > progressBefore,
+    'qa-incidents: `oc get sa -n <ns> -o name` counts toward investigation progress',
+    `${progressBefore} -> ${afterGetSa?.investigationProgress}`
+  );
+  await runCmd('oc adm policy who-can use scc privileged', 200);
+  const afterWhoCan = await activeIncident('SCCForbidden');
+  assert(
+    (afterWhoCan?.investigationProgress ?? 0) > (afterGetSa?.investigationProgress ?? 0),
+    'qa-incidents: `oc adm policy who-can use scc privileged` counts toward investigation progress',
+    `${afterGetSa?.investigationProgress} -> ${afterWhoCan?.investigationProgress}`
+  );
+  await runCmd('oc get rolebinding -n privileged-lab', 200);
+  const afterRoleBinding = await activeIncident('SCCForbidden');
+  assert(
+    (afterRoleBinding?.investigationProgress ?? 0) > (afterWhoCan?.investigationProgress ?? 0),
+    'qa-incidents: `oc get rolebinding -n <ns>` counts toward investigation progress',
+    `${afterWhoCan?.investigationProgress} -> ${afterRoleBinding?.investigationProgress}`
+  );
+
+  const l17Grant = await runCmd(
+    'oc adm policy add-scc-to-user privileged -z priv-sa -n privileged-lab',
+    300
+  );
+  assert(!l17Grant.error, 'qa-incidents: L17 grant privileged SCC succeeds', l17Grant.message);
+  await advanceGame(5);
+  assert(
+    !(await incidentNames()).includes('SCCForbidden'),
+    'qa-incidents: SCCForbidden resolves from cluster state on the tick (no later write)',
+    JSON.stringify(await incidentNames())
+  );
+  let l17Pods = await podsIn('privileged-lab');
+  assert(
+    l17Pods.some(
+      (pod) => pod.phase === 'Running' && pod.ready === 'True' && pod.scc === 'privileged'
+    ),
+    'qa-incidents: privileged Pod is Running+Ready after the state-driven heal',
+    JSON.stringify(l17Pods)
+  );
+  assert(
+    !l17Pods.some((pod) => pod.phase === 'Pending'),
+    'qa-incidents: state-driven heal never re-pends the running Pod (#27c)',
+    JSON.stringify(l17Pods)
+  );
+  await sleep(1800); // CampaignMode.update() runs on the wall clock
+  let l17Status = await levelStatus();
+  assert(
+    allObjectivesComplete(l17Status),
+    'qa-incidents: L17 objectives complete CLI-only',
+    JSON.stringify(
+      l17Status?.objectives?.map((objective) => [objective.label, objective.completed])
+    )
+  );
+  assert(
+    l17Status?.state === 'completed',
+    'qa-incidents: L17 completes CLI-only',
+    JSON.stringify(l17Status?.state)
+  );
+
+  // ── 2. L15: quota incident bound to the damaged quota + A2 model (#27b) ──
+  section('incidents: L15 quota incident heals from state, CLI-only');
+  assert(await startLevel('campaign', 15), 'qa-incidents: L15 launches');
+  await advanceGame(2);
+  await runCmd('oc project quota-lab', 150);
+  let step = await runCmd('oc apply -f examples/quota.yaml', 300);
+  assert(!step.error, 'qa-incidents: L15 apply examples/quota.yaml', step.message);
+  step = await runCmd('oc apply -f examples/limitrange.yaml', 300);
+  assert(!step.error, 'qa-incidents: L15 apply examples/limitrange.yaml', step.message);
+  step = await runCmd(
+    'oc set resources deployment/web --limits=cpu=500m,memory=512Mi --requests=cpu=100m,memory=128Mi',
+    300
+  );
+  assert(!step.error, 'qa-incidents: L15 set web resource requests/limits', step.message);
+  await advanceGame(4);
+  step = await runCmd(
+    'oc create clusterquota team-quota --project-label-selector=name=quota-lab --hard=pods=10 --hard=secrets=20',
+    300
+  );
+  assert(!step.error, 'qa-incidents: L15 create ClusterResourceQuota', step.message);
+  await runCmd('oc adm create-bootstrap-project-template -o yaml', 250);
+  const templateYaml = [
+    'apiVersion: template.openshift.io/v1',
+    'kind: Template',
+    'metadata:',
+    '  name: project-request',
+    '  namespace: openshift-config',
+    'objects:',
+    '  - apiVersion: networking.k8s.io/v1',
+    '    kind: NetworkPolicy',
+    '    metadata:',
+    '      name: allow-same-namespace',
+    '    spec:',
+    '      podSelector: {}',
+    '      ingress:',
+    '        - from:',
+    '            - podSelector: {}',
+    'parameters: []',
+    '',
+  ].join('\n');
+  await openFilesPanel();
+  await evaluate(
+    (yaml) => window.game.manifestEngine.writeFile('template.yaml', yaml),
+    templateYaml
+  );
+  await closeOverlays();
+  step = await runCmd('oc create -f template.yaml -n openshift-config', 300);
+  assert(!step.error, 'qa-incidents: L15 create project-request Template', step.message);
+  step = await runCmd(
+    `oc patch project.config.openshift.io/cluster --type=merge -p '{"spec":{"projectRequestTemplate":{"name":"project-request"}}}'`,
+    300
+  );
+  assert(!step.error, 'qa-incidents: L15 patch project.config template', step.message);
+
+  const l15Fired = await advanceUntil(
+    async () => (await incidentNames()).includes('ResourceQuotaExceeded'),
+    40,
+    2
+  );
+  assert(
+    l15Fired,
+    'qa-incidents: L15 ResourceQuotaExceeded fires',
+    JSON.stringify(await incidentNames())
+  );
+  const l15Incident = await activeIncident('ResourceQuotaExceeded');
+  assert(
+    l15Incident?.target === 'compute-quota' && l15Incident?.pendingTarget === false,
+    'qa-incidents: L15 incident is bound to the quota actually damaged (compute-quota)',
+    JSON.stringify({ target: l15Incident?.target, pendingTarget: l15Incident?.pendingTarget })
+  );
+  let l15Quota = await quotaState('quota-lab', 'compute-quota');
+  assert(
+    l15Quota.used.pods <= Number(l15Quota.hard.pods),
+    'qa-incidents: quota damage never lets Used exceed Hard (#31 A2)',
+    JSON.stringify({ used: l15Quota.used.pods, hard: l15Quota.hard.pods })
+  );
+  assert(
+    l15Quota.used.pods === Number(l15Quota.hard.pods),
+    'qa-incidents: damaged quota is exactly full so the controller cannot replace the Pod',
+    JSON.stringify({ used: l15Quota.used.pods, hard: l15Quota.hard.pods })
+  );
+  assert(
+    !l15Quota.pods.some((pod) => pod.phase === 'Failed' || pod.phase === 'Pending'),
+    'qa-incidents: quota damage does not fabricate Failed/Pending Pod objects',
+    JSON.stringify(l15Quota.pods)
+  );
+  await advanceGame(6);
+  l15Quota = await quotaState('quota-lab', 'compute-quota');
+  assert(
+    l15Quota.events.some(
+      (event) =>
+        event.kind === 'ReplicaSet' &&
+        /FailedCreate/i.test(event.reason || '') &&
+        /exceeded quota/i.test(event.message || '') &&
+        /requested: pods=1, used: pods=1/.test(event.message || '')
+    ),
+    'qa-incidents: ReplicaSet reports Error creating: exceeded quota (#31 A2)',
+    JSON.stringify(l15Quota.events.slice(-4))
+  );
+
+  // The learner's fix is the LAST write: from here the incident must clear from
+  // the tick, with no panel button and no unrelated command.
+  step = await runCmd(
+    `oc patch resourcequota compute-quota -p '{"spec":{"hard":{"pods":"10","requests.cpu":"4","requests.memory":"8Gi"}}}'`,
+    350
+  );
+  assert(!step.error, 'qa-incidents: L15 raise the damaged quota (last write)', step.message);
+  await advanceGame(6);
+  assert(
+    !(await incidentNames()).includes('ResourceQuotaExceeded'),
+    'qa-incidents: ResourceQuotaExceeded resolves from the tick with no write after the fix',
+    JSON.stringify(await incidentNames())
+  );
+  l15Quota = await quotaState('quota-lab', 'compute-quota');
+  assert(
+    Number(l15Quota.hard.pods) === 10,
+    'qa-incidents: state-driven heal does not overwrite the raised quota',
+    JSON.stringify(l15Quota.hard)
+  );
+  assert(
+    l15Quota.pods.filter((pod) => pod.phase === 'Running').length >= 2,
+    'qa-incidents: workload re-schedules after the quota is raised',
+    JSON.stringify(l15Quota.pods)
+  );
+  await sleep(2200);
+  const l15Status = await levelStatus();
+  assert(
+    allObjectivesComplete(l15Status),
+    'qa-incidents: L15 objectives complete CLI-only',
+    JSON.stringify(
+      l15Status?.objectives?.map((objective) => [objective.label, objective.completed])
+    )
+  );
+  assert(
+    l15Status?.state === 'completed',
+    'qa-incidents: L15 completes CLI-only',
+    JSON.stringify(l15Status?.state)
+  );
+
+  // ── 3. lab 8: fix BEFORE the incident fires must still heal (#27a + #27c) ─
+  section('incidents: lab 8 SCCForbidden fix-before-trigger');
+  assert(await startLevel('challenge', 8), 'qa-incidents: lab 8 launches');
+  await advanceGame(2);
+  await runCmd('oc project secure', 150);
+  step = await runCmd('oc apply -f challenges/privileged-app.yaml', 300);
+  assert(!step.error, 'qa-incidents: lab 8 apply privileged-app manifest', step.message);
+  step = await runCmd('oc create serviceaccount priv-sa -n secure', 250);
+  assert(!step.error, 'qa-incidents: lab 8 create ServiceAccount priv-sa', step.message);
+  await advanceGame(2);
+  step = await runCmd('oc adm policy add-scc-to-user privileged -z priv-sa -n secure', 300);
+  assert(!step.error, 'qa-incidents: lab 8 grant SCC before the incident fires', step.message);
+  await advanceGame(3);
+  let lab8Pods = await podsIn('secure');
+  assert(
+    lab8Pods.some((pod) => pod.phase === 'Running' && pod.scc === 'privileged'),
+    'qa-incidents: lab 8 privileged Pod runs before the incident activates',
+    JSON.stringify(lab8Pods)
+  );
+  const lab8Resolved = await advanceUntil(
+    async () => (await resolvedNames()).includes('SCCForbidden'),
+    60,
+    3
+  );
+  assert(
+    lab8Resolved,
+    'qa-incidents: lab 8 SCCForbidden resolves by tick state check (fix before trigger)',
+    JSON.stringify({ active: await incidentNames(), resolved: await resolvedNames() })
+  );
+  lab8Pods = await podsIn('secure');
+  assert(
+    lab8Pods.some(
+      (pod) => pod.phase === 'Running' && pod.ready === 'True' && pod.scc === 'privileged'
+    ),
+    'qa-incidents: lab 8 running Pod survives the state-driven resolution (not re-pended)',
+    JSON.stringify(lab8Pods)
+  );
+  await sleep(1800);
+  const lab8Status = await levelStatus();
+  assert(
+    allObjectivesComplete(lab8Status),
+    'qa-incidents: lab 8 objectives complete CLI-only (privileged objective stays ticked)',
+    JSON.stringify(
+      lab8Status?.objectives?.map((objective) => [objective.label, objective.completed])
+    )
+  );
+  assert(
+    lab8Status?.completed === true,
+    'qa-incidents: lab 8 completes',
+    JSON.stringify(lab8Status?.completed)
+  );
+
+  // ── 4. lab 6: quota incident on a learner-created quota (#27b) ───────────
+  section('incidents: lab 6 quota incident heals from state');
+  assert(await startLevel('challenge', 6), 'qa-incidents: lab 6 launches');
+  await advanceGame(2);
+  await runCmd('oc project quota-lab', 150);
+  step = await runCmd(
+    'oc create quota team-quota --hard=pods=10,requests.cpu=4,requests.memory=8Gi',
+    300
+  );
+  assert(!step.error, 'qa-incidents: lab 6 create quota team-quota', step.message);
+  step = await runCmd(
+    'oc create limitrange team-limits --default=cpu=500m,memory=512Mi --default-request=cpu=100m,memory=128Mi --max=cpu=2,memory=4Gi',
+    300
+  );
+  assert(!step.error, 'qa-incidents: lab 6 create LimitRange', step.message);
+  step = await runCmd(
+    'oc create deployment api --image=quay.io/openshift/origin-hello-openshift:latest -n quota-lab',
+    300
+  );
+  assert(!step.error, 'qa-incidents: lab 6 create deployment api', step.message);
+  step = await runCmd(
+    'oc set resources deployment/api --requests=cpu=100m,memory=128Mi --limits=cpu=500m,memory=512Mi -n quota-lab',
+    300
+  );
+  assert(!step.error, 'qa-incidents: lab 6 set api requests/limits', step.message);
+  const lab6Fired = await advanceUntil(
+    async () => (await incidentNames()).includes('ResourceQuotaExceeded'),
+    50,
+    2
+  );
+  assert(
+    lab6Fired,
+    'qa-incidents: lab 6 ResourceQuotaExceeded fires',
+    JSON.stringify(await incidentNames())
+  );
+  const lab6Incident = await activeIncident('ResourceQuotaExceeded');
+  assert(
+    lab6Incident?.target === 'team-quota' && lab6Incident?.pendingTarget === false,
+    'qa-incidents: lab 6 incident binds to the quota that exists',
+    JSON.stringify({ target: lab6Incident?.target, pendingTarget: lab6Incident?.pendingTarget })
+  );
+  step = await runCmd(
+    `oc patch resourcequota team-quota -p '{"spec":{"hard":{"pods":"10","requests.cpu":"4","requests.memory":"8Gi"}}}'`,
+    350
+  );
+  assert(!step.error, 'qa-incidents: lab 6 raise the damaged quota (last write)', step.message);
+  await advanceGame(6);
+  assert(
+    !(await incidentNames()).includes('ResourceQuotaExceeded'),
+    'qa-incidents: lab 6 quota incident resolves by tick state check',
+    JSON.stringify(await incidentNames())
+  );
+  await sleep(1800);
+  const lab6Status = await levelStatus();
+  assert(
+    allObjectivesComplete(lab6Status),
+    'qa-incidents: lab 6 objectives complete CLI-only',
+    JSON.stringify(
+      lab6Status?.objectives?.map((objective) => [objective.label, objective.completed])
+    )
+  );
+  assert(
+    lab6Status?.completed === true,
+    'qa-incidents: lab 6 completes',
+    JSON.stringify(lab6Status?.completed)
+  );
+
+  // ── 5. L20: NodeNotReady fixed from the CLI + realistic node display (#28) ─
+  section('incidents: L20 NodeNotReady recovered via oc debug/systemctl');
+  assert(await startLevel('campaign', 20), 'qa-incidents: L20 launches');
+  let nodesText = await runCmd('oc get nodes', 250);
+  assert(
+    /^worker-0\s/m.test(nodesText.message) && !/^node-1\s/m.test(nodesText.message),
+    'qa-incidents: nodes use real names (worker-0, not node-1)',
+    nodesText.message.split('\n').slice(0, 2).join(' | ')
+  );
+  assert(
+    /worker-0\s+Ready\s+worker\s/.test(nodesText.message),
+    'qa-incidents: worker ROLES rendered (not <none>)',
+    nodesText.message
+  );
+  assert(
+    /master-0\s+Ready\s+control-plane,master\s/.test(nodesText.message),
+    'qa-incidents: control-plane,master ROLES rendered',
+    nodesText.message
+  );
+  await runCmd('oc adm cordon worker-0', 250);
+  nodesText = await runCmd('oc get nodes', 250);
+  assert(
+    /worker-0\s+Ready,SchedulingDisabled\s/.test(nodesText.message),
+    'qa-incidents: cordoned Ready node shows Ready,SchedulingDisabled',
+    nodesText.message
+  );
+  await runCmd('oc adm uncordon worker-0', 250);
+
+  const nodeFired = await advanceUntil(
+    async () => (await incidentNames()).includes('NodeNotReady'),
+    140,
+    4
+  );
+  assert(nodeFired, 'qa-incidents: L20 NodeNotReady fires', JSON.stringify(await incidentNames()));
+  let nodeList = await nodesInfo();
+  let broken = damagedNode(nodeList);
+  assert(Boolean(broken), 'qa-incidents: one node is NotReady', JSON.stringify(nodeList));
+  const brokenName = broken?.name;
+  nodesText = await runCmd('oc get nodes', 250);
+  assert(
+    new RegExp(`${brokenName}\\s+NotReady,SchedulingDisabled\\s`).test(nodesText.message),
+    'qa-incidents: cordoned NotReady node shows NotReady,SchedulingDisabled',
+    nodesText.message
+  );
+
+  step = await runCmd(`oc debug node/${brokenName}`, 250);
+  assert(
+    !step.error && step.message.includes(`(node/${brokenName}) $`),
+    'qa-incidents: oc debug node/<n> opens a debug shell',
+    step.message
+  );
+  step = await runCmd('systemctl status kubelet', 150);
+  assert(
+    step.error && /command not found/.test(step.message),
+    'qa-incidents: host binaries are unavailable before chroot /host',
+    step.message
+  );
+  step = await runCmd('chroot /host', 150);
+  assert(!step.error, 'qa-incidents: chroot /host succeeds', step.message);
+  step = await runCmd('journalctl -u kubelet', 200);
+  assert(
+    !step.error && /kubelet/i.test(step.message),
+    'qa-incidents: journalctl -u kubelet shows kubelet logs on the host',
+    step.message
+  );
+  step = await runCmd('journalctl -u kubelet | tail -n 2', 200);
+  assert(
+    !step.error && step.message.trim().split('\n').length <= 2,
+    'qa-incidents: journalctl pipe tail is supported in the debug shell',
+    step.message
+  );
+  step = await runCmd('systemctl status kubelet', 200);
+  assert(
+    !step.error && /inactive \(dead\)/.test(step.message),
+    'qa-incidents: kubelet reports inactive (dead) on the NotReady node',
+    step.message
+  );
+  step = await runCmd('systemctl restart kubelet', 250);
+  assert(!step.error, 'qa-incidents: systemctl restart kubelet succeeds', step.message);
+  await runCmd('exit', 150);
+  const debugExit = await runCmd('exit', 150);
+  assert(!debugExit.error, 'qa-incidents: exit leaves the debug session');
+  step = await runCmd('oc get nodes', 250);
+  assert(
+    !step.error && /worker-0/.test(step.message),
+    'qa-incidents: normal oc commands resume after the debug session',
+    step.message
+  );
+  await advanceGame(5);
+  nodeList = await nodesInfo();
+  assert(
+    !damagedNode(nodeList),
+    'qa-incidents: node is Ready again after systemctl restart kubelet',
+    JSON.stringify(nodeList)
+  );
+  assert(
+    !(await incidentNames()).includes('NodeNotReady'),
+    'qa-incidents: NodeNotReady resolves from state with no later write command',
+    JSON.stringify(await incidentNames())
+  );
+
+  // One-shot form: `oc debug node/x -- chroot /host <cmd>`.
+  step = await runCmd(`oc debug node/${brokenName} -- chroot /host systemctl status kubelet`, 250);
+  assert(
+    !step.error && /kubelet\.service/.test(step.message),
+    'qa-incidents: one-shot oc debug node/x -- chroot /host <cmd> runs',
+    step.message
+  );
+  step = await runCmd(`oc debug node/${brokenName} -- chroot /host systemctl restart kubelet`, 250);
+  assert(!step.error, 'qa-incidents: one-shot systemctl restart kubelet succeeds', step.message);
+
+  // Drawer resolution action must keep working (#28 "keep the drawer action").
+  const drawerIncident = await evaluate(() => {
+    const engine = window.game.incidentEngine;
+    const def = [...(engine?._defsById?.values?.() || [])].find(
+      (entry) => entry.name === 'NodeNotReady'
+    );
+    if (!def) return null;
+    const id = engine.spawnIncident(def, 'worker-0', 3, { exactTarget: true });
+    const incident = engine.activeIncidents.get(id);
+    return incident ? { id, target: incident.target } : null;
+  });
+  assert(
+    drawerIncident?.target === 'worker-0',
+    'qa-incidents: drawer-path NodeNotReady can be spawned on a node',
+    JSON.stringify(drawerIncident)
+  );
+  const drawerResolved = await evaluate((incidentId) => {
+    const result = window.game.incidentEngine.resolveIncident(incidentId, 'uncordon-node');
+    return Boolean(result);
+  }, drawerIncident?.id);
+  assert(drawerResolved, 'qa-incidents: drawer resolution action returns a result');
+  await advanceGame(3);
+  nodeList = await nodesInfo();
+  const drawerNode = nodeList.find((node) => node.name === 'worker-0');
+  assert(
+    drawerNode && drawerNode.ready === 'True' && drawerNode.unschedulable === false,
+    'qa-incidents: drawer action heals and uncordons the node',
+    JSON.stringify(drawerNode)
+  );
+
+  // ── 6. #31 A1: CrashLoopBackOff seed/fix contract (L3) ───────────────────
+  section('incidents: CrashLoopBackOff seed/fix contract (L3)');
+  assert(await startLevel('campaign', 3), 'qa-incidents: L3 launches');
+  const l3Deploy = await evaluate(() => {
+    const deploy = (window.game?.cluster?.getByKind('Deployment') || []).find(
+      (entry) => entry.metadata?.name === 'web-app'
+    );
+    const container = deploy?.spec?.template?.spec?.containers?.[0] || {};
+    return {
+      env: (container.env || []).map((entry) => ({ name: entry.name, value: entry.value })),
+      image: container.image,
+    };
+  });
+  assert(
+    l3Deploy.env.some((entry) => entry.name === 'APP_MODE' && entry.value === 'debug-invalid'),
+    'qa-incidents: L3 starting Deployment carries the invalid APP_MODE seed',
+    JSON.stringify(l3Deploy.env)
+  );
+  await advanceGame(12);
+  const l3Incident = await activeIncident('CrashLoopBackOff');
+  assert(
+    Boolean(l3Incident),
+    'qa-incidents: L3 CrashLoopBackOff activates',
+    JSON.stringify(await incidentNames())
+  );
+  let l3Pods = await podsIn('ops-lab');
+  assert(
+    l3Pods.length > 0 && l3Pods.some((pod) => pod.phase === 'CrashLoopBackOff'),
+    'qa-incidents: L3 workload Pods are crash-looping',
+    JSON.stringify(l3Pods)
+  );
+  step = await runCmd('oc set env deployment/web-app FOO=bar -n ops-lab', 350);
+  assert(!step.error, 'qa-incidents: L3 unrelated env change succeeds', step.message);
+  await advanceGame(8);
+  assert(
+    (await incidentNames()).includes('CrashLoopBackOff'),
+    'qa-incidents: unrelated env change does NOT heal CrashLoopBackOff (#31 A1)',
+    JSON.stringify(await incidentNames())
+  );
+  step = await runCmd('oc set env deployment/web-app APP_MODE=production -n ops-lab', 350);
+  assert(!step.error, 'qa-incidents: L3 correct APP_MODE succeeds', step.message);
+  await advanceGame(10);
+  assert(
+    !(await incidentNames()).includes('CrashLoopBackOff'),
+    'qa-incidents: correcting the seeded value heals CrashLoopBackOff from state',
+    JSON.stringify(await incidentNames())
+  );
+  l3Pods = await podsIn('ops-lab');
+  assert(
+    l3Pods.length > 0 && l3Pods.every((pod) => pod.phase === 'Running'),
+    'qa-incidents: L3 workload is healthy after the real fix',
+    JSON.stringify(l3Pods)
+  );
+
+  // ── 7. Resolution must not fabricate completion of a repaired Job ────────
+  section('incidents: repaired Job is never force-completed (no empty logs)');
+  await returnToMenu();
+  assert(await bootSandbox(), 'qa-incidents: sandbox launches');
+  await evaluate(() => window.game.incidentEngine.start('sandbox'));
+  await runCmd('oc new-project job-lab', 200);
+  step = await runCmd(
+    'oc create job report-batch --image=busybox -n job-lab -- sh -c "sleep 30"',
+    300
+  );
+  assert(!step.error, 'qa-incidents: create Job report-batch', step.message);
+  await advanceGame(3);
+  const jobIncident = await evaluate(() => {
+    const engine = window.game.incidentEngine;
+    const def = [...(engine?._defsById?.values?.() || [])].find(
+      (entry) => entry.name === 'JobDeadlineExceeded'
+    );
+    if (!def) return null;
+    const id = engine.spawnIncident(def, 'report-batch', 3, {
+      exactTarget: true,
+      namespace: 'job-lab',
+    });
+    const incident = engine.activeIncidents.get(id);
+    const job = (window.game.cluster?.getByKind('Job') || []).find(
+      (entry) => entry.metadata?.name === 'report-batch'
+    );
+    return { id, damageApplied: incident?.damageApplied, phase: job?.status?.phase };
+  });
+  assert(
+    jobIncident?.damageApplied === true && jobIncident?.phase === 'Failed',
+    'qa-incidents: JobDeadlineExceeded damages the Job into Failed',
+    JSON.stringify(jobIncident)
+  );
+  await runCmd('oc delete job report-batch -n job-lab', 250);
+  step = await runCmd(
+    'oc create job report-batch --image=busybox -n job-lab -- sh -c "echo 42"',
+    300
+  );
+  assert(!step.error, 'qa-incidents: recreate healthy Job report-batch', step.message);
+  await advanceGame(8);
+  const repairedJob = await evaluate(() => {
+    const job = (window.game.cluster?.getByKind('Job') || []).find(
+      (entry) => entry.metadata?.name === 'report-batch'
+    );
+    const pods = (window.game.cluster?.getByKind('Pod') || []).filter(
+      (pod) => pod.metadata?.namespace === 'job-lab'
+    );
+    return {
+      phase: job?.status?.phase,
+      succeeded: job?.status?.succeeded,
+      pods: pods.map((pod) => ({ name: pod.metadata.name, phase: pod.status?.phase })),
+    };
+  });
+  assert(
+    !(repairedJob.phase === 'Complete' && repairedJob.pods.length === 0),
+    'qa-incidents: repaired Job is not force-completed without a Pod',
+    JSON.stringify(repairedJob)
+  );
+  step = await runCmd('oc logs job/report-batch -n job-lab', 250);
+  assert(
+    !step.error && /42/.test(step.message),
+    'qa-incidents: repaired Job logs still show its real output',
+    step.message
+  );
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -4850,19 +5612,6 @@ await runSection('qa-scenarios', async () => {
     'scenarios: L15 quota Used never exceeds Hard',
     `used ${quotaModel.usedPods} hard ${quotaModel.hardPods}`
   );
-  console.log(
-    'DEBUG-L15',
-    JSON.stringify({
-      quotaEventMatch: quotaModel.replicaSetEvents.map((m) =>
-        /exceeded quota: compute-quota, requested: pods=1, used: pods=(\d+), limited: (\d+)/
-          .exec(m)
-          ?.slice(1)
-      ),
-      usedPods: quotaModel.usedPods,
-      hardPods: quotaModel.hardPods,
-      types: { used: typeof quotaModel.usedPods, hard: typeof quotaModel.hardPods },
-    })
-  );
   const quotaEventMatch = quotaModel.replicaSetEvents
     .map((message) =>
       /exceeded quota: compute-quota, requested: pods=1, used: pods=(\d+), limited: (\d+)/.exec(
@@ -4955,6 +5704,9 @@ await runSection('qa-scenarios', async () => {
   await returnToMenu();
 });
 
+// ═══════════════════════════════════════════════════════════════════════════
+// QA ROUND 1.1.8 — issue #29/#36: CLI write safety and output fidelity
+// ═══════════════════════════════════════════════════════════════════════════
 // ═══════════════════════════════════════════════════════════════════════════
 // QA ROUND 1.1.8 — issue #29/#36: CLI write safety and output fidelity
 // ═══════════════════════════════════════════════════════════════════════════
@@ -5148,13 +5900,26 @@ await runSection('qa-cli', async () => {
       ).length;
     });
   assert((await countApiPods()) > 0, 'qa-cli #29c: api Deployment spawned pods');
+  const podsBeforeDelete = await countApiPods();
+  // Pause the controller so it cannot re-create pods between the delete and the
+  // count (a running Deployment controller would immediately replace them).
+  await evaluate(() => {
+    if (window.game?.gameEngine?.state !== 'paused') window.game.gameEngine.togglePause();
+  });
   r = await runCmd('oc delete pod -l app=api');
   assert(
     !r.error && /pod ".*" deleted/.test(r.message),
     'qa-cli #29c: oc delete pod -l app=api deletes matching pods',
     r.message
   );
-  assert((await countApiPods()) === 0, 'qa-cli #29c: selector delete removed every matching pod');
+  assert(
+    (await countApiPods()) === 0,
+    'qa-cli #29c: selector delete removed every matching pod',
+    `before=${podsBeforeDelete}`
+  );
+  await evaluate(() => {
+    if (window.game?.gameEngine?.state === 'paused') window.game.gameEngine.togglePause();
+  });
 
   // ── #29f describe <type> with no name lists the objects ─────────────────
   await expectCmd(
@@ -5168,6 +5933,385 @@ await runSection('qa-cli', async () => {
     'qa-cli #29f: describe quota with no name describes all quotas',
     describeQuota.message.slice(0, 300)
   );
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // #36 collected CLI output differences (sandbox cluster)
+  // ═══════════════════════════════════════════════════════════════════════
+  assert(await bootSandbox(), 'qa-cli #36: sandbox mode boots');
+  await closeOverlays();
+  await evaluate(() => window.game?.gameEngine?.resume?.());
+
+  // Files and shell: redirects are silent, `--dry-run=client -o name` parses.
+  await expectCmd(
+    'qa-cli #36: create deployment web in sandbox',
+    'oc create deploy web --image=quay.io/openshift/origin-hello-openshift:latest --replicas=2',
+    /deployment\.apps\/web created/
+  );
+  let out = await runCmd('oc get deploy web -o yaml > /tmp/web.yaml');
+  assert(
+    !out.error && out.message === '',
+    'qa-cli #36: shell redirect prints nothing on success',
+    JSON.stringify(out.message)
+  );
+  out = await runCmd('head -1 /tmp/web.yaml');
+  assert(/apiVersion/.test(out.message), 'qa-cli #36: redirect wrote the file', out.message);
+  out = await runCmd('oc label deploy web tier=frontend --dry-run=client -o name');
+  assert(
+    !out.error && out.message.trim() === 'deployment.apps/web',
+    'qa-cli #36: label --dry-run=client -o name works',
+    out.message
+  );
+  const dryRunLabelPersisted = await evaluate(() => {
+    const deployment = (window.game?.cluster?.getByKind?.('Deployment') || []).find(
+      (item) => item.metadata?.name === 'web'
+    );
+    return Boolean(deployment?.metadata?.labels?.tier);
+  });
+  assert(!dryRunLabelPersisted, 'qa-cli #36: label dry-run does not persist');
+
+  // Object metadata: UUID uid, second-precision creationTimestamp.
+  const objectMeta = await evaluate(() => {
+    const deployment = (window.game?.cluster?.getByKind?.('Deployment') || []).find(
+      (item) => item.metadata?.name === 'web'
+    );
+    return deployment
+      ? { uid: deployment.metadata?.uid, timestamp: deployment.metadata?.creationTimestamp }
+      : null;
+  });
+  assert(
+    /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+      objectMeta?.uid || ''
+    ),
+    'qa-cli #36: metadata.uid is a UUID',
+    objectMeta?.uid
+  );
+  assert(
+    /T\d{2}:\d{2}:\d{2}Z$/.test(objectMeta?.timestamp || ''),
+    'qa-cli #36: creationTimestamp is second precision',
+    objectMeta?.timestamp
+  );
+
+  // `oc get deploy -o wide` has CONTAINERS + IMAGES.
+  out = await runCmd('oc get deploy -o wide');
+  const wideHeader = String(out.message).split('\n')[0];
+  assert(
+    /\bCONTAINERS\b/.test(wideHeader) && /\bIMAGES\b/.test(wideHeader),
+    'qa-cli #36: oc get deploy -o wide has CONTAINERS and IMAGES',
+    wideHeader
+  );
+  assert(
+    /quay\.io\/openshift\/origin-hello-openshift:latest/.test(out.message),
+    'qa-cli #36: wide IMAGES cell shows the container image',
+    out.message.split('\n')[1]
+  );
+
+  // Endpoints: NAME ENDPOINTS AGE with comma-joined address:port list.
+  await expectCmd(
+    'qa-cli #36: expose the web deployment',
+    'oc expose deploy web --port=8080',
+    /service\/web exposed/
+  );
+  await advanceSimulation(3);
+  out = await runCmd('oc get endpoints web');
+  const endpointsLines = String(out.message).split('\n').filter(Boolean);
+  assert(
+    /^NAME\s+ENDPOINTS\s+AGE$/.test(endpointsLines[0] || ''),
+    'qa-cli #36: endpoints columns are NAME ENDPOINTS AGE',
+    endpointsLines[0]
+  );
+  assert(
+    /^web\s+10\.\d+\.\d+\.\d+:\d+(?:,10\.\d+\.\d+\.\d+:\d+)*\s+\d+s$/.test(endpointsLines[1] || ''),
+    'qa-cli #36: endpoints row lists address:port pairs',
+    endpointsLines[1]
+  );
+
+  // ImageStreamTag: digest reference, realistic digest, image-appropriate Command.
+  out = await runCmd('oc get istag -n openshift nodejs:20-ubi9');
+  assert(
+    /nodejs-20@sha256:[0-9a-f]{64}/.test(out.message) && !/nodejs-20:latest/.test(out.message),
+    'qa-cli #36: oc get istag prints @sha256 reference',
+    out.message
+  );
+  const digests = [...String(out.message).matchAll(/sha256:([0-9a-f]{64})/g)].map(
+    (match) => match[1]
+  );
+  assert(
+    digests.length > 0 && digests.every((digest) => !/^([0-9a-f]{8})\1{7}$/.test(digest)),
+    'qa-cli #36: image digest is realistic (not one 8-char chunk repeated)',
+    digests[0]
+  );
+  out = await runCmd('oc describe istag nodejs:20-ubi9 -n openshift');
+  assert(
+    /Docker Image:\s+image-registry\.openshift-image-registry\.svc:5000\/openshift\/nodejs@sha256:/.test(
+      out.message
+    ),
+    'qa-cli #36: describe istag Docker Image uses the internal registry',
+    out.message.slice(0, 300)
+  );
+  assert(
+    /Command:\s+\/usr\/libexec\/s2i\/run/.test(out.message),
+    'qa-cli #36: describe istag Command is container-appropriate for nodejs',
+    out.message
+  );
+
+  // Builds: short FROM form, real STARTED/DURATION.
+  await expectCmd(
+    'qa-cli #36: oc new-build with image~git source',
+    'oc new-build openshift/nodejs:20-ubi9~https://github.com/openshift/nodejs-ex --name=webapp-build',
+    /buildconfig\.build\.openshift\.io "webapp-build" created/
+  );
+  out = await runCmd('oc get bc');
+  assert(
+    /nodejs:20-ubi9/.test(out.message) && !/nodejs:20-ubi9~/.test(out.message),
+    'qa-cli #36: BuildConfig FROM column is the short builder tag',
+    out.message
+  );
+  await expectCmd('qa-cli #36: start the build', 'oc start-build webapp-build', /started/);
+  await advanceSimulation(40);
+  out = await runCmd('oc get builds');
+  const buildLine =
+    String(out.message)
+      .split('\n')
+      .find((line) => line.startsWith('webapp-build-1')) || '';
+  assert(/Complete/.test(buildLine), 'qa-cli #36: build reaches Complete', buildLine);
+  assert(
+    !/<none>/.test(buildLine) && /nodejs:20-ubi9\s/.test(buildLine) && !/~/.test(buildLine),
+    'qa-cli #36: build STARTED + FROM are real',
+    buildLine
+  );
+  out = await runCmd('oc describe build webapp-build-1');
+  assert(
+    /Build Config:\s+BuildConfig\/webapp-build/.test(out.message) &&
+      /Image:\s+image-registry\.openshift-image-registry\.svc:5000\//.test(out.message),
+    'qa-cli #36: describe build shows BuildConfig and image',
+    out.message.slice(0, 400)
+  );
+
+  // Rollout: undo gives the re-activated ReplicaSet the next revision (2,3).
+  await expectCmd(
+    'qa-cli #36: create rollout deployment',
+    'oc create deploy roll --image=quay.io/openshift/origin-hello-openshift:latest',
+    /deployment\.apps\/roll created/
+  );
+  await advanceSimulation(8);
+  await expectCmd(
+    'qa-cli #36: change the rollout image',
+    'oc set image deploy/roll origin-hello-openshift=nginx:1.26',
+    /image updated/
+  );
+  await advanceSimulation(4);
+  await expectCmd('qa-cli #36: oc rollout undo', 'oc rollout undo deploy/roll', /rolled back/);
+  out = await runCmd('oc rollout history deploy/roll');
+  assert(
+    /^2\s/m.test(out.message) && /^3\s/m.test(out.message) && !/^1\s/m.test(out.message),
+    'qa-cli #36: rollout history after undo is 2,3',
+    out.message
+  );
+  // A rollout stuck on ImagePullBackOff reports updated-replica availability.
+  await expectCmd(
+    'qa-cli #36: create bad-image deployment',
+    'oc create deploy stuck --image=quay.io/openshift/origin-hello-openshift:latest',
+    /deployment\.apps\/stuck created/
+  );
+  await advanceSimulation(8);
+  await runCmd(
+    'oc set image deploy/stuck origin-hello-openshift=quay.io/openshift/does-not-exist:nope'
+  );
+  await advanceSimulation(10);
+  out = await runCmd('oc rollout status deploy/stuck');
+  assert(
+    /0 of 1 updated replicas are available/.test(out.message) &&
+      !/old replicas are pending termination/.test(out.message),
+    'qa-cli #36: rollout status on ImagePullBackOff reports updated replicas available',
+    out.message
+  );
+
+  // Routes and Services.
+  await runCmd('oc create service clusterip tls-app --tcp=443:8080');
+  await runCmd('oc create route passthrough tls-app --service=tls-app');
+  out = await runCmd('oc get route tls-app');
+  assert(
+    /\s8080\s+passthrough\s/.test(out.message),
+    'qa-cli #36: passthrough Route PORT is the backend port',
+    out.message
+  );
+  await runCmd(
+    'oc create route edge web --service=web --hostname=web.apps.example.com --path=/api'
+  );
+  out = await runCmd('oc describe route web');
+  assert(
+    !/<auto-generated>/.test(out.message) &&
+      /Requested Host:\s+web\.apps\.example\.com/.test(out.message),
+    'qa-cli #36: describe route shows the real Requested Host',
+    out.message.slice(0, 300)
+  );
+  assert(
+    /Path:\s+\/api/.test(out.message),
+    'qa-cli #36: describe route shows the real Path',
+    out.message
+  );
+  await runCmd('oc create route edge web-auto --service=web');
+  out = await runCmd('oc describe route web-auto');
+  assert(
+    !/<auto-generated>/.test(out.message) && /^Requested Host:\s+\S+/m.test(out.message),
+    'qa-cli #36: describe auto-generated route shows a real host',
+    out.message.slice(0, 300)
+  );
+  await runCmd('oc create service loadbalancer lb --tcp=80:8080');
+  out = await runCmd('oc get service lb');
+  assert(
+    /\b80:3\d{4}\/TCP\b/.test(out.message),
+    'qa-cli #36: LoadBalancer PORT(S) shows the allocated nodePort',
+    out.message
+  );
+
+  // jsonpath: unset field prints empty, escaped dots work.
+  out = await runCmd("oc get deploy web -o jsonpath='{.metadata.annotations.missing}'");
+  assert(
+    !out.error && out.message === '',
+    'qa-cli #36: jsonpath on an unset field prints empty',
+    JSON.stringify(out.message)
+  );
+  await runCmd('oc annotate deploy/web openshift.io/scc=restricted-v2 --overwrite');
+  out = await runCmd("oc get deploy web -o jsonpath='{.metadata.annotations.openshift\\.io/scc}'");
+  assert(
+    !out.error && out.message.trim() === 'restricted-v2',
+    'qa-cli #36: jsonpath escaped-dot annotations work',
+    out.message
+  );
+
+  // Quota describe: aligned Resource/Used/Hard columns.
+  await runCmd('oc create quota q1 --hard=pods=10,requests.cpu=2,limits.memory=4Gi');
+  out = await runCmd('oc describe quota');
+  const quotaLines = String(out.message).split('\n');
+  const quotaHeader = quotaLines.find((line) => /^Resource\s/.test(line)) || '';
+  const quotaRow = quotaLines.find((line) => /^requests\.cpu\s/.test(line)) || '';
+  assert(
+    /^Resource\s+Used\s+Hard$/.test(quotaHeader) &&
+      quotaHeader.indexOf('Used') === quotaRow.indexOf('0m') &&
+      quotaHeader.indexOf('Hard') === quotaRow.indexOf('2'),
+    'qa-cli #36: describe quota columns align',
+    JSON.stringify({ quotaHeader, quotaRow })
+  );
+
+  // CronJob TIMEZONE <none>.
+  await runCmd('oc create cronjob nightly --image=busybox --schedule="*/5 * * * *"');
+  out = await runCmd('oc get cronjob');
+  const cronHeader = String(out.message)
+    .split('\n')[0]
+    .split(/\s{2,}/);
+  const cronRow =
+    String(out.message)
+      .split('\n')[1]
+      ?.split(/\s{2,}/) || [];
+  assert(
+    cronRow[cronHeader.indexOf('TIMEZONE')] === '<none>',
+    'qa-cli #36: CronJob TIMEZONE column is <none>',
+    JSON.stringify({ cronHeader, cronRow })
+  );
+
+  // describe deploy surfaces controller events during FailedCreate.
+  await runCmd('oc create deploy priv --image=nginx:latest');
+  await runCmd(
+    'oc patch deploy/priv -p \'{"spec":{"template":{"spec":{"containers":[{"name":"nginx","image":"nginx:latest","securityContext":{"privileged":true}}]}}}}\''
+  );
+  await advanceSimulation(6);
+  out = await runCmd('oc describe deploy priv');
+  assert(
+    /^Events:/m.test(out.message) && /FailedCreate/.test(out.message),
+    'qa-cli #36: describe deploy shows Events during FailedCreate',
+    out.message.slice(-600)
+  );
+
+  // Kustomize: no leading `---`, commonLabels reach selectors, v5 semantics kept.
+  await evaluate(() => {
+    const me = window.game.manifestEngine;
+    const deploymentYaml =
+      'apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: kd\nspec:\n  replicas: 1\n  selector:\n    matchLabels:\n      app: kd\n  template:\n    metadata:\n      labels:\n        app: kd\n    spec:\n      containers:\n        - name: c\n          image: nginx:latest\n';
+    me.writeFile(
+      'qa-kust-common/kustomization.yaml',
+      'apiVersion: kustomize.config.k8s.io/v1beta1\nkind: Kustomization\nresources:\n  - deploy.yaml\ncommonLabels:\n  team: platform\n'
+    );
+    me.writeFile('qa-kust-common/deploy.yaml', deploymentYaml);
+    me.writeFile(
+      'qa-kust-labels/kustomization.yaml',
+      'apiVersion: kustomize.config.k8s.io/v1beta1\nkind: Kustomization\nresources:\n  - deploy.yaml\nlabels:\n  - pairs:\n      team: platform\n'
+    );
+    me.writeFile('qa-kust-labels/deploy.yaml', deploymentYaml);
+    me.writeFile(
+      'qa-kust-selectors/kustomization.yaml',
+      'apiVersion: kustomize.config.k8s.io/v1beta1\nkind: Kustomization\nresources:\n  - deploy.yaml\nlabels:\n  - pairs:\n      team: platform\n    includeSelectors: true\n'
+    );
+    me.writeFile('qa-kust-selectors/deploy.yaml', deploymentYaml);
+    me.writeFile(
+      'qa-kust-patches/kustomization.yaml',
+      'apiVersion: kustomize.config.k8s.io/v1beta1\nkind: Kustomization\nresources:\n  - deploy.yaml\npatches:\n  - target:\n      kind: Deployment\n      name: kd\n    patch: |-\n      apiVersion: apps/v1\n      kind: Deployment\n      metadata:\n        name: kd\n      spec:\n        replicas: 4\n'
+    );
+    me.writeFile('qa-kust-patches/deploy.yaml', deploymentYaml);
+  });
+  out = await runCmd('oc kustomize qa-kust-common');
+  assert(
+    !String(out.message).trimStart().startsWith('---'),
+    'qa-cli #36: oc kustomize output does not start with ---'
+  );
+  assert(
+    /selector:[\s\S]*team: platform/.test(out.message) &&
+      /template:[\s\S]*team: platform/.test(out.message),
+    'qa-cli #36: deprecated commonLabels reach Deployment selectors',
+    out.message.slice(0, 500)
+  );
+  out = await runCmd('oc kustomize qa-kust-labels');
+  assert(
+    /labels:\n    team: platform/.test(out.message) &&
+      !/selector:[\s\S]*team: platform/.test(out.message),
+    'qa-cli #36: v5 labels without includeSelectors only labels metadata',
+    out.message.slice(0, 500)
+  );
+  out = await runCmd('oc kustomize qa-kust-selectors');
+  assert(
+    /selector:[\s\S]*team: platform/.test(out.message),
+    'qa-cli #36: v5 labels includeSelectors reaches the selector',
+    out.message.slice(0, 500)
+  );
+  out = await runCmd('oc kustomize qa-kust-patches');
+  assert(
+    !out.error && /replicas: 4/.test(out.message),
+    'qa-cli #36: kustomize v5 patches apply strategic-merge semantics',
+    out.message.slice(0, 400)
+  );
+
+  // Namespace labels + monitoring printer columns.
+  out = await runCmd('oc get ns --show-labels');
+  assert(
+    /^NAME\s+STATUS\s+AGE\s+LABELS/m.test(out.message) &&
+      /kubernetes\.io\/metadata\.name=default/.test(out.message),
+    'qa-cli #36: oc get ns --show-labels has a LABELS column',
+    out.message.split('\n').slice(0, 2).join(' | ')
+  );
+  out = await runCmd('oc get alertmanager -n openshift-monitoring');
+  assert(
+    /^NAME\s+VERSION\s+REPLICAS\s+AGE/m.test(out.message) &&
+      /^main\s+0\.27\.0\s+\d+\s+\d+s/m.test(out.message),
+    'qa-cli #36: monitoring Alertmanager columns',
+    out.message
+  );
+  out = await runCmd('oc get prometheusrules -A');
+  assert(
+    /^NAMESPACE\s+NAME\s+AGE/m.test(out.message) &&
+      /openshift-monitoring\s+kubernetes-monitoring-rules\s+\d+s/.test(out.message),
+    'qa-cli #36: PrometheusRule columns',
+    out.message.split('\n').slice(0, 2).join(' | ')
+  );
+
+  // Node cordon keeps SchedulingDisabled in the STATUS column.
+  await runCmd('oc adm cordon sandbox-node-2');
+  out = await runCmd('oc get nodes');
+  assert(
+    /sandbox-node-2\s+Ready,SchedulingDisabled/.test(out.message),
+    'qa-cli #36: cordoned node STATUS is Ready,SchedulingDisabled',
+    out.message
+  );
+  await runCmd('oc adm uncordon sandbox-node-2');
 
   await returnToMenu();
 });
@@ -5342,8 +6486,8 @@ await runSection('qa-workstation', async () => {
   );
   const rshSecretEnv = await runCmd(`oc rsh -n ${ns} deploy/app env`);
   assert(
-    !rshSecretEnv.error && /password=s3cret/.test(rshSecretEnv.message),
-    'qa-workstation: rsh env shows envFrom Secret values',
+    !rshSecretEnv.error && /PASSWORD=s3cret/.test(rshSecretEnv.message),
+    'qa-workstation: rsh env shows Secret-key env values',
     rshSecretEnv.message.slice(0, 300)
   );
 
@@ -6533,7 +7677,11 @@ spec:
   assert(
     challengeStatus.state === 'completed' && challengeStatus.completionPercentage === 100,
     'qa-grading #30a: lab 9 completes on behaviour alone',
-    JSON.stringify({ state: challengeStatus.state, pct: challengeStatus.completionPercentage })
+    JSON.stringify({
+      state: challengeStatus.state,
+      pct: challengeStatus.completionPercentage,
+      objectives: (challengeStatus.objectives || []).map((entry) => [entry.label, entry.completed]),
+    })
   );
 
   // ── #30b: lab 9 — the provided file still passes 6/6 ────────────────────
@@ -6634,7 +7782,21 @@ spec:
     320
   );
   await writeVirtualFile('idp.yaml', OAUTH_YAML);
+  const preApplyEvidence = await evaluate(() => {
+    const mode = window.game.app.modeInstance;
+    const def = mode?.currentLevelDef;
+    const loginObjective = (def?.objectives || []).find((o) => o.type === 'login');
+    return {
+      level: mode?.currentLevel,
+      hasDef: !!def,
+      defLogin: !!loginObjective,
+      baseline: loginObjective?._baseline || null,
+      history: window.game.gameEngine.getLoginHistory(),
+      user: window.game.gameEngine.currentUser,
+    };
+  });
   await objectiveResults();
+  console.log('QA-GRADING DEBUG pre-apply', JSON.stringify(preApplyEvidence));
   command = await runCmd('oc apply -f idp.yaml', 650);
   assert(!command.error, 'qa-grading #30e: oc apply -f idp.yaml activates the OAuth provider');
   await advanceSimulation(8);
@@ -6643,11 +7805,23 @@ spec:
   await runCmd('oc whoami', 120);
   command = await runCmd('oc login -u kubeadmin', 320);
   assert(!command.error, 'qa-grading #30e: L13 switch back to kubeadmin', command.message);
+  const loginEvidence = await evaluate(() => {
+    const def = window.game.app.modeInstance?.currentLevelDef;
+    const loginObjective = (def?.objectives || []).find((objective) => objective.type === 'login');
+    return {
+      currentUser: window.game.gameEngine.currentUser,
+      history: window.game.gameEngine.getLoginHistory(),
+      rawBaseline: loginObjective?._baseline || null,
+    };
+  });
   results = await objectiveResults();
   assert(
     (objectiveByLabel(results, /Log in to the CLI as alice/i) || {}).completed === true,
     'qa-grading #30e: L13 "Log in to the CLI as alice" latches after the user switch',
-    JSON.stringify(results.map((entry) => [entry.label, entry.completed]))
+    JSON.stringify({
+      results: results.map((entry) => [entry.label, entry.completed]),
+      ...loginEvidence,
+    })
   );
   assert(
     (objectiveByLabel(results, /User "alice" exists after first login/i) || {}).completed === true,

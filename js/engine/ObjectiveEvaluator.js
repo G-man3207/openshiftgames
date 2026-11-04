@@ -824,8 +824,10 @@ function evaluateLabel(obj, c) {
 //          Ingress *and* Egress (no Pod-to-Pod and no internet egress),
 //   probe: 'dns-egress'   → a frontend Pod can resolve DNS (5353 to
 //          openshift-dns) while the project is otherwise isolated,
-//   probe: 'reach'        → source can reach target:port (allowed path),
-//   probe: 'deny'         → source cannot reach target:port,
+//   probe: 'reach'        → source can reach `to`:port (allowed path),
+//   probe: 'deny'         → source cannot reach `to`:port,
+//   (the destination descriptor field is `to`, not `target`, because the
+//   progress wrapper owns `target` as the objective's completion count.)
 //   probe: 'deny-external'→ source resolves names but cannot reach the
 //          internet, and the denial comes from the egress policy (not from a
 //          broken DNS egress rule).
@@ -962,7 +964,7 @@ function probeReach(c, obj, namespace, expected) {
   // no NetworkPolicy at all, frontend → backend is reachable by default.
   if (expected && !namespaceIsolationActive(c, namespace)) return false;
   const source = workloadProbePod(c, obj.source, namespace);
-  const target = networkTargetPod(c, obj.target, namespace);
+  const target = networkTargetPod(c, obj.to, namespace);
   if (!source || !target) return false;
   const port = asNumber(obj.port, 80);
   const protocol = String(obj.protocol || 'TCP').toUpperCase();

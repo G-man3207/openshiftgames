@@ -3565,6 +3565,53 @@ export class SimulationTick {
    */
   ensureOLMDefaultsSync() {
     this._ensureOLMDefaults();
+    // The oauth-openshift control-plane pods are controller-owned too: create
+    // the ReplicaSet + pods synchronously before the app auto-align so each mesh
+    // gets a unique layout target (otherwise RS + 2 pods share the deployment's
+    // fallback position and break the fresh-level alignment uniqueness check).
+    this.ensureOAuthDefaultsSync();
+  }
+
+  /**
+   * Synchronously materialise the oauth-openshift ReplicaSet and its pods.
+   * Idempotent: safe to call before every post-launch auto-align (level start,
+   * restart) and from the per-tick controller afterwards.
+   * @returns {object|null} the ReplicaSet when the deployment exists
+   */
+  ensureOAuthDefaultsSync() {
+    const deployment = this.cluster.getByName(
+      'Deployment',
+      'oauth-openshift',
+      'openshift-authentication'
+    );
+    if (!deployment) return null;
+    const template = deepClone(deployment.spec.template || {});
+    const templateHash = this._templateHash(template);
+    const ownedSets = this.cluster
+      .getChildren(deployment.uid)
+      .filter((child) => child.kind === 'ReplicaSet');
+    let replicaSet = ownedSets.find(
+      (rs) => rs.metadata.labels?.['pod-template-hash'] === templateHash
+    );
+    if (!replicaSet) {
+      replicaSet = this._createDeploymentReplicaSet(
+        deployment,
+        template,
+        templateHash,
+        deepClone(deployment.spec.selector?.matchLabels || deployment.metadata.labels || {}),
+        ownedSets
+      );
+    }
+    if (!replicaSet) return null;
+    const desired = Math.max(0, Number(deployment.spec.replicas ?? 1) || 0);
+    const pods = this._activePodsOf(replicaSet);
+    if (pods.length < desired) {
+      for (let index = 0; index < desired - pods.length; index += 1) {
+        this._createPodForWorkload(replicaSet, replicaSet);
+      }
+    }
+    this._refreshReplicaSetStatus(replicaSet, this._activePodsOf(replicaSet), 0);
+    return replicaSet;
   }
 
   /**
@@ -3621,8 +3668,15 @@ export class SimulationTick {
   }
 
   /** Target CSV name for a package (PackageManifest currentCSV), otherwise a
-   * package-derived name (never the Subscription name — issue #9). */
-  _csvNameForPackage(packageName) {
+   * package-derived name (never the Subscription name — issue #9).
+   *
+   * Real OLM honours `Subscription.spec.startingCSV`: the pinned CSV is
+   * installed instead of the channel head when it belongs to the package
+   * (issue #34 — "picking a channel or startingCSV"). Unknown/foreign pins fall
+   * back to the catalog's current CSV, like OLM's dependency resolver. */
+  _csvNameForPackage(packageName, subscription = null) {
+    const pinned = subscription?.spec?.startingCSV;
+    if (typeof pinned === 'string' && pinned.startsWith(`${packageName}.v`)) return pinned;
     const manifest = this.cluster.getByName('PackageManifest', packageName, '');
     if (manifest && typeof manifest.currentCSV === 'string' && manifest.currentCSV)
       return manifest.currentCSV;
@@ -3642,8 +3696,8 @@ export class SimulationTick {
     );
   }
 
-  _csvVersionForPackage(packageName) {
-    const csvName = this._csvNameForPackage(packageName);
+  _csvVersionForPackage(packageName, subscription = null) {
+    const csvName = this._csvNameForPackage(packageName, subscription);
     const match = String(csvName).match(/\.v?(\d+\.\d+\.\d+)/);
     return match ? match[1] : '1.0.0';
   }
@@ -4399,8 +4453,8 @@ export class SimulationTick {
         subscription.spec.installPlanApproval = 'Automatic';
         this.cluster.update(subscription.uid, subscription);
       }
-      const csvName = this._csvNameForPackage(packageName);
-      const version = this._csvVersionForPackage(packageName);
+      const csvName = this._csvNameForPackage(packageName, subscription);
+      const version = this._csvVersionForPackage(packageName, subscription);
       const setStatus = (reason, message, phase = subscription.status.phase || 'Installing') => {
         if (subscription.status.phase === phase && subscription.status.reason === reason) return;
         subscription.status.phase = phase;

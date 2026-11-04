@@ -1435,7 +1435,7 @@ const CAMPAIGN_LEVELS = [
     chapter: 5,
     chapterName: 'Security & Operations',
     description:
-      'Capstone. Build a complete production platform the way EX280 expects: a Project with quota and limits, the webapp Deployment + Service + TLS Route, a source Build feeding an ImageStream, a developer User/Group with a NetworkPolicy, MetalLB, a Job and a CronJob, plus an Architecture Advisor score of 25 or more and a composite drill score of 75 or more (both are in-game metrics, not Red Hat exam scores).',
+      'Capstone. Build a complete production platform the way EX280 expects: a Project with quota and limits, the webapp Deployment + Service + TLS Route, a source Build feeding an ImageStream, a developer User/Group with a NetworkPolicy (default-deny must also block the Route when checked from the workstation — an ingress policy that allows the router namespace restores it), MetalLB, a Job and a CronJob, plus an Architecture Advisor score of 25 or more and a composite drill score of 75 or more (both are in-game metrics, not Red Hat exam scores).',
     examObjectives: [
       'Manage OpenShift Container Platform > Use the web console to manage and configure an OpenShift cluster',
       'Manage OpenShift Container Platform > Examine resources and cluster status',
@@ -1495,12 +1495,14 @@ const CAMPAIGN_LEVELS = [
       'examples/operatorgroup.yaml',
       'examples/metallb.yaml',
       'examples/default-deny.yaml',
+      'examples/allow-from-router.yaml',
     ],
     focusFiles: [
       'manifests/deployment.yaml',
       'manifests/route.yaml',
       'examples/quota.yaml',
       'examples/default-deny.yaml',
+      'examples/allow-from-router.yaml',
     ],
     objectives: [
       { type: 'project', name: 'prod-platform', label: 'Create the Project "prod-platform"' },
@@ -1541,6 +1543,11 @@ const CAMPAIGN_LEVELS = [
         kind: 'NetworkPolicy',
         name: 'default-deny',
         label: 'Add a default-deny NetworkPolicy',
+      },
+      {
+        type: 'routeAccess',
+        name: 'webapp',
+        label: 'Route webapp is reachable from the workstation (router allowed by NetworkPolicy)',
       },
       { type: 'user', name: 'developer', label: 'Create the User "developer"' },
       {
@@ -1608,7 +1615,7 @@ const CAMPAIGN_LEVELS = [
       'Create the platform project: `oc new-project prod-platform`, then apply the quota/limits with `oc apply -f examples/quota.yaml` and `oc apply -f examples/limitrange.yaml`.',
       'Deploy the app: `oc apply -f manifests/deployment.yaml`, `oc apply -f manifests/service.yaml`, then expose a Route: `oc create route edge webapp --service=webapp`. Enable ports/health probes in the YAML for a higher Architecture Advisor score.',
       'Build: `oc apply -f examples/buildconfig.yaml` (it already outputs ImageStreamTag `webapp:latest`), then `oc start-build webapp --follow` and watch the Build reach Complete.',
-      'Security/self-service: `oc create user developer`, `oc adm groups new developers developer`, apply the shipped `examples/default-deny.yaml` (a `networking.k8s.io/v1` NetworkPolicy that selects all pods) with `oc apply -f examples/default-deny.yaml -n prod-platform` — there is no oc create networkpolicy subcommand; use the Files panel New/Import buttons if you want to edit or add manifests.',
+      'NetworkPolicy + ingress: apply the shipped `examples/default-deny.yaml` (`networking.k8s.io/v1`, selects all Pods) with `oc apply -f examples/default-deny.yaml -n prod-platform`, then verify from the workstation: `curl -k https://webapp-prod-platform.apps.cluster.example.com` now fails with 503 even though the Route is Admitted. Allow the router with an ingress NetworkPolicy whose `namespaceSelector.matchLabels` is `policy-group.network.openshift.io/ingress: ""` (the shipped `examples/allow-from-router.yaml`, `oc apply -f examples/allow-from-router.yaml -n prod-platform`) and re-run `curl` — it must answer again. There is no `oc create networkpolicy` subcommand; use the Files panel New/Import buttons for other policies. Also create `oc create user developer` and `oc adm groups new developers developer`.',
       'Install MetalLB the 4.x OLM way: `oc new-project metallb-system`, `oc apply -f examples/operatorgroup.yaml`, edit `examples/subscription.yaml` (spec.name/metadata.name `metallb-operator`, namespace `metallb-system`) and apply it, wait for the CSV `metallb-operator.v0.14.9` (`oc get csv -n metallb-system`) to reach Succeeded, then `oc apply -f examples/metallb.yaml` (MetalLB CR + IP pool + L2 advertisement).',
       'Finish with a Job (`oc create job report-job --image=perl -- perl -e "print 42"`) and a CronJob (`oc create cronjob nightly --image=busybox --schedule="*/5 * * * *" -- sh -c date`), then check `oc status` and the Architecture Advisor in the HUD. The capstone is gated on the scheduled incidents being RESOLVED: CrashLoopBackOff fires 60 s in on webapp and NodeNotReady fires 120 s in on worker-1. For the CrashLoopBackOff, run `oc logs <pod> -n prod-platform --previous` (the crash names the invalid `APP_MODE`) and correct it with `oc set env deployment/webapp APP_MODE=production -n prod-platform` — an unrelated env var or `oc rollout restart` will NOT clear it. Restore the node (`oc debug node/worker-1`, then `chroot /host systemctl restart kubelet`) and confirm both incidents are gone from the Incidents panel — the level cannot complete while either is still active.',
     ],
