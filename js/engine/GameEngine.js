@@ -40,6 +40,7 @@ import {
   createResource,
   normalizeKind,
 } from '../data/kindRegistry.js';
+import { applyKnownImageSecurityProfiles } from '../resources/ImageSecurityProfiles.js';
 
 // ─── SHA1 + base64 helpers (for the simulated {SHA} htpasswd hashes) ──────
 
@@ -173,12 +174,115 @@ export function htpasswdSha(password) {
   return `{SHA}${base64FromBytes(sha1Bytes(utf8Bytes(password)))}`;
 }
 
+// ─── Simulated bcrypt (`htpasswd -B`) ─────────────────────────────────────
+
+/** bcrypt's base64 alphabet (`./A-Za-z0-9`) and constant field widths. */
+const BCRYPT_BASE64_ALPHABET = './ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+const BCRYPT_SALT_CHARS = 22; // 16 random bytes, bcrypt-base64 encoded
+const BCRYPT_DIGEST_CHARS = 31; // 23 digest bytes, bcrypt-base64 encoded
+const BCRYPT_COST = 10;
+
+/**
+ * Encode bytes with bcrypt's base64 alphabet (no padding).
+ * @param {Uint8Array} bytes
+ * @returns {string}
+ */
+function bcryptBase64FromBytes(bytes) {
+  let output = '';
+  for (let i = 0; i < bytes.length; i += 3) {
+    const byte1 = bytes[i];
+    const byte2 = i + 1 < bytes.length ? bytes[i + 1] : undefined;
+    const byte3 = i + 2 < bytes.length ? bytes[i + 2] : undefined;
+    output += BCRYPT_BASE64_ALPHABET[byte1 >> 2];
+    output += BCRYPT_BASE64_ALPHABET[((byte1 & 0x03) << 4) | (byte2 === undefined ? 0 : byte2 >> 4)];
+    if (byte2 === undefined) break;
+    output += BCRYPT_BASE64_ALPHABET[((byte2 & 0x0f) << 2) | (byte3 === undefined ? 0 : byte3 >> 6)];
+    if (byte3 === undefined) break;
+    output += BCRYPT_BASE64_ALPHABET[byte3 & 0x3f];
+  }
+  return output;
+}
+
+/**
+ * A fresh 22-character bcrypt salt (16 random bytes, bcrypt-base64 encoded).
+ * Salts differ per call — hashes of the same password are never identical,
+ * exactly like real `htpasswd -B`.
+ * @returns {string}
+ */
+export function randomBcryptSalt() {
+  const bytes = new Uint8Array(16);
+  const cryptoObject = typeof globalThis !== 'undefined' ? globalThis.crypto : undefined;
+  if (cryptoObject && typeof cryptoObject.getRandomValues === 'function') {
+    cryptoObject.getRandomValues(bytes);
+  } else {
+    for (let i = 0; i < bytes.length; i++) bytes[i] = Math.floor(Math.random() * 256);
+  }
+  return bcryptBase64FromBytes(bytes).slice(0, BCRYPT_SALT_CHARS);
+}
+
+/**
+ * Compute the 31-character bcrypt hash field for `salt + password`.
+ *
+ * Dependency-free stand-in for real bcrypt: a salted SHA-1 key-stretching
+ * chain (12 rounds) whose output is encoded with bcrypt's base64 alphabet.
+ * It is deterministic for a given (salt, password) pair — which is all the
+ * simulator needs — while producing strings that look and behave exactly like
+ * `$2y$10$<22-char salt><31-char hash>` entries.
+ *
+ * @param {string} salt 22-character bcrypt salt
+ * @param {string} password
+ * @returns {string} 31-character hash field
+ */
+function bcryptSimulatorDigest(salt, password) {
+  const saltBytes = utf8Bytes(String(salt));
+  let state = utf8Bytes(`${salt}\u0000${password}`);
+  const collected = [];
+  for (let round = 0; round < 12; round++) {
+    const input = new Uint8Array(state.length + saltBytes.length + 2);
+    input.set(state, 0);
+    input.set(saltBytes, state.length);
+    input[input.length - 2] = round & 0xff;
+    input[input.length - 1] = (round >> 8) & 0xff;
+    state = sha1Bytes(input);
+    for (const byte of state) collected.push(byte);
+  }
+  return bcryptBase64FromBytes(Uint8Array.from(collected.slice(0, 23))).slice(0, BCRYPT_DIGEST_CHARS);
+}
+
+/**
+ * Build a simulated bcrypt hash the way `htpasswd -B` does:
+ * `$2y$10$<22-char salt><31-char hash>` (60 characters, fresh salt per call).
+ * @param {string} password
+ * @returns {string}
+ */
+export function hashPasswordBcrypt(password) {
+  const salt = randomBcryptSalt();
+  return `$2y$${BCRYPT_COST}$${salt}${bcryptSimulatorDigest(salt, String(password))}`;
+}
+
+/**
+ * Verify a password against a simulated bcrypt hash (`$2y$`/`$2a$`/`$2b$`).
+ * Real bcrypt hashes cannot be verified without a bcrypt implementation; the
+ * simulator only ever writes its own salted-scheme hashes.
+ * @param {string} hash
+ * @param {string} password
+ * @returns {boolean}
+ */
+export function verifyBcryptPasswordHash(hash, password) {
+  const match = String(hash || '').match(/^\$(2[abxy])\$(\d{2})\$([./A-Za-z0-9]{22})([./A-Za-z0-9]{31})$/);
+  if (!match) return false;
+  const salt = match[3];
+  const expected = match[4];
+  return bcryptSimulatorDigest(salt, String(password)) === expected;
+}
+
 /**
  * Verify a password against an htpasswd hash.
  * @param {string} hash
  * @param {string} password
  * @returns {boolean|null} true/false, or null when the hash format cannot be
- *   verified in the browser (bcrypt/apr1/sha-crypt).
+ *   verified in the browser (apr1/sha-crypt/SSHA: the simulator accepts those
+ *   as opaque, matching the historical lenient behaviour).
  */
 export function verifyPasswordHash(hash, password) {
   const value = String(hash || '').trim();
@@ -190,7 +294,8 @@ export function verifyPasswordHash(hash, password) {
     if (digest.length !== 28) return true;
     return digest === base64FromBytes(sha1Bytes(utf8Bytes(password)));
   }
-  if (value.startsWith('{SSHA}') || /^\$2[abxy]\$/.test(value) || value.startsWith('$apr1$') || value.startsWith('$5$') || value.startsWith('$6$')) {
+  if (/^\$2[abxy]\$/.test(value)) return verifyBcryptPasswordHash(value, password);
+  if (value.startsWith('{SSHA}') || value.startsWith('$apr1$') || value.startsWith('$5$') || value.startsWith('$6$')) {
     return null;
   }
   if (value.includes(':')) return null;
@@ -225,6 +330,46 @@ export function htpasswdSimulatorHash(user, pass) {
   h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
   const digest = (h2 >>> 0).toString(16).padStart(8, '0') + (h1 >>> 0).toString(16).padStart(8, '0');
   return `{SHA}${base64FromBytes(utf8Bytes(digest)).replace(/=+$/, '')}`;
+}
+
+/**
+ * Verify a password against any htpasswd hash the simulator writes or accepts.
+ * Handles:
+ *  - the legacy simulator `{SHA}` placeholder (depends on the user name),
+ *  - real `{SHA}` entries,
+ *  - simulated bcrypt `$2y$`/`$2a$`/`$2b$` entries (`htpasswd -B`),
+ *  - plaintext entries used by hand-written test files.
+ * Opaque real formats ({SSHA}, $apr1$, sha-crypt) stay accepted as before.
+ *
+ * @param {string} user htpasswd user name
+ * @param {string} hash stored hash field
+ * @param {string} password attempted password
+ * @returns {boolean}
+ */
+export function verifyHtpasswdPasswordHash(user, hash, password) {
+  const value = String(hash || '').trim();
+  if (!value) return false;
+  if (value === htpasswdSimulatorHash(user, password)) return true;
+  // Simulator `{SHA}` placeholder is 28 chars total; a mismatch must fail.
+  if (value.startsWith('{SHA}') && value.length !== 33) return false;
+  const verified = verifyPasswordHash(value, password);
+  if (verified === null) return true; // opaque real format: simulator accepts
+  return verified === true;
+}
+
+/**
+ * Create the hash field the in-game `htpasswd` tool should store.
+ * `-B` writes bcrypt (`$2y$10$…`); without `-B` the legacy simulator `{SHA}`
+ * placeholder is kept so existing levels/files stay valid.
+ *
+ * @param {string} user
+ * @param {string} password
+ * @param {{bcrypt?: boolean, B?: boolean}} [options]
+ * @returns {string}
+ */
+export function hashHtpasswdEntry(user, password, options = {}) {
+  if (options.bcrypt || options.B) return hashPasswordBcrypt(password);
+  return htpasswdSimulatorHash(user, password);
 }
 
 /**
@@ -1748,21 +1893,46 @@ export class GameEngine {
     }
     const entry = entries.find((candidate) => candidate.user === username);
     if (!entry) return { ok: false, reason: 'Verify you have provided the correct credentials.' };
-    const hash = String(entry.hash || '');
-
-    // 1) Simulator placeholder hashes written by the in-game `htpasswd` tool
-    //    (deterministic, non-reversible by design — see ManifestEngine).
-    if (hash === htpasswdSimulatorHash(username, password)) return { ok: true };
-    const isSimulatorPlaceholder = hash.startsWith('{SHA}') && hash.length !== '{SHA}'.length + 28;
-    if (isSimulatorPlaceholder) {
+    // Handles the legacy simulator {SHA} placeholder, real {SHA}, simulated
+    // bcrypt (-B) and plaintext entries (see verifyHtpasswdPasswordHash).
+    if (!verifyHtpasswdPasswordHash(username, entry.hash, password)) {
       return { ok: false, reason: 'Verify you have provided the correct credentials.' };
     }
-
-    // 2) Real htpasswd formats the browser can verify ({SHA}, plaintext).
-    const verified = verifyPasswordHash(hash, password);
-    if (verified === null) return { ok: true }; // unsupported hash format in simulator
-    if (!verified) return { ok: false, reason: 'Verify you have provided the correct credentials.' };
     return { ok: true };
+  }
+
+  /**
+   * `htpasswd -B`-style hash for the CLI / Files engine.
+   * `gameEngine.hashPasswordBcrypt('Passw0rd')` → `$2y$10$…` (fresh salt).
+   * @param {string} password
+   * @returns {string}
+   */
+  hashPasswordBcrypt(password) {
+    return hashPasswordBcrypt(password);
+  }
+
+  /**
+   * Verify a password against any htpasswd hash (see
+   * {@link verifyHtpasswdPasswordHash}).
+   * @param {string} user
+   * @param {string} hash
+   * @param {string} password
+   * @returns {boolean}
+   */
+  verifyHtpasswdPasswordHash(user, hash, password) {
+    return verifyHtpasswdPasswordHash(user, hash, password);
+  }
+
+  /**
+   * Build the hash field for an htpasswd entry (`-B` → bcrypt, otherwise the
+   * legacy simulator `{SHA}` placeholder).
+   * @param {string} user
+   * @param {string} password
+   * @param {{bcrypt?: boolean, B?: boolean}} [options]
+   * @returns {string}
+   */
+  hashHtpasswdEntry(user, password, options = {}) {
+    return hashHtpasswdEntry(user, password, options);
   }
 
   /**
@@ -2290,9 +2460,12 @@ export class GameEngine {
     // is rejected with `pods "<name>" is forbidden`. Controllers creating pods
     // for Deployments/ReplicaSets go through SimulationTick admission instead.
     if (kind === 'Pod') {
+      // Known root images (e.g. `nginx:latest`) count as requesting the UID they
+      // actually run as; SCC admission itself only sees explicit pod requests.
+      const admissionSpec = applyKnownImageSecurityProfiles(deepClone(normalised.spec || {}));
       const candidate = {
         metadata: { name, namespace },
-        spec: deepClone(normalised.spec || {}),
+        spec: admissionSpec,
       };
       const resolution = this.cluster.resolveSCCForPod(candidate);
       if (!resolution.allowed) {
@@ -3543,7 +3716,10 @@ export class GameEngine {
   /**
    * Create or update a RoleBinding/ClusterRoleBinding.
    * @param {{role: string, subject: string|object, namespace?: string, clusterWide?: boolean, remove?: boolean, kind?: string}} options
-   * @returns {{success: boolean, message: string, binding?: object}}
+   * @returns {{success: boolean, message: string, binding?: object,
+   *   role?: string, roleKind?: 'Role'|'ClusterRole', roleRefApiGroup?: string,
+   *   bindingKind?: string, bindingName?: string, subjectKind?: string,
+   *   subjectLabel?: string, subjectText?: string, subjectNamespace?: string}}
    */
   modifyRoleBinding(options = {}) {
     const namespace = options.namespace || this.currentProject || 'default';
@@ -3565,6 +3741,28 @@ export class GameEngine {
     const bindingKind = clusterWide ? 'ClusterRoleBinding' : 'RoleBinding';
     const bindingNamespace = clusterWide ? '' : namespace;
     const existing = this.cluster.getByName(bindingKind, bindingName, bindingNamespace);
+
+    /**
+     * Fields the CLI needs for real `oc adm policy` output (issue #21), e.g.
+     * `clusterrole.rbac.authorization.k8s.io/view added: "default"`.
+     * `subjectLabel` is the bare name (not the full SA identity string) and
+     * `roleKind` is the roleRef kind of the (new or existing) binding.
+     */
+    const outputDetails = (binding, fallbackRoleKind = roleKind) => {
+      const roleRef = binding?.spec?.roleRef || { apiGroup: 'rbac.authorization.k8s.io', kind: fallbackRoleKind, name: roleName };
+      return {
+        role: roleName,
+        roleKind: roleRef.kind || fallbackRoleKind,
+        roleRefApiGroup: roleRef.apiGroup || 'rbac.authorization.k8s.io',
+        bindingKind: binding?.kind || bindingKind,
+        bindingName: binding?.metadata?.name || bindingName,
+        subjectKind: normalizedSubject.subject.kind,
+        subjectLabel: normalizedSubject.subject.name,
+        subjectText: normalizedSubject.description,
+        subjectNamespace: normalizedSubject.subject.namespace || '',
+        subject: normalizedSubject.subject,
+      };
+    };
 
     if (options.remove) {
       // Real `oc adm policy remove-*-from-*` finds the binding(s) by roleRef
@@ -3598,13 +3796,19 @@ export class GameEngine {
           success: true,
           message: `${normalizedSubject.description} removed from role ${roleName}`,
           binding: changedBinding,
+          ...outputDetails(changedBinding),
         };
       }
       if (!existing) return { success: true, message: `${bindingKind} "${bindingName}" not found; nothing to remove` };
       const subjects = (existing.spec.subjects || []).filter((subject) => !this._sameSubject(subject, normalizedSubject.roleBindingSubject));
       existing.spec.subjects = subjects;
       this.cluster.update(existing.uid, existing);
-      return { success: true, message: `${normalizedSubject.description} removed from ${roleName}`, binding: existing };
+      return {
+        success: true,
+        message: `${normalizedSubject.description} removed from ${roleName}`,
+        binding: existing,
+        ...outputDetails(existing),
+      };
     }
 
     if (existing) {
@@ -3613,7 +3817,12 @@ export class GameEngine {
         existing.spec.subjects.push(normalizedSubject.roleBindingSubject);
         this.cluster.update(existing.uid, existing);
       }
-      return { success: true, message: `${normalizedSubject.description} added to role ${roleName}`, binding: existing };
+      return {
+        success: true,
+        message: `${normalizedSubject.description} added to role ${roleName}`,
+        binding: existing,
+        ...outputDetails(existing),
+      };
     }
 
     const binding = this.applyManifestObject({
@@ -3627,7 +3836,12 @@ export class GameEngine {
     });
     if (!binding) return { success: false, message: this.lastApplyError || `failed to create ${bindingKind}` };
     this.eventBus.emit('rbac:updated', { binding: bindingName, kind: bindingKind, role: roleName, subject: normalizedSubject.subject });
-    return { success: true, message: `${normalizedSubject.description} added to role ${roleName}`, binding };
+    return {
+      success: true,
+      message: `${normalizedSubject.description} added to role ${roleName}`,
+      binding,
+      ...outputDetails(binding),
+    };
   }
 
   /** @returns {boolean} whether two RBAC subjects refer to the same identity */
@@ -4554,6 +4768,14 @@ export class GameEngine {
 
 GameEngine.MODES = GAME_MODES;
 GameEngine.STATES = GAME_STATES;
+// Password-hash helpers usable from DOM-free callers (ManifestEngine, CLI).
+GameEngine.htpasswdSha = htpasswdSha;
+GameEngine.htpasswdSimulatorHash = htpasswdSimulatorHash;
+GameEngine.hashPasswordBcrypt = hashPasswordBcrypt;
+GameEngine.verifyPasswordHash = verifyPasswordHash;
+GameEngine.verifyBcryptPasswordHash = verifyBcryptPasswordHash;
+GameEngine.verifyHtpasswdPasswordHash = verifyHtpasswdPasswordHash;
+GameEngine.hashHtpasswdEntry = hashHtpasswdEntry;
 
 export { EventBus, GAME_MODES, GAME_STATES };
 export default GameEngine;
