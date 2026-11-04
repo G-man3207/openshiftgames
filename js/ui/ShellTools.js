@@ -1760,14 +1760,92 @@ export class ShellTools {
     );
   }
 
+  /**
+   * `ls` with real shell semantics (#36): list the IMMEDIATE children of the
+   * target directory (names relative to it, directories suffixed with `/`),
+   * de-duplicated — never the recursive full VFS paths. `ls <file>` prints the
+   * file, `ls a b` lists each target with a `a:` header, and dotfiles are
+   * hidden unless `-a`.
+   */
   _cmd_ls(args, stdin) {
-    const target = args.find((arg) => !arg.startsWith('-')) || '';
-    const files = this._listFiles(target);
-    if (!files.length) {
-      if (target && this._fileExists(target)) return this._ok(target);
-      return this._err(`ls: cannot access '${target || '.'}': No such file or directory`);
+    const flags = new Set();
+    const targets = [];
+    let endOfFlags = false;
+    for (const arg of args) {
+      if (!endOfFlags && arg === '--') {
+        endOfFlags = true;
+        continue;
+      }
+      if (!endOfFlags && arg.startsWith('-') && arg !== '-') {
+        for (const flag of arg.slice(1)) flags.add(flag);
+        continue;
+      }
+      targets.push(arg);
     }
-    return this._ok(files.join('\n'));
+    const showAll = flags.has('a');
+    const longFormat = flags.has('l');
+    const recursive = flags.has('R');
+    /** Immediate children of a directory prefix from the recursive file list. */
+    const childrenOf = (prefix) => {
+      const clean = String(prefix || '')
+        .replace(/^\.\/+/, '')
+        .replace(/\/+$/, '');
+      const base = clean ? `${clean}/` : '';
+      const entries = new Map();
+      for (const file of this.bar._manifestFileList()) {
+        if (base && !file.startsWith(base)) continue;
+        const rest = base ? file.slice(base.length) : file;
+        if (!rest) continue;
+        const segments = rest.split('/');
+        const name = segments[0];
+        if (!name || (!showAll && name.startsWith('.'))) continue;
+        const isDirectory = segments.length > 1;
+        if (!entries.has(name)) entries.set(name, isDirectory);
+      }
+      return [...entries.entries()]
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([name, isDirectory]) => ({ name, isDirectory }));
+    };
+    const formatEntry = (targetDir, entry) => {
+      const path = targetDir
+        ? `${String(targetDir).replace(/\/+$/, '')}/${entry.name}`
+        : entry.name;
+      if (!longFormat) return entry.isDirectory ? `${entry.name}/` : entry.name;
+      const size = entry.isDirectory ? 4096 : (this._readFile(path) || '').length;
+      return `${entry.isDirectory ? 'drwxr-xr-x' : '-rw-r--r--'}. 1 student student ${String(size).padStart(6)} ${entry.name}${entry.isDirectory ? '/' : ''}`;
+    };
+    const listTarget = (target) => {
+      const clean = String(target || '')
+        .replace(/^\.\/+/, '')
+        .replace(/\/+$/, '');
+      const entries = childrenOf(clean);
+      if (entries.length) {
+        if (recursive) {
+          const output = entries.flatMap((entry) => {
+            const child = clean ? `${clean}/${entry.name}` : entry.name;
+            if (!entry.isDirectory) return [formatEntry(clean, entry)];
+            return [`${child}:`, ...childrenOf(child).map((item) => formatEntry(child, item))];
+          });
+          return { output };
+        }
+        return { output: entries.map((entry) => formatEntry(clean, entry)) };
+      }
+      const direct = clean ? this._readFile(clean) : null;
+      if (direct !== null) return { output: [target] };
+      if (!clean) return { output: [] };
+      return { error: `ls: cannot access '${target}': No such file or directory` };
+    };
+    if (!targets.length) targets.push('');
+    const blocks = [];
+    for (const target of targets) {
+      const result = listTarget(target);
+      if (result.error) return this._err(result.error);
+      if (targets.length > 1 && !longFormat && result.output.length) {
+        blocks.push(`${target}:`);
+      }
+      blocks.push(...result.output);
+    }
+    return this._ok(blocks.join('\n'));
   }
 
   _cmd_rm(args, stdin) {

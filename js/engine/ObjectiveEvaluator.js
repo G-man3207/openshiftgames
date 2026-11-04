@@ -82,6 +82,13 @@ export const OBJECTIVE_TYPES = [
   // provider state instead of a command regex.
   'networkPolicy',
   'oauthProvider',
+  // Phase-2B objective kinds (issue #34): password rotation, identity cleanup,
+  // OLM install variants and Route reachability from the workstation.
+  'password',
+  'identity',
+  'installPlan',
+  'subscription',
+  'routeAccess',
   // Extension: `label` appears in the level-2 curriculum prose in §9 even
   // though it is missing from the type list. Implemented as a state check so
   // "work with labels and selectors" is actually exercised.
@@ -132,6 +139,11 @@ const BOOLEAN_TYPES = new Set([
   'architectureScore',
   'networkPolicy',
   'oauthProvider',
+  'password',
+  'identity',
+  'installPlan',
+  'subscription',
+  'routeAccess',
   'label',
 ]);
 
@@ -1042,24 +1054,27 @@ function evaluateProject(obj, c) {
   return result(active.length >= target, Math.min(active.length, target), target);
 }
 
-// ─── login evidence and OAuth identity-provider state (issue #30) ─────────
+// ─── login / secret evidence and OAuth identity-provider state (issue #30) ─
 //
 // `oc login -u alice …; oc whoami; oc login -u kubeadmin` must still tick
 // "Log in to the CLI as alice": the objective latches on a successful login
-// event instead of only looking at the current session. A login history
-// exposed by the engine/cluster (openshift-details owns the login path) is
-// preferred; an EventBus latch installed here covers builds without it.
-// The baseline index is captured on the first evaluation of the run, so a
-// retry/relaunch cannot be pre-ticked by a login from an earlier run.
+// event instead of only looking at the current session. The engine's own
+// login history is authoritative (openshift-details owns the login path and
+// clears it on every level seeding, so a retry cannot be pre-ticked); the
+// EventBus latch below covers builds without that history and also timestamps
+// OAuth Secret writes for the password-rotation objective.
+//
+// The evidence cache is keyed by game engine and lives for the page session.
+// Entries are appended by EventBus events; nothing here mutates the cluster.
 
-const loginEventLatch = new WeakMap();
+const gradingEvidenceCache = new WeakMap();
 
-function latchLoginEvents(engine) {
+function evidenceCache(engine) {
   if (!engine || typeof engine !== 'object') return null;
-  let entries = loginEventLatch.get(engine);
-  if (!entries) {
-    entries = [];
-    loginEventLatch.set(engine, entries);
+  let cache = gradingEvidenceCache.get(engine);
+  if (!cache) {
+    cache = { entries: [], secretTouches: new Map() };
+    gradingEvidenceCache.set(engine, cache);
     try {
       const bus = engine.eventBus;
       if (bus && typeof bus.on === 'function') {
@@ -1067,15 +1082,33 @@ function latchLoginEvents(engine) {
           const user =
             typeof data === 'string' ? data : (data?.user ?? data?.username ?? data?.name);
           if (!user) return;
-          entries.push({ user: String(user), provider: data?.provider || null });
-          if (entries.length > 200) entries.splice(0, entries.length - 200);
+          cache.entries.push({
+            user: String(user),
+            provider: data?.provider || null,
+            time: Date.now(),
+          });
+          if (cache.entries.length > 200) cache.entries.splice(0, cache.entries.length - 200);
         });
+        const noteSecret = (data) => {
+          const resource = data?.resource;
+          if (!resource || String(resource.kind || data?.kind || '') !== 'Secret') return;
+          const namespace = resource.metadata?.namespace || data?.namespace || '';
+          if (namespace !== 'openshift-config') return;
+          const name = resource.metadata?.name || data?.name || '';
+          if (name) cache.secretTouches.set(name, Date.now());
+        };
+        bus.on('cluster:modified', noteSecret);
+        bus.on('cluster:added', noteSecret);
       }
     } catch {
       /* feature-detected: an engine without an event bus simply has no latch */
     }
   }
-  return entries;
+  return cache;
+}
+
+function latchLoginEvents(engine) {
+  return evidenceCache(engine)?.entries || null;
 }
 
 function loginEntryUser(entry) {
@@ -1100,11 +1133,13 @@ function arrayLoginHistory(owner, property) {
   return Array.isArray(value) ? value : null;
 }
 
-function loginHistory(c) {
-  // Use the first source that actually has entries: concatenating an accessor
-  // with the array it copies would duplicate entries and break the baseline
-  // index. A non-empty owner-provided history is authoritative; the EventBus
-  // latch only covers builds where no owner-provided history exists yet.
+/**
+ * Owner-provided login history (authoritative). Returned as soon as a provider
+ * is capable of answering (even when the list is still empty), so an empty
+ * owner history is not confused with "no owner history exists".
+ * @returns {Array<{user: string, provider?: string, time?: number}>|null}
+ */
+function providerLoginHistory(c) {
   const engine = c.gameEngine;
   const cluster = c.clusterState;
   const candidates = [
@@ -1116,24 +1151,34 @@ function loginHistory(c) {
     arrayLoginHistory(cluster, 'recentLogins'),
   ];
   for (const list of candidates) {
-    if (list && list.length > 0) return list;
+    if (Array.isArray(list)) return list;
   }
-  return latchLoginEvents(engine) || [];
+  return null;
+}
+
+function loginHistory(c) {
+  const owned = providerLoginHistory(c);
+  if (owned) return owned;
+  return latchLoginEvents(c.gameEngine) || [];
 }
 
 function evaluateLogin(obj, c) {
   const wanted = obj.user ? String(obj.user) : null;
   const matches = (user) => (wanted ? user === wanted : Boolean(user));
   const currentUser = c.gameEngine?.currentUser || null;
-  const history = loginHistory(c);
-  // Capture the baseline on the FIRST evaluation of the run, even while the
-  // history is still empty: otherwise the first login after level start would
-  // be folded into the baseline and a later user switch would un-tick it.
-  const baseline = ensureBaseline(obj, () => ({ historyLength: history.length }));
-  const start = Math.min(Math.max(0, asNumber(baseline.historyLength, 0)), history.length);
-  // Latch: once the required login happened during this run, switching back to
-  // another user (or logging out) must not un-tick the objective.
-  if (history.slice(start).some((entry) => matches(loginEntryUser(entry)))) return bool(true);
+  const owned = providerLoginHistory(c);
+  if (owned) {
+    // The engine history is reset on level seeding, so any matching login is
+    // evidence for THIS run. Latch: later logins/logouts must not un-tick.
+    if (owned.some((entry) => matches(loginEntryUser(entry)))) return bool(true);
+  } else {
+    const latched = latchLoginEvents(c.gameEngine) || [];
+    if (latched.length > 0) {
+      const baseline = ensureBaseline(obj, () => ({ historyLength: latched.length }));
+      const start = Math.min(Math.max(0, asNumber(baseline.historyLength, 0)), latched.length);
+      if (latched.slice(start).some((entry) => matches(loginEntryUser(entry)))) return bool(true);
+    }
+  }
   return bool(matches(currentUser));
 }
 
@@ -1145,10 +1190,33 @@ function evaluateLogin(obj, c) {
 function evaluateUser(obj, c) {
   const users = listKind(c.clusterState, 'User');
   if (obj.name) {
-    return bool(users.some((user) => resourceName(user) === obj.name));
+    const present = users.some((user) => resourceName(user) === obj.name);
+    // `exists: false` grades a real deletion (issue #34 auth-users bullet).
+    return bool(obj.exists === false ? !present : present);
   }
   const target = Math.max(1, asNumber(obj.count, 1));
   return result(users.length >= target, Math.min(users.length, target), target);
+}
+
+/**
+ * Identity objects (issue #34): `oc delete user bob` deliberately leaves the
+ * Identity (`htpasswd:bob`) behind on a real cluster, so cleanup is graded on
+ * the separate Identity resource. Match by exact metadata.name, or by the
+ * spec user/providerUserName when only `user` is supplied.
+ */
+function evaluateIdentity(obj, c) {
+  const identities = listKind(c.clusterState, 'Identity');
+  const wantedName = obj.name ? String(obj.name) : '';
+  const wantedUser = obj.user ? String(obj.user) : '';
+  if (!wantedName && !wantedUser) return bool(false);
+  const present = identities.some((identity) => {
+    if (wantedName) return resourceName(identity) === wantedName;
+    const spec = resourceSpec(identity);
+    const userName = String(spec.user?.name || spec.userName || '');
+    const providerUserName = String(spec.providerUserName || '');
+    return userName === wantedUser || providerUserName === wantedUser;
+  });
+  return bool(obj.exists === false ? !present : present);
 }
 
 function htpasswdSecretOf(provider) {
@@ -1199,6 +1267,143 @@ function evaluateOAuthProvider(obj, c) {
       ? cluster.getAuthProviderConfig()
       : null;
   return bool(Boolean(config));
+}
+
+// ─── HTPasswd password rotation (issue #34 auth-passwords) ────────────────
+//
+// Grades the real rotation flow: the IdP-referenced Secret's htpasswd entry for
+// the user must verify the requested password, the authentication provider must
+// be active, and (optional `requireLogin`) the user must have logged in AFTER
+// the most recent write to that Secret — so a login with the previous password
+// cannot satisfy the objective.
+
+function passwordProviderSecretName(c) {
+  const engine = c.gameEngine;
+  try {
+    if (engine && typeof engine._providerSecretName === 'function') {
+      const name = engine._providerSecretName();
+      if (name) return String(name);
+    }
+  } catch {
+    /* feature-detect */
+  }
+  const provider = engine?.authProvider;
+  if (provider) {
+    const name = provider.secretName || provider.htpasswd?.fileData?.name;
+    if (name) return String(name);
+  }
+  try {
+    const config = c.clusterState?.getAuthProviderConfig?.();
+    if (config?.secretName) return String(config.secretName);
+  } catch {
+    /* ignore */
+  }
+  return '';
+}
+
+/** Is the configured HTPasswd provider live (OAuth rollout finished)? */
+function identityProviderActive(c) {
+  const engine = c.gameEngine;
+  try {
+    if (engine && typeof engine.getAuthProvider === 'function') {
+      const provider = engine.getAuthProvider();
+      if (!provider || provider.ready !== true) return false;
+      if (engine.simulation && engine.simulation._oauthPending) return false;
+      return true;
+    }
+  } catch {
+    /* fall through to the cluster view */
+  }
+  try {
+    return Boolean(c.clusterState?.getAuthProviderConfig?.());
+  } catch {
+    return false;
+  }
+}
+
+function decodeBase64Text(value) {
+  if (typeof value !== 'string' || !value) return null;
+  try {
+    if (typeof atob === 'function') return atob(value);
+    if (typeof Buffer !== 'undefined') return Buffer.from(value, 'base64').toString('utf8');
+  } catch {
+    /* ignore */
+  }
+  return null;
+}
+
+/** `[{user, hash}]` from the Secret the identity provider references. */
+function htpasswdEntriesFor(c) {
+  const engine = c.gameEngine;
+  try {
+    if (engine && typeof engine._getHtpasswdEntries === 'function') {
+      const entries = engine._getHtpasswdEntries();
+      if (Array.isArray(entries)) return entries;
+    }
+  } catch {
+    /* feature-detect */
+  }
+  const secretName = passwordProviderSecretName(c);
+  if (!secretName) return null;
+  const secret = findResource(c.clusterState, 'Secret', secretName, 'openshift-config');
+  const encoded = secret?.spec?.data?.htpasswd ?? secret?.data?.htpasswd;
+  const text = decodeBase64Text(encoded);
+  if (!text) return null;
+  return text
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line && !line.startsWith('#'))
+    .map((line) => {
+      const separator = line.indexOf(':');
+      return separator > 0
+        ? { user: line.slice(0, separator), hash: line.slice(separator + 1) }
+        : null;
+    })
+    .filter(Boolean);
+}
+
+function passwordVerifies(c, user, password) {
+  const engine = c.gameEngine;
+  const entries = htpasswdEntriesFor(c);
+  if (!entries) return false;
+  const entry = entries.find((candidate) => candidate && String(candidate.user) === String(user));
+  if (!entry) return false;
+  try {
+    if (engine && typeof engine.verifyHtpasswdPasswordHash === 'function')
+      return engine.verifyHtpasswdPasswordHash(user, entry.hash, password) === true;
+  } catch {
+    /* fall through to the plaintext comparison */
+  }
+  return String(entry.hash) === String(password);
+}
+
+function evaluatePassword(obj, c) {
+  const user = obj.user ? String(obj.user) : '';
+  if (!user || obj.password === undefined || obj.password === null) return bool(false);
+  if (!identityProviderActive(c)) return bool(false);
+  if (!passwordVerifies(c, user, obj.password)) return bool(false);
+  if (!obj.requireLogin) return bool(true);
+  const secretName = passwordProviderSecretName(c);
+  if (!secretName) return bool(false);
+  const history = loginHistory(c);
+  const cache = evidenceCache(c.gameEngine);
+  const rotatedAt = cache?.secretTouches?.get(secretName);
+  let tail = history;
+  if (typeof rotatedAt === 'number') {
+    // The EventBus timestamp orders the Secret write against the logins, so a
+    // login with the OLD password that happened before the rotation is ignored.
+    tail = history.filter((entry) => {
+      const time = entry && typeof entry === 'object' ? Number(entry.time) : NaN;
+      return !Number.isFinite(time) || time >= rotatedAt;
+    });
+  } else {
+    // No observed Secret write (e.g. rotated before this session's first
+    // evaluation): fall back to a rolling history baseline.
+    const baseline = ensureBaseline(obj, () => ({ historyLength: history.length }));
+    const start = Math.min(Math.max(0, asNumber(baseline.historyLength, 0)), history.length);
+    tail = history.slice(start);
+  }
+  return bool(tail.some((entry) => loginEntryUser(entry) === user));
 }
 
 function groupUsers(group) {
@@ -1355,6 +1560,30 @@ function evaluateRoute(obj, c) {
   const admitted = routes.filter(routeAdmitted).length;
   const target = Math.max(1, asNumber(obj.count, 1));
   return result(admitted >= target, Math.min(admitted, target), target);
+}
+
+/**
+ * Can the workstation reach a Route through the router/NetworkPolicy model
+ * (issue #33): uses the simulator's `canRouterReach(route, {namespace})`
+ * helper, so grading follows the same path an HTTP request from the
+ * workstation would take (Router → Service → Pods → policy evaluation).
+ */
+function evaluateRouteAccess(obj, c) {
+  const namespace = obj.namespace || levelProjectNamespace(c);
+  const route = obj.name
+    ? findResource(c.clusterState, 'Route', obj.name, namespace || undefined)
+    : null;
+  if (!route) return result(false, 0, 1);
+  const sim = c.gameEngine?.simulation || c.gameEngine?.engine?.simulation || null;
+  if (!sim || typeof sim.canRouterReach !== 'function') return result(false, 0, 1);
+  let reach = null;
+  try {
+    reach = sim.canRouterReach(route, { namespace: resourceNamespace(route) || namespace });
+  } catch {
+    reach = null;
+  }
+  if (!reach) return result(false, 0, 1);
+  return result(Boolean(reach.allowed), reach.allowed ? 1 : 0, 1);
 }
 
 function evaluateTls(obj, c) {
@@ -1525,7 +1754,12 @@ function evaluateManifest(obj, c) {
 function evaluateOperator(obj, c) {
   const wanted = String(obj.name || obj.operator || '').toLowerCase();
   const subscriptions = listKind(c.clusterState, 'Subscription');
+  // Phase-2B OLM variants (issue #34): scope to an install namespace, and model
+  // the AllNamespaces (global OperatorGroup) install in openshift-operators.
+  const namespaceFilter =
+    obj.namespace || (obj.allNamespaces === true ? 'openshift-operators' : '');
   const matching = subscriptions.filter((subscription) => {
+    if (namespaceFilter && resourceNamespace(subscription) !== namespaceFilter) return false;
     if (!wanted) return true;
     const spec = resourceSpec(subscription);
     const haystack =
@@ -1536,6 +1770,7 @@ function evaluateOperator(obj, c) {
     (subscription) => resourceStatus(subscription).phase === 'Succeeded'
   ).length;
   const csvSucceeded = listKind(c.clusterState, 'ClusterServiceVersion').filter((csv) => {
+    if (namespaceFilter && resourceNamespace(csv) !== namespaceFilter) return false;
     const name = resourceName(csv).toLowerCase();
     if (wanted && !name.includes(wanted)) return false;
     return resourceStatus(csv).phase === 'Succeeded';
@@ -1558,6 +1793,105 @@ function evaluateOperator(obj, c) {
   const levelContext = Boolean(c.levelDef);
   const done = matching.length === 0 && (!levelContext || obj._sawInstalled === true);
   return result(done, done ? target : 0, target);
+}
+
+function installPlanMatches(plan, packageName, namespace) {
+  if (namespace && resourceNamespace(plan) !== namespace) return false;
+  if (!packageName) return true;
+  const wanted = String(packageName).toLowerCase();
+  const labels = resourceLabels(plan);
+  const packageLabel = String(labels['operators.coreos.com/package'] || '').toLowerCase();
+  if (packageLabel && (packageLabel === wanted || packageLabel.includes(wanted))) return true;
+  const csvNames = asArray(resourceSpec(plan).clusterServiceVersionNames).map((name) =>
+    String(name).toLowerCase()
+  );
+  return csvNames.some((name) => name.includes(wanted));
+}
+
+/**
+ * OLM InstallPlan approval (issue #34): the Manual-approval flow waits at
+ * RequiresApproval until the learner approves the plan, then OLM completes it
+ * and the CSV reaches Succeeded. Latched once observed because L18 uninstalls
+ * operators later in the same level.
+ */
+function evaluateInstallPlan(obj, c) {
+  const namespace = obj.namespace || levelProjectNamespace(c) || '';
+  const packageName = String(obj.package || obj.name || '');
+  const approval = obj.approval ? String(obj.approval) : null;
+  const plans = listKind(c.clusterState, 'InstallPlan').filter((plan) => {
+    if (!installPlanMatches(plan, packageName, namespace)) return false;
+    if (approval && String(resourceSpec(plan).approval || '') !== approval) return false;
+    return true;
+  });
+  const approved = plans.some((plan) => resourceSpec(plan).approved === true);
+  const complete = plans.some((plan) => resourceStatus(plan).phase === 'Complete');
+  const csvNames = new Set(
+    plans.flatMap((plan) =>
+      asArray(resourceSpec(plan).clusterServiceVersionNames).map((name) => String(name))
+    )
+  );
+  const csvSucceeded = listKind(c.clusterState, 'ClusterServiceVersion').some((csv) => {
+    if (namespace && resourceNamespace(csv) !== namespace) return false;
+    if (csvNames.size > 0 && !csvNames.has(resourceName(csv))) return false;
+    if (packageName && !resourceName(csv).toLowerCase().includes(packageName.toLowerCase()))
+      return false;
+    return resourceStatus(csv).phase === 'Succeeded';
+  });
+  const observed = approved && (complete || csvSucceeded);
+  if (observed) obj._installPlanLatch = true;
+  const done = observed || (Boolean(c.levelDef) && obj._installPlanLatch === true);
+  return bool(done);
+}
+
+/**
+ * OLM Subscription declaration (issue #34): all supplied spec fields
+ * (channel/startingCSV/installPlanApproval, …) must match a real Subscription.
+ * Latched once observed because the L18 flow can uninstall it afterwards.
+ */
+function evaluateSubscription(obj, c) {
+  const namespace = obj.namespace || levelProjectNamespace(c) || '';
+  const wantedName = obj.name ? String(obj.name) : '';
+  const packageName = String(obj.package || obj.name || '');
+  const fields = ['channel', 'startingCSV', 'installPlanApproval', 'source', 'sourceNamespace'];
+  const matching = listKind(c.clusterState, 'Subscription').filter((subscription) => {
+    if (namespace && resourceNamespace(subscription) !== namespace) return false;
+    const spec = resourceSpec(subscription);
+    const haystack =
+      `${resourceName(subscription)} ${spec.name || ''} ${spec.packageName || ''}`.toLowerCase();
+    if (packageName && !haystack.includes(packageName.toLowerCase())) return false;
+    if (
+      wantedName &&
+      resourceName(subscription) !== wantedName &&
+      !haystack.includes(wantedName.toLowerCase())
+    ) {
+      // A Subscription renamed by the learner still counts when it installs the
+      // same package; the package match above is the authoritative selector.
+    }
+    for (const field of fields) {
+      if (obj[field] === undefined || obj[field] === null) continue;
+      if (String(spec[field] ?? '') !== String(obj[field])) return false;
+    }
+    if (
+      obj.statusPhase &&
+      String(resourceStatus(subscription).phase || '') !== String(obj.statusPhase)
+    )
+      return false;
+    if (
+      obj.installedCSV &&
+      String(resourceStatus(subscription).installedCSV || '') !== String(obj.installedCSV)
+    )
+      return false;
+    if (
+      obj.currentCSV &&
+      String(resourceStatus(subscription).currentCSV || '') !== String(obj.currentCSV)
+    )
+      return false;
+    return true;
+  });
+  const observed = matching.length > 0;
+  if (observed) obj._subscriptionLatch = true;
+  const done = observed || (Boolean(c.levelDef) && obj._subscriptionLatch === true);
+  return bool(done);
 }
 
 function subjectMatches(subjectList, wanted) {
@@ -2324,8 +2658,12 @@ function evaluateByType(type, obj, c) {
       return evaluateLogin(obj, c);
     case 'user':
       return evaluateUser(obj, c);
+    case 'identity':
+      return evaluateIdentity(obj, c);
     case 'oauthprovider':
       return evaluateOAuthProvider(obj, c);
+    case 'password':
+      return evaluatePassword(obj, c);
     case 'group':
       return evaluateGroup(obj, c);
     case 'cani':
@@ -2336,6 +2674,8 @@ function evaluateByType(type, obj, c) {
       return evaluateConnect(obj, c);
     case 'route':
       return evaluateRoute(obj, c);
+    case 'routeaccess':
+      return evaluateRouteAccess(obj, c);
     case 'tls':
       return evaluateTls(obj, c);
     case 'build':
@@ -2354,6 +2694,10 @@ function evaluateByType(type, obj, c) {
       return evaluateManifest(obj, c);
     case 'operator':
       return evaluateOperator(obj, c);
+    case 'installplan':
+      return evaluateInstallPlan(obj, c);
+    case 'subscription':
+      return evaluateSubscription(obj, c);
     case 'scc':
       return evaluateScc(obj, c);
     case 'privileged':

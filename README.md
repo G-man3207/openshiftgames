@@ -33,7 +33,8 @@ names are shown in EX280 Prep).
   `diff -f`, `patch --type=strategic|merge|json`, `adm policy` (RBAC + SCC), `auth can-i`,
   `adm top`, `adm cordon|drain`, `create quota|limitrange|clusterquota`, `create token`,
   `image info`, `process`, `helm` (repo/search/install/upgrade/history/rollback), `htpasswd`,
-  `--dry-run=client|server`, `<resource>.<group>` tokens, `jsonpath`/`custom-columns`,
+  `debug node` (interactive `chroot /host` + `systemctl`/`journalctl` kubelet troubleshooting),
+  `--dry-run=client|server`, `<resource>.<group>` tokens, escaped jsonpath keys, `custom-columns`,
   `events --field-selector`, pipes, redirects and `-f -` stdin. Container names follow real `oc`
   (`oc create deployment --image=…` names the container after the image; `oc set image` never adds
   one). RBAC is genuinely enforced: a plain user gets the real
@@ -41,21 +42,28 @@ names are shown in EX280 Prep).
   `oc` is the taught command; a leading `kubectl` is accepted as an alias with an educational hint.
 - **A real shell around `oc`** — `vim`/`vi` (opens the manifest editor), `cat`, `echo` with
   `>`/`>>` redirects, heredocs, command substitution, and pipes through `grep`, `sed`, `tail`,
-  `head`, `wc`, `sort`, `openssl`, `htpasswd`, `skopeo` (including `grep -A/-B/-C` context) — so
-  exam workflows like writing YAML in the terminal and `oc apply -f -` work exactly as on a real
-  workstation.
+  `head`, `cut`, `wc`, `sort`, `base64 -d`, `openssl` (including real `req -x509` / `x509` PEM
+  handling), `htpasswd`, `skopeo` — so exam workflows like writing YAML in the terminal,
+  decoding a Secret and `oc apply -f -` work as on a real workstation. A workstation-side `curl`
+  resolves Route hosts through the router model (edge/passthrough/reencrypt, http redirect and
+  NetworkPolicy reachability), and `oc exec`/`oc rsh` show the Pod's real volumes, ConfigMaps,
+  Secrets and env.
 - **First-class OpenShift resources** — Project, Pod, Deployment, ReplicaSet, StatefulSet, DaemonSet,
   Job, CronJob, Service, Route, Ingress, NetworkPolicy, ConfigMap, Secret, PVC, PV, StorageClass,
   HPA, PDB, ResourceQuota, LimitRange, ClusterResourceQuota, ServiceAccount, Role, RoleBinding,
   ClusterRole, ClusterRoleBinding, SCC, BuildConfig, Build, ImageStream, Template, Subscription,
   OperatorGroup, InstallPlan, ClusterServiceVersion, PackageManifest, MetalLB, User, Group,
-  ClusterOperator, ClusterVersion, IPAddressPool, L2Advertisement.
+  ClusterOperator, ClusterVersion, IPAddressPool, L2Advertisement, PrometheusRule, Alertmanager.
   A single central registry (`js/data/kindRegistry.js`) drives the palette, 3D renderer, inspector,
   command bar, minimap and YAML export.
 - **S2I builds & ImageStreams** — `oc new-app`, BuildConfig → Build → ImageStream lifecycle, image
   change triggers and rollouts, internal registry image references.
 - **Routes & networking** — `oc expose svc/...`, edge/passthrough/reencrypt TLS Routes, Route
   admission state, Services, NetworkPolicies, MetalLB `LoadBalancer` services with EXTERNAL-IP.
+  The service-ca controller issues Service serving certificates
+  (`service.beta.openshift.io/serving-cert-secret-name`) and injects CA bundles
+  (`inject-cabundle`) for reencrypt Routes; a default-deny policy really blocks a project's Route
+  until an ingress NetworkPolicy admits the router namespace (the L20 capstone teaches the fix).
 - **Declarative workflows** — a Files panel with editable YAML manifests, `oc apply -f`,
   Kustomize base/overlays (`oc apply -k`), OpenShift templates (`oc process -f … | oc apply -f -`),
   Helm charts (`helm install|upgrade|uninstall`), `--dry-run=client -o yaml` manifest skeletons,
@@ -71,7 +79,10 @@ names are shown in EX280 Prep).
   with `mkdir() "/var/cache/nginx/client_temp" failed (13: Permission denied)` in `oc logs` — the
   `ServiceAccount` + `anyuid` grant + `oc set serviceaccount` flow, or an explicit non-root
   `runAsUser`, is the escape hatch. `htpasswd -B` writes real-shaped bcrypt hashes and login
-  validates bcrypt and legacy `{SHA}` entries.
+  validates bcrypt and legacy `{SHA}` entries. The full exam identity lifecycle is practised:
+  rotate the HTPasswd password through the `openshift-config/htpass-secret` (`oc extract` →
+  `htpasswd` → `oc set data`) and wait for the OAuth rollout, then delete a departing user and
+  its Identity (`oc delete user` leaves the Identity behind).
 - **Quotas & self-service** — Namespace/Project quotas, LimitRanges, ClusterResourceQuota, project
   templates (`oc adm create-bootstrap-project-template` + `project.config.openshift.io/cluster`) and
   the real `self-provisioners` ClusterRoleBinding (remove it and `oc new-project` returns Forbidden).
@@ -80,16 +91,24 @@ names are shown in EX280 Prep).
   operator effects (e.g. the MetalLB operator creates its controller/speaker pods and serves
   LoadBalancer IPs only once the MetalLB CR, IPAddressPool and L2Advertisement exist), and a correct
   two-step uninstall: deleting the Subscription keeps the CSV; deleting the CSV removes the operands.
+  Operator install variants are modelled: AllNamespaces installs through the global OperatorGroup
+  into `openshift-operators`, Manual `installPlanApproval` waits for the
+  `oc patch installplan … approved:true` step, and `startingCSV` pins the installed version.
   The catalog package names follow OCP 4.x (`metallb-operator`); OLM resolves per namespace, so a
   Subscription for a package that is not in the catalog makes every Subscription in that namespace
   report `ResolutionFailed` (with no fake CSV or InstallPlan), while other namespaces install
   normally.
+- **Monitoring & alerting** — `oc get prometheusrules -A`, `oc describe prometheusrule`, live
+  `Alertmanager` state (`oc get|describe alertmanager -n openshift-monitoring`): the Watchdog alert
+  always fires and cluster state (crash-looping or unready Pods) surfaces the matching alert rules.
 - **20-level EX280 campaign (5 chapters)** — Manage OpenShift → Declarative & Kustomize →
   Deploy & Expose → Identity, RBAC & Self-service → Security & Operations, ending in a production
-  platform build whose capstone only completes once its scheduled incidents are resolved.
-- **12 timed EX280 labs** — speed drills: three-tier app, CrashLoopBackOff, edge TLS Routes,
+  platform build whose capstone only completes once its scheduled incidents are resolved. The
+  capstone's node failure is fixed the real way: `oc debug node/<n>` → `chroot /host` →
+  `systemctl restart kubelet` (the incidents drawer action remains as a fallback).
+- **13 timed EX280 labs** — speed drills: three-tier app, CrashLoopBackOff, edge TLS Routes,
   Kustomize prod overlay, source-to-image, quota guardrail, RBAC onboarding, SCC, network isolation,
-  operator install, HTPasswd onboarding and an EX280 speed run.
+  operator install, HTPasswd onboarding, production network policies and an EX280 speed run.
 - **EX280 Prep mode** — objective tracker for the official EX280V422 objective groups (with Red Hat
   docs links), quick command labs, a searchable `oc` cheat sheet, exam facts and an evidence-based
   study-coverage verdict (mastery requires the bullet’s own commands inside the linked drill run).
@@ -150,7 +169,7 @@ Bottom toolbar: **Auto-align** | **Reset view** | **Terminal** | **Files** | **Y
 The game is organised around the official EX280V422 objective groups. Campaign level data carries
 `examObjectives` and `docsLinks`; challenges and quick labs carry docs links; the in-app EX280 Prep
 tracker maps every bullet to its campaign levels, timed labs and quick labs. The table below is
-derived from that same data (9 objective groups, 55 bullets; _timed labs_ are the 12 challenge drills):
+derived from that same data (9 objective groups, 55 bullets; _timed labs_ are the 13 challenge drills):
 
 | EX280V422 objective group                                                  | Where it is practiced                                                                                                                                                             | Levels                    | Timed labs          | Quick lab                                  |
 | -------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------- | ------------------- | ------------------------------------------ |
@@ -158,7 +177,7 @@ derived from that same data (9 objective groups, 55 bullets; _timed labs_ are th
 | Declarative Resource Management (manifests, Kustomize, secrets/configmaps) | Files panel, `oc apply -f/-k`, `oc process`                                                                                                                                       | 4, 5, 6, 7, 10, 11        | 1, 3, 4, 10, 11, 12 | Kustomize prod overlay                     |
 | Deploy applications (templates, Helm, builds, rollouts, Services, Routes)  | Builds/ImageStream controllers, `oc new-app`, `oc start-build`, `oc rollout`                                                                                                      | 2, 8, 10, 11, 12          | 1, 3, 5, 9, 10, 12  | Route with edge TLS                        |
 | Manage authentication and authorization (HTPasswd, users, groups, RBAC)    | `oc login`, users/groups, `oc adm policy`, `oc auth can-i`                                                                                                                        | 13, 14, 16                | 7, 11, 12           | HTPasswd users & login                     |
-| Configure network security (Services, Routes, NetworkPolicy, TLS)          | Route admission, TLS edge/passthrough, default-deny NetworkPolicy                                                                                                                 | 3, 11, 12, 20             | 3, 8, 9, 10         | —                                          |
+| Configure network security (Services, Routes, NetworkPolicy, TLS)          | Route admission, TLS edge/passthrough/reencrypt, service serving certs, default-deny + router-ingress NetworkPolicy                                                               | 3, 11, 12, 20             | 3, 8, 9, 10, 13     | Service serving cert → reencrypt Route     |
 | Expose non-HTTP/SNI Applications                                           | passthrough Routes, LoadBalancer services                                                                                                                                         | 12                        | 10                  | —                                          |
 | Enable developer self-service (quotas, LimitRanges, project templates)     | ResourceQuota/LimitRange/ClusterResourceQuota; project-request template flow (generate → edit → create in `openshift-config` → point `project.config.openshift.io/cluster` at it) | 8, 15, 20                 | 6, 12               | ResourceQuota + LimitRange                 |
 | Manage OpenShift operators (OLM)                                           | Subscription → CSV phases, operator effects, uninstall                                                                                                                            | 12, 18                    | 10                  | Install an operator                        |

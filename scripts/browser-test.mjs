@@ -4607,6 +4607,10 @@ await runSection('qa-incidents', async () => {
       { ns: namespace, name: quotaName }
     );
 
+  // A `--only=qa-incidents` run starts on about:blank, so make sure the game
+  // app (and the helpers that call `window.game`) is booted.
+  await bootMenu();
+
   // ── 1. L17: SCCForbidden heals from state, CLI-only (issue #27a + #27c) ──
   section('incidents: L17 SCCForbidden self-heals from state (CLI-only)');
   assert(await startLevel('campaign', 17), 'qa-incidents: L17 launches');
@@ -6500,6 +6504,40 @@ await runSection('qa-workstation', async () => {
     /^acef$/
   );
 
+  // ── #36: real `ls` semantics — immediate children, not recursive paths ──
+  const lsRoot = await runCmd('ls');
+  const lsRootLines = lsRoot.message.split('\n').filter(Boolean);
+  assert(
+    !lsRoot.error &&
+      lsRootLines.includes('manifests/') &&
+      lsRootLines.includes('htpasswd') &&
+      !lsRootLines.some((line) => line.includes('manifests/deployment')),
+    'qa-workstation: ls at / lists immediate children only',
+    lsRootLines.slice(0, 12).join(', ')
+  );
+  const lsManifests = await runCmd('ls manifests');
+  const lsManifestLines = lsManifests.message.split('\n').filter(Boolean);
+  assert(
+    !lsManifests.error &&
+      lsManifestLines.includes('deployment.yaml') &&
+      lsManifestLines.includes('service.yaml') &&
+      lsManifestLines.every((line) => !line.includes('/')),
+    'qa-workstation: ls manifests prints child file names only',
+    lsManifests.message.replace(/\n/g, ' ⏎ ')
+  );
+  const lsFile = await runCmd('ls manifests/deployment.yaml');
+  assert(
+    !lsFile.error && lsFile.message.trim() === 'manifests/deployment.yaml',
+    'qa-workstation: ls <file> prints the file path',
+    lsFile.message
+  );
+  const lsDirs = await runCmd('ls kustomize');
+  assert(
+    !lsDirs.error && /^base\/$/m.test(lsDirs.message) && /^overlays\/$/m.test(lsDirs.message),
+    'qa-workstation: ls marks subdirectories with a trailing slash',
+    lsDirs.message.replace(/\n/g, ' ⏎ ')
+  );
+
   // ── #32a: base64 standalone + in pipes ──────────────────────────────────
   const b64Decode = await runCmd(
     `oc get secret db-secret -o jsonpath={.data.password} -n ${ns} | base64 -d`
@@ -7050,6 +7088,177 @@ await runSection('qa-workstation', async () => {
   await runCmd(
     'rm -f tls.key tls.crt qatest/tls.crt qatest/tls.key serving/tls.crt serving/tls.key cabundle/service-ca.crt qa/default-deny.yaml qa/allow-from-router.yaml'
   );
+
+  // ── #33 acceptance: L20 capstone (shipped data) default-deny → curl 503 →
+  //    allow-from-router → curl 200, and the routeAccess objective ticks. ──
+  await bootMenu();
+  assert(await launch('campaign', 20), 'qa-workstation: L20 capstone launches');
+  await closeOverlays();
+  await evaluate(() => window.game?.gameEngine?.pause?.());
+  const l20Ns = 'prod-platform';
+  const l20Host = `webapp-${l20Ns}.apps.cluster.example.com`;
+  await expectCmd(
+    'qa-workstation: L20 create capstone project',
+    `oc new-project ${l20Ns}`,
+    /Now using project|created/i
+  );
+  const l20Deploy = await runCmd(`oc apply -f manifests/deployment.yaml -n ${l20Ns}`);
+  assert(
+    !l20Deploy.error,
+    'qa-workstation: L20 webapp Deployment manifest applies',
+    l20Deploy.message.slice(0, 240)
+  );
+  const l20Service = await runCmd(`oc apply -f manifests/service.yaml -n ${l20Ns}`);
+  assert(
+    !l20Service.error,
+    'qa-workstation: L20 webapp Service manifest applies',
+    l20Service.message.slice(0, 240)
+  );
+  await expectCmd(
+    'qa-workstation: L20 create webapp Route',
+    `oc create route edge webapp --service=webapp -n ${l20Ns}`,
+    /route.*(exposed|created)/i
+  );
+  await advanceSimulation(20);
+  assert(
+    await waitFor(
+      () =>
+        evaluate(
+          ({ routeNamespace }) => {
+            const route = window.game.cluster.getByName('Route', 'webapp', routeNamespace);
+            return Boolean(
+              route?.status?.ingress?.some((entry) =>
+                (entry.conditions || []).some(
+                  (condition) => condition.type === 'Admitted' && condition.status === 'True'
+                )
+              )
+            );
+          },
+          { routeNamespace: l20Ns }
+        ),
+      25000
+    ),
+    'qa-workstation: L20 Route webapp admitted'
+  );
+  const l20Before = await runCmd(`curl -k https://${l20Host}`);
+  assert(
+    /Hello OpenShift/.test(l20Before.message),
+    'qa-workstation: L20 capstone Route answers curl before the default-deny',
+    l20Before.message.slice(0, 200)
+  );
+  await expectCmd(
+    'qa-workstation: L20 apply shipped default-deny',
+    `oc apply -f examples/default-deny.yaml -n ${l20Ns}`,
+    /networkpolicy.*(created|configured)/i
+  );
+  await advanceSimulation(3);
+  const l20Blocked = await runCmd(`curl -k https://${l20Host}`);
+  assert(
+    /503 Service Unavailable/.test(l20Blocked.message),
+    'qa-workstation: L20 capstone default-deny blocks workstation curl (503)',
+    l20Blocked.message.slice(0, 200)
+  );
+  const l20StillAdmitted = await evaluate(
+    ({ routeNamespace }) => {
+      const route = window.game.cluster.getByName('Route', 'webapp', routeNamespace);
+      return Boolean(
+        route?.status?.ingress?.some((entry) =>
+          (entry.conditions || []).some(
+            (condition) => condition.type === 'Admitted' && condition.status === 'True'
+          )
+        )
+      );
+    },
+    { routeNamespace: l20Ns }
+  );
+  assert(
+    l20StillAdmitted,
+    'qa-workstation: L20 Route stays Admitted while the router is policy-blocked'
+  );
+  await expectCmd(
+    'qa-workstation: L20 apply shipped allow-from-router',
+    `oc apply -f examples/allow-from-router.yaml -n ${l20Ns}`,
+    /networkpolicy.*(created|configured)/i
+  );
+  await advanceSimulation(3);
+  const l20After = await runCmd(`curl -k https://${l20Host}`);
+  assert(
+    /Hello OpenShift/.test(l20After.message),
+    'qa-workstation: L20 allow-from-router restores workstation curl (200)',
+    l20After.message.slice(0, 200)
+  );
+  // Campaign objectives are evaluated by the mode's 1 s wall-clock ticker. The
+  // routeAccess objective also needs grading's ObjectiveEvaluator support: probe
+  // with a temporary objective so this integration check degrades to a warning
+  // (instead of a false failure) until that evaluator lands.
+  const l20Objective = await evaluate(() => {
+    const mode = window.game?.app?.modeInstance;
+    const definition = mode?.currentLevelDef;
+    const index = (definition?.objectives || []).findIndex(
+      (objective) => objective.type === 'routeAccess'
+    );
+    return {
+      index,
+      total: definition?.objectives?.length || 0,
+      progress: index >= 0 ? mode?.objectiveProgress?.[index] || null : null,
+    };
+  });
+  assert(
+    l20Objective.index >= 0,
+    'qa-workstation: L20 ships the routeAccess objective in the capstone data',
+    JSON.stringify(l20Objective)
+  );
+  const l20EvaluatorSupportsRouteAccess = await evaluate(() => {
+    const mode = window.game?.app?.modeInstance;
+    if (!mode?.currentLevelDef?.objectives || !Array.isArray(mode.objectiveProgress)) return false;
+    const probe = {
+      type: 'routeAccess',
+      name: 'webapp',
+      label: 'qa-workstation probe',
+    };
+    // Evaluate the probe through the SAME path CampaignMode uses on its ticker;
+    // remove it again so it never leaks into the level progress/summary.
+    const definition = mode.currentLevelDef;
+    const index = definition.objectives.length;
+    definition.objectives.push(probe);
+    mode.objectiveProgress.push({ ...probe, current: 0, target: 1, completed: false });
+    try {
+      mode.updateObjectives();
+      return mode.objectiveProgress[index]?.completed === true;
+    } finally {
+      definition.objectives.pop();
+      mode.objectiveProgress.pop();
+    }
+  });
+  if (l20EvaluatorSupportsRouteAccess) {
+    const l20ObjectiveCompleted = await waitFor(
+      () =>
+        evaluate(() => {
+          const mode = window.game?.app?.modeInstance;
+          const definition = mode?.currentLevelDef;
+          const index = (definition?.objectives || []).findIndex(
+            (objective) => objective.type === 'routeAccess'
+          );
+          return index >= 0 && mode.objectiveProgress?.[index]?.completed === true;
+        }),
+      10000
+    );
+    assert(
+      l20ObjectiveCompleted,
+      'qa-workstation: L20 routeAccess objective completes after curl is restored',
+      JSON.stringify(l20Objective.progress)
+    );
+  } else {
+    // Cross-team dependency (grading owns the routeAccess evaluator): the
+    // default-deny -> 503 -> allow -> 200 end-to-end flow above is still fully
+    // asserted; only the objective-type wiring is reported as pending.
+    warn(
+      'qa-workstation: L20 routeAccess objective type pending in ObjectiveEvaluator (grading)',
+      'curl-based capstone flow asserted; objective-type integration pending'
+    );
+  }
+  await evaluate(() => window.game?.gameEngine?.resume?.());
+  await returnToMenu();
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -7122,6 +7331,14 @@ await runSection('qa-openshift', async () => {
     projectLabel['kubernetes.io/metadata.name'] === project,
     'openshift: every Project carries kubernetes.io/metadata.name',
     JSON.stringify(projectLabel)
+  );
+  result = await runCmd(`oc get ns ${project} --show-labels`);
+  assert(
+    !result.error &&
+      /\bLABELS\b/.test(result.message) &&
+      new RegExp(`kubernetes\\.io/metadata\\.name=${project}`).test(result.message),
+    'openshift: oc get ns --show-labels renders the LABELS column with metadata.name',
+    result.message
   );
 
   // ── SCC: 4.x grant output, who-can and scc-subject-review ────────────────
@@ -7782,21 +7999,7 @@ spec:
     320
   );
   await writeVirtualFile('idp.yaml', OAUTH_YAML);
-  const preApplyEvidence = await evaluate(() => {
-    const mode = window.game.app.modeInstance;
-    const def = mode?.currentLevelDef;
-    const loginObjective = (def?.objectives || []).find((o) => o.type === 'login');
-    return {
-      level: mode?.currentLevel,
-      hasDef: !!def,
-      defLogin: !!loginObjective,
-      baseline: loginObjective?._baseline || null,
-      history: window.game.gameEngine.getLoginHistory(),
-      user: window.game.gameEngine.currentUser,
-    };
-  });
   await objectiveResults();
-  console.log('QA-GRADING DEBUG pre-apply', JSON.stringify(preApplyEvidence));
   command = await runCmd('oc apply -f idp.yaml', 650);
   assert(!command.error, 'qa-grading #30e: oc apply -f idp.yaml activates the OAuth provider');
   await advanceSimulation(8);

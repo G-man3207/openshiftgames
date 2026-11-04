@@ -596,7 +596,7 @@ are absent.
 
 ---
 
-## 10. Challenges — 12 timed labs (js/modes/ChallengeMode.js, reuse ObjectiveEvaluator)
+## 10. Challenges — 13 timed labs (js/modes/ChallengeMode.js, reuse ObjectiveEvaluator)
 
 Keep the challenge runner architecture (`CHALLENGES`, `startChallenge`, `getStatus`, etc.).
 Replace scenarios with these (id/title fixed; each 180-420s, objectives use section 9 schema,
@@ -614,6 +614,8 @@ Replace scenarios with these (id/title fixed; each 180-420s, objectives use sect
 10. _Install an Operator_ — Subscription Succeeded (+ uninstall/delete objective), MetalLB LoadBalancer service with EXTERNAL-IP.
 11. _HTPasswd Onboarding_ — htpasswd users, OAuth config, login as user, group membership, permissions.
 12. _EX280 Speed Run_ — mixed: project, apply manifests, build, route TLS, quota, job, RBAC; under time.
+13. _Production Network Policies_ — default-deny NetworkPolicy + DNS egress + allow only gateway→ledger; graded on
+    observed traffic behaviour, not on policy names (added 1.2.0).
 
 ---
 

@@ -212,7 +212,7 @@ const CAMPAIGN_LEVELS = [
     chapter: 1,
     chapterName: 'Manage OpenShift',
     description:
-      'Welcome to OpenShift. A Project is the OpenShift-facing representation of a Kubernetes namespace: it isolates your workloads and is what you create and switch between with `oc new-project` / `oc project`. In this level you will log in to the CLI, create your first Project, and deploy both a bare Pod and a Deployment. Note the runtime trap: `restricted-v2` ADMITS a bare `nginx:latest` Pod (SCC admission only sees the pod spec) but nginx cannot run under the arbitrary non-root UID it is assigned — it crashes with "Permission denied" and the Pod ends up CrashLoopBackOff. Use a non-root image like `quay.io/openshift/origin-hello-openshift:latest` for a healthy workload.',
+      'Welcome to OpenShift. A Project is the OpenShift-facing representation of a Kubernetes namespace: it isolates your workloads and is what you create and switch between with `oc new-project` / `oc project`. In this level you will log in to the CLI, create your first Project, and deploy both a bare Pod and a Deployment.',
     examObjectives: [
       'Manage OpenShift Container Platform > Use the web console to manage and configure an OpenShift cluster',
       'Manage OpenShift Container Platform > Use the command-line interface to manage and configure an OpenShift cluster',
@@ -245,8 +245,9 @@ const CAMPAIGN_LEVELS = [
     hints: [
       'Log in first: `oc login -u kubeadmin` (or `oc login --username=kubeadmin`), then check `oc whoami`.',
       'Create the project: `oc new-project first-project --display-name="First Project"`. `oc project` shows the current project.',
-      'Run a Pod with a non-root image: `oc run hello-pod --image=quay.io/openshift/origin-hello-openshift:latest`. Watch it with `oc get pods -o wide`. Trap: `oc run hello-pod --image=nginx:latest` is ADMITTED by `restricted-v2` (SCC admission only checks the pod spec, not the image\'s USER), then the container crashes — `oc logs hello-pod` shows `nginx: [emerg] mkdir() "/var/cache/nginx/client_temp" failed (13: Permission denied)` and `oc get pods` reports CrashLoopBackOff with a growing RESTARTS count. What IS rejected at admission: a Pod that explicitly requests `runAsUser: 0`, a `privileged: true` container or a host port (the controller shows FailedCreate and no Pod exists). If you tried the nginx trap, delete it before re-running with the supported image: `oc delete pod hello-pod`.',
-      'Create a Deployment: `oc create deployment hello-deploy --image=quay.io/openshift/origin-hello-openshift:latest`, then verify `oc get deployments,pods`.',
+      'Create a Deployment: `oc create deployment hello-deploy --image=quay.io/openshift/origin-hello-openshift:latest`, then verify `oc get deployments,pods`. The level also asks for a bare Pod — `oc run hello-pod --image=quay.io/openshift/origin-hello-openshift:latest` deploys one, and the Pod view mirrors `oc describe pod`.',
+      'Trap worth knowing (not required here): a bare `oc run hello-pod --image=nginx:latest` is ADMITTED by `restricted-v2` — admission only validates the pod spec, not the image USER — and then crashes, because nginx cannot write `/var/cache/nginx` under the arbitrary non-root UID it is assigned. Use a non-root image like `quay.io/openshift/origin-hello-openshift:latest` for a healthy workload.',
+      'What IS rejected at admission: a Pod that explicitly requests `runAsUser: 0`, a `privileged: true` container or a host port (the controller shows FailedCreate and no Pod exists). If you tried the nginx trap, delete it before re-running with the supported image: `oc delete pod hello-pod`.',
     ],
     starCriteria: { time: 240, efficiency: 0.75, noFailures: true },
     nextLevel: 2,
@@ -428,6 +429,7 @@ const CAMPAIGN_LEVELS = [
       'Read the crash output: `oc logs <pod> --previous` — `configuration validation failed: APP_MODE has an unsupported value`. `oc describe pod <pod>` shows a growing restart count and Back-off restarting failed container.',
       'Correlate events: `oc get events --sort-by=.lastTimestamp`, and check cluster operators with `oc get clusteroperators`.',
       'Inspect the faulty value: `oc get deployment/web-app -o yaml` — the container env sets `APP_MODE=debug-invalid`. Correct it: `oc set env deployment/web-app APP_MODE=production`. Anything else fails: `oc set env deployment/web-app FOO=bar` (unrelated variable), `oc rollout restart` and deleting the Pod only recreate the same broken configuration, so the incident keeps firing.',
+      'Related trap (admission ≠ runtime): a `nginx:latest` Pod is ADMITTED by `restricted-v2` — the SCC validates the pod spec, not the image USER — and then crashes with `mkdir "/var/cache/nginx/client_temp" failed (13: Permission denied)`. Check the image USER before blaming the SCC; a Pod that explicitly requests `runAsUser: 0` IS rejected at admission (FailedCreate).',
     ],
     starCriteria: { time: 360, efficiency: 0.7, noFailures: false },
     nextLevel: 4,
@@ -989,14 +991,28 @@ const CAMPAIGN_LEVELS = [
     chapter: 4,
     chapterName: 'Identity, RBAC & Self-service',
     description:
-      'OpenShift authenticates through identity providers. Configure an HTPasswd provider: create users in the virtual htpasswd file, store it in a Secret in openshift-config, reference it from the OAuth cluster resource, then log in as the new user.',
+      'OpenShift authenticates through identity providers. Configure an HTPasswd provider: create users in the virtual htpasswd file, store it in a Secret in openshift-config, reference it from the OAuth cluster resource, then log in as the new user. Then cover the two lifecycle tasks EX280 expects: rotate that user password the real way (extract the secret, change the hash with `htpasswd`, write it back with `oc set data`, wait for the OAuth rollout and log in with the new password) and clean up a departing user — deleting the User does NOT remove its Identity, so both objects have to go.',
     examObjectives: [
       'Manage authentication and authorization > Configure the HTPasswd identity provider for authentication',
       'Manage authentication and authorization > Create and delete users',
       'Manage authentication and authorization > Modify user passwords',
     ],
     docsLinks: [DOCS.idp, DOCS.usersGroups, DOCS.cli],
-    startingResources: [node('node-1'), node('node-2'), project('identity-lab')],
+    startingResources: [
+      node('node-1'),
+      node('node-2'),
+      project('identity-lab'),
+      // Cleanup target for the "create and delete users" bullet: the departing
+      // user bob already has a User AND an Identity (created on an earlier
+      // login), so deleting the User leaves the Identity behind until it is
+      // deleted too (real OpenShift 4.x semantics).
+      { kind: 'User', name: 'bob', spec: { fullName: 'Bob (departing contractor)', groups: [] } },
+      {
+        kind: 'Identity',
+        name: 'htpasswd:bob',
+        spec: { providerName: 'htpasswd', providerUserName: 'bob', user: { name: 'bob' } },
+      },
+    ],
     availableResources: ['Project', 'User', 'Identity', 'Secret', 'OAuth', 'Group'],
     objectives: [
       {
@@ -1012,6 +1028,26 @@ const CAMPAIGN_LEVELS = [
       },
       { type: 'user', name: 'alice', label: 'User "alice" exists after first login' },
       { type: 'login', user: 'alice', label: 'Log in to the CLI as alice' },
+      {
+        type: 'password',
+        user: 'alice',
+        password: 'NewPassw0rd!',
+        requireLogin: true,
+        label:
+          'Rotate alice’s htpasswd password and log in with it (extract → htpasswd → oc set data → OAuth rollout)',
+      },
+      {
+        type: 'user',
+        name: 'bob',
+        exists: false,
+        label: 'Delete the departing User "bob" (oc delete user bob)',
+      },
+      {
+        type: 'identity',
+        user: 'bob',
+        exists: false,
+        label: 'Delete bob’s Identity too (oc delete identity htpasswd:bob)',
+      },
     ],
     incidents: [],
     hints: [
@@ -1019,6 +1055,8 @@ const CAMPAIGN_LEVELS = [
       'Create the Secret: `oc create secret generic htpass-secret --from-file=htpasswd -n openshift-config`. The key must be named `htpasswd`.',
       'Configure the provider: `oc edit oauth cluster` and add an HTPasswd identityProvider referencing `htpass-secret` (mappingMethod: claim).',
       'Wait for the authentication operator to roll out, then `oc login -u alice -p <password>` and confirm with `oc whoami`.',
+      'Rotate the password the exam way: `oc extract secret/htpass-secret -n openshift-config --to /tmp --confirm`, then `htpasswd -bB /tmp/htpasswd alice "NewPassw0rd!"`, then `oc set data secret/htpass-secret -n openshift-config --from-file=htpasswd=/tmp/htpasswd`. The authentication operator watches the secret, restarts the oauth-openshift pods and keeps the old password until the rollout completes — logging in too early is rejected, so wait for `oc get clusteroperators authentication` and then `oc login -u alice -p "NewPassw0rd!"`.',
+      'Clean up the departing user: `oc delete user bob` removes the User but leaves the Identity `htpasswd:bob` behind (a stale login mapping), so finish with `oc delete identity htpasswd:bob` and verify `oc get users` / `oc get identities` are clean.',
     ],
     starCriteria: { time: 420, efficiency: 0.7, noFailures: true },
     nextLevel: 14,
@@ -1324,7 +1362,7 @@ const CAMPAIGN_LEVELS = [
     chapter: 5,
     chapterName: 'Security & Operations',
     description:
-      'Operators extend the cluster API. Install an operator with OLM from an OperatorGroup + Subscription, watch the InstallPlan and CSV reach Succeeded, then uninstall it cleanly: deleting the Subscription leaves the ClusterServiceVersion, deleting the CSV is the actual uninstall. Both install and removal are EX280 objectives.',
+      'Operators extend the cluster API. Start with the SingleNamespace MetalLB install (OperatorGroup + Subscription), watch the InstallPlan and CSV reach Succeeded, then uninstall it cleanly: deleting the Subscription leaves the ClusterServiceVersion, deleting the CSV is the actual uninstall. Then cover the OLM variants EX280 expects: an AllNamespaces install in openshift-operators (no new OperatorGroup — the cluster-global one already exists), Manual InstallPlan approval (the install stops at RequiresApproval until you patch `spec.approved`), and pinning a version with `startingCSV` instead of taking the channel head.',
     examObjectives: [
       'Manage OpenShift operators > Install an operator',
       'Manage OpenShift operators > Uninstall an operator',
@@ -1333,8 +1371,16 @@ const CAMPAIGN_LEVELS = [
     docsLinks: [DOCS.operators, DOCS.operatorAdmin, DOCS.operatorOlm],
     startingResources: [node('node-1'), node('node-2'), project('operator-lab')],
     availableResources: ['Project', 'Subscription', 'ClusterOperator'],
-    manifestFiles: ['examples/subscription.yaml', 'examples/operatorgroup.yaml'],
-    focusFiles: ['examples/operatorgroup.yaml', 'examples/subscription.yaml'],
+    manifestFiles: [
+      'examples/subscription.yaml',
+      'examples/operatorgroup.yaml',
+      'examples/subscription-manual-pinned.yaml',
+    ],
+    focusFiles: [
+      'examples/operatorgroup.yaml',
+      'examples/subscription.yaml',
+      'examples/subscription-manual-pinned.yaml',
+    ],
     objectives: [
       {
         type: 'operator',
@@ -1353,6 +1399,34 @@ const CAMPAIGN_LEVELS = [
         installed: false,
         label: 'After installing, uninstall the operator (delete Subscription + CSV)',
       },
+      {
+        type: 'operator',
+        name: 'cert-manager-operator',
+        namespace: 'openshift-operators',
+        allNamespaces: true,
+        installed: true,
+        label:
+          'Install cert-manager AllNamespaces into openshift-operators (global OperatorGroup, no new OperatorGroup)',
+      },
+      {
+        type: 'installPlan',
+        namespace: 'openshift-operators',
+        package: 'cert-manager-operator',
+        approval: 'Manual',
+        approved: true,
+        label:
+          'Approve the Manual InstallPlan (oc patch installplan <name> -n openshift-operators --type=merge)',
+      },
+      {
+        type: 'subscription',
+        name: 'cert-manager-operator',
+        namespace: 'openshift-operators',
+        package: 'cert-manager-operator',
+        channel: 'stable',
+        startingCSV: 'cert-manager-operator.v1.15.0',
+        installPlanApproval: 'Manual',
+        label: 'Pin the install with startingCSV instead of taking the channel head',
+      },
     ],
     incidents: [],
     hints: [
@@ -1362,6 +1436,9 @@ const CAMPAIGN_LEVELS = [
       'Watch OLM: `oc get sub,csv,installplan -n metallb-system` — an InstallPlan appears, then the CSV `metallb-operator.v0.14.9` goes Installing → Succeeded; `oc get subscription -n metallb-system -o yaml` reports `status.installedCSV`.',
       'Uninstall (only after the install above reached Succeeded): `oc delete subscription metallb-operator -n metallb-system`, then confirm the CSV is STILL there with `oc get csv -n metallb-system` — deleting the Subscription does not remove the operator.',
       'Finish the uninstall by deleting the CSV itself: `oc delete csv metallb-operator.v0.14.9 -n metallb-system` (typing `clusterserviceversion`/`csv` is the uninstall step), then confirm with `oc get csv -n metallb-system` and `oc get subscription -A`.',
+      'AllNamespaces variant: no new OperatorGroup is needed — `openshift-operators` already ships the cluster-global `global-operators` group (`oc get operatorgroup -n openshift-operators`), and the Subscription must live in `openshift-operators` too. The installed CSV appears in that project (`oc get csv -n openshift-operators`).',
+      'Manual approval + pinned version: apply `examples/subscription-manual-pinned.yaml` (namespace `openshift-operators`, `installPlanApproval: Manual`, `startingCSV: cert-manager-operator.v1.15.0`), then approve the InstallPlan OLM creates: `oc patch installplan <name> -n openshift-operators --type=merge -p \'{"spec":{"approved":true}}\'`. Until then the Subscription stays `RequiresApproval`.',
+      'Prove the pin: `oc get sub,csv,installplan -n openshift-operators` — the CSV is `cert-manager-operator.v1.15.0` (not the channel-head v1.17.0), which only happens when `startingCSV` is honoured.',
     ],
     starCriteria: { time: 420, efficiency: 0.7, noFailures: true },
     nextLevel: 19,

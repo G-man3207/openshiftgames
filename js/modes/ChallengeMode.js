@@ -1,9 +1,10 @@
 /**
- * ChallengeMode — 12 timed OpenShift 4.22 / EX280 labs (CONVERSION-SPEC §10).
+ * ChallengeMode — 13 timed OpenShift 4.22 / EX280 labs (CONVERSION-SPEC §10).
  *
  * Keeps the original challenge runner/state machine and public API
  * (`CHALLENGES`, `startChallenge`, `getStatus`, `restart`, `exit`, ...) but:
- *  - scenarios are the exact 12 from CONVERSION-SPEC §10,
+ *  - scenarios are the 13 from CONVERSION-SPEC §10 (lab 13 "Production Network
+ *    Policies" is the 1.1.8 coverage addition for issue #34),
  *  - objectives are evaluated by js/engine/ObjectiveEvaluator.js (no duplicate
  *    objective logic),
  *  - starting resources go through ClusterState.addResource() so the registry
@@ -338,9 +339,30 @@ spec:
           name: htpass-secret
 `,
   },
+  13: {
+    // Starter policy only: the project is isolated, but the learner still has to
+    // write the DNS-egress and directional gateway -> ledger allow rules. This
+    // fixes the old lab-9 complaint that the provided file gave full marks.
+    'challenges/payments-networkpolicy.yaml': `# Zero-trust starting point: isolate the payments project first.
+# NetworkPolicies are additive — add the DNS egress and the gateway -> ledger
+# allow rules yourself. This lab grades traffic behaviour, not object names.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny
+  namespace: payments
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress: []
+  egress: []
+`,
+  },
 };
 
-// ─── the 12 challenges (CONVERSION-SPEC §10) ───────────────────────────────
+// ─── the 13 challenges (CONVERSION-SPEC §10 + #34 lab 13) ───────────────────
 
 const CHALLENGES = [
   {
@@ -882,8 +904,8 @@ const CHALLENGES = [
     id: 10,
     title: 'Install an Operator',
     description:
-      'Install the MetalLB Operator with OLM, create the IPAddressPool and L2Advertisement, expose a LoadBalancer Service with an external IP, and uninstall an unwanted operator Subscription.',
-    timeLimit: 360,
+      'Install the MetalLB Operator with OLM, create the IPAddressPool and L2Advertisement, expose a LoadBalancer Service with an external IP, and uninstall an unwanted operator Subscription. Then install the Pipelines operator AllNamespaces in openshift-operators (the cluster-global OperatorGroup) — no new OperatorGroup is needed there.',
+    timeLimit: 420,
     docsLinks: [DOCS.operators, DOCS.metallb],
     objectives: [
       {
@@ -924,6 +946,15 @@ const CHALLENGES = [
         count: 1,
         label: 'Use oc apply/oc get for the operator or Service',
       },
+      {
+        type: 'operator',
+        name: 'openshift-pipelines-operator-rh',
+        namespace: 'openshift-operators',
+        allNamespaces: true,
+        installed: true,
+        label:
+          'Install the Pipelines operator AllNamespaces in openshift-operators (global OperatorGroup)',
+      },
     ],
     startingResources: [
       ...nodes(3),
@@ -944,7 +975,11 @@ const CHALLENGES = [
         status: { phase: 'Succeeded', installedCSV: 'ansible-automation-platform-operator.v1.0.0' },
       },
     ],
-    manifestFiles: ['examples/subscription.yaml', 'challenges/metallb-operator.yaml'],
+    manifestFiles: [
+      'examples/subscription.yaml',
+      'challenges/metallb-operator.yaml',
+      'examples/subscription-pipelines.yaml',
+    ],
     focusFiles: ['challenges/metallb-operator.yaml'],
     availableResources: [
       'Project',
@@ -960,15 +995,16 @@ const CHALLENGES = [
       'Create a LoadBalancer Service in the store project: oc create service loadbalancer web-lb --tcp=80:8080 -n store',
       'Check the EXTERNAL-IP column: oc get svc web-lb -n store (MetalLB assigns it from metallb-pool/L2Advertisement).',
       'Uninstall the old AAP operator properly: oc delete subscription ansible-automation-platform-operator -n openshift-operators, then delete its CSV — read the name from oc get csv -n openshift-operators (aap-operator.v2.6.0) and run oc delete csv aap-operator.v2.6.0 -n openshift-operators — deleting the Subscription alone leaves the operator installed.',
-      'Confirm: oc get csv,sub -n openshift-operators is empty (CSV gone = uninstalled).',
+      'AllNamespaces variant: apply examples/subscription-pipelines.yaml (Subscription for openshift-pipelines-operator-rh in openshift-operators) — the cluster-global global-operators OperatorGroup is already there, so no OperatorGroup is needed; watch oc get sub,csv -n openshift-operators until the Pipelines CSV reaches Succeeded.',
+      'Confirm the AAP uninstall: oc get csv -n openshift-operators no longer lists the AAP CSV (the Pipelines Subscription/CSV from the AllNamespaces install may still be present).',
     ],
   },
   {
     id: 11,
     title: 'HTPasswd Onboarding',
     description:
-      'Configure HTPasswd authentication end-to-end: create an htpasswd entry, store it in openshift-config, apply the OAuth identity provider, log in as the new user, add group membership and grant project permissions.',
-    timeLimit: 360,
+      'Configure HTPasswd authentication end-to-end: create an htpasswd entry, store it in openshift-config, apply the OAuth identity provider, log in as the new user, add group membership and grant project permissions — then rotate that user password the real way and log in with the new one.',
+    timeLimit: 420,
     docsLinks: [DOCS.idp, DOCS.auth, DOCS.rbac],
     objectives: [
       { type: 'command', pattern: 'htpasswd', count: 1, label: 'Create an htpasswd entry' },
@@ -991,6 +1027,13 @@ const CHALLENGES = [
       },
       { type: 'user', name: 'alice', label: 'User alice exists (created on first login)' },
       { type: 'login', user: 'alice', label: 'Log in as alice' },
+      {
+        type: 'password',
+        user: 'alice',
+        password: 'NewPassw0rd!',
+        requireLogin: true,
+        label: 'Rotate alice’s htpasswd password and log in with the new password',
+      },
       {
         type: 'group',
         name: 'developers',
@@ -1032,6 +1075,7 @@ const CHALLENGES = [
       'Store it in openshift-config with the mandatory htpasswd key: oc create secret generic htpass-secret --from-file=htpasswd=htpasswd -n openshift-config',
       'Configure the provider from the Files panel: oc apply -f challenges/oauth-htpasswd.yaml — or write the OAuth manifest yourself and oc apply -f idp.yaml / cat <<EOF | oc apply -f - / oc patch oauth cluster --type=merge -p \'{"spec":…}\'. The check grades the resulting OAuth state, not the command.',
       'Wait for the OAuth rollout, then log in: oc login -u alice -p openshift; oc whoami',
+      'Rotate the password: oc extract secret/htpass-secret -n openshift-config --to /tmp --confirm; htpasswd -bB /tmp/htpasswd alice "NewPassw0rd!"; oc set data secret/htpass-secret -n openshift-config --from-file=htpasswd=/tmp/htpasswd — the operator restarts oauth-openshift, so wait for the rollout (oc get clusteroperators authentication) before oc login -u alice -p "NewPassw0rd!" (the old password is rejected until then).',
       'Create the group with the user (or add later): oc adm groups new developers alice  # oc adm groups add-users developers alice',
       'Grant project access: oc adm policy add-role-to-user edit alice -n onboarding',
       'Verify: oc auth can-i get pods --as=alice -n onboarding',
