@@ -181,6 +181,7 @@ Generated/validated in the final run (all 1600×900 unless noted):
 | [`docs/screenshots/exam-prep.png`](screenshots/exam-prep.png) | EX280 Prep tracker (9 groups/55 bullets, evidence-based verdict) |
 | [`docs/screenshots/files-panel.png`](screenshots/files-panel.png) | Files & Manifests panel |
 | [`docs/screenshots/draw.png`](screenshots/draw.png) | OpenShift Draw + YAML export |
+| [`docs/screenshots/incidents-drawer.png`](screenshots/incidents-drawer.png) | incidents drawer open: drawer shifts the mission card and view toolbar aside instead of covering them |
 | [`og-image.png`](../og-image.png) | Open Graph/Twitter card (`shifting.pro`, 1200×630) |
 | [`docs/verification-report.json`](verification-report.json) | machine-readable: pass/fail + timings + artifact metadata |
 
