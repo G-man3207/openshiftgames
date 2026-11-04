@@ -407,6 +407,29 @@ async function findResource(kind, name, namespace) {
     { kind, name, namespace },
   );
 }
+/** Advance the fixed-step simulation by `seconds` of game time without waiting
+ * for wall-clock time to pass. Used to reach controller/exponential timings
+ * (FailedCreate retry throttling, OLM install steps, image-pull back-off)
+ * deterministically instead of inflating the suite runtime with long sleeps. */
+async function advanceSimulation(seconds) {
+  return evaluate((secs) => {
+    const sim = window.game?.gameEngine?.simulation;
+    if (!sim || typeof sim.tick !== 'function') return false;
+    const steps = Math.ceil(secs / 0.05);
+    for (let i = 0; i < steps; i += 1) sim.tick(0.05);
+    return true;
+  }, seconds);
+}
+/** Split an oc/helm tabwriter table into header + data rows (3+ space columns). */
+function parseTable(message) {
+  const lines = String(message ?? '')
+    .split('\n')
+    .filter((line) => line.trim() !== '');
+  return {
+    header: lines[0] || '',
+    rows: lines.slice(1).map((line) => line.split(/\s{3,}/).map((cell) => cell.trim())),
+  };
+}
 
 // ── Run wrapper ────────────────────────────────────────────────────────────
 async function runSection(name, fn) {
@@ -1002,50 +1025,282 @@ await runSection('cli', async () => {
   await expectCmd('cli: oc describe deployment', `oc describe deployment/web -n ${project}`, /Name:|Deployment/i);
   await expectCmd('cli: oc rollout status', `oc rollout status deployment/web -n ${project}`, /deployment|rollout/i);
 
-  // #20 QA: nginx:latest is a real restricted-v2 violation (root + port 80):
-  // admission rejects it, the ReplicaSet reports FailedCreate and NO Pod exists.
-  await expectCmd(
-    'cli: nginx restricted-v2 trap deployment created',
-    `oc create deployment nginx-trap --image=nginx:latest -n ${project}`,
-    /deployment\.apps\/nginx-trap created/i,
+  // #26: real oc only prints the container-defaulting hint for MULTI-container
+  // pods; a single-container pod's exec/rsh must run the command in silence.
+  const execSingle = await runCmd(`oc exec ${podName} -n ${project} -- whoami`);
+  assert(
+    !execSingle.error && !/Defaulting container name|Use 'oc describe pod/.test(execSingle.message),
+    'cli: exec single-container pod prints no container-defaulting hint',
+    execSingle.message.replace(/\n/g, ' ⏎ ').slice(0, 240),
   );
-  const readNginxTrap = () => evaluate((ns) => {
-    const rs = (window.game.cluster.getByKind?.('ReplicaSet') || [])
-      .find((r) => (r.metadata?.namespace || '') === ns && /^nginx-trap-/.test(r.metadata?.name || ''));
-    if (!rs) return null;
-    const conditions = rs.status?.conditions || [];
-    const failedCreate = conditions.some(
-      (c) => c.type === 'ReplicaFailure'
-        || /security context constraint/i.test(String(c.message || '')),
-    );
-    const pods = (window.game.cluster.getByKind?.('Pod') || [])
-      .filter((p) => (p.metadata?.namespace || '') === ns && /^nginx-trap-/.test(p.metadata?.name || ''));
-    const events = typeof rs.getEvents === 'function' ? (rs.getEvents?.() || []) : (rs.events || []);
-    const failedCreateEvents = events.filter(
-      (e) => /FailedCreate/.test(String(e.reason || ''))
-        && /security context constraint|forbidden/i.test(String(e.message || '')),
-    );
-    return {
-      failedCreate,
-      conditions: conditions.map((c) => ({ type: c.type, reason: c.reason, message: String(c.message || '').slice(0, 160) })),
-      pods: pods.length,
-      eventCount: failedCreateEvents.length,
-    };
-  }, project);
-  await waitFor(async () => {
-    const state = await readNginxTrap();
-    return Boolean(state && state.failedCreate && state.eventCount > 0);
-  }, 30000);
-  const nginxTrap = await readNginxTrap();
-  assert(nginxTrap?.failedCreate, 'cli: nginx:latest is rejected by restricted-v2 (RS FailedCreate)', JSON.stringify(nginxTrap));
-  assert(nginxTrap?.pods === 0, 'cli: restricted-v2 rejection creates no Pod', JSON.stringify(nginxTrap));
-  assert(nginxTrap?.eventCount > 0, 'cli: restricted-v2 rejection records a FailedCreate event', JSON.stringify(nginxTrap));
-  // #21: events must be filterable like real oc.
+  const rshSingle = await runCmd(`oc rsh ${podName} -n ${project} hostname`);
+  assert(
+    !rshSingle.error && !/Defaulting container name|Use 'oc describe pod/.test(rshSingle.message),
+    'cli: rsh single-container pod prints no container-defaulting hint',
+    rshSingle.message.replace(/\n/g, ' ⏎ ').slice(0, 240),
+  );
+  const multiPod = `apiVersion: v1
+kind: Pod
+metadata:
+  name: multi
+  namespace: ${project}
+  labels:
+    app: multi
+spec:
+  containers:
+    - name: first
+      image: quay.io/openshift/origin-hello-openshift:latest
+      resources:
+        requests: { cpu: 50m, memory: 64Mi }
+        limits: { cpu: 200m, memory: 128Mi }
+    - name: second
+      image: quay.io/openshift/origin-hello-openshift:latest
+      resources:
+        requests: { cpu: 50m, memory: 64Mi }
+        limits: { cpu: 200m, memory: 128Mi }
+`;
+  await evaluate((text) => window.game.manifestEngine.writeFile('qa/multi-pod.yaml', text), multiPod);
+  await expectCmd('cli: create multi-container Pod', 'oc apply -f qa/multi-pod.yaml -n ex280-demo', /pod\/multi created|created|configured/i);
+  await waitFor(() => evaluate(() => {
+    const pod = window.game.cluster.getByName?.('Pod', 'multi', 'ex280-demo');
+    return pod?.status?.phase === 'Running' && (pod.status.containerStatuses || []).every((status) => status.ready);
+  }), 10000);
+  const execMulti = await runCmd(`oc exec pod/multi -n ${project} -- hostname`);
+  assert(
+    !execMulti.error
+      && /Defaulting container name to "first"/.test(execMulti.message)
+      && /Use 'oc describe pod\/multi -n ex280-demo'/.test(execMulti.message),
+    'cli: exec multi-container pod still prints the container-defaulting hint',
+    execMulti.message.replace(/\n/g, ' ⏎ ').slice(0, 240),
+  );
+  const execMultiNamed = await runCmd(`oc exec pod/multi -n ${project} -c second -- hostname`);
+  assert(
+    !execMultiNamed.error && !/Defaulting container name/.test(execMultiNamed.message),
+    'cli: exec -c suppresses the container-defaulting hint',
+    execMultiNamed.message.replace(/\n/g, ' ⏎ ').slice(0, 240),
+  );
+
+  // #26: sed must exist in the shell and work inside `oc ... | sed ...` pipes.
+  const describePodOne = await runCmd(`oc describe pod ${podName} -n ${project}`);
+  const describeHead = describePodOne.message.trim().split('\n').slice(0, 5).join('\n');
+  const sedHead = await runCmd(`oc describe pod ${podName} -n ${project} | sed -n '1,5p'`);
+  assert(
+    !sedHead.error && sedHead.message.trim() === describeHead,
+    'cli: describe | sed -n \'1,5p\' echoes the first 5 lines',
+    sedHead.message.replace(/\n/g, ' ⏎ ').slice(0, 240),
+  );
+  const sedUnquoted = await runCmd(`oc describe pod ${podName} -n ${project} | sed -n 1,40p`);
+  assert(
+    !sedUnquoted.error && sedUnquoted.message.trim() === describePodOne.message.trim().split('\n').slice(0, 40).join('\n'),
+    'cli: describe | sed -n 1,40p (unquoted) works in a pipe',
+    sedUnquoted.message.replace(/\n/g, ' ⏎ ').slice(0, 240),
+  );
+  const sedSub = await runCmd(`echo 'foo bar foo' | sed 's/foo/baz/'`);
+  assert(!sedSub.error && sedSub.message.trim() === 'baz bar foo', 'cli: sed s/// substitutes in a pipe', sedSub.message.slice(0, 120));
+
+  // #20 QA: nginx:latest under restricted-v2 is ADMITTED (SCC admission only
+  // sees the pod spec, not the image USER), then the container crash-loops with
+  // the real nginx permission-denied log. Only a spec that EXPLICITLY requests
+  // root/privileged is rejected with RS FailedCreate. The documented anyuid
+  // service-account fix path makes it run (#25).
+
+  const nginxProject = 'nginx-lab';
+  await expectCmd('cli: create nginx-lab project', `oc new-project ${nginxProject}`, /Now using project|created/i);
+  await expectCmd('cli: switch back to the demo project', `oc project ${project}`, /Now using project/i);
   await expectCmd(
+    'cli: nginx:latest deployment is admitted under restricted-v2',
+    `oc create deployment ngx --image=nginx:latest -n ${nginxProject}`,
+    /deployment\.apps\/ngx created/i,
+  );
+  const readNginxLab = () => evaluate((ns) => {
+    const cluster = window.game.cluster;
+    const deployment = cluster.getByName?.('Deployment', 'ngx', ns);
+    const replicaSets = deployment ? (cluster.getChildren?.(deployment.uid) || []).filter((child) => child.kind === 'ReplicaSet') : [];
+    const pods = (cluster.getByKindAndNamespace?.('Pod', ns) || []).filter((pod) => /^ngx-/.test(pod.metadata?.name || ''));
+    return {
+      podCount: pods.length,
+      pods: pods.map((pod) => {
+        const status = (pod.status?.containerStatuses || [])[0] || {};
+        return {
+          name: pod.metadata.name,
+          phase: pod.status?.phase,
+          scc: pod.metadata.annotations?.['openshift.io/scc'] || null,
+          waiting: status.state?.waiting?.reason || null,
+          ready: status.ready === true,
+          restarts: status.restartCount || 0,
+          lastTerminated: status.lastState?.terminated?.exitCode ?? null,
+        };
+      }),
+      rsConditions: replicaSets.flatMap((set) => set.status?.conditions || []).map((condition) => `${condition.type}=${condition.status}/${condition.reason}`),
+      deployConditions: (deployment?.status?.conditions || []).map((condition) => `${condition.type}=${condition.status}/${condition.reason}`),
+      availableReplicas: deployment?.status?.availableReplicas ?? null,
+    };
+  }, nginxProject);
+  const nginxAdmitted = await waitFor(async () => {
+    const state = await readNginxLab();
+    return state.podCount === 1 && !state.rsConditions.some((line) => /ReplicaFailure=True/.test(line));
+  }, 30000);
+  let nginxState = await readNginxLab();
+  assert(
+    nginxAdmitted,
+    'cli: nginx:latest pod is ADMITTED (pod exists, no RS FailedCreate)',
+    JSON.stringify({ pods: nginxState.podCount, rsConditions: nginxState.rsConditions }),
+  );
+  assert(
+    nginxState.pods[0]?.scc === 'restricted-v2',
+    'cli: admitted nginx pod runs under scc=restricted-v2',
+    JSON.stringify(nginxState.pods.map((pod) => pod.scc)),
+  );
+  await waitFor(async () => {
+    const state = await readNginxLab();
+    return state.pods.some((pod) => pod.waiting === 'CrashLoopBackOff' && pod.restarts > 0);
+  }, 30000);
+  nginxState = await readNginxLab();
+  assert(
+    nginxState.pods.some((pod) => pod.waiting === 'CrashLoopBackOff' && pod.restarts > 0),
+    'cli: nginx pod crash-loops (CrashLoopBackOff, restarts > 0)',
+    JSON.stringify(nginxState.pods),
+  );
+  assert(
+    nginxState.pods.some((pod) => pod.phase === 'Running'),
+    'cli: crash-looping nginx pod stays Running (admission did not reject it)',
+    JSON.stringify(nginxState.pods.map((pod) => pod.phase)),
+  );
+  assert(
+    nginxState.pods.some((pod) => pod.lastTerminated === 1),
+    'cli: nginx container lastState records the crash (exit code 1)',
+    JSON.stringify(nginxState.pods.map((pod) => pod.lastTerminated)),
+  );
+  await expectCmd('cli: oc get pods shows CrashLoopBackOff', `oc get pods -n ${nginxProject}`, /ngx-[a-z0-9-]+\s+0\/1\s+CrashLoopBackOff\s+[1-9]/);
+  await expectCmd(
+    'cli: nginx crash log is the permission-denied emerge',
+    `oc logs deployment/ngx -n ${nginxProject}`,
+    /mkdir\(\).*(client_temp).*Permission denied/,
+  );
+  await expectCmd(
+    'cli: nginx deployment reports Available False MinimumReplicasUnavailable',
+    `oc describe deployment/ngx -n ${nginxProject}`,
+    /Available\s+False\s+MinimumReplicasUnavailable/,
+  );
+
+  // An explicitly requested root user is still rejected at admission: the
+  // ReplicaSet reports FailedCreate and NO Pod object is created.
+  const rootDeployment = `apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ngx-root
+  namespace: ${nginxProject}
+  labels:
+    app: ngx-root
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ngx-root
+  template:
+    metadata:
+      labels:
+        app: ngx-root
+    spec:
+      containers:
+        - name: main
+          image: nginx:latest
+          securityContext:
+            runAsUser: 0
+`;
+  await evaluate((text) => window.game.manifestEngine.writeFile('qa/root-deploy.yaml', text), rootDeployment);
+  await expectCmd(
+    'cli: apply explicit runAsUser:0 deployment',
+    'oc apply -f qa/root-deploy.yaml',
+    /deployment\.apps\/ngx-root created|created|configured/i,
+  );
+  const readRootFailure = () => evaluate((ns) => {
+    const cluster = window.game.cluster;
+    const deployment = cluster.getByName?.('Deployment', 'ngx-root', ns);
+    const replicaSets = deployment ? (cluster.getChildren?.(deployment.uid) || []).filter((child) => child.kind === 'ReplicaSet') : [];
+    return {
+      messages: replicaSets.flatMap((set) => (
+        (set.status?.conditions || [])
+          .filter((condition) => condition.type === 'ReplicaFailure')
+          .map((condition) => `${condition.reason}:${condition.message}`)
+      )),
+      pods: (cluster.getByKindAndNamespace?.('Pod', ns) || []).filter((pod) => pod.metadata?.labels?.app === 'ngx-root').length,
+    };
+  }, nginxProject);
+  const rootDenied = await waitFor(async () => {
+    const state = await readRootFailure();
+    return state.messages.length > 0 && state.pods === 0;
+  }, 20000);
+  const rootState = await readRootFailure();
+  assert(rootDenied, 'cli: explicit runAsUser:0 still gets RS FailedCreate with no Pod', JSON.stringify(rootState));
+  assert(
+    rootState.messages.some((line) => /unable to validate against any security context constraint/.test(line)),
+    'cli: explicit root denial message is the SCC one',
+    JSON.stringify(rootState.messages),
+  );
+
+  // #26: real oc aggregates repeated FailedCreate retries into ONE Event row
+  // with a `(xN over …)` LAST SEEN suffix. Advance game time past the 10s retry
+  // throttle so the burst is deterministic instead of waiting ~2 wall-clock min.
+  await advanceSimulation(150);
+  const failedCreateRetries = await evaluate((ns) => (
+    window.game.gameEngine.simulation.getEvents({ namespace: ns, reason: 'FailedCreate' }) || []
+  ).length, nginxProject);
+  assert(failedCreateRetries >= 10, 'cli: explicit violation generated >= 10 FailedCreate retries', `got ${failedCreateRetries}`);
+  const failedCreateEvents = await expectCmd(
     'cli: events --field-selector reason=FailedCreate',
-    `oc get events --field-selector reason=FailedCreate -n ${project}`,
+    `oc get events --field-selector reason=FailedCreate -n ${nginxProject}`,
     /FailedCreate/,
   );
+  const failedCreateTable = parseTable(failedCreateEvents.message);
+  const failedCreateRows = failedCreateTable.rows.filter((row) => row[2] === 'FailedCreate');
+  assert(
+    /^LAST SEEN\s+TYPE\s+REASON\s+OBJECT\s+MESSAGE$/.test(failedCreateTable.header),
+    'cli: events table keeps LAST SEEN/TYPE/REASON/OBJECT/MESSAGE header',
+    failedCreateTable.header,
+  );
+  assert(
+    failedCreateRows.length === 1,
+    'cli: FailedCreate retries aggregate into exactly one row',
+    `${failedCreateRows.length}: ${JSON.stringify(failedCreateRows)}`,
+  );
+  const aggregateCell = failedCreateRows[0]?.[0] || '';
+  const aggregateCount = aggregateCell.match(/\(x(\d+) over [^)]+\)/);
+  assert(
+    Boolean(aggregateCount) && Number(aggregateCount[1]) >= 10,
+    'cli: aggregated FailedCreate row carries (xN over …) with N >= 10',
+    aggregateCell,
+  );
+
+  // The documented anyuid fix path: dedicated SA + SCC grant + deployment SA.
+  await expectCmd('cli: create nginx-sa', `oc create sa nginx-sa -n ${nginxProject}`, /serviceaccount\/nginx-sa created/i);
+  await expectCmd('cli: grant anyuid to nginx-sa', `oc adm policy add-scc-to-user anyuid -z nginx-sa -n ${nginxProject}`, /added|anyuid/i);
+  await expectCmd(
+    'cli: point ngx at nginx-sa',
+    `oc set serviceaccount deployment/ngx nginx-sa -n ${nginxProject}`,
+    /serviceaccount|updated/i,
+  );
+  const nginxFixed = await waitFor(async () => {
+    const state = await readNginxLab();
+    return state.podCount === 1
+      && state.pods[0].scc === 'anyuid'
+      && state.pods[0].phase === 'Running'
+      && state.pods[0].ready === true
+      && state.availableReplicas >= 1;
+  }, 45000);
+  nginxState = await readNginxLab();
+  assert(nginxFixed, 'cli: anyuid service-account fix path leaves exactly one Running/Ready pod', JSON.stringify(nginxState));
+  assert(
+    nginxState.pods[0]?.scc === 'anyuid',
+    'cli: fixed nginx pod runs under scc=anyuid',
+    JSON.stringify(nginxState.pods.map((pod) => pod.scc)),
+  );
+  assert(
+    nginxState.deployConditions.includes('Available=True/MinimumReplicasAvailable'),
+    'cli: fixed nginx deployment reports Available True MinimumReplicasAvailable',
+    JSON.stringify(nginxState.deployConditions),
+  );
+  await expectCmd('cli: oc get deployment ngx shows 1/1 ready', `oc get deployment ngx -n ${nginxProject}`, /1\/1/);
   const routeAdmittedEarly = await waitFor(() => evaluate((ns) => {
     const route = (window.game.cluster.getByKind?.('Route') || []).find((r) => r.metadata?.name === 'web' && r.metadata?.namespace === ns);
     return !!route?.status?.ingress?.[0]?.conditions?.some((c) => c.type === 'Admitted' && c.status === 'True');
@@ -1074,6 +1329,167 @@ await runSection('cli', async () => {
   await expectCmd('cli: helm install', 'helm install webapp helm/webapp', /NAME:|deployed/i);
   await expectCmd('cli: helm list', 'helm list', /webapp/);
   await expectCmd('cli: helm uninstall', 'helm uninstall webapp', /uninstalled|release/i);
+
+  // #24: Helm 3 history/rollback semantics — only the latest revision is
+  // `deployed`, older revisions are `superseded`, a rollback re-deploys the
+  // target revision's CHART (no repo prefix, real APP VERSION) and install
+  // output has no CHART: line.
+  const helmProject = 'helm-lab';
+  await expectCmd('cli: create helm-lab project', `oc new-project ${helmProject}`, /Now using project|created/i);
+  await expectCmd('cli: switch back to the demo project', `oc project ${project}`, /Now using project/i);
+  await expectCmd(
+    'cli: helm repo add bitnami',
+    'helm repo add bitnami https://charts.bitnami.com/bitnami',
+    /has been added to your repositories/i,
+  );
+  const helmInstall = await expectCmd(
+    'cli: helm install bitnami/nginx 15.0.0',
+    `helm install web bitnami/nginx --version 15.0.0 -n ${helmProject}`,
+    /^NAME: web$/m,
+  );
+  assert(
+    !/^CHART:/m.test(helmInstall.message)
+      && /^LAST DEPLOYED: [A-Z][a-z]{2} [A-Z][a-z]{2} +\d{1,2} \d{2}:\d{2}:\d{2} \d{4}$/m.test(helmInstall.message)
+      && new RegExp(`^NAMESPACE: ${helmProject}$`, 'm').test(helmInstall.message)
+      && /^STATUS: deployed$/m.test(helmInstall.message)
+      && /^REVISION: 1$/m.test(helmInstall.message)
+      && /^TEST SUITE: None$/m.test(helmInstall.message),
+    'cli: helm install output has the real shape (no CHART: line)',
+    helmInstall.message.replace(/\n/g, ' ⏎ ').slice(0, 320),
+  );
+  const helmUpgrade = await expectCmd(
+    'cli: helm upgrade bitnami/nginx 15.1.0',
+    `helm upgrade web bitnami/nginx --version 15.1.0 -n ${helmProject}`,
+    /^REVISION: 2$/m,
+  );
+  assert(!/^CHART:/m.test(helmUpgrade.message), 'cli: helm upgrade output has no CHART: line', helmUpgrade.message.replace(/\n/g, ' ⏎ ').slice(0, 240));
+  await expectCmd('cli: helm rollback web 1', `helm rollback web 1 -n ${helmProject}`, /Rollback was a success/i);
+  const historyRun = await expectCmd(
+    'cli: helm history header',
+    `helm history web -n ${helmProject}`,
+    /REVISION.*UPDATED.*STATUS.*CHART.*APP VERSION.*DESCRIPTION/,
+  );
+  const historyTable = parseTable(historyRun.message);
+  const historyRow = (index) => historyTable.rows[index] || [];
+  assert(historyTable.rows.length === 3, 'cli: helm history has exactly 3 revisions', JSON.stringify(historyTable.rows));
+  assert(
+    historyRow(0)[2] === 'superseded' && historyRow(0)[3] === 'nginx-15.0.0' && historyRow(0)[4] === '1.25.3' && historyRow(0)[5] === 'Install complete',
+    'cli: helm history rev 1 is superseded nginx-15.0.0 1.25.3 Install complete',
+    JSON.stringify(historyRow(0)),
+  );
+  assert(
+    historyRow(1)[2] === 'superseded' && historyRow(1)[3] === 'nginx-15.1.0' && historyRow(1)[4] === '1.25.3' && historyRow(1)[5] === 'Upgrade complete',
+    'cli: helm history rev 2 is superseded nginx-15.1.0 1.25.3 Upgrade complete',
+    JSON.stringify(historyRow(1)),
+  );
+  assert(
+    historyRow(2)[2] === 'deployed' && historyRow(2)[3] === 'nginx-15.0.0' && historyRow(2)[4] === '1.25.3' && historyRow(2)[5] === 'Rollback to 1',
+    'cli: helm history rev 3 is deployed nginx-15.0.0 Rollback to 1 (rollback re-deploys rev 1 chart)',
+    JSON.stringify(historyRow(2)),
+  );
+  assert(
+    historyTable.rows.filter((row) => row[2] === 'deployed').length === 1,
+    'cli: only the latest helm history revision is deployed',
+    JSON.stringify(historyTable.rows.map((row) => `${row[0]}:${row[2]}`)),
+  );
+  assert(
+    historyTable.rows.every((row) => !String(row[3] || '').includes('bitnami/')),
+    'cli: helm history CHART column has no repo prefix',
+    JSON.stringify(historyTable.rows.map((row) => row[3])),
+  );
+  const rolledBackYaml = await runCmd(`oc get deployment web -n ${helmProject} -o yaml`);
+  assert(
+    !rolledBackYaml.error && /helm\.sh\/chart: nginx-15\.0\.0/.test(rolledBackYaml.message),
+    'cli: helm rollback re-applies the revision 1 chart to the workload',
+    rolledBackYaml.message.replace(/\n/g, ' ⏎ ').slice(0, 400),
+  );
+  const helmListRun = await runCmd(`helm list -n ${helmProject}`);
+  const helmListRows = parseTable(helmListRun.message).rows;
+  assert(
+    helmListRows.length === 1 && helmListRows[0][5] === 'nginx-15.0.0' && helmListRows[0][6] === '1.25.3',
+    'cli: helm list CHART/APP VERSION match the deployed revision',
+    JSON.stringify(helmListRows),
+  );
+
+  // #26: image-pull failures must match failure tokens INSIDE the tag, not only
+  // as a prefix (`:v9-nope` earns ImagePullBackOff), and recovering to :latest
+  // must pull normally again.
+  const pullProject = 'pull-lab';
+  const pullImage = 'quay.io/openshift/origin-hello-openshift';
+  await expectCmd('cli: create pull-lab project', `oc new-project ${pullProject}`, /Now using project|created/i);
+  await expectCmd('cli: switch back to the demo project', `oc project ${project}`, /Now using project/i);
+  const pullDeployment = `apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pullapp
+  namespace: ${pullProject}
+  labels:
+    app: pullapp
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: pullapp
+  template:
+    metadata:
+      labels:
+        app: pullapp
+    spec:
+      containers:
+        - name: main
+          image: ${pullImage}:latest
+          resources:
+            requests: { cpu: 100m, memory: 128Mi }
+            limits: { cpu: 500m, memory: 256Mi }
+`;
+  await evaluate((text) => window.game.manifestEngine.writeFile('qa/pullapp.yaml', text), pullDeployment);
+  await expectCmd('cli: apply pullapp deployment', 'oc apply -f qa/pullapp.yaml', /deployment\.apps\/pullapp created|created|configured/i);
+  const readPullLab = () => evaluate(() => {
+    const cluster = window.game.cluster;
+    const deployment = cluster.getByName?.('Deployment', 'pullapp', 'pull-lab');
+    const pods = (cluster.getByKindAndNamespace?.('Pod', 'pull-lab') || []).filter((pod) => pod.metadata?.labels?.app === 'pullapp');
+    return {
+      availableReplicas: deployment?.status?.availableReplicas ?? 0,
+      pods: pods.map((pod) => ({
+        phase: pod.status?.phase,
+        image: pod.spec?.containers?.[0]?.image || '',
+        waiting: (pod.status?.containerStatuses || [])[0]?.state?.waiting?.reason || null,
+      })),
+    };
+  });
+  const baselinePulled = await waitFor(async () => {
+    const state = await readPullLab();
+    return state.availableReplicas >= 1 && state.pods.some((pod) => pod.phase === 'Running' && /:latest$/.test(pod.image));
+  }, 30000);
+  assert(baselinePulled, 'cli: :latest image pulls and the Deployment becomes available', JSON.stringify(await readPullLab()));
+  await expectCmd(
+    'cli: oc set image to :v9-nope',
+    `oc set image deployment/pullapp main=${pullImage}:v9-nope -n ${pullProject}`,
+    /image updated|updated/i,
+  );
+  await advanceSimulation(20);
+  const notPullable = await waitFor(async () => {
+    const state = await readPullLab();
+    return state.pods.some((pod) => /ImagePullBackOff|ErrImagePull/.test(pod.waiting || '') && /v9-nope/.test(pod.image));
+  }, 20000);
+  const pullState = await readPullLab();
+  assert(
+    notPullable,
+    'cli: :v9-nope (failure token inside the tag) is ImagePullBackOff',
+    JSON.stringify(pullState.pods),
+  );
+  await expectCmd('cli: oc get pods shows ImagePullBackOff', `oc get pods -n ${pullProject}`, /ImagePullBackOff/);
+  await expectCmd(
+    'cli: recover pullapp to :latest',
+    `oc set image deployment/pullapp main=${pullImage}:latest -n ${pullProject}`,
+    /image updated|updated/i,
+  );
+  await advanceSimulation(30);
+  const pullRecovered = await waitFor(async () => {
+    const state = await readPullLab();
+    return state.pods.some((pod) => pod.phase === 'Running' && /:latest$/.test(pod.image));
+  }, 20000);
+  assert(pullRecovered, 'cli: :latest pulls again after the image-pull failure (recovery)', JSON.stringify((await readPullLab()).pods));
 
   await expectCmd('cli: oc create user', 'oc create user bob --full-name="Bob User"', /user.*bob.*created/i);
   await expectCmd('cli: oc create group', 'oc create group devs', /group.*created/i);
@@ -1141,6 +1557,45 @@ await runSection('cli', async () => {
     await expectCmd('auth: oc whoami admin', 'oc whoami', /^admin/im);
     await expectCmd('auth: login back as kubeadmin', 'oc login -u kubeadmin', /Login successful/i);
     await expectCmd('auth: htpasswd creates alice', 'htpasswd -c htpasswd alice Passw0rd', () => true);
+    // #26: htpasswd must print the real messages and honour -c/-b/-D semantics.
+    const htpasswdCreate = await runCmd('htpasswd -c -B -b /tmp/h u1 pw');
+    assert(
+      !htpasswdCreate.error && htpasswdCreate.message.trim() === 'Adding password for user u1',
+      'cli: htpasswd -c -B -b prints Adding password for user u1',
+      JSON.stringify(htpasswdCreate.message),
+    );
+    const htpasswdFile = await evaluate(() => window.game.manifestEngine.readFile('/tmp/h'));
+    assert(
+      typeof htpasswdFile === 'string' && /^u1:\$2y\$/.test(htpasswdFile),
+      'cli: htpasswd writes a bcrypt $2y$ entry',
+      JSON.stringify(htpasswdFile),
+    );
+    const htpasswdUpdate = await runCmd('htpasswd -B -b /tmp/h u1 pw2');
+    assert(
+      !htpasswdUpdate.error && htpasswdUpdate.message.trim() === 'Updating password for user u1',
+      'cli: htpasswd updates print Updating password for user u1',
+      JSON.stringify(htpasswdUpdate.message),
+    );
+    const htpasswdAdd = await runCmd('htpasswd -b /tmp/h u2 pw');
+    assert(!htpasswdAdd.error && htpasswdAdd.message.trim() === 'Adding password for user u2', 'cli: htpasswd adds a second user', JSON.stringify(htpasswdAdd.message));
+    const htpasswdDelete = await runCmd('htpasswd -D /tmp/h u2');
+    assert(
+      !htpasswdDelete.error && htpasswdDelete.message.trim() === 'Deleting password for user u2',
+      'cli: htpasswd -D prints Deleting password for user u2',
+      JSON.stringify(htpasswdDelete.message),
+    );
+    const htpasswdMissing = await runCmd('htpasswd -D /tmp/h u2');
+    assert(
+      !htpasswdMissing.error && htpasswdMissing.message.trim() === 'User u2 not found',
+      'cli: htpasswd -D on a missing user prints User u2 not found',
+      JSON.stringify(htpasswdMissing.message),
+    );
+    const htpasswdNoCreate = await runCmd('htpasswd -b /tmp/does-not-exist u3 pw');
+    assert(
+      htpasswdNoCreate.error && /cannot modify file \/tmp\/does-not-exist; use '-c' to create it/.test(htpasswdNoCreate.message),
+      "cli: htpasswd without -c on a missing file errors like real htpasswd",
+      htpasswdNoCreate.message,
+    );
     await expectCmd('auth: create htpasswd secret', 'oc create secret generic htpasswd-secret --from-file=htpasswd -n openshift-config', /secret\/htpasswd-secret created|configured/i);
     const oauth = await evaluate(() => window.game.gameEngine.configureHTPasswdProvider({ secretName: 'htpasswd-secret' }));
     assert(oauth?.success === true, 'auth: OAuth HTPasswd provider configured', JSON.stringify(oauth));
@@ -1225,6 +1680,119 @@ await runSection('cli', async () => {
   await expectCmd('cli: oc get subs', 'oc get subs -n openshift-operators', /ansible-automation-platform-operator/i);
   await expectCmd('cli: oc get csv', 'oc get csv -n openshift-operators', /ansible-automation-platform-operator|NAME/i);
   await expectCmd('cli: oc delete subscription', 'oc delete subscription ansible-automation-platform-operator -n openshift-operators', /deleted/i);
+
+  // #26: OLM resolves per namespace/OperatorGroup. An unresolvable package makes
+  // EVERY Subscription in that namespace report ResolutionFailed, with no
+  // CSV/InstallPlan; a namespace with only a resolvable Subscription installs.
+  const writeOperatorGroup = (namespace) => evaluate(({ ns }) => window.game.manifestEngine.writeFile(`qa/og-${ns}.yaml`, `apiVersion: operators.coreos.com/v1
+kind: OperatorGroup
+metadata:
+  name: ${ns}-og
+  namespace: ${ns}
+spec:
+  targetNamespaces:
+    - ${ns}
+`), { ns: namespace });
+  const writeSubscriptionFile = (namespace, name, pkg) => evaluate(({ ns, subName, packageName }) => window.game.manifestEngine.writeFile(`qa/sub-${ns}-${subName}.yaml`, `apiVersion: operators.coreos.com/v1alpha1
+kind: Subscription
+metadata:
+  name: ${subName}
+  namespace: ${ns}
+spec:
+  channel: stable
+  name: ${packageName}
+  source: redhat-operators
+  sourceNamespace: openshift-marketplace
+`), { ns: namespace, subName: name, packageName: pkg });
+  const readOlmNamespace = (namespace) => evaluate((ns) => {
+    const cluster = window.game.cluster;
+    const subs = cluster.getByKindAndNamespace?.('Subscription', ns) || [];
+    return {
+      subs: subs.map((sub) => ({
+        name: sub.metadata.name,
+        phase: sub.status?.phase,
+        reason: sub.status?.reason,
+        conditions: (sub.status?.conditions || []).map((condition) => `${condition.type}=${condition.status}/${condition.reason}`),
+      })),
+      csvs: (cluster.getByKindAndNamespace?.('ClusterServiceVersion', ns) || []).map((csv) => `${csv.metadata.name}:${csv.status?.phase}`),
+      installPlans: (cluster.getByKindAndNamespace?.('InstallPlan', ns) || []).map((plan) => plan.metadata.name),
+    };
+  }, namespace);
+  const olmBrokenProject = 'olm-lab';
+  await expectCmd('cli: create olm-lab project', `oc new-project ${olmBrokenProject}`, /Now using project|created/i);
+  await expectCmd('cli: switch back to the demo project', `oc project ${project}`, /Now using project/i);
+  await writeOperatorGroup(olmBrokenProject);
+  await writeSubscriptionFile(olmBrokenProject, 'healthy-sub', 'metallb-operator');
+  await writeSubscriptionFile(olmBrokenProject, 'bogus-sub', 'bogus-operator');
+  // Apply the OperatorGroup and BOTH Subscriptions in one synchronous pass so the
+  // namespace is resolved as a unit (like a user applying the manifests together):
+  // the unresolvable package means nothing is installed in the namespace.
+  const olmBrokenApply = await evaluate((ns) => {
+    const bar = window.game.app.commandBar;
+    const outputs = [
+      bar.executeCommand(`oc apply -f qa/og-${ns}.yaml`),
+      bar.executeCommand(`oc apply -f qa/sub-${ns}-healthy-sub.yaml`),
+      bar.executeCommand(`oc apply -f qa/sub-${ns}-bogus-sub.yaml`),
+    ];
+    return { errors: outputs.filter((output) => output?.error).length, messages: outputs.map((output) => String(output?.message || '').split('\n')[0]) };
+  }, olmBrokenProject);
+  assert(olmBrokenApply.errors === 0, 'cli: olm-lab OperatorGroup + a healthy and an unknown-package Subscription applied', JSON.stringify(olmBrokenApply.messages));
+  // Let OLM resolve the namespace; the failure then applies to both Subscriptions
+  // and the namespace installs nothing (no phantom CSV/InstallPlan).
+  await advanceSimulation(30);
+  const olmNamespaceBroken = await waitFor(async () => {
+    const state = await readOlmNamespace(olmBrokenProject);
+    return state.subs.length === 2
+      && state.subs.every((sub) => sub.conditions.some((line) => /ResolutionFailed=True\//.test(line)))
+      && state.csvs.length === 0
+      && state.installPlans.length === 0;
+  }, 30000);
+  const olmBrokenState = await readOlmNamespace(olmBrokenProject);
+  assert(
+    olmNamespaceBroken,
+    'cli: both Subscriptions in a namespace report ResolutionFailed ConstraintsNotSatisfiable',
+    JSON.stringify(olmBrokenState),
+  );
+  assert(
+    olmBrokenState.subs.every((sub) => /ConstraintsNotSatisfiable/.test(sub.conditions.join(' '))),
+    'cli: ResolutionFailed reason is ConstraintsNotSatisfiable for every Subscription',
+    JSON.stringify(olmBrokenState.subs.map((sub) => sub.reason)),
+  );
+  assert(
+    olmBrokenState.csvs.length === 0 && olmBrokenState.installPlans.length === 0,
+    'cli: an unresolvable namespace creates no CSV/InstallPlan',
+    JSON.stringify({ csvs: olmBrokenState.csvs, installPlans: olmBrokenState.installPlans }),
+  );
+  await expectCmd(
+    'cli: oc describe subscription shows the namespace resolution failure',
+    `oc describe subscription healthy-sub -n ${olmBrokenProject}`,
+    /ResolutionFailed/,
+  );
+  const olmHealthyProject = 'olm-ok';
+  await expectCmd('cli: create olm-ok project', `oc new-project ${olmHealthyProject}`, /Now using project|created/i);
+  await expectCmd('cli: switch back to the demo project', `oc project ${project}`, /Now using project/i);
+  await writeOperatorGroup(olmHealthyProject);
+  await expectCmd('cli: apply olm-ok OperatorGroup', `oc apply -f qa/og-${olmHealthyProject}.yaml`, /operatorgroup.*created|created|configured/i);
+  await writeSubscriptionFile(olmHealthyProject, 'metallb-operator', 'metallb-operator');
+  await expectCmd(
+    'cli: healthy single-Subscription namespace created',
+    `oc apply -f qa/sub-${olmHealthyProject}-metallb-operator.yaml`,
+    /subscription.*created|created|configured/i,
+  );
+  await advanceSimulation(60);
+  const olmHealthy = await waitFor(async () => {
+    const state = await readOlmNamespace(olmHealthyProject);
+    return state.subs.length === 1
+      && /Succeeded/.test(state.subs[0].phase || '')
+      && state.csvs.some((row) => /metallb-operator.*:Succeeded/.test(row));
+  }, 30000);
+  const olmHealthyState = await readOlmNamespace(olmHealthyProject);
+  assert(olmHealthy, 'cli: a healthy single-Subscription namespace still reaches CSV Succeeded', JSON.stringify(olmHealthyState));
+  assert(
+    olmHealthyState.subs.every((sub) => !sub.conditions.some((line) => /ResolutionFailed=True/.test(line))),
+    'cli: healthy Subscription has no ResolutionFailed condition',
+    JSON.stringify(olmHealthyState.subs),
+  );
 
   await expectCmd('cli: oc create job', `oc create job hello --image=busybox -- echo hi -n ${project}`, /job\.batch\/hello created/i);
   await expectCmd('cli: oc create cronjob', `oc create cronjob hello-cron --image=busybox --schedule="*/1 * * * *" -n ${project}`, /cronjob\.batch\/hello-cron created/i);
@@ -1431,16 +1999,49 @@ await runSection('ui', async () => {
   // Clear any overlay a previous assertion may have left half-open (Esc semantics
   // are "close topmost first"), then poll for the pause card under software WebGL.
   await closeOverlays();
+  // Eliminate the race: a modal that is still finishing its close can swallow the
+  // first Escape. Wait until nothing modal is open before pressing.
+  const anyModalOpen = () => evaluate(() => {
+    const active = (id) => document.getElementById(id)?.classList.contains('active') === true;
+    return Boolean(
+      document.getElementById('tutorial-overlay')
+        || active('pause-overlay')
+        || active('settings-panel')
+        || active('achievements-panel')
+        || active('stats-panel')
+        || active('modal-level-complete')
+        || active('modal-game-over')
+        || window.game?.examPrepUI?.visible === true
+        || window.game?.manifestPanel?.visible === true
+        || window.game?.app?.inspector?.visible === true
+        || window.game?.app?.contextMenu?.visible === true
+        || window.game?.app?.metrics?.visible === true
+        || window.game?.app?.hud?.settingsPanel?.visible === true,
+    );
+  });
+  const pauseOverlayActive = () => evaluate(() => document.getElementById('pause-overlay')?.classList.contains('active') === true);
+  await waitFor(async () => !(await anyModalOpen()), 3000, 100);
+  await evaluate(() => document.activeElement?.blur?.());
   await sleep(250);
   await page.keyboard.press('Escape');
-  const pauseOpened = await waitFor(
-    () => evaluate(() => document.getElementById('pause-overlay')?.classList.contains('active') === true),
-    6000,
+  let pauseOpened = await waitFor(() => pauseOverlayActive(), 1500);
+  if (!pauseOpened) {
+    // Under load a slow repaint can lose the first bounded wait; allow exactly one
+    // retry, and only when the first Escape did not open the card AND nothing is
+    // open any more (a lingering overlay consumed it). Escape must never discard
+    // the run — if it did, the card would not open and the main menu would show.
+    if (await pauseOverlayActive()) pauseOpened = true;
+    else if (!(await anyModalOpen())) {
+      await page.keyboard.press('Escape');
+      pauseOpened = await waitFor(() => pauseOverlayActive(), 6000);
+    }
+  }
+  assert(pauseOpened, 'ui: Esc opens the pause overlay instead of discarding the run');
+  const runNotDiscarded = await waitFor(
+    () => evaluate(() => document.getElementById('main-menu')?.classList.contains('hidden') === true),
+    4000,
   );
-  assert(
-    pauseOpened && (await evaluate(() => document.getElementById('main-menu')?.classList.contains('hidden') === true)),
-    'ui: Esc opens the pause overlay instead of discarding the run',
-  );
+  assert(runNotDiscarded, 'ui: Esc pause keeps the run (main menu stays hidden)');
   await evaluate(() => document.getElementById('pause-resume')?.click());
   await waitFor(() => evaluate(() => document.getElementById('pause-overlay')?.classList.contains('active') === false), 4000);
   assert(
@@ -1543,8 +2144,9 @@ await runSection('campaign', async () => {
 
   await expectCmd('campaign L1: oc login', 'oc login -u kubeadmin', /logged in|Login successful|kubeadmin/i);
   await expectCmd('campaign L1: create project', 'oc new-project first-project', /Now using project/i);
-  // L1 uses the restricted-v2-safe image (nginx:latest is a real restricted-v2
-  // violation — see the nginx trap regression in the CLI section).
+  // L1 uses the supported non-root image: nginx:latest is ADMITTED under
+  // restricted-v2 but then crash-loops on /var/cache/nginx (permission denied) —
+  // see the nginx runtime regression in the CLI section.
   await expectCmd('campaign L1: run Pod', 'oc run hello-pod --image=quay.io/openshift/origin-hello-openshift:latest -n first-project', /pod.*created/i);
   await expectCmd('campaign L1: create Deployment', 'oc create deployment hello-deploy --image=quay.io/openshift/origin-hello-openshift:latest -n first-project', /deployment.*created/i);
   const completed = await waitFor(() => evaluate(() => {
@@ -1590,6 +2192,97 @@ await runSection('campaign', async () => {
     assert(info.panelDisplay !== 'none' && info.panelRows >= 2, `campaign: level ${id} objectives panel populated`, JSON.stringify(info));
     await closeOverlays();
   }
+  // #22 non-regression for campaign gates: the uptime/clusterHealth activation
+  // baselines must stay meaningful. L3's clusterHealth objective must not
+  // complete before its triggerTime incident, must stay incomplete while it is
+  // active, and must complete after the incident is resolved. L20's resolve
+  // objectives must stay incomplete until both scheduled incidents resolve.
+  const campaignGateStatus = () => evaluate(() => {
+    const mode = window.game.app.modeInstance;
+    const engine = window.game.incidentEngine;
+    return {
+      state: mode.state,
+      objectives: mode.objectiveProgress.map((objective) => ({
+        type: objective.type,
+        label: objective.label,
+        completed: objective.completed,
+        current: objective.current,
+        target: objective.target,
+      })),
+      health: engine.getClusterHealth(),
+      activeIncidents: engine.getActiveIncidents().length,
+      activationCount: engine.activationCount,
+    };
+  });
+  const objectiveOfType = (status, type) => status.objectives.find((objective) => objective.type === type);
+  await evaluate(() => window.game.gameEngine.setTimeScale(1));
+  assert(await launch('campaign', 3), 'campaign gates: level 3 starts');
+  await closeOverlays();
+  const l3Start = await campaignGateStatus();
+  assert(objectiveOfType(l3Start, 'clusterHealth') !== undefined, 'campaign gates: level 3 has a clusterHealth objective');
+  assert(
+    objectiveOfType(l3Start, 'clusterHealth')?.completed === false,
+    'campaign gates: L3 clusterHealth is incomplete before the incident fires',
+    JSON.stringify({ health: l3Start.health, active: l3Start.activeIncidents }),
+  );
+  await evaluate(() => window.game.gameEngine.setTimeScale(6));
+  const l3IncidentFired = await waitFor(
+    () => evaluate(() => window.game.incidentEngine.activationCount >= 1 && window.game.incidentEngine.getActiveIncidents().length >= 1),
+    40000,
+  );
+  assert(l3IncidentFired, 'campaign gates: L3 triggerTime incident fires');
+  const l3Active = await campaignGateStatus();
+  assert(
+    objectiveOfType(l3Active, 'clusterHealth')?.completed === false && l3Active.activeIncidents >= 1,
+    'campaign gates: L3 clusterHealth stays incomplete while the incident is active',
+    JSON.stringify({ completed: objectiveOfType(l3Active, 'clusterHealth')?.completed, active: l3Active.activeIncidents }),
+  );
+  await evaluate(() => {
+    const engine = window.game.incidentEngine;
+    for (const incident of engine.getActiveIncidents()) engine.resolveIncident(incident.id, 'qa-gate');
+  });
+  const l3Restored = await waitFor(
+    async () => objectiveOfType(await campaignGateStatus(), 'clusterHealth')?.completed === true,
+    30000,
+  );
+  const l3After = await campaignGateStatus();
+  assert(l3Restored, 'campaign gates: L3 clusterHealth completes after the incident is resolved', JSON.stringify(objectiveOfType(l3After, 'clusterHealth')));
+  assert(
+    l3After.activeIncidents === 0 && l3After.health >= 90,
+    'campaign gates: L3 cluster health is restored to >= 90',
+    JSON.stringify({ health: l3After.health, active: l3After.activeIncidents }),
+  );
+
+  await evaluate(() => window.game.gameEngine.setTimeScale(1));
+  assert(await launch('campaign', 20), 'campaign gates: level 20 starts');
+  await closeOverlays();
+  const l20Resolve = (status) => status.objectives.filter((objective) => objective.type === 'resolve');
+  const l20Start = await campaignGateStatus();
+  assert(
+    l20Resolve(l20Start).length >= 2 && l20Resolve(l20Start).every((objective) => !objective.completed),
+    'campaign gates: L20 resolve objectives are incomplete at level start',
+    JSON.stringify(l20Resolve(l20Start)),
+  );
+  await evaluate(() => window.game.gameEngine.setTimeScale(10));
+  const l20IncidentsFired = await waitFor(() => evaluate(() => window.game.incidentEngine.activationCount >= 2), 90000);
+  assert(l20IncidentsFired, 'campaign gates: L20 scheduled incidents fire');
+  const l20Active = await campaignGateStatus();
+  assert(
+    l20Active.activeIncidents >= 1 && l20Resolve(l20Active).every((objective) => !objective.completed),
+    'campaign gates: L20 resolve objectives stay incomplete while the incidents are active',
+    JSON.stringify({ active: l20Active.activeIncidents, resolve: l20Resolve(l20Active) }),
+  );
+  await evaluate(() => {
+    const engine = window.game.incidentEngine;
+    for (const incident of engine.getActiveIncidents()) engine.resolveIncident(incident.id, 'qa-gate');
+  });
+  const l20Resolved = await waitFor(async () => l20Resolve(await campaignGateStatus()).every((objective) => objective.completed), 30000);
+  assert(
+    l20Resolved,
+    'campaign gates: L20 resolve objectives tick only after both incidents are resolved',
+    JSON.stringify(l20Resolve(await campaignGateStatus())),
+  );
+  await evaluate(() => window.game.gameEngine.setTimeScale(1));
   await returnToMenu();
 });
 
@@ -1653,6 +2346,237 @@ await runSection('challenges', async () => {
     return challengeClockRunning < challengeClockHeld;
   }, 8000, 250);
   assert(clockResumed, 'challenges: countdown runs again after Files closes', `${challengeClockHeld} -> ${challengeClockRunning}`);
+
+  // ── #22/#23: Timed lab 02 end-to-end + diagnostics fidelity ──────────────
+  // The triggerTime:0 CrashLoopBackOff preload used to be counted by the uptime
+  // baseline, soft-locking "Restore cluster health to at least 90%". Completing
+  // the lab through the real CLI (investigate -> fix image -> rollout) must tick
+  // all 4 objectives. The same run guards the #23 diagnostics: live image and
+  // real Node in `describe pod`, no openshiftgames* internals leaking, a real
+  // Pod Template / NewReplicaSet / conditions in `describe deployment`, correctly
+  // scheduled crash-looping pods, and a 3D status that is not stuck "Pending".
+  assert(await launch('challenge', 2), 'challenges: timed lab 02 starts');
+  await evaluate(() => {
+    window.game?.gameEngine?.resume?.();
+    window.game?.gameEngine?.setTimeScale?.(4);
+    window.game?.gameEngine?.simulation?.setBuildFailureRate?.(0);
+  });
+  await closeOverlays();
+  const labStatus = () => evaluate(() => {
+    const mode = window.game.app.modeInstance;
+    const engine = window.game.incidentEngine;
+    const status = mode.getStatus();
+    return {
+      challenge: mode.currentChallenge,
+      state: status.state,
+      timeRemaining: status.timeRemaining,
+      objectives: status.objectives.map((objective) => ({
+        type: objective.type,
+        completed: objective.completed,
+        current: objective.current,
+        target: objective.target,
+      })),
+      health: engine.getClusterHealth(),
+      activeIncidents: engine.getActiveIncidents().length,
+      activationCount: engine.activationCount,
+    };
+  });
+  const labObjective = (status, type) => status.objectives.find((objective) => objective.type === type);
+  const labPlaying = await waitFor(async () => (await labStatus()).state === 'playing', 20000);
+  assert(labPlaying, 'challenges: timed lab 02 is playing');
+  const labCrashLoopActive = await waitFor(async () => {
+    const status = await labStatus();
+    return status.activeIncidents >= 1 && status.activationCount >= 1;
+  }, 30000);
+  const labBefore = await labStatus();
+  assert(labCrashLoopActive, 'challenges: lab 02 CrashLoopBackOff incident is active', JSON.stringify(labBefore));
+  assert(
+    labBefore.activationCount >= 1 && labObjective(labBefore, 'uptime')?.completed === false,
+    'challenges: lab 02 uptime objective is incomplete while the triggerTime:0 incident is active',
+    JSON.stringify({ activationCount: labBefore.activationCount, uptime: labObjective(labBefore, 'uptime'), health: labBefore.health }),
+  );
+  const labIncident = await evaluate(() => {
+    const engine = window.game.incidentEngine;
+    const active = engine.getActiveIncidents();
+    if (!active.length) return null;
+    const details = engine.getIncidentDetails(active[0].id);
+    return details ? { id: details.id, targetPod: details.targetPod, name: details.name } : null;
+  });
+  assert(Boolean(labIncident?.targetPod), 'challenges: lab 02 incident exposes a real crash-looping target Pod', JSON.stringify(labIncident));
+  const labTargetPod = labIncident?.targetPod || '';
+
+  // #23 (a): scheduling root cause — preloaded/damaged pods must be bound to a
+  // real Node, including the `oc get pods -o wide` NODE column.
+  const labScheduling = await evaluate(() => {
+    const nodes = new Set((window.game.cluster.getByKind('Node') || []).map((node) => node.metadata.name));
+    const pods = (window.game.cluster.getByKindAndNamespace?.('Pod', 'default') || [])
+      .filter((pod) => pod.metadata?.labels?.app === 'payment-service');
+    return {
+      nodes: [...nodes],
+      pods: pods.map((pod) => ({ name: pod.metadata.name, nodeName: pod.spec?.nodeName || null, onRealNode: nodes.has(pod.spec?.nodeName) })),
+    };
+  });
+  assert(
+    labScheduling.pods.length >= 3 && labScheduling.pods.every((pod) => pod.onRealNode),
+    'challenges: lab 02 crash-looping pods are bound to a real Node (spec.nodeName)',
+    JSON.stringify(labScheduling),
+  );
+  const labWide = await runCmd('oc get pods -l app=payment-service -o wide -n default');
+  const labWideRows = labWide.message.split('\n').map((line) => line.trim()).filter((line) => /^payment-service-/.test(line));
+  assert(
+    labWideRows.length >= 3 && labWideRows.every((line) => labScheduling.nodes.some((node) => line.split(/\s+/).includes(node))),
+    'challenges: oc get pods -o wide shows a real NODE column (not <none>)',
+    JSON.stringify(labWideRows.map((line) => line.slice(0, 180))),
+  );
+
+  // #23 (b): describe pod shows the live image + real Node and leaks nothing.
+  const labLogs = await runCmd('oc logs deployment/payment-service --previous -n default');
+  assert(
+    !labLogs.error && /invalid configuration|exit code 1|FATAL/i.test(labLogs.message),
+    'challenges: lab 02 previous logs show the crash output',
+    labLogs.message.replace(/\n/g, ' ⏎ ').slice(0, 300),
+  );
+  const labDescribePod = await runCmd(`oc describe pod ${labTargetPod} -n default`);
+  const labLiveImage = await runCmd(`oc get pod ${labTargetPod} -n default -o jsonpath={.spec.containers[0].image}`);
+  const labDescribeImage = (labDescribePod.message.match(/^\s*Image:\s+(.+)$/m) || [])[1] || '';
+  assert(
+    !labDescribePod.error
+      && labDescribeImage.trim() === labLiveImage.message.trim()
+      && labDescribeImage.trim() === 'quay.io/example/payments:v2-bad-config',
+    '#23: describe pod Image matches the live spec image',
+    `${labDescribeImage} vs ${labLiveImage.message}`,
+  );
+  const labNodeLine = labDescribePod.message.match(/^Node:\s+(\S+)\/(\S+)$/m) || [];
+  assert(
+    Boolean(labNodeLine[1]) && labNodeLine[1] !== '<none>' && labNodeLine[2] !== '<none>',
+    '#23: describe pod shows a real Node (not <none>/<none>)',
+    labNodeLine[0],
+  );
+  assert(
+    !/openshiftgames/i.test(labDescribePod.message),
+    '#23: describe pod hides simulator-internal annotations',
+    (labDescribePod.message.match(/Annotations:.*$/m) || [])[0],
+  );
+  const labPodYaml = await runCmd(`oc get pod ${labTargetPod} -n default -o yaml`);
+  const labPodListYaml = await runCmd('oc get pods -l app=payment-service -n default -o yaml');
+  assert(!/openshiftgames/i.test(labPodYaml.message), '#23: oc get pod -o yaml hides simulator-internal annotations');
+  assert(!/openshiftgames/i.test(labPodListYaml.message), '#23: oc get pods -o yaml hides simulator-internal annotations');
+
+  // #23 (c): describe deployment has a real Pod Template, NewReplicaSet and the
+  // status-derived conditions (not the old always-healthy ones).
+  const labDeployDescribe = await runCmd('oc describe deployment payment-service -n default');
+  assert(
+    /^Pod Template:/m.test(labDeployDescribe.message) && /^\s+Containers:/m.test(labDeployDescribe.message),
+    '#23: describe deployment includes a real Pod Template section',
+    labDeployDescribe.message.slice(0, 400),
+  );
+  assert(
+    /Image:\s+quay\.io\/example\/payments:v2-bad-config/.test(labDeployDescribe.message),
+    '#23: describe deployment Pod Template shows the container image',
+    labDeployDescribe.message.slice(0, 600),
+  );
+  const labNewReplicaSet = (labDeployDescribe.message.match(/^NewReplicaSet:\s+(.+)$/m) || [])[1] || '';
+  assert(
+    /^payment-service-[a-z0-9]+ \(\d+\/\d+ replicas created\)$/.test(labNewReplicaSet.trim()),
+    '#23: describe deployment shows NewReplicaSet <hash> (3/3 replicas created)',
+    labNewReplicaSet,
+  );
+  assert(
+    /Available\s+False\s+MinimumReplicasUnavailable/.test(labDeployDescribe.message),
+    '#23: describe deployment reports Available False MinimumReplicasUnavailable while crash-looping',
+    labDeployDescribe.message.split('\n').filter((line) => /Available|Progressing/.test(line)).join(' | '),
+  );
+  assert(
+    !/openshiftgames/i.test(labDeployDescribe.message),
+    '#23: describe deployment hides simulator-internal annotations',
+    (labDeployDescribe.message.match(/Annotations:.*$/m) || [])[0],
+  );
+  const labDeployYaml = await runCmd('oc get deployment payment-service -n default -o yaml');
+  assert(!/openshiftgames/i.test(labDeployYaml.message), '#23: oc get deployment -o yaml hides simulator-internal internals');
+  const labBrokenVisual = await evaluate(async () => {
+    const { visualStatusFor, isAttentionStatus } = await import('/js/rendering/ResourceStatus.js');
+    const deployment = window.game.cluster.getByName('Deployment', 'payment-service', 'default');
+    const visual = visualStatusFor(deployment, null);
+    return { visual, attention: isAttentionStatus(visual) };
+  });
+  assert(
+    labBrokenVisual.visual !== 'Pending' && labBrokenVisual.attention === true,
+    '#23: failing Deployment status is not Pending and carries an attention status',
+    JSON.stringify(labBrokenVisual),
+  );
+
+  // Investigate, then fix the workload with the documented `oc set image`.
+  await expectCmd('challenges: lab 02 investigate logs', 'oc logs deployment/payment-service --previous -n default', /invalid configuration|exit code 1|FATAL/i);
+  await expectCmd('challenges: lab 02 investigate describe', `oc describe pod ${labTargetPod} -n default`, /payment-service/);
+  const labInvestigated = await waitFor(async () => labObjective(await labStatus(), 'investigate')?.completed === true, 15000);
+  assert(labInvestigated, 'challenges: lab 02 investigate objective ticks after logs/describe');
+  await expectCmd(
+    'challenges: lab 02 fix image',
+    'oc set image deployment/payment-service main=quay.io/openshift/origin-hello-openshift:latest -n default',
+    /image updated|updated/i,
+  );
+  const labCompleted = await waitFor(async () => (await labStatus()).state === 'completed', 60000);
+  const labAfter = await labStatus();
+  assert(
+    labCompleted,
+    '#22: timed lab 02 completes after the documented image fix',
+    JSON.stringify({ state: labAfter.state, timeRemaining: labAfter.timeRemaining }),
+  );
+  assert(
+    labAfter.objectives.length === 4 && labAfter.objectives.every((objective) => objective.completed),
+    '#22: timed lab 02 reaches 4/4 objectives complete',
+    JSON.stringify(labAfter.objectives),
+  );
+  const labUptime = labObjective(labAfter, 'uptime');
+  assert(
+    labUptime?.completed === true && labUptime.current >= 90,
+    '#22: "Restore cluster health to at least 90%" ticks after the fix (triggerTime:0 baseline)',
+    JSON.stringify(labUptime),
+  );
+  assert(
+    labAfter.activeIncidents === 0 && labAfter.health >= 90,
+    '#22: lab 02 incident cleared and cluster health >= 90',
+    JSON.stringify({ active: labAfter.activeIncidents, health: labAfter.health }),
+  );
+  await waitFor(() => evaluate(() => (window.game.cluster.getByName('Deployment', 'payment-service', 'default')?.status?.readyReplicas || 0) >= 3), 15000);
+  const labDeploymentState = await evaluate(() => {
+    const deployment = window.game.cluster.getByName('Deployment', 'payment-service', 'default');
+    const nodes = new Set((window.game.cluster.getByKind('Node') || []).map((node) => node.metadata.name));
+    const pods = (window.game.cluster.getByKindAndNamespace?.('Pod', 'default') || [])
+      .filter((pod) => pod.metadata?.labels?.app === 'payment-service')
+      .map((pod) => ({ phase: pod.status?.phase, onRealNode: nodes.has(pod.spec?.nodeName) }));
+    return {
+      readyReplicas: deployment?.status?.readyReplicas ?? 0,
+      availableReplicas: deployment?.status?.availableReplicas ?? 0,
+      pods,
+    };
+  });
+  assert(
+    labDeploymentState.readyReplicas >= 3
+      && labDeploymentState.pods.length >= 3
+      && labDeploymentState.pods.every((pod) => pod.phase === 'Running' && pod.onRealNode),
+    '#22: payment-service rolls out 3/3 Ready on real Nodes',
+    JSON.stringify(labDeploymentState),
+  );
+  const labHealthyDescribe = await runCmd('oc describe deployment payment-service -n default');
+  assert(
+    /Available\s+True\s+MinimumReplicasAvailable/.test(labHealthyDescribe.message),
+    '#23: recovered Deployment reports Available True MinimumReplicasAvailable',
+    labHealthyDescribe.message.split('\n').filter((line) => /Available/.test(line)).join(' | '),
+  );
+  const labHealthyVisual = await evaluate(async () => {
+    const { visualStatusFor, isAttentionStatus } = await import('/js/rendering/ResourceStatus.js');
+    const deployment = window.game.cluster.getByName('Deployment', 'payment-service', 'default');
+    const visual = visualStatusFor(deployment, null);
+    return { visual, attention: isAttentionStatus(visual) };
+  });
+  assert(
+    labHealthyVisual.visual === 'Running' && labHealthyVisual.attention === false,
+    '#23: healthy Deployment status reads Running with no attention suffix',
+    JSON.stringify(labHealthyVisual),
+  );
+  await evaluate(() => window.game.gameEngine.setTimeScale(1));
+  await closeOverlays();
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
