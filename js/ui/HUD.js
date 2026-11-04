@@ -77,6 +77,7 @@ export class HUD {
     this._boundSelect = this._onResourceSelect.bind(this);
     this._boundAchievement = this._onAchievement.bind(this);
     this._boundStopped = this._onEngineStopped.bind(this);
+    this._boundPauseState = this._onPauseState.bind(this);
     this._boundDocumentClick = this._onDocumentClick.bind(this);
     this._boundKeydown = this._onKeydown.bind(this);
     this._engineAttached = false;
@@ -115,6 +116,7 @@ export class HUD {
     this._syncIncidentCount();
     this._syncXPFromScoring();
     this._updateAll();
+    this._updatePausedIndicator();
 
     this.settingsPanel = new SettingsPanel();
     this.settingsPanel.init();
@@ -238,6 +240,13 @@ export class HUD {
           </button>
           <span class="hud-rule" aria-hidden="true"></span>
           <span id="hud-timer" class="hud-timer" data-testid="hud-timer">00:00</span>
+          <!-- Visible pause state: overlays (Files, guide, EX280 Prep) freeze the
+               simulation clock; without this chip the freeze looks like a bug. -->
+          <span id="hud-paused" class="hud-paused-chip" data-testid="hud-paused" role="status" aria-live="polite" hidden>
+            <span class="hud-paused-icon" aria-hidden="true">${SVG.pause}</span>
+            <span class="hud-paused-label">Paused</span>
+            <span id="hud-paused-reason" class="hud-paused-reason"></span>
+          </span>
           <div class="hud-speed" role="group" aria-label="Simulation speed">
             <button id="hud-speed-1" class="hud-speed-btn is-active" type="button" title="Normal speed" data-testid="hud-speed-1">1x</button>
             <button id="hud-speed-2" class="hud-speed-btn" type="button" title="Double speed" data-testid="hud-speed-2">2x</button>
@@ -299,6 +308,7 @@ export class HUD {
       'hud-projects', 'hud-workloads', 'hud-routes', 'hud-builds', 'hud-pods-running',
       'hud-pods-pending', 'hud-pods-failed', 'hud-deployments', 'hud-services', 'hud-mode-name',
       'hud-cpu-bar', 'hud-cpu-text', 'hud-mem-bar', 'hud-mem-text', 'hud-timer', 'hud-mode',
+      'hud-paused', 'hud-paused-reason',
       'hud-level', 'hud-xp-bar', 'hud-pause', 'hud-pause-icon', 'hud-speed-1', 'hud-speed-2',
       'hud-speed-4', 'hud-alert-badge', 'hud-alerts', 'hud-xp-container', 'hud-logo-text',
       'hud-mission', 'hud-mission-count', 'hud-mission-fill', 'hud-level-name', 'hud-cluster-pop',
@@ -414,6 +424,8 @@ export class HUD {
     bus.on('xp:gain', this._boundXP);
     bus.on('resource:selected', this._boundSelect);
     bus.on('achievement:unlocked', this._boundAchievement);
+    bus.on('engine:paused', this._boundPauseState);
+    bus.on('engine:resumed', this._boundPauseState);
     bus.on('engine:stopped', this._boundStopped);
   }
 
@@ -426,6 +438,8 @@ export class HUD {
       bus.off?.('xp:gain', this._boundXP);
       bus.off?.('resource:selected', this._boundSelect);
       bus.off?.('achievement:unlocked', this._boundAchievement);
+      bus.off?.('engine:paused', this._boundPauseState);
+      bus.off?.('engine:resumed', this._boundPauseState);
       bus.off?.('engine:stopped', this._boundStopped);
     }
     this._engineRef = null;
@@ -434,6 +448,60 @@ export class HUD {
 
   _onEngineStopped() {
     this.destroy();
+  }
+
+  // ─── Visible pause state ────────────────────────────────────────────────
+  /**
+   * Overlays that cover a live run (Files & Manifests, the guide, EX280 Prep,
+   * the pause card) freeze the simulation and the mission clock through the
+   * app's clock-pause arbitration. This chip keeps that freeze visible so OLM
+   * installs / rollouts don't look stuck (GitHub issue #20).
+   */
+  _onPauseState() {
+    this._updatePausedIndicator();
+  }
+
+  _pauseReasonLabel() {
+    const app = window.game?.app;
+    const reasons = app?._clockPauseReasons;
+    const has = (reason) => Boolean(reasons && typeof reasons.has === 'function' && reasons.has(reason));
+    if (has('files')) return 'Files open';
+    if (has('tutorial')) return 'Guide open';
+    if (has('examprep')) return 'EX280 Prep';
+    if (has('pause')) return 'Pause card';
+    if (reasons && typeof reasons.size === 'number' && reasons.size > 0) return 'Overlay open';
+    return '';
+  }
+
+  _updatePausedIndicator() {
+    const chip = this.elements['hud-paused'] || this.container?.querySelector('#hud-paused');
+    const reasonEl = this.elements['hud-paused-reason'] || this.container?.querySelector('#hud-paused-reason');
+    if (!chip) return;
+    const app = window.game?.app;
+    const gameEngine = this._gameEngine();
+    const state = String(gameEngine?.state || '').toLowerCase();
+    const reason = this._pauseReasonLabel();
+    const paused = Boolean(reason) || state === 'paused';
+    chip.hidden = !paused;
+    chip.classList.toggle('is-visible', paused);
+    if (reasonEl) reasonEl.textContent = reason;
+    if (paused) {
+      chip.title = reason ? `Simulation paused — ${reason}` : 'Simulation paused';
+      chip.setAttribute('aria-label', reason ? `Simulation paused: ${reason}` : 'Simulation paused');
+    } else {
+      chip.removeAttribute('title');
+      chip.removeAttribute('aria-label');
+    }
+    // Mirror the pause state on the pause button so the icon is honest even
+    // when another surface (not the button) paused the run.
+    const button = this.elements['hud-pause'];
+    const icon = this.elements['hud-pause-icon'];
+    if (button) {
+      button.classList.toggle('is-paused', paused);
+      button.title = paused ? 'Resume simulation' : 'Pause simulation';
+      button.setAttribute('aria-label', paused ? 'Resume simulation' : 'Pause simulation');
+    }
+    if (icon) icon.innerHTML = paused ? SVG.play : SVG.pause;
   }
 
   // ─── Updates ───────────────────────────────────────────────────────────
@@ -709,6 +777,7 @@ export class HUD {
     this._syncXPFromScoring();
     this._updateMode(state);
     this._updateMission();
+    this._updatePausedIndicator();
   }
 
   _updateMode(state) {

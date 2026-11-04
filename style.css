@@ -2350,6 +2350,36 @@ kbd {
   text-align: right;
 }
 
+/* Visible paused state (Files/guide/EX280 Prep overlays freeze the sim). */
+.hud-paused-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 24px;
+  padding: 0 8px;
+  border: 1px solid rgba(232, 163, 61, 0.45);
+  border-radius: var(--radius-sm);
+  background: var(--warning-dim);
+  color: var(--warning);
+  font-family: var(--font-sans);
+  font-size: var(--fs-11);
+  font-weight: 600;
+  letter-spacing: 0.015em;
+  white-space: nowrap;
+}
+.hud-paused-chip[hidden] { display: none !important; }
+.hud-paused-icon { display: inline-flex; }
+.hud-paused-icon svg { width: 11px; height: 11px; }
+.hud-paused-reason {
+  color: var(--warning);
+  font-weight: 500;
+  opacity: 0.75;
+}
+.hud-paused-reason:not(:empty)::before { content: "· "; }
+@media (max-width: 1180px) {
+  .hud-paused-reason { display: none; }
+}
+
 .hud-speed {
   display: inline-flex;
   align-items: center;
