@@ -28,15 +28,25 @@ names are shown in EX280 Prep).
 ## Features
 
 - **`oc` terminal** — a simulated OpenShift CLI with `get`, `describe`, `apply -f`, `create`,
-  `new-app`, `new-project`, `expose`, `create route`, `start-build`, `set env|image|resources`,
-  `rollout`, `logs`, `adm policy` (RBAC + SCC), `auth can-i`, `adm top`, `adm cordon|drain`,
-  `create quota|limitrange|clusterquota`, `process`, `helm`, `htpasswd`, pipes and output redirects.
+  `new-app`, `new-project`, `expose`, `create route`, `start-build`, `set env|image|resources|volume`,
+  `rollout` (`status|history|undo`), `logs` (Pods, Deployments, Jobs), `exec`, `rsh`, `cp`, `wait`,
+  `diff -f`, `patch --type=strategic|merge|json`, `adm policy` (RBAC + SCC), `auth can-i`,
+  `adm top`, `adm cordon|drain`, `create quota|limitrange|clusterquota`, `create token`,
+  `image info`, `process`, `helm` (repo/search/install/upgrade/history/rollback), `htpasswd`,
+  `--dry-run=client|server`, `<resource>.<group>` tokens, `jsonpath`/`custom-columns`, pipes,
+  redirects and `-f -` stdin. RBAC is genuinely enforced: a plain user gets the real
+  `Error from server (Forbidden): …` for reads and writes they are not allowed to perform.
   `oc` is the taught command; a leading `kubectl` is accepted as an alias with an educational hint.
+- **A real shell around `oc`** — `vim`/`vi` (opens the manifest editor), `cat`, `echo` with
+  `>`/`>>` redirects, heredocs, command substitution, and pipes through `grep`, `tail`, `head`,
+  `wc`, `sort`, `openssl`, `htpasswd`, `skopeo` — so exam workflows like writing YAML in the
+  terminal and `oc apply -f -` work exactly as on a real workstation.
 - **First-class OpenShift resources** — Project, Pod, Deployment, ReplicaSet, StatefulSet, DaemonSet,
   Job, CronJob, Service, Route, Ingress, NetworkPolicy, ConfigMap, Secret, PVC, PV, StorageClass,
   HPA, PDB, ResourceQuota, LimitRange, ClusterResourceQuota, ServiceAccount, Role, RoleBinding,
-  ClusterRole, ClusterRoleBinding, SCC, BuildConfig, Build, ImageStream, Template, Subscription
-  (Operator), User, Group, ClusterOperator, ClusterVersion, IPAddressPool, L2Advertisement.
+  ClusterRole, ClusterRoleBinding, SCC, BuildConfig, Build, ImageStream, Template, Subscription,
+  OperatorGroup, InstallPlan, ClusterServiceVersion, PackageManifest, MetalLB, User, Group,
+  ClusterOperator, ClusterVersion, IPAddressPool, L2Advertisement.
   A single central registry (`js/data/kindRegistry.js`) drives the palette, 3D renderer, inspector,
   command bar, minimap and YAML export.
 - **S2I builds & ImageStreams** — `oc new-app`, BuildConfig → Build → ImageStream lifecycle, image
@@ -45,15 +55,21 @@ names are shown in EX280 Prep).
   admission state, Services, NetworkPolicies, MetalLB `LoadBalancer` services with EXTERNAL-IP.
 - **Declarative workflows** — a Files panel with editable YAML manifests, `oc apply -f`,
   Kustomize base/overlays (`oc apply -k`), OpenShift templates (`oc process -f … | oc apply -f -`),
-  Helm charts (`helm install|upgrade|uninstall`) and an `htpasswd` file for identity labs.
-- **Security & identity** — HTPasswd identity provider + `oc login`, users/groups/identities, RBAC
-  evaluation (`oc auth can-i`, `oc adm policy add-role-to-user`), SCC grants
-  (`oc adm policy add-scc-to-user`), privileged-pod denial with real `Forbidden` semantics.
+  Helm charts (`helm install|upgrade|uninstall`), `--dry-run=client -o yaml` manifest skeletons,
+  terminal-authored YAML (heredocs/`vim`) and an `htpasswd` file for identity labs.
+- **Security & identity** — HTPasswd identity provider + `oc login` (validated against the
+  `htpass-secret` Secret, like a real cluster), users/groups/identities, RBAC evaluation
+  (`oc auth can-i`, `oc adm policy …`, `oc policy …`) enforced on every command, OCP 4.x SCC grants
+  (RBAC bindings to `system:openshift:scc:<name>`, with the SCC users/groups lists left untouched
+  like 4.x), and privileged-pod rejection as a ReplicaSet `FailedCreate` — the Pod is never created.
 - **Quotas & self-service** — Namespace/Project quotas, LimitRanges, ClusterResourceQuota, project
   templates (`oc adm create-bootstrap-project-template` + `project.config.openshift.io/cluster`) and
-  self-provisioner concepts.
-- **Operators (OLM)** — Subscriptions install through CSV phases (`Installing → Succeeded`), then
-  affect the cluster (e.g. MetalLB provides LoadBalancer IPs); uninstall by deleting the Subscription.
+  the real `self-provisioners` ClusterRoleBinding (remove it and `oc new-project` returns Forbidden).
+- **Operators (OLM)** — a software catalog of PackageManifests, OperatorGroups, Subscriptions that
+  move through InstallPlan and ClusterServiceVersion phases (`Installing → Succeeded`), real
+  operator effects (e.g. the MetalLB operator creates its controller/speaker pods and serves
+  LoadBalancer IPs only once the MetalLB CR, IPAddressPool and L2Advertisement exist), and a correct
+  two-step uninstall: deleting the Subscription keeps the CSV; deleting the CSV removes the operands.
 - **20-level EX280 campaign (5 chapters)** — Manage OpenShift → Declarative & Kustomize →
   Deploy & Expose → Identity, RBAC & Self-service → Security & Operations, ending in a production
   platform build.
@@ -69,7 +85,7 @@ names are shown in EX280 Prep).
   objective data, real product captures, and a light colophon that credits K8s Games by Rohit
   (Apache-2.0), the project this one is a derivative of. Native page scrolling, 390px responsive,
   `prefers-reduced-motion` support and a progress-aware primary action.
-- **3D cluster view** — Three.js r152 diorama with redesigned models for all 42 kinds, studio
+- **3D cluster view** — Three.js r152 diorama with redesigned models for all 47 kinds, studio
   lighting, floor tier zones, camera fit-to-view, a screen-space label layer with collision culling,
   ownership/network/traffic connections, project floor planes, minimap, inspector, live metrics and
   an importable/exportable YAML view. The renderer boots as the start-page hero and expands to full
@@ -194,7 +210,9 @@ The repo is a static site and deploys to any static host. The canonical demo is 
   MetalLB LoadBalancer IPs, SCC enforcement, LimitRange/ResourceQuota/ClusterResourceQuota,
   OAuth/HTPasswd, ClusterOperator health.
 - **Command layer** — `js/ui/CommandBar.js` parses `oc` commands (with pipes/redirects and tab
-  completion) and drives the same engine APIs as the UI.
+  completion), runs them through the RBAC authorization gate and drives the same engine APIs as the
+  UI; `js/ui/ShellTools.js` is the simulated shell (heredocs, redirects, cat/echo/grep/tail/head/wc/
+  vim/openssl/skopeo/htpasswd/…) that shares the ManifestEngine virtual filesystem.
 - **Declarative engine** — `js/engine/YamlParser.js` + `js/engine/ManifestEngine.js` provide a
   virtual file system, YAML manifests, Kustomize overlays, OpenShift templates, Helm charts and
   HTPasswd file operations; `js/ui/ManifestPanel.js` is the Files panel.
@@ -219,8 +237,8 @@ js/engine/            GameEngine, ClusterState, SimulationTick, IncidentEngine, 
                       YamlParser, ManifestEngine, ObjectiveEvaluator, RBAC helpers
 js/resources/         ResourceBase + per-kind classes (OpenShift + legacy)
 js/rendering/         Three.js renderer, meshes, connection lines, particles, label layer
-js/ui/                CommandBar, HUD, Inspector, ContextMenu, Metrics, IncidentPanel, Minimap,
-                      Settings, ManifestPanel, StartMenu
+js/ui/                CommandBar, ShellTools, HUD, Inspector, ContextMenu, Metrics, IncidentPanel,
+                      Minimap, Settings, ManifestPanel, StartMenu
 js/modes/             CampaignMode, ChallengeMode, ChaosMode, SandboxMode, ExamPrepMode
 vercel.json           static hosting: /draw rewrite + cache/bot headers
 og-image.html         OpenGraph card source (1200×630) — PNG regenerated by the verifier

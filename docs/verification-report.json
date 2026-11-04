@@ -1,19 +1,19 @@
 {
-  "timestamp": "2026-11-04T10:40:15.265Z",
+  "timestamp": "2026-11-04T14:28:44.981Z",
   "environment": {
     "node": "v26.10.0",
     "chrome": "Chrome/156.0.8078.79",
-    "baseUrl": "http://127.0.0.1:33451",
+    "baseUrl": "http://127.0.0.1:32841",
     "viewport": {
       "width": 1600,
       "height": 900
     },
     "puppeteerCore": "/tmp/verify-tools",
-    "startedAt": "2026-11-04T10:31:53.659Z",
-    "durationSeconds": 502
+    "startedAt": "2026-11-04T14:24:57.828Z",
+    "durationSeconds": 227
   },
   "summary": {
-    "passes": 521,
+    "passes": 552,
     "failures": 0,
     "warnings": 0,
     "consoleErrors": 0,
@@ -52,7 +52,7 @@
       "warnings": 0
     },
     "cli": {
-      "passes": 135,
+      "passes": 137,
       "failures": 0,
       "warnings": 0
     },
@@ -76,13 +76,18 @@
       "failures": 0,
       "warnings": 0
     },
+    "regressions": {
+      "passes": 21,
+      "failures": 0,
+      "warnings": 0
+    },
     "draw": {
       "passes": 10,
       "failures": 0,
       "warnings": 0
     },
     "shots": {
-      "passes": 2,
+      "passes": 10,
       "failures": 0,
       "warnings": 0
     }
@@ -96,26 +101,74 @@
       "path": "screenshot.png",
       "width": 1600,
       "height": 900,
-      "bytes": 798642
+      "bytes": 828357
     },
     "ogImage": {
       "path": "og-image.png",
       "width": 1200,
       "height": 630,
-      "bytes": 184408
+      "bytes": 190662
     },
     "screenshots": [
+      {
+        "path": "docs/screenshots/menu.png",
+        "width": 1600,
+        "height": 900,
+        "bytes": 323737
+      },
       {
         "path": "docs/screenshots/exam-prep.png",
         "width": 1600,
         "height": 900,
-        "bytes": 195955
+        "bytes": 204208
+      },
+      {
+        "path": "docs/screenshots/sandbox.png",
+        "width": 1600,
+        "height": 900,
+        "bytes": 828861
       },
       {
         "path": "screenshot.png",
         "width": 1600,
         "height": 900,
-        "bytes": 798642
+        "bytes": 828357
+      },
+      {
+        "path": "docs/screenshots/files-panel.png",
+        "width": 1600,
+        "height": 900,
+        "bytes": 228850
+      },
+      {
+        "path": "docs/screenshots/campaign-level-1.png",
+        "width": 1600,
+        "height": 900,
+        "bytes": 469790
+      },
+      {
+        "path": "docs/screenshots/regressions-minimap-collapsed.png",
+        "width": 1600,
+        "height": 900,
+        "bytes": 809427
+      },
+      {
+        "path": "docs/screenshots/regressions-campaign-restart.png",
+        "width": 1600,
+        "height": 900,
+        "bytes": 470063
+      },
+      {
+        "path": "docs/screenshots/draw.png",
+        "width": 1600,
+        "height": 900,
+        "bytes": 488216
+      },
+      {
+        "path": "og-image.png",
+        "width": 1200,
+        "height": 630,
+        "bytes": 190662
       }
     ]
   },
@@ -735,6 +788,14 @@
     {
       "section": "cli",
       "name": "cli: oc apply -f manifest"
+    },
+    {
+      "section": "cli",
+      "name": "cli: switch to the overlay project"
+    },
+    {
+      "section": "cli",
+      "name": "cli: switch back to the demo project"
     },
     {
       "section": "cli",
@@ -2157,6 +2218,90 @@
       "name": "followup: oc edit project.config opens editor"
     },
     {
+      "section": "regressions",
+      "name": "regressions: cluster map starts expanded"
+    },
+    {
+      "section": "regressions",
+      "name": "regressions: first collapse click shrinks the cluster map immediately"
+    },
+    {
+      "section": "regressions",
+      "name": "regressions: collapse click updates the cluster map toggle state"
+    },
+    {
+      "section": "regressions",
+      "name": "regressions: collapsed cluster map stays anchored bottom-right"
+    },
+    {
+      "section": "regressions",
+      "name": "regressions: cluster map keeps a single toggle"
+    },
+    {
+      "section": "regressions",
+      "name": "regressions: cluster map expands again with the canvas visible"
+    },
+    {
+      "section": "regressions",
+      "name": "regressions: second collapse still shrinks the cluster map"
+    },
+    {
+      "section": "regressions",
+      "name": "regressions: relaunch keeps a single incident panel"
+    },
+    {
+      "section": "regressions",
+      "name": "regressions: incidents drawer opens with shared state + HUD aria"
+    },
+    {
+      "section": "regressions",
+      "name": "regressions: incidents drawer header matches the engine count"
+    },
+    {
+      "section": "regressions",
+      "name": "regressions: incidents drawer no longer covers mission card or view toolbar"
+    },
+    {
+      "section": "regressions",
+      "name": "regressions: Esc closes the incidents drawer and clears its layout state"
+    },
+    {
+      "section": "regressions",
+      "name": "regressions: fresh campaign level starts auto-aligned"
+    },
+    {
+      "section": "regressions",
+      "name": "regressions: pause card opens before restart"
+    },
+    {
+      "section": "regressions",
+      "name": "regressions: restart keeps every cluster resource rendered"
+    },
+    {
+      "section": "regressions",
+      "name": "regressions: restart auto-aligns the rebuilt cluster (no stacked resources)"
+    },
+    {
+      "section": "regressions",
+      "name": "regressions: restarted layout matches the fresh-launch layout"
+    },
+    {
+      "section": "regressions",
+      "name": "regressions: restart refits the camera to the fresh-launch view"
+    },
+    {
+      "section": "regressions",
+      "name": "regressions: restarted layout settles and stays put"
+    },
+    {
+      "section": "regressions",
+      "name": "regressions: next level starts from the level-complete action"
+    },
+    {
+      "section": "regressions",
+      "name": "regressions: next level starts auto-aligned (no stacked pile)"
+    },
+    {
       "section": "draw",
       "name": "draw: page loads with palette"
     },
@@ -2203,6 +2348,38 @@
     {
       "section": "shots",
       "name": "console: no unexpected console errors"
+    },
+    {
+      "section": "shots",
+      "name": "shots: screenshot.png is 1600x900"
+    },
+    {
+      "section": "shots",
+      "name": "shots: og-image.png is 1200x630"
+    },
+    {
+      "section": "shots",
+      "name": "shots: docs/screenshots/menu.png (1600x900)"
+    },
+    {
+      "section": "shots",
+      "name": "shots: docs/screenshots/sandbox.png (1600x900)"
+    },
+    {
+      "section": "shots",
+      "name": "shots: docs/screenshots/campaign-level-1.png (1600x900)"
+    },
+    {
+      "section": "shots",
+      "name": "shots: docs/screenshots/exam-prep.png (1600x900)"
+    },
+    {
+      "section": "shots",
+      "name": "shots: docs/screenshots/files-panel.png (1600x900)"
+    },
+    {
+      "section": "shots",
+      "name": "shots: docs/screenshots/draw.png (1600x900)"
     }
   ]
 }

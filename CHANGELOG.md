@@ -4,6 +4,117 @@ All notable changes to OpenShift Games are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 aims to follow [Semantic Versioning](https://semver.org/).
 
+## [1.1.5] — 2026-11-04
+
+Exam-fidelity release: the open GitHub QA report (issues #1–#14), the terminal, RBAC/identity,
+OLM and the incident/campaign flows now behave like a real OpenShift 4.22 cluster — and the
+incidents drawer no longer covers the level brief or the view toolbar.
+
+### Added
+
+- **A simulated shell around `oc`** (issue #11): `vim`/`vi` (opens the Files editor), `cat`,
+  `echo` with `>`/`>>` redirects, heredocs, command substitution (`$(openssl rand -hex 16)`),
+  pipes through `grep`, `tail`, `head`, `wc`, `sort`, `openssl`, `htpasswd`, `skopeo`, plus
+  `ls`/`cp`/`mv`/`rm`/`touch`. Terminal-authored YAML is immediately available to
+  `oc apply -f` and in the Files panel. Only real `oc` commands get the automatic `oc`
+  prefix now — `cat file` and `htpasswd …` run as shell commands instead of `oc cat`.
+- **Missing oc surface for the exam** (issue #11): `oc policy add-role-to-user/-group`,
+  `oc describe istag/<is>:<tag>`, `oc logs job/<name>`, `oc image info`, `skopeo inspect`,
+  `oc create token`, `oc exec deploy/<name>`, `oc set serviceaccount cronjob/<name>`,
+  `oc diff -f`, `oc autoscale`, `oc rsh`, `oc cp`, `oc wait`,
+  `helm repo add/search` + `helm history/rollback` + `helm install repo/chart --version`,
+  `jsonpath`/`custom-columns` on the previously table-only paths, `NAMESPACE` for
+  `oc get csv -A`, and `<resource>.<group>` tokens (`deployment.apps`,
+  `clusterrolebinding.rbac`, `route.route.openshift.io`).
+- **Real OLM flow** (issue #9): OperatorGroup, InstallPlan and ClusterServiceVersion kinds (and
+  `MetalLB`), a PackageManifest software catalog, `Subscription → InstallPlan → CSV` progression
+  (CSV named after the package), correct uninstall (deleting a Subscription keeps the CSV; deleting
+  the CSV removes the operands), and MetalLB operand pods + `EXTERNAL-IP` only after the MetalLB
+  CR, IPAddressPool and L2Advertisement exist.
+- **Evidence-based EX280 readiness verdict** (issue #14): a bullet counts only with drill evidence
+  (a quick-lab check that actually passed, or a linked level/challenge completed after exercising
+  the bullet's own commands); a completed level alone is "Practiced", and the web-console bullet is
+  capped at "docs only". The coverage bar is red → amber → green.
+
+### Changed
+
+- **RBAC is enforced on every command** (issue #2): `oc get/describe/logs/events`, deletes and
+  cross-project mutations return the real `Error from server (Forbidden): …` for users without the
+  permission; plain users no longer see `openshift-*` projects; `oc auth can-i` and the command
+  gate share one model; `-f/-k` objects go through per-object authorization.
+- **OCP 4.x SCC grants** (issue #13): `oc adm policy add-scc-to-user/-to-group` create
+  (Cluster)RoleBindings to `system:openshift:scc:<name>` and leave the SCC `users`/`groups` lists
+  untouched; denied workloads surface as a ReplicaSet `FailedCreate` and **no Pod is created**;
+  incident resolution and L17/C8 objectives are binding-aware and teach a dedicated ServiceAccount.
+- **HTPasswd authentication** (issue #12) validates against the IdP-referenced `htpass-secret`
+  Secret in `openshift-config`, not a local root `htpasswd` file; rotation is
+  `oc extract` → `htpasswd` → `oc set data secret`; `oc delete user` no longer deletes the
+  Identity (that is a separate `oc delete identity`).
+- **`oc patch` honours `--type`** (issue #6): strategic merge (default) merges container lists by
+  name so the image survives a securityContext patch; a patch that would leave a container without
+  an image is rejected like a real API server and does not mutate the object; JSON merge and JSON
+  patch types are supported.
+- **`oc set volume`/`oc set volumes`** (issue #5) rewritten against the real `oc` flags
+  (`--configmap-name`, `--secret-name`, `--claim-size`, `-m/--mount-path`, `--read-only`,
+  `--default-mode`, `--overwrite`, `-c` globs, list mode) with the real validation messages;
+  invented flags are rejected.
+- **`--dry-run=client|server`** (issue #8) prints the manifest (`-o yaml|json|name`) and mutates
+  nothing across create/apply/replace, `-f -` stdin, directories and `-k` overlays.
+- **`oc expose deployment/x`** (issue #10) creates only a Service; the Route needs
+  `oc expose svc/x` (or `oc create route …`), and `--service=x` without a name defaults to the
+  service name; passthrough Routes no longer invent `path: /`.
+- **Rollouts** (issue #7): a Deployment rolled to a non-existent image puts every new Pod into
+  `ImagePullBackOff`, keeps the old ReplicaSet serving per `maxUnavailable`, marks the Deployment
+  `ProgressDeadlineExceeded` and makes `oc rollout status` fail with
+  `error: deployment "x" exceeded its progress deadline`; `oc rollout history/undo` use the real
+  ReplicaSet revisions.
+- **The incidents drawer no longer overlaps the mission card or the view toolbar.** While it is
+  open, the objectives panel and the bottom toolbar (Auto-align / Reset view / Terminal / Files /
+  YAML / EX280 / Help) slide to its right; on narrow viewports the drawer covers the mission card
+  instead of colliding with it.
+- **Campaign content follows the fixed command semantics**: hint commands across the campaign,
+  timed labs and incidents were executed end-to-end and updated (OLM flow, SCC verification,
+  `oc set volume`, patch types, expose/route, rollout, dry-run, DNS policy port 5353, L6/L8/L1/L10
+  corrections).
+
+### Fixed
+
+- **Incident panel showed “0 active” and campaign levels soft-locked** (issue #1): `init()` is now
+  idempotent (a level change/retry no longer appends a second panel with frozen HTML), the panel is
+  the single ingestion path (`Resolved ([object Object])` gone), new incidents force the Active
+  filter, and the panel reconciles with the engine on open.
+- **Timed lab 02 soft-locked if the root cause was fixed before “investigating”** (issue #4):
+  suggested commands resolve the real damaged Pod, `oc logs/describe` on any owned Pod advances the
+  investigation, and resolving the incident implies investigation. Crash logs are per-Pod/per-image;
+  healthy pods reject `--previous` with the real BadRequest; restart-until-green no longer counts as
+  a fix.
+- **Self-provisioner removal really disables project creation** (issue #3): the real default
+  `self-provisioners` ClusterRoleBinding is seeded, removing the subject makes `oc new-project`
+  return Forbidden, and `oc describe/patch clusterrolebinding self-provisioners` work.
+- **CLI repairs auto-resolve incidents** (issue #1 follow-up): granting `view` to the damaged
+  ServiceAccount in L14 and recreating/fixing the Job in L19 resolve their incidents and complete
+  the objective.
+- **Capstone can no longer be skipped** (issue #14): L20 completion is gated on the scheduled
+  CrashLoopBackOff and NodeNotReady incidents; objectives are end-state evaluated, so removing a
+  user from a group un-ticks the L14 objective.
+- **Stale current project after a level change** (issue #14): cluster-scoped commands such as
+  `oc create namespace X` no longer fail with the previous level's namespace `NotFound`.
+- **CronJob invalid schedules, ghost ClusterResourceQuota limits, DNS egress port 53 and the
+  un-evaluated NetworkPolicies** (issue #14): invalid cron strings are rejected and Jobs are not
+  created immediately; ClusterResourceQuota hard limits match exactly what was asked for;
+  NetworkPolicy evaluation now gates `oc exec … -- curl` with DNS via `dns-default` port 5353.
+- **Landing page said “Continue · level 20” after the campaign was complete** (issue #14) — it now
+  offers “Replay the campaign”.
+
+### Tests
+
+- `node scripts/verify.mjs` — 808 static checks, 0 failures.
+- `node scripts/browser-test.mjs` — 552 headless-browser checks, 0 failures (menu, responsive,
+  tutorial, CLI, incident panel, campaign, timed labs, EX280 Prep, Files, draw and regressions),
+  plus per-issue repro scripts for every item above.
+
+---
+
 ## [1.1.4] — 2026-11-04
 
 Two interaction fixes: the cluster map now collapses on the first click, and restarting a level
