@@ -6,7 +6,7 @@ const timestamp = () => new Date().toISOString();
 /** Default container used by the workload kinds when the caller gives none. */
 const DEFAULT_CONTAINER = {
   name: 'main',
-  image: 'nginx:latest',
+  image: 'quay.io/openshift/origin-hello-openshift:latest',
   ports: [{ containerPort: 8080, protocol: 'TCP' }],
   resources: {
     requests: { cpu: '100m', memory: '128Mi' },

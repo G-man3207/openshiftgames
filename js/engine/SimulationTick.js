@@ -38,6 +38,7 @@ import {
   parseCronSchedule,
   nextCronOccurrence,
 } from '../resources/WorkloadResources.js';
+import { applyKnownImageSecurityProfiles } from '../resources/ImageSecurityProfiles.js';
 
 /** Fixed controller timings in game seconds (1 tick = 0.05 s at 20 TPS). */
 const BUILD_PHASE_NEW_SECONDS = 1;
@@ -59,7 +60,9 @@ const IMAGE_PULL_RETRY_SECONDS = 2;
  */
 const OLM_CATALOG = [
   {
-    name: 'metallb',
+    // redhat-operators package name on OCP 4.x is `metallb-operator` (the CSV
+    // inside it is still metallb-operator.v0.14.9) — issue #18.
+    name: 'metallb-operator',
     displayName: 'MetalLB Operator',
     currentCSV: 'metallb-operator.v0.14.9',
     channel: 'stable',
@@ -1572,6 +1575,9 @@ export class SimulationTick {
         timedOut: false,
         message: `Error from server (NotFound): ${singular}s "${name}" not found`,
         reason: null,
+        generation: 0,
+        observedGeneration: 0,
+        specUpdatePending: false,
         deadlineSeconds: null,
         remainingSeconds: null,
         revision: null,
@@ -1587,12 +1593,24 @@ export class SimulationTick {
         error: `error: no rollout strategy for "${singular}"`,
         message: `error: no rollout strategy for "${singular}"`,
         reason: 'NoRolloutStrategy',
+        generation: Number(resource.metadata?.generation) || 1,
+        observedGeneration: Number(resource.status?.observedGeneration) || 0,
+        specUpdatePending: false,
         deadlineSeconds: null,
         remainingSeconds: null,
         revision: null,
         status: { desired: 0, updated: 0, ready: 0, available: 0, replicas: 0, unavailable: 0 },
       };
     }
+
+    // Honest generation mirroring (#17): `oc set image` bumps metadata.generation
+    // synchronously while status.observedGeneration only advances when the
+    // controller reconciles that generation. Until then any completion reported
+    // from the old status would be a lie — real oc prints the spec-update
+    // waiting line instead of "successfully rolled out".
+    const generation = Number(resource.metadata?.generation) || 1;
+    const observedGeneration = Number(resource.status?.observedGeneration) || 0;
+    const specUpdatePending = observedGeneration < generation;
 
     if (canonical === 'Deployment') {
       const desired = Math.max(0, Number(resource.spec.replicas ?? 1) || 0);
@@ -1610,7 +1628,7 @@ export class SimulationTick {
       const failedCreate = (resource.status.conditions || []).some(
         (condition) => condition.type === 'ReplicaFailure' && condition.status === 'True'
       );
-      const complete = !paused && !timedOut && !failedCreate
+      const complete = !paused && !timedOut && !failedCreate && !specUpdatePending
         && status.updated >= desired
         && status.available >= desired
         && status.replicas <= desired;
@@ -1621,6 +1639,8 @@ export class SimulationTick {
       let message;
       if (timedOut) {
         message = `error: deployment "${name}" exceeded its progress deadline`;
+      } else if (specUpdatePending) {
+        message = `Waiting for deployment "${name}" spec update to be observed by the deployment controller...`;
       } else if (complete) {
         message = `deployment "${name}" successfully rolled out`;
       } else if (paused) {
@@ -1638,7 +1658,12 @@ export class SimulationTick {
         pending: !complete && !timedOut,
         timedOut,
         message,
-        reason: timedOut ? 'ProgressDeadlineExceeded' : (complete ? 'NewReplicaSetAvailable' : (progressing?.reason || null)),
+        reason: timedOut
+          ? 'ProgressDeadlineExceeded'
+          : (specUpdatePending ? 'SpecUpdatePending' : (complete ? 'NewReplicaSetAvailable' : (progressing?.reason || null))),
+        generation,
+        observedGeneration,
+        specUpdatePending,
         deadlineSeconds,
         remainingSeconds,
         revision: Number(resource.metadata?.annotations?.['deployment.kubernetes.io/revision']) || null,
@@ -1646,25 +1671,44 @@ export class SimulationTick {
       };
     }
 
-    const desired = Math.max(0, Number(resource.spec.replicas ?? 1) || 0);
-    const status = {
-      desired,
-      updated: Number(resource.status.updatedReplicas || resource.status.currentReplicas || 0),
-      ready: Number(resource.status.readyReplicas || resource.status.numberReady || 0),
-      available: Number(resource.status.availableReplicas || resource.status.numberAvailable || 0),
-      replicas: Number(resource.status.replicas || resource.status.currentReplicas || 0),
-      unavailable: Number(resource.status.unavailableReplicas || 0),
-    };
-    const complete = status.updated >= desired && status.ready >= desired && status.replicas >= desired;
+    const isDaemonSet = canonical === 'DaemonSet';
+    const desired = isDaemonSet
+      ? Math.max(0, Number(resource.status.desiredNumberScheduled ?? resource.status.currentNumberScheduled ?? 0) || 0)
+      : Math.max(0, Number(resource.spec.replicas ?? 1) || 0);
+    const status = isDaemonSet
+      ? {
+        desired,
+        updated: Number(resource.status.updatedNumberScheduled || 0),
+        ready: Number(resource.status.numberReady || 0),
+        available: Number(resource.status.numberAvailable || 0),
+        replicas: Number(resource.status.currentNumberScheduled || 0),
+        unavailable: Number(resource.status.numberUnavailable || 0),
+      }
+      : {
+        desired,
+        updated: Number(resource.status.updatedReplicas || resource.status.currentReplicas || 0),
+        ready: Number(resource.status.readyReplicas || 0),
+        available: Number(resource.status.availableReplicas || 0),
+        replicas: Number(resource.status.replicas || resource.status.currentReplicas || 0),
+        unavailable: Number(resource.status.unavailableReplicas || 0),
+      };
+    const complete = !specUpdatePending
+      && status.updated >= desired && status.available >= desired && status.replicas >= desired;
+    const controllerName = isDaemonSet ? 'daemon set' : 'statefulset';
     return {
       found: true,
       complete,
       pending: !complete,
       timedOut: false,
-      message: complete
-        ? `${singular} "${name}" successfully rolled out`
-        : `Waiting for ${singular} "${name}" rollout to finish: ${status.ready} of ${status.desired} updated replicas are ready...`,
-      reason: complete ? 'NewReplicaSetAvailable' : 'ReplicaSetUpdated',
+      message: specUpdatePending
+        ? `Waiting for ${controllerName} "${name}" spec update to be observed by the ${controllerName} controller...`
+        : (complete
+          ? `${singular} "${name}" successfully rolled out`
+          : `Waiting for ${controllerName} "${name}" rollout to finish: ${status.available} of ${status.desired} updated pods are available...`),
+      reason: specUpdatePending ? 'SpecUpdatePending' : (complete ? 'NewReplicaSetAvailable' : 'ReplicaSetUpdated'),
+      generation,
+      observedGeneration,
+      specUpdatePending,
       deadlineSeconds: null,
       remainingSeconds: null,
       revision: null,
@@ -2203,6 +2247,62 @@ export class SimulationTick {
     }
   }
 
+  /**
+   * Recent Event objects across the cluster (issue #21).
+   *
+   * Every resource keeps its own Event history (`resource.getEvents()`); the CLI
+   * merges these with its synthetic event stream so controller events such as
+   * the ReplicaSet `Warning FailedCreate` emitted by SCC admission are visible
+   * to `oc get events --field-selector reason=FailedCreate`.
+   *
+   * @param {{namespace?: string, allNamespaces?: boolean, reason?: string, type?: string, limit?: number}} [options]
+   * @returns {Array<{type: string, reason: string, message: string, involvedObject: object, namespace: string, object: string, source: string, count: number, firstTimestamp: string, lastTimestamp: string}>}
+   */
+  getEvents(options = {}) {
+    const namespace = options.namespace || null;
+    const allNamespaces = options.allNamespaces === true || !namespace;
+    const reasonFilter = options.reason ? String(options.reason) : null;
+    const typeFilter = options.type ? String(options.type) : null;
+    const limit = Math.max(1, Math.min(1000, Number(options.limit) || 200));
+    const events = [];
+    const resources = typeof this.cluster.getAllResources === 'function'
+      ? this.cluster.getAllResources()
+      : (this.cluster.getByKind('Pod') || []);
+    for (const resource of resources) {
+      if (!resource) continue;
+      const eventList = typeof resource.getEvents === 'function' ? resource.getEvents() : (resource.events || []);
+      for (const event of eventList || []) {
+        if (!event || !event.reason) continue;
+        const involvedObject = event.involvedObject || {};
+        const eventNamespace = involvedObject.namespace || resource.metadata?.namespace || '';
+        if (!allNamespaces && eventNamespace !== namespace) continue;
+        if (reasonFilter && String(event.reason) !== reasonFilter) continue;
+        if (typeFilter && String(event.type) !== typeFilter) continue;
+        const kind = involvedObject.kind || resource.kind || 'Resource';
+        const name = involvedObject.name || resource.metadata?.name || '';
+        events.push({
+          type: String(event.type || 'Normal'),
+          reason: String(event.reason),
+          message: String(event.message || ''),
+          involvedObject: {
+            kind,
+            name,
+            namespace: eventNamespace,
+            uid: involvedObject.uid || resource.metadata?.uid || '',
+          },
+          namespace: eventNamespace,
+          object: `${String(kind).toLowerCase()}/${name}`,
+          source: event.source || kind,
+          count: Number(event.count) || 1,
+          firstTimestamp: event.firstTimestamp || event.timestamp || new Date().toISOString(),
+          lastTimestamp: event.lastTimestamp || event.timestamp || new Date().toISOString(),
+        });
+      }
+    }
+    events.sort((a, b) => String(b.lastTimestamp).localeCompare(String(a.lastTimestamp)));
+    return events.slice(0, limit);
+  }
+
   /** Virtual wall-clock for CronJob scheduling (simulated time). */
   _virtualNowMs() {
     return this._simEpoch + this.gameSeconds * 1000;
@@ -2256,15 +2356,19 @@ export class SimulationTick {
         else if (ratio < 1 - TOLERANCE) desiredReplicas = Math.min(desiredReplicas, Math.ceil(currentReplicas * ratio));
       }
 
-      hpa.status.currentMetrics = statusMetrics;
-      hpa.status.currentReplicas = currentReplicas;
       if (!metricsAvailable) {
-        hpa.status.desiredReplicas = currentReplicas;
+        // Real HPA: no metrics sample -> TARGETS `<unknown>/50%`; currentMetrics
+        // stays empty (a 0% sample would be a lie) and REPLICAS stays at its
+        // last successful value (0 until the first successful sync).
+        hpa.status.currentMetrics = [];
+        hpa.status.desiredReplicas = Number(hpa.status.currentReplicas || 0) || 0;
         hpa.setCondition('ScalingActive', 'False', 'FailedGetResourceMetric', 'the HPA was unable to compute the replica count: no metrics returned');
         hpa.setCondition('ScalingLimited', 'False', 'DesiredWithinRange', '');
         this.cluster.update(hpa.uid, hpa);
         continue;
       }
+      hpa.status.currentMetrics = statusMetrics;
+      hpa.status.currentReplicas = currentReplicas;
 
       const rawDesiredReplicas = Math.max(minReplicas, Math.min(maxReplicas, desiredReplicas));
       desiredReplicas = rawDesiredReplicas;
@@ -2707,7 +2811,8 @@ export class SimulationTick {
   _tickMetalLBOperands(dt) {
     const csvReady = this.cluster.getByKind('ClusterServiceVersion').some(
       (csv) => csv.status.phase === 'Succeeded'
-        && (/metallb/i.test(csv.metadata?.name || '') || csv.metadata?.labels?.['olm.package'] === 'metallb')
+        && (/metallb/i.test(csv.metadata?.name || '')
+          || /^metallb/.test(String(csv.metadata?.labels?.['olm.package'] || '')))
     );
     const crs = this.cluster.getByKind('MetalLB');
     const desired = new Map();
@@ -3198,6 +3303,13 @@ export class SimulationTick {
       if (subscription.metadata.deletionTimestamp) continue;
       const namespace = subscription.metadata.namespace;
       const packageName = this._packageNameForSubscription(subscription);
+      // The Subscription CRD defaults spec.installPlanApproval to Automatic.
+      // Manifest apply stores the spec verbatim, so restore the API default
+      // here instead of reporting `undefined` before/until the controller runs.
+      if (!subscription.spec.installPlanApproval) {
+        subscription.spec.installPlanApproval = 'Automatic';
+        this.cluster.update(subscription.uid, subscription);
+      }
       const csvName = this._csvNameForPackage(packageName);
       const version = this._csvVersionForPackage(packageName);
       const setStatus = (reason, message, phase = subscription.status.phase || 'Installing') => {
@@ -3241,6 +3353,38 @@ export class SimulationTick {
         continue;
       }
       subscription._noNamespaceLogged = false;
+
+      // Catalog resolution (issue #18): a Subscription whose package is not in
+      // the software catalog never installs. Real OLM reports ConstraintsNotSatisfiable
+      // / ResolutionFailed and creates no InstallPlan/CSV — no phantom CSV.
+      const catalogEntry = this.cluster.getByName('PackageManifest', packageName, '');
+      if (!catalogEntry) {
+        const resolutionMessage = `constraints not satisfiable: no operators found in package "${packageName}" in the catalog referenced by the subscription`;
+        if (subscription.status.reason !== 'ConstraintsNotSatisfiable') {
+          subscription.status.phase = 'UpgradePending';
+          subscription.status.reason = 'ConstraintsNotSatisfiable';
+          subscription.status.message = resolutionMessage;
+          subscription.setCondition('ResolutionFailed', 'True', 'ConstraintsNotSatisfiable', resolutionMessage);
+          subscription.setCondition('InstallPlanPending', 'False', 'NoInstallPlan', '');
+          this.cluster.update(subscription.uid, subscription);
+          subscription.recordEvent('Warning', 'ResolutionFailed', resolutionMessage);
+          this.cluster.update(subscription.uid, subscription);
+          this.eventBus?.emit('operator:resolution-failed', {
+            name: subscription.metadata.name,
+            namespace,
+            packageName,
+            message: resolutionMessage,
+          });
+        }
+        continue;
+      }
+      if (subscription.status.reason === 'ConstraintsNotSatisfiable') {
+        // Package appeared later (e.g. catalog refreshed) → retry resolution.
+        subscription.status.phase = 'Installing';
+        subscription.status.reason = 'Installing';
+        subscription._installElapsed = 0;
+        this.cluster.update(subscription.uid, subscription);
+      }
 
       // OperatorGroup: openshift-operators has the cluster-global group, other
       // namespaces require one (SingleNamespace installs) before OLM can deploy
@@ -3534,9 +3678,13 @@ export class SimulationTick {
    * @returns {{allowed: boolean, scc: object|null, candidates: object[], message?: string}}
    */
   _resolveAdmissionForSpec(podSpec, namespace) {
+    // Known root images (e.g. nginx) contribute an effective runAsUser: 0 so
+    // the default restricted-v2 SCC rejects them exactly like the classic
+    // real-cluster trap (#20). Explicit runAsUser overrides win.
+    const effectivePodSpec = applyKnownImageSecurityProfiles(podSpec || {});
     const candidate = {
       metadata: { name: 'admission-candidate', namespace, labels: {} },
-      spec: podSpec || {},
+      spec: effectivePodSpec,
     };
     const resolution = this.cluster.resolveSCCForPod(candidate);
     if (resolution.allowed) return resolution;
@@ -3547,14 +3695,14 @@ export class SimulationTick {
     // No SCC bound to the service account at all (e.g. a custom namespace the
     // player just created): restricted pods are still admitted, elevated ones
     // are not (matches the real default `system:authenticated` binding).
-    const request = podSecurityRequest(podSpec || {});
+    const request = podSecurityRequest(effectivePodSpec);
     const elevated = request.privileged || request.hostNetwork || request.hostPID || request.hostIPC || request.hostPath
       || request.hostPorts.length > 0 || request.runAsUsers.includes(0);
     if (elevated) {
       return { ...resolution, allowed: false, message: 'unable to validate against any security context constraint' };
     }
     const restricted = this.cluster.getSCC('restricted-v2') || this.cluster.getSCCs()[0] || null;
-    if (restricted && this.cluster.sccAllowsPod(restricted, podSpec || {})) {
+    if (restricted && this.cluster.sccAllowsPod(restricted, effectivePodSpec)) {
       return { allowed: true, scc: restricted, candidates: [restricted] };
     }
     return { ...resolution, message: 'unable to validate against any security context constraint' };

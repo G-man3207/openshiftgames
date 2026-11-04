@@ -273,15 +273,24 @@ export class HorizontalPodAutoscaler extends ResourceBase {
     this.currentReplicas = metadata.currentReplicas || this.spec.minReplicas;
     this.targetDeployment = null;
     this.lastScaleTime = null;
+    // Fresh HPA: no metrics have been sampled yet, so exactly like a real
+    // cluster `oc get hpa` reports TARGETS `<unknown>/50%` (not 50%/50%) and
+    // REPLICAS 0 until the HPA controller completes a successful sync.
     this._setInitialStatus({
       phase: 'Active',
-      currentReplicas: this.currentReplicas,
-      desiredReplicas: this.currentReplicas,
+      currentReplicas: Number(metadata.currentReplicas) || 0,
+      desiredReplicas: Number(metadata.currentReplicas) || 0,
       currentMetrics: [],
       lastScaleTime: null,
       conditions: [
         { type: 'AbleToScale', status: 'True', reason: 'ReadyForNewScale', lastTransitionTime: timestamp() },
-        { type: 'ScalingActive', status: 'True', reason: 'ValidMetricFound', lastTransitionTime: timestamp() },
+        {
+          type: 'ScalingActive',
+          status: 'False',
+          reason: 'FailedGetResourceMetric',
+          message: 'the HPA was unable to compute the replica count: no metrics returned',
+          lastTransitionTime: timestamp(),
+        },
         { type: 'ScalingLimited', status: 'False', reason: 'DesiredWithinRange', lastTransitionTime: timestamp() },
       ],
     });
@@ -302,7 +311,7 @@ export class HorizontalPodAutoscaler extends ResourceBase {
 Namespace:                             ${this.metadata.namespace}
 Reference:                             ${target.kind}/${target.name}
 Metrics:                               ( current / target )
-  resource cpu on pods (as a percentage of request):  ${Math.round(this.status.currentMetrics?.[0]?.resource?.current?.averageUtilization || 0)}% / ${this.getTargetUtilization()}%
+  resource cpu on pods (as a percentage of request):  ${this.status.currentMetrics?.[0]?.resource?.current?.averageUtilization !== undefined ? `${Math.round(this.status.currentMetrics[0].resource.current.averageUtilization)}%` : '<unknown>'} / ${this.getTargetUtilization()}%
 Min replicas:                          ${this.spec.minReplicas}
 Max replicas:                          ${this.spec.maxReplicas}
 ${target.kind}/${target.name} replicas: ${this.status.currentReplicas || 0}

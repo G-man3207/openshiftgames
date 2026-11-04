@@ -122,7 +122,7 @@ K.Pod = {
   columns: 'NAME       READY   STATUS    RESTARTS   AGE',
   palette: { section: 'workloads', label: 'Pod', shortcut: '1' },
   minimapSize: 8,
-  defaultSpec: () => ({ containers: [{ name: 'main', image: 'nginx:latest', ports: [{ containerPort: 8080 }] }] }),
+  defaultSpec: () => ({ containers: [{ name: 'main', image: 'quay.io/openshift/origin-hello-openshift:latest', ports: [{ containerPort: 8080 }] }] }),
   explain:
     'Pod is the smallest deployable unit: one or more containers sharing network\n' +
     'and storage. OpenShift runs pods under a SecurityContextConstraint; use a\n' +
@@ -142,7 +142,7 @@ K.Deployment = {
     strategy: { type: 'RollingUpdate', rollingUpdate: { maxSurge: '25%', maxUnavailable: '25%' } },
     template: {
       metadata: { labels: { app: 'app' } },
-      spec: { containers: [{ name: 'main', image: 'nginx:latest', ports: [{ containerPort: 8080 }] }] },
+      spec: { containers: [{ name: 'main', image: 'quay.io/openshift/origin-hello-openshift:latest', ports: [{ containerPort: 8080 }] }] },
     },
     revisionHistoryLimit: 10,
     progressDeadlineSeconds: 600,
@@ -165,7 +165,7 @@ K.ReplicaSet = {
   defaultSpec: () => ({
     replicas: 3,
     selector: { matchLabels: { app: 'app' } },
-    template: { metadata: { labels: { app: 'app' } }, spec: { containers: [{ name: 'main', image: 'nginx:latest' }] } },
+    template: { metadata: { labels: { app: 'app' } }, spec: { containers: [{ name: 'main', image: 'quay.io/openshift/origin-hello-openshift:latest' }] } },
   }),
   explain: 'ReplicaSet ensures a stable number of Pod replicas; normally managed by a Deployment.',
 };
@@ -181,7 +181,7 @@ K.StatefulSet = {
     replicas: 3,
     serviceName: 'app',
     selector: { matchLabels: { app: 'app' } },
-    template: { metadata: { labels: { app: 'app' } }, spec: { containers: [{ name: 'main', image: 'nginx:latest' }] } },
+    template: { metadata: { labels: { app: 'app' } }, spec: { containers: [{ name: 'main', image: 'quay.io/openshift/origin-hello-openshift:latest' }] } },
   }),
   explain:
     'StatefulSet provides stable pod names and per-pod storage (volumeClaimTemplates)\n' +
@@ -197,7 +197,7 @@ K.DaemonSet = {
   minimapSize: 14,
   defaultSpec: () => ({
     selector: { matchLabels: { app: 'agent' } },
-    template: { metadata: { labels: { app: 'agent' } }, spec: { containers: [{ name: 'main', image: 'nginx:latest' }] } },
+    template: { metadata: { labels: { app: 'agent' } }, spec: { containers: [{ name: 'main', image: 'quay.io/openshift/origin-hello-openshift:latest' }] } },
   }),
   explain: 'DaemonSet runs exactly one Pod on every (matching) node — node agents, log collectors, CNI.',
 };
@@ -355,7 +355,8 @@ K.NetworkPolicy = {
   explain:
     'NetworkPolicy is an allow-list firewall for Pods. A policy selecting all pods\n' +
     'with empty podSelector and Ingress/Egress policyTypes gives default-deny; DNS\n' +
-    'egress to port 53 must then be explicitly allowed.',
+    'egress to the dns-default pods (openshift-dns) on port 5353 must then be\n' +
+    'explicitly allowed — OpenShift DNS does not listen on port 53.',
 };
 K.IPAddressPool = {
   apiVersion: 'metallb.io/v1beta1',
@@ -437,7 +438,7 @@ K.Template = {
   defaultSpec: () => ({
     parameters: [{ name: 'APP_NAME', displayName: 'Application name', description: 'Name used for the deployed application', required: true, value: 'webapp' }],
     objects: [
-      { apiVersion: 'apps/v1', kind: 'Deployment', metadata: { name: '${APP_NAME}' }, spec: { replicas: 2, selector: { matchLabels: { app: '${APP_NAME}' } }, template: { metadata: { labels: { app: '${APP_NAME}' } }, spec: { containers: [{ name: 'main', image: 'nginx:latest' }] } } } },
+      { apiVersion: 'apps/v1', kind: 'Deployment', metadata: { name: '${APP_NAME}' }, spec: { replicas: 2, selector: { matchLabels: { app: '${APP_NAME}' } }, template: { metadata: { labels: { app: '${APP_NAME}' } }, spec: { containers: [{ name: 'main', image: 'quay.io/openshift/origin-hello-openshift:latest' }] } } } },
       { apiVersion: 'v1', kind: 'Service', metadata: { name: '${APP_NAME}' }, spec: { selector: { app: '${APP_NAME}' }, ports: [{ port: 8080, targetPort: 8080 }] } },
     ],
     message: 'Application ${APP_NAME} deployed.',

@@ -636,7 +636,7 @@ export class Template extends ResourceBase {
                 selector: { matchLabels: { app: '${APP_NAME}' } },
                 template: {
                   metadata: { labels: { app: '${APP_NAME}' } },
-                  spec: { containers: [{ name: 'main', image: 'nginx:latest', ports: [{ containerPort: 8080 }] }] },
+                  spec: { containers: [{ name: 'main', image: 'quay.io/openshift/origin-hello-openshift:latest', ports: [{ containerPort: 8080 }] }] },
                 },
               },
             },
@@ -719,21 +719,18 @@ export class Subscription extends ResourceBase {
     if (metadata.startingCSV) defaults.startingCSV = metadata.startingCSV;
     if (metadata.config) defaults.config = deepClone(metadata.config);
     this._initSpec(defaults, metadata.spec);
+    // A freshly created Subscription has not been resolved by OLM yet: it must
+    // NOT claim `InstallPlanPending True RequiresApproval` before an InstallPlan
+    // even exists (issue #18). The controller adds the real conditions
+    // (ResolutionFailed / InstallPlanPending / InstallPlanComplete) as it
+    // progresses, exactly like a real cluster.
     this._setInitialStatus({
       phase: 'Installing',
       currentCSV: '',
       installedCSV: '',
       installPlanRef: null,
       state: 'UpgradePending',
-      conditions: [
-        {
-          type: 'InstallPlanPending',
-          status: 'True',
-          reason: 'RequiresApproval',
-          message: 'Install plan is pending',
-          lastTransitionTime: timestamp(),
-        },
-      ],
+      conditions: [],
     });
   }
 
@@ -797,7 +794,7 @@ Namespace:            ${this.metadata.namespace}
 Labels:               ${Object.entries(this.metadata.labels).map(([k, v]) => `${k}=${v}`).join(', ') || '<none>'}
 Annotations:          ${Object.entries(this.metadata.annotations).map(([k, v]) => `${k}=${v}`).join(', ') || '<none>'}
 Channel:              ${this.spec.channel}
-Install Plan Approval:${this.spec.installPlanApproval}
+InstallPlan Approval:  ${this.spec.installPlanApproval || 'Automatic'}
 Source:               ${this.spec.source}
 Source Namespace:     ${this.spec.sourceNamespace}
 Package:              ${this.spec.packageName || this.spec.name}
