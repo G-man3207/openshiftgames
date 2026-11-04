@@ -39,6 +39,8 @@ import {
 } from '../data/EX280Objectives.js';
 
 const LOCAL_STORAGE_KEY = 'openshiftgames_exam_prep';
+/** Learner-facing documentation (moved out of the repo docs/ folder to the GitHub wiki). */
+const STUDY_GUIDE_URL = 'https://github.com/G-man3207/openshiftgames/wiki/EX280-Study-Guide';
 const STYLE_ID = 'exam-prep-styles';
 const TABS = [
   { id: 'objectives', label: 'Objective tracker', testId: 'exam-prep-tab-objectives' },
@@ -71,11 +73,9 @@ const EX280_STYLES = `
   align-items: center;
   justify-content: center;
   padding: 1rem;
-  background: rgba(0, 0, 0, 0.72);
-  backdrop-filter: blur(6px);
-  -webkit-backdrop-filter: blur(6px);
-  color: var(--text-primary, rgba(255, 255, 255, 0.92));
-  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  background: rgba(6, 8, 11, 0.72);
+  color: var(--text, #ECEEF1);
+  font-family: var(--font-sans, 'Inter', system-ui, sans-serif);
 }
 #exam-prep-overlay.active { display: flex; }
 #exam-prep-overlay .ep-shell {
@@ -84,10 +84,10 @@ const EX280_STYLES = `
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  background: var(--bg-card, #161b22);
-  border: 1px solid rgba(238, 0, 0, 0.35);
-  border-radius: 18px;
-  box-shadow: 0 30px 90px rgba(0, 0, 0, 0.65), 0 0 40px rgba(238, 0, 0, 0.12);
+  background: var(--surface, #111419);
+  border: 1px solid var(--line-strong, #2C333E);
+  border-radius: 8px;
+  box-shadow: var(--shadow-float, 0 18px 44px rgba(0,0,0,.55));
   animation: epIn 0.22s ease;
 }
 @keyframes epIn { from { opacity: 0; transform: translateY(10px) scale(0.99); } to { opacity: 1; transform: none; } }
@@ -96,24 +96,24 @@ const EX280_STYLES = `
   align-items: flex-start;
   gap: 1rem;
   padding: 1rem 1.15rem 0.65rem;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.07);
-  background: linear-gradient(180deg, rgba(238, 0, 0, 0.10), transparent 70%);
+  border-bottom: 1px solid var(--line, #1F242C);
+  background: transparent;
 }
 .ep-heading { flex: 1; min-width: 0; }
 .ep-eyebrow {
-  font-size: 0.58rem;
-  letter-spacing: 0.14em;
-  font-weight: 700;
-  text-transform: uppercase;
-  color: var(--brand-orange, #F97316);
-  margin-bottom: 0.15rem;
+  font-size: 0.68rem;
+  letter-spacing: 0;
+  font-weight: 500;
+  text-transform: none;
+  color: var(--muted, #9AA1A9);
+  margin-bottom: 0.2rem;
 }
 .ep-title { font-size: 1.3rem; font-weight: 800; line-height: 1.15; }
 .ep-subtitle { font-size: 0.68rem; color: var(--text-secondary, rgba(255,255,255,0.6)); margin-top: 0.25rem; }
 .ep-note { font-size: 0.6rem; color: var(--text-muted, rgba(255,255,255,0.35)); margin-top: 0.2rem; }
 .ep-head-links { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-top: 0.4rem; }
-.ep-head-links a { font-size: 0.62rem; color: var(--status-blue, #58a6ff); text-decoration: none; }
-.ep-head-links a:hover { text-decoration: underline; }
+.ep-head-links a { font-size: 0.66rem; color: var(--muted, #9AA1A9); text-decoration: none; border-bottom: 1px solid var(--line-strong, #2C333E); }
+.ep-head-links a:hover { color: var(--text, #ECEEF1); }
 .ep-close {
   width: 32px; height: 32px;
   flex: none;
@@ -147,9 +147,9 @@ const EX280_STYLES = `
 }
 .ep-tab:hover { color: #fff; }
 .ep-tab.active {
-  color: #fff;
-  background: rgba(238, 0, 0, 0.16);
-  border-color: rgba(238, 0, 0, 0.4);
+  color: var(--text, #ECEEF1);
+  background: var(--raised-2, #1B2027);
+  border-color: transparent;
 }
 .ep-progress-row {
   display: flex;
@@ -172,16 +172,16 @@ const EX280_STYLES = `
   height: 100%;
   width: 0%;
   border-radius: 999px;
-  background: linear-gradient(90deg, var(--brand-red, #EE0000), var(--brand-orange, #F97316));
+  background: var(--accent, #EE0000);
   transition: width 0.35s ease;
 }
 .ep-readiness {
-  font-size: 0.62rem;
-  font-weight: 800;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
   padding: 0.28rem 0.6rem;
-  border-radius: 999px;
+  border-radius: 4px;
   white-space: nowrap;
   border: 1px solid rgba(255,255,255,0.16);
   color: var(--text-secondary, rgba(255,255,255,0.6));
@@ -578,6 +578,7 @@ export class ExamPrepUI {
               <a href="${escapeHtml(EX280_EXAM_FACTS.officialExamUrl)}" target="_blank" rel="noopener noreferrer">Official EX280 exam page</a>
               <a href="${escapeHtml(EX280_EXAM_FACTS.objectivesPdfUrl)}" target="_blank" rel="noopener noreferrer">Objectives by version (PDF)</a>
               <a href="${escapeHtml(EX280_EXAM_FACTS.docsBaseUrl)}" target="_blank" rel="noopener noreferrer">OpenShift 4.22 docs</a>
+              <a href="${STUDY_GUIDE_URL}" target="_blank" rel="noopener noreferrer">EX280 study guide (wiki)</a>
             </div>
           </div>
           <button type="button" class="ep-close" data-action="close" data-testid="exam-prep-close" aria-label="Close EX280 Prep">&times;</button>

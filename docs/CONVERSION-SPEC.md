@@ -1,5 +1,12 @@
 # OpenShift Games — Conversion Specification (v1)
 
+> **Documentation note (2026-11-04).** Learner-facing documentation now lives in the
+> [GitHub wiki](https://github.com/G-man3207/openshiftgames/wiki): the EX280 Study Guide and the
+> in-app EX280 Prep reference moved there from `docs/EX280-STUDY-GUIDE.md` and `docs/EXAM-PREP.md`.
+> This spec, the architecture map, the declarative-engine guide, the research notes and the
+> verification report remain in `docs/` as engineering records.
+
+
 Status: **implemented (v1.0.0, 2026-11-03)** — authoritative build contract for the Kubernetes→OpenShift conversion. Final verification results: see `docs/verification-report.md`.
 Owner: Team Lead. All conversion work MUST conform to this document. If something here is
 wrong or impossible, message the Lead before changing course.

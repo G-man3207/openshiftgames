@@ -43,13 +43,14 @@ import {
   sccForServiceAccount as rbacSccForServiceAccount,
   whoCan as rbacWhoCan,
 } from './RBACEngine.js';
+import { OCP_CHANNEL, OCP_VERSION as PLATFORM_OCP_VERSION } from '../data/platformVersions.js';
 
 // ─── OpenShift constants ───────────────────────────────────────────────────
 
 /** Target OpenShift version of the game. */
-export const OPENSHIFT_VERSION = '4.22.0';
+export const OPENSHIFT_VERSION = PLATFORM_OCP_VERSION;
 /** Upgrade channel exposed by ClusterVersion. */
-export const OPENSHIFT_CHANNEL = 'stable-4.22';
+export const OPENSHIFT_CHANNEL = OCP_CHANNEL;
 /** Simulated cluster base domain. */
 export const CLUSTER_DOMAIN = 'cluster.example.com';
 /** Domain used by the default ingress router for Route hosts. */
@@ -413,8 +414,8 @@ export class ClusterState {
         desired: { version: OPENSHIFT_VERSION, channel: OPENSHIFT_CHANNEL },
         history: [{ state: 'Completed', version: OPENSHIFT_VERSION, startedTime: new Date().toISOString(), completionTime: new Date().toISOString() }],
         conditions: [
-          { type: 'Available', status: 'True', reason: 'ClusterVersionAvailable', message: 'Done applying 4.22.0' },
-          { type: 'Progressing', status: 'False', reason: 'ClusterVersionNotProgressing', message: 'Cluster version is 4.22.0' },
+          { type: 'Available', status: 'True', reason: 'ClusterVersionAvailable', message: `Done applying ${OPENSHIFT_VERSION}` },
+          { type: 'Progressing', status: 'False', reason: 'ClusterVersionNotProgressing', message: `Cluster version is ${OPENSHIFT_VERSION}` },
         ],
         versionHash: 'simulated',
       },
@@ -1703,6 +1704,9 @@ export class ClusterState {
     if (suppliedUid) resource.metadata.uid = String(suppliedUid);
     if (obj.spec && typeof obj.spec === 'object') {
       resource.spec = deepMerge(resource.spec || {}, obj.spec);
+      // Nodes derive display capacity/allocatable from their spec; keep them in
+      // sync when a mode/manifest merges capacity into an existing Node.
+      if (typeof resource.syncCapacityFromSpec === 'function') resource.syncCapacityFromSpec();
     }
     if (rawMeta.labels) Object.assign(resource.metadata.labels, rawMeta.labels);
     if (rawMeta.annotations) Object.assign(resource.metadata.annotations, rawMeta.annotations);

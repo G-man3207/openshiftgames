@@ -23,7 +23,7 @@
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='14' fill='%23EE0000'/><circle cx='16' cy='16' r='6' fill='%230d1117'/><text x='16' y='21' text-anchor='middle' fill='white' font-size='11' font-weight='bold'>O</text></svg>">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Schibsted+Grotesk:wght@400;500;600;700;800&family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
   <script src="https://cdn.tailwindcss.com/3.4.1"></script>
   <script>
     tailwind.config = {
@@ -38,14 +38,15 @@
             'elevated': '#1c2333',
           },
           fontFamily: {
-            sans: ['Inter', 'system-ui', 'sans-serif'],
+            sans: ['Schibsted Grotesk', 'Inter', 'system-ui', 'sans-serif'],
             mono: ['JetBrains Mono', 'SF Mono', 'monospace'],
           }
         }
       }
     }
   </script>
-  <link rel="stylesheet" href="style.css?v=1.0.1">
+  <link rel="stylesheet" href="style.css?v=1.1.0">
+  <link rel="stylesheet" href="start.css?v=1.1.0">
   <!-- Pinned dependency: Three.js r152 (ES modules, no build step) -->
   <script type="importmap">
   {
@@ -60,110 +61,318 @@
 
   <canvas id="game-canvas"></canvas>
 
-  <!-- ───────────────────────────── Main menu ───────────────────────────── -->
-  <div id="main-menu">
-    <div class="os-badge" id="menu-exam-badge">EX280 · OpenShift 4.22</div>
-    <div class="menu-logo">OpenShift Games</div>
-    <div class="menu-subtitle">OpenShift 4.22 Cluster Simulation · Built for EX280</div>
+  <!-- ───────────────────────────── Start page ────────────────────────── -->
+  <div id="main-menu" class="sp">
+    <a class="sp-skip" href="#sp-modes">Skip to modes</a>
 
-    <a href="https://github.com/G-man3207/openshiftgames" target="_blank" rel="noopener" class="github-badge" id="github-badge">
-      <div class="github-badge-inner">
-        <svg class="github-icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-          <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/>
-        </svg>
-        <span class="github-text">Star on GitHub</span>
-        <span class="github-stars" id="github-stars">
-          <svg class="github-star-icon" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 .25a.75.75 0 01.673.418l1.882 3.815 4.21.612a.75.75 0 01.416 1.279l-3.046 2.97.719 4.192a.75.75 0 01-1.088.791L8 12.347l-3.766 1.98a.75.75 0 01-1.088-.79l.72-4.194L.818 6.374a.75.75 0 01.416-1.28l4.21-.611L7.327.668A.75.75 0 018 .25z"/></svg>
-          <span id="github-star-count">--</span>
+    <header class="sp-nav" id="sp-nav">
+      <div class="sp-nav-inner">
+      <a class="sp-brand" href="#top" aria-label="OpenShift Games — top of page">
+        <span class="sp-mark" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none"><path d="M12 2.6 20.5 7.3v9.4L12 21.4 3.5 16.7V7.3L12 2.6Z" stroke="currentColor" stroke-width="1.6"/><circle cx="12" cy="12" r="2.6" fill="currentColor"/></svg>
         </span>
+        <span class="menu-logo">OpenShift Games</span>
+      </a>
+
+      <nav class="sp-nav-links" aria-label="Page sections">
+        <a href="#sp-modes">Modes</a>
+        <a href="#sp-inside">Inside</a>
+        <a href="#sp-exam">EX280 coverage</a>
+        <a href="#sp-original">Credits</a>
+      </nav>
+
+      <div class="sp-nav-actions">
+        <a id="github-badge" class="sp-gh" href="https://github.com/G-man3207/openshiftgames" target="_blank" rel="noopener" title="Star OpenShift Games on GitHub">
+          <svg class="sp-gh-icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
+          <span class="sp-gh-text">GitHub</span>
+          <span class="sp-gh-stars">
+            <svg class="sp-gh-star" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 .25a.75.75 0 01.673.418l1.882 3.815 4.21.612a.75.75 0 01.416 1.279l-3.046 2.97.719 4.192a.75.75 0 01-1.088.791L8 12.347l-3.766 1.98a.75.75 0 01-1.088-.79l.72-4.194L.818 6.374a.75.75 0 01.416-1.28l4.21-.611L7.327.668A.75.75 0 018 .25z"/></svg>
+            <span id="github-star-count">--</span>
+          </span>
+        </a>
+        <button id="menu-exam-prep" class="sp-nav-cta" type="button" title="EX280 objective tracker, quick labs and cheat sheet">EX280 Prep</button>
       </div>
-    </a>
-
-    <div class="menu-grid">
-      <button class="menu-btn" data-mode="campaign" title="20-level EX280 campaign">
-        <span class="menu-btn-icon"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polygon points="5 3 19 12 5 21 5 3"/></svg></span>
-        <div class="menu-btn-title">Campaign</div>
-        <div class="menu-btn-desc">20 levels across 5 EX280 chapters — from <code class="menu-code">oc</code> basics to a full production platform.</div>
-      </button>
-      <button class="menu-btn" data-mode="chaos" title="Endless incident survival">
-        <span class="menu-btn-icon"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg></span>
-        <div class="menu-btn-title">Chaos Mode</div>
-        <div class="menu-btn-desc">Production firefighting. Survive escalating OpenShift incidents and keep the platform available.</div>
-      </button>
-      <button class="menu-btn" data-mode="sandbox" title="Free build, scored by the Architecture Advisor">
-        <span class="menu-btn-icon"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></span>
-        <div class="menu-btn-title">Sandbox</div>
-        <div class="menu-btn-desc">Free build. Design an OpenShift platform and let the Architecture Advisor score it.</div>
-      </button>
-      <button class="menu-btn" data-mode="challenge" title="12 timed EX280 labs">
-        <span class="menu-btn-icon"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg></span>
-        <div class="menu-btn-title">Timed Labs</div>
-        <div class="menu-btn-desc">12 timed EX280 scenarios. Build, break and fix an OpenShift cluster against the clock.</div>
-      </button>
-    </div>
-
-    <button class="menu-exam-btn" id="menu-exam-prep" title="EX280 objective tracker, quick labs and cheat sheet">
-      <span class="menu-exam-icon">
-        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 2 3 7v6c0 5 3.8 8.4 9 9 5.2-.6 9-4 9-9V7l-9-5z"/><path d="m8.5 12.5 2.5 2.5 4.5-5"/></svg>
-      </span>
-      <span class="menu-exam-text">
-        <span class="menu-exam-title">EX280 Prep</span>
-        <span class="menu-exam-desc">Objective tracker · quick labs · cheat sheet · readiness verdict</span>
-      </span>
-      <span class="menu-exam-key">?</span>
-    </button>
-
-    <a href="/draw" class="menu-draw-link">
-      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
-      <span>OpenShift Draw</span>
-      <span class="menu-draw-desc">Design OpenShift architectures in 3D. Drag resources onto the canvas, draw connections, export YAML.</span>
-    </a>
-
-    <div class="menu-footer">
-      <button class="menu-footer-btn" id="btn-settings">Settings</button>
-      <button class="menu-footer-btn" id="btn-achievements">Achievements</button>
-      <button class="menu-footer-btn" id="btn-stats">Stats</button>
-    </div>
-
-    <div id="menu-hints" class="menu-hints-wrap">
-      <div class="menu-keyboard-hints">
-        Press <span class="keyboard-hint">/</span> for oc terminal &middot;
-        <span class="keyboard-hint">F</span> files &middot;
-        <span class="keyboard-hint">?</span> EX280 Prep &middot;
-        <span class="keyboard-hint">Space</span> pause &middot;
-        <span class="keyboard-hint">M</span> metrics &middot;
-        <span class="keyboard-hint">Esc</span> menu
       </div>
-      <div class="menu-attribution">
-        Built for <a href="https://www.redhat.com/en/services/training/red-hat-certified-openshift-administrator-exam" target="_blank" rel="noopener">EX280</a> &middot;
-        based on <a href="https://github.com/rohitg00/k8sgames" target="_blank" rel="noopener">K8s Games by Rohit</a> (Apache-2.0) &middot;
-        OpenShift is a trademark of Red Hat, Inc.
+    </header>
+
+    <main id="top">
+      <!-- Hero: the product performs — the live cluster is the picture -->
+      <section class="sp-hero" aria-labelledby="sp-title">
+        <div class="sp-hero-copy">
+          <h1 class="sp-h1" id="sp-title">Learn OpenShift<br>by breaking it.</h1>
+          <p class="sp-lede">A 3D OpenShift&nbsp;4.22 cluster in your browser. Type real <code>oc</code> commands, run S2I builds, expose Routes. Then break the platform and fix it.</p>
+          <div class="sp-cta-row">
+            <button type="button" class="sp-cta" id="sp-cta-primary">
+              <span id="sp-cta-label" class="sp-cta-label">Start the campaign</span>
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 8h11M9 3.5 13.5 8 9 12.5"/></svg>
+            </button>
+            <button type="button" class="sp-cta-ghost" id="sp-cta-sandbox">
+              Open sandbox
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 8h11M9 3.5 13.5 8 9 12.5"/></svg>
+            </button>
+          </div>
+          <p class="sp-specs">
+            <span><strong>20</strong> levels</span>
+            <span><strong>12</strong> timed labs</span>
+            <span><strong>55</strong> exam objectives</span>
+            <span>No install</span>
+          </p>
+          <p class="menu-subtitle">OpenShift 4.22 Cluster Simulation · Built for EX280</p>
+        </div>
+
+        <div class="sp-hero-stage">
+          <figure class="sp-stage" id="sp-stage">
+            <div class="sp-stage-mount" id="sp-stage-mount" aria-label="Live 3D OpenShift cluster view"></div>
+            <div class="sp-stage-chrome" aria-hidden="true">
+              <div class="sp-stage-top">
+                <span class="sp-stage-live"><span class="sp-dot"></span>Live cluster</span>
+                <span class="sp-stage-id">ocp 4.22</span>
+              </div>
+              <div class="sp-stage-bottom">
+                <span class="sp-readout"><span class="sp-readout-v" id="sp-r-projects">10</span>projects</span>
+                <span class="sp-readout"><span class="sp-readout-v" id="sp-r-nodes">0</span>nodes</span>
+                <span class="sp-readout"><span class="sp-readout-v" id="sp-r-pods">0</span>pods</span>
+                <span class="sp-stage-hint">the actual renderer</span>
+              </div>
+            </div>
+          </figure>
+          <p class="sp-stage-caption">This is the Three.js renderer, not a screenshot. Start a mode and it becomes your cluster.</p>
+        </div>
+      </section>
+
+      <!-- Modes: the real launcher, as a banded list -->
+      <section id="sp-modes" class="sp-section sp-modes" aria-labelledby="sp-modes-title">
+        <div class="sp-sec-head sp-reveal">
+          <h2 class="sp-h2" id="sp-modes-title">Four ways to run your cluster</h2>
+          <p class="sp-sec-note">Every mode is scored and saves its progress in this browser. Pick the one that matches the time you have.</p>
+        </div>
+
+        <ul class="sp-mode-list sp-reveal">
+          <li>
+            <button class="menu-btn sp-mode" type="button" data-mode="campaign" title="20-level EX280 campaign">
+              <span class="sp-mode-name">Campaign</span>
+              <span class="sp-mode-desc">Twenty levels across the EX280 chapters: projects and the CLI, YAML and Kustomize, builds and Routes, identity and RBAC, security and a final production platform.</span>
+              <span class="sp-mode-meta">20 levels · 5 chapters</span>
+              <span class="sp-mode-arrow"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 8h11M9 3.5 13.5 8 9 12.5"/></svg></span>
+            </button>
+          </li>
+          <li>
+            <button class="menu-btn sp-mode" type="button" data-mode="challenge" title="12 timed EX280 labs">
+              <span class="sp-mode-name">Timed labs</span>
+              <span class="sp-mode-desc">Twelve scored scenarios against the clock: a three-tier app, CrashLoopBackOff, edge TLS Routes, Kustomize overlays, SCCs, an Operator install and an EX280 speed run.</span>
+              <span class="sp-mode-meta">12 labs · 4–7 min</span>
+              <span class="sp-mode-arrow"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 8h11M9 3.5 13.5 8 9 12.5"/></svg></span>
+            </button>
+          </li>
+          <li>
+            <button class="menu-btn sp-mode" type="button" data-mode="sandbox" title="Free build scored by the Architecture Advisor">
+              <span class="sp-mode-name">Sandbox</span>
+              <span class="sp-mode-desc">No level, no timer. Build whatever you want and get the Architecture Advisor's 0–100 review on availability, security, networking, storage and cost.</span>
+              <span class="sp-mode-meta">Free build · scored 0–100</span>
+              <span class="sp-mode-arrow"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 8h11M9 3.5 13.5 8 9 12.5"/></svg></span>
+            </button>
+          </li>
+          <li>
+            <button class="menu-btn sp-mode" type="button" data-mode="chaos" title="Endless incident survival">
+              <span class="sp-mode-name">Chaos mode</span>
+              <span class="sp-mode-desc">An endless stream of production incidents. Diagnose with logs, events and describe, then keep the platform available for as long as you can.</span>
+              <span class="sp-mode-meta">Endless · survival</span>
+              <span class="sp-mode-arrow"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 8h11M9 3.5 13.5 8 9 12.5"/></svg></span>
+            </button>
+          </li>
+        </ul>
+
+        <div class="sp-mode-extra sp-reveal">
+          <a class="sp-extra" href="/draw">
+            <span class="sp-extra-name">OpenShift Draw</span>
+            <span class="sp-extra-desc">A 3D whiteboard for OpenShift architectures. Drag resources, draw connections, export YAML.</span>
+            <span class="sp-extra-arrow"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 8h11M9 3.5 13.5 8 9 12.5"/></svg></span>
+          </a>
+          <button class="sp-extra" type="button" data-exam-prep title="EX280 objective tracker, quick labs and cheat sheet">
+            <span class="sp-extra-name">EX280 Prep</span>
+            <span class="sp-extra-desc">Objective tracker for all 55 exam bullets, quick labs, a cheat sheet and a readiness verdict.</span>
+            <span class="sp-extra-arrow"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 8h11M9 3.5 13.5 8 9 12.5"/></svg></span>
+          </button>
+        </div>
+      </section>
+
+      <!-- Inside: what the simulator actually does, shown with real captures -->
+      <section id="sp-inside" class="sp-section sp-inside" aria-labelledby="sp-inside-title">
+        <div class="sp-sec-head sp-reveal">
+          <h2 class="sp-h2" id="sp-inside-title">Inside the simulator</h2>
+          <p class="sp-sec-note">A real cluster model, not a quiz. Controllers reconcile, builds run and Routes get admitted — in this tab.</p>
+        </div>
+
+        <div class="sp-features">
+          <div class="sp-feature sp-reveal">
+            <div class="sp-feature-copy">
+              <h3 class="sp-h3">Type the command. Watch the cluster answer.</h3>
+              <p>A simulated <code>oc</code> with the commands that matter: <code>new-project</code>, <code>new-app</code>, <code>expose</code>, <code>set env</code>, <code>rollout</code>, <code>adm policy</code> and <code>auth can-i</code>, with honest <code>Forbidden</code>, <code>NotFound</code> and <code>CrashLoopBackOff</code> output when it fails.</p>
+            </div>
+            <figure class="sp-fig">
+              <img src="img/start/terminal.png" width="1600" height="1040" alt="The OpenShift Games oc terminal: new-project, new-app, expose, then oc get pods and oc get routes returning real OpenShift tables.">
+            </figure>
+          </div>
+
+          <div class="sp-feature sp-feature--flip sp-reveal">
+            <figure class="sp-fig">
+              <img src="img/start/manifests.png" width="1640" height="1400" alt="The Files panel: an editable deployment manifest with Apply -f and Apply -k actions and a virtual file tree of manifests, Kustomize overlays and a Helm chart.">
+            </figure>
+            <div class="sp-feature-copy">
+              <h3 class="sp-h3">Real manifests. Real YAML. Real mistakes.</h3>
+              <p>A virtual filesystem with editable Deployments, Services, Routes and Secrets. <code>oc apply -f</code> and <code>apply -k</code>, Kustomize overlays, OpenShift templates, Helm charts, and an htpasswd file for the identity labs.</p>
+            </div>
+          </div>
+
+          <div class="sp-feature sp-reveal">
+            <div class="sp-feature-copy">
+              <h3 class="sp-h3">Break it. Fix it. Get a score.</h3>
+              <p>Incidents arrive uninvited: failing pods, blocked Routes, quota denials. Diagnose with <code>describe</code>, <code>logs</code> and events, then repair the resource. Build freely in the sandbox and the Architecture Advisor grades the platform 0–100.</p>
+            </div>
+            <figure class="sp-fig">
+              <img src="img/start/architecture.png" width="2800" height="1400" alt="Chaos mode: the incident panel lists active incidents with investigation steps and the exact oc commands, next to the live cluster view.">
+            </figure>
+          </div>
+        </div>
+      </section>
+
+      <!-- EX280 coverage: pick an objective, get the practice -->
+      <section id="sp-exam" class="sp-section sp-exam" aria-labelledby="sp-exam-title">
+        <div class="sp-sec-head sp-reveal">
+          <h2 class="sp-h2" id="sp-exam-title">Every EX280 objective has a drill</h2>
+          <p class="sp-sec-note">All 9 objective groups and 55 bullet points from EX280V422, mapped to campaign levels and timed labs. Pick one to see where it's drilled.</p>
+        </div>
+
+        <div class="sp-exam-grid sp-reveal">
+          <div class="sp-exam-list" id="sp-exam-list" role="tablist" aria-label="EX280 objective groups"></div>
+          <div class="sp-exam-detail" id="sp-exam-detail" role="tabpanel" aria-live="polite"></div>
+        </div>
+
+        <figure class="sp-fig sp-band sp-reveal">
+          <img src="img/start/levels.png" width="3000" height="2220" alt="The EX280 campaign level select: five chapters of four levels each, with progress, lock states and a Start campaign action.">
+          <figcaption class="sp-fig-caption">The campaign in the app: five chapters, twenty levels, one level unlocked at a time. Every level carries the EX280 objectives it drills, and the EX280 Prep tracker turns them into a readiness verdict.</figcaption>
+        </figure>
+      </section>
+
+      <!-- upstream-attribution:start -->
+      <!-- The homage: K8s Games, clearly and permanently credited -->
+      <section id="sp-original" class="sp-original" aria-labelledby="sp-original-title">
+        <div class="sp-letter sp-reveal">
+          <h2 class="sp-h2" id="sp-original-title">Where this comes from</h2>
+          <p class="sp-letter-lede">OpenShift Games is a derivative work of K8s Games, the game that put a Kubernetes cluster in 3D on the web.</p>
+          <p><a href="https://github.com/rohitg00/k8sgames" target="_blank" rel="noopener">K8s Games</a> by Rohit did something the documentation never does: it made a cluster a place. You could build a Deployment, watch it schedule, kill a pod and see the controller put it back — in a browser, with no install. It is Apache-2.0 licensed, and its source, spirit and interface are the foundation this project grew from.</p>
+          <p>OpenShift Games keeps that idea and points it at the exam: a full OpenShift 4.22 platform model with Projects, Routes, S2I builds, ImageStreams, SCCs, RBAC evaluation, quotas, LimitRanges and OLM operators, and every campaign level mapped to the official <strong>EX280V422</strong> objective groups. The homage is intentional and permanent.</p>
+
+          <ul class="sp-changes">
+            <li><strong>OpenShift 4.22 semantics</strong>Projects instead of namespaces, Routes instead of Ingress, BuildConfigs and ImageStreams for source builds.</li>
+            <li><strong>EX280 objective mapping</strong>Nine groups and 55 bullets tracked across levels, timed labs and quick labs.</li>
+            <li><strong>A real oc CLI</strong>new-project, new-app, expose, set, rollout, adm policy and auth can-i, with honest failures.</li>
+            <li><strong>Platform operations</strong>Quotas, LimitRanges, ClusterResourceQuota, Operators, SCCs and LoadBalancers that behave like the platform.</li>
+            <li><strong>Twenty levels, five chapters</strong>From your first Project to a full production platform build.</li>
+            <li><strong>Twelve timed labs</strong>Speed drills from CrashLoopBackOff to edge TLS Routes, scored against the clock.</li>
+          </ul>
+
+          <div class="sp-letter-links">
+            <a class="sp-letter-link" href="https://github.com/rohitg00/k8sgames" target="_blank" rel="noopener">K8s Games on GitHub
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 12 12 4M6 4h6v6"/></svg>
+            </a>
+            <a class="sp-letter-link" href="https://github.com/G-man3207/openshiftgames" target="_blank" rel="noopener">OpenShift Games source
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 12 12 4M6 4h6v6"/></svg>
+            </a>
+            <a class="sp-letter-link" href="https://www.apache.org/licenses/LICENSE-2.0" target="_blank" rel="noopener">Apache-2.0 license
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 12 12 4M6 4h6v6"/></svg>
+            </a>
+          </div>
+
+          <p class="menu-attribution">Built for <a href="https://www.redhat.com/en/services/training/red-hat-certified-openshift-administrator-exam" target="_blank" rel="noopener">EX280</a> · based on <a href="https://github.com/rohitg00/k8sgames" target="_blank" rel="noopener">K8s Games by Rohit</a> (Apache-2.0) · OpenShift is a trademark of Red Hat, Inc.</p>
+        </div>
+      </section>
+      <!-- upstream-attribution:end -->
+    </main>
+
+    <footer class="sp-footer">
+      <div class="sp-footer-inner">
+        <div class="sp-footer-cols">
+          <div class="sp-footer-col">
+            <div class="sp-footer-brand">
+              <span class="sp-mark" aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="none"><path d="M12 2.6 20.5 7.3v9.4L12 21.4 3.5 16.7V7.3L12 2.6Z" stroke="currentColor" stroke-width="1.6"/><circle cx="12" cy="12" r="2.6" fill="currentColor"/></svg>
+              </span>
+              <span class="menu-logo">OpenShift Games</span>
+            </div>
+            <p class="sp-footer-tag">A browser-based 3D OpenShift cluster simulator for the EX280 exam.</p>
+          </div>
+
+          <nav class="sp-footer-col" aria-label="Play">
+            <h3>Play</h3>
+            <button type="button" data-start-mode="campaign">Campaign</button>
+            <button type="button" data-start-mode="challenge">Timed labs</button>
+            <button type="button" data-start-mode="sandbox">Sandbox</button>
+            <button type="button" data-start-mode="chaos">Chaos mode</button>
+            <a href="/draw">OpenShift Draw</a>
+          </nav>
+
+          <nav class="sp-footer-col" aria-label="Prepare">
+            <h3>Prepare</h3>
+            <button type="button" data-exam-prep>EX280 Prep</button>
+            <a href="https://www.redhat.com/en/services/training/red-hat-certified-openshift-administrator-exam" target="_blank" rel="noopener">The EX280 exam page</a>
+            <a href="https://docs.redhat.com/en/documentation/openshift_container_platform/4.22" target="_blank" rel="noopener">OpenShift 4.22 docs</a>
+            <!-- upstream-attribution:start -->
+            <a href="https://github.com/rohitg00/k8sgames" target="_blank" rel="noopener">K8s Games by Rohit</a>
+            <!-- upstream-attribution:end -->
+          </nav>
+
+          <nav class="sp-footer-col" aria-label="Project">
+            <h3>Project</h3>
+            <a href="https://github.com/G-man3207/openshiftgames" target="_blank" rel="noopener">GitHub</a>
+            <button type="button" id="btn-settings">Settings</button>
+            <button type="button" id="btn-achievements">Achievements</button>
+            <button type="button" id="btn-stats">Stats</button>
+          </nav>
+        </div>
+
+        <div class="sp-footer-wordmark" aria-hidden="true">OpenShift Games</div>
+
+        <!-- upstream-attribution:start -->
+        <div class="sp-footer-legal">
+          <p>Apache-2.0 · derivative of <a href="https://github.com/rohitg00/k8sgames" target="_blank" rel="noopener">K8s Games by Rohit</a> · a study aid, not an exam dump.</p>
+          <p>Independent project. Not affiliated with, sponsored or endorsed by Red Hat. OpenShift and Red Hat are trademarks of Red Hat, Inc. Kubernetes is a trademark of The Linux Foundation.</p>
+        </div>
+        <!-- upstream-attribution:end -->
       </div>
-    </div>
+    </footer>
   </div>
 
   <!-- ───────────────────────────── Game shell ─────────────────────────── -->
   <div id="game-container">
-    <div id="objectives-panel" class="fixed top-14 z-30 w-64 rounded-xl backdrop-blur-xl bg-black/60 border border-white/10 shadow-2xl overflow-hidden transition-all duration-300" style="display:none;left:76px;">
-      <div class="flex items-center justify-between px-3 py-2 border-b border-white/8">
-        <div class="flex items-center gap-2 min-w-0 flex-1">
-          <span class="text-amber-400 text-sm shrink-0">&#9654;</span>
-          <span id="obj-panel-title" class="flex items-center text-white/90 text-sm font-semibold min-w-0 flex-1">Level 1</span>
-        </div>
-        <button id="obj-panel-toggle" class="text-white/40 hover:text-white/80 text-xs transition-colors px-1" aria-label="Toggle objectives panel">&#9660;</button>
-      </div>
+    <section id="objectives-panel" aria-label="Mission objectives" style="display:none;">
+      <header class="mission-head">
+        <div class="mission-meta" id="obj-panel-meta">Level 1</div>
+        <button id="obj-panel-toggle" class="icon-btn mission-collapse" aria-label="Collapse mission panel" aria-expanded="true">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M4 6l4 4 4-4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+      </header>
       <div id="obj-panel-body">
-        <div id="obj-panel-desc" class="px-3 py-2 text-[11px] text-white/50 border-b border-white/5 leading-relaxed"></div>
-        <div id="obj-list" class="px-3 py-2 space-y-1.5"></div>
-        <div id="hint-section" class="px-3 py-2 border-t border-white/5">
-          <button id="btn-show-hint" class="flex items-center gap-1.5 w-full px-2.5 py-1.5 text-xs font-medium text-amber-400/80 hover:text-amber-400 bg-amber-400/5 hover:bg-amber-400/10 border border-amber-400/15 hover:border-amber-400/30 rounded-lg transition-all">
-            <svg class="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 20 20" aria-hidden="true"><path d="M11 3a1 1 0 10-2 0v1a1 1 0 102 0V3zM15.657 5.757a1 1 0 00-1.414-1.414l-.707.707a1 1 0 001.414 1.414l.707-.707zM18 10a1 1 0 01-1 1h-1a1 1 0 110-2h1a1 1 0 011 1zM5.05 6.464A1 1 0 106.464 5.05l-.707-.707a1 1 0 00-1.414 1.414l.707.707zM4 11a1 1 0 100-2H3a1 1 0 000 2h1zM10 18a3 3 0 01-2.83-2h5.66A3 3 0 0110 18zM13 14H7v-1a3 3 0 01.879-2.121l.707-.707A5 5 0 0010 5a5 5 0 00-1.414 0A5 5 0 005 10c0 1.38.56 2.63 1.464 3.536L7 14z"/></svg>
-            Show Hint
+        <h2 id="obj-panel-title" class="mission-title">Level 1</h2>
+        <p id="obj-panel-desc" class="mission-goal"></p>
+        <div class="mission-next" id="mission-next" hidden>
+          <span class="mission-next-label">Next step</span>
+          <span class="mission-next-text" id="mission-next-text"></span>
+        </div>
+        <div class="mission-progress">
+          <span id="obj-progress-label" class="mission-progress-label">0 / 0 objectives</span>
+          <div class="mission-progress-track" aria-hidden="true"><div id="obj-progress-fill" class="mission-progress-fill"></div></div>
+        </div>
+        <div id="obj-list" class="obj-list" role="list"></div>
+        <div id="hint-section" class="mission-hints">
+          <button id="btn-show-hint" class="hint-btn" type="button" hidden>
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M8 1.5a4 4 0 00-2.3 7.3c.4.3.6.7.6 1.2v.3h3.4V10c0-.5.2-.9.6-1.2A4 4 0 008 1.5z"/><path d="M6.3 13h3.4M7 15h2" stroke-linecap="round"/></svg>
+            <span>Show hint</span>
           </button>
-          <div id="hint-list" class="mt-1.5 space-y-1"></div>
+          <div id="hint-list" class="hint-list"></div>
         </div>
       </div>
-    </div>
+    </section>
 
     <a href="https://github.com/G-man3207/openshiftgames" target="_blank" rel="noopener" id="game-github-badge" class="fixed top-14 right-4 z-30 flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg backdrop-blur-xl bg-white/5 border border-white/8 shadow-lg text-white/40 hover:text-white/90 hover:bg-white/10 hover:border-white/15 transition-all group" title="Star OpenShift Games on GitHub" style="text-decoration:none;">
       <svg class="w-4 h-4 opacity-60 group-hover:opacity-100 transition-opacity" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
@@ -171,69 +380,105 @@
       <span id="game-github-stars" class="text-[11px] font-mono font-semibold text-amber-400/60 group-hover:text-amber-400 transition-colors">--</span>
     </a>
 
-    <div id="view-toolbar" class="fixed bottom-4 left-1/2 -translate-x-1/2 z-30 flex items-center gap-2 px-3 py-2 rounded-xl backdrop-blur-xl bg-white/5 border border-white/10 shadow-2xl">
-      <button id="btn-auto-align" class="toolbar-btn" title="Auto-align OpenShift architecture layout">
-        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 5a1 1 0 011-1h14a1 1 0 011 1v2a1 1 0 01-1 1H5a1 1 0 01-1-1V5zM4 13a1 1 0 011-1h6a1 1 0 011 1v6a1 1 0 01-1 1H5a1 1 0 01-1-1v-6zM16 13a1 1 0 011-1h2a1 1 0 011 1v6a1 1 0 01-1 1h-2a1 1 0 01-1-1v-6z"/></svg>
-        Auto-Align
+    <div id="view-toolbar" role="toolbar" aria-label="Cluster view controls">
+      <button id="btn-auto-align" class="tb-btn" title="Auto-align the cluster layout">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M4 5a1 1 0 011-1h14a1 1 0 011 1v2a1 1 0 01-1 1H5a1 1 0 01-1-1V5zM4 13a1 1 0 011-1h6a1 1 0 011 1v6a1 1 0 01-1 1H5a1 1 0 01-1-1v-6zM16 13a1 1 0 011-1h2a1 1 0 011 1v6a1 1 0 01-1 1h-2a1 1 0 01-1-1v-6z"/></svg>
+        <span>Auto-align</span>
       </button>
-      <button id="btn-reset-camera" class="toolbar-btn" title="Reset camera to default view">
-        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"/></svg>
-        Reset View
+      <button id="btn-reset-camera" class="tb-btn" title="Reset the camera">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"/></svg>
+        <span>Reset view</span>
       </button>
-      <button id="btn-export-yaml" class="toolbar-btn" title="Export cluster as YAML manifests">
-        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4"/></svg>
-        YAML
+      <span class="tb-sep" aria-hidden="true"></span>
+      <button id="btn-terminal" class="tb-btn tb-btn-terminal" title="Open the oc terminal (/)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M4 6h16M4 18h16M8 10l-2 2 2 2M16 10l2 2-2 2"/></svg>
+        <span>Terminal</span>
+        <kbd>/</kbd>
       </button>
-      <button id="btn-manifests" class="toolbar-btn toolbar-btn-files" title="Files &amp; manifests (F)">
-        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"/></svg>
-        Files
-        <span class="toolbar-key">F</span>
+      <button id="btn-manifests" class="tb-btn" title="Files and manifests (F)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"/></svg>
+        <span>Files</span>
+        <kbd>F</kbd>
       </button>
-      <div class="toolbar-divider"></div>
-      <div class="flex items-center gap-1.5 px-2 py-1 text-[11px] text-white/30">
-        <kbd class="toolbar-kbd">/</kbd>
-        <span>oc</span>
-      </div>
-      <div class="toolbar-divider"></div>
-      <button id="btn-exam-prep" class="toolbar-btn toolbar-btn-exam" title="EX280 Prep (?)">
-        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 2 3 7v6c0 5 3.8 8.4 9 9 5.2-.6 9-4 9-9V7l-9-5z"/><path d="m8.5 12.5 2.5 2.5 4.5-5"/></svg>
-        EX280
+      <button id="btn-export-yaml" class="tb-btn" title="Export the cluster as YAML">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4"/></svg>
+        <span>YAML</span>
       </button>
-      <div class="toolbar-divider"></div>
-      <button id="btn-help" class="toolbar-btn toolbar-btn-help" title="How to play (H)">
-        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.343 4 3 0 1.4-1.278 2.575-3.006 2.907-.542.104-.994.54-.994 1.093m0 3h.01"/><circle cx="12" cy="12" r="10" stroke-width="2"/></svg>
-        Help
+      <span class="tb-sep" aria-hidden="true"></span>
+      <button id="btn-exam-prep" class="tb-btn" title="EX280 Prep (?)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M12 2 3 7v6c0 5 3.8 8.4 9 9 5.2-.6 9-4 9-9V7l-9-5z"/><path d="m8.5 12.5 2.5 2.5 4.5-5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <span>EX280</span>
+      </button>
+      <button id="btn-help" class="tb-btn" title="How to play (H)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9.6 9a2.4 2.4 0 114 1.7c-.9.8-1.6 1.3-1.6 2.5M12 16.8h.01" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <span>Help</span>
       </button>
     </div>
 
-    <!-- Palette is generated at boot from js/data/kindRegistry.js (PALETTE_SECTIONS). -->
-    <div id="resource-palette" class="glass-dark" aria-label="Resource palette"></div>
+    <!-- Palette content is generated at boot from js/data/kindRegistry.js (PALETTE_SECTIONS). -->
+    <aside id="resource-palette" aria-label="Resource palette">
+      <div class="palette-head">
+        <h2 class="palette-title">Create a resource</h2>
+        <div class="palette-search">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><circle cx="7" cy="7" r="4.5"/><path d="m10.5 10.5 3 3" stroke-linecap="round"/></svg>
+          <input id="palette-search" type="text" placeholder="Search kinds" aria-label="Search resource kinds" autocomplete="off" spellcheck="false" />
+          <button id="palette-search-clear" class="palette-search-clear" type="button" aria-label="Clear search" hidden>&times;</button>
+        </div>
+      </div>
+      <div class="palette-scroll" id="palette-body"></div>
+      <div class="palette-foot">
+        <span class="palette-hint">Click or drag to place</span>
+        <span class="palette-hint-keys"><kbd>1</kbd>–<kbd>9</kbd> quick place</span>
+      </div>
+    </aside>
   </div>
 
   <!-- ───────────────────────────── Select screens ─────────────────────── -->
-  <div id="level-select">
-    <div style="max-width: 720px; width: 95%;">
-      <div class="flex items-center justify-between mb-6">
-        <div>
-          <h2 class="text-xl font-bold text-white">EX280 Campaign</h2>
-          <p class="text-xs text-white/40 mt-1">20 levels · 5 chapters · from your first Project to a production OpenShift platform</p>
+  <div id="level-select" aria-label="EX280 Campaign mission select">
+    <div class="select-shell">
+      <header class="select-head">
+        <button id="level-select-back" class="btn-quiet select-back">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M10 4 6 8l4 4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          Back
+        </button>
+        <div class="select-titles">
+          <h2>EX280 Campaign</h2>
+          <p>20 levels · 5 chapters · from your first Project to a production OpenShift platform</p>
         </div>
-        <button id="level-select-back" class="btn-secondary text-sm">Back</button>
-      </div>
+        <div class="select-actions">
+          <span id="level-select-progress" class="select-progress">0 / 20 complete</span>
+          <button id="level-continue" class="btn-primary">Continue</button>
+        </div>
+      </header>
       <div class="level-grid" id="level-grid"></div>
+      <footer class="select-foot">
+        <span>Progress saves automatically in this browser</span>
+        <span class="select-foot-keys"><kbd>H</kbd> controls · <kbd>Esc</kbd> back</span>
+      </footer>
     </div>
   </div>
 
-  <div id="challenge-select" class="modal-overlay">
-    <div class="modal-content" style="max-width: 620px;">
-      <div class="flex items-center justify-between mb-4">
-        <div>
-          <h2 class="modal-title" style="margin-bottom:0">Timed EX280 Labs</h2>
-          <p class="text-xs text-white/40 mt-1">12 scenarios against the clock</p>
+  <div id="challenge-select" aria-label="Timed EX280 labs">
+    <div class="select-shell">
+      <header class="select-head">
+        <button id="challenge-back" class="btn-quiet select-back">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M10 4 6 8l4 4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          Back
+        </button>
+        <div class="select-titles">
+          <h2>Timed Labs</h2>
+          <p>12 EX280 scenarios against the clock · hints cost time but never failure</p>
         </div>
-        <button id="challenge-back" class="btn-secondary text-sm">Back</button>
-      </div>
+        <div class="select-actions">
+          <span id="challenge-select-progress" class="select-progress">0 / 12 complete</span>
+          <button id="challenge-continue" class="btn-primary">Start first lab</button>
+        </div>
+      </header>
       <div class="challenge-grid" id="challenge-grid"></div>
+      <footer class="select-foot">
+        <span>Every lab can be retried without losing progress</span>
+        <span class="select-foot-keys"><kbd>/</kbd> oc terminal · <kbd>?</kbd> EX280 prep</span>
+      </footer>
     </div>
   </div>
 
@@ -319,8 +564,71 @@
   </div>
 
   <div id="loading-screen" class="loading-screen" style="display: none;">
-    <div class="loading-spinner"></div>
-    <div class="loading-text">Initializing OpenShift cluster...</div>
+    <div class="loading-mark" aria-hidden="true">
+      <svg viewBox="0 0 32 32" fill="none" stroke="currentColor" stroke-width="2"><circle cx="16" cy="16" r="12" stroke-opacity=".25"/><path d="M16 4a12 12 0 0 1 12 12" stroke-linecap="round"/></svg>
+    </div>
+    <div class="loading-text">Starting your OpenShift cluster</div>
+    <div class="loading-sub">Applying the 4.22 platform defaults…</div>
+  </div>
+
+  <!-- ───────────────────────────── Pause ──────────────────────────────── -->
+  <div id="pause-overlay" role="dialog" aria-modal="true" aria-labelledby="pause-title" aria-hidden="true">
+    <div class="pause-card">
+      <header class="pause-head">
+        <div>
+          <div class="pause-kicker" id="pause-kicker">Campaign · Level 1</div>
+          <h2 class="pause-title" id="pause-title">Paused</h2>
+        </div>
+        <span class="pause-clock" id="pause-clock">00:00</span>
+      </header>
+      <p class="pause-sub" id="pause-sub">Your run is safe. Take a breath.</p>
+      <div class="pause-actions">
+        <button id="pause-resume" class="btn-primary">Resume</button>
+        <button id="pause-restart" class="btn-secondary">Restart level</button>
+        <button id="pause-quit" class="btn-quiet pause-quit">Main menu</button>
+      </div>
+      <div class="pause-confirm" id="pause-confirm" hidden>
+        <p>Leave this run? Progress made in the current level is discarded.</p>
+        <div class="pause-confirm-actions">
+          <button id="pause-confirm-cancel" class="btn-secondary">Stay in the run</button>
+          <button id="pause-confirm-leave" class="btn-danger">Leave to main menu</button>
+        </div>
+      </div>
+      <div class="pause-keys">
+        <span class="pause-keys-title">Controls</span>
+        <dl class="pause-key-grid">
+          <div><dt><kbd>/</kbd></dt><dd>oc terminal</dd></div>
+          <div><dt><kbd>F</kbd></dt><dd>Files &amp; manifests</dd></div>
+          <div><dt><kbd>M</kbd></dt><dd>Metrics</dd></div>
+          <div><dt><kbd>?</kbd></dt><dd>EX280 prep</dd></div>
+          <div><dt><kbd>H</kbd></dt><dd>How to play</dd></div>
+          <div><dt><kbd>Space</kbd></dt><dd>Pause / resume</dd></div>
+          <div><dt><kbd>1</kbd>–<kbd>9</kbd></dt><dd>Quick place</dd></div>
+          <div><dt><kbd>Esc</kbd></dt><dd>Pause</dd></div>
+        </dl>
+      </div>
+    </div>
+  </div>
+
+  <!-- ─────────────────── Smaller screens: honest notice ───────────────── -->
+  <div id="desktop-notice" role="dialog" aria-modal="true" aria-labelledby="desktop-notice-title">
+    <div class="notice-card">
+      <div class="notice-mark" aria-hidden="true">
+        <svg viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="2"><rect x="5" y="9" width="38" height="25" rx="3"/><path d="M17 40h14M24 34v6" stroke-linecap="round"/><path d="M14 22h20M14 28h12" stroke-linecap="round" stroke-opacity=".45"/></svg>
+      </div>
+      <h2 id="desktop-notice-title">Built for a desktop</h2>
+      <p class="notice-body">
+        The 3D cluster, the <code>oc</code> terminal and the console panels need a real keyboard and a
+        wide screen to teach the way they should. At this size the simulation is hard to use.
+      </p>
+      <p class="notice-body notice-body-quiet">Open OpenShift Games on a laptop or desktop, or continue on this device at your own pace.</p>
+      <div class="notice-actions">
+        <button id="notice-continue" class="btn-primary">Continue anyway</button>
+        <button id="notice-back" class="btn-quiet">Back to the main menu</button>
+      </div>
+      <div class="notice-rule"></div>
+      <p class="notice-caption">Best on Chrome, Edge or Firefox at 1280px or wider.</p>
+    </div>
   </div>
 
   <script type="module">
@@ -348,6 +656,7 @@
     import { MetricsDashboard } from './js/ui/MetricsDashboard.js';
     import { IncidentPanel } from './js/ui/IncidentPanel.js';
     import { Minimap } from './js/ui/Minimap.js';
+    import { StartMenu } from './js/ui/StartMenu.js';
     import { CampaignMode } from './js/modes/CampaignMode.js';
     import { ChaosMode } from './js/modes/ChaosMode.js';
     import { SandboxMode } from './js/modes/SandboxMode.js';
@@ -415,6 +724,7 @@
         this.minimap = null;
         this.manifestPanel = null;
         this.examPrepUI = null;
+        this.startMenu = null;
         this.currentMode = null;
         this.modeInstance = null;
         this.dragResource = null;
@@ -467,6 +777,8 @@
         this.bindGameEvents();
         this.bindKeyboard();
         this.bindPalette();
+        this.bindPauseEvents();
+        this.bindResponsiveNotice();
         this.buildLevelSelect();
         this.buildChallengeSelect();
         this.buildAchievements();
@@ -538,6 +850,16 @@
         this.renderer.onResourceMoved = (uid, pos) => this.placedPositions.set(uid, pos);
 
         this.applySettings();
+
+        // Start page: the live cluster diorama in the hero stage (the canvas is
+        // reparented into the stage while the menu is up) + objective picker.
+        try {
+          this.startMenu = new StartMenu(this);
+          this.startMenu.init();
+          this.startMenu.showScene();
+        } catch (err) {
+          console.warn(`${APP_NAME}: start page init failed`, err);
+        }
       }
 
       _syncSettingsUi() {
@@ -741,7 +1063,7 @@
               break;
             case ' ':
               e.preventDefault();
-              this.engine?.togglePause?.();
+              this.togglePause();
               break;
             case 'm':
             case 'M':
@@ -776,7 +1098,11 @@
       }
 
       handleEscape() {
-        // Panels/modals first, then inspector, then back to menu.
+        // One Escape = close the topmost surface. In-game with nothing open it
+        // opens Pause instead of silently discarding the run.
+        if (this.commandBar?.visible) { this.commandBar.hide?.(); return; }
+        if (document.getElementById('pause-overlay')?.classList.contains('active')) { this.hidePause({ resume: true }); return; }
+        if (document.getElementById('desktop-notice')?.classList.contains('active')) { return; }
         if (this.manifestPanel?.visible) { this.manifestPanel.hide?.(); return; }
         if (this.examPrepUI?.visible) { this.examPrepUI.hide?.(); return; }
         for (const panelId of ['settings-panel', 'achievements-panel', 'stats-panel']) {
@@ -787,7 +1113,167 @@
           }
         }
         if (this.inspector?.visible) { this.inspector.hide?.(); return; }
-        if (this.currentMode) this.returnToMenu();
+        if (document.getElementById('level-select')?.classList.contains('active')) {
+          document.getElementById('level-select')?.classList.remove('active');
+          return;
+        }
+        if (document.getElementById('challenge-select')?.classList.contains('active')) {
+          document.getElementById('challenge-select')?.classList.remove('active');
+          return;
+        }
+        if (this.currentMode) this.showPause();
+      }
+
+      // ── Pause overlay ───────────────────────────────────────────────────────
+      /** Space / HUD pause button: open the overlay, or resume from it. */
+      togglePause() {
+        const overlay = document.getElementById('pause-overlay');
+        if (overlay?.classList.contains('active')) {
+          this.hidePause({ resume: true });
+          return;
+        }
+        if (this.currentMode) this.showPause();
+      }
+
+      showPause() {
+        if (!this.currentMode) return;
+        const overlay = document.getElementById('pause-overlay');
+        if (!overlay || overlay.classList.contains('active')) return;
+        this.inspector?.hide?.();
+        this.contextMenu?.hide?.();
+        const status = this.modeInstance?.getStatus?.() || {};
+        const isChallenge = this.currentMode === 'challenge';
+        const kickerEl = document.getElementById('pause-kicker');
+        const subEl = document.getElementById('pause-sub');
+        const clockEl = document.getElementById('pause-clock');
+        if (kickerEl) {
+          kickerEl.textContent = isChallenge
+            ? `Timed Lab ${status.challengeId || ''} · ${status.title || 'In progress'}`.trim()
+            : `Campaign · Level ${status.currentLevel || 1}${status.chapterName ? ` · ${status.chapterName}` : ''}`;
+        }
+        if (subEl) {
+          subEl.textContent = isChallenge
+            ? `Time remaining ${this.formatClock(status.timeRemaining || 0)} · the clock is paused.`
+            : `${status.levelTitle || 'In progress'} — your run is safe. Take a breath.`;
+        }
+        if (clockEl) clockEl.textContent = this.formatClock(status.elapsedTime || 0);
+        const confirm = document.getElementById('pause-confirm');
+        if (confirm) confirm.hidden = true;
+        const quit = document.getElementById('pause-quit');
+        if (quit) quit.hidden = false;
+        const engine = this.engine;
+        this._pausedByOverlay = engine?.state === GAME_STATES.RUNNING || engine?.state === 'running';
+        try { if (this._pausedByOverlay) engine.pause(); } catch { /* ignore */ }
+        // Timed modes track their own elapsed time from the wall clock, so the
+        // overlay must pause them as well or the clock keeps ticking while the
+        // pause card says it is paused.
+        try {
+          if (typeof this.modeInstance?.pause === 'function') {
+            this.modeInstance.pause();
+            this._modePausedByOverlay = true;
+          }
+        } catch { /* ignore */ }
+        overlay.classList.add('active');
+        overlay.setAttribute('aria-hidden', 'false');
+        requestAnimationFrame(() => document.getElementById('pause-resume')?.focus());
+      }
+
+      hidePause({ resume = false } = {}) {
+        const overlay = document.getElementById('pause-overlay');
+        if (!overlay?.classList.contains('active')) return;
+        overlay.classList.remove('active');
+        overlay.setAttribute('aria-hidden', 'true');
+        if (resume) {
+          try {
+            if (this._modePausedByOverlay) this.modeInstance?.resume?.();
+          } catch { /* ignore */ }
+          this._modePausedByOverlay = false;
+          try { if (this._pausedByOverlay) this.engine.resume(); } catch { /* ignore */ }
+          this._pausedByOverlay = false;
+        } else {
+          // Quit/restart from the pause card: the mode instance is replaced anyway.
+          this._modePausedByOverlay = false;
+          this._pausedByOverlay = false;
+        }
+      }
+
+      restartCurrentLevel() {
+        this.hidePause();
+        if (this.modeInstance && typeof this.modeInstance.restart === 'function') {
+          this.modeInstance.restart();
+          this._initObjectivesPanel(this.currentMode);
+          this._startLevelTutorialFromMode();
+        } else {
+          this.startMode(this.currentMode);
+        }
+      }
+
+      bindPauseEvents() {
+        document.getElementById('pause-resume')?.addEventListener('click', () => this.hidePause({ resume: true }));
+        document.getElementById('pause-restart')?.addEventListener('click', () => this.restartCurrentLevel());
+        document.getElementById('pause-quit')?.addEventListener('click', () => {
+          const confirm = document.getElementById('pause-confirm');
+          const quit = document.getElementById('pause-quit');
+          if (confirm) confirm.hidden = false;
+          if (quit) quit.hidden = true;
+          document.getElementById('pause-confirm-leave')?.focus();
+        });
+        document.getElementById('pause-confirm-cancel')?.addEventListener('click', () => {
+          const confirm = document.getElementById('pause-confirm');
+          const quit = document.getElementById('pause-quit');
+          if (confirm) confirm.hidden = true;
+          if (quit) quit.hidden = false;
+          document.getElementById('pause-quit')?.focus();
+        });
+        document.getElementById('pause-confirm-leave')?.addEventListener('click', () => {
+          this.hidePause();
+          this.returnToMenu();
+        });
+      }
+
+      _inlineFormat(text) {
+        return escapeHtml(text)
+          .replace(/`([^`]+)`/g, '<code>$1</code>')
+          .replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>');
+      }
+
+      formatClock(totalSeconds) {
+        const s = Math.max(0, Math.floor(Number(totalSeconds) || 0));
+        return `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
+      }
+
+      // ── Responsive notice ("best on a desktop") ─────────────────────────────
+      bindResponsiveNotice() {
+        const continueBtn = document.getElementById('notice-continue');
+        continueBtn?.addEventListener('click', () => {
+          document.body.classList.add('continue-anyway');
+          document.getElementById('desktop-notice')?.classList.remove('active');
+          try { sessionStorage.setItem('osg_desktop_notice', 'continue'); } catch { /* ignore */ }
+        });
+        document.getElementById('notice-back')?.addEventListener('click', () => {
+          document.getElementById('desktop-notice')?.classList.remove('active');
+          this.returnToMenu();
+        });
+        try {
+          if (sessionStorage.getItem('osg_desktop_notice') === 'continue') document.body.classList.add('continue-anyway');
+        } catch { /* ignore */ }
+        window.addEventListener('resize', () => {
+          if (this.currentMode) this._maybeShowDesktopNotice();
+        });
+      }
+
+      /**
+       * The desktop recommendation is a GAME-only notice: the start page must
+       * always render at phone width. Only show this once a mode is launched.
+       */
+      _maybeShowDesktopNotice() {
+        if (!this.currentMode) return;
+        if (window.innerWidth > 900) return;
+        if (document.body.classList.contains('continue-anyway')) return;
+        const notice = document.getElementById('desktop-notice');
+        if (!notice || notice.classList.contains('active')) return;
+        notice.classList.add('active');
+        notice.setAttribute('aria-hidden', 'false');
       }
 
       selectPaletteResource(kind) {
@@ -798,31 +1284,88 @@
       }
 
       // ── Palette (generated from kindRegistry.PALETTE_SECTIONS) ──────────────
+      _paletteGroups() {
+        const essentials = ['Project', 'Node', 'Pod', 'Deployment', 'Service', 'Route'];
+        const groups = [{ id: 'essentials', label: 'Essentials', kinds: essentials, essential: true }];
+        for (const section of PALETTE_SECTIONS) {
+          const kinds = (section.kinds || []).filter((kind) => !essentials.includes(kind));
+          if (kinds.length === 0) continue;
+          groups.push({ id: section.id, label: section.label, kinds });
+        }
+        return groups;
+      }
+
       renderPalette() {
-        const palette = document.getElementById('resource-palette');
-        if (!palette) return;
+        const body = document.getElementById('palette-body');
+        if (!body) return;
 
         this._shortcutKinds = {};
         SHORTCUT_KINDS.forEach((kind, idx) => { this._shortcutKinds[String(idx + 1)] = kind; });
+        this._paletteQuery = '';
+        this._paletteCollapsed = new Set(this._paletteGroups().filter((g) => !g.essential).map((g) => g.id));
+        this._paletteGroupsData = this._paletteGroups();
 
         let html = '';
-        for (const section of PALETTE_SECTIONS) {
-          if (!section.kinds || section.kinds.length === 0) continue;
-          html += `<div class="palette-section-label">${escapeHtml(section.label)}</div>`;
-          for (const kind of section.kinds) {
-            const meta = paletteMeta(kind);
-            const shortcut = Object.entries(this._shortcutKinds).find(([, k]) => k === kind)?.[0];
-            const tooltip = `${escapeHtml(kind)}${shortcut ? ` <span class="keyboard-hint">${shortcut}</span>` : ''}`;
-            html += `
-              <div class="palette-item" data-resource="${escapeHtml(kind)}" draggable="true" role="button" tabindex="0" aria-label="Create ${escapeHtml(kind)}">
-                <div class="palette-icon">${SECTION_ICONS[section.id] || SECTION_ICONS.projects}</div>
-                <div class="palette-label">${escapeHtml(meta.label || kind)}</div>
-                <div class="palette-tooltip">${tooltip}</div>
-              </div>`;
-          }
-          html += '<div class="palette-separator"></div>';
+        for (const group of this._paletteGroupsData) {
+          const collapsed = this._paletteCollapsed.has(group.id);
+          html += `
+            <div class="palette-group${collapsed ? ' collapsed' : ''}" data-group="${escapeHtml(group.id)}">
+              <button class="palette-group-head" type="button" aria-expanded="${!collapsed}">
+                <svg class="palette-chevron" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M3 4.5 6 7.5 9 4.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                <span class="palette-group-name">${escapeHtml(group.label)}</span>
+                <span class="palette-group-count">${group.kinds.length}</span>
+              </button>
+              <div class="palette-group-body">
+                ${group.kinds.map((kind) => {
+                  const meta = paletteMeta(kind);
+                  const shortcut = Object.entries(this._shortcutKinds).find(([, k]) => k === kind)?.[0];
+                  return `
+                    <div class="palette-item" data-resource="${escapeHtml(kind)}" draggable="true" role="button" tabindex="0" aria-label="Create ${escapeHtml(kind)}">
+                      <span class="palette-icon">${SECTION_ICONS[meta.section] || SECTION_ICONS.projects}</span>
+                      <span class="palette-label">${escapeHtml(meta.label || kind)}</span>
+                      ${shortcut ? `<kbd class="palette-shortcut">${shortcut}</kbd>` : ''}
+                    </div>`;
+                }).join('')}
+              </div>
+            </div>`;
         }
-        palette.innerHTML = html;
+        body.innerHTML = html;
+
+        // Empty search state, kept in the DOM so the panel never collapses to nothing.
+        body.insertAdjacentHTML('beforeend', '<div class="palette-empty" hidden><span>No kinds match that search.</span><button class="btn-quiet palette-empty-clear" type="button">Clear search</button></div>');
+      }
+
+      _setPaletteCollapsed(groupId, collapsed) {
+        if (!this._paletteCollapsed) return;
+        if (collapsed) this._paletteCollapsed.add(groupId);
+        else this._paletteCollapsed.delete(groupId);
+        const group = document.querySelector(`#palette-body .palette-group[data-group="${CSS.escape(groupId)}"]`);
+        if (!group) return;
+        group.classList.toggle('collapsed', collapsed);
+        group.querySelector('.palette-group-head')?.setAttribute('aria-expanded', String(!collapsed));
+      }
+
+      _filterPalette(rawQuery) {
+        const body = document.getElementById('palette-body');
+        if (!body) return;
+        const query = String(rawQuery || '').trim().toLowerCase();
+        this._paletteQuery = query;
+        body.classList.toggle('filtering', query.length > 0);
+        const clear = document.getElementById('palette-search-clear');
+        if (clear) clear.hidden = query.length === 0;
+        let anyMatch = false;
+        for (const item of body.querySelectorAll('.palette-item')) {
+          const haystack = `${item.dataset.resource || ''} ${item.querySelector('.palette-label')?.textContent || ''}`.toLowerCase();
+          const match = !query || haystack.includes(query);
+          item.classList.toggle('filtered-out', !match);
+          if (match) anyMatch = true;
+        }
+        for (const group of body.querySelectorAll('.palette-group')) {
+          const visible = group.querySelectorAll('.palette-item:not(.filtered-out)').length;
+          group.classList.toggle('empty', visible === 0);
+        }
+        const empty = body.querySelector('.palette-empty');
+        if (empty) empty.hidden = anyMatch || !query;
       }
 
       bindPalette() {
@@ -859,10 +1402,35 @@
         });
 
         palette.addEventListener('click', (e) => {
+          const groupHead = e.target.closest('.palette-group-head');
+          if (groupHead) {
+            const group = groupHead.closest('.palette-group');
+            const groupId = group?.dataset.group;
+            if (groupId) this._setPaletteCollapsed(groupId, !group.classList.contains('collapsed'));
+            return;
+          }
           const item = e.target.closest('.palette-item');
           if (!item) return;
           const rect = canvas.getBoundingClientRect();
           this.placeResource(item.dataset.resource, rect.left + rect.width / 2, rect.top + rect.height / 2);
+        });
+
+        const search = document.getElementById('palette-search');
+        search?.addEventListener('input', () => this._filterPalette(search.value));
+        search?.addEventListener('keydown', (e) => {
+          if (e.key === 'Escape') {
+            search.value = '';
+            this._filterPalette('');
+            search.blur();
+          }
+        });
+        const clearSearch = () => {
+          if (search) search.value = '';
+          this._filterPalette('');
+        };
+        document.getElementById('palette-search-clear')?.addEventListener('click', clearSearch);
+        palette.addEventListener('click', (e) => {
+          if (e.target.closest('.palette-empty-clear')) clearSearch();
         });
 
         canvas.addEventListener('dragover', (e) => {
@@ -892,6 +1460,8 @@
         document.getElementById('btn-manifests')?.addEventListener('click', () => this.showFiles());
         document.getElementById('btn-exam-prep')?.addEventListener('click', () => this.showExamPrep());
         document.getElementById('btn-export-yaml')?.addEventListener('click', () => this.exportClusterYAML());
+        document.getElementById('btn-terminal')?.addEventListener('click', () => this.commandBar?.toggle?.());
+        document.getElementById('hud-menu')?.addEventListener('click', () => this.showPause());
       }
 
       // ── Placement ───────────────────────────────────────────────────────────
@@ -1400,13 +1970,27 @@
         ui.show();
       }
 
-      _showToast(message) {
+      _showToast(message, tone = 'info', options = {}) {
         document.querySelectorAll('.os-toast').forEach((el) => el.remove());
         const toast = document.createElement('div');
-        toast.className = 'os-toast';
-        toast.textContent = message;
+        toast.className = `os-toast os-toast-${tone}`;
+        toast.setAttribute('role', 'status');
+        toast.setAttribute('aria-live', 'polite');
+        toast.innerHTML = `
+          <span class="os-toast-mark" aria-hidden="true"></span>
+          <span class="os-toast-text">${escapeHtml(message)}</span>
+          ${options.actionLabel ? `<button class="os-toast-action" type="button">${escapeHtml(options.actionLabel)}</button>` : ''}`;
         document.body.appendChild(toast);
-        setTimeout(() => { toast.classList.add('os-toast-out'); setTimeout(() => toast.remove(), 300); }, 3200);
+        toast.querySelector('.os-toast-action')?.addEventListener('click', () => {
+          options.onAction?.();
+          toast.remove();
+        });
+        const life = Number(options.duration) || 3600;
+        setTimeout(() => {
+          toast.classList.add('os-toast-out');
+          setTimeout(() => toast.remove(), 260);
+        }, life);
+        return toast;
       }
 
       getPlacementPosition() {
@@ -1423,37 +2007,21 @@
         const allResources = cluster.getAllResources();
         if (allResources.length === 0) return;
 
-        const tiers = {};
-        let tierIndex = 0;
-        for (const section of PALETTE_SECTIONS) {
-          const kinds = Object.keys(KIND_DEFS).filter((k) => (KIND_DEFS[k].palette?.section || 'projects') === section.id);
-          if (kinds.length === 0) continue;
-          tiers[section.id] = { kinds, z: -10 + tierIndex * 4.5, spacing: Math.max(2.4, Math.min(4, 18 / kinds.length)) };
-          tierIndex++;
+        // Single source of truth for the layout: the renderer's registry-derived
+        // tiers (wrapped, compact, with floor zones). It also re-frames the camera
+        // once the move finishes, so the result always fits the viewport.
+        try {
+          const targets = typeof this.renderer.autoAlign === 'function'
+            ? this.renderer.autoAlign(cluster, { duration: 800 })
+            : new Map();
+          for (const [uid, pos] of targets) this.placedPositions.set(uid, pos);
+        } catch (err) {
+          console.warn(`${APP_NAME}: auto-align failed`, err);
         }
-
-        const targets = new Map();
-        for (const tier of Object.values(tiers)) {
-          const resources = allResources.filter((r) => tier.kinds.includes(r.kind));
-          if (resources.length === 0) continue;
-          const totalWidth = (resources.length - 1) * tier.spacing;
-          const startX = -totalWidth / 2;
-          resources.forEach((r, i) => {
-            targets.set(r.uid || r.metadata?.uid, { x: startX + i * tier.spacing, y: 0, z: tier.z });
-          });
-        }
-
-        const unmatched = allResources.filter((r) => !targets.has(r.uid || r.metadata?.uid));
-        if (unmatched.length > 0) {
-          const startX = -((unmatched.length - 1) * 3) / 2;
-          unmatched.forEach((r, i) => targets.set(r.uid || r.metadata?.uid, { x: startX + i * 3, y: 0, z: 34 }));
-        }
-
-        if (typeof this.renderer.animateToPositions === 'function') {
-          this.renderer.animateToPositions(targets, 800);
-        }
-        for (const [uid, pos] of targets) this.placedPositions.set(uid, pos);
-        setTimeout(() => this.renderer?.resetCamera?.(), 200);
+        setTimeout(() => {
+          if (typeof this.renderer?.fitToView === 'function') this.renderer.fitToView({ animate: true, duration: 700 });
+          else this.renderer?.resetCamera?.();
+        }, 860);
       }
 
       // ── Modes / launch ──────────────────────────────────────────────────────
@@ -1478,7 +2046,15 @@
           this._showWebGLError();
           return;
         }
+        // The start page's live renderer becomes the full-screen game view.
+        try {
+          this.startMenu?.hideScene?.();
+        } catch (err) {
+          console.warn(`${APP_NAME}: start page teardown failed`, err);
+        }
         this.examPrepUI?.hide?.();
+        this.hidePause();
+        this.currentMode = mode;
 
         this._pendingLevelTutorial = false;
         this._clearTutorialOverlay();
@@ -1486,6 +2062,8 @@
         document.getElementById('level-select')?.classList.remove('active');
         document.getElementById('challenge-select')?.classList.remove('active');
         document.getElementById('game-container')?.classList.add('active');
+        this._maybeShowDesktopNotice();
+        document.getElementById('palette-search')?.value && this._filterPalette('');
 
         for (const uid of [...(this.renderer?.resourceMeshes?.keys() || [])]) this.renderer.removeResource(uid);
         this.placedPositions.clear();
@@ -1503,10 +2081,6 @@
         this.minimap.init();
 
         this.applySettings();
-        // ?tutorial=0 skips the intro modal (used by screenshots/verifier).
-        let skipTutorial = false;
-        try { skipTutorial = new URLSearchParams(window.location.search).get('tutorial') === '0'; } catch {}
-        if (!skipTutorial) this.showTutorial(mode);
         this.renderer.start();
         this.engine.start();
 
@@ -1514,7 +2088,7 @@
           switch (mode) {
             case 'campaign':
               this.modeInstance = new CampaignMode(this.engine, this.incidentEngine, this.scoringEngine);
-              this.modeInstance.startLevel(levelOrChallenge || 1);
+              if (this.modeInstance.startLevel(levelOrChallenge || 1) === false) this.modeInstance.startLevel(1);
               break;
             case 'chaos':
               this.modeInstance = new ChaosMode(this.engine, this.incidentEngine, this.scoringEngine);
@@ -1537,6 +2111,10 @@
         }
 
         this._initObjectivesPanel(mode);
+        // ?tutorial=0 skips the intro modal (used by screenshots/verifier).
+        let skipTutorial = false;
+        try { skipTutorial = new URLSearchParams(window.location.search).get('tutorial') === '0'; } catch {}
+        if (!skipTutorial) this.showTutorial(mode);
 
         // Lay out everything present after mode setup: seeded OpenShift defaults plus the
         // mode's starting resources. Uses the renderer's registry-derived tiers and the
@@ -1589,58 +2167,54 @@
         panel.style.display = '';
         this._hintIndex = 0;
         this._panelCollapsed = false;
+        this._objSig = '';
         const hintList = document.getElementById('hint-list');
         if (hintList) hintList.innerHTML = '';
         const body = document.getElementById('obj-panel-body');
         if (body) body.style.display = '';
         const toggle = document.getElementById('obj-panel-toggle');
-        if (toggle) toggle.innerHTML = '&#9660;';
+        if (toggle) {
+          toggle.setAttribute('aria-expanded', 'true');
+          toggle.onclick = () => {
+            this._panelCollapsed = !this._panelCollapsed;
+            const panelBody = document.getElementById('obj-panel-body');
+            if (panelBody) panelBody.style.display = this._panelCollapsed ? 'none' : '';
+            panel.classList.toggle('collapsed', this._panelCollapsed);
+            toggle.setAttribute('aria-expanded', String(!this._panelCollapsed));
+          };
+        }
 
         const levelDef = this._getLevelDef();
         const allHints = levelDef?.hints || [];
         const hintBtn = document.getElementById('btn-show-hint');
         const hintSection = document.getElementById('hint-section');
         if (allHints.length > 0) {
-          if (hintSection) hintSection.style.display = '';
+          if (hintSection) { hintSection.style.display = ''; hintSection.hidden = false; }
           if (hintBtn) {
             hintBtn.style.display = '';
-            hintBtn.innerHTML = `<svg class="w-3.5 h-3.5 shrink-0" fill="currentColor" viewBox="0 0 20 20" aria-hidden="true"><path d="M11 3a1 1 0 10-2 0v1a1 1 0 102 0V3zM15.657 5.757a1 1 0 00-1.414-1.414l-.707.707a1 1 0 001.414 1.414l.707-.707zM18 10a1 1 0 01-1 1h-1a1 1 0 110-2h1a1 1 0 011 1zM5.05 6.464A1 1 0 106.464 5.05l-.707-.707a1 1 0 00-1.414 1.414l.707.707zM4 11a1 1 0 100-2H3a1 1 0 000 2h1zM10 18a3 3 0 01-2.83-2h5.66A3 3 0 0110 18zM13 14H7v-1a3 3 0 01.879-2.121l.707-.707A5 5 0 0010 5a5 5 0 00-1.414 0A5 5 0 005 10c0 1.38.56 2.63 1.464 3.536L7 14z"/></svg><span>Show Hint (${allHints.length})</span>`;
+            hintBtn.hidden = false;
+            hintBtn.querySelector('span').textContent = `Show hint (${allHints.length})`;
+            hintBtn.onclick = () => {
+              if (!this.modeInstance?.useHint) return;
+              const hint = this.modeInstance.useHint(this._hintIndex);
+              if (!hint) return;
+              const list = document.getElementById('hint-list');
+              const div = document.createElement('div');
+              div.className = 'hint-row';
+              div.innerHTML = `<span class="hint-index">${this._hintIndex + 1}</span><span class="hint-text">${escapeHtml(hint)}</span>`;
+              list?.appendChild(div);
+              this._hintIndex++;
+              if (this._hintIndex >= allHints.length) hintBtn.style.display = 'none';
+              else hintBtn.querySelector('span').textContent = `Show hint (${allHints.length - this._hintIndex} left)`;
+            };
           }
         } else {
           if (hintSection) hintSection.style.display = 'none';
-          if (hintBtn) hintBtn.style.display = 'none';
+          if (hintBtn) { hintBtn.style.display = 'none'; hintBtn.hidden = true; }
         }
 
         const status = this.modeInstance?.getStatus?.();
         if (status) this._updateObjectivesPanel(status);
-
-        if (toggle) {
-          toggle.onclick = () => {
-            this._panelCollapsed = !this._panelCollapsed;
-            document.getElementById('obj-panel-body').style.display = this._panelCollapsed ? 'none' : '';
-            toggle.innerHTML = this._panelCollapsed ? '&#9654;' : '&#9660;';
-          };
-        }
-
-        if (hintBtn) {
-          hintBtn.onclick = () => {
-            if (!this.modeInstance?.useHint) return;
-            const hint = this.modeInstance.useHint(this._hintIndex);
-            if (!hint) return;
-            const list = document.getElementById('hint-list');
-            const div = document.createElement('div');
-            div.className = 'flex items-start gap-1.5 text-[11px] text-amber-400/70 leading-relaxed';
-            div.innerHTML = `<span class="text-amber-400/50 mt-px shrink-0">&#128161;</span><span>${escapeHtml(hint)}</span>`;
-            list?.appendChild(div);
-            this._hintIndex++;
-            const all = this._getLevelDef()?.hints || [];
-            if (this._hintIndex >= all.length) hintBtn.style.display = 'none';
-            else {
-              const label = hintBtn.querySelector('span');
-              if (label) label.textContent = `Show Hint (${all.length - this._hintIndex} left)`;
-            }
-          };
-        }
 
         if (this._objUpdateInterval) clearInterval(this._objUpdateInterval);
         this._objUpdateInterval = setInterval(() => {
@@ -1653,31 +2227,68 @@
         const titleEl = document.getElementById('obj-panel-title');
         const descEl = document.getElementById('obj-panel-desc');
         const listEl = document.getElementById('obj-list');
+        const metaEl = document.getElementById('obj-panel-meta');
         if (!titleEl || !status) return;
         const levelDef = this._getLevelDef();
         const isChallenge = this.currentMode === 'challenge';
+        const objectives = status.objectives || [];
+        const done = objectives.filter((o) => o.completed).length;
+        const total = objectives.length;
 
-        if (isChallenge) {
-          const mins = Math.floor((status.timeRemaining || 0) / 60);
-          const secs = (status.timeRemaining || 0) % 60;
-          const timeStr = `${mins}:${String(secs).padStart(2, '0')}`;
-          const urgentClass = (status.timeRemaining || 0) <= 30 ? 'text-red-400' : 'text-sky-400';
-          titleEl.innerHTML = `<span class="truncate">${escapeHtml(status.title || 'Lab')}</span><span class="${urgentClass} font-mono text-[11px] ml-auto pl-2 shrink-0">${timeStr}</span>`;
-        } else {
-          titleEl.textContent = `L${status.currentLevel || '?'} - ${status.levelTitle || ''}`;
+        if (metaEl) {
+          if (isChallenge) {
+            const left = status.timeRemaining || 0;
+            metaEl.textContent = `Timed lab ${status.challengeId || ''} · ${this.formatClock(left)} left`.trim();
+            metaEl.dataset.urgent = String(left <= 30);
+          } else {
+            metaEl.textContent = `Campaign · Level ${status.currentLevel || '?'}${status.chapterName ? ` · ${status.chapterName}` : ''}`;
+            delete metaEl.dataset.urgent;
+          }
         }
-        if (descEl) descEl.textContent = levelDef?.description || '';
+        titleEl.textContent = isChallenge
+          ? (status.title || 'Timed lab')
+          : (status.levelTitle ? `L${status.currentLevel || '?'} · ${status.levelTitle}` : `Level ${status.currentLevel || '?'}`);
+        if (descEl) descEl.innerHTML = this._inlineFormat(levelDef?.description || '');
 
-        if (listEl) {
+        const progressLabel = document.getElementById('obj-progress-label');
+        if (progressLabel) progressLabel.textContent = `${done} / ${total} objective${total === 1 ? '' : 's'}`;
+        const fill = document.getElementById('obj-progress-fill');
+        if (fill) {
+          fill.style.width = `${total ? Math.round((done / total) * 100) : 0}%`;
+          fill.classList.toggle('is-complete', total > 0 && done === total);
+        }
+
+        const nextWrap = document.getElementById('mission-next');
+        const nextText = document.getElementById('mission-next-text');
+        const pending = objectives.find((o) => !o.completed);
+        if (nextWrap && nextText) {
+          if (pending) {
+            nextWrap.hidden = false;
+            nextText.textContent = pending.label || pending.type || 'Continue';
+          } else if (total > 0) {
+            nextWrap.hidden = false;
+            nextText.textContent = 'All objectives complete — nice work.';
+          } else {
+            nextWrap.hidden = true;
+          }
+        }
+
+        const signature = `${isChallenge ? status.timeRemaining : ''}|${objectives.map((o) => `${o.completed ? 1 : 0}:${o.current || 0}`).join(',')}`;
+        if (listEl && signature !== this._objSig) {
+          this._objSig = signature;
           listEl.innerHTML = '';
-          for (const obj of status.objectives || []) {
-            const done = obj.completed;
-            const div = document.createElement('div');
-            div.className = `flex items-start gap-2 py-1 px-2 rounded-md text-xs ${done ? 'bg-green-500/8' : 'bg-white/3'}`;
-            const icon = done ? '<span class="text-green-400 shrink-0">&#10003;</span>' : '<span class="text-white/30 shrink-0">&#9675;</span>';
-            const progress = obj.target > 1 ? ` <span class="text-white/30 font-mono">${obj.current || 0}/${obj.target}</span>` : '';
-            div.innerHTML = `${icon}<span class="${done ? 'text-green-400/80 line-through' : 'text-white/70'}">${escapeHtml(obj.label || obj.type)}${progress}</span>`;
-            listEl.appendChild(div);
+          for (const obj of objectives) {
+            const isDone = Boolean(obj.completed);
+            const row = document.createElement('div');
+            row.className = `obj-row${isDone ? ' done' : ''}`;
+            row.setAttribute('role', 'listitem');
+            const progress = obj.target > 1 && !isDone ? ` <span class="obj-count">${Math.min(obj.current || 0, obj.target)}/${obj.target}</span>` : '';
+            row.innerHTML = `
+              <span class="obj-check" aria-hidden="true">${isDone
+                ? '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="m3.5 8.5 3 3 6-7" stroke-linecap="round" stroke-linejoin="round"/></svg>'
+                : ''}</span>
+              <span class="obj-label">${escapeHtml(obj.label || obj.type || 'Objective')}${progress}</span>`;
+            listEl.appendChild(row);
           }
         }
 
@@ -1697,6 +2308,10 @@
           clearInterval(this._objUpdateInterval);
           this._objUpdateInterval = null;
         }
+        this.hidePause();
+        const notice = document.getElementById('desktop-notice');
+        notice?.classList.remove('active');
+        notice?.setAttribute('aria-hidden', 'true');
         const panel = document.getElementById('objectives-panel');
         if (panel) panel.style.display = 'none';
         this._clearTutorialOverlay();
@@ -1713,9 +2328,20 @@
         this.currentMode = null;
         document.getElementById('game-container')?.classList.remove('active');
         document.getElementById('main-menu')?.classList.remove('hidden');
+        document.body.classList.remove('terminal-open');
+        for (const ui of [this.commandBar, this.inspector, this.contextMenu, this.metrics, this.incidentPanel, this.minimap]) {
+          try { ui?.destroy?.(); } catch { /* already gone */ }
+        }
         document.querySelectorAll('#hud, #command-bar, #inspector-panel, #context-menu, #context-menu-container, #metrics-dashboard, #incident-panel, #minimap, #minimap-container').forEach((el) => el?.remove());
         for (const uid of [...(this.renderer?.resourceMeshes?.keys() || [])]) this.renderer.removeResource(uid);
         this.placedPositions.clear();
+        // Rebuild the live diorama inside the start page hero stage (must run after
+        // the renderer meshes above have been cleared).
+        try {
+          this.startMenu?.showScene?.();
+        } catch (err) {
+          console.warn(`${APP_NAME}: start page scene restore failed`, err);
+        }
       }
 
       // ── Render sync (connections live here, not in the renderer) ────────────
@@ -1868,88 +2494,105 @@
       showTutorial(mode) {
         document.getElementById('tutorial-overlay')?.remove();
         const modeNames = {
-          sandbox: 'Sandbox Mode',
-          chaos: 'Chaos Mode',
+          sandbox: 'Sandbox',
+          chaos: 'Chaos mode',
           campaign: 'EX280 Campaign',
-          challenge: 'Timed EX280 Labs',
+          challenge: 'Timed Labs',
           examprep: 'EX280 Prep',
         };
+        const levelDef = this._getLevelDef();
+        const isCampaign = mode === 'campaign' && levelDef;
+        const isChallenge = mode === 'challenge' && levelDef;
         const modeGoals = {
-          sandbox: 'Build any OpenShift platform you want. Create Projects, deploy applications, expose Routes and let the Architecture Advisor score your design 0–100.',
-          chaos: 'Survive as long as possible. Incidents escalate over time — if cluster health hits zero, the platform goes down. Fix issues fast for combo XP.',
-          campaign: 'Complete objectives across 5 EX280 chapters to pass each level. Faster completion with fewer resources earns more stars (3 max).',
-          challenge: 'Beat the clock. Deploy and configure the required OpenShift resources before time runs out.',
-          examprep: 'Track every EX280V422 objective, practice quick labs, and read the oc cheat sheet. Readiness verdict appears at 90% mastered.',
+          sandbox: 'A free build of a whole OpenShift platform. Create Projects, deploy workloads and expose Routes — the Architecture Advisor scores the result.',
+          chaos: 'A live platform under fire. Incidents escalate over time; keep cluster health above zero and fix what breaks.',
+          campaign: 'One EX280 skill at a time. Every level has a short mission, a checklist and hints whenever you want them.',
+          challenge: 'A timed EX280 lab. Same tools as the real exam, a clock, and hints that help without failing you.',
+          examprep: 'Track the official EX280V422 objectives, run quick labs and read the oc cheat sheet.',
         };
-        const controls = [
-          { key: 'Click palette', desc: 'Create a resource from the kind registry' },
-          { key: 'Drag resource', desc: 'Move it anywhere in the 3D cluster view' },
-          { key: 'Click resource', desc: 'Inspect it (Overview / YAML / Describe / Events)' },
-          { key: 'Right-click', desc: 'OpenShift actions: expose, start build, scale, rollback, delete' },
-          { key: '/', desc: '$ oc terminal — get, describe, new-app, expose, apply -f, …' },
-          { key: 'F', desc: 'Files / manifests panel (apply -f, apply -k, templates, Helm)' },
-          { key: '?', desc: 'EX280 Prep — objective tracker, quick labs, cheat sheet' },
-          { key: 'H', desc: 'Re-open this help' },
-          { key: 'Space', desc: 'Pause / resume the simulation' },
-          { key: 'M', desc: 'Toggle live metrics dashboard' },
-          { key: '1–9', desc: 'Quick-select a palette resource' },
-          { key: 'Esc', desc: 'Close panel / return to main menu' },
-        ];
-        const modeRules = {
+        const defaultMoves = {
           sandbox: [
-            'Start with the default platform Projects and Nodes — add more from the palette',
-            'Create a <b>Project</b> first, then deploy workloads (<b>Deployment</b>) into it',
-            'Expose a <b>Service</b>, then a <b>Route</b> (<code>oc expose svc/&lt;name&gt;</code>) for external traffic',
-            'Use the <b>Files</b> panel for declarative YAML, Kustomize overlays, templates and Helm',
-            'Architecture Advisor scores: HA, security, networking, storage, scaling, RBAC, quotas, probes, config, cost',
+            'Create a <b>Project</b> from the palette, then a <b>Deployment</b> inside it.',
+            'Expose it with a <b>Service</b>, then a <b>Route</b> — or run <code>oc expose svc/&lt;name&gt;</code>.',
+            'Press <kbd>/</kbd> for the oc terminal, <kbd>F</kbd> for manifests, <kbd>H</kbd> for this guide.',
           ],
           chaos: [
-            'You start with a running OpenShift platform — keep it alive',
-            'Incidents appear as alerts in the top bar and the Incidents panel',
-            'Investigate with <code>oc describe</code>, <code>oc logs</code>, <code>oc get events</code>',
-            'Resolve incidents by fixing the actual resource state where possible',
-            'Difficulty and incident rate increase over time',
+            'Watch the <b>incident bell</b> in the top bar for new alerts.',
+            'Investigate with <code>oc describe</code>, <code>oc logs</code> and <code>oc get events</code>.',
+            'Fix the underlying resource, or resolve the incident from the Incidents panel.',
           ],
           campaign: [
-            'Ch 1 — Manage OpenShift: Projects, <code>oc</code> CLI, querying, declarative basics',
-            'Ch 2 — Declarative &amp; Kustomize: manifests, overlays, ConfigMaps/Secrets, templates, Helm',
-            'Ch 3 — Deploy &amp; Expose: images/builds/ImageStreams, rollouts, Services, Routes with TLS',
-            'Ch 4 — Identity, RBAC &amp; self-service: HTPasswd, users/groups, quotas, LimitRanges, SAs',
-            'Ch 5 — Security &amp; Operations: SCC, operators, jobs/cronjobs, final production platform',
+            'Read the <b>mission card</b> on the left — it lists every objective.',
+            'Complete the first objective; press <kbd>/</kbd> to use the oc terminal.',
+            'Stuck? <b>Show hint</b> reveals the next step — using hints never fails a level.',
           ],
           challenge: [
-            '<b>Click resources</b> in the palette or use the <code>oc</code> terminal to create resources',
-            '<b>Names matter</b> — a name prompt appears so you can match objective names',
-            '<b>Show Hint</b> on the objectives panel gives step-by-step <code>oc</code> commands',
-            '<b>F</b> opens the Files panel; many labs provide manifests and overlays',
-            'Right-click any resource for OpenShift actions: Expose, Start Build, Scale, Rollout, Delete',
+            'Read the mission card; the clock starts now.',
+            'Create resources from the palette or with the <b>oc</b> terminal.',
+            '<b>Show hint</b> gives the next command — it costs you time, never the level.',
           ],
         };
-        const rules = modeRules[mode] || modeRules.sandbox;
+        const fallbackMoves = defaultMoves[mode] || defaultMoves.sandbox;
+        const formatHint = (hint) => escapeHtml(hint)
+          .replace(/`([^`]+)`/g, '<code>$1</code>')
+          .replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>');
+        const hintMoves = (levelDef?.hints || []).slice(0, 3).map(formatHint);
+        const moves = hintMoves.length > 0 ? hintMoves : fallbackMoves;
+        const objectiveLabels = (levelDef?.objectives || []).map((objective) => objective.label || objective.type).filter(Boolean);
+        const title = isCampaign
+          ? `L${levelDef.id} · ${levelDef.title}`
+          : isChallenge
+            ? levelDef.title
+            : modeNames[mode] || mode;
+        const kicker = isCampaign
+          ? `Campaign · Level ${levelDef.id}${levelDef.chapterName ? ` · ${levelDef.chapterName}` : ''}`
+          : isChallenge
+            ? `Timed lab · ${Math.round((levelDef.timeLimit || 0) / 60)} minutes`
+            : `${modeNames[mode] || mode} · OpenShift 4.22`;
+        const startLabel = isCampaign || isChallenge ? 'Start level' : 'Start exploring';
+        const objectivesBlock = objectiveLabels.length > 0
+          ? `<div class="intro-block">
+               <h3 class="intro-block-title">Your objectives</h3>
+               <ol class="intro-objectives">
+                 ${objectiveLabels.slice(0, 6).map((label) => `<li>${escapeHtml(label)}</li>`).join('')}
+               </ol>
+             </div>`
+          : `<div class="intro-block">
+               <h3 class="intro-block-title">What good looks like</h3>
+               <p class="intro-note">${escapeHtml(modeGoals[mode] || '')}</p>
+             </div>`;
 
         const overlay = document.createElement('div');
         overlay.id = 'tutorial-overlay';
         overlay.innerHTML = `
-          <div class="tutorial-card">
-            <div class="tutorial-header">
-              <div class="tutorial-mode">${escapeHtml(modeNames[mode] || mode)}</div>
-              <div class="tutorial-desc">${modeGoals[mode] || ''}</div>
+          <div class="intro-card" role="dialog" aria-modal="true" aria-labelledby="tutorial-title">
+            <header class="intro-head">
+              <div class="intro-kicker">${escapeHtml(kicker)}</div>
+              <h2 id="tutorial-title" class="intro-title">${escapeHtml(title)}</h2>
+              <p class="intro-lede">${escapeHtml(levelDef?.description || modeGoals[mode] || '')}</p>
+            </header>
+            <div class="intro-grid">
+              ${objectivesBlock}
+              <div class="intro-block">
+                <h3 class="intro-block-title">First moves</h3>
+                <ol class="intro-steps">
+                  ${moves.map((move) => `<li>${move}</li>`).join('')}
+                </ol>
+              </div>
             </div>
-            <div class="tutorial-section-label">How to Play</div>
-            <div class="tutorial-tips">
-              ${rules.map((r) => `<div class="tutorial-tip"><span class="tutorial-bullet"></span><span class="tutorial-text">${r}</span></div>`).join('')}
+            <div class="intro-controls">
+              <span><kbd>/</kbd> oc terminal</span>
+              <span><kbd>F</kbd> Files &amp; manifests</span>
+              <span><kbd>H</kbd> this guide</span>
+              <span><kbd>Esc</kbd> pause</span>
             </div>
-            <div class="tutorial-section-label">Controls</div>
-            <div class="tutorial-tips">
-              ${controls.map((t) => `<div class="tutorial-tip"><span class="tutorial-key">${escapeHtml(t.key)}</span><span class="tutorial-text">${escapeHtml(t.desc)}</span></div>`).join('')}
-            </div>
-            <div class="tutorial-footer">
-              <a href="${DOCS_URL}" target="_blank" rel="noopener">OpenShift 4.22 docs</a>
-              <span>·</span>
-              <a href="${EXAM_URL}" target="_blank" rel="noopener">EX280 exam objectives</a>
-            </div>
-            <button id="tutorial-start" class="tutorial-btn">Got it, let's go</button>
-            <div class="tutorial-hint">Press <span class="tutorial-hint-key">H</span> anytime to reopen this</div>
+            <footer class="intro-foot">
+              <div class="intro-links">
+                <a href="${DOCS_URL}" target="_blank" rel="noopener">OpenShift 4.22 docs</a>
+                <a href="${EXAM_URL}" target="_blank" rel="noopener">EX280 objectives</a>
+              </div>
+              <button id="tutorial-start" class="btn-primary intro-start">${escapeHtml(startLabel)}</button>
+            </footer>
           </div>`;
         document.body.appendChild(overlay);
         const close = () => {
@@ -1962,7 +2605,7 @@
               this._pendingLevelTutorial = false;
               this._startLevelTutorialFromMode();
             }
-          }, 400);
+          }, 260);
         };
         document.getElementById('tutorial-start').addEventListener('click', close);
         overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
@@ -1977,11 +2620,13 @@
         document.getElementById('level-tutorial-overlay')?.remove();
         document.querySelectorAll('.coach-target').forEach((el) => el.classList.remove('coach-target'));
         this._tutorialQueue = null;
+        this._tutorialTotal = 0;
       }
 
       _startLevelTutorial(steps) {
         this._clearTutorialOverlay();
         this._tutorialQueue = [...steps];
+        this._tutorialTotal = steps.length;
         this._showTutorialStep();
       }
 
@@ -2004,14 +2649,18 @@
         const overlay = document.createElement('div');
         overlay.id = 'level-tutorial-overlay';
         overlay.className = 'coach-card-wrap';
-        const remaining = this._tutorialQueue.length;
+        const done = this._tutorialTotal - (this._tutorialQueue?.length || 0);
+        const isLast = (this._tutorialQueue?.length || 0) === 0;
         overlay.innerHTML = `
           <div class="coach-card">
-            <div class="coach-step">Tutorial · ${remaining === 0 ? 'last step' : `${remaining} step${remaining === 1 ? '' : 's'} left`}</div>
+            <div class="coach-head">
+              <span class="coach-step">Step ${done} of ${this._tutorialTotal}</span>
+              <div class="coach-dots" aria-hidden="true">${Array.from({ length: this._tutorialTotal }, (_, i) => `<span class="coach-dot${i < done ? ' on' : ''}"></span>`).join('')}</div>
+            </div>
             <div class="coach-text">${step.text || ''}</div>
             <div class="coach-actions">
-              <button id="coach-skip" class="coach-skip">Skip tutorial</button>
-              <button id="coach-next" class="coach-next">${remaining === 0 ? 'Start' : 'Next'}</button>
+              <button id="coach-skip" class="coach-skip" type="button">Skip guide</button>
+              <button id="coach-next" class="coach-next" type="button">${isLast ? 'Start playing' : 'Next'}</button>
             </div>
           </div>`;
         document.body.appendChild(overlay);
@@ -2020,53 +2669,114 @@
       }
 
       // ── Select screens ─────────────────────────────────────────────────────
+      _progressSnapshot() {
+        const progress = this.scoringEngine ? this.scoringEngine.progress : {};
+        return {
+          campaignProgress: progress.campaignProgress || {},
+          challengeProgress: progress.challengeProgress || {},
+        };
+      }
+
       buildLevelSelect() {
         const grid = document.getElementById('level-grid');
         if (!grid) return;
         grid.innerHTML = '';
-        const progress = this.scoringEngine ? this.scoringEngine.progress : { campaignProgress: {} };
-        const campaignProgress = progress.campaignProgress || {};
-        let currentChapter = 0;
+        const { campaignProgress } = this._progressSnapshot();
+        const completedIds = (CAMPAIGN_LEVELS || []).filter((level) => campaignProgress[level.id]?.completed).map((level) => level.id);
+        const progressLabel = document.getElementById('level-select-progress');
+        if (progressLabel) progressLabel.textContent = `${completedIds.length} / ${(CAMPAIGN_LEVELS || []).length} complete`;
 
-        (CAMPAIGN_LEVELS || []).forEach((level) => {
-          const chapter = level.chapter || Math.ceil(level.id / 4);
-          if (chapter !== currentChapter) {
-            currentChapter = chapter;
-            const chapterInfo = (CHAPTERS || [])[chapter - 1] || { name: `Chapter ${chapter}` };
-            const header = document.createElement('div');
-            header.className = 'chapter-header';
-            header.textContent = `Chapter ${chapter}: ${chapterInfo.name || chapterInfo.title || ''}`;
-            grid.appendChild(header);
-          }
-          const card = document.createElement('div');
+        let continueLevel = 1;
+        for (const level of CAMPAIGN_LEVELS || []) {
           const prevCompleted = level.id === 1 || campaignProgress[level.id - 1]?.completed;
           const isLocked = !prevCompleted;
-          const isCompleted = campaignProgress[level.id]?.completed;
-          const stars = campaignProgress[level.id]?.stars || 0;
-          card.className = `level-card ${isLocked ? 'locked' : ''} ${isCompleted ? 'completed' : ''}`;
-          card.innerHTML = `
-            <div class="level-number">${level.id}</div>
-            <div class="level-title">${escapeHtml(level.title || level.name || `Level ${level.id}`)}</div>
-            <div class="level-stars">${isCompleted ? '&#9733;'.repeat(stars) + '&#9734;'.repeat(Math.max(0, 3 - stars)) : '&#9734;&#9734;&#9734;'}</div>`;
-          if (!isLocked) card.addEventListener('click', () => this.launchGame('campaign', level.id));
-          grid.appendChild(card);
-        });
+          if (!isLocked && !campaignProgress[level.id]?.completed) { continueLevel = level.id; break; }
+        }
+        const continueBtn = document.getElementById('level-continue');
+        if (continueBtn) {
+          continueBtn.textContent = completedIds.length === 0 ? 'Start campaign' : `Continue · Level ${continueLevel}`;
+          continueBtn.onclick = () => this.launchGame('campaign', continueLevel);
+        }
+
+        for (const chapterInfo of CHAPTERS || []) {
+          const block = document.createElement('section');
+          block.className = 'chapter-block';
+          const chapterLevels = (CAMPAIGN_LEVELS || []).filter((level) => (level.chapter || 1) === chapterInfo.id);
+          const doneInChapter = chapterLevels.filter((level) => campaignProgress[level.id]?.completed).length;
+          block.innerHTML = `
+            <header class="chapter-row">
+              <div class="chapter-titles">
+                <h3 class="chapter-name">${escapeHtml(chapterInfo.name)}</h3>
+                <p class="chapter-desc">${escapeHtml(chapterInfo.description || '')}</p>
+              </div>
+              <span class="chapter-progress">${doneInChapter} / ${chapterLevels.length}</span>
+            </header>
+            <div class="chapter-levels"></div>`;
+          const levelsWrap = block.querySelector('.chapter-levels');
+          for (const level of chapterLevels) {
+            const prevCompleted = level.id === 1 || campaignProgress[level.id - 1]?.completed;
+            const isLocked = !prevCompleted;
+            const entry = campaignProgress[level.id];
+            const isCompleted = Boolean(entry?.completed);
+            const stars = entry?.stars || 0;
+            const isNext = level.id === continueLevel && !isCompleted;
+            const classes = ['level-card', isLocked ? 'locked' : '', isCompleted ? 'completed' : '', isNext ? 'next' : ''].filter(Boolean).join(' ');
+            const card = document.createElement('button');
+            card.type = 'button';
+            card.className = classes;
+            card.dataset.level = String(level.id);
+            card.disabled = isLocked;
+            card.innerHTML = `
+              <span class="level-number">${isLocked ? '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="3.5" y="7" width="9" height="6.5" rx="1.5"/><path d="M5.5 7V5a2.5 2.5 0 015 0v2" stroke-linecap="round"/></svg>' : level.id}</span>
+              <span class="level-body">
+                <span class="level-title">${escapeHtml(level.title || level.name || `Level ${level.id}`)}</span>
+                <span class="level-meta">${isCompleted ? 'Completed' : isLocked ? 'Locked — finish the previous level' : isNext ? 'Up next' : 'Ready'}</span>
+              </span>
+              <span class="level-tail">
+                ${isCompleted ? `<span class="level-stars" aria-label="${stars} of 3 stars">${'&#9733;'.repeat(stars)}${'&#9734;'.repeat(Math.max(0, 3 - stars))}</span>` : ''}
+                ${isLocked ? '' : `<span class="level-go" aria-hidden="true"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M6 4l4 4-4 4" stroke-linecap="round" stroke-linejoin="round"/></svg></span>`}
+              </span>`;
+            if (!isLocked) card.addEventListener('click', () => this.launchGame('campaign', level.id));
+            levelsWrap?.appendChild(card);
+          }
+          grid.appendChild(block);
+        }
       }
 
       buildChallengeSelect() {
         const grid = document.getElementById('challenge-grid');
         if (!grid) return;
         grid.innerHTML = '';
-        (CHALLENGES || []).forEach((ch, idx) => {
-          const card = document.createElement('div');
-          card.className = 'challenge-card';
+        const { challengeProgress } = this._progressSnapshot();
+        const completed = (CHALLENGES || []).filter((challenge) => challengeProgress[challenge.id]?.completed).length;
+        const progressLabel = document.getElementById('challenge-select-progress');
+        if (progressLabel) progressLabel.textContent = `${completed} / ${(CHALLENGES || []).length} complete`;
+        const firstOpen = (CHALLENGES || []).find((challenge) => !challengeProgress[challenge.id]?.completed) || (CHALLENGES || [])[0];
+        const continueBtn = document.getElementById('challenge-continue');
+        if (continueBtn && firstOpen) {
+          continueBtn.textContent = completed === 0 ? 'Start first lab' : `Continue · ${firstOpen.title}`;
+          continueBtn.onclick = () => this.launchGame('challenge', firstOpen.id);
+        }
+
+        (CHALLENGES || []).forEach((challenge, idx) => {
+          const entry = challengeProgress[challenge.id];
+          const isCompleted = Boolean(entry?.completed);
+          const minutes = Math.floor((challenge.timeLimit || 0) / 60);
+          const card = document.createElement('button');
+          card.type = 'button';
+          card.className = `challenge-card${isCompleted ? ' completed' : ''}`;
+          card.dataset.challenge = String(challenge.id || idx + 1);
           card.innerHTML = `
-            <div class="challenge-info">
-              <div class="challenge-name">${escapeHtml(ch.title || ch.name || `Lab ${idx + 1}`)}</div>
-              <div class="challenge-desc">${escapeHtml(ch.description || '')}</div>
-            </div>
-            <div class="challenge-time">${ch.timeLimit ? Math.floor(ch.timeLimit / 60) + ' min' : ''}</div>`;
-          card.addEventListener('click', () => this.launchGame('challenge', ch.id || idx + 1));
+            <span class="challenge-index">${String(idx + 1).padStart(2, '0')}</span>
+            <span class="challenge-info">
+              <span class="challenge-name">${escapeHtml(challenge.title || challenge.name || `Lab ${idx + 1}`)}</span>
+              <span class="challenge-desc">${escapeHtml((challenge.description || '').split('. ').slice(0, 2).join('. '))}</span>
+            </span>
+            <span class="challenge-tail">
+              <span class="challenge-time">${minutes} min</span>
+              ${isCompleted ? '<span class="challenge-done">Completed</span>' : '<span class="challenge-go" aria-hidden="true"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M6 4l4 4-4 4" stroke-linecap="round" stroke-linejoin="round"/></svg></span>'}
+            </span>`;
+          card.addEventListener('click', () => this.launchGame('challenge', challenge.id || idx + 1));
           grid.appendChild(card);
         });
       }

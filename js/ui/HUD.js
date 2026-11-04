@@ -1,34 +1,45 @@
 /**
- * HUD — top bar for the OpenShift Games cluster view (OCP 4.22 / EX280).
+ * HUD — in-game top bar for the OpenShift Games cluster view (OCP 4.22 / EX280).
  *
- * Shows the product identity, cluster health, OpenShift resource counters
- * (Projects / Workloads / Routes / Builds / Pods / Nodes / Deployments /
- * Services), CPU+memory, mode label, XP, Pause/Speed controls, the incident
- * bell and the settings/party-mode handlers.
+ * One 52px flat bar: pause/menu, product wordmark, platform + mode + level,
+ * mission progress, cluster health, simulated clock, speed, pause, incidents
+ * and settings. The resource counters and CPU/MEM meters live in a calm
+ * "Cluster" popover instead of cluttering the bar.
  *
- * The element ids consumed by index.html and by prior work are preserved
- * (`hud-logo-text`, `hud-nodes`, `hud-pods-*`, `hud-deployments`,
- * `hud-services`, `hud-mode`, `hud-pause*`, `hud-speed-*`, ...). New counters
- * add `hud-projects`, `hud-workloads`, `hud-routes`, `hud-builds`.
+ * Test/legacy contract preserved (ids used by index.html and by the browser
+ * acceptance suite): `hud-logo`, `hud-mode`, `hud-menu`, `hud-health`,
+ * `hud-timer`, `hud-level`, `hud-xp-bar`, `hud-pause*`, `hud-speed-1/2/4`,
+ * `hud-alert-badge`, `hud-alerts`, `hud-settings`, `hud-mode-name`,
+ * `hud-projects`, `hud-workloads`, `hud-routes`, `hud-builds`, `hud-nodes`,
+ * `hud-pods-running/pending/failed`, `hud-deployments`, `hud-services`,
+ * `hud-cpu-bar/text`, `hud-mem-bar/text`.
  *
  * All engine subscriptions are idempotent: `init()` re-creates the DOM and
  * re-binds; `destroy()` removes every listener. The HUD also consumes
- * `engine:stopped` so `returnToMenu()` / `engine.reset()` never leak listeners
- * or leave a stale settings modal behind.
+ * `engine:stopped` so `returnToMenu()` / `engine.reset()` never leak listeners.
  */
 
 import { XP_LEVELS } from '../engine/ScoringEngine.js';
 import { SettingsPanel } from './SettingsPanel.js';
 
 const PLATFORM_LABEL = 'OpenShift 4.22';
-const REPO_URL = 'https://github.com/G-man3207/openshiftgames';
 const MODE_LABELS = {
   campaign: 'Campaign',
-  challenge: 'Timed Lab',
+  challenge: 'Timed lab',
   chaos: 'Chaos',
   sandbox: 'Sandbox',
 };
 const WORKLOAD_KINDS = ['Deployment', 'StatefulSet', 'DaemonSet', 'ReplicaSet', 'Job', 'CronJob'];
+
+const SVG = {
+  menu: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M2.5 4h11M2.5 8h11M2.5 12h11" stroke-linecap="round"/></svg>',
+  pause: '<svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><rect x="4" y="3" width="2.6" height="10" rx="1"/><rect x="9.4" y="3" width="2.6" height="10" rx="1"/></svg>',
+  play: '<svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M5 3.6c0-.8.9-1.3 1.6-.9l6 4.4c.6.4.6 1.4 0 1.8l-6 4.4c-.7.4-1.6-.1-1.6-.9V3.6z"/></svg>',
+  bell: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M4.3 6.8a3.7 3.7 0 017.4 0v2.4l1.1 1.7H3.2l1.1-1.7V6.8z" stroke-linejoin="round"/><path d="M6.5 12.6a1.6 1.6 0 003 0" stroke-linecap="round"/></svg>',
+  gear: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><circle cx="8" cy="8" r="2.1"/><path d="M8 1.9v1.5M8 12.6v1.5M1.9 8h1.5M12.6 8h1.5M3.7 3.7l1 1M11.3 11.3l1 1M12.3 3.7l-1 1M4.7 11.3l-1 1" stroke-linecap="round"/></svg>',
+  mark: '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="2.4" stroke-opacity=".28"/><circle cx="12" cy="12" r="3.4" fill="currentColor"/></svg>',
+  chevron: '<svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M4 7l2-2 2 2" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+};
 
 export class HUD {
   constructor() {
@@ -43,6 +54,7 @@ export class HUD {
     this.xpToNextLevel = 100;
     this.xpProgress = 0;
     this.settingsPanel = null;
+    this._popOpen = false;
 
     this._boundTick = this._onTick.bind(this);
     this._boundIncident = this._onIncident.bind(this);
@@ -51,6 +63,8 @@ export class HUD {
     this._boundSelect = this._onResourceSelect.bind(this);
     this._boundAchievement = this._onAchievement.bind(this);
     this._boundStopped = this._onEngineStopped.bind(this);
+    this._boundDocumentClick = this._onDocumentClick.bind(this);
+    this._boundKeydown = this._onKeydown.bind(this);
     this._engineAttached = false;
     this._engineRef = null;
 
@@ -71,10 +85,13 @@ export class HUD {
     this.elapsedTime = 0;
     this.incidentCount = 0;
     this.xpProgress = 0;
+    this._popOpen = false;
+
     this.container = document.createElement('div');
     this.container.id = 'hud';
-    this.container.className = 'fixed top-0 left-0 right-0 z-40 pointer-events-none';
+    this.container.className = 'hud';
     this.container.setAttribute('data-testid', 'hud');
+    this.container.setAttribute('role', 'banner');
     this.container.innerHTML = this._buildHTML();
     document.body.appendChild(this.container);
 
@@ -88,10 +105,8 @@ export class HUD {
     this.settingsPanel = new SettingsPanel();
     this.settingsPanel.init();
 
-    if (window._ghStars) {
-      const el = this.container.querySelector('#hud-github-stars');
-      if (el) el.textContent = window._ghStars;
-    }
+    document.addEventListener('click', this._boundDocumentClick);
+    document.addEventListener('keydown', this._boundKeydown, true);
   }
 
   destroy() {
@@ -100,6 +115,8 @@ export class HUD {
     this._unbindGameEvents();
     this.settingsPanel?.destroy();
     this.settingsPanel = null;
+    document.removeEventListener('click', this._boundDocumentClick);
+    document.removeEventListener('keydown', this._boundKeydown, true);
 
     if (this._partyModeTarget) {
       try {
@@ -132,156 +149,96 @@ export class HUD {
     return window.game?.cluster || window.game?.app?.engine?.cluster || null;
   }
 
+  _app() {
+    return window.game?.app || window.game?.app;
+  }
+
   // ─── Markup ────────────────────────────────────────────────────────────
 
   _buildHTML() {
     return `
-      <style>
-        /* Keep the top bar on one line at 1600px; reveal secondary counters on wide screens. */
-        #hud .hud-wide-only { display: none !important; }
-        #hud .hud-github { display: none !important; }
-        @media (min-width: 1900px) {
-          #hud .hud-wide-only { display: flex !important; }
-          #hud .hud-github { display: flex !important; }
-        }
-        @media (max-width: 1560px) {
-          #hud .hud-center { display: none !important; }
-        }
-        @media (max-width: 1280px) {
-          #hud #hud-xp-container { display: none !important; }
-        }
-        @media (max-width: 1199px) {
-          #hud .hud-stat-workloads,
-          #hud .hud-stat-routes,
-          #hud .hud-stat-builds { display: none !important; }
-        }
-        @media (max-width: 900px) {
-          #hud .hud-stat-projects,
-          #hud .hud-stat-nodes { display: none !important; }
-          #hud #hud-mode-name { display: none !important; }
-        }
-      </style>
-      <div class="flex items-center justify-between px-4 py-2 gap-3 backdrop-blur-xl bg-white/5 border-b border-white/10 pointer-events-auto">
-        <div class="flex items-center gap-4 min-w-0">
-          <button id="hud-menu" class="px-2 py-1 text-xs text-white/60 hover:text-white/90 hover:bg-white/10 rounded-lg transition-all flex items-center gap-1.5" title="Back to Menu (Esc)" data-testid="hud-menu">
-            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"/></svg>
-            <span>Menu</span>
+      <div class="hud-bar">
+        <div class="hud-left">
+          <button id="hud-menu" class="hud-icon-btn hud-menu-btn" type="button" title="Pause &amp; menu (Esc)" aria-label="Pause and open menu" data-testid="hud-menu">
+            ${SVG.menu}
           </button>
-          <div class="hud-divider h-5 w-px bg-white/10"></div>
-          <div class="flex items-center gap-2 shrink-0">
-            <div id="hud-health" class="w-3 h-3 rounded-full bg-green-400 shadow-lg shadow-green-400/50 transition-colors duration-500" title="Cluster health" data-testid="hud-health"></div>
-            <span id="hud-logo-text" class="text-white/90 text-sm font-semibold tracking-wide whitespace-nowrap" data-testid="hud-logo">OpenShift Games</span>
+          <div class="hud-brand">
+            <span class="hud-mark">${SVG.mark}</span>
+            <span id="hud-logo-text" class="hud-word" data-testid="hud-logo">OpenShift Games</span>
           </div>
-          <div class="hud-divider h-5 w-px bg-white/10"></div>
-          <div class="flex items-center gap-3 text-xs text-white/60 whitespace-nowrap min-w-0">
-            <div class="hud-stat hud-stat-projects flex items-center gap-1" title="Projects">
-              <span class="text-white/40">Projects</span>
-              <span id="hud-projects" class="text-white/90 font-mono" data-testid="hud-projects">0</span>
-            </div>
-            <div class="hud-stat hud-stat-workloads hud-extra-stat flex items-center gap-1" title="Deployments, StatefulSets, DaemonSets, ReplicaSets, Jobs and CronJobs">
-              <span class="text-white/40">Workloads</span>
-              <span id="hud-workloads" class="text-white/90 font-mono" data-testid="hud-workloads">0</span>
-            </div>
-            <div class="hud-stat hud-stat-routes hud-extra-stat flex items-center gap-1" title="Routes">
-              <span class="text-white/40">Routes</span>
-              <span id="hud-routes" class="text-white/90 font-mono" data-testid="hud-routes">0</span>
-            </div>
-            <div class="hud-stat hud-stat-builds hud-extra-stat flex items-center gap-1" title="Builds (all phases)">
-              <span class="text-white/40">Builds</span>
-              <span id="hud-builds" class="text-white/90 font-mono" data-testid="hud-builds">0</span>
-            </div>
-            <div class="hud-stat hud-stat-nodes hud-extra-stat flex items-center gap-1" title="Nodes">
-              <span class="text-white/40">Nodes</span>
-              <span id="hud-nodes" class="text-white/90 font-mono" data-testid="hud-nodes">0</span>
-            </div>
-            <div class="hud-stat hud-stat-pods flex items-center gap-1" title="Pods: running / pending / failed">
-              <span class="text-white/40">Pods</span>
-              <span id="hud-pods-running" class="text-green-400 font-mono" data-testid="hud-pods-running">0</span>
-              <span class="text-white/20">/</span>
-              <span id="hud-pods-pending" class="text-yellow-400 font-mono" data-testid="hud-pods-pending">0</span>
-              <span class="text-white/20">/</span>
-              <span id="hud-pods-failed" class="text-red-400 font-mono" data-testid="hud-pods-failed">0</span>
-            </div>
-            <div class="hud-extra-stat hud-wide-only flex items-center gap-1" title="Deployments">
-              <span class="text-white/40">Deploy</span>
-              <span id="hud-deployments" class="text-white/90 font-mono" data-testid="hud-deployments">0</span>
-            </div>
-            <div class="hud-extra-stat hud-wide-only flex items-center gap-1" title="Services">
-              <span class="text-white/40">Svc</span>
-              <span id="hud-services" class="text-white/90 font-mono" data-testid="hud-services">0</span>
-            </div>
-          </div>
+          <span class="hud-rule" aria-hidden="true"></span>
+          <span id="hud-mode" class="hud-mode" data-testid="hud-mode">${PLATFORM_LABEL}</span>
+          <span id="hud-mode-name" class="hud-mode-name" data-testid="hud-mode-name">Sandbox</span>
+          <span class="hud-rule hud-rule-optional" aria-hidden="true"></span>
+          <span id="hud-level-name" class="hud-level-name"></span>
         </div>
 
-        <div class="hud-center flex items-center gap-4">
-          <div class="flex items-center gap-2 min-w-[140px]">
-            <span class="text-white/40 text-xs">CPU</span>
-            <div class="flex-1 h-1.5 bg-white/5 rounded-full overflow-hidden">
-              <div id="hud-cpu-bar" class="h-full bg-blue-400 rounded-full transition-all duration-500" style="width: 0%"></div>
-            </div>
-            <span id="hud-cpu-text" class="text-white/60 text-xs font-mono w-8 text-right">0%</span>
-          </div>
-          <div class="flex items-center gap-2 min-w-[140px]">
-            <span class="text-white/40 text-xs">MEM</span>
-            <div class="flex-1 h-1.5 bg-white/5 rounded-full overflow-hidden">
-              <div id="hud-mem-bar" class="h-full bg-purple-400 rounded-full transition-all duration-500" style="width: 0%"></div>
-            </div>
-            <span id="hud-mem-text" class="text-white/60 text-xs font-mono w-8 text-right">0%</span>
-          </div>
+        <div class="hud-center">
+          <button id="hud-mission" class="hud-mission" type="button" title="Show mission objectives" hidden>
+            <span class="hud-mission-text">
+              <span id="hud-mission-count" class="hud-mission-count">0 / 0 objectives</span>
+              <span class="hud-mission-bar" aria-hidden="true"><span id="hud-mission-fill" class="hud-mission-fill"></span></span>
+            </span>
+          </button>
         </div>
 
-        <div class="flex items-center gap-2 shrink-0">
-          <div class="flex items-center gap-2">
-            <span id="hud-timer" class="text-white/60 text-xs font-mono" data-testid="hud-timer">00:00</span>
-            <div class="hud-divider h-5 w-px bg-white/10"></div>
-            <span id="hud-mode" class="text-xs text-sky-400 font-medium uppercase tracking-wider whitespace-nowrap" data-testid="hud-mode">${PLATFORM_LABEL}</span>
-            <span id="hud-mode-name" class="text-[10px] text-white/30 uppercase tracking-wider whitespace-nowrap" data-testid="hud-mode-name">Sandbox</span>
-          </div>
-
-          <div class="flex items-center gap-1.5">
-            <div class="relative">
-              <div id="hud-xp-container" class="flex items-center gap-1.5" title="OpenShift skills XP">
-                <span id="hud-level" class="text-xs text-amber-400 font-bold">L1</span>
-                <div class="w-16 h-1.5 bg-white/5 rounded-full overflow-hidden">
-                  <div id="hud-xp-bar" class="h-full bg-amber-400 rounded-full transition-all duration-300" style="width: 0%"></div>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <div class="hud-divider h-5 w-px bg-white/10"></div>
-
-          <div class="flex items-center gap-1">
-            <button id="hud-pause" class="px-1.5 py-0.5 text-xs text-white/60 hover:text-white/90 hover:bg-white/10 rounded transition-colors" title="Pause / resume simulation" data-testid="hud-pause">
-              <span id="hud-pause-icon">&#9646;&#9646;</span>
-            </button>
-            <button id="hud-speed-1" class="px-1.5 py-0.5 text-xs text-sky-400 bg-sky-400/10 rounded font-mono" data-testid="hud-speed-1">1x</button>
-            <button id="hud-speed-2" class="px-1.5 py-0.5 text-xs text-white/40 hover:text-white/60 rounded font-mono transition-colors" data-testid="hud-speed-2">2x</button>
-            <button id="hud-speed-4" class="px-1.5 py-0.5 text-xs text-white/40 hover:text-white/60 rounded font-mono transition-colors" data-testid="hud-speed-4">4x</button>
-          </div>
-
-          <div class="hud-divider h-5 w-px bg-white/10"></div>
-
-          <button id="hud-alerts" class="relative px-2 py-0.5 text-xs text-white/60 hover:text-white/90 transition-colors" title="OpenShift incidents" data-testid="hud-alerts">
-            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"/>
-            </svg>
-            <span id="hud-alert-badge" class="absolute -top-1 -right-1 hidden min-w-[16px] h-4 px-1 text-[10px] font-bold text-white bg-red-500 rounded-full flex items-center justify-center" data-testid="hud-alert-badge">0</span>
+        <div class="hud-right">
+          <button id="hud-health" class="hud-health" type="button" title="Cluster health" data-testid="hud-health" aria-expanded="false">
+            <span id="hud-health-dot" class="hud-health-dot"></span>
+            <span id="hud-health-label" class="hud-health-label">Healthy</span>
           </button>
-
-          <button id="hud-settings" class="px-2 py-0.5 text-xs text-white/60 hover:text-white/90 transition-colors" title="Settings" data-testid="hud-settings">
-            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><circle cx="12" cy="12" r="3"/></svg>
+          <span class="hud-rule" aria-hidden="true"></span>
+          <span id="hud-timer" class="hud-timer" data-testid="hud-timer">00:00</span>
+          <div class="hud-speed" role="group" aria-label="Simulation speed">
+            <button id="hud-speed-1" class="hud-speed-btn is-active" type="button" title="Normal speed" data-testid="hud-speed-1">1x</button>
+            <button id="hud-speed-2" class="hud-speed-btn" type="button" title="Double speed" data-testid="hud-speed-2">2x</button>
+            <button id="hud-speed-4" class="hud-speed-btn" type="button" title="Quadruple speed" data-testid="hud-speed-4">4x</button>
+          </div>
+          <button id="hud-pause" class="hud-icon-btn" type="button" title="Pause simulation" data-testid="hud-pause">
+            <span id="hud-pause-icon">${SVG.pause}</span>
           </button>
+          <button id="hud-alerts" class="hud-icon-btn hud-alert-btn" type="button" title="OpenShift incidents" data-testid="hud-alerts">
+            ${SVG.bell}
+            <span id="hud-alert-badge" class="hud-badge" data-testid="hud-alert-badge" hidden>0</span>
+          </button>
+          <button id="hud-settings" class="hud-icon-btn" type="button" title="Settings" data-testid="hud-settings">
+            ${SVG.gear}
+          </button>
+        </div>
+      </div>
 
-          <div class="hud-divider h-5 w-px bg-white/10"></div>
-
-          <a href="${REPO_URL}" target="_blank" rel="noopener" class="hud-github flex items-center gap-1.5 px-2 py-0.5 text-xs text-white/50 hover:text-white/90 transition-all rounded-md hover:bg-white/5" title="Star OpenShift Games on GitHub">
-            <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="currentColor">
-              <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/>
-            </svg>
-            <svg class="w-3 h-3 text-amber-400" viewBox="0 0 16 16" fill="currentColor"><path d="M8 .25a.75.75 0 01.673.418l1.882 3.815 4.21.612a.75.75 0 01.416 1.279l-3.046 2.97.719 4.192a.75.75 0 01-1.088.791L8 12.347l-3.766 1.98a.75.75 0 01-1.088-.79l.72-4.194L.818 6.374a.75.75 0 01.416-1.28l4.21-.611L7.327.668A.75.75 0 018 .25z"/></svg>
-            <span id="hud-github-stars" class="font-mono text-amber-400/80">--</span>
-          </a>
+      <div id="hud-cluster-pop" class="hud-pop" hidden>
+        <div class="hud-pop-head">
+          <span>Cluster</span>
+          <span class="hud-pop-version">${PLATFORM_LABEL}</span>
+        </div>
+        <dl class="hud-stat-grid">
+          <div class="hud-stat"><dt>Projects</dt><dd id="hud-projects" data-testid="hud-projects">0</dd></div>
+          <div class="hud-stat"><dt>Workloads</dt><dd id="hud-workloads" data-testid="hud-workloads">0</dd></div>
+          <div class="hud-stat"><dt>Routes</dt><dd id="hud-routes" data-testid="hud-routes">0</dd></div>
+          <div class="hud-stat"><dt>Builds</dt><dd id="hud-builds" data-testid="hud-builds">0</dd></div>
+          <div class="hud-stat"><dt>Nodes</dt><dd id="hud-nodes" data-testid="hud-nodes">0</dd></div>
+          <div class="hud-stat"><dt>Deployments</dt><dd id="hud-deployments" data-testid="hud-deployments">0</dd></div>
+          <div class="hud-stat"><dt>Services</dt><dd id="hud-services" data-testid="hud-services">0</dd></div>
+          <div class="hud-stat hud-stat-pods">
+            <dt>Pods</dt>
+            <dd><span id="hud-pods-running" class="is-good" data-testid="hud-pods-running">0</span><span class="hud-slash">/</span><span id="hud-pods-pending" class="is-warn" data-testid="hud-pods-pending">0</span><span class="hud-slash">/</span><span id="hud-pods-failed" class="is-bad" data-testid="hud-pods-failed">0</span></dd>
+          </div>
+        </dl>
+        <div class="hud-meters">
+          <div class="hud-meter">
+            <div class="hud-meter-head"><span>CPU</span><span id="hud-cpu-text" class="hud-meter-value">0%</span></div>
+            <div class="hud-meter-track"><div id="hud-cpu-bar" class="hud-meter-fill" style="width:0%"></div></div>
+          </div>
+          <div class="hud-meter">
+            <div class="hud-meter-head"><span>Memory</span><span id="hud-mem-text" class="hud-meter-value">0%</span></div>
+            <div class="hud-meter-track"><div id="hud-mem-bar" class="hud-meter-fill" style="width:0%"></div></div>
+          </div>
+        </div>
+        <div class="hud-xp" id="hud-xp-container">
+          <span id="hud-level" class="hud-xp-level">L1</span>
+          <span class="hud-xp-track"><span id="hud-xp-bar" class="hud-xp-fill"></span></span>
+          <span id="hud-xp-label" class="hud-xp-label">0 XP</span>
         </div>
       </div>
     `;
@@ -289,12 +246,13 @@ export class HUD {
 
   _cacheElements() {
     const ids = [
-      'hud-menu', 'hud-settings', 'hud-health', 'hud-nodes', 'hud-projects', 'hud-workloads',
-      'hud-routes', 'hud-builds', 'hud-pods-running', 'hud-pods-pending', 'hud-pods-failed',
-      'hud-deployments', 'hud-services', 'hud-mode-name', 'hud-cpu-bar', 'hud-cpu-text', 'hud-mem-bar',
-      'hud-mem-text', 'hud-timer', 'hud-mode', 'hud-level', 'hud-xp-bar', 'hud-pause',
-      'hud-pause-icon', 'hud-speed-1', 'hud-speed-2', 'hud-speed-4', 'hud-alert-badge',
-      'hud-alerts', 'hud-xp-container', 'hud-github-stars', 'hud-logo-text',
+      'hud-menu', 'hud-settings', 'hud-health', 'hud-health-dot', 'hud-health-label', 'hud-nodes',
+      'hud-projects', 'hud-workloads', 'hud-routes', 'hud-builds', 'hud-pods-running',
+      'hud-pods-pending', 'hud-pods-failed', 'hud-deployments', 'hud-services', 'hud-mode-name',
+      'hud-cpu-bar', 'hud-cpu-text', 'hud-mem-bar', 'hud-mem-text', 'hud-timer', 'hud-mode',
+      'hud-level', 'hud-xp-bar', 'hud-pause', 'hud-pause-icon', 'hud-speed-1', 'hud-speed-2',
+      'hud-speed-4', 'hud-alert-badge', 'hud-alerts', 'hud-xp-container', 'hud-logo-text',
+      'hud-mission', 'hud-mission-count', 'hud-mission-fill', 'hud-level-name', 'hud-cluster-pop',
     ];
     for (const id of ids) {
       this.elements[id] = this.container?.querySelector(`#${id}`) || document.getElementById(id) || null;
@@ -307,18 +265,31 @@ export class HUD {
       if (el) el.addEventListener(event, handler);
     };
 
-    on('hud-menu', 'click', () => window.game?.app?.returnToMenu?.());
+    on('hud-menu', 'click', () => {
+      this._closePopover();
+      window.game?.app?.showPause?.();
+    });
     on('hud-settings', 'click', () => this.settingsPanel?.toggle());
     on('hud-pause', 'click', () => this._togglePause());
     on('hud-speed-1', 'click', () => this._setSpeed(1));
     on('hud-speed-2', 'click', () => this._setSpeed(2));
     on('hud-speed-4', 'click', () => this._setSpeed(4));
     on('hud-alerts', 'click', () => {
+      this._closePopover();
       try {
         this._bus()?.emit?.('ui:toggle-incidents');
       } catch {
         /* no incident panel */
       }
+    });
+    on('hud-health', 'click', (event) => {
+      event.stopPropagation();
+      this._togglePopover();
+    });
+    on('hud-mission', 'click', () => {
+      const toggle = document.getElementById('obj-panel-toggle');
+      if (toggle) toggle.click();
+      else document.getElementById('objectives-panel')?.classList.toggle('collapsed');
     });
 
     const logoText = this.elements['hud-logo-text'];
@@ -326,6 +297,38 @@ export class HUD {
       logoText.style.cursor = 'pointer';
       logoText.addEventListener('click', () => this._onLogoClick());
     }
+  }
+
+  _onDocumentClick(event) {
+    if (!this._popOpen) return;
+    if (event.target.closest?.('#hud-cluster-pop') || event.target.closest?.('#hud-health')) return;
+    this._closePopover();
+  }
+
+  _onKeydown(event) {
+    if (event.key !== 'Escape' || !this._popOpen) return;
+    this._closePopover();
+    event.stopPropagation();
+    event.preventDefault();
+  }
+
+  _togglePopover() {
+    this._popOpen = !this._popOpen;
+    const pop = this.elements['hud-cluster-pop'] || this.container?.querySelector('#hud-cluster-pop');
+    const health = this.elements['hud-health'];
+    if (pop) pop.hidden = !this._popOpen;
+    health?.setAttribute('aria-expanded', String(this._popOpen));
+    health?.classList.toggle('is-open', this._popOpen);
+  }
+
+  _closePopover() {
+    if (!this._popOpen) return;
+    this._popOpen = false;
+    const pop = this.elements['hud-cluster-pop'] || this.container?.querySelector('#hud-cluster-pop');
+    const health = this.elements['hud-health'];
+    if (pop) pop.hidden = true;
+    health?.setAttribute('aria-expanded', 'false');
+    health?.classList.remove('is-open');
   }
 
   _bindGameEvents() {
@@ -371,6 +374,7 @@ export class HUD {
     this._updateTimer();
     this._updateHealth(data);
     this._updateMode(data);
+    this._updateMission();
   }
 
   _onIncident() {
@@ -475,14 +479,20 @@ export class HUD {
     const memBar = this.elements['hud-mem-bar'];
     if (cpuBar) {
       cpuBar.style.width = `${cpuPct}%`;
-      cpuBar.className = `h-full rounded-full transition-all duration-500 ${this._metricBarColor(cpuPct, 'bg-blue-400')}`;
+      cpuBar.dataset.level = this._metricLevel(cpuPct);
     }
     if (memBar) {
       memBar.style.width = `${memPct}%`;
-      memBar.className = `h-full rounded-full transition-all duration-500 ${this._metricBarColor(memPct, 'bg-purple-400')}`;
+      memBar.dataset.level = this._metricLevel(memPct);
     }
     this._setText('hud-cpu-text', `${cpuPct}%`);
     this._setText('hud-mem-text', `${memPct}%`);
+  }
+
+  _metricLevel(pct) {
+    if (pct > 85) return 'high';
+    if (pct > 65) return 'mid';
+    return 'low';
   }
 
   _updateTimer() {
@@ -493,37 +503,37 @@ export class HUD {
   }
 
   _updateHealth(state) {
-    const el = this.elements['hud-health'];
-    if (!el) return;
+    const dot = this.elements['hud-health-dot'] || this.container?.querySelector('#hud-health-dot');
+    const label = this.elements['hud-health-label'] || this.container?.querySelector('#hud-health-label');
+    const button = this.elements['hud-health'];
+    if (!dot) return;
     let health = state?.clusterHealth ?? 'healthy';
     if (health && typeof health === 'object') {
       const degraded = Array.isArray(health.degraded) ? health.degraded.length : 0;
       const percent = Number(health.percent);
       health = degraded > 0 ? 'critical' : Number.isFinite(percent) && percent < 100 ? 'warning' : 'healthy';
     }
-    const label = health === 'critical' ? 'Degraded' : health === 'warning' ? 'Warning' : 'Healthy';
-    el.title = `Cluster health: ${label}`;
-    el.setAttribute('data-health', health);
-    if (health === 'critical') {
-      el.className = 'w-3 h-3 rounded-full bg-red-400 shadow-lg shadow-red-400/50 animate-pulse transition-colors duration-500';
-    } else if (health === 'warning') {
-      el.className = 'w-3 h-3 rounded-full bg-yellow-400 shadow-lg shadow-yellow-400/50 transition-colors duration-500';
-    } else {
-      el.className = 'w-3 h-3 rounded-full bg-green-400 shadow-lg shadow-green-400/50 transition-colors duration-500';
-    }
+    const labelText = health === 'critical' ? 'Degraded' : health === 'warning' ? 'Warning' : 'Healthy';
+    dot.dataset.health = health;
+    if (label) label.textContent = labelText;
+    if (button) button.setAttribute('aria-label', `Cluster health: ${labelText} (open cluster stats)`);
+    this._setText('hud-pop-health', labelText);
   }
 
   _updateAlertBadge() {
     const badge = this.elements['hud-alert-badge'];
+    const button = this.elements['hud-alerts'];
     if (!badge) return;
     if (this.incidentCount > 0) {
-      badge.classList.remove('hidden');
+      badge.hidden = false;
       badge.textContent = this.incidentCount > 99 ? '99+' : String(this.incidentCount);
       badge.title = `${this.incidentCount} active OpenShift incident${this.incidentCount === 1 ? '' : 's'}`;
+      button?.classList.add('has-alert');
     } else {
-      badge.classList.add('hidden');
+      badge.hidden = true;
       badge.textContent = '0';
       badge.title = 'No active incidents';
+      button?.classList.remove('has-alert');
     }
   }
 
@@ -573,9 +583,39 @@ export class HUD {
 
   _updateXP() {
     this._setText('hud-level', `L${this.level}`);
+    this._setText('hud-xp-label', `${this.xp} XP`);
     const pct = Math.min(100, Math.max(0, Math.round((this.xpProgress ?? 0) * 100)));
     const bar = this.elements['hud-xp-bar'];
     if (bar) bar.style.width = `${pct}%`;
+  }
+
+  _updateMission() {
+    const app = this._app();
+    const mode = app?.currentMode;
+    const isMission = mode === 'campaign' || mode === 'challenge';
+    const button = this.elements['hud-mission'];
+    const levelName = this.elements['hud-level-name'];
+    if (!button) return;
+    if (!isMission) {
+      button.hidden = true;
+      if (levelName) levelName.textContent = mode === 'chaos' ? 'Incident survival' : mode === 'sandbox' ? 'Free build' : '';
+      return;
+    }
+    const status = app?.modeInstance?.getStatus?.();
+    if (!status) return;
+    const objectives = status.objectives || [];
+    const done = objectives.filter((objective) => objective.completed).length;
+    const total = objectives.length;
+    button.hidden = false;
+    this._setText('hud-mission-count', `${done} / ${total} objective${total === 1 ? '' : 's'}`);
+    const fill = this.elements['hud-mission-fill'];
+    if (fill) fill.style.width = `${total ? Math.round((done / total) * 100) : 0}%`;
+    button.classList.toggle('is-complete', total > 0 && done === total);
+    if (levelName) {
+      levelName.textContent = mode === 'challenge'
+        ? (status.title || '')
+        : (status.levelTitle ? `L${status.currentLevel} · ${status.levelTitle}` : `Level ${status.currentLevel || ''}`);
+    }
   }
 
   _updateAll() {
@@ -594,12 +634,7 @@ export class HUD {
     this._updateAlertBadge();
     this._syncXPFromScoring();
     this._updateMode(state);
-  }
-
-  _metricBarColor(pct, normalColor) {
-    if (pct > 80) return 'bg-red-400';
-    if (pct > 60) return 'bg-yellow-400';
-    return normalColor;
+    this._updateMission();
   }
 
   _updateMode(state) {
@@ -621,6 +656,13 @@ export class HUD {
   // ─── Pause / speed ─────────────────────────────────────────────────────
 
   _togglePause() {
+    // The app owns pausing now: it stops the mission clocks as well as the engine
+    // and shows the pause card (so pausing is visible, not silent).
+    const app = window.game?.app;
+    if (app && typeof app.togglePause === 'function') {
+      app.togglePause();
+      return;
+    }
     this.paused = !this.paused;
     const gameEngine = this._gameEngine();
     try {
@@ -630,9 +672,12 @@ export class HUD {
       /* engine stopped */
     }
     const icon = this.elements['hud-pause-icon'];
-    if (icon) icon.innerHTML = this.paused ? '&#9654;' : '&#9646;&#9646;';
+    if (icon) icon.innerHTML = this.paused ? SVG.play : SVG.pause;
     const button = this.elements['hud-pause'];
-    if (button) button.title = this.paused ? 'Resume simulation' : 'Pause simulation';
+    if (button) {
+      button.title = this.paused ? 'Resume simulation' : 'Pause simulation';
+      button.classList.toggle('is-paused', this.paused);
+    }
   }
 
   _setSpeed(multiplier) {
@@ -643,65 +688,41 @@ export class HUD {
     } catch {
       /* engine stopped */
     }
-    const buttons = { 1: 'hud-speed-1', 2: 'hud-speed-2', 4: 'hud-speed-4' };
-    for (const [speed, id] of Object.entries(buttons)) {
+    for (const [speed, id] of Object.entries({ 1: 'hud-speed-1', 2: 'hud-speed-2', 4: 'hud-speed-4' })) {
       const el = this.elements[id];
       if (!el) continue;
-      if (Number(speed) === multiplier) {
-        el.className = 'px-1.5 py-0.5 text-xs text-sky-400 bg-sky-400/10 rounded font-mono';
-      } else {
-        el.className = 'px-1.5 py-0.5 text-xs text-white/40 hover:text-white/60 rounded font-mono transition-colors';
-      }
+      el.classList.toggle('is-active', Number(speed) === multiplier);
     }
   }
 
-  // ─── Achievement toast (unchanged behaviour) ───────────────────────────
+  // ─── Achievement toast ─────────────────────────────────────────────────
 
   _showAchievementToast(data) {
     const toast = document.createElement('div');
-    toast.className = 'fixed top-16 right-4 z-50 flex items-center gap-3 px-4 py-3 rounded-lg border border-amber-500/30 bg-amber-500/10 backdrop-blur-xl shadow-2xl animate-slide-in-right';
+    toast.className = 'hud-toast';
     toast.setAttribute('data-testid', 'achievement-toast');
+    toast.setAttribute('role', 'status');
     toast.innerHTML = `
-      <div class="text-2xl">${this._achievementIcon(data.icon)}</div>
-      <div>
-        <div class="text-amber-400 text-xs font-bold uppercase tracking-wider">Achievement Unlocked!</div>
-        <div class="text-white/90 text-sm font-medium">${this._escapeHTML(data.name)}</div>
-        <div class="text-white/40 text-[10px]">${this._escapeHTML(data.description)} &middot; +${data.xpReward ?? 0} XP</div>
-      </div>
-    `;
+      <span class="hud-toast-mark" aria-hidden="true">${'&#9733;'}</span>
+      <span class="hud-toast-body">
+        <span class="hud-toast-kicker">Achievement unlocked</span>
+        <span class="hud-toast-title">${this._escapeHTML(data.name)}</span>
+        <span class="hud-toast-meta">${this._escapeHTML(data.description)} +${data.xpReward ?? 0} XP</span>
+      </span>`;
     document.body.appendChild(toast);
     setTimeout(() => {
-      toast.style.opacity = '0';
-      toast.style.transform = 'translateX(100%)';
-      toast.style.transition = 'all 0.5s ease-out';
-      setTimeout(() => toast.remove(), 500);
-    }, 4000);
-  }
-
-  _achievementIcon(icon) {
-    const icons = {
-      seedling: '\ud83c\udf31', rocket: '\ud83d\ude80', shield: '\ud83d\udee1\ufe0f', star: '\u2b50',
-      terminal: '\ud83d\udcbb', folder: '\ud83d\udcc1', link: '\ud83d\udd17', sprout: '\ud83c\udf3f',
-      graduation: '\ud83c\udf93', lightning: '\u26a1', fire: '\ud83d\udd25', trophy: '\ud83c\udfc6',
-      crown: '\ud83d\udc51', sword: '\u2694\ufe0f', moon: '\ud83c\udf19', brain: '\ud83e\udde0',
-      skull: '\ud83d\udc80', monkey: '\ud83d\udc12', coffee: '\u2615', disco: '\ud83c\udf89',
-      gamepad: '\ud83c\udfae', key: '\ud83d\udd11', medal: '\ud83c\udfc5', castle: '\ud83c\udff0',
-      scroll: '\ud83d\udcdc', domino: '\ud83c\udfb2', explosion: '\ud83d\udca5', loop: '\ud83d\udd04',
-      zap: '\u26a1', herd: '\ud83d\udc02', house: '\ud83c\udfe0', crosshair: '\ud83c\udfaf',
-      server: '\ud83d\udda5\ufe0f', firewall: '\ud83e\uddf1', database: '\ud83d\uddc4\ufe0f',
-      book: '\ud83d\udcd6', expand: '\ud83d\udd0d', stars: '\u2728', blueprint: '\ud83d\udcd0',
-      collection: '\ud83d\udce6', check: '\u2705',
-    };
-    return icons[icon] || '\ud83c\udfc6';
+      toast.classList.add('hud-toast-out');
+      setTimeout(() => toast.remove(), 300);
+    }, 4200);
   }
 
   _escapeHTML(str) {
-    const div = document.createElement('div');
+    const div = document.createElement('span');
     div.textContent = str ?? '';
     return div.innerHTML;
   }
 
-  // ─── Easter egg (unchanged) ────────────────────────────────────────────
+  // ─── Easter egg (unchanged behaviour) ──────────────────────────────────
 
   _onLogoClick() {
     this._logoClickCount += 1;
@@ -720,8 +741,8 @@ export class HUD {
     const style = document.createElement('style');
     style.id = 'party-mode-style';
     style.textContent = `
-      @keyframes party-rainbow { 0% { filter: hue-rotate(0deg) brightness(1.2); } 50% { filter: hue-rotate(180deg) brightness(1.3); } 100% { filter: hue-rotate(360deg) brightness(1.2); } }
-      .party-mode * { animation: party-rainbow 0.5s linear infinite; }
+      @keyframes party-rainbow { 0% { filter: hue-rotate(0deg) brightness(1.15); } 50% { filter: hue-rotate(180deg) brightness(1.25); } 100% { filter: hue-rotate(360deg) brightness(1.15); } }
+      .party-mode * { animation: party-rainbow 0.6s linear infinite; }
     `;
     document.head.appendChild(style);
     const target = document.getElementById('cluster-view') || document.querySelector('canvas') || document.body;

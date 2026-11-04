@@ -146,7 +146,7 @@ export class InspectorPanel {
 
     this.container = document.createElement('div');
     this.container.id = 'inspector-panel';
-    this.container.className = 'fixed top-12 right-0 w-96 bottom-0 z-30 transform translate-x-full transition-transform duration-300 ease-out';
+    this.container.className = 'panel-side panel-right';
     this.container.setAttribute('data-testid', 'inspector-panel');
     this.container.innerHTML = this._buildShell();
     document.body.appendChild(this.container);
@@ -163,14 +163,12 @@ export class InspectorPanel {
   show() {
     if (!this.container) return;
     this.visible = true;
-    this.container.classList.remove('translate-x-full');
-    this.container.classList.add('translate-x-0');
+    this.container.classList.add('is-open');
   }
 
   hide() {
     if (this.container) {
-      this.container.classList.remove('translate-x-0');
-      this.container.classList.add('translate-x-full');
+      this.container.classList.remove('is-open');
     }
     this.visible = false;
     this.resource = null;
@@ -310,7 +308,7 @@ export class InspectorPanel {
 
   _buildShell() {
     return `
-      <div class="h-full flex flex-col backdrop-blur-xl bg-white/5 border-l border-white/10 shadow-2xl">
+      <div class="panel-inner">
         <div id="inspector-header" class="flex items-center justify-between px-4 py-3 border-b border-white/5" data-testid="inspector-header">
           <div class="flex items-center gap-2 min-w-0">
             <div id="inspector-icon" class="w-8 h-8 rounded-lg bg-openshift/15 flex items-center justify-center text-openshift-light text-[10px] font-bold shrink-0">OCP</div>

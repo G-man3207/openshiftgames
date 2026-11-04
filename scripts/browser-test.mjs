@@ -1168,9 +1168,23 @@ await runSection('ui', async () => {
   assert(await evaluate(() => window.game?.gameEngine?.state === 'running'), 'ui: Space resumes the simulation');
   await evaluate(() => document.activeElement?.blur?.());
 
+  // gamefeel: Esc now opens the pause overlay (never discards the run).
   await page.keyboard.press('Escape');
-  await sleep(700);
-  assert(await evaluate(() => document.getElementById('main-menu')?.classList.contains('hidden') === false), 'ui: Esc returns to the main menu');
+  await sleep(500);
+  assert(
+    await evaluate(() =>
+      document.getElementById('pause-overlay')?.classList.contains('active') === true &&
+      document.getElementById('main-menu')?.classList.contains('hidden') === true
+    ),
+    'ui: Esc opens the pause overlay instead of discarding the run',
+  );
+  await evaluate(() => document.getElementById('pause-resume')?.click());
+  await sleep(250);
+  assert(
+    await evaluate(() => document.getElementById('pause-overlay')?.classList.contains('active') === false),
+    'ui: pause Resume returns to the run',
+  );
+  await returnToMenu();
 });
 
 // ═══════════════════════════════════════════════════════════════════════════

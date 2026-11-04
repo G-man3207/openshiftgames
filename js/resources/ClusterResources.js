@@ -1,4 +1,10 @@
 import { ResourceBase } from './ResourceBase.js';
+import {
+  CRIO_RUNTIME,
+  KUBELET_VERSION,
+  NODE_KERNEL_VERSION,
+  RHCOS_OS_IMAGE,
+} from '../data/platformVersions.js';
 import { deepClone } from './ManifestSerializer.js';
 
 const timestamp = () => new Date().toISOString();
@@ -70,12 +76,12 @@ export class Node extends ResourceBase {
         condition('NetworkUnavailable', 'False', 'NoNetworkPlugin', 'network plugin is ready'),
       ],
       nodeInfo: {
-        kubeletVersion: metadata.kubeletVersion || 'v1.29.2',
-        containerRuntimeVersion: 'containerd://1.7.11',
-        osImage: metadata.osImage || 'Red Hat Enterprise Linux CoreOS 4.22.0',
+        kubeletVersion: metadata.kubeletVersion || KUBELET_VERSION,
+        containerRuntimeVersion: metadata.containerRuntimeVersion || CRIO_RUNTIME,
+        osImage: metadata.osImage || RHCOS_OS_IMAGE,
         architecture: 'amd64',
         operatingSystem: 'linux',
-        kernelVersion: metadata.kernelVersion || '5.14.0-284.el9.x86_64',
+        kernelVersion: metadata.kernelVersion || NODE_KERNEL_VERSION,
         machineID: this.metadata.uid,
         systemUUID: this.metadata.uid,
       },
@@ -161,9 +167,33 @@ export class Node extends ResourceBase {
   }
 
   getMemoryUsagePercent() {
-    const used = this.status.usage?.memory || 0;
+    // usage.memory is in MiB (ClusterState.getNodeAllocatable), allocatable in bytes
+    const usedBytes = (this.status.usage?.memory || 0) * 1024 ** 2;
     const capacity = parseMemoryToBytes(this.status.allocatable?.memory || this.status.capacity?.memory || this.spec.memory || '8Gi');
-    return capacity > 0 ? (used / capacity) * 100 : 0;
+    return capacity > 0 ? (usedBytes / capacity) * 100 : 0;
+  }
+
+  /**
+   * Re-derive status.capacity/allocatable from the spec.
+   *
+   * Modes seed Nodes by merging a manifest-style spec ({cpu:'16', memory:'32Gi'})
+   * into an already-constructed Node, so the constructor-time capacity (4 / 8Gi)
+   * could disagree with the spec — `oc describe node` then showed capacity 4 with
+   * allocatable 16000m. Call this whenever spec.cpu/spec.memory change.
+   */
+  syncCapacityFromSpec() {
+    const cpu = String(this.spec?.cpu || this.status.capacity?.cpu || '4');
+    const memory = String(this.spec?.memory || this.status.capacity?.memory || '8Gi');
+    const pods = String(this.spec?.pods || this.status.capacity?.pods || '110');
+    this.status.capacity = { ...(this.status.capacity || {}), cpu, memory, pods };
+    const allocCpu = Math.max(0, parseCpuToMillis(cpu) - 200);
+    const allocMemoryBytes = Math.max(0, parseMemoryToBytes(memory) - 1024 ** 3);
+    this.status.allocatable = {
+      ...(this.status.allocatable || {}),
+      cpu: `${allocCpu}m`,
+      memory: `${Math.round(allocMemoryBytes / 1024 ** 2)}Mi`,
+      pods,
+    };
   }
 
   toDescribe() {
@@ -193,8 +223,8 @@ System Info:
   Kernel Version:     ${this.status.nodeInfo?.kernelVersion}
   Architecture:       ${this.status.nodeInfo?.architecture}
 Non-terminated Pods: (${this.pods.length} in total)
-  CPU Usage:          ${this.status.usage?.cpu || 0}m / ${this.status.allocatable?.cpu} (${this.getCpuUsagePercent().toFixed(1)}%)
-  Memory Usage:       ${Math.round((this.status.usage?.memory || 0) / 1024 ** 2)}Mi / ${this.status.allocatable?.memory} (${this.getMemoryUsagePercent().toFixed(1)}%)
+  CPU Usage:          ${Math.round(this.status.usage?.cpu || 0)}m / ${this.status.allocatable?.cpu || this.status.capacity?.cpu} (${this.getCpuUsagePercent().toFixed(1)}%)
+  Memory Usage:       ${Math.round(this.status.usage?.memory || 0)}Mi / ${this.status.allocatable?.memory || this.status.capacity?.memory} (${this.getMemoryUsagePercent().toFixed(1)}%)
 Events:
 ${this.events.slice(-10).map((e) => `  ${e.type}\t${e.reason}\t${e.message}`).join('\n')}`;
   }

@@ -294,8 +294,8 @@ export class SettingsPanel {
     const exportId = this._controlId('export-save');
 
     return `
-      <div class="absolute inset-0 bg-black/60 backdrop-blur-sm" data-action="backdrop"></div>
-      <div class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[520px] max-h-[85vh] overflow-y-auto rounded-xl border border-white/10 bg-gray-900/95 backdrop-blur-xl shadow-2xl">
+      <div class="settings-backdrop" data-action="backdrop"></div>
+      <div class="settings-dialog">
         <div class="flex items-start justify-between px-6 py-4 border-b border-white/5">
           <div>
             <div class="flex items-center gap-2">

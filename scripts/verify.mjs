@@ -965,27 +965,46 @@ const ALLOW_UPSTREAM = new Set([
   'README.md', 'NOTICE', 'LICENSE', 'docs/architecture-map.md', 'docs/CONVERSION-SPEC.md',
 ]);
 const ATTRIBUTION_DOCS = (rel) => rel === 'README.md' || rel === 'NOTICE' || rel.startsWith('docs/');
-let footerAttributionAllowed = false;
+// The start page intentionally credits the original K8s Games as a homage. The
+// credit blocks are explicitly delimited in index.html so the legacy-branding
+// scan can exempt them without relaxing the rule for the rest of the UI.
+const ATTRIBUTION_MARKER_START = /<!--\s*upstream-attribution:start\s*-->/;
+const ATTRIBUTION_MARKER_END = /<!--\s*upstream-attribution:end\s*-->/;
+function upstreamAttributionLines(rel, src) {
+  const set = new Set();
+  if (rel !== 'index.html') return set;
+  let inside = false;
+  for (const [i, line] of src.split('\n').entries()) {
+    if (ATTRIBUTION_MARKER_START.test(line)) { inside = true; continue; }
+    if (ATTRIBUTION_MARKER_END.test(line)) { inside = false; continue; }
+    if (inside) set.add(i);
+  }
+  return set;
+}
 for (const rel of allFiles.filter((f) => /\.(html|js|css|json|txt|yml|yaml)$/.test(f))) {
   if (rel.startsWith('scripts/') || ATTRIBUTION_DOCS(rel) || ALLOW_UPSTREAM.has(rel)) continue;
   const src = read(rel);
   const lines = src.split('\n');
+  const allowedAttributionLines = upstreamAttributionLines(rel, src);
   for (const [i, line] of lines.entries()) {
+    if (allowedAttributionLines.has(i)) continue;
     if (/k8sgames\.com/i.test(line)) fail('branding', `${rel}:${i + 1}: contains k8sgames.com outside attribution`);
     if (/rohitg00\/k8sgames/i.test(line)) {
       if (rel === 'index.html' && /K8s Games by Rohit/.test(line) && /Apache-2\.0/.test(line)) {
-        footerAttributionAllowed = true;
         continue;
       }
       fail('branding', `${rel}:${i + 1}: contains rohitg00/k8sgames outside attribution files`);
     }
   }
 }
-if (footerAttributionAllowed) note('index.html footer attribution link is allowed by CONVERSION-SPEC §1');
+const indexAttributionLines = upstreamAttributionLines('index.html', read('index.html'));
+if (indexAttributionLines.size > 0) note(`index.html upstream-attribution blocks are delimited and exempt from the legacy-branding scan (${indexAttributionLines.size} lines)`);
 const FORBIDDEN_UI_NAMES = [/Kubernetes Cluster Simulation/i, /K8s Games/i];
 for (const rel of ['index.html', 'draw.html', ...jsFiles.filter((f) => f.startsWith('js/'))]) {
   const src = read(rel);
+  const allowedAttributionLines = upstreamAttributionLines(rel, src);
   for (const [i, line] of src.split('\n').entries()) {
+    if (allowedAttributionLines.has(i)) continue;
     // The menu attribution line is required copy ("based on K8s Games by Rohit").
     if (rel === 'index.html' && /based on .*K8s Games by Rohit/.test(line)) continue;
     for (const re of FORBIDDEN_UI_NAMES) {
@@ -1011,8 +1030,7 @@ if (/\bK8S_BLUE\b/.test(allFiles.map((f) => (/\.(html|js|css)$/.test(f) ? read(f
 }
 const requiredUiFiles = [
   'LICENSE', 'NOTICE', 'README.md', 'screenshot.png', 'og-image.png', 'index.html', 'draw.html',
-  'style.css', 'vercel.json', 'robots.txt', 'og-image.html', 'docs/EX280-STUDY-GUIDE.md',
-  'docs/EXAM-PREP.md',
+  'style.css', 'vercel.json', 'robots.txt', 'og-image.html',
 ];
 for (const rel of requiredUiFiles) {
   if (!has(rel)) fail('files', `missing required file ${rel}`);
@@ -1049,6 +1067,17 @@ if (!/OpenShift 4\.22 Cluster Simulation · Built for EX280/.test(indexSrc)) fai
 if (!(indexSrc.includes('Built for') && indexSrc.includes('EX280') && /based on/.test(indexSrc) && indexSrc.includes('K8s Games by Rohit') && indexSrc.includes('(Apache-2.0)') && /trademark of Red Hat/.test(indexSrc))) {
   fail('branding', 'required menu footer attribution copy missing');
 } else passed();
+// Marker-delimited credit regions are required (homage section + footer legal
+// block), so the exemption above can never silently remove the upstream credit.
+const attributionStarts = (indexSrc.match(/upstream-attribution:start/g) || []).length;
+const attributionEnds = (indexSrc.match(/upstream-attribution:end/g) || []).length;
+if (attributionStarts < 2 || attributionEnds !== attributionStarts) {
+  fail('branding', `start page upstream attribution block missing or unbalanced (start=${attributionStarts}, end=${attributionEnds}; expected >=2 balanced pairs)`);
+} else passed();
+if (!/github\.com\/rohitg00\/k8sgames/.test(indexSrc)) fail('branding', 'start page does not link to the original k8sgames repo');
+else passed();
+if (!/Apache-2\.0/.test(indexSrc)) fail('branding', 'start page does not state the Apache-2.0 licence of the original');
+else passed();
 if (/Kubernetes Cluster Simulation/.test(indexSrc)) fail('branding', 'index.html still says Kubernetes Cluster Simulation');
 if (!/three@0\.152\.0/.test(indexSrc)) fail('branding', 'index.html Three.js CDN version is not pinned to 0.152.0');
 if (!/cdn\.tailwindcss\.com\/3\.4\.1/.test(indexSrc)) fail('branding', 'index.html Tailwind CDN is not pinned');
@@ -1072,6 +1101,9 @@ const readmeChecks = [
   [/vercel\.json/, 'README vercel.json instructions'],
   [/python3 -m http\.server/, 'README local static-server instructions'],
   [/EX280V422/, 'README EX280V422 coverage'],
+  [/github\.com\/G-man3207\/openshiftgames\/wiki/, 'README GitHub wiki link'],
+  [/wiki\/EX280-Study-Guide/, 'README wiki study-guide link'],
+  [/wiki\/Exam-Prep/, 'README wiki EX280 Prep link'],
 ];
 for (const [re, label] of readmeChecks) {
   if (!re.test(readme)) fail('readme', `README missing ${label}`);

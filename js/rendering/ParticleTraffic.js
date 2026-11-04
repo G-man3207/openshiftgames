@@ -9,26 +9,26 @@ import * as THREE from 'three';
  * intentionally not mapped to particles to keep the effect readable).
  */
 
-const POOL_SIZE = 2048;
-const PARTICLE_BASE_SIZE = 3.0;
-const PARTICLE_MIN_SPEED = 1.5;
-const PARTICLE_MAX_SPEED = 4.0;
-const SPAWN_INTERVAL = 0.35;
-const TRAIL_LENGTH = 3;
-const FADE_IN_DURATION = 0.15;
-const FADE_OUT_START = 0.85;
-const MAX_SPAWNS_PER_UPDATE = 36;
+const POOL_SIZE = 1024;
+const PARTICLE_BASE_SIZE = 2.1;
+const PARTICLE_MIN_SPEED = 0.7;
+const PARTICLE_MAX_SPEED = 1.9;
+const SPAWN_INTERVAL = 0.7;
+const TRAIL_LENGTH = 2;
+const FADE_IN_DURATION = 0.2;
+const FADE_OUT_START = 0.82;
+const MAX_SPAWNS_PER_UPDATE = 16;
 
 const TRAFFIC_COLORS = {
-  healthy: new THREE.Color(0x3fb950),
-  error:   new THREE.Color(0xf85149),
-  slow:    new THREE.Color(0xd29922),
-  route:   new THREE.Color(0xee0000), // OpenShift red
-  build:   new THREE.Color(0xf97316), // OpenShift orange
-  image:   new THREE.Color(0xa371f7),
-  operator: new THREE.Color(0xf0883e),
-  network: new THREE.Color(0x58a6ff),
-  default: new THREE.Color(0x58a6ff),
+  healthy: new THREE.Color(0x4fb47f),
+  error:   new THREE.Color(0xd95c55),
+  slow:    new THREE.Color(0xc2a04a),
+  route:   new THREE.Color(0xd94a42), // softened OpenShift red
+  build:   new THREE.Color(0xd98a4a), // softened OpenShift orange
+  image:   new THREE.Color(0x9a86cc),
+  operator: new THREE.Color(0xd08a54),
+  network: new THREE.Color(0x5b9fd4),
+  default: new THREE.Color(0x5b9fd4),
 };
 
 /** Relationship type → traffic type (null/absent = no particles). */
@@ -40,15 +40,15 @@ export const CONNECTION_TRAFFIC_TYPES = {
 };
 
 const TRAFFIC_REQUEST_RATES = {
-  route: 1.4,
-  build: 0.5,
-  image: 0.4,
-  operator: 0.3,
-  network: 0.8,
-  healthy: 1,
-  slow: 0.5,
-  error: 0.6,
-  default: 0.8,
+  route: 0.9,
+  build: 0.3,
+  image: 0.25,
+  operator: 0.2,
+  network: 0.5,
+  healthy: 0.7,
+  slow: 0.35,
+  error: 0.4,
+  default: 0.5,
 };
 
 export { TRAFFIC_COLORS, TRAFFIC_REQUEST_RATES };
@@ -80,8 +80,8 @@ const fragmentShader = `
         if (dist > 0.5) discard;
 
         float intensity = 1.0 - smoothstep(0.0, 0.5, dist);
-        float glow = exp(-dist * 4.0) * 0.6;
-        float finalAlpha = (intensity + glow) * vAlpha;
+        float glow = exp(-dist * 5.5) * 0.35;
+        float finalAlpha = (intensity + glow) * vAlpha * 0.75;
 
         gl_FragColor = vec4(vColor, finalAlpha);
     }
@@ -244,7 +244,7 @@ export class ParticleTrafficSystem {
 
     const mid = new THREE.Vector3().lerpVectors(start, end, 0.5);
     const dist = start.distanceTo(end);
-    mid.y += Math.min(dist * 0.25, 2.5);
+    mid.y += Math.min(dist * 0.14, 1.7) + 0.35;
 
     return new THREE.QuadraticBezierCurve3(start, mid, end);
   }
@@ -280,7 +280,7 @@ export class ParticleTrafficSystem {
     particle.speed = PARTICLE_MIN_SPEED + Math.random() * (PARTICLE_MAX_SPEED - PARTICLE_MIN_SPEED);
     particle.color.copy(route.color);
     particle.alpha = 0;
-    particle.size = PARTICLE_BASE_SIZE * (0.7 + Math.random() * 0.6);
+    particle.size = PARTICLE_BASE_SIZE * (0.65 + Math.random() * 0.5);
     particle.trailIndex = 0;
 
     this.colors[index * 3] = route.color.r;

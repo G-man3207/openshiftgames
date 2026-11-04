@@ -199,7 +199,19 @@ export class SimulationTick {
       const alloc = this.cluster.getNodeAllocatable(node.name);
       if (!alloc) continue;
 
-      node.status.allocatable = { cpu: alloc.cpu.available, memory: alloc.memory.available };
+      // Player-visible node status must agree with the node spec: capacity from
+      // spec.cpu/spec.memory (modes seed 16 / 32Gi nodes), allocatable as real
+      // Kubernetes quantities (strings with units), pod limit preserved.
+      if (typeof node.syncCapacityFromSpec === 'function') node.syncCapacityFromSpec();
+      // Real nodes reserve system/kube resources, so allocatable < capacity.
+      const RESERVED_CPU_MILLICORES = 250;
+      const RESERVED_MEMORY_MIB = 1024;
+      node.status.allocatable = {
+        ...(node.status.allocatable || {}),
+        cpu: `${Math.max(0, Math.round(alloc.cpu.available - RESERVED_CPU_MILLICORES))}m`,
+        memory: `${Math.max(0, Math.round(alloc.memory.available - RESERVED_MEMORY_MIB))}Mi`,
+        pods: String(node.status.allocatable?.pods || node.status.capacity?.pods || '110'),
+      };
       node.status.usage = {
         cpu: alloc.cpu.used,
         memory: alloc.memory.used,

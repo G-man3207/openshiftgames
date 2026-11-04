@@ -19,6 +19,7 @@
  */
 
 import { ResourceBase } from './ResourceBase.js';
+import { OCP_CHANNEL, OCP_VERSION } from '../data/platformVersions.js';
 import { deepClone } from './ManifestSerializer.js';
 
 const timestamp = () => new Date().toISOString();
@@ -27,10 +28,8 @@ const timestamp = () => new Date().toISOString();
 export const APPS_DOMAIN = 'apps.cluster.example.com';
 /** Internal image registry host used by `image-registry.openshift-image-registry`. */
 export const IMAGE_REGISTRY = 'image-registry.openshift-image-registry.svc:5000';
-/** OCP version simulated by the game. */
-export const OCP_VERSION = '4.22.0';
-/** Default release channel for this simulated cluster. */
-export const OCP_CHANNEL = 'stable-4.22';
+// `OCP_VERSION` / `OCP_CHANNEL` are re-exported from js/data/platformVersions.js
+// (imported above) so the resource classes and the `oc` output share one source.
 
 function seededUUID(seed) {
   let hash = 0;

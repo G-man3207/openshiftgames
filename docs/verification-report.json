@@ -1,19 +1,19 @@
 {
-  "timestamp": "2026-11-03T23:34:45.378Z",
+  "timestamp": "2026-11-04T01:05:42.537Z",
   "environment": {
     "node": "v26.10.0",
     "chrome": "Chrome/156.0.8078.79",
-    "baseUrl": "http://127.0.0.1:38715",
+    "baseUrl": "http://127.0.0.1:45941",
     "viewport": {
       "width": 1600,
       "height": 900
     },
     "puppeteerCore": "/tmp/verify-tools",
-    "startedAt": "2026-11-03T23:32:04.570Z",
-    "durationSeconds": 161
+    "startedAt": "2026-11-04T01:02:51.203Z",
+    "durationSeconds": 171
   },
   "summary": {
-    "passes": 437,
+    "passes": 438,
     "failures": 0,
     "warnings": 0,
     "consoleErrors": 0,
@@ -57,7 +57,7 @@
       "warnings": 0
     },
     "ui": {
-      "passes": 18,
+      "passes": 19,
       "failures": 0,
       "warnings": 0
     },
@@ -91,62 +91,62 @@
       "path": "screenshot.png",
       "width": 1600,
       "height": 900,
-      "bytes": 252186
+      "bytes": 772793
     },
     "ogImage": {
       "path": "og-image.png",
       "width": 1200,
       "height": 630,
-      "bytes": 200078
+      "bytes": 183556
     },
     "screenshots": [
       {
         "path": "docs/screenshots/menu.png",
         "width": 1600,
         "height": 900,
-        "bytes": 118259
+        "bytes": 325180
       },
       {
         "path": "docs/screenshots/exam-prep.png",
         "width": 1600,
         "height": 900,
-        "bytes": 212719
+        "bytes": 208424
       },
       {
         "path": "docs/screenshots/sandbox.png",
         "width": 1600,
         "height": 900,
-        "bytes": 251849
+        "bytes": 773900
       },
       {
         "path": "screenshot.png",
         "width": 1600,
         "height": 900,
-        "bytes": 252186
+        "bytes": 772793
       },
       {
         "path": "docs/screenshots/files-panel.png",
         "width": 1600,
         "height": 900,
-        "bytes": 193899
+        "bytes": 215565
       },
       {
         "path": "docs/screenshots/campaign-level-1.png",
         "width": 1600,
         "height": 900,
-        "bytes": 254604
+        "bytes": 699726
       },
       {
         "path": "docs/screenshots/draw.png",
         "width": 1600,
         "height": 900,
-        "bytes": 161782
+        "bytes": 391551
       },
       {
         "path": "og-image.png",
         "width": 1200,
         "height": 630,
-        "bytes": 200078
+        "bytes": 183556
       }
     ]
   },
@@ -1017,7 +1017,11 @@
     },
     {
       "section": "ui",
-      "name": "ui: Esc returns to the main menu"
+      "name": "ui: Esc opens the pause overlay instead of discarding the run"
+    },
+    {
+      "section": "ui",
+      "name": "ui: pause Resume returns to the run"
     },
     {
       "section": "campaign",

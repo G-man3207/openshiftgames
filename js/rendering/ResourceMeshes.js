@@ -1,40 +1,67 @@
 import * as THREE from 'three';
+import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 import { RESOURCE_KINDS, normalizeKind } from '../data/kindRegistry.js';
 
 /**
- * Kind → 3D mesh creator registry for OpenShift Games.
+ * Kind → 3D model registry for OpenShift Games — "instrument diorama" language.
  *
- * Every kind in js/data/kindRegistry.js has a creator here, including the
- * non-placeable kinds that can appear in cluster state (Build, Identity, OAuth,
- * ClusterOperator, ClusterVersion). Unknown kinds still get a labelled fallback
- * cube so the renderer never crashes.
+ * ART DIRECTION (see ClusterRenderer.js header for the full document)
+ * ----------------------------------------------------------------
+ * Every kind is built from one shared vocabulary so 42 different resources read as
+ * one designed set, not 42 unrelated props:
  *
- * OpenShift-specific kinds use the OpenShift red (#EE0000) / orange (#F97316)
- * accent palette; transient status still overrides the glow/emissive colour via
- * STATUS_COLORS so existing status colour semantics are preserved.
+ *   1. Pedestal — a dark lathed plinth with a chamfered edge, a faint machined inlay
+ *      ring and one additive status ring. Footprint is the only size signal.
+ *   2. Body — matte micro-metal (metalness 0.34 / roughness 0.52), charcoal-blue
+ *      `MAT.body` family. Colour is never used as a wash; only the silhouette, a few
+ *      edge strips and one small category accent carry the kind's hue.
+ *   3. Category accent — a single muted hue per registry palette section, so tiers
+ *      read as colour-coded at a glance (projects red, workloads blue, builds amber,
+ *      network sky, config gold, storage green, scaling violet, security red-orange,
+ *      identity teal).
+ *   4. Status — the additive pedestal ring (and its slow pulse) is the only place
+ *      semantic status colour appears. Body shapes stay neutral.
+ *   5. Bevels — RoundedBoxGeometry / bevelled extrusions / lathed forms; no raw boxes
+ *      or cylinders are allowed to be the dominant form.
+ *
+ * Contact shadows are rendered by ClusterRenderer as a single instanced mesh (see
+ * ClusterRenderer._initContactShadows); each group exposes `userData.footprint`
+ * for that system, `userData.labelY` for the HTML label layer, and
+ * `userData.statusMaterial` for status updates.
+ *
+ * The public API is unchanged: CREATORS + ResourceMeshFactory.create / updateStatus /
+ * dispose, MESH_CREATOR_KINDS / MISSING_MESH_KINDS / hasMeshCreator / meshKindFor.
  */
 
 // ── Palette ──────────────────────────────────────────────────────────────────
 export const OPENSHIFT_RED = 0xee0000;
 export const OPENSHIFT_ORANGE = 0xf97316;
-const RED = 0xd73a49;
-const LIGHT_RED = 0xf85149;
-const ORANGE = 0xf0883e;
-const GOLD = 0xe3b341;
-const YELLOW = 0xd29922;
-const GREEN = 0x3fb950;
-const TEAL = 0x39c5cf;
-const BLUE = 0x326ce5;
-const LIGHT_BLUE = 0x58a6ff;
-const SKY = 0x79c0ff;
-const DARK_BLUE = 0x1f6feb;
-const PURPLE = 0xa371f7;
-const VIOLET = 0x8957e5;
-const CYAN = 0x22d3ee;
-const GRAY = 0x8b949e;
-const DARK_GRAY = 0x6e7681;
-const SLATE = 0x30363d;
-const WHITE = 0xe6edf3;
+
+/** Muted material family — the "instrument" body metal. */
+const MAT = {
+  body: 0x35424f,
+  bodyDark: 0x202834,
+  bodyLight: 0x4a596c,
+  metal: 0x66788f,
+  pedestal: 0x161d26,
+  pedestalTop: 0x26313f,
+  ink: 0x10151b,
+  white: 0xdbe4f0,
+};
+
+/** Category accents, one per palette section. Calm, not neon. */
+const HUE = {
+  open: 0xe8453c, // Close to OpenShift red but softer so 10 Projects don't glow.
+  warm: 0xe07a3f,
+  amber: 0xd9a544,
+  green: 0x4fb47f,
+  teal: 0x3fb0aa,
+  sky: 0x5aa7d6,
+  blue: 0x5b83d6,
+  violet: 0x9b7fd4,
+  ice: 0xb9cbe0,
+  slate: 0x7285a0,
+};
 
 const STATUS_COLORS = {
   Running: 0x28a745,
@@ -54,7 +81,7 @@ const STATUS_COLORS = {
   Bound: 0x28a745,
   Available: 0x28a745,
   Admitted: 0x28a745,
-  Active: 0xee0000,
+  Active: 0x2ea043,
   Progressing: 0x58a6ff,
   Updating: 0x58a6ff,
   Installing: 0xffa657,
@@ -65,206 +92,153 @@ const STATUS_COLORS = {
   default: 0x58a6ff,
 };
 
-const EMISSIVE_INTENSITY = 0.25;
+/** Statuses whose ring should breathe slowly. */
+const PULSING_STATUSES = new Set([
+  'Pending', 'New', 'Progressing', 'Updating', 'Installing', 'Suspended', 'Paused',
+  'Failed', 'CrashLoop', 'CrashLoopBackOff', 'Degraded', 'Unavailable',
+]);
 
 export function getStatusColor(status) {
   return STATUS_COLORS[status] || STATUS_COLORS.default;
 }
 
-// ── Generic helpers ──────────────────────────────────────────────────────────
-function createStandardMaterial(color, status) {
-  const statusColor = getStatusColor(status);
-  return new THREE.MeshStandardMaterial({
+// ── Geometry constants ───────────────────────────────────────────────────────
+const PEDESTAL_HEIGHT = 0.18;
+const TAU = Math.PI * 2;
+
+const _ringCache = new Map();
+function ringGeometry(inner, outer, segments = 48) {
+  const key = `${inner}:${outer}:${segments}`;
+  if (!_ringCache.has(key)) {
+    const geo = new THREE.RingGeometry(inner, outer, segments);
+    geo.userData.shared = true;
+    _ringCache.set(key, geo);
+  }
+  return _ringCache.get(key);
+}
+
+const _pedestalCache = new Map();
+function pedestalGeometry(radius) {
+  const key = radius.toFixed(2);
+  if (!_pedestalCache.has(key)) {
+    const r = radius;
+    const h = PEDESTAL_HEIGHT;
+    const profile = [
+      new THREE.Vector2(0, 0),
+      new THREE.Vector2(r * 0.9, 0),
+      new THREE.Vector2(r, h * 0.24),
+      new THREE.Vector2(r, h * 0.74),
+      new THREE.Vector2(r * 0.9, h),
+      new THREE.Vector2(0, h),
+    ];
+    const geo = new THREE.LatheGeometry(profile, 24);
+    geo.userData.shared = true;
+    _pedestalCache.set(key, geo);
+  }
+  return _pedestalCache.get(key);
+}
+
+const STATUS_RING_GEO = ringGeometry(0.86, 0.945, 56);
+const INLAY_RING_GEO = ringGeometry(0.5, 0.62);
+const TOKEN_RING_GEO = ringGeometry(0.9, 1.0, 40);
+
+// ── Material helpers ─────────────────────────────────────────────────────────
+/** Matte micro-metal body material. Never tinted by status. */
+function mat(color, opts = {}) {
+  const {
+    metalness = 0.34,
+    roughness = 0.52,
+    emissive = 0x000000,
+    emissiveIntensity = 0,
+  } = opts;
+  return new THREE.MeshStandardMaterial({ color, metalness, roughness, emissive, emissiveIntensity });
+}
+
+/** Unlit edge/accent material — reads as a machined emissive inlay. */
+function glow(color, opacity = 1) {
+  return new THREE.MeshBasicMaterial({
     color,
-    metalness: 0.4,
-    roughness: 0.35,
-    emissive: new THREE.Color(statusColor),
-    emissiveIntensity: EMISSIVE_INTENSITY,
+    transparent: opacity < 1,
+    opacity,
+    depthWrite: opacity >= 1,
   });
 }
 
-function createGlowMaterial(color, opacity = 0.15) {
+/** Unlit additive ring used for status halos. */
+function statusRingMaterial(color) {
   return new THREE.MeshBasicMaterial({
     color,
     transparent: true,
-    opacity,
+    opacity: 0.55,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
     side: THREE.DoubleSide,
   });
 }
 
-function createGlowRing(color, radius) {
-  const ringGeo = new THREE.RingGeometry(radius * 0.8, radius * 1.2, 32);
-  const ring = new THREE.Mesh(ringGeo, createGlowMaterial(color, 0.15));
-  ring.rotation.x = -Math.PI / 2;
-  ring.position.y = 0.02;
-  ring.userData.isGlow = true;
-  return ring;
-}
-
+// ── Mesh / geometry helpers ──────────────────────────────────────────────────
 function addMesh(group, geometry, material, opts = {}) {
+  const {
+    x = 0, y = 0, z = 0,
+    rx = 0, ry = 0, rz = 0,
+    sx = 1, sy = 1, sz = 1,
+    castShadow = true, receiveShadow = true,
+    renderOrder = 0, userData,
+  } = opts;
   const mesh = new THREE.Mesh(geometry, material);
-  const { x = 0, y = 0, z = 0, rx = 0, ry = 0, rz = 0, castShadow = true, receiveShadow = true, userData } = opts;
   mesh.position.set(x, y, z);
   mesh.rotation.set(rx, ry, rz);
+  mesh.scale.set(sx, sy, sz);
   mesh.castShadow = castShadow;
   mesh.receiveShadow = receiveShadow;
+  mesh.renderOrder = renderOrder;
   if (userData) Object.assign(mesh.userData, userData);
   group.add(mesh);
   return mesh;
 }
 
-function box(group, w, h, d, color, status, opts = {}) {
-  return addMesh(group, new THREE.BoxGeometry(w, h, d), createStandardMaterial(color, status), opts);
+/** Rounded, bevel-edged slab — the workhorse body form. */
+function slab(group, w, h, d, color, opts = {}) {
+  const radius = Math.min(w, h, d) * (opts.round ?? 0.22);
+  const geo = new RoundedBoxGeometry(w, h, d, 2, Math.max(0.02, radius));
+  const material = opts.material || mat(color, opts);
+  return addMesh(group, geo, material, opts);
 }
 
-function cylinder(group, rTop, rBottom, height, segments, color, status, opts = {}) {
-  return addMesh(group, new THREE.CylinderGeometry(rTop, rBottom, height, segments), createStandardMaterial(color, status), opts);
+function disc(group, radius, height, color, opts = {}) {
+  const geo = new THREE.CylinderGeometry(radius, radius, height, opts.segments ?? 28);
+  return addMesh(group, geo, opts.material || mat(color, opts), opts);
 }
 
-function sphere(group, radius, color, status, opts = {}) {
-  return addMesh(group, new THREE.SphereGeometry(radius, 16, 16), createStandardMaterial(color, status), opts);
+function torus(group, radius, tube, color, opts = {}) {
+  const { arc = TAU, radialSegments = 10, tubularSegments = 36, ...meshOpts } = opts;
+  const geo = new THREE.TorusGeometry(radius, tube, radialSegments, tubularSegments, arc);
+  return addMesh(group, geo, meshOpts.material || mat(color, meshOpts), meshOpts);
 }
 
-function torus(group, radius, tube, color, status, opts = {}) {
+function strap(group, w, h, d, color, opts = {}) {
+  return addMesh(group, new THREE.BoxGeometry(w, h, d), glow(color, opts.opacity ?? 1), {
+    castShadow: false,
+    receiveShadow: false,
+    ...opts,
+  });
+}
+
+function extruded(group, shape, depth, color, opts = {}) {
   const {
-    arc = Math.PI * 2,
-    radialSegments = 8,
-    tubularSegments = 24,
+    bevel = true, bevelSize = 0.035, bevelThickness = 0.035, bevelSegments = 2,
     ...meshOpts
   } = opts;
-  return addMesh(group, new THREE.TorusGeometry(radius, tube, radialSegments, tubularSegments, arc), createStandardMaterial(color, status), meshOpts);
-}
-
-function cone(group, radius, height, segments, color, status, opts = {}) {
-  return addMesh(group, new THREE.ConeGeometry(radius, height, segments), createStandardMaterial(color, status), opts);
-}
-
-function extrude(group, shape, depth, color, status, opts = {}) {
-  const { bevel = true, bevelSize = 0.04, bevelThickness = 0.04, bevelSegments = 2, ...meshOpts } = opts;
-  const geometry = new THREE.ExtrudeGeometry(shape, {
+  const geo = new THREE.ExtrudeGeometry(shape, {
     depth,
     bevelEnabled: bevel,
     bevelThickness,
     bevelSize,
     bevelSegments,
+    curveSegments: 10,
   });
-  geometry.center();
-  return addMesh(group, geometry, createStandardMaterial(color, status), meshOpts);
-}
-
-function flatBar(group, w, h, d, color, opts = {}) {
-  return addMesh(group, new THREE.BoxGeometry(w, h, d), new THREE.MeshBasicMaterial({ color }), opts);
-}
-
-const _labelTextureCache = new Map();
-
-function createLabelSprite(text) {
-  const cached = _labelTextureCache.get(text);
-  if (cached) {
-    const spriteMat = new THREE.SpriteMaterial({
-      map: cached,
-      transparent: true,
-      depthTest: false,
-      sizeAttenuation: true,
-    });
-    const sprite = new THREE.Sprite(spriteMat);
-    sprite.scale.set(3.5, 0.9, 1);
-    sprite.userData.isLabel = true;
-    return sprite;
-  }
-
-  const canvas = document.createElement('canvas');
-  const ctx = canvas.getContext('2d');
-  canvas.width = 512;
-  canvas.height = 128;
-
-  ctx.clearRect(0, 0, 512, 128);
-  ctx.font = 'bold 36px "Inter", sans-serif';
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-
-  ctx.shadowColor = 'rgba(0, 0, 0, 0.8)';
-  ctx.shadowBlur = 8;
-  ctx.shadowOffsetX = 0;
-  ctx.shadowOffsetY = 2;
-
-  ctx.fillStyle = 'rgba(13, 17, 23, 0.85)';
-  const metrics = ctx.measureText(text);
-  const textWidth = Math.min(metrics.width + 28, 500);
-  const rh = 56;
-  const rx = (512 - textWidth) / 2;
-  const ry = (128 - rh) / 2;
-  const r = 8;
-  ctx.beginPath();
-  ctx.moveTo(rx + r, ry);
-  ctx.lineTo(rx + textWidth - r, ry);
-  ctx.quadraticCurveTo(rx + textWidth, ry, rx + textWidth, ry + r);
-  ctx.lineTo(rx + textWidth, ry + rh - r);
-  ctx.quadraticCurveTo(rx + textWidth, ry + rh, rx + textWidth - r, ry + rh);
-  ctx.lineTo(rx + r, ry + rh);
-  ctx.quadraticCurveTo(rx, ry + rh, rx, ry + rh - r);
-  ctx.lineTo(rx, ry + r);
-  ctx.quadraticCurveTo(rx, ry, rx + r, ry);
-  ctx.closePath();
-  ctx.fill();
-
-  ctx.strokeStyle = 'rgba(238, 0, 0, 0.45)';
-  ctx.lineWidth = 1.5;
-  ctx.stroke();
-
-  ctx.shadowBlur = 0;
-  ctx.fillStyle = '#e6edf3';
-  ctx.fillText(text, 256, 64, 480);
-
-  const texture = new THREE.CanvasTexture(canvas);
-  texture.minFilter = THREE.LinearFilter;
-  texture.userData.shared = true;
-  _labelTextureCache.set(text, texture);
-
-  const spriteMat = new THREE.SpriteMaterial({
-    map: texture,
-    transparent: true,
-    depthTest: false,
-    sizeAttenuation: true,
-  });
-
-  const sprite = new THREE.Sprite(spriteMat);
-  sprite.scale.set(3.5, 0.9, 1);
-  sprite.userData.isLabel = true;
-  return sprite;
-}
-
-function addLabel(group, resource, y = 0.9, text) {
-  const labelText = text || resourceDisplayName(resource);
-  const label = createLabelSprite(labelText);
-  label.position.y = y;
-  group.add(label);
-  return label;
-}
-
-function addGlow(group, accent, radius) {
-  group.add(createGlowRing(accent, radius));
-}
-
-// ── Renderable / live-resource accessors ────────────────────────────────────
-function resourceDisplayName(resource) {
-  return resource?.name || resource?.metadata?.name || resource?.id || 'unnamed';
-}
-
-function resourceKind(resource) {
-  return resource?.kind || resource?.type || resource?._ref?.kind || null;
-}
-
-function resourceSpec(resource) {
-  return resource?.spec || resource?._ref?.spec || {};
-}
-
-function resourceStatus(resource) {
-  const status = resource?.status;
-  if (typeof status === 'string') return status;
-  const refStatus = resource?._ref?.status;
-  if (typeof refStatus === 'string') return refStatus;
-  return status?.phase || refStatus?.phase || null;
+  geo.center();
+  return addMesh(group, geo, meshOpts.material || mat(color, meshOpts), meshOpts);
 }
 
 // ── Shape helpers ────────────────────────────────────────────────────────────
@@ -301,41 +275,26 @@ function shieldShape(width, height) {
   shape.moveTo(0, height / 2);
   shape.quadraticCurveTo(hw, height / 2, hw, height / 6);
   shape.lineTo(hw, -height / 6);
-  shape.quadraticCurveTo(hw * 0.8, -height / 2.5, 0, -height / 2);
-  shape.quadraticCurveTo(-hw * 0.8, -height / 2.5, -hw, -height / 6);
+  shape.quadraticCurveTo(hw * 0.78, -height / 2.55, 0, -height / 2);
+  shape.quadraticCurveTo(-hw * 0.78, -height / 2.55, -hw, -height / 6);
   shape.lineTo(-hw, height / 6);
   shape.quadraticCurveTo(-hw, height / 2, 0, height / 2);
   return shape;
 }
 
-function lockShape() {
-  const shackle = new THREE.Shape();
-  shackle.moveTo(-0.4, -0.3);
-  shackle.lineTo(-0.4, 0.1);
-  shackle.quadraticCurveTo(-0.4, 0.5, 0, 0.5);
-  shackle.quadraticCurveTo(0.4, 0.5, 0.4, 0.1);
-  shackle.lineTo(0.4, -0.3);
-  shackle.lineTo(-0.4, -0.3);
-
-  const body = new THREE.Shape();
-  body.moveTo(-0.5, -0.3);
-  body.lineTo(0.5, -0.3);
-  body.lineTo(0.5, -0.8);
-  body.lineTo(-0.5, -0.8);
-  body.closePath();
-
-  return { shackle, body };
-}
-
 function folderShape() {
   const shape = new THREE.Shape();
-  shape.moveTo(-0.9, -0.6);
-  shape.lineTo(-0.35, -0.6);
-  shape.lineTo(-0.2, -0.42);
-  shape.lineTo(0.9, -0.42);
-  shape.lineTo(0.9, 0.6);
-  shape.lineTo(-0.9, 0.6);
-  shape.closePath();
+  shape.moveTo(-0.86, -0.58);
+  shape.lineTo(-0.32, -0.58);
+  shape.lineTo(-0.16, -0.4);
+  shape.lineTo(0.86, -0.4);
+  shape.quadraticCurveTo(0.94, -0.4, 0.94, -0.31);
+  shape.lineTo(0.94, 0.54);
+  shape.quadraticCurveTo(0.94, 0.63, 0.85, 0.63);
+  shape.lineTo(-0.86, 0.63);
+  shape.quadraticCurveTo(-0.94, 0.63, -0.94, 0.54);
+  shape.lineTo(-0.94, -0.49);
+  shape.quadraticCurveTo(-0.94, -0.58, -0.86, -0.58);
   return shape;
 }
 
@@ -354,12 +313,14 @@ function arrowSignShape() {
 
 function pageShape() {
   const shape = new THREE.Shape();
-  shape.moveTo(-0.5, -0.65);
-  shape.lineTo(0.32, -0.65);
-  shape.lineTo(0.5, -0.46);
-  shape.lineTo(0.5, 0.65);
-  shape.lineTo(-0.5, 0.65);
-  shape.closePath();
+  shape.moveTo(-0.48, -0.66);
+  shape.lineTo(0.3, -0.66);
+  shape.lineTo(0.5, -0.44);
+  shape.lineTo(0.5, 0.66);
+  shape.lineTo(-0.48, 0.66);
+  shape.quadraticCurveTo(-0.56, 0.66, -0.56, 0.58);
+  shape.lineTo(-0.56, -0.58);
+  shape.quadraticCurveTo(-0.56, -0.66, -0.48, -0.66);
   return shape;
 }
 
@@ -389,885 +350,884 @@ function octagonShape(radius) {
   return shape;
 }
 
-function roundedBoxGeometry(width, height, depth, radius, segments) {
+function triangleShape(radius) {
   const shape = new THREE.Shape();
-  const hw = width / 2 - radius;
-  const hh = height / 2 - radius;
-
-  shape.moveTo(-hw, height / 2);
-  shape.lineTo(hw, height / 2);
-  shape.quadraticCurveTo(width / 2, height / 2, width / 2, hh);
-  shape.lineTo(width / 2, -hh);
-  shape.quadraticCurveTo(width / 2, -height / 2, hw, -height / 2);
-  shape.lineTo(-hw, -height / 2);
-  shape.quadraticCurveTo(-width / 2, -height / 2, -width / 2, -hh);
-  shape.lineTo(-width / 2, hh);
-  shape.quadraticCurveTo(-width / 2, height / 2, -hw, height / 2);
-
-  return new THREE.ExtrudeGeometry(shape, {
-    depth,
-    bevelEnabled: true,
-    bevelThickness: 0.05,
-    bevelSize: 0.05,
-    bevelSegments: segments || 2,
-  });
+  for (let i = 0; i < 3; i++) {
+    const angle = (TAU / 3) * i - Math.PI / 2;
+    const x = radius * Math.cos(angle);
+    const y = radius * Math.sin(angle);
+    if (i === 0) shape.moveTo(x, y);
+    else shape.lineTo(x, y);
+  }
+  shape.closePath();
+  return shape;
 }
 
-// ── Composite helpers ────────────────────────────────────────────────────────
-function addPerson(group, opts = {}) {
-  const { x = 0, y = 0, z = 0, scale = 1, color = TEAL, status = null, headColor = null } = opts;
-  const person = new THREE.Group();
-  person.position.set(x, y, z);
-  person.scale.setScalar(scale);
-  group.add(person);
-
-  addMesh(person, new THREE.SphereGeometry(0.26, 16, 16), createStandardMaterial(headColor || color, status), { y: 0.92 });
-  addMesh(person, new THREE.CylinderGeometry(0.24, 0.4, 0.62, 12), createStandardMaterial(color, status), { y: 0.42 });
-  addMesh(person, new THREE.SphereGeometry(0.4, 16, 12, 0, Math.PI * 2, 0, Math.PI / 2), createStandardMaterial(color, status), {
-    y: 0.6, rx: Math.PI, castShadow: false,
+// ── Pedestal / stage ─────────────────────────────────────────────────────────
+function buildPedestal(group, radius, status) {
+  const plinth = addMesh(group, pedestalGeometry(radius), mat(MAT.pedestal, { metalness: 0.55, roughness: 0.42 }), {
+    y: 0,
   });
-  return person;
+  plinth.name = 'pedestal';
+
+  // Machined top inlay ring.
+  addMesh(group, INLAY_RING_GEO, glow(MAT.metal, 0.5), {
+    y: PEDESTAL_HEIGHT + 0.001,
+    rx: -Math.PI / 2,
+    sx: radius, sy: radius,
+    castShadow: false,
+    receiveShadow: false,
+  });
+
+  // Status halo ring (sole carrier of semantic status colour).
+  const statusMaterial = statusRingMaterial(getStatusColor(status));
+  const statusMesh = addMesh(group, STATUS_RING_GEO, statusMaterial, {
+    y: PEDESTAL_HEIGHT + 0.003,
+    rx: -Math.PI / 2,
+    sx: radius, sy: radius,
+    castShadow: false,
+    receiveShadow: false,
+    renderOrder: 2,
+  });
+
+  group.userData.statusMaterial = statusMaterial;
+  group.userData.statusRing = statusMesh;
+  group.userData.statusBaseOpacity = 0.5;
+  group.userData.status = status || null;
+  group.userData.statusPulse = PULSING_STATUSES.has(status);
+  group.userData.footprint = radius * 1.12;
+  return PEDESTAL_HEIGHT;
 }
 
-function addGear(group, opts = {}) {
-  const {
-    radius = 0.4,
-    teeth = 8,
-    depth = 0.16,
-    color = OPENSHIFT_ORANGE,
-    status = null,
-    x = 0,
-    y = 0.55,
-    z = 0,
-    tilt = 0,
-  } = opts;
+/**
+ * Start a kind model: pedestal first, then the creator adds the body on top.
+ * @returns {{group: THREE.Group, status: string|null, top: number, radius: number}}
+ */
+function stage(resource, options = {}) {
+  const radius = (options.radius ?? 0.95) * 1.12;
+  const status = resourceStatus(resource);
+  const group = new THREE.Group();
+  const top = buildPedestal(group, radius, status);
+  return { group, status, top, radius };
+}
+
+/** Finish a kind model: derive label anchor + footprint from real bounds. */
+function finish(group) {
+  const box = new THREE.Box3().setFromObject(group);
+  const size = new THREE.Vector3();
+  box.getSize(size);
+  group.userData.labelY = box.max.y + 0.4;
+  group.userData.height = box.max.y;
+  group.userData.footprint = Math.max(size.x, size.z) * 0.62;
+  return group;
+}
+
+// ── Composite props ──────────────────────────────────────────────────────────
+function addBust(group, { x = 0, y = 0, z = 0, scale = 1, color = HUE.teal, accent = HUE.ice } = {}) {
+  const bust = new THREE.Group();
+  bust.position.set(x, y, z);
+  bust.scale.setScalar(scale);
+  group.add(bust);
+
+  // Shoulders: a halved, bevelled disc.
+  addMesh(bust, new THREE.SphereGeometry(0.4, 20, 12, 0, TAU, 0, Math.PI / 2), mat(color), {
+    y: 0.02, rx: Math.PI, sy: 0.9,
+  });
+  // Neck.
+  addMesh(bust, new THREE.CylinderGeometry(0.11, 0.13, 0.14, 14), mat(MAT.bodyDark), { y: 0.2 });
+  // Head.
+  addMesh(bust, new THREE.SphereGeometry(0.23, 20, 16), mat(color, { roughness: 0.42 }), { y: 0.44 });
+  // Face accent line.
+  strap(bust, 0.16, 0.03, 0.02, accent, { y: 0.44, z: 0.205, opacity: 0.8 });
+  return bust;
+}
+
+function addGear(group, { x = 0, y = 0, z = 0, radius = 0.5, teeth = 10, color = HUE.warm, tilt = 0 } = {}) {
   const gear = new THREE.Group();
   gear.position.set(x, y, z);
   gear.rotation.x = tilt;
   group.add(gear);
 
-  addMesh(gear, new THREE.TorusGeometry(radius * 0.72, radius * 0.24, 10, 24), createStandardMaterial(color, status));
-  addMesh(gear, new THREE.CylinderGeometry(radius * 0.18, radius * 0.18, depth * 1.6, 12), createStandardMaterial(DARK_GRAY, status), {
-    rx: Math.PI / 2,
-  });
+  const thickness = 0.16;
+  addMesh(gear, new THREE.CylinderGeometry(radius * 0.78, radius * 0.78, thickness, 24), mat(color), { rx: Math.PI / 2 });
+  addMesh(gear, new THREE.CylinderGeometry(radius * 0.22, radius * 0.22, thickness * 1.5, 16), mat(MAT.bodyDark), { rx: Math.PI / 2 });
   for (let i = 0; i < teeth; i++) {
-    const angle = (Math.PI * 2 * i) / teeth;
-    addMesh(gear, new THREE.BoxGeometry(radius * 0.28, radius * 0.24, depth), createStandardMaterial(color, status), {
-      x: Math.cos(angle) * radius * 0.88,
-      y: Math.sin(angle) * radius * 0.88,
+    const angle = (TAU * i) / teeth;
+    const tooth = new THREE.BoxGeometry(radius * 0.22, radius * 0.2, thickness);
+    addMesh(gear, tooth, mat(color), {
+      x: Math.cos(angle) * radius * 0.86,
+      y: Math.sin(angle) * radius * 0.86,
       rz: angle,
     });
   }
   return gear;
 }
 
-function addChainLinks(group, count, color, status, opts = {}) {
-  const { x = 0, z = 0 } = opts;
+function addChainLinks(group, count, color, { x = 0, y = 0, z = 0, step = 0.34, radius = 0.26 } = {}) {
   const links = [];
   for (let i = 0; i < count; i++) {
-    const link = torus(group, 0.28, 0.07, color, status, {
+    links.push(torus(group, radius, 0.06, color, {
       x,
-      y: 0.35 + i * 0.36,
+      y: y + i * step,
       z,
       rz: i % 2 === 0 ? 0 : Math.PI / 2,
-      tubularSegments: 16,
-    });
-    links.push(link);
+      tubularSegments: 20,
+    }));
   }
   return links;
 }
 
-function addPersonBadge(group, color, status) {
-  // ID-card style badge used by ServiceAccount.
-  addMesh(group, roundedBoxGeometry(1.0, 0.68, 0.08, 0.08, 2), createStandardMaterial(color, status), {
-    y: 0.62, rx: -Math.PI / 2 + 0.22,
-  });
-  addMesh(group, new THREE.CylinderGeometry(0.14, 0.14, 0.03, 16), createStandardMaterial(WHITE, status), {
-    y: 0.68, z: 0.06, rx: Math.PI / 2 - 0.22,
-  });
-  flatBar(group, 0.42, 0.04, 0.02, 0xd0d7de, { y: 0.56, z: 0.08 });
-  flatBar(group, 0.3, 0.04, 0.02, 0xd0d7de, { y: 0.46, z: 0.08 });
-}
-
-function addSignalArcs(group, color, status, opts = {}) {
-  const { x = 0, y = 0.5, z = 0 } = opts;
+function addSignalArcs(group, color, { x = 0, y = 0, z = 0 } = {}) {
+  const arcs = [];
   for (let i = 0; i < 3; i++) {
-    const radius = 0.28 + i * 0.2;
-    const arc = torus(group, radius, 0.02, color, status, {
-      x,
-      y: y + i * 0.3,
-      z,
-      arc: Math.PI * 0.9,
-      rz: Math.PI * 0.05,
-      tubularSegments: 20,
-      castShadow: false,
+    const arc = torus(group, 0.26 + i * 0.16, 0.018, color, {
+      x, y: y + i * 0.16, z,
+      arc: Math.PI * 0.8,
+      rz: Math.PI * 0.1,
+      tubularSegments: 22,
     });
     arc.rotation.x = Math.PI / 2;
     arc.rotation.z = -Math.PI / 2;
+    arcs.push(arc);
   }
+  return arcs;
+}
+
+// ── Live-resource accessors ──────────────────────────────────────────────────
+function resourceDisplayName(resource) {
+  return resource?.name || resource?.metadata?.name || resource?.id || 'unnamed';
+}
+
+function resourceKind(resource) {
+  return resource?.kind || resource?.type || resource?._ref?.kind || null;
+}
+
+function resourceSpec(resource) {
+  return resource?.spec || resource?._ref?.spec || {};
+}
+
+function resourceStatus(resource) {
+  const status = resource?.status;
+  if (typeof status === 'string') return status;
+  const refStatus = resource?._ref?.status;
+  if (typeof refStatus === 'string') return refStatus;
+  return status?.phase || refStatus?.phase || null;
+}
+
+function replicaCount(resource, fallback = 3) {
+  const spec = resourceSpec(resource);
+  const value = spec.replicas ?? resource?.replicas ?? fallback;
+  return Math.max(1, Math.min(Number(value) || fallback, 5));
 }
 
 // ── Kind creators ────────────────────────────────────────────────────────────
 const CREATORS = {
   // ── Projects & cluster ────────────────────────────────────────────────────
   Project(resource) {
-    const status = resourceStatus(resource);
-    const group = new THREE.Group();
-
-    // Project scope zone (Project replaces Namespace in OpenShift).
-    const zone = new THREE.Mesh(
-      new THREE.PlaneGeometry(2.6, 2.6),
-      new THREE.MeshStandardMaterial({
-        color: OPENSHIFT_RED,
-        transparent: true,
-        opacity: 0.05,
-        side: THREE.DoubleSide,
-        depthWrite: false,
-      }),
-    );
-    zone.rotation.x = -Math.PI / 2;
-    zone.position.y = -0.02;
-    zone.receiveShadow = true;
-    group.add(zone);
-
-    const zoneBorder = new THREE.LineSegments(
-      new THREE.EdgesGeometry(new THREE.PlaneGeometry(2.6, 2.6)),
-      new THREE.LineBasicMaterial({ color: OPENSHIFT_RED, transparent: true, opacity: 0.45 }),
-    );
-    zoneBorder.rotation.x = -Math.PI / 2;
-    zoneBorder.position.y = 0.01;
-    group.add(zoneBorder);
-
-    // Folder icon standing on the zone.
-    const folder = extrude(group, folderShape(), 0.16, OPENSHIFT_RED, status, {
-      y: 0.62, bevel: false,
+    const { group, top, status } = stage(resource, { radius: 1.02 });
+    // Folder standing on a slight backward tilt.
+    const folder = extruded(group, folderShape(), 0.24, MAT.bodyLight, { y: top + 0.62, rx: -0.32, bevelSize: 0.04 });
+    folder.rotation.y = 0.06;
+    // Folder tab accent.
+    strap(group, 0.5, 0.05, 0.02, HUE.open, { y: top + 1.02, z: 0.24, opacity: 0.9 });
+    // Project "scope" token under the folder.
+    addMesh(group, TOKEN_RING_GEO, glow(HUE.open, 0.22), {
+      y: top + 0.012, rx: -Math.PI / 2, sx: 0.9, sy: 0.9, castShadow: false,
     });
-    folder.rotation.x = -0.25;
-    flatBar(group, 0.5, 0.06, 0.02, 0xff8a80, { y: 0.8, z: 0.12 });
-    addLabel(group, resource, 1.15);
-    return group;
+    addMesh(group, new THREE.BoxGeometry(1.5, 0.026, 1.5), mat(MAT.bodyDark, { metalness: 0.2, roughness: 0.8 }), {
+      y: top + 0.006, castShadow: false, receiveShadow: true,
+    });
+    void status;
+    return finish(group);
   },
 
   Node(resource) {
-    const status = resourceStatus(resource);
-    const group = new THREE.Group();
-    const platformGeom = new THREE.BoxGeometry(3.0, 0.4, 2.2);
-    const platformMat = createStandardMaterial(SLATE, status);
-    platformMat.metalness = 0.5;
-    platformMat.roughness = 0.5;
-    const platform = new THREE.Mesh(platformGeom, platformMat);
-    platform.receiveShadow = true;
-    platform.castShadow = true;
-    group.add(platform);
-
-    const borderMat = new THREE.LineBasicMaterial({ color: OPENSHIFT_RED, transparent: true, opacity: 0.6 });
-    group.add(new THREE.LineSegments(new THREE.EdgesGeometry(platformGeom), borderMat));
-
-    for (let i = 0; i < 3; i++) {
-      addMesh(group, new THREE.BoxGeometry(0.35, 0.12, 0.35), new THREE.MeshStandardMaterial({
-        color: SKY,
-        emissive: new THREE.Color(OPENSHIFT_RED),
-        emissiveIntensity: 0.35,
-        metalness: 0.7,
-        roughness: 0.3,
-      }), { x: -0.6 + i * 0.6, y: 0.26 });
+    const { group, top } = stage(resource, { radius: 1.4 });
+    // Wide server deck with ventilation fins — the "hardware" silhouette.
+    slab(group, 1.9, 0.34, 1.25, MAT.body, { y: top + 0.19, round: 0.12 });
+    slab(group, 1.55, 0.1, 0.95, MAT.bodyDark, { y: top + 0.4, round: 0.15 });
+    for (let i = 0; i < 4; i++) {
+      slab(group, 1.5, 0.1, 0.11, MAT.bodyLight, { y: top + 0.5, z: -0.32 + i * 0.22, round: 0.3 });
+      strap(group, 0.9, 0.016, 0.012, HUE.sky, { y: top + 0.56, z: -0.32 + i * 0.22, opacity: 0.55 });
     }
-
-    addMesh(group, new THREE.SphereGeometry(0.18, 12, 12), new THREE.MeshBasicMaterial({
-      color: getStatusColor(status),
-    }), { x: -1.2, y: 0.38, z: -0.8, userData: { isGlow: true } });
-
-    addLabel(group, resource, 0.9);
-    return group;
+    // Control-plane antennae.
+    addMesh(group, new THREE.CylinderGeometry(0.03, 0.05, 0.5, 8), mat(MAT.metal), { x: -0.7, y: top + 0.62, z: 0.42 });
+    addMesh(group, new THREE.SphereGeometry(0.07, 12, 12), glow(HUE.ice), { x: -0.7, y: top + 0.9, z: 0.42 });
+    strap(group, 1.5, 0.03, 0.02, HUE.sky, { y: top + 0.075, z: 0.65, opacity: 0.75 });
+    return finish(group);
   },
 
   ClusterResourceQuota(resource) {
-    const status = resourceStatus(resource);
-    const group = new THREE.Group();
-    box(group, 1.5, 0.12, 0.85, SLATE, status, { y: 0.06 });
-    const heights = [0.5, 0.85, 1.15];
-    heights.forEach((h, i) => {
-      box(group, 0.26, h, 0.5, i === 2 ? LIGHT_RED : OPENSHIFT_ORANGE, status, {
-        x: -0.46 + i * 0.46,
-        y: 0.12 + h / 2,
+    const { group, top } = stage(resource, { radius: 0.92 });
+    const heights = [0.34, 0.62, 0.9];
+    heights.forEach((height, index) => {
+      slab(group, 0.3, height, 0.44, index === 2 ? HUE.warm : MAT.bodyLight, {
+        x: -0.34 + index * 0.34,
+        y: top + height / 2 + 0.04,
+        round: 0.3,
+      });
+      strap(group, 0.24, 0.018, 0.02, HUE.amber, {
+        x: -0.34 + index * 0.34,
+        y: top + height + 0.05,
+        opacity: 0.7,
       });
     });
-    flatBar(group, 2.0, 0.02, 0.02, OPENSHIFT_RED, { y: 1.25, castShadow: false });
-    addGlow(group, OPENSHIFT_ORANGE, 0.7);
-    addLabel(group, resource, 1.55);
-    return group;
+    slab(group, 1.35, 0.07, 0.62, MAT.bodyDark, { y: top + 0.05, round: 0.2 });
+    return finish(group);
   },
 
   ClusterOperator(resource) {
-    const status = resourceStatus(resource);
-    const group = new THREE.Group();
-    cylinder(group, 0.5, 0.62, 0.18, 20, SLATE, status, { y: 0.09 });
-    cylinder(group, 0.07, 0.09, 0.5, 10, DARK_GRAY, status, { y: 0.4 });
-    const beaconMat = new THREE.MeshStandardMaterial({
-      color: OPENSHIFT_RED,
-      emissive: new THREE.Color(getStatusColor(status)),
+    const { group, top } = stage(resource, { radius: 0.95 });
+    disc(group, 0.34, 0.1, MAT.body, { y: top + 0.05 });
+    addMesh(group, new THREE.CylinderGeometry(0.045, 0.07, 0.62, 10), mat(MAT.metal), { y: top + 0.42 });
+    const beaconMaterial = mat(HUE.warm, {
+      metalness: 0.2,
+      roughness: 0.3,
+      emissive: new THREE.Color(HUE.warm),
       emissiveIntensity: 0.9,
-      metalness: 0.3,
-      roughness: 0.2,
     });
-    const beacon = addMesh(group, new THREE.SphereGeometry(0.24, 20, 20), beaconMat, { y: 0.78 });
-    const halo = torus(group, 0.38, 0.03, OPENSHIFT_ORANGE, status, { y: 0.78, rx: Math.PI / 2 });
-    addGlow(group, getStatusColor(status), 0.55);
-    addLabel(group, resource, 1.25);
+    const beacon = addMesh(group, new THREE.SphereGeometry(0.2, 20, 16), beaconMaterial, { y: top + 0.84 });
+    const halo = torus(group, 0.33, 0.02, HUE.amber, { y: top + 0.84, rx: Math.PI / 2 });
     group.userData.animate = (time) => {
-      const pulse = 0.85 + Math.sin(time * 3) * 0.15;
+      const pulse = 0.9 + Math.sin(time * 1.6) * 0.1;
       beacon.scale.setScalar(pulse);
-      beaconMat.emissiveIntensity = 0.6 + Math.sin(time * 3) * 0.25;
-      halo.rotation.z = time * 0.9;
+      beaconMaterial.emissiveIntensity = 0.7 + Math.sin(time * 1.6) * 0.25;
+      halo.rotation.z = time * 0.4;
     };
-    return group;
+    return finish(group);
   },
 
   ClusterVersion(resource) {
-    const status = resourceStatus(resource);
-    const group = new THREE.Group();
-    cylinder(group, 0.1, 0.14, 1.0, 10, DARK_GRAY, status, { y: 0.5 });
-    const ringColors = [OPENSHIFT_RED, OPENSHIFT_ORANGE, GOLD];
+    const { group, top } = stage(resource, { radius: 0.95 });
+    addMesh(group, new THREE.CylinderGeometry(0.035, 0.055, 1.05, 10), mat(MAT.metal), { y: top + 0.55 });
     const rings = [];
-    ringColors.forEach((color, i) => {
-      const radius = 0.52 - i * 0.14;
-      const ring = torus(group, radius, 0.035, color, status, { y: 0.32 + i * 0.28, rx: Math.PI / 2 });
+    [HUE.open, HUE.warm, HUE.amber].forEach((color, index) => {
+      const ring = torus(group, 0.5 - index * 0.1, 0.028, color, {
+        y: top + 0.42 + index * 0.24,
+        rx: Math.PI / 2,
+      });
       rings.push(ring);
     });
-    cone(group, 0.13, 0.3, 8, OPENSHIFT_RED, status, { y: 1.2 });
-    addGlow(group, OPENSHIFT_RED, 0.6);
-    addLabel(group, resource, 1.6);
+    addMesh(group, new THREE.SphereGeometry(0.15, 18, 14), glow(HUE.warm), { y: top + 0.42 });
+    addMesh(group, new THREE.ConeGeometry(0.1, 0.18, 10), mat(HUE.warm), { y: top + 1.16 });
     group.userData.animate = (time) => {
-      rings[0].rotation.z = time * 0.6;
-      rings[1].rotation.z = -time * 0.8;
-      rings[2].rotation.z = time * 1.0;
+      rings[0].rotation.z = time * 0.35;
+      rings[1].rotation.z = -time * 0.5;
+      rings[2].rotation.z = time * 0.65;
     };
-    return group;
+    return finish(group);
   },
 
   OAuth(resource) {
-    const status = resourceStatus(resource);
-    const group = new THREE.Group();
-    // Key = identity provider.
-    torus(group, 0.3, 0.09, OPENSHIFT_RED, status, { y: 1.05 });
-    box(group, 0.1, 0.72, 0.1, OPENSHIFT_ORANGE, status, { y: 0.6 });
-    box(group, 0.26, 0.09, 0.09, OPENSHIFT_ORANGE, status, { x: 0.12, y: 0.32 });
-    box(group, 0.2, 0.09, 0.09, OPENSHIFT_ORANGE, status, { x: 0.1, y: 0.5 });
-    addGlow(group, OPENSHIFT_RED, 0.5);
-    addLabel(group, resource, 1.55);
-    return group;
+    const { group, top } = stage(resource, { radius: 0.9 });
+    // Key: upright bow + shaft + two teeth.
+    torus(group, 0.24, 0.07, HUE.open, { x: -0.2, y: top + 0.95, rz: Math.PI / 2 });
+    slab(group, 0.12, 0.9, 0.12, MAT.bodyLight, { x: 0.06, y: top + 0.5, round: 0.4 });
+    slab(group, 0.2, 0.1, 0.1, HUE.warm, { x: 0.2, y: top + 0.2, round: 0.4 });
+    slab(group, 0.16, 0.1, 0.1, HUE.warm, { x: 0.18, y: top + 0.4, round: 0.4 });
+    addMesh(group, new THREE.CylinderGeometry(0.09, 0.09, 0.05, 14), mat(MAT.bodyDark), {
+      x: -0.2, y: top + 0.95, rz: Math.PI / 2,
+    });
+    return finish(group);
   },
 
   // ── Workloads ─────────────────────────────────────────────────────────────
   Pod(resource) {
-    const status = resourceStatus(resource);
-    const group = new THREE.Group();
-    const geom = new THREE.ExtrudeGeometry(hexShape(0.6), {
-      depth: 0.5,
-      bevelEnabled: true,
-      bevelThickness: 0.05,
-      bevelSize: 0.05,
-      bevelSegments: 2,
+    const { group, top } = stage(resource, { radius: 0.86 });
+    // Hexagonal capsule — the canonical workload token.
+    const body = addMesh(group, new THREE.CylinderGeometry(0.5, 0.5, 1.0, 6), mat(HUE.blue, { roughness: 0.44 }), {
+      y: top + 0.54,
+      ry: Math.PI / 6,
     });
-    geom.center();
-    const mesh = new THREE.Mesh(geom, createStandardMaterial(BLUE, status));
-    mesh.castShadow = true;
-    group.add(mesh);
-
-    const glow = new THREE.Mesh(new THREE.CircleGeometry(0.7, 6), createGlowMaterial(getStatusColor(status), 0.15));
-    glow.rotation.x = -Math.PI / 2;
-    glow.position.y = -0.26;
-    glow.userData.isGlow = true;
-    group.add(glow);
-
-    addGlow(group, OPENSHIFT_RED, 0.5);
-    addLabel(group, resource, 0.8);
-
-    group.userData.baseY = resource.y || 0;
-    return group;
+    addMesh(group, new THREE.CylinderGeometry(0.5, 0.5, 0.08, 6), glow(HUE.ice, 0.75), {
+      y: top + 1.1, ry: Math.PI / 6, castShadow: false,
+    });
+    const collar = torus(group, 0.53, 0.028, HUE.sky, { y: top + 0.62, rx: Math.PI / 2, tubularSegments: 6 });
+    collar.rotation.z = Math.PI / 6;
+    addMesh(group, new THREE.SphereGeometry(0.07, 12, 12), glow(HUE.ice), { y: top + 1.16 });
+    void body;
+    return finish(group);
   },
 
   Deployment(resource) {
-    const status = resourceStatus(resource);
-    const group = new THREE.Group();
-    const geom = roundedBoxGeometry(1.4, 1.0, 0.5, 0.15, 3);
-    geom.center();
-    const mesh = new THREE.Mesh(geom, createStandardMaterial(DARK_BLUE, status));
-    mesh.castShadow = true;
-    group.add(mesh);
-
-    const spec = resourceSpec(resource);
-    const replicas = spec.replicas ?? resource.replicas ?? 1;
-    const badge = new THREE.Mesh(new THREE.CircleGeometry(0.2, 16), new THREE.MeshBasicMaterial({ color: SKY }));
-    badge.position.set(0.6, 0.55, 0.3);
-    group.add(badge);
-    const badgeLabel = createLabelSprite(String(replicas));
-    badgeLabel.scale.set(0.5, 0.25, 1);
-    badgeLabel.position.set(0.6, 0.55, 0.32);
-    group.add(badgeLabel);
-
-    addGlow(group, OPENSHIFT_ORANGE, 0.7);
-    addLabel(group, resource, 0.9);
-    return group;
+    const { group, top } = stage(resource, { radius: 1.0 });
+    const replicas = replicaCount(resource, 3);
+    // Layered plates = declarative rollout.
+    const plateWidths = [1.5, 1.16, 0.82];
+    for (let i = 0; i < 3; i++) {
+      slab(group, plateWidths[i], 0.16, 0.9 - i * 0.16, MAT.bodyLight, {
+        y: top + 0.16 + i * 0.22,
+        round: 0.28,
+      });
+      strap(group, plateWidths[i] * 0.66, 0.02, 0.02, i === 2 ? HUE.ice : HUE.blue, {
+        y: top + 0.25 + i * 0.22,
+        z: 0.42 - i * 0.08,
+        opacity: 0.75,
+      });
+    }
+    // Rollout chevron.
+    strap(group, 0.32, 0.03, 0.02, HUE.ice, { y: top + 0.78, z: 0.16, rz: 0.6, opacity: 0.8 });
+    strap(group, 0.32, 0.03, 0.02, HUE.ice, { y: top + 0.78, z: 0.16, rz: -0.6, opacity: 0.8 });
+    // Replica tick marks.
+    for (let i = 0; i < replicas; i++) {
+      strap(group, 0.04, 0.02, 0.04, HUE.sky, {
+        x: (i - (replicas - 1) / 2) * 0.16,
+        y: top + 0.1,
+        z: 0.46,
+        opacity: 0.85,
+      });
+    }
+    return finish(group);
   },
 
   ReplicaSet(resource) {
-    const status = resourceStatus(resource);
-    const group = new THREE.Group();
-    const spec = resourceSpec(resource);
-    const count = Math.min(spec.replicas ?? resource.replicas ?? 3, 5);
+    const { group, top } = stage(resource, { radius: 0.92 });
+    const count = Math.min(replicaCount(resource, 3), 4);
+    slab(group, 1.36, 0.12, 0.52, MAT.bodyDark, { y: top + 0.07, round: 0.3 });
     for (let i = 0; i < count; i++) {
-      const mat = createStandardMaterial(0x388bfd, status);
-      mat.transparent = true;
-      mat.opacity = 1 - i * 0.15;
-      addMesh(group, new THREE.BoxGeometry(1.2, 0.12, 0.9), mat, { y: i * 0.16 });
+      slab(group, 0.26, 0.34, 0.3, MAT.bodyLight, {
+        x: (i - (count - 1) / 2) * 0.32,
+        y: top + 0.31,
+        round: 0.28,
+      });
+      strap(group, 0.14, 0.03, 0.02, HUE.sky, {
+        x: (i - (count - 1) / 2) * 0.32,
+        y: top + 0.2,
+        z: 0.17,
+        opacity: 0.8,
+      });
     }
-    addGlow(group, 0x388bfd, 0.6);
-    addLabel(group, resource, count * 0.16 + 0.5);
-    return group;
+    return finish(group);
   },
 
   StatefulSet(resource) {
-    const status = resourceStatus(resource);
-    const group = new THREE.Group();
-    const spec = resourceSpec(resource);
-    const ordinals = Math.min(spec.replicas ?? resource.replicas ?? 3, 5);
-    for (let i = 0; i < ordinals; i++) {
-      const geom = new THREE.ExtrudeGeometry(hexShape(0.4), { depth: 0.3, bevelEnabled: false });
-      geom.center();
-      addMesh(group, geom, createStandardMaterial(VIOLET, status), {
-        x: i * 0.9 - (ordinals - 1) * 0.45,
+    const { group, top } = stage(resource, { radius: 0.92 });
+    const count = Math.min(replicaCount(resource, 3), 4);
+    // Ordered ordinal stack — persistent identity per replica.
+    for (let i = 0; i < count; i++) {
+      disc(group, 0.42, 0.24, i === count - 1 ? HUE.violet : MAT.bodyLight, {
+        x: (i - (count - 1) / 2) * 0.1,
+        y: top + 0.18 + i * 0.27,
+        z: i * 0.02,
       });
-      const ordLabel = createLabelSprite(String(i));
-      ordLabel.scale.set(0.5, 0.25, 1);
-      ordLabel.position.set(i * 0.9 - (ordinals - 1) * 0.45, 0.5, 0);
-      group.add(ordLabel);
+      strap(group, 0.6, 0.02, 0.02, i === count - 1 ? HUE.ice : HUE.violet, {
+        y: top + 0.32 + i * 0.27,
+        opacity: 0.65,
+      });
     }
-    addGlow(group, VIOLET, 0.5);
-    addLabel(group, resource, 0.8);
-    return group;
+    addMesh(group, new THREE.SphereGeometry(0.06, 12, 12), glow(HUE.ice), {
+      y: top + 0.34 + count * 0.27,
+    });
+    return finish(group);
   },
 
   DaemonSet(resource) {
-    const status = resourceStatus(resource);
-    const group = new THREE.Group();
-    const geom = new THREE.ExtrudeGeometry(starShape(0.7, 0.35, 5), {
-      depth: 0.4,
-      bevelEnabled: true,
-      bevelThickness: 0.03,
-      bevelSize: 0.03,
-      bevelSegments: 1,
-    });
-    geom.center();
-    const mesh = new THREE.Mesh(geom, createStandardMaterial(YELLOW, status));
-    mesh.castShadow = true;
-    group.add(mesh);
-    addGlow(group, YELLOW, 0.6);
-    addLabel(group, resource, 0.9);
+    const { group, top } = stage(resource, { radius: 0.95 });
+    disc(group, 0.32, 0.12, MAT.body, { y: top + 0.06 });
+    addMesh(group, new THREE.CylinderGeometry(0.05, 0.08, 0.34, 10), mat(MAT.metal), { y: top + 0.28 });
+    // Hub + one agent cube per node in a tilted ring.
+    const ring = new THREE.Group();
+    ring.position.y = top + 0.6;
+    ring.rotation.x = 0.34;
+    group.add(ring);
+    addMesh(ring, new THREE.SphereGeometry(0.17, 18, 14), mat(HUE.teal, { roughness: 0.4 }));
+    torus(ring, 0.62, 0.018, HUE.teal, { rx: Math.PI / 2 });
+    for (let i = 0; i < 4; i++) {
+      const angle = (TAU * i) / 4;
+      slab(ring, 0.16, 0.16, 0.16, MAT.bodyLight, {
+        x: Math.cos(angle) * 0.62,
+        z: Math.sin(angle) * 0.62,
+        round: 0.24,
+      });
+    }
     group.userData.animate = (time) => {
-      mesh.rotation.z = Math.sin(time * 0.5) * 0.1;
+      ring.rotation.y = time * 0.25;
     };
-    return group;
+    return finish(group);
   },
 
   Job(resource) {
-    const status = resourceStatus(resource);
-    const group = new THREE.Group();
-    const mat = createStandardMaterial(0x7ee787, status);
-    cone(group, 0.4, 0.6, 6, 0x7ee787, status, { y: 0.3 });
-    const botCone = cone(group, 0.4, 0.6, 6, 0x7ee787, status, { rx: Math.PI, y: -0.3 });
-    botCone.material = mat.clone();
-    box(group, 0.16, 0.1, 0.16, WHITE, status, {});
-    addGlow(group, 0x7ee787, 0.4);
-    addLabel(group, resource, 0.9);
-    group.userData.animate = (time) => {
-      if (status === 'Running') group.rotation.z = Math.sin(time * 3) * 0.15;
-    };
-    return group;
+    const { group, top } = stage(resource, { radius: 0.9 });
+    // Run-to-completion triangle.
+    const prism = extruded(group, triangleShape(0.55), 0.42, HUE.green, {
+      y: top + 0.62,
+      bevelSize: 0.05,
+      bevelThickness: 0.05,
+    });
+    prism.rotation.y = 0.2;
+    slab(group, 0.5, 0.08, 0.5, MAT.bodyDark, { y: top + 0.06, round: 0.3 });
+    strap(group, 0.52, 0.03, 0.02, HUE.green, { y: top + 0.12, z: 0.3, opacity: 0.8 });
+    return finish(group);
   },
 
   CronJob(resource) {
-    const status = resourceStatus(resource);
-    const group = new THREE.Group();
-    const face = cylinder(group, 0.6, 0.6, 0.15, 24, 0xbc8cff, status, { rx: Math.PI / 2 });
-    torus(group, 0.62, 0.05, PURPLE, status, {});
-    const handMat = new THREE.MeshStandardMaterial({
-      color: 0xffffff, emissive: new THREE.Color(0xffffff), emissiveIntensity: 0.3,
+    const { group, top } = stage(resource, { radius: 0.9 });
+    // Upright clock face.
+    const face = disc(group, 0.52, 0.14, MAT.bodyLight, {
+      y: top + 0.62, rx: Math.PI / 2, z: 0.06,
     });
-    const hourHand = addMesh(group, new THREE.BoxGeometry(0.04, 0.3, 0.04), handMat, { y: 0.15, z: 0.1 });
-    const minuteHand = addMesh(group, new THREE.BoxGeometry(0.03, 0.42, 0.03), handMat.clone(), { y: 0.21, z: 0.12 });
+    torus(group, 0.53, 0.045, HUE.violet, { y: top + 0.62, z: 0.06 });
+    const handMaterial = glow(HUE.ice);
+    const hour = addMesh(group, new THREE.BoxGeometry(0.035, 0.24, 0.03), handMaterial, {
+      y: top + 0.72, z: 0.16,
+    });
+    const minute = addMesh(group, new THREE.BoxGeometry(0.025, 0.34, 0.03), handMaterial.clone(), {
+      y: top + 0.77, z: 0.17,
+    });
     for (let i = 0; i < 12; i++) {
-      const angle = (Math.PI / 6) * i;
-      flatBar(group, 0.03, 0.08, 0.03, 0xc9d1d9, {
-        x: Math.sin(angle) * 0.5, y: Math.cos(angle) * 0.5, z: 0.1, castShadow: false,
+      const angle = (TAU / 12) * i;
+      strap(group, 0.025, 0.05, 0.02, HUE.slate, {
+        x: Math.sin(angle) * 0.4,
+        y: top + 0.62 + Math.cos(angle) * 0.4,
+        z: 0.14,
+        rz: -angle,
+        opacity: 0.7,
       });
     }
-    addGlow(group, 0xbc8cff, 0.5);
-    addLabel(group, resource, 1.0);
-    group.userData.animate = (time) => {
-      hourHand.rotation.z = -time * 0.2;
-      minuteHand.rotation.z = -time * 1.2;
-    };
     void face;
-    return group;
+    group.userData.animate = (time) => {
+      hour.rotation.z = -time * 0.08;
+      minute.rotation.z = -time * 0.5;
+    };
+    return finish(group);
   },
 
   // ── Builds & images ──────────────────────────────────────────────────────
   BuildConfig(resource) {
-    const status = resourceStatus(resource);
-    const group = new THREE.Group();
-    const gear = addGear(group, { radius: 0.42, teeth: 8, color: OPENSHIFT_ORANGE, status, tilt: 0.35 });
-    // Wrench crossed over the gear.
-    box(group, 0.09, 0.62, 0.09, GRAY, status, { x: 0.42, y: 0.55, z: 0.12, rz: -0.6 });
-    box(group, 0.2, 0.12, 0.1, GRAY, status, { x: 0.62, y: 0.78, z: 0.12, rz: -0.6 });
-    addGlow(group, OPENSHIFT_ORANGE, 0.6);
-    addLabel(group, resource, 1.25);
+    const { group, top } = stage(resource, { radius: 0.9 });
+    const gear = addGear(group, { y: top + 0.72, z: 0.02, radius: 0.44, color: HUE.warm, tilt: Math.PI / 2 });
+    // Config wrench crossing the gear.
+    slab(group, 0.07, 0.52, 0.07, MAT.metal, { x: 0.34, y: top + 0.62, z: 0.12, rz: -0.5, round: 0.4 });
+    slab(group, 0.16, 0.1, 0.09, MAT.metal, { x: 0.5, y: top + 0.82, z: 0.12, rz: -0.5, round: 0.3 });
     group.userData.animate = (time) => {
-      gear.rotation.z = time * 0.4;
+      gear.rotation.z = time * 0.22;
     };
-    return group;
+    return finish(group);
   },
 
   Build(resource) {
-    const status = resourceStatus(resource);
-    const group = new THREE.Group();
-    const gear = addGear(group, { radius: 0.5, teeth: 10, color: ORANGE, status, tilt: 0.3 });
-    addGlow(group, ORANGE, 0.55);
-    addLabel(group, resource, 1.25);
+    const { group, top } = stage(resource, { radius: 0.92 });
+    const gear = addGear(group, { y: top + 0.72, z: 0.02, radius: 0.52, teeth: 12, color: HUE.warm, tilt: Math.PI / 2 });
+    // Progress arc above the gear.
+    const arc = torus(group, 0.62, 0.022, HUE.amber, {
+      y: top + 0.72,
+      z: 0.04,
+      arc: Math.PI * 1.35,
+      tubularSegments: 40,
+    });
     group.userData.animate = (time) => {
-      gear.rotation.z = time * 1.4;
+      gear.rotation.z = time * 0.7;
+      arc.rotation.z = -time * 0.3;
     };
-    return group;
+    return finish(group);
   },
 
   ImageStream(resource) {
-    const status = resourceStatus(resource);
-    const group = new THREE.Group();
+    const { group, top } = stage(resource, { radius: 0.9 });
+    addMesh(group, new THREE.CylinderGeometry(0.04, 0.05, 1.15, 10), mat(MAT.metal), { y: top + 0.6 });
     const spec = resourceSpec(resource);
-    const tagCount = Math.max(2, Math.min((spec.tags || []).length || 2, 5));
-    const disks = [];
+    const tagCount = Math.max(2, Math.min((spec.tags || []).length || 3, 4));
+    const layers = [];
     for (let i = 0; i < tagCount; i++) {
-      const radius = 0.56 - i * 0.06;
-      const disk = cylinder(group, radius, radius, 0.14, 24, i === 0 ? OPENSHIFT_ORANGE : PURPLE, status, {
-        y: 0.2 + i * 0.22,
+      const layer = disc(group, 0.46 - i * 0.05, 0.1, i === tagCount - 1 ? HUE.amber : MAT.bodyLight, {
+        y: top + 0.28 + i * 0.2,
+        ry: i * 0.18,
       });
-      disks.push(disk);
+      layers.push(layer);
+      strap(group, 0.5 - i * 0.05, 0.02, 0.02, HUE.amber, {
+        y: top + 0.34 + i * 0.2,
+        opacity: 0.6,
+      });
     }
-    cylinder(group, 0.07, 0.07, tagCount * 0.22 + 0.2, 10, DARK_GRAY, status, { y: 0.2 + (tagCount - 1) * 0.11 });
-    addGlow(group, PURPLE, 0.6);
-    addLabel(group, resource, 0.2 + tagCount * 0.22 + 0.5);
     group.userData.animate = (time) => {
-      disks.forEach((disk, i) => {
-        disk.position.y = 0.2 + i * 0.22 + Math.sin(time * 1.5 + i) * 0.02;
+      layers.forEach((layer, i) => {
+        layer.position.y = top + 0.28 + i * 0.2 + Math.sin(time * 0.8 + i) * 0.012;
       });
     };
-    return group;
+    return finish(group);
   },
 
   // ── Networking ───────────────────────────────────────────────────────────
   Service(resource) {
-    const status = resourceStatus(resource);
-    const group = new THREE.Group();
-    sphere(group, 0.5, LIGHT_BLUE, status);
-    const ringMat = new THREE.MeshStandardMaterial({
-      color: SKY,
-      emissive: new THREE.Color(LIGHT_BLUE),
-      emissiveIntensity: 0.3,
-      metalness: 0.6,
-      roughness: 0.3,
+    const { group, top } = stage(resource, { radius: 0.95 });
+    disc(group, 0.28, 0.1, MAT.bodyDark, { y: top + 0.05 });
+    const sphereMaterial = mat(HUE.sky, { metalness: 0.5, roughness: 0.28 });
+    addMesh(group, new THREE.SphereGeometry(0.4, 26, 20), sphereMaterial, { y: top + 0.58 });
+    const ringA = torus(group, 0.62, 0.026, HUE.sky, { y: top + 0.58, rx: Math.PI / 2 + 0.34 });
+    const ringB = torus(group, 0.74, 0.018, HUE.ice, {
+      y: top + 0.58, rx: Math.PI / 2 - 0.2, opacity: 0.6,
     });
-    const ring = addMesh(group, new THREE.TorusGeometry(0.75, 0.06, 8, 32), ringMat, { rx: Math.PI / 2 });
-    addGlow(group, BLUE, 0.6);
-    addLabel(group, resource, 0.9);
+    for (let i = 0; i < 3; i++) {
+      const angle = (TAU / 3) * i;
+      strap(group, 0.05, 0.05, 0.18, HUE.ice, {
+        x: Math.cos(angle) * 0.4,
+        y: top + 0.58,
+        z: Math.sin(angle) * 0.4,
+        ry: -angle,
+        opacity: 0.8,
+      });
+    }
     group.userData.animate = (time) => {
-      ring.rotation.z = time * 0.8;
+      ringA.rotation.z = time * 0.35;
+      ringB.rotation.z = -time * 0.22;
     };
-    return group;
+    return finish(group);
   },
 
   Route(resource) {
-    const status = resourceStatus(resource);
-    const group = new THREE.Group();
+    const { group, top } = stage(resource, { radius: 0.88 });
     const spec = resourceSpec(resource);
-
-    cylinder(group, 0.06, 0.09, 1.25, 8, DARK_GRAY, status, { y: 0.62 });
-
-    const signGeom = new THREE.ExtrudeGeometry(arrowSignShape(), {
-      depth: 0.13, bevelEnabled: true, bevelThickness: 0.02, bevelSize: 0.02, bevelSegments: 1,
+    // Sign post + routed arrow.
+    slab(group, 0.1, 1.3, 0.1, MAT.bodyLight, { y: top + 0.7, round: 0.4 });
+    const sign = extruded(group, arrowSignShape(), 0.14, MAT.bodyLight, {
+      y: top + 1.16, x: 0.14, bevelSize: 0.03,
     });
-    signGeom.center();
-    const sign = new THREE.Mesh(signGeom, createStandardMaterial(OPENSHIFT_RED, status));
-    sign.position.set(0.16, 1.1, 0);
-    sign.castShadow = true;
-    group.add(sign);
-
-    const tls = spec.tls;
-    if (tls) {
-      const tlsColor = tls.termination === 'passthrough' ? PURPLE : GOLD;
-      const lockRing = torus(group, 0.16, 0.035, tlsColor, status, { x: 0.16, y: 1.48, z: 0.12 });
-      lockRing.rotation.x = Math.PI / 2;
-    } else {
-      flatBar(group, 0.24, 0.05, 0.02, 0xff8a80, { x: 0.16, y: 0.78, z: 0.12, castShadow: false });
+    strap(group, 0.62, 0.035, 0.02, HUE.open, { y: top + 1.16, x: 0.14, z: 0.09, opacity: 0.9 });
+    if (spec.tls) {
+      const tlsColor = spec.tls.termination === 'passthrough' ? HUE.violet : HUE.amber;
+      torus(group, 0.13, 0.03, tlsColor, { y: top + 1.52, x: -0.08, rx: Math.PI / 2 });
     }
-
-    addGlow(group, OPENSHIFT_RED, 0.5);
-    addLabel(group, resource, 1.7);
     group.userData.animate = (time) => {
-      sign.rotation.y = Math.sin(time * 0.6) * 0.08;
+      sign.rotation.y = Math.sin(time * 0.4) * 0.06;
     };
-    return group;
+    return finish(group);
   },
 
   Ingress(resource) {
-    const status = resourceStatus(resource);
-    const group = new THREE.Group();
-    const geom = new THREE.OctahedronGeometry(0.6, 0);
-    const mat = createStandardMaterial(SKY, status);
-    mat.flatShading = true;
-    const mesh = new THREE.Mesh(geom, mat);
-    mesh.castShadow = true;
-    group.add(mesh);
+    const { group, top } = stage(resource, { radius: 0.92 });
+    const geometry = new THREE.OctahedronGeometry(0.5, 0);
+    const material = mat(HUE.sky, { metalness: 0.55, roughness: 0.32, flatShading: true });
+    const gem = addMesh(group, geometry, material, { y: top + 0.68 });
     const edges = new THREE.LineSegments(
-      new THREE.EdgesGeometry(geom),
-      new THREE.LineBasicMaterial({ color: 0xb3d9ff, transparent: true, opacity: 0.5 }),
+      new THREE.EdgesGeometry(geometry),
+      new THREE.LineBasicMaterial({ color: HUE.ice, transparent: true, opacity: 0.45 }),
     );
+    edges.position.copy(gem.position);
     group.add(edges);
-    addGlow(group, SKY, 0.5);
-    addLabel(group, resource, 1.0);
+    torus(group, 0.6, 0.022, HUE.sky, { y: top + 0.16, rx: Math.PI / 2 });
     group.userData.animate = (time) => {
-      mesh.rotation.y = time * 0.4;
-      edges.rotation.y = time * 0.4;
+      gem.rotation.y = time * 0.25;
+      edges.rotation.y = time * 0.25;
     };
-    return group;
+    return finish(group);
   },
 
   NetworkPolicy(resource) {
-    const status = resourceStatus(resource);
-    const group = new THREE.Group();
-    extrude(group, shieldShape(1.0, 1.2), 0.25, 0xf0883e, status, {});
+    const { group, top } = stage(resource, { radius: 0.9 });
+    const shield = extruded(group, shieldShape(0.95, 1.12), 0.22, MAT.bodyLight, {
+      y: top + 0.7, bevelSize: 0.04,
+    });
+    void shield;
     for (let i = 0; i < 3; i++) {
-      flatBar(group, 0.62, 0.05, 0.03, 0xffd7a8, { y: 0.24 - i * 0.22, z: 0.16, castShadow: false });
+      strap(group, 0.56, 0.05, 0.03, HUE.warm, {
+        y: top + 0.48 + i * 0.18, z: 0.14, opacity: 0.8,
+      });
     }
-    addGlow(group, 0xf0883e, 0.5);
-    addLabel(group, resource, 1.0);
-    return group;
+    return finish(group);
   },
 
   IPAddressPool(resource) {
-    const status = resourceStatus(resource);
-    const group = new THREE.Group();
-    const nodes = [
-      { x: -0.55, y: 0.3, z: 0.25 },
-      { x: 0.55, y: 0.3, z: 0.25 },
-      { x: 0, y: 0.3, z: -0.55 },
+    const { group, top } = stage(resource, { radius: 0.92 });
+    disc(group, 0.62, 0.08, MAT.bodyDark, { y: top + 0.04 });
+    const points = [
+      new THREE.Vector3(-0.38, top + 0.18, 0.22),
+      new THREE.Vector3(0.38, top + 0.18, 0.22),
+      new THREE.Vector3(0, top + 0.18, -0.38),
     ];
-    for (const node of nodes) {
-      sphere(group, 0.18, OPENSHIFT_ORANGE, status, node);
+    for (const point of points) {
+      addMesh(group, new THREE.SphereGeometry(0.13, 16, 12), mat(HUE.warm, { roughness: 0.4 }), {
+        x: point.x, y: point.y, z: point.z,
+      });
     }
-    const lineGeom = new THREE.BufferGeometry().setFromPoints([
-      new THREE.Vector3(-0.55, 0.3, 0.25), new THREE.Vector3(0.55, 0.3, 0.25),
-      new THREE.Vector3(0.55, 0.3, 0.25), new THREE.Vector3(0, 0.3, -0.55),
-      new THREE.Vector3(0, 0.3, -0.55), new THREE.Vector3(-0.55, 0.3, 0.25),
+    const lineGeometry = new THREE.BufferGeometry().setFromPoints([
+      points[0], points[1], points[1], points[2], points[2], points[0],
     ]);
-    group.add(new THREE.LineSegments(lineGeom, new THREE.LineBasicMaterial({ color: OPENSHIFT_ORANGE, transparent: true, opacity: 0.6 })));
-    cylinder(group, 0.42, 0.52, 0.12, 20, SLATE, status, { y: 0.02 });
-    addGlow(group, OPENSHIFT_ORANGE, 0.55);
-    addLabel(group, resource, 0.9);
-    return group;
+    group.add(new THREE.LineSegments(lineGeometry, new THREE.LineBasicMaterial({
+      color: HUE.amber, transparent: true, opacity: 0.5,
+    })));
+    return finish(group);
   },
 
   L2Advertisement(resource) {
-    const status = resourceStatus(resource);
-    const group = new THREE.Group();
-    sphere(group, 0.2, OPENSHIFT_RED, status, { x: -0.4, y: 0.25 });
-    sphere(group, 0.2, OPENSHIFT_RED, status, { x: 0.4, y: 0.25 });
-    addSignalArcs(group, OPENSHIFT_ORANGE, status, { x: 0, y: 0.55, z: 0 });
-    cylinder(group, 0.45, 0.55, 0.1, 20, SLATE, status, { y: 0.02 });
-    addGlow(group, OPENSHIFT_RED, 0.55);
-    addLabel(group, resource, 1.55);
-    return group;
+    const { group, top } = stage(resource, { radius: 0.9 });
+    disc(group, 0.55, 0.08, MAT.bodyDark, { y: top + 0.04 });
+    addMesh(group, new THREE.SphereGeometry(0.14, 16, 12), mat(HUE.open), { x: -0.32, y: top + 0.2 });
+    addMesh(group, new THREE.SphereGeometry(0.14, 16, 12), mat(HUE.open), { x: 0.32, y: top + 0.2 });
+    addSignalArcs(group, HUE.warm, { x: 0, y: top + 0.55 });
+    return finish(group);
   },
 
   // ── Config / storage ─────────────────────────────────────────────────────
   ConfigMap(resource) {
-    const status = resourceStatus(resource);
-    const group = new THREE.Group();
-    cylinder(group, 0.35, 0.35, 0.8, 16, GOLD, status, {});
-    const capMat = new THREE.MeshStandardMaterial({ color: 0xf0c84d, metalness: 0.4, roughness: 0.4 });
-    addMesh(group, new THREE.CylinderGeometry(0.38, 0.38, 0.05, 16), capMat, { y: 0.42 });
-    addMesh(group, new THREE.CylinderGeometry(0.38, 0.38, 0.05, 16), capMat.clone(), { y: -0.42 });
-    addGlow(group, GOLD, 0.4);
-    addLabel(group, resource, 0.9);
-    return group;
+    const { group, top } = stage(resource, { radius: 0.9 });
+    // Binder of key/value entries.
+    const binder = slab(group, 1.1, 0.78, 0.3, MAT.bodyLight, {
+      y: top + 0.56, rx: -0.16, round: 0.16,
+    });
+    binder.rotation.y = 0.08;
+    for (let i = 0; i < 3; i++) {
+      strap(group, 0.7 - i * 0.1, 0.035, 0.02, HUE.amber, {
+        y: top + 0.78 - i * 0.16, z: 0.18, opacity: 0.75,
+      });
+    }
+    slab(group, 0.24, 0.08, 0.36, MAT.bodyDark, { y: top + 0.12, round: 0.3 });
+    return finish(group);
   },
 
   Secret(resource) {
-    const status = resourceStatus(resource);
-    const group = new THREE.Group();
-    const shapes = lockShape();
-
-    const shackleGeom = new THREE.ExtrudeGeometry(shapes.shackle, { depth: 0.25, bevelEnabled: false });
-    shackleGeom.center();
-    addMesh(group, shackleGeom, createStandardMaterial(GRAY, status), { y: 0.3 });
-    const bodyGeom = new THREE.ExtrudeGeometry(shapes.body, {
-      depth: 0.35, bevelEnabled: true, bevelThickness: 0.03, bevelSize: 0.03,
+    const { group, top } = stage(resource, { radius: 0.88 });
+    // Padlock.
+    const body = slab(group, 0.8, 0.58, 0.36, MAT.bodyLight, { y: top + 0.42, round: 0.2 });
+    void body;
+    const shackle = torus(group, 0.26, 0.06, MAT.metal, { y: top + 0.86, arc: Math.PI, tubularSegments: 22 });
+    shackle.rotation.z = Math.PI;
+    strap(group, 0.34, 0.05, 0.03, HUE.amber, { y: top + 0.5, z: 0.2, opacity: 0.85 });
+    addMesh(group, new THREE.CylinderGeometry(0.07, 0.07, 0.04, 14), mat(MAT.bodyDark), {
+      y: top + 0.42, z: 0.2, rx: Math.PI / 2,
     });
-    bodyGeom.center();
-    addMesh(group, bodyGeom, createStandardMaterial(DARK_GRAY, status), { y: -0.15 });
-    addGlow(group, DARK_GRAY, 0.5);
-    addLabel(group, resource, 0.9);
-    return group;
+    return finish(group);
   },
 
   LimitRange(resource) {
-    const status = resourceStatus(resource);
-    const group = new THREE.Group();
-    const ruler = box(group, 1.85, 0.08, 0.38, YELLOW, status, { y: 0.1, rz: 0.05 });
+    const { group, top } = stage(resource, { radius: 0.9 });
+    slab(group, 1.5, 0.1, 0.38, MAT.bodyLight, { y: top + 0.14, rz: 0.03, round: 0.3 });
     for (let i = 0; i < 10; i++) {
       const tall = i % 5 === 0;
-      flatBar(group, 0.03, tall ? 0.14 : 0.09, 0.02, 0xffe08a, {
-        x: -0.8 + i * 0.178, y: 0.18, z: 0.18, castShadow: false,
+      strap(group, 0.03, tall ? 0.16 : 0.1, 0.02, HUE.amber, {
+        x: -0.64 + i * 0.142,
+        y: top + 0.26,
+        z: 0.16,
+        opacity: tall ? 0.95 : 0.6,
       });
     }
-    addGlow(group, YELLOW, 0.55);
-    addLabel(group, resource, 0.85);
-    group.userData.animate = (time) => {
-      ruler.rotation.y = Math.sin(time * 0.5) * 0.06;
-    };
-    return group;
+    slab(group, 0.22, 0.16, 0.4, MAT.bodyDark, { y: top + 0.08, x: 0.66, round: 0.3 });
+    return finish(group);
   },
 
   ResourceQuota(resource) {
-    const status = resourceStatus(resource);
-    const group = new THREE.Group();
-    box(group, 1.0, 0.8, 0.6, 0xdb6d28, status, {});
+    const { group, top } = stage(resource, { radius: 0.92 });
+    slab(group, 0.95, 0.72, 0.66, MAT.bodyLight, { y: top + 0.44, round: 0.18 });
     for (let i = 0; i < 3; i++) {
-      const stripeMat = new THREE.MeshStandardMaterial({
-        color: 0xffa657,
-        emissive: new THREE.Color(0xffa657),
-        emissiveIntensity: 0.2,
+      strap(group, 0.72, 0.05, 0.02, HUE.warm, {
+        y: top + 0.28 + i * 0.18, z: 0.34, opacity: 0.7,
       });
-      addMesh(group, new THREE.BoxGeometry(1.02, 0.06, 0.62), stripeMat, { y: -0.2 + i * 0.2 });
     }
-    addGlow(group, 0xdb6d28, 0.5);
-    addLabel(group, resource, 0.9);
-    return group;
+    slab(group, 0.98, 0.06, 0.69, MAT.bodyDark, { y: top + 0.82, round: 0.3 });
+    return finish(group);
   },
 
   Template(resource) {
-    const status = resourceStatus(resource);
-    const group = new THREE.Group();
-    const page = extrude(group, pageShape(), 0.06, WHITE, status, { bevel: false, y: 0.72 });
-    page.rotation.y = 0.18;
-    flatBar(group, 0.62, 0.04, 0.02, OPENSHIFT_ORANGE, { y: 0.95, z: 0.06, castShadow: false });
-    flatBar(group, 0.66, 0.04, 0.02, 0x8b949e, { y: 0.82, z: 0.06, castShadow: false });
-    flatBar(group, 0.52, 0.04, 0.02, 0x8b949e, { y: 0.68, z: 0.06, castShadow: false });
-    addGlow(group, OPENSHIFT_ORANGE, 0.5);
-    addLabel(group, resource, 1.35);
+    const { group, top } = stage(resource, { radius: 0.88 });
+    const page = extruded(group, pageShape(), 0.08, MAT.bodyLight, {
+      y: top + 0.68, bevelSize: 0.02,
+    });
+    page.rotation.y = 0.14;
+    for (let i = 0; i < 3; i++) {
+      strap(group, i === 0 ? 0.5 : 0.62, 0.04, 0.02, i === 0 ? HUE.warm : HUE.slate, {
+        y: top + 0.88 - i * 0.16, z: 0.06, opacity: i === 0 ? 0.9 : 0.6,
+      });
+    }
     group.userData.animate = (time) => {
-      page.position.y = 0.72 + Math.sin(time * 1.4) * 0.04;
-      page.rotation.y = 0.18 + Math.sin(time * 0.8) * 0.06;
+      page.position.y = top + 0.68 + Math.sin(time * 0.7) * 0.02;
     };
-    return group;
+    return finish(group);
   },
 
   PersistentVolume(resource) {
-    const status = resourceStatus(resource);
-    const group = new THREE.Group();
+    const { group, top } = stage(resource, { radius: 1.0 });
+    addMesh(group, new THREE.CylinderGeometry(0.04, 0.06, 1.0, 10), mat(MAT.metal), { y: top + 0.52 });
     for (let i = 0; i < 3; i++) {
-      cylinder(group, 0.55, 0.55, 0.16, 24, i === 0 ? TEAL : GREEN, status, { y: 0.22 + i * 0.24 });
+      disc(group, 0.54 - i * 0.02, 0.16, i === 0 ? HUE.green : MAT.bodyLight, {
+        y: top + 0.24 + i * 0.26,
+      });
+      torus(group, 0.5, 0.02, HUE.green, { y: top + 0.33 + i * 0.26, rx: Math.PI / 2 });
     }
-    cylinder(group, 0.08, 0.08, 0.9, 10, DARK_GRAY, status, { y: 0.45 });
-    flatBar(group, 0.7, 0.05, 0.05, TEAL, { y: 0.05, z: 0.32, castShadow: false });
-    addGlow(group, TEAL, 0.6);
-    addLabel(group, resource, 1.25);
-    return group;
+    return finish(group);
   },
 
   PersistentVolumeClaim(resource) {
-    const status = resourceStatus(resource);
-    const group = new THREE.Group();
-    cylinder(group, 0.5, 0.4, 0.8, 8, 0x56d364, status, {});
-    const ring = addMesh(group, new THREE.TorusGeometry(0.52, 0.04, 8, 8), new THREE.MeshStandardMaterial({
-      color: GREEN, metalness: 0.5, roughness: 0.3,
-    }), { rx: Math.PI / 2, y: 0.2 });
-    addGlow(group, 0x56d364, 0.5);
-    addLabel(group, resource, 0.9);
-    void ring;
-    return group;
+    const { group, top } = stage(resource, { radius: 0.9 });
+    // Short volume puck with a connector — a claim, not the disk itself.
+    const puck = disc(group, 0.48, 0.5, HUE.green, { y: top + 0.32 });
+    void puck;
+    torus(group, 0.5, 0.04, MAT.metal, { y: top + 0.32, rx: Math.PI / 2 });
+    addMesh(group, new THREE.CylinderGeometry(0.12, 0.16, 0.16, 12), mat(MAT.bodyDark), { y: top + 0.66 });
+    strap(group, 0.6, 0.04, 0.02, HUE.green, { y: top + 0.2, z: 0.34, opacity: 0.7 });
+    return finish(group);
   },
 
   StorageClass(resource) {
-    const status = resourceStatus(resource);
-    const group = new THREE.Group();
-    const offsets = [[-0.22, 0.12], [0, 0.26], [0.22, 0.4]];
-    for (const [z, y] of offsets) {
-      box(group, 1.25, 0.1, 0.85, PURPLE, status, { z, y });
+    const { group, top } = stage(resource, { radius: 0.92 });
+    // Tiered plates = storage classes / provisioner levels.
+    for (let i = 0; i < 3; i++) {
+      slab(group, 1.24 - i * 0.16, 0.1, 0.86 - i * 0.1, i === 2 ? HUE.violet : MAT.bodyLight, {
+        y: top + 0.16 + i * 0.2,
+        z: -0.16 + i * 0.16,
+        round: 0.24,
+      });
     }
-    box(group, 0.1, 0.5, 0.1, VIOLET, status, { x: -0.5, y: 0.28 });
-    addGlow(group, PURPLE, 0.6);
-    addLabel(group, resource, 0.95);
-    return group;
+    slab(group, 0.08, 0.58, 0.08, MAT.metal, { x: -0.42, y: top + 0.42, round: 0.4 });
+    strap(group, 0.7, 0.025, 0.02, HUE.violet, { y: top + 0.52, opacity: 0.75 });
+    return finish(group);
   },
 
   // ── Scaling & availability ───────────────────────────────────────────────
   HorizontalPodAutoscaler(resource) {
-    const status = resourceStatus(resource);
-    const group = new THREE.Group();
-    const gauge = addMesh(group, new THREE.TorusGeometry(0.55, 0.1, 8, 24, Math.PI * 1.5),
-      createStandardMaterial(0xd2a8ff, status), { rz: Math.PI * 0.75 });
-    const needleMat = new THREE.MeshStandardMaterial({
-      color: 0xff7b72, emissive: new THREE.Color(0xff7b72), emissiveIntensity: 0.3,
+    const { group, top } = stage(resource, { radius: 0.9 });
+    const gauge = torus(group, 0.52, 0.06, HUE.violet, {
+      y: top + 0.62, z: 0.02, arc: Math.PI * 1.5, tubularSegments: 36,
     });
-    const needle = addMesh(group, new THREE.ConeGeometry(0.04, 0.5, 4), needleMat, { y: 0.2 });
-    addMesh(group, new THREE.SphereGeometry(0.08, 8, 8), new THREE.MeshStandardMaterial({ color: 0xffffff, metalness: 0.8 }), {});
-    addGlow(group, 0xd2a8ff, 0.5);
-    addLabel(group, resource, 0.9);
+    gauge.rotation.z = Math.PI * 0.75;
+    const needleMaterial = mat(HUE.ice, {
+      emissive: new THREE.Color(HUE.ice), emissiveIntensity: 0.35,
+    });
+    const needle = addMesh(group, new THREE.ConeGeometry(0.035, 0.44, 6), needleMaterial, {
+      y: top + 0.74, z: 0.1,
+    });
+    disc(group, 0.09, 0.08, MAT.bodyDark, { y: top + 0.62, z: 0.1, rx: Math.PI / 2 });
+    for (let i = 0; i < 5; i++) {
+      strap(group, 0.02, 0.05, 0.02, HUE.violet, {
+        x: Math.sin(Math.PI * 0.25 + (i / 4) * Math.PI * 1.5) * 0.64,
+        y: top + 0.62 + Math.cos(Math.PI * 0.25 + (i / 4) * Math.PI * 1.5) * 0.64,
+        z: 0.03,
+        opacity: 0.55,
+      });
+    }
     group.userData.animate = (time) => {
       const utilization = resource.currentUtilization || 50;
       const angle = (utilization / 100) * Math.PI * 1.5 - Math.PI * 0.75;
-      needle.rotation.z = angle + Math.sin(time * 2) * 0.05;
+      needle.rotation.z = angle + Math.sin(time * 1.2) * 0.02;
     };
-    void gauge;
-    return group;
+    return finish(group);
   },
 
   PodDisruptionBudget(resource) {
-    const status = resourceStatus(resource);
-    const group = new THREE.Group();
-    const left = extrude(group, shieldShape(0.56, 1.1), 0.22, TEAL, status, { x: -0.3, bevel: false });
-    const right = extrude(group, shieldShape(0.56, 1.1), 0.22, TEAL, status, { x: 0.3, bevel: false });
-    left.rotation.z = 0.08;
-    right.rotation.z = -0.08;
-    flatBar(group, 0.9, 0.06, 0.06, 0xffe08a, { y: 0.1, z: 0.14, castShadow: false });
-    addGlow(group, TEAL, 0.55);
-    addLabel(group, resource, 1.0);
-    return group;
+    const { group, top } = stage(resource, { radius: 0.92 });
+    const left = extruded(group, shieldShape(0.48, 1.0), 0.2, MAT.bodyLight, {
+      x: -0.28, y: top + 0.66, bevelSize: 0.03,
+    });
+    const right = extruded(group, shieldShape(0.48, 1.0), 0.2, MAT.bodyLight, {
+      x: 0.28, y: top + 0.66, bevelSize: 0.03,
+    });
+    left.rotation.z = 0.07;
+    right.rotation.z = -0.07;
+    strap(group, 0.68, 0.05, 0.04, HUE.teal, { y: top + 0.56, z: 0.13, opacity: 0.85 });
+    return finish(group);
   },
 
   // ── Security / identity / operators ──────────────────────────────────────
   ServiceAccount(resource) {
-    const status = resourceStatus(resource);
-    const group = new THREE.Group();
-    addPersonBadge(group, OPENSHIFT_ORANGE, status);
-    addGlow(group, OPENSHIFT_RED, 0.5);
-    addLabel(group, resource, 1.2);
-    return group;
+    const { group, top } = stage(resource, { radius: 0.88 });
+    // ID badge on a stand.
+    const badge = slab(group, 0.78, 0.56, 0.1, MAT.bodyLight, {
+      y: top + 0.56, rx: -0.22, round: 0.16,
+    });
+    badge.rotation.y = 0.04;
+    addMesh(group, new THREE.CylinderGeometry(0.11, 0.11, 0.03, 18), mat(HUE.warm), {
+      y: top + 0.67, z: 0.1, rx: Math.PI / 2 - 0.22,
+    });
+    strap(group, 0.34, 0.04, 0.02, HUE.warm, { y: top + 0.5, z: 0.1, opacity: 0.8 });
+    strap(group, 0.26, 0.04, 0.02, HUE.slate, { y: top + 0.4, z: 0.1, opacity: 0.7 });
+    slab(group, 0.34, 0.08, 0.3, MAT.bodyDark, { y: top + 0.1, round: 0.3 });
+    return finish(group);
   },
 
   Role(resource) {
-    const status = resourceStatus(resource);
-    const group = new THREE.Group();
-    extrude(group, octagonShape(0.5), 0.16, GOLD, status, { y: 0.55 });
-    const star = extrude(group, starShape(0.26, 0.11, 5), 0.08, 0xffe08a, status, { y: 0.55, z: 0.14, bevel: false });
-    void star;
-    addGlow(group, GOLD, 0.5);
-    addLabel(group, resource, 1.15);
-    return group;
+    const { group, top } = stage(resource, { radius: 0.88 });
+    // Octagonal permission medal + star.
+    const medal = extruded(group, octagonShape(0.5), 0.16, MAT.bodyLight, {
+      y: top + 0.66, rx: -0.12, bevelSize: 0.03,
+    });
+    void medal;
+    extruded(group, starShape(0.24, 0.1, 5), 0.06, HUE.amber, {
+      y: top + 0.66, z: 0.12, rx: -0.12, bevelSize: 0.02,
+    });
+    strap(group, 0.42, 0.035, 0.02, HUE.amber, { y: top + 0.2, z: 0.24, opacity: 0.65 });
+    return finish(group);
   },
 
   ClusterRole(resource) {
-    const status = resourceStatus(resource);
-    const group = new THREE.Group();
-    extrude(group, octagonShape(0.55), 0.18, OPENSHIFT_ORANGE, status, { y: 0.6 });
-    extrude(group, starShape(0.28, 0.12, 5), 0.08, 0xffe08a, status, { y: 0.6, z: 0.16, bevel: false });
-    const orbit = torus(group, 0.82, 0.025, OPENSHIFT_RED, status, { y: 0.6, rx: Math.PI / 2 });
-    addGlow(group, OPENSHIFT_ORANGE, 0.6);
-    addLabel(group, resource, 1.2);
+    const { group, top } = stage(resource, { radius: 0.92 });
+    extruded(group, octagonShape(0.54), 0.18, MAT.bodyLight, {
+      y: top + 0.68, rx: -0.12, bevelSize: 0.03,
+    });
+    extruded(group, starShape(0.26, 0.11, 5), 0.06, HUE.warm, {
+      y: top + 0.68, z: 0.13, rx: -0.12, bevelSize: 0.02,
+    });
+    const orbit = torus(group, 0.76, 0.02, HUE.warm, { y: top + 0.68, rx: Math.PI / 2 + 0.22 });
     group.userData.animate = (time) => {
-      orbit.rotation.z = time * 0.6;
+      orbit.rotation.z = time * 0.3;
     };
-    return group;
+    return finish(group);
   },
 
   RoleBinding(resource) {
-    const status = resourceStatus(resource);
-    const group = new THREE.Group();
-    addChainLinks(group, 2, GOLD, status);
-    addGlow(group, GOLD, 0.5);
-    addLabel(group, resource, 1.15);
-    return group;
+    const { group, top } = stage(resource, { radius: 0.88 });
+    addChainLinks(group, 2, HUE.amber, { y: top + 0.4 });
+    slab(group, 0.4, 0.08, 0.3, MAT.bodyDark, { y: top + 0.06, round: 0.3 });
+    return finish(group);
   },
 
   ClusterRoleBinding(resource) {
-    const status = resourceStatus(resource);
-    const group = new THREE.Group();
-    addChainLinks(group, 3, OPENSHIFT_ORANGE, status);
-    const orbit = torus(group, 0.8, 0.025, OPENSHIFT_RED, status, { y: 0.72, rx: Math.PI / 2 });
-    addGlow(group, OPENSHIFT_ORANGE, 0.55);
-    addLabel(group, resource, 1.45);
+    const { group, top } = stage(resource, { radius: 0.9 });
+    addChainLinks(group, 3, HUE.warm, { y: top + 0.32 });
+    const orbit = torus(group, 0.72, 0.018, HUE.warm, { y: top + 0.7, rx: Math.PI / 2 + 0.2 });
     group.userData.animate = (time) => {
-      orbit.rotation.z = -time * 0.5;
+      orbit.rotation.z = -time * 0.26;
     };
-    return group;
+    return finish(group);
   },
 
   SecurityContextConstraints(resource) {
-    const status = resourceStatus(resource);
-    const group = new THREE.Group();
-    const shieldGeom = new THREE.ExtrudeGeometry(shieldShape(1.1, 1.25), {
-      depth: 0.3, bevelEnabled: true, bevelThickness: 0.04, bevelSize: 0.04, bevelSegments: 2,
+    const { group, top } = stage(resource, { radius: 0.92 });
+    const shield = extruded(group, shieldShape(1.0, 1.18), 0.26, MAT.bodyLight, {
+      y: top + 0.72, bevelSize: 0.04,
     });
-    shieldGeom.center();
-    addMesh(group, shieldGeom, createStandardMaterial(OPENSHIFT_RED, status), {});
-    const edge = new THREE.LineSegments(
-      new THREE.EdgesGeometry(shieldGeom),
-      new THREE.LineBasicMaterial({ color: 0xff8a80, transparent: true, opacity: 0.5 }),
-    );
-    group.add(edge);
-    // Keyhole → pod security.
-    addMesh(group, new THREE.CylinderGeometry(0.12, 0.12, 0.05, 16), new THREE.MeshStandardMaterial({
-      color: 0x2b0a0a, metalness: 0.1, roughness: 0.9,
-    }), { y: 0.14, z: 0.19, rx: Math.PI / 2 });
-    flatBar(group, 0.08, 0.26, 0.04, 0x2b0a0a, { y: -0.06, z: 0.19, castShadow: false });
-    addGlow(group, OPENSHIFT_RED, 0.55);
-    addLabel(group, resource, 1.1);
-    return group;
+    void shield;
+    // Keyhole = pod security.
+    addMesh(group, new THREE.CylinderGeometry(0.1, 0.1, 0.05, 16), mat(MAT.bodyDark), {
+      y: top + 0.8, z: 0.16, rx: Math.PI / 2,
+    });
+    strap(group, 0.07, 0.24, 0.04, MAT.bodyDark, { y: top + 0.62, z: 0.16, opacity: 0.9 });
+    strap(group, 0.62, 0.035, 0.02, HUE.open, { y: top + 0.3, z: 0.18, opacity: 0.75 });
+    return finish(group);
   },
 
   User(resource) {
-    const status = resourceStatus(resource);
-    const group = new THREE.Group();
-    addPerson(group, { color: CYAN, headColor: LIGHT_BLUE, status });
-    addGlow(group, CYAN, 0.5);
-    addLabel(group, resource, 1.35);
-    return group;
+    const { group, top } = stage(resource, { radius: 0.86 });
+    addBust(group, { y: top + 0.12, scale: 1.0, color: HUE.teal, accent: HUE.ice });
+    return finish(group);
   },
 
   Group(resource) {
-    const status = resourceStatus(resource);
-    const group = new THREE.Group();
-    addPerson(group, { x: -0.42, y: 0, z: -0.12, scale: 0.72, color: TEAL, headColor: CYAN, status });
-    addPerson(group, { x: 0.42, y: 0, z: -0.12, scale: 0.72, color: TEAL, headColor: CYAN, status });
-    addPerson(group, { x: 0, y: 0, z: 0.25, scale: 0.85, color: LIGHT_BLUE, headColor: WHITE, status });
-    addGlow(group, CYAN, 0.55);
-    addLabel(group, resource, 1.45);
-    return group;
+    const { group, top } = stage(resource, { radius: 0.95 });
+    addBust(group, { x: -0.3, z: 0.16, y: top + 0.08, scale: 0.6, color: HUE.teal });
+    addBust(group, { x: 0.3, z: 0.16, y: top + 0.08, scale: 0.6, color: HUE.teal });
+    addBust(group, { y: top + 0.1, z: -0.16, scale: 0.72, color: HUE.sky, accent: HUE.ice });
+    return finish(group);
   },
 
   Identity(resource) {
-    const status = resourceStatus(resource);
-    const group = new THREE.Group();
-    addPersonBadge(group, DARK_GRAY, status);
-    flatBar(group, 0.36, 0.05, 0.02, OPENSHIFT_ORANGE, { y: 0.36, z: 0.08, castShadow: false });
-    addGlow(group, DARK_GRAY, 0.45);
-    addLabel(group, resource, 1.2);
-    return group;
+    const { group, top } = stage(resource, { radius: 0.84 });
+    slab(group, 0.7, 0.5, 0.12, MAT.bodyLight, { y: top + 0.52, rx: -0.2, round: 0.2 });
+    addMesh(group, new THREE.SphereGeometry(0.1, 16, 12), mat(HUE.slate), { y: top + 0.66, z: 0.08 });
+    strap(group, 0.34, 0.04, 0.02, HUE.sky, { y: top + 0.48, z: 0.08, opacity: 0.8 });
+    return finish(group);
   },
 
   Subscription(resource) {
-    const status = resourceStatus(resource);
-    const group = new THREE.Group();
-    const piece = extrude(group, puzzleShape(), 0.26, OPENSHIFT_ORANGE, status, { y: 0.6 });
-    piece.rotation.y = 0.4;
-    const halo = torus(group, 0.62, 0.03, OPENSHIFT_RED, status, { y: 0.6, rx: Math.PI / 2 });
-    addGlow(group, OPENSHIFT_ORANGE, 0.55);
-    addLabel(group, resource, 1.3);
+    const { group, top } = stage(resource, { radius: 0.9 });
+    const piece = extruded(group, puzzleShape(), 0.24, MAT.bodyLight, {
+      y: top + 0.66, bevelSize: 0.035,
+    });
+    piece.rotation.y = 0.42;
+    strap(group, 0.4, 0.05, 0.03, HUE.warm, { y: top + 0.66, z: 0.2, opacity: 0.85 });
+    const halo = torus(group, 0.66, 0.02, HUE.warm, { y: top + 0.66, rx: Math.PI / 2 + 0.3 });
     group.userData.animate = (time) => {
-      piece.rotation.y = 0.4 + Math.sin(time * 0.7) * 0.15;
-      halo.rotation.z = time * 0.5;
+      piece.rotation.y = 0.42 + Math.sin(time * 0.4) * 0.1;
+      halo.rotation.z = time * 0.28;
     };
-    return group;
+    return finish(group);
   },
 };
 
@@ -1287,6 +1247,9 @@ const MESH_ALIASES = {
   CM: 'ConfigMap',
   NETPOL: 'NetworkPolicy',
   PDB: 'PodDisruptionBudget',
+  SCC: 'SecurityContextConstraints',
+  CRB: 'ClusterRoleBinding',
+  CR: 'ClusterRole',
 };
 
 /** Canonical kinds in js/data/kindRegistry.js that have a dedicated creator. */
@@ -1320,45 +1283,44 @@ export class ResourceMeshFactory {
   create(resource) {
     const kind = meshKindFor(resource);
     const creator = kind ? CREATORS[kind] : null;
-    const group = creator ? creator(resource) : this._createFallback(resource);
+    let group;
+    try {
+      group = creator ? creator(resource) : this._createFallback(resource);
+    } catch (error) {
+      console.warn(`ResourceMeshes: ${kind || 'unknown'} creator failed, using fallback`, error);
+      group = this._createFallback(resource);
+    }
     if (group) {
       group.userData.meshKind = kind || 'Fallback';
       group.userData.resourceKind = resourceKind(resource) || kind || 'Unknown';
+      group.userData.displayName = resourceDisplayName(resource);
     }
     return group;
   }
 
   _createFallback(resource) {
-    const status = resourceStatus(resource);
-    const group = new THREE.Group();
-    const mesh = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.8, 0.8), createStandardMaterial(GRAY, status));
-    mesh.castShadow = true;
-    group.add(mesh);
-    addGlow(group, DARK_GRAY, 0.4);
-    addLabel(group, resource, 0.8);
-    return group;
+    const { group, top: pedestalTop } = stage(resource, { radius: 0.86 });
+    slab(group, 0.62, 0.62, 0.62, MAT.body, { y: pedestalTop + 0.42, round: 0.16 });
+    strap(group, 0.4, 0.04, 0.04, HUE.slate, { y: pedestalTop + 0.76, opacity: 0.8 });
+    return finish(group);
   }
 
   updateStatus(group, status) {
     if (!group || !status) return;
     const statusColor = getStatusColor(status);
-    group.traverse((child) => {
-      if (!child.isMesh) return;
-      if (child.userData.isLabel) return;
-      if (child.userData.isGlow && child.material) {
-        child.material.color.set(statusColor);
-      } else if (child.material?.emissive) {
-        child.material.emissive.set(statusColor);
-      }
-    });
+    group.userData.status = status;
+    group.userData.statusPulse = PULSING_STATUSES.has(status);
+    const material = group.userData.statusMaterial;
+    if (material) {
+      material.color.set(statusColor);
+      material.opacity = group.userData.statusBaseOpacity ?? 0.62;
+    }
   }
 
   dispose(group) {
     if (!group) return;
     group.traverse((child) => {
-      // Labels share cached canvas textures — never dispose those.
-      if (child.userData?.isLabel) return;
-      if (child.geometry) child.geometry.dispose();
+      if (child.geometry && !child.geometry.userData?.shared) child.geometry.dispose();
       const materials = Array.isArray(child.material)
         ? child.material
         : (child.material ? [child.material] : []);

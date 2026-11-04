@@ -9,7 +9,14 @@ step: every lab runs client-side in your browser.
 
 **Play:** https://shifting.pro · **Draw:** https://shifting.pro/draw
 
-Target platform: **Red Hat OpenShift Container Platform 4.22** · Exam: **EX280V422**
+**Documentation:** the learner-facing guides live in the
+[GitHub wiki](https://github.com/G-man3207/openshiftgames/wiki) — start with the
+[EX280 Study Guide](https://github.com/G-man3207/openshiftgames/wiki/EX280-Study-Guide) and the
+[EX280 Prep mode](https://github.com/G-man3207/openshiftgames/wiki/Exam-Prep) reference. The engineering
+docs (architecture map, conversion spec, declarative engine, research notes, verification report) stay in
+[`docs/`](docs/).
+
+Target platform: **Red Hat OpenShift Container Platform 4.22** (Kubernetes 1.35, CRI-O) · Exam: **EX280V422**
 (Red Hat Certified Specialist in OpenShift Administration).
 
 ![OpenShift Games — 3D OpenShift cluster simulation in the browser](screenshot.png)
@@ -54,8 +61,16 @@ Target platform: **Red Hat OpenShift Container Platform 4.22** · Exam: **EX280V
   docs links), quick command labs, a searchable `oc` cheat sheet, exam facts and a readiness verdict.
 - **Chaos mode** — endless incident survival; **Sandbox** — free build scored 0–100 by the
   Architecture Advisor (HA, security, networking, storage, scaling, RBAC, quotas, probes, config, cost).
-- **3D cluster view** — Three.js scene with ownership/network/traffic connections, namespace floor
-  planes, minimap, inspector, live metrics and an importable/exportable YAML view.
+- **A start page worth opening** — a dark, premium landing screen with the live 3D cluster in the
+  hero: a banded mode launcher, an interactive EX280 objective→drill picker built from the real
+  objective data, real product captures, and a light colophon that credits K8s Games by Rohit
+  (Apache-2.0), the project this one is a derivative of. Native page scrolling, 390px responsive,
+  `prefers-reduced-motion` support and a progress-aware primary action.
+- **3D cluster view** — Three.js r152 diorama with redesigned models for all 42 kinds, studio
+  lighting, floor tier zones, camera fit-to-view, a screen-space label layer with collision culling,
+  ownership/network/traffic connections, project floor planes, minimap, inspector, live metrics and
+  an importable/exportable YAML view. The renderer boots as the start-page hero and expands to full
+  screen when a mode launches.
 - **OpenShift Draw** (`/draw`) — a 3D architecture whiteboard: drag OpenShift resources, draw
   connections, edit properties, auto-layout, export YAML/PNG and share via URL.
 
@@ -63,8 +78,9 @@ Target platform: **Red Hat OpenShift Container Platform 4.22** · Exam: **EX280V
 
 ## How to play
 
-1. Pick a mode from the main menu — **Campaign**, **Timed Labs**, **Sandbox**, **Chaos** — or open
-   **EX280 Prep** for the objective tracker.
+1. Pick a mode on the start page — **Campaign**, **Timed Labs**, **Sandbox**, **Chaos** — or open
+   **EX280 Prep** for the objective tracker. The start page also maps each EX280 objective group to
+   the campaign level and timed lab that drills it.
 2. Create resources from the left palette or with the `oc` terminal (`/`). The name prompt lets you
    match the objective name (e.g. `frontend`).
 3. Click a resource to inspect it (Overview / YAML / Describe / Events); right-click for actions.
@@ -82,7 +98,7 @@ Target platform: **Red Hat OpenShift Container Platform 4.22** · Exam: **EX280V
 | `H` | Help / How to play |
 | `Space` | Pause / resume the simulation |
 | `M` | Metrics dashboard |
-| `Esc` | Close panel / back to menu |
+| `Esc` | Close panel / open the pause menu (Resume, Restart, Main menu) |
 | `1–9` | Quick-select a palette resource |
 | Left-click | Select resource |
 | Left-drag | Move resource or rotate camera |
@@ -157,7 +173,8 @@ The repo is a static site and deploys to any static host. The canonical demo is 
 
 - **No build step** — vanilla ES modules + import maps. No bundler, no framework, no npm runtime
   dependencies. Tailwind is loaded from the CDN for utility classes; custom styling lives in
-  `style.css`.
+  `style.css` (in-game shell) and `start.css` (start page). Type is set in Schibsted Grotesk with
+  JetBrains Mono reserved for real terminal/YAML code.
 - **Three.js r152** (`https://unpkg.com/three@0.152.0/...`, pinned in the import map) powers the 3D
   cluster view and the whiteboard; WebGL is required.
 - **Central kind registry** — `js/data/kindRegistry.js` is the single source of truth for kinds,
@@ -174,25 +191,29 @@ The repo is a static site and deploys to any static host. The canonical demo is 
 - **Declarative engine** — `js/engine/YamlParser.js` + `js/engine/ManifestEngine.js` provide a
   virtual file system, YAML manifests, Kustomize overlays, OpenShift templates, Helm charts and
   HTPasswd file operations; `js/ui/ManifestPanel.js` is the Files panel.
-- **UI** — HUD, Inspector, ContextMenu, Metrics, Settings, Incidents, Minimap; `index.html` wires the
-  shell and the palette (generated from the registry); `draw.html` is the whiteboard.
+- **UI** — StartMenu (the start page: live diorama stage, mode launcher, EX280 objective picker,
+  scroll reveals), HUD, Inspector, ContextMenu, Metrics, Settings, Incidents, Minimap, docked `oc`
+  terminal and pause overlay; `index.html` wires the shell and the palette (generated from the
+  registry); `draw.html` is the whiteboard.
 - **Data** — `js/data/CampaignLevels.js`, `js/data/IncidentDefs.js`, `js/data/Achievements.js`,
   `js/data/EX280Objectives.js`, `js/data/ManifestFiles.js`.
 
 Repo layout:
 
 ```
-index.html            game shell (inline ES module)
+index.html            start page markup + game shell (inline ES module)
 draw.html             OpenShift Draw whiteboard
-style.css             all custom styling (OpenShift red accents)
+style.css             in-game design system and shell styling
+start.css             start page styling (dark editorial, one accent)
+img/start/            product captures used by the start page
 js/data/              kind registry, campaign levels, incidents, achievements, EX280 objectives,
                       manifest files
 js/engine/            GameEngine, ClusterState, SimulationTick, IncidentEngine, ScoringEngine,
                       YamlParser, ManifestEngine, ObjectiveEvaluator, RBAC helpers
 js/resources/         ResourceBase + per-kind classes (OpenShift + legacy)
-js/rendering/         Three.js renderer, meshes, connection lines, particles
+js/rendering/         Three.js renderer, meshes, connection lines, particles, label layer
 js/ui/                CommandBar, HUD, Inspector, ContextMenu, Metrics, IncidentPanel, Minimap,
-                      Settings, ManifestPanel
+                      Settings, ManifestPanel, StartMenu
 js/modes/             CampaignMode, ChallengeMode, ChaosMode, SandboxMode, ExamPrepMode
 vercel.json           static hosting: /draw rewrite + cache/bot headers
 og-image.html         OpenGraph card source (1200×630) — PNG regenerated by the verifier

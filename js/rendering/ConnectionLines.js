@@ -12,20 +12,42 @@ import * as THREE from 'three';
  */
 
 export const RELATIONSHIP_COLORS = {
-  ownership:    0xc9d1d9,
-  containment:  0x8b949e,
-  network:      0x58a6ff,
-  route:        0xee0000, // OpenShift red
-  build:        0xf97316, // OpenShift orange
-  image:        0xa371f7,
-  security:     0xd29922,
-  identity:     0x39c5cf,
-  storage:      0x8b949e,
-  config:       0xd29922,
-  scaling:      0xd2a8ff,
-  operator:     0xf0883e,
-  custom:       0x58a6ff,
-  default:      0x6e7681,
+  ownership:    0x8899ab,
+  containment:  0x56657a,
+  network:      0x5b9fd4,
+  route:        0xd94a42, // softened OpenShift red
+  build:        0xd98a4a, // softened OpenShift orange
+  image:        0x9a86cc,
+  security:     0xc2a04a,
+  identity:     0x4fa9a4,
+  storage:      0x6f8a86,
+  config:       0xb79a4a,
+  scaling:      0x9c86c9,
+  operator:     0xd08a54,
+  custom:       0x5b9fd4,
+  default:      0x56657a,
+};
+
+/**
+ * Base opacity per relationship — containment edges touch almost every resource and
+ * must stay near-invisible, while the OpenShift delivery path (route/build/operator)
+ * is allowed a little more presence. Hover/selection multiplies these.
+ */
+export const RELATIONSHIP_OPACITY = {
+  ownership:    0.14,
+  containment:  0.045,
+  network:      0.2,
+  route:        0.3,
+  build:        0.24,
+  image:        0.2,
+  security:     0.16,
+  identity:     0.16,
+  storage:      0.14,
+  config:       0.16,
+  scaling:      0.16,
+  operator:     0.2,
+  custom:       0.26,
+  default:      0.12,
 };
 
 /** Human-readable relationship labels (used by tooltips / debugging). */
@@ -45,13 +67,16 @@ export const RELATIONSHIP_LABELS = {
   custom: 'drawn connection',
 };
 
-const DASH_SIZE = 0.3;
-const GAP_SIZE = 0.15;
-const CURVE_SEGMENTS = 32;
-const FLOW_SPEED = 2.0;
-const BASE_LINE_WIDTH = 1.5;
-const MIN_OPACITY = 0.25;
-const MAX_OPACITY = 0.7;
+const DASH_SIZE = 0.16;
+const GAP_SIZE = 0.28;
+const CURVE_SEGMENTS = 36;
+const FLOW_SPEED = 0.35;
+const BASE_LINE_WIDTH = 1;
+const MIN_OPACITY = 0.05;
+const MAX_OPACITY = 0.62;
+const HOVER_OPACITY = 0.58;
+const ARC_RATIO = 0.14;
+const ARC_MAX = 1.7;
 
 export function colorForRelationship(type) {
   return RELATIONSHIP_COLORS[type] || RELATIONSHIP_COLORS.default;
@@ -82,7 +107,8 @@ export class ConnectionLineManager {
 
     const midpoint = new THREE.Vector3().lerpVectors(sourcePos, targetPos, 0.5);
     const distance = sourcePos.distanceTo(targetPos);
-    midpoint.y += Math.min(distance * 0.3, 3);
+    // A shallow arc reads as a conduit; a tall one reads as a mistake.
+    midpoint.y += Math.min(distance * ARC_RATIO, ARC_MAX) + 0.35;
 
     const curve = new THREE.QuadraticBezierCurve3(sourcePos, midpoint, targetPos);
     const points = curve.getPoints(CURVE_SEGMENTS);
@@ -90,7 +116,8 @@ export class ConnectionLineManager {
 
     const relationColor = colorForRelationship(connection.type);
     const trafficVolume = connection.trafficVolume || 1;
-    const opacity = Math.min(MIN_OPACITY + trafficVolume * 0.05, MAX_OPACITY);
+    const baseOpacity = RELATIONSHIP_OPACITY[connection.type] ?? RELATIONSHIP_OPACITY.default;
+    const opacity = Math.min(baseOpacity * (0.85 + trafficVolume * 0.1), MAX_OPACITY);
 
     const material = new THREE.LineDashedMaterial({
       color: relationColor,
@@ -108,9 +135,10 @@ export class ConnectionLineManager {
     line.userData.targetId = connection.targetId;
     line.userData.type = connection.type;
     line.userData.flowOffset = 0;
-    line.userData.flowSpeed = FLOW_SPEED * (0.5 + Math.random() * 0.5);
+    line.userData.flowSpeed = FLOW_SPEED * (0.6 + Math.random() * 0.5);
     line.userData.curve = curve;
     line.userData.baseOpacity = opacity;
+    line.userData.baseColor = relationColor;
 
     this.lineGroup.add(line);
     this.connections.set(connection.id, {
@@ -143,6 +171,9 @@ export class ConnectionLineManager {
         continue;
       }
 
+      // Hidden resources (e.g. the menu showcase subset) take their edges with them.
+      entry.line.visible = sourceGroup.visible !== false && targetGroup.visible !== false;
+
       const sourcePos = sourceGroup.position;
       const targetPos = targetGroup.position;
 
@@ -156,7 +187,7 @@ export class ConnectionLineManager {
 
       const midpoint = new THREE.Vector3().lerpVectors(sourcePos, targetPos, 0.5);
       const distance = sourcePos.distanceTo(targetPos);
-      midpoint.y += Math.min(distance * 0.3, 3);
+      midpoint.y += Math.min(distance * ARC_RATIO, ARC_MAX) + 0.35;
       entry.midpoint.copy(midpoint);
 
       const curve = new THREE.QuadraticBezierCurve3(
@@ -223,16 +254,17 @@ export class ConnectionLineManager {
     for (const entry of this.connections.values()) {
       const isRelated = entry.connection.sourceId === resourceId ||
                         entry.connection.targetId === resourceId;
-      entry.line.material.opacity = isRelated ? MAX_OPACITY : MIN_OPACITY * 0.5;
-      entry.line.userData.flowSpeed = FLOW_SPEED * (isRelated ? 2 : 0.5);
+      entry.line.material.opacity = isRelated ? HOVER_OPACITY : MIN_OPACITY;
+      entry.line.material.color.set(isRelated ? entry.line.userData.baseColor : 0x33404f);
+      entry.line.userData.flowSpeed = FLOW_SPEED * (isRelated ? 3.2 : 0.6);
     }
   }
 
   resetHighlight() {
     for (const entry of this.connections.values()) {
-      entry.line.material.opacity = entry.line.userData.baseOpacity
-        ?? Math.min(MIN_OPACITY + (entry.connection.trafficVolume || 1) * 0.05, MAX_OPACITY);
-      entry.line.userData.flowSpeed = FLOW_SPEED * (0.5 + Math.random() * 0.5);
+      entry.line.material.opacity = entry.line.userData.baseOpacity ?? MIN_OPACITY;
+      entry.line.material.color.set(entry.line.userData.baseColor ?? colorForRelationship(entry.connection.type));
+      entry.line.userData.flowSpeed = FLOW_SPEED * (0.6 + Math.random() * 0.5);
     }
   }
 

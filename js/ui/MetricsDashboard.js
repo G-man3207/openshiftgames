@@ -23,11 +23,12 @@ import { parseCpuMillis, parseMemoryMi } from '../engine/ClusterState.js';
 
 const WINDOW_SIZE = 60;
 
+// One ink hue for every series: colour is reserved for status in this console.
 const CHART_COLORS = {
-  cpu: { line: '#60a5fa', fill: 'rgba(96, 165, 250, 0.10)' },
-  memory: { line: '#c084fc', fill: 'rgba(192, 132, 252, 0.10)' },
-  network: { line: '#34d399', fill: 'rgba(52, 211, 153, 0.10)' },
-  pods: { line: '#fbbf24', fill: 'rgba(251, 191, 36, 0.10)' },
+  cpu: { line: '#ECEEF1', fill: 'rgba(236, 238, 241, 0.06)' },
+  memory: { line: '#ECEEF1', fill: 'rgba(236, 238, 241, 0.06)' },
+  network: { line: '#ECEEF1', fill: 'rgba(236, 238, 241, 0.06)' },
+  pods: { line: '#ECEEF1', fill: 'rgba(236, 238, 241, 0.06)' },
 };
 
 function hashText(text) {
@@ -85,7 +86,7 @@ export class MetricsDashboard {
     this._ownsMKey = !window.game?.app;
     this.container = document.createElement('div');
     this.container.id = 'metrics-dashboard';
-    this.container.className = 'fixed bottom-0 left-0 right-0 z-30 transform translate-y-full transition-transform duration-300 ease-out';
+    this.container.className = 'panel-dock';
     this.container.setAttribute('data-testid', 'metrics-dashboard');
     this.container.innerHTML = this._buildHTML();
     document.body.appendChild(this.container);
@@ -100,7 +101,8 @@ export class MetricsDashboard {
     if (!this.container) return;
     this.visible = true;
     this.container.classList.remove('translate-y-full');
-    this.container.classList.add('translate-y-0');
+    this.container.classList.add('is-open');
+    document.body.classList.add('metrics-open');
     // Render synchronously so the panel is never shown with stale/empty tables
     // (the cluster may have been seeded after init()), then resize + redraw on
     // the next frame once the transform has settled.
@@ -117,7 +119,8 @@ export class MetricsDashboard {
   hide() {
     if (!this.container) return;
     this.visible = false;
-    this.container.classList.remove('translate-y-0');
+    this.container.classList.remove('is-open');
+    document.body.classList.remove('metrics-open');
     this.container.classList.add('translate-y-full');
   }
 
@@ -199,13 +202,13 @@ export class MetricsDashboard {
 
   _buildHTML() {
     return `
-      <div id="metrics-panel" data-testid="metrics-panel" class="backdrop-blur-xl bg-white/5 border-t border-white/10 shadow-2xl" style="height: 430px;">
-        <div class="flex items-center justify-between px-4 py-2 border-b border-white/5" style="height: 42px;">
+      <div id="metrics-panel" data-testid="metrics-panel" class="metrics-panel">
+        <div class="metrics-head" style="height: 46px;">
           <div class="flex items-center gap-3">
-            <span class="text-white/60 text-xs font-semibold uppercase tracking-wider">OpenShift metrics</span>
-            <span class="px-2 py-0.5 rounded-full text-[10px] font-semibold text-openshift bg-openshift/10 border border-openshift/30">oc adm top</span>
-            <span id="metrics-scope" class="text-white/20 text-xs" data-testid="metrics-scope">Cluster-wide</span>
-            <span id="metrics-cluster-version" class="text-white/20 text-[10px] font-mono" data-testid="metrics-cluster-version">OpenShift 4.22</span>
+            <span class="metrics-title">OpenShift metrics</span>
+            <span class="metrics-chip">oc adm top</span>
+            <span id="metrics-scope" class="metrics-scope" data-testid="metrics-scope">Cluster-wide</span>
+            <span id="metrics-cluster-version" class="metrics-version" data-testid="metrics-cluster-version">OpenShift 4.22</span>
           </div>
           <div class="flex items-center gap-2">
             <span class="text-white/20 text-xs">Press M to toggle</span>
@@ -219,11 +222,11 @@ export class MetricsDashboard {
 
         <div class="px-3 pb-2 flex flex-col gap-2" style="height: calc(100% - 42px); min-height: 0;">
           <div class="grid grid-cols-5 gap-2 shrink-0 pt-2">
-            ${this._summaryCard('Cluster CPU', 'metrics-cluster-cpu', 'text-blue-400', 'Average node CPU usage')}
-            ${this._summaryCard('Cluster Memory', 'metrics-cluster-mem', 'text-purple-400', 'Average node memory usage')}
-            ${this._summaryCard('Routes admitted', 'metrics-routes-admitted', 'text-emerald-400', 'Admitted / total Routes')}
-            ${this._summaryCard('Builds running', 'metrics-builds-running', 'text-orange-400', 'Builds in New/Pending/Running')}
-            ${this._summaryCard('ClusterOperators', 'metrics-operator-health', 'text-sky-400', 'Available / total')}
+            ${this._summaryCard('CPU', 'metrics-cluster-cpu', 'Average node CPU usage')}
+            ${this._summaryCard('Memory', 'metrics-cluster-mem', 'Average node memory usage')}
+            ${this._summaryCard('Routes admitted', 'metrics-routes-admitted', 'Admitted / total Routes')}
+            ${this._summaryCard('Builds running', 'metrics-builds-running', 'Builds in New/Pending/Running')}
+            ${this._summaryCard('ClusterOperators', 'metrics-operator-health', 'Available / total')}
           </div>
 
           <div class="grid grid-cols-4 gap-2 shrink-0" style="height: 108px;">
@@ -235,24 +238,24 @@ export class MetricsDashboard {
 
           <div class="grid grid-cols-12 gap-3 flex-1 min-h-0">
             <div class="col-span-5 min-h-0 flex flex-col">
-              <div class="flex items-center justify-between text-[10px] uppercase tracking-wider text-white/30 mb-1 shrink-0">
-                <span>oc adm top pods</span><span class="text-white/20 normal-case tracking-normal">CPU(cores) · MEMORY(bytes)</span>
+              <div class="metrics-section-head">
+                <span>oc adm top pods</span><span class="metrics-section-meta">CPU · memory</span>
               </div>
               <div id="metrics-pods" data-testid="metrics-pods" class="flex-1 min-h-0 overflow-auto rounded-lg bg-black/20 border border-white/5 p-1"></div>
             </div>
             <div class="col-span-4 min-h-0 flex flex-col">
-              <div class="flex items-center justify-between text-[10px] uppercase tracking-wider text-white/30 mb-1 shrink-0">
-                <span>oc adm top nodes</span><span class="text-white/20 normal-case tracking-normal">CPU / MEMORY</span>
+              <div class="metrics-section-head">
+                <span>oc adm top nodes</span><span class="metrics-section-meta">CPU · memory</span>
               </div>
               <div id="metrics-nodes" data-testid="metrics-nodes" class="flex-1 min-h-0 overflow-auto rounded-lg bg-black/20 border border-white/5 p-1"></div>
             </div>
             <div class="col-span-3 min-h-0 flex flex-col gap-2">
               <div class="min-h-0 flex-1 flex flex-col">
-                <div class="text-[10px] uppercase tracking-wider text-white/30 mb-1 shrink-0">Quota usage</div>
+                <div class="metrics-section-head">Quota usage</div>
                 <div id="metrics-quota" data-testid="metrics-quota" class="flex-1 min-h-0 overflow-auto rounded-lg bg-black/20 border border-white/5 p-1"></div>
               </div>
               <div class="min-h-0 flex-1 flex flex-col">
-                <div class="text-[10px] uppercase tracking-wider text-white/30 mb-1 shrink-0">ClusterOperator health</div>
+                <div class="metrics-section-head">ClusterOperator health</div>
                 <div id="metrics-operators" data-testid="metrics-operators" class="flex-1 min-h-0 overflow-auto rounded-lg bg-black/20 border border-white/5 p-1"></div>
               </div>
             </div>
@@ -262,18 +265,18 @@ export class MetricsDashboard {
     `;
   }
 
-  _summaryCard(label, id, colorClass, title) {
-    return `<div class="rounded-lg bg-black/20 border border-white/5 px-2 py-1.5" title="${this._escapeHTML(title)}">
-      <div class="text-[9px] uppercase tracking-wider text-white/30">${this._escapeHTML(label)}</div>
-      <div id="${id}" class="text-sm font-mono font-semibold ${colorClass}" data-testid="${id}">0</div>
+  _summaryCard(label, id, title) {
+    return `<div class="metrics-kpi" title="${this._escapeHTML(title)}">
+      <div class="metrics-kpi-label">${this._escapeHTML(label)}</div>
+      <div id="${id}" class="metrics-kpi-value" data-testid="${id}">0</div>
     </div>`;
   }
 
   _chartBox(key, label, valueId, color) {
-    return `<div class="relative rounded-lg bg-white/5 border border-white/5 overflow-hidden">
-      <div class="absolute top-0 left-0 text-[9px] text-white/30 z-10 px-1">${this._escapeHTML(label)}</div>
-      <div class="absolute top-0 right-0 text-[10px] font-mono z-10 px-1" id="${valueId}" style="color: ${color}">0</div>
-      <canvas id="metrics-canvas-${key}" class="w-full h-full"></canvas>
+    return `<div class="metrics-chart">
+      <div class="metrics-chart-label">${this._escapeHTML(label)}</div>
+      <div class="metrics-chart-value" id="${valueId}">0</div>
+      <canvas id="metrics-canvas-${key}" class="metrics-canvas"></canvas>
     </div>`;
   }
 

@@ -81,7 +81,7 @@ export class IncidentPanel {
     this.container = document.createElement('div');
     this.container.id = 'incident-panel';
     this.container.className =
-      'fixed top-12 left-0 w-80 bottom-0 z-30 transform -translate-x-full transition-transform duration-300 ease-out';
+      'panel-side panel-left';
     this.container.innerHTML = this._buildHTML();
     document.body.appendChild(this.container);
     this._bindEvents();
@@ -108,16 +108,14 @@ export class IncidentPanel {
   show() {
     if (!this.container) return;
     this.visible = true;
-    this.container.classList.remove('-translate-x-full');
-    this.container.classList.add('translate-x-0');
+    this.container.classList.add('is-open');
     this._renderList();
   }
 
   hide() {
     if (!this.container) return;
     this.visible = false;
-    this.container.classList.remove('translate-x-0');
-    this.container.classList.add('-translate-x-full');
+    this.container.classList.remove('is-open');
   }
 
   toggle() {
@@ -134,7 +132,7 @@ export class IncidentPanel {
     }).join('');
 
     return `
-      <div class="h-full flex flex-col backdrop-blur-xl bg-white/5 border-r border-white/10 shadow-2xl">
+      <div class="panel-inner">
         <div class="flex items-center justify-between px-4 py-3 border-b border-white/5">
           <div class="flex items-center gap-2">
             <svg class="w-4 h-4 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">

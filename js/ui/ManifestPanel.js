@@ -285,56 +285,56 @@ export class ManifestPanel {
     style.id = STYLE_ID;
     style.textContent = `
       .ogmf-overlay { position: fixed; inset: 0; z-index: 260; display: none; align-items: center; justify-content: center;
-        background: rgba(3, 7, 18, 0.78); backdrop-filter: blur(4px); padding: 16px; box-sizing: border-box; }
+        background: rgba(6, 8, 11, 0.72); padding: 16px; box-sizing: border-box; }
       .ogmf-dialog { display: flex; flex-direction: column; width: min(1140px, 96vw); height: min(780px, 92vh);
-        background: var(--bg-dark, #0d1117); color: var(--text-primary, rgba(255,255,255,.92));
-        border: 1px solid var(--border-subtle, rgba(255,255,255,.1)); border-radius: 12px; overflow: hidden;
-        box-shadow: 0 24px 80px rgba(0,0,0,.6); font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
+        background: var(--surface, #111419); color: var(--text, #ECEEF1);
+        border: 1px solid var(--line-strong, #2C333E); border-radius: 8px; overflow: hidden;
+        box-shadow: 0 18px 44px rgba(0,0,0,.55), 0 2px 10px rgba(0,0,0,.4); font-family: var(--font-sans, 'Inter', system-ui, sans-serif); }
       .ogmf-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px;
-        padding: 14px 18px; border-bottom: 1px solid var(--border-subtle, rgba(255,255,255,.1));
-        background: linear-gradient(135deg, rgba(238,0,0,.10), rgba(13,17,23,0)); }
-      .ogmf-title { margin: 0; font-size: 17px; font-weight: 700; letter-spacing: .2px; }
-      .ogmf-subtitle { margin: 4px 0 0; font-size: 11px; color: var(--text-secondary, rgba(255,255,255,.6)); }
+        padding: 14px 18px; border-bottom: 1px solid var(--line, #1F242C);
+        background: transparent; }
+      .ogmf-title { margin: 0; font-size: 17px; font-weight: 700; letter-spacing: -0.01em; color: var(--text, #ECEEF1); }
+      .ogmf-subtitle { margin: 4px 0 0; font-size: 12px; color: var(--muted, #9AA1A9); }
       .ogmf-header-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; justify-content: flex-end; }
       .ogmf-docs { display: flex; gap: 8px; flex-wrap: wrap; }
-      .ogmf-docs a { font-size: 11px; color: #58a6ff; text-decoration: none; border-bottom: 1px dotted rgba(88,166,255,.4); }
-      .ogmf-docs a:hover { color: #79b8ff; }
+      .ogmf-docs a { font-size: 11px; color: var(--muted, #9AA1A9); text-decoration: none; border-bottom: 1px solid var(--line-strong, #2C333E); }
+      .ogmf-docs a:hover { color: var(--text, #ECEEF1); }
       .ogmf-body { display: grid; grid-template-columns: 268px minmax(0, 1fr); flex: 1; min-height: 0; }
-      .ogmf-sidebar { border-right: 1px solid var(--border-subtle, rgba(255,255,255,.1)); display: flex;
+      .ogmf-sidebar { border-right: 1px solid var(--line, #1F242C); display: flex;
         flex-direction: column; min-height: 0; background: rgba(255,255,255,.02); }
-      .ogmf-sidebar-title { padding: 10px 14px 8px; font-size: 10px; letter-spacing: .12em; text-transform: uppercase;
-        color: var(--text-muted, rgba(255,255,255,.35)); }
+      .ogmf-sidebar-title { padding: 12px 14px 8px; font-size: 11px; letter-spacing: 0; text-transform: none; font-weight: 600;
+        color: var(--faint, #7C8590); }
       .ogmf-tree { overflow: auto; flex: 1; padding: 0 6px 12px; }
       .ogmf-dir { padding: 5px 8px 2px; font-size: 11px; color: var(--text-muted, rgba(255,255,255,.35));
         font-family: ui-monospace, SFMono-Regular, Menlo, monospace; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
       .ogmf-file { display: block; width: 100%; text-align: left; background: transparent; border: 0; color: var(--text-secondary, rgba(255,255,255,.6));
         font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; padding: 4px 8px;
         border-radius: 6px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-      .ogmf-file:hover { background: rgba(255,255,255,.06); color: var(--text-primary, rgba(255,255,255,.92)); }
-      .ogmf-file.is-active { background: rgba(238,0,0,.16); color: #fff; box-shadow: inset 2px 0 0 #ee0000; }
-      .ogmf-file.is-focus::after { content: ' ★'; color: #f97316; font-size: 10px; }
+      .ogmf-file:hover { background: var(--raised, #161A20); color: var(--text, #ECEEF1); }
+      .ogmf-file.is-active { background: var(--raised-2, #1B2027); color: var(--text, #ECEEF1); }
+      .ogmf-file.is-focus::after { content: ' ·'; color: var(--warning, #E8A33D); font-size: 10px; }
       .ogmf-main { display: flex; flex-direction: column; min-width: 0; min-height: 0; padding: 12px 16px 14px; gap: 10px; }
       .ogmf-toolbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-      .ogmf-path { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; color: var(--text-primary, rgba(255,255,255,.92));
-        background: rgba(255,255,255,.05); border: 1px solid var(--border-subtle, rgba(255,255,255,.1));
+      .ogmf-path { font-family: var(--font-mono, monospace); font-size: 12px; color: var(--text, #ECEEF1);
+        background: var(--ground, #0A0C10); border: 1px solid var(--line-strong, #2C333E);
         border-radius: 6px; padding: 4px 8px; max-width: 44%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
       .ogmf-spacer { flex: 1; }
-      .ogmf-dirty { font-size: 10px; text-transform: uppercase; letter-spacing: .08em; color: #f97316; display: none; }
+      .ogmf-dirty { font-size: 11px; text-transform: none; letter-spacing: 0; color: var(--warning, #E8A33D); display: none; }
       .ogmf-btn { font: inherit; font-size: 12px; padding: 6px 11px; border-radius: 6px; cursor: pointer;
-        border: 1px solid var(--border-subtle, rgba(255,255,255,.1)); background: rgba(255,255,255,.06); color: var(--text-primary, rgba(255,255,255,.92)); }
-      .ogmf-btn:hover { background: rgba(255,255,255,.12); }
+        border: 1px solid var(--line-strong, #2C333E); background: transparent; color: var(--text, #ECEEF1); }
+      .ogmf-btn:hover { background: var(--raised, #161A20); }
       .ogmf-btn:disabled { opacity: .4; cursor: not-allowed; }
-      .ogmf-btn-primary { background: #ee0000; border-color: #ee0000; color: #fff; font-weight: 600; }
-      .ogmf-btn-primary:hover { background: #c90000; }
-      .ogmf-btn-kustomize { border-color: rgba(249,115,22,.55); color: #fdba74; }
+      .ogmf-btn-primary { background: var(--text, #ECEEF1); border-color: var(--text, #ECEEF1); color: #0B0D11; font-weight: 600; }
+      .ogmf-btn-primary:hover { background: #fff; }
+      .ogmf-btn-kustomize { border-color: var(--line-strong, #2C333E); color: var(--text, #ECEEF1); }
       .ogmf-close { background: transparent; border: 0; color: var(--text-secondary, rgba(255,255,255,.6)); font-size: 22px;
         line-height: 1; cursor: pointer; padding: 2px 6px; border-radius: 6px; }
       .ogmf-close:hover { color: #fff; background: rgba(255,255,255,.1); }
       .ogmf-editor { flex: 1; min-height: 160px; resize: none; width: 100%; box-sizing: border-box;
-        background: #0b0f16; color: #e6edf3; border: 1px solid var(--border-subtle, rgba(255,255,255,.1));
+        background: var(--ground, #0A0C10); color: var(--text, #ECEEF1); border: 1px solid var(--line-strong, #2C333E);
         border-radius: 8px; padding: 12px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
         font-size: 12.5px; line-height: 1.55; tab-size: 2; white-space: pre; overflow: auto; }
-      .ogmf-editor:focus { outline: none; border-color: rgba(238,0,0,.6); box-shadow: 0 0 0 2px rgba(238,0,0,.15); }
+      .ogmf-editor:focus { outline: none; border-color: #464F5C; box-shadow: none; }
       .ogmf-output { max-height: 150px; overflow: auto; border-radius: 8px; border: 1px solid transparent; }
       .ogmf-output.has-result { border-color: rgba(63,185,80,.35); background: rgba(63,185,80,.07); }
       .ogmf-output.has-error { border-color: rgba(248,81,73,.4); background: rgba(248,81,73,.08); }
@@ -342,7 +342,7 @@ export class ManifestPanel {
         font-size: 11.5px; line-height: 1.5; color: #7ee787; white-space: pre-wrap; word-break: break-word; }
       .ogmf-error { margin: 0; padding: 8px 10px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
         font-size: 11.5px; line-height: 1.5; color: #ff7b72; white-space: pre-wrap; word-break: break-word; }
-      .ogmf-hint { font-size: 10.5px; color: var(--text-muted, rgba(255,255,255,.35)); display: flex; justify-content: space-between; gap: 10px; }
+      .ogmf-hint { font-size: 11px; color: var(--faint, #7C8590); display: flex; justify-content: space-between; gap: 10px; }
       .ogmf-hint code { color: var(--text-secondary, rgba(255,255,255,.6)); }
       @media (max-width: 760px) {
         .ogmf-body { grid-template-columns: 1fr; grid-template-rows: 180px minmax(0, 1fr); }

@@ -52,6 +52,14 @@ import {
   toManifestObject,
   createResource,
 } from '../data/kindRegistry.js';
+import {
+  CRIO_RUNTIME,
+  KUBERNETES_GIT_VERSION,
+  KUSTOMIZE_VERSION,
+  OCP_CHANNEL,
+  OCP_GIT_VERSION,
+  OCP_VERSION,
+} from '../data/platformVersions.js';
 
 // ────────────────────────────────────────────────────────────────────────────
 // Constants
@@ -59,12 +67,26 @@ import {
 
 /** Rendered prompt (spec §1). */
 export const OC_PROMPT = '$ oc';
+/** Tailwind colour class -> terminal output tone (the terminal is self-styled). */
+const TERM_TONES = {
+  'text-white/70': 'out',
+  'text-white/30': 'dim',
+  'text-white/20': 'dim',
+  'text-red-400': 'err',
+  'text-green-400/80': 'cmd',
+  'text-green-400': 'ok',
+  'text-amber-400': 'warn',
+  'text-amber-400/80': 'warn',
+  'text-amber-400/70': 'warn',
+  'text-sky-400': 'info',
+  'text-yellow-400': 'warn',
+};
 /** Docs base used by help / PLEG links. */
 export const OC_DOCS_URL = 'https://docs.redhat.com/en/documentation/openshift_container_platform/4.22';
-/** Simulated server + client versions (target platform: OCP 4.22). */
-export const OC_CLIENT_VERSION = '4.22.0';
-export const OC_SERVER_VERSION = '4.22.0';
-export const K8S_SERVER_VERSION = 'v1.34.0';
+/** Simulated server + client versions, derived from js/data/platformVersions.js. */
+export const OC_CLIENT_VERSION = OCP_VERSION;
+export const OC_SERVER_VERSION = OCP_VERSION;
+export const K8S_SERVER_VERSION = KUBERNETES_GIT_VERSION;
 export const OC_SERVER_URL = 'https://api.cluster.example.com:6443';
 export const APPS_DOMAIN = 'apps.cluster.example.com';
 /** Internal registry reference used by builds/imagestreams (spec §5). */
@@ -1372,10 +1394,13 @@ export class CommandBar {
   // ── DOM lifecycle ─────────────────────────────────────────────────────────
 
   init() {
-    if (typeof document === 'undefined' || this.container) return;
+    if (typeof document === 'undefined') return;
+    if (this.container?.isConnected) return;
+    this.container?.remove();
     this.container = document.createElement('div');
     this.container.id = 'command-bar';
-    this.container.className = 'fixed bottom-0 left-0 right-0 z-50 transform translate-y-full transition-transform duration-300 ease-out';
+    this.container.className = 'term-container';
+    this.container.setAttribute('aria-label', 'oc terminal');
     this.container.innerHTML = this._buildHTML();
     document.body.appendChild(this.container);
 
@@ -1384,6 +1409,7 @@ export class CommandBar {
     this.suggestionsEl = document.getElementById('cmd-suggestions');
 
     this._bindEvents();
+    this._updateContextLabel();
     this._appendOutput(
       `oc terminal ready — OpenShift 4.22. Type 'oc --help' for commands, '/' toggles the terminal.`,
       'text-white/30',
@@ -1392,28 +1418,39 @@ export class CommandBar {
 
   _buildHTML() {
     return `
-      <div class="backdrop-blur-xl bg-white/5 border-t border-white/10 shadow-2xl">
-        <div class="flex items-center justify-between px-4 py-2 border-b border-white/5">
-          <span class="text-white/40 text-xs font-mono">oc — OpenShift 4.22 terminal</span>
-          <div class="flex items-center gap-2">
-            <span class="text-white/20 text-xs">Press / to toggle</span>
-            <button id="cmd-close" class="text-white/30 hover:text-white/60 transition-colors" aria-label="Close terminal">
-              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+      <div class="term-dock">
+        <div class="term-head">
+          <div class="term-title">
+            <span class="term-dots" aria-hidden="true"><i></i><i></i><i></i></span>
+            <span class="term-name">oc</span>
+            <span class="term-platform">OpenShift 4.22</span>
+            <span class="term-ctx" id="cmd-context">kubeadmin · default</span>
+          </div>
+          <div class="term-head-actions">
+            <span class="term-hint">Close <kbd>Esc</kbd></span>
+            <button id="cmd-close" class="term-close" type="button" aria-label="Close terminal">
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
+                <path d="M4 4l8 8M12 4l-8 8" stroke-linecap="round"/>
               </svg>
             </button>
           </div>
         </div>
-        <div id="cmd-output" class="px-4 py-2 max-h-64 overflow-y-auto font-mono text-sm scrollbar-thin"></div>
-        <div class="relative px-4 py-3 border-t border-white/5">
-          <div class="flex items-center gap-2">
-            <span class="text-green-400 text-sm font-mono shrink-0">${OC_PROMPT}</span>
-            <input id="cmd-input" type="text" class="flex-1 bg-transparent text-white/90 text-sm font-mono outline-none placeholder:text-white/20" placeholder="enter oc command (the 'oc ' prefix is optional)..." autocomplete="off" spellcheck="false" />
-          </div>
-          <div id="cmd-suggestions" class="absolute bottom-full left-0 right-0 hidden"></div>
+        <div id="cmd-output" class="term-output" role="log" aria-live="polite"></div>
+        <div class="term-prompt-row">
+          <span class="term-prompt" aria-hidden="true">$</span>
+          <input id="cmd-input" type="text" class="term-input" placeholder="Type a command — the 'oc ' prefix is optional" autocomplete="off" spellcheck="false" autocapitalize="off" />
         </div>
+        <div id="cmd-suggestions" class="term-suggestions" hidden></div>
       </div>
     `;
+  }
+
+  _updateContextLabel() {
+    const el = document.getElementById('cmd-context');
+    if (!el) return;
+    const user = this.currentUser || 'kubeadmin';
+    const project = this.currentProject || 'default';
+    el.textContent = `${user} · ${project}`;
   }
 
   _bindEvents() {
@@ -1433,9 +1470,13 @@ export class CommandBar {
       });
     }
     this.eventBus?.on?.('ui:show-command-bar', this._boundShowCommandBar);
+    for (const eventName of ['project:switched', 'login', 'logout']) {
+      this.eventBus?.on?.(eventName, () => this._updateContextLabel());
+    }
   }
 
   _onGlobalKeydown(e) {
+    if (e.defaultPrevented) return;
     if (e.key === '/' && !this.visible && !e.ctrlKey && !e.metaKey) {
       const tag = document.activeElement?.tagName;
       if (tag === 'INPUT' || tag === 'TEXTAREA') return;
@@ -1585,18 +1626,19 @@ export class CommandBar {
   _renderSuggestions() {
     if (!this.suggestionsEl) return;
     if (this.suggestions.length === 0) {
-      this.suggestionsEl.classList.add('hidden');
+      this.suggestionsEl.hidden = true;
       this.suggestionsEl.innerHTML = '';
       return;
     }
-    this.suggestionsEl.classList.remove('hidden');
+    this.suggestionsEl.hidden = false;
     this.suggestionsEl.innerHTML = `
-      <div class="mx-4 mb-1 backdrop-blur-xl bg-gray-900/90 border border-white/10 rounded-lg overflow-hidden shadow-xl">
+      <div class="term-suggestion-list">
         ${this.suggestions
           .map(
             (suggestion, i) => `
-          <div class="px-3 py-1.5 text-sm font-mono cursor-pointer transition-colors ${i === this.selectedSuggestion ? 'bg-red-500/20 text-red-300' : 'text-white/60 hover:bg-white/5'}" data-idx="${i}">
-            ${this._escapeHTML(suggestion.value)}
+          <div class="term-suggestion${i === this.selectedSuggestion ? ' is-selected' : ''}" data-idx="${i}">
+            <span class="term-suggestion-kind">${this._escapeHTML(suggestion.type || 'command')}</span>
+            <span class="term-suggestion-value">${this._escapeHTML(suggestion.value)}</span>
           </div>`,
           )
           .join('')}
@@ -1609,7 +1651,7 @@ export class CommandBar {
     this.input.value = suggestion.value + ' ';
     this.suggestions = [];
     this.selectedSuggestion = -1;
-    this.suggestionsEl?.classList.add('hidden');
+    if (this.suggestionsEl) this.suggestionsEl.hidden = true;
     this.input.focus();
   }
 
@@ -1888,8 +1930,11 @@ export class CommandBar {
     this._outputLines.push({ text: value, colorClass });
     if (this._outputLines.length > 500) this._outputLines.shift();
     if (typeof document === 'undefined' || !this.output) return;
+    const tone = TERM_TONES[colorClass] || 'out';
     const line = document.createElement('div');
-    line.className = `${colorClass} text-xs font-mono whitespace-pre-wrap leading-5`;
+    line.className = 'term-line';
+    line.dataset.tone = tone;
+    if (/^(oc|kubectl)/i.test(value) || value.startsWith('$ oc')) line.dataset.tone = 'cmd';
     line.textContent = value;
     this.output.appendChild(line);
     this.output.scrollTop = this.output.scrollHeight;
@@ -1966,19 +2011,20 @@ export class CommandBar {
   show() {
     if (!this.container) return;
     this.visible = true;
-    this.container.classList.remove('translate-y-full');
-    this.container.classList.add('translate-y-0');
+    this._updateContextLabel();
+    this.container.classList.add('is-open');
+    document.body.classList.add('terminal-open');
     requestAnimationFrame(() => this.input?.focus());
   }
 
   hide() {
     if (!this.container) return;
     this.visible = false;
-    this.container.classList.remove('translate-y-0');
-    this.container.classList.add('translate-y-full');
+    this.container.classList.remove('is-open');
+    document.body.classList.remove('terminal-open');
     this.input?.blur();
     this.suggestions = [];
-    this.suggestionsEl?.classList.add('hidden');
+    if (this.suggestionsEl) this.suggestionsEl.hidden = true;
   }
 
   toggle() {
@@ -1991,6 +2037,8 @@ export class CommandBar {
     this.eventBus?.off?.('ui:show-command-bar', this._boundShowCommandBar);
     this.container?.remove();
     this.container = null;
+    this.visible = false;
+    if (typeof document !== 'undefined') document.body?.classList.remove('terminal-open');
   }
 }
 
@@ -2903,7 +2951,7 @@ Object.assign(CommandBar.prototype, {
           { header: 'EXTERNAL-IP', value: (resource) => this._nodeAddress(resource, 'ExternalIP') },
           { header: 'OS-IMAGE', value: (resource) => resource.status?.nodeInfo?.osImage || 'Red Hat Enterprise Linux CoreOS 4.22' },
           { header: 'KERNEL-VERSION', value: (resource) => resource.status?.nodeInfo?.kernelVersion || '5.14.0-427.el9.x86_64' },
-          { header: 'CONTAINER-RUNTIME', value: (resource) => resource.status?.nodeInfo?.containerRuntimeVersion || 'cri-o://1.34.0' },
+          { header: 'CONTAINER-RUNTIME', value: (resource) => resource.status?.nodeInfo?.containerRuntimeVersion || CRIO_RUNTIME },
         ];
       case 'CronJob':
         return [{ header: 'CONTAINERS', value: (resource) => this._containerList(resource).map((c) => c.name).join(',') || '<none>' }];
@@ -3253,7 +3301,7 @@ Object.assign(CommandBar.prototype, {
           const found = conditions.find((entry) => entry.type === type);
           return found ? found.status : 'Unknown';
         };
-        const version = resource.status?.versions?.[0]?.version || '4.22.0';
+        const version = resource.status?.versions?.[0]?.version || OCP_VERSION;
         const available = conditions.find((entry) => entry.type === 'Available');
         return {
           NAME: name,
@@ -3265,7 +3313,7 @@ Object.assign(CommandBar.prototype, {
         };
       }
       case 'ClusterVersion': {
-        const version = resource.status?.desired?.version || resource.spec?.desired?.version || '4.22.0';
+        const version = resource.status?.desired?.version || resource.spec?.desired?.version || OCP_VERSION;
         const conditions = resource.status?.conditions || [];
         const progress = conditions.find((entry) => entry.type === 'Progressing');
         const available = conditions.find((entry) => entry.type === 'Available');
@@ -3275,7 +3323,7 @@ Object.assign(CommandBar.prototype, {
           AVAILABLE: this._booleanCell(available ? available.status === 'True' : true),
           PROGRESSING: this._booleanCell(progress ? progress.status === 'True' : false),
           SINCE: available?.lastTransitionTime ? formatAge(available.lastTransitionTime) : formatAge(resource.metadata?.creationTimestamp),
-          STATUS: progress?.message || 'Done applying 4.22.0',
+          STATUS: progress?.message || `Done applying ${OCP_VERSION}`,
         };
       }
       case 'OAuth': {
@@ -4000,7 +4048,7 @@ Object.assign(CommandBar.prototype, {
           `Namespace:    `,
           `Labels:       ${labels}`,
           `Annotations:  ${annotations}`,
-          `Version:      ${status.versions?.[0]?.version || '4.22.0'}`,
+          `Version:      ${status.versions?.[0]?.version || OCP_VERSION}`,
           '',
           'Status:',
           '  Conditions:',
@@ -4018,8 +4066,8 @@ Object.assign(CommandBar.prototype, {
           `Name:         ${metadata.name}`,
           `Labels:       ${labels}`,
           `Annotations:  ${annotations}`,
-          `Version:      ${status.desired?.version || spec.desired?.version || '4.22.0'}`,
-          `Channel:      ${spec.channel || status.desired?.channel || 'stable-4.22'}`,
+          `Version:      ${status.desired?.version || spec.desired?.version || OCP_VERSION}`,
+          `Channel:      ${spec.channel || status.desired?.channel || OCP_CHANNEL}`,
           '',
           'Status:',
           '  Conditions:',
@@ -4085,9 +4133,9 @@ Object.assign(CommandBar.prototype, {
           `  pods:        ${capacity.pods || '250'}`,
           '',
           'Allocatable:',
-          `  cpu:         ${allocatable.cpu || '7900m'}`,
-          `  memory:      ${allocatable.memory || '15Gi'}`,
-          `  pods:        ${allocatable.pods || '250'}`,
+          `  cpu:         ${allocatable.cpu || '3800m'}`,
+          `  memory:      ${allocatable.memory || '7Gi'}`,
+          `  pods:        ${allocatable.pods || capacity.pods || '110'}`,
           '',
           `Unschedulable:  ${Boolean(spec.unschedulable)}`,
           `Taints:         ${(spec.taints || []).map((taint) => `${taint.key}=${taint.value || ''}:${taint.effect}`).join(', ') || '<none>'}`,
@@ -5287,17 +5335,17 @@ Object.assign(CommandBar.prototype, {
     const serverVersion = OC_SERVER_VERSION;
     if (output.format === 'yaml' || output.format === 'json') {
       const object = {
-        clientVersion: { major: '4', minor: '22', gitVersion: `v4.22.0`, platform: 'linux/amd64' },
-        serverVersion: { major: '4', minor: '22', gitVersion: `v4.22.0`, kubernetesVersion: K8S_SERVER_VERSION },
-        kustomizeVersion: 'v5.6.0',
+        clientVersion: { major: '4', minor: '22', gitVersion: OCP_GIT_VERSION, platform: 'linux/amd64' },
+        serverVersion: { major: '4', minor: '22', gitVersion: OCP_GIT_VERSION, kubernetesVersion: KUBERNETES_GIT_VERSION },
+        kustomizeVersion: KUSTOMIZE_VERSION,
       };
       return this._ok(output.format === 'json' ? JSON.stringify(object, null, 4) : toYamlDocument(object));
     }
     if (flags.client) {
-      return this._ok(`Client Version: ${OC_CLIENT_VERSION}\nKustomize Version: v5.6.0`);
+      return this._ok(`Client Version: ${OC_CLIENT_VERSION}\nKustomize Version: ${KUSTOMIZE_VERSION}`);
     }
     return this._ok(
-      `Client Version: ${OC_CLIENT_VERSION}\nKustomize Version: v5.6.0\nServer Version: ${serverVersion}\nKubernetes Version: ${K8S_SERVER_VERSION}`,
+      `Client Version: ${OC_CLIENT_VERSION}\nKustomize Version: ${KUSTOMIZE_VERSION}\nServer Version: ${serverVersion}\nKubernetes Version: ${KUBERNETES_GIT_VERSION}`,
     );
   },
 

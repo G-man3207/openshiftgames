@@ -14,3 +14,4 @@ playwright-report/
 
 # Local verification artifacts (screenshots and reports under docs/ are committed on purpose)
 /tmp/
+.taste-skill/

@@ -223,7 +223,7 @@ export class ContextMenu {
     const groups = this._actionsFor(this.resource);
 
     this.container.innerHTML = `
-      <div class="backdrop-blur-xl bg-gray-900/95 border border-white/10 rounded-lg shadow-2xl overflow-hidden min-w-[220px]">
+      <div class="context-menu-card">
         <div class="px-3 py-2 border-b border-white/5">
           <div class="text-white/90 text-xs font-medium truncate" data-testid="context-menu-title">${this._escapeHTML(name)}</div>
           <div class="text-white/30 text-[10px] truncate">${this._escapeHTML(kind)}${apiVersion ? ` · ${this._escapeHTML(apiVersion)}` : ''} · ${this._escapeHTML(scope)}</div>
