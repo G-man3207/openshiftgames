@@ -95,7 +95,12 @@ export const CLUSTER_OPERATOR_NAMES = [
 /** ImageStreams pre-installed in the `openshift` project (OCP 4.22 samples).
  * `latestVersion` is the UBI image the samples' `latest` tag resolves to. */
 export const DEFAULT_IMAGE_STREAMS = [
-  { name: 'nodejs', tags: ['20-ubi9', '22-ubi9', 'latest'], repository: 'nodejs', latestVersion: '22' },
+  {
+    name: 'nodejs',
+    tags: ['20-ubi9', '22-ubi9', 'latest'],
+    repository: 'nodejs',
+    latestVersion: '22',
+  },
   { name: 'python', tags: ['3.12-ubi9', 'latest'], repository: 'python', latestVersion: '3.12' },
   { name: 'nginx', tags: ['1.26-ubi9', 'latest'], repository: 'nginx', latestVersion: '1.26' },
 ];
@@ -423,7 +428,10 @@ export const RESOURCE_KINDS = [...REGISTRY_RESOURCE_KINDS];
 export const CLUSTER_SCOPED_KINDS = [...REGISTRY_CLUSTER_SCOPED_KINDS];
 /** Parent kind → expected child kinds, derived from the registry ownerChain. */
 export const OWNER_CHAINS = Object.fromEntries(
-  RESOURCE_KINDS.filter((kind) => getOwnerChain(kind).length > 0).map((kind) => [kind, [...getOwnerChain(kind)]])
+  RESOURCE_KINDS.filter((kind) => getOwnerChain(kind).length > 0).map((kind) => [
+    kind,
+    [...getOwnerChain(kind)],
+  ])
 );
 
 /**
@@ -469,7 +477,10 @@ export function deepMerge(target, ...sources) {
     for (const [key, value] of Object.entries(source)) {
       if (value === undefined) continue;
       if (value && typeof value === 'object' && !Array.isArray(value)) {
-        out[key] = deepMerge(out[key] && typeof out[key] === 'object' && !Array.isArray(out[key]) ? out[key] : {}, value);
+        out[key] = deepMerge(
+          out[key] && typeof out[key] === 'object' && !Array.isArray(out[key]) ? out[key] : {},
+          value
+        );
       } else {
         out[key] = deepClone(value);
       }
@@ -536,7 +547,9 @@ export function parseMemoryMi(value) {
 const DNS1123_LABEL = /^[a-z0-9]([-a-z0-9]*[a-z0-9])?$/;
 
 function isValidProjectName(name) {
-  return typeof name === 'string' && name.length > 0 && name.length <= 63 && DNS1123_LABEL.test(name);
+  return (
+    typeof name === 'string' && name.length > 0 && name.length <= 63 && DNS1123_LABEL.test(name)
+  );
 }
 
 // ─── ClusterState ──────────────────────────────────────────────────────────
@@ -616,7 +629,11 @@ export class ClusterState {
     });
     this._seed('User', 'kubeadmin', {
       uid: 'seed-user-kubeadmin',
-      spec: { fullName: 'Cluster administrator', groups: ['system:authenticated', 'system:masters'], identities: [] },
+      spec: {
+        fullName: 'Cluster administrator',
+        groups: ['system:authenticated', 'system:masters'],
+        identities: [],
+      },
     });
     this._seed('User', 'admin', {
       uid: 'seed-user-admin',
@@ -625,7 +642,11 @@ export class ClusterState {
     this._seed('ClusterRoleBinding', 'kubeadmin-cluster-admin', {
       uid: 'seed-crb-kubeadmin',
       spec: {
-        roleRef: { apiGroup: 'rbac.authorization.k8s.io', kind: 'ClusterRole', name: 'cluster-admin' },
+        roleRef: {
+          apiGroup: 'rbac.authorization.k8s.io',
+          kind: 'ClusterRole',
+          name: 'cluster-admin',
+        },
         subjects: [{ kind: 'User', apiGroup: 'rbac.authorization.k8s.io', name: 'kubeadmin' }],
       },
     });
@@ -638,15 +659,29 @@ export class ClusterState {
       uid: 'seed-clusterrole-self-provisioner',
       spec: {
         rules: [
-          { apiGroups: ['project.openshift.io'], resources: ['projectrequests'], verbs: ['create'] },
+          {
+            apiGroups: ['project.openshift.io'],
+            resources: ['projectrequests'],
+            verbs: ['create'],
+          },
         ],
       },
     });
     this._seed('ClusterRoleBinding', 'self-provisioners', {
       uid: 'seed-crb-self-provisioners',
       spec: {
-        roleRef: { apiGroup: 'rbac.authorization.k8s.io', kind: 'ClusterRole', name: 'self-provisioner' },
-        subjects: [{ kind: 'Group', apiGroup: 'rbac.authorization.k8s.io', name: 'system:authenticated:oauth' }],
+        roleRef: {
+          apiGroup: 'rbac.authorization.k8s.io',
+          kind: 'ClusterRole',
+          name: 'self-provisioner',
+        },
+        subjects: [
+          {
+            kind: 'Group',
+            apiGroup: 'rbac.authorization.k8s.io',
+            name: 'system:authenticated:oauth',
+          },
+        ],
       },
     });
 
@@ -656,9 +691,27 @@ export class ClusterState {
         uid: `seed-co-${name}`,
         status: {
           conditions: [
-            { type: 'Available', status: 'True', reason: 'AsExpected', message: 'All is well', lastTransitionTime: new Date().toISOString() },
-            { type: 'Progressing', status: 'False', reason: 'AsExpected', message: 'All is well', lastTransitionTime: new Date().toISOString() },
-            { type: 'Degraded', status: 'False', reason: 'AsExpected', message: 'All is well', lastTransitionTime: new Date().toISOString() },
+            {
+              type: 'Available',
+              status: 'True',
+              reason: 'AsExpected',
+              message: 'All is well',
+              lastTransitionTime: new Date().toISOString(),
+            },
+            {
+              type: 'Progressing',
+              status: 'False',
+              reason: 'AsExpected',
+              message: 'All is well',
+              lastTransitionTime: new Date().toISOString(),
+            },
+            {
+              type: 'Degraded',
+              status: 'False',
+              reason: 'AsExpected',
+              message: 'All is well',
+              lastTransitionTime: new Date().toISOString(),
+            },
             { type: 'Upgradeable', status: 'True', reason: 'AsExpected', message: '' },
           ],
           versions: [{ name: 'operator', version: OPENSHIFT_VERSION }],
@@ -672,10 +725,27 @@ export class ClusterState {
       spec: { channel: OPENSHIFT_CHANNEL, clusterID: 'simulated-cluster-id' },
       status: {
         desired: { version: OPENSHIFT_VERSION, channel: OPENSHIFT_CHANNEL },
-        history: [{ state: 'Completed', version: OPENSHIFT_VERSION, startedTime: new Date().toISOString(), completionTime: new Date().toISOString() }],
+        history: [
+          {
+            state: 'Completed',
+            version: OPENSHIFT_VERSION,
+            startedTime: new Date().toISOString(),
+            completionTime: new Date().toISOString(),
+          },
+        ],
         conditions: [
-          { type: 'Available', status: 'True', reason: 'ClusterVersionAvailable', message: `Done applying ${OPENSHIFT_VERSION}` },
-          { type: 'Progressing', status: 'False', reason: 'ClusterVersionNotProgressing', message: `Cluster version is ${OPENSHIFT_VERSION}` },
+          {
+            type: 'Available',
+            status: 'True',
+            reason: 'ClusterVersionAvailable',
+            message: `Done applying ${OPENSHIFT_VERSION}`,
+          },
+          {
+            type: 'Progressing',
+            status: 'False',
+            reason: 'ClusterVersionNotProgressing',
+            message: `Cluster version is ${OPENSHIFT_VERSION}`,
+          },
         ],
         versionHash: 'simulated',
       },
@@ -694,7 +764,10 @@ export class ClusterState {
         namespace: 'openshift',
         uid: `seed-imagestream-openshift-${imageStream.name}`,
         spec: { lookupPolicy: { local: false }, tags: [] },
-        status: { dockerImageRepository: `${IMAGE_REGISTRY_HOST}/openshift/${imageStream.name}`, tags: [] },
+        status: {
+          dockerImageRepository: `${IMAGE_REGISTRY_HOST}/openshift/${imageStream.name}`,
+          tags: [],
+        },
       });
       for (const tag of imageStream.tags) {
         this.updateImageStreamTag('openshift', imageStream.name, tag, {
@@ -734,7 +807,8 @@ export class ClusterState {
       annotations: options.annotations || {},
       spec: {},
     });
-    resource.metadata.uid = options.uid || `seed-${kind}-${namespace ? `${namespace}-` : ''}${name}`;
+    resource.metadata.uid =
+      options.uid || `seed-${kind}-${namespace ? `${namespace}-` : ''}${name}`;
     resource.apiVersion = resource.apiVersion || 'v1';
     resource.spec = deepMerge({}, defaultSpecForKind(kind), options.spec || {});
     if (options.status) this._applyStatus(resource, options.status);
@@ -817,7 +891,9 @@ export class ClusterState {
     const nameKey = `${resource.kind}:${resource.metadata.namespace}:${resource.metadata.name}`;
     const existingUid = this.nameIndex.get(nameKey);
     if (existingUid && this.resources.has(existingUid)) {
-      throw new Error(`${resource.kind} "${resource.metadata.name}" already exists in project "${resource.metadata.namespace || '(cluster)'}"`);
+      throw new Error(
+        `${resource.kind} "${resource.metadata.name}" already exists in project "${resource.metadata.namespace || '(cluster)'}"`
+      );
     }
     this._register(resource);
     if (resource.kind === 'Project') this.ensureProjectDefaults(resource);
@@ -863,7 +939,11 @@ export class ClusterState {
       resource._bumpResourceVersion();
 
       if (oldPhase !== resource.status.phase) {
-        resource.recordEvent('Normal', 'PhaseChange', `Phase changed from ${oldPhase} to ${resource.status.phase}`);
+        resource.recordEvent(
+          'Normal',
+          'PhaseChange',
+          `Phase changed from ${oldPhase} to ${resource.status.phase}`
+        );
       }
     } else if (updates && typeof updates === 'object') {
       if (updates.spec) {
@@ -874,8 +954,10 @@ export class ClusterState {
         this._applyStatus(resource, updates.status);
       }
       if (updates.metadata) {
-        if (updates.metadata.labels) Object.assign(resource.metadata.labels, updates.metadata.labels);
-        if (updates.metadata.annotations) Object.assign(resource.metadata.annotations, updates.metadata.annotations);
+        if (updates.metadata.labels)
+          Object.assign(resource.metadata.labels, updates.metadata.labels);
+        if (updates.metadata.annotations)
+          Object.assign(resource.metadata.annotations, updates.metadata.annotations);
       }
       if (updates.apiVersion) resource.apiVersion = updates.apiVersion;
       resource._bumpResourceVersion();
@@ -990,7 +1072,8 @@ export class ClusterState {
    * @returns {ResourceBase[]}
    */
   getByKind(kind) {
-    if (kind === 'Namespace' || kind === 'namespace' || kind === 'ns') return this.getByKind('Project');
+    if (kind === 'Namespace' || kind === 'namespace' || kind === 'ns')
+      return this.getByKind('Project');
     const canonical = this._canonicalKind(kind);
     if (!canonical) return [];
     const uids = this.kindIndex.get(canonical);
@@ -1091,14 +1174,19 @@ export class ClusterState {
   findPodsForService(serviceName, namespace = 'default') {
     const service = this.getByName('Service', serviceName, namespace);
     if (!service || !service.spec.selector) return [];
-    return this.selectByLabels('Pod', service.spec.selector).filter((pod) => pod.metadata.namespace === namespace);
+    return this.selectByLabels('Pod', service.spec.selector).filter(
+      (pod) => pod.metadata.namespace === namespace
+    );
   }
 
   /** Ready endpoints (pods) for a Service. */
   getServiceEndpoints(service) {
     if (!service || !service.spec.selector) return [];
     return this.selectByLabels('Pod', service.spec.selector).filter(
-      (pod) => pod.metadata.namespace === service.metadata.namespace && pod.status.phase === 'Running' && pod.isConditionTrue('Ready')
+      (pod) =>
+        pod.metadata.namespace === service.metadata.namespace &&
+        pod.status.phase === 'Running' &&
+        pod.isConditionTrue('Ready')
     );
   }
 
@@ -1222,11 +1310,16 @@ export class ClusterState {
   }
 
   _addToNameIndex(resource) {
-    this.nameIndex.set(`${resource.kind}:${resource.metadata.namespace}:${resource.metadata.name}`, resource.uid);
+    this.nameIndex.set(
+      `${resource.kind}:${resource.metadata.namespace}:${resource.metadata.name}`,
+      resource.uid
+    );
   }
 
   _removeFromNameIndex(resource) {
-    this.nameIndex.delete(`${resource.kind}:${resource.metadata.namespace}:${resource.metadata.name}`);
+    this.nameIndex.delete(
+      `${resource.kind}:${resource.metadata.namespace}:${resource.metadata.name}`
+    );
   }
 
   _addToLabelIndex(resource) {
@@ -1296,7 +1389,11 @@ export class ClusterState {
     this._watchCallbacks.get(kind).push(callback);
     return () => {
       const list = this._watchCallbacks.get(kind);
-      if (list) this._watchCallbacks.set(kind, list.filter((cb) => cb !== callback));
+      if (list)
+        this._watchCallbacks.set(
+          kind,
+          list.filter((cb) => cb !== callback)
+        );
     };
   }
 
@@ -1310,7 +1407,10 @@ export class ClusterState {
    * @param {{pods?: number, cpu?: number, memory?: number}} quota
    */
   setResourceQuota(namespace, quota) {
-    this.resourceQuotas.set(namespace, { hard: { ...quota }, used: this._calculateQuotaUsage(namespace) });
+    this.resourceQuotas.set(namespace, {
+      hard: { ...quota },
+      used: this._calculateQuotaUsage(namespace),
+    });
   }
 
   getResourceQuota(namespace) {
@@ -1353,7 +1453,9 @@ export class ClusterState {
 
   /** @param {string} [namespace] @returns {object[]} LimitRange resources */
   getLimitRanges(namespace) {
-    return namespace ? this.getByKindAndNamespace('LimitRange', namespace) : this.getByKind('LimitRange');
+    return namespace
+      ? this.getByKindAndNamespace('LimitRange', namespace)
+      : this.getByKind('LimitRange');
   }
 
   /** @returns {object[]} ClusterResourceQuota resources */
@@ -1408,7 +1510,9 @@ export class ClusterState {
   getClusterResourceQuotasForProject(namespace) {
     const project = this.getByName('Project', namespace, '');
     if (!project) return [];
-    return this.getClusterResourceQuotas().filter((clusterQuota) => this.clusterQuotaSelectsProject(clusterQuota, project));
+    return this.getClusterResourceQuotas().filter((clusterQuota) =>
+      this.clusterQuotaSelectsProject(clusterQuota, project)
+    );
   }
 
   /**
@@ -1445,8 +1549,9 @@ export class ClusterState {
     for (const pod of pods) {
       // Only admitted pods count towards quota: Running pods always count;
       // Pending pods count once admission marked them (quota-admitted).
-      const admittedPending = pod.status.phase === 'Pending'
-        && pod.metadata.annotations?.['openshiftgames/quota-admitted'] === 'true';
+      const admittedPending =
+        pod.status.phase === 'Pending' &&
+        pod.metadata.annotations?.['openshiftgames/quota-admitted'] === 'true';
       if (pod.status.phase !== 'Running' && !admittedPending) continue;
       usage.pods++;
       for (const container of pod.spec.containers || []) {
@@ -1507,7 +1612,11 @@ export class ClusterState {
         if (usedMap[key] !== undefined) used[key] = this._formatQuotaUsage(key, usedMap[key]);
         else used[key] = '0';
       }
-      const newStatus = { hard: deepClone(hard), used, observedGeneration: quota.metadata.generation };
+      const newStatus = {
+        hard: deepClone(hard),
+        used,
+        observedGeneration: quota.metadata.generation,
+      };
       const changed = JSON.stringify(quota.status?.used) !== JSON.stringify(used);
       quota.status = { ...quota.status, ...newStatus };
       if (changed) {
@@ -1571,11 +1680,16 @@ export class ClusterState {
       if (hardPods !== undefined && currentUsage.pods + 1 > hardPods) {
         violations.push(`${label}: pods ${currentUsage.pods + 1} > ${hardPods}`);
       }
-      for (const [cpuKey, label2] of [['requests.cpu', 'cpu'], ['cpu', 'cpu']]) {
+      for (const [cpuKey, label2] of [
+        ['requests.cpu', 'cpu'],
+        ['cpu', 'cpu'],
+      ]) {
         if (hard[cpuKey] === undefined) continue;
         const limit = parseCpuMillis(hard[cpuKey]);
         if (currentUsage['requests.cpu'] + requestedCpu > limit) {
-          violations.push(`${label}: ${label2} ${currentUsage['requests.cpu'] + requestedCpu}m > ${limit}m`);
+          violations.push(
+            `${label}: ${label2} ${currentUsage['requests.cpu'] + requestedCpu}m > ${limit}m`
+          );
         }
         break;
       }
@@ -1583,7 +1697,9 @@ export class ClusterState {
         if (hard[memKey] === undefined) continue;
         const limit = parseMemoryMi(hard[memKey]);
         if (currentUsage['requests.memory'] + requestedMemory > limit) {
-          violations.push(`${label}: memory ${Math.round(currentUsage['requests.memory'] + requestedMemory)}Mi > ${Math.round(limit)}Mi`);
+          violations.push(
+            `${label}: memory ${Math.round(currentUsage['requests.memory'] + requestedMemory)}Mi > ${Math.round(limit)}Mi`
+          );
         }
         break;
       }
@@ -1625,10 +1741,16 @@ export class ClusterState {
       if (hard.pods !== undefined && usage.pods + 1 > Number(hard.pods)) {
         violations.push(`exceeded cluster quota: ${clusterQuota.metadata.name}`);
       }
-      if (hard['requests.cpu'] !== undefined && usage['requests.cpu'] + requestedCpu > parseCpuMillis(hard['requests.cpu'])) {
+      if (
+        hard['requests.cpu'] !== undefined &&
+        usage['requests.cpu'] + requestedCpu > parseCpuMillis(hard['requests.cpu'])
+      ) {
         violations.push(`exceeded cluster quota: ${clusterQuota.metadata.name}`);
       }
-      if (hard['requests.memory'] !== undefined && usage['requests.memory'] + requestedMemory > parseMemoryMi(hard['requests.memory'])) {
+      if (
+        hard['requests.memory'] !== undefined &&
+        usage['requests.memory'] + requestedMemory > parseMemoryMi(hard['requests.memory'])
+      ) {
         violations.push(`exceeded cluster quota: ${clusterQuota.metadata.name}`);
       }
     }
@@ -1693,17 +1815,27 @@ export class ClusterState {
             for (const [key, minValue] of Object.entries(limit.min || {})) {
               const actual = requests[key] !== undefined ? requests[key] : limits[key];
               if (actual === undefined) continue;
-              const failed = key === 'cpu' ? parseCpuMillis(actual) < parseCpuMillis(minValue) : parseMemoryMi(actual) < parseMemoryMi(minValue);
+              const failed =
+                key === 'cpu'
+                  ? parseCpuMillis(actual) < parseCpuMillis(minValue)
+                  : parseMemoryMi(actual) < parseMemoryMi(minValue);
               if (failed) {
-                violations.push(`minimum ${key} usage per Container is ${minValue}, but request is ${actual}`);
+                violations.push(
+                  `minimum ${key} usage per Container is ${minValue}, but request is ${actual}`
+                );
               }
             }
             for (const [key, maxValue] of Object.entries(limit.max || {})) {
               const actual = limits[key] !== undefined ? limits[key] : requests[key];
               if (actual === undefined) continue;
-              const failed = key === 'cpu' ? parseCpuMillis(actual) > parseCpuMillis(maxValue) : parseMemoryMi(actual) > parseMemoryMi(maxValue);
+              const failed =
+                key === 'cpu'
+                  ? parseCpuMillis(actual) > parseCpuMillis(maxValue)
+                  : parseMemoryMi(actual) > parseMemoryMi(maxValue);
               if (failed) {
-                violations.push(`maximum ${key} usage per Container is ${maxValue}, but limit is ${actual}`);
+                violations.push(
+                  `maximum ${key} usage per Container is ${maxValue}, but limit is ${actual}`
+                );
               }
             }
           }
@@ -1715,11 +1847,21 @@ export class ClusterState {
             podMemRequest += parseMemoryMi(container.resources?.requests?.memory || '0');
           }
           for (const [key, minValue] of Object.entries(limit.min || {})) {
-            const failed = key === 'cpu' ? podCpuRequest < parseCpuMillis(minValue) : key === 'memory' ? podMemRequest < parseMemoryMi(minValue) : false;
+            const failed =
+              key === 'cpu'
+                ? podCpuRequest < parseCpuMillis(minValue)
+                : key === 'memory'
+                  ? podMemRequest < parseMemoryMi(minValue)
+                  : false;
             if (failed) violations.push(`minimum ${key} usage per Pod is ${minValue}`);
           }
           for (const [key, maxValue] of Object.entries(limit.max || {})) {
-            const failed = key === 'cpu' ? podCpuRequest > parseCpuMillis(maxValue) : key === 'memory' ? podMemRequest > parseMemoryMi(maxValue) : false;
+            const failed =
+              key === 'cpu'
+                ? podCpuRequest > parseCpuMillis(maxValue)
+                : key === 'memory'
+                  ? podMemRequest > parseMemoryMi(maxValue)
+                  : false;
             if (failed) violations.push(`maximum ${key} usage per Pod is ${maxValue}`);
           }
         }
@@ -1741,7 +1883,9 @@ export class ClusterState {
       memory: memSpec ? parseMemoryMi(memSpec) : 8192,
     };
     const pods = this.getByKind('Pod').filter(
-      (pod) => pod.spec.nodeName === nodeName && (pod.status.phase === 'Running' || pod.status.phase === 'Pending')
+      (pod) =>
+        pod.spec.nodeName === nodeName &&
+        (pod.status.phase === 'Running' || pod.status.phase === 'Pending')
     );
     let cpuUsed = 0;
     let memoryUsed = 0;
@@ -1753,7 +1897,11 @@ export class ClusterState {
     }
     return {
       cpu: { capacity: capacity.cpu, used: cpuUsed, available: capacity.cpu - cpuUsed },
-      memory: { capacity: capacity.memory, used: memoryUsed, available: capacity.memory - memoryUsed },
+      memory: {
+        capacity: capacity.memory,
+        used: memoryUsed,
+        available: capacity.memory - memoryUsed,
+      },
       podCount: pods.length,
     };
   }
@@ -1794,19 +1942,30 @@ export class ClusterState {
     }
 
     const admittedRoutes = routes.filter((route) => this.isRouteAdmitted(route)).length;
-    const activeProjects = projects.filter((project) => project.status.phase !== 'Terminating').length;
+    const activeProjects = projects.filter(
+      (project) => project.status.phase !== 'Terminating'
+    ).length;
 
     return {
-      nodes: { total: nodes.length, ready: nodes.filter((node) => node.isConditionTrue('Ready')).length },
+      nodes: {
+        total: nodes.length,
+        ready: nodes.filter((node) => node.isConditionTrue('Ready')).length,
+      },
       pods: { total: pods.length, ...podPhases },
-      deployments: { total: deployments.length, available: deployments.filter((deployment) => deployment.isConditionTrue('Available')).length },
+      deployments: {
+        total: deployments.length,
+        available: deployments.filter((deployment) => deployment.isConditionTrue('Available'))
+          .length,
+      },
       services: { total: services.length },
       namespaces: { total: projects.length },
       projects: { total: projects.length, active: activeProjects },
       routes: { total: routes.length, admitted: admittedRoutes },
       builds: {
         total: builds.length,
-        running: builds.filter((build) => ['New', 'Pending', 'Running'].includes(build.status.phase)).length,
+        running: builds.filter((build) =>
+          ['New', 'Pending', 'Running'].includes(build.status.phase)
+        ).length,
         complete: builds.filter((build) => build.status.phase === 'Complete').length,
         failed: builds.filter((build) => build.status.phase === 'Failed').length,
       },
@@ -1818,15 +1977,28 @@ export class ClusterState {
         cronjobs: this.getByKind('CronJob').length,
       },
       imageStreams: { total: this.getByKind('ImageStream').length },
-      subscriptions: { total: subscriptions.length, installed: subscriptions.filter((sub) => sub.status.phase === 'Succeeded').length },
+      subscriptions: {
+        total: subscriptions.length,
+        installed: subscriptions.filter((sub) => sub.status.phase === 'Succeeded').length,
+      },
       clusterOperators: {
         total: clusterOperators.length,
-        available: clusterOperators.filter((operator) => operator.isConditionTrue('Available')).length,
-        degraded: clusterOperators.filter((operator) => operator.isConditionTrue('Degraded')).length,
+        available: clusterOperators.filter((operator) => operator.isConditionTrue('Available'))
+          .length,
+        degraded: clusterOperators.filter((operator) => operator.isConditionTrue('Degraded'))
+          .length,
       },
       resources: { total: this.resources.size },
-      cpu: { total: totalCpu, used: usedCpu, percent: totalCpu > 0 ? Math.round((usedCpu / totalCpu) * 100) : 0 },
-      memory: { total: totalMemory, used: usedMemory, percent: totalMemory > 0 ? Math.round((usedMemory / totalMemory) * 100) : 0 },
+      cpu: {
+        total: totalCpu,
+        used: usedCpu,
+        percent: totalCpu > 0 ? Math.round((usedCpu / totalCpu) * 100) : 0,
+      },
+      memory: {
+        total: totalMemory,
+        used: usedMemory,
+        percent: totalMemory > 0 ? Math.round((usedMemory / totalMemory) * 100) : 0,
+      },
     };
   }
 
@@ -1937,7 +2109,8 @@ export class ClusterState {
       return null;
     }
 
-    const existing = (suppliedUid && this.resources.get(suppliedUid)) || this.getByName(kind, name, namespace);
+    const existing =
+      (suppliedUid && this.resources.get(suppliedUid)) || this.getByName(kind, name, namespace);
     if (existing) {
       this._mergeInto(existing, obj);
       return this.update(existing.uid, existing);
@@ -1953,7 +2126,10 @@ export class ClusterState {
         spec: {},
       });
     } catch (error) {
-      console.warn(`ClusterState.addResource: failed to create ${kind} via registry, falling back:`, error);
+      console.warn(
+        `ClusterState.addResource: failed to create ${kind} via registry, falling back:`,
+        error
+      );
       resource = new ResourceBase(kind, obj.apiVersion || 'v1', name, namespace);
     }
     if (!(resource instanceof ResourceBase)) {
@@ -1977,7 +2153,9 @@ export class ClusterState {
 
   /** Handle `addResource(new ResourceBaseInstance)` without downgrading. */
   _addInstance(obj) {
-    const existing = this.resources.get(obj.uid) || this.getByName(obj.kind, obj.metadata.name, obj.metadata.namespace);
+    const existing =
+      this.resources.get(obj.uid) ||
+      this.getByName(obj.kind, obj.metadata.name, obj.metadata.namespace);
     if (existing) {
       this._copyResourceState(existing, obj);
       return this.update(existing.uid, existing);
@@ -2055,7 +2233,10 @@ export class ClusterState {
 
   isProjectTerminating(name) {
     const project = this.getProject(name);
-    return !!project && (project.status.phase === 'Terminating' || project.metadata.deletionTimestamp !== null);
+    return (
+      !!project &&
+      (project.status.phase === 'Terminating' || project.metadata.deletionTimestamp !== null)
+    );
   }
 
   /** Create a default service account in a project (idempotent). */
@@ -2069,7 +2250,10 @@ export class ClusterState {
         metadata: {
           name: 'default',
           namespace: name,
-          annotations: { 'openshift.io/requester': project.metadata.annotations?.['openshift.io/requester'] || 'kubeadmin' },
+          annotations: {
+            'openshift.io/requester':
+              project.metadata.annotations?.['openshift.io/requester'] || 'kubeadmin',
+          },
         },
         spec: {},
       });
@@ -2140,7 +2324,8 @@ export class ClusterState {
     const values = {};
     for (const parameter of template?.spec?.parameters || []) {
       if (!parameter?.name) continue;
-      values[parameter.name] = parameter.value !== undefined ? parameter.value : parameter.generate ?? '';
+      values[parameter.name] =
+        parameter.value !== undefined ? parameter.value : (parameter.generate ?? '');
     }
     for (const [key, value] of Object.entries(params)) {
       if (value === undefined || value === null) continue;
@@ -2227,10 +2412,18 @@ export class ClusterState {
    */
   createProject(name, options = {}) {
     if (!isValidProjectName(name)) {
-      return { success: false, error: true, message: `error: Invalid project name "${name}": must be a lowercase DNS-1123 label` };
+      return {
+        success: false,
+        error: true,
+        message: `error: Invalid project name "${name}": must be a lowercase DNS-1123 label`,
+      };
     }
     if (this.getProject(name)) {
-      return { success: false, error: true, message: `Error from server (AlreadyExists): project.project.openshift.io "${name}" already exists` };
+      return {
+        success: false,
+        error: true,
+        message: `Error from server (AlreadyExists): project.project.openshift.io "${name}" already exists`,
+      };
     }
     const requester = String(options.requester || 'kubeadmin');
     const templateName = this.getProjectConfig()?.spec?.projectRequestTemplate?.name || '';
@@ -2261,7 +2454,8 @@ export class ClusterState {
       ...(options.annotations || {}),
       ...(templateProject?.metadata?.annotations || {}),
     };
-    const displayName = projectAnnotations['openshift.io/display-name'] || options.displayName || name;
+    const displayName =
+      projectAnnotations['openshift.io/display-name'] || options.displayName || name;
     const project = this.addResource({
       kind: 'Project',
       metadata: {
@@ -2316,7 +2510,11 @@ export class ClusterState {
   deleteProject(name) {
     const project = this.getProject(name);
     if (!project) {
-      return { success: false, error: true, message: `Error from server (NotFound): project.project.openshift.io "${name}" not found` };
+      return {
+        success: false,
+        error: true,
+        message: `Error from server (NotFound): project.project.openshift.io "${name}" not found`,
+      };
     }
     project.setPhase('Terminating');
     project.setAnnotation('openshiftgames/terminate-at', String(Date.now() + 2000));
@@ -2428,7 +2626,12 @@ export class ClusterState {
     const user = this.getUser(userName);
     if (user) {
       user.spec.identities = user.spec.identities || [];
-      if (!user.spec.identities.some((entry) => entry.providerName === providerName && entry.providerUserName === providerUserName)) {
+      if (
+        !user.spec.identities.some(
+          (entry) =>
+            entry.providerName === providerName && entry.providerUserName === providerUserName
+        )
+      ) {
         user.spec.identities.push({ providerName, providerUserName });
         this.update(user.uid, user);
       }
@@ -2698,13 +2901,19 @@ export class ClusterState {
   grantSCC(sccName, subject, options = {}) {
     const scc = this.getSCC(sccName);
     if (!scc) {
-      return { success: false, message: `Error from server (NotFound): securitycontextconstraints.security.openshift.io "${sccName}" not found` };
+      return {
+        success: false,
+        message: `Error from server (NotFound): securitycontextconstraints.security.openshift.io "${sccName}" not found`,
+      };
     }
     const parsed = normalizeSCCSubject(subject, options);
     if (!parsed.name) return { success: false, message: 'error: you must specify a subject' };
     const roleName = `system:openshift:scc:${sccName}`;
     this._ensureSCCClusterRole(sccName);
-    const { bindingKind, bindingNamespace, subjectEntry } = this._sccGrantBindingTarget(parsed, options.namespace);
+    const { bindingKind, bindingNamespace, subjectEntry } = this._sccGrantBindingTarget(
+      parsed,
+      options.namespace
+    );
     const existing = this.getByName(bindingKind, roleName, bindingNamespace);
     let binding = existing;
     let changed = false;
@@ -2757,7 +2966,10 @@ export class ClusterState {
   revokeSCC(sccName, subject, options = {}) {
     const scc = this.getSCC(sccName);
     if (!scc) {
-      return { success: false, message: `Error from server (NotFound): securitycontextconstraints.security.openshift.io "${sccName}" not found` };
+      return {
+        success: false,
+        message: `Error from server (NotFound): securitycontextconstraints.security.openshift.io "${sccName}" not found`,
+      };
     }
     const parsed = normalizeSCCSubject(subject, options);
     if (!parsed.name) return { success: false, message: 'error: you must specify a subject' };
@@ -2768,11 +2980,15 @@ export class ClusterState {
     const removeFromBinding = (binding, bindingNamespace) => {
       if (!binding || !this._bindingHasRoleRef(binding, roleName)) return;
       const subjects = binding.spec?.subjects || [];
-      const next = subjects.filter((entry) => !this._subjectMatchesSCCGrant(entry, parsed, bindingNamespace, options.namespace));
+      const next = subjects.filter(
+        (entry) => !this._subjectMatchesSCCGrant(entry, parsed, bindingNamespace, options.namespace)
+      );
       if (next.length !== subjects.length) {
         binding.spec.subjects = next;
         this.update(binding.uid, binding);
-        removedFrom.add(`${binding.kind}/${binding.metadata?.namespace || ''}/${binding.metadata?.name || ''}`);
+        removedFrom.add(
+          `${binding.kind}/${binding.metadata?.namespace || ''}/${binding.metadata?.name || ''}`
+        );
       }
     };
 
@@ -2783,7 +2999,12 @@ export class ClusterState {
     // subject's project (scan every project so removal works without -n too).
     for (const rb of this.getByKind('RoleBinding')) {
       if ((rb.metadata?.name || '') !== roleName) continue;
-      if (parsed.kind === 'ServiceAccount' && parsed.namespace && rb.metadata?.namespace !== parsed.namespace) continue;
+      if (
+        parsed.kind === 'ServiceAccount' &&
+        parsed.namespace &&
+        rb.metadata?.namespace !== parsed.namespace
+      )
+        continue;
       removeFromBinding(rb, rb.metadata?.namespace || '');
     }
 
@@ -2818,12 +3039,14 @@ export class ClusterState {
       kind: 'ClusterRole',
       metadata: { name: roleName },
       spec: {
-        rules: [{
-          apiGroups: ['security.openshift.io'],
-          resources: ['securitycontextconstraints'],
-          resourceNames: [sccName],
-          verbs: ['use'],
-        }],
+        rules: [
+          {
+            apiGroups: ['security.openshift.io'],
+            resources: ['securitycontextconstraints'],
+            resourceNames: [sccName],
+            verbs: ['use'],
+          },
+        ],
       },
     });
   }
@@ -2875,16 +3098,19 @@ export class ClusterState {
   _subjectMatchesSCCGrant(entry, parsed, bindingNamespace = '', optionNamespace = '') {
     if (!entry || entry.kind !== parsed.kind || entry.name !== parsed.name) return false;
     if (parsed.kind !== 'ServiceAccount') return true;
-    const targetNamespace = entry.namespace || bindingNamespace || parsed.namespace || optionNamespace || '';
+    const targetNamespace =
+      entry.namespace || bindingNamespace || parsed.namespace || optionNamespace || '';
     return targetNamespace === '' || targetNamespace === parsed.namespace;
   }
 
   /** @param {object} left @param {object} right @returns {boolean} */
   _sameRBACSubject(left, right) {
-    return Boolean(left && right)
-      && left.kind === right.kind
-      && left.name === right.name
-      && (left.namespace || '') === (right.namespace || '');
+    return (
+      Boolean(left && right) &&
+      left.kind === right.kind &&
+      left.name === right.name &&
+      (left.namespace || '') === (right.namespace || '')
+    );
   }
 
   // ── OAuth / identity providers ──────────────────────────────────────────
@@ -2906,7 +3132,8 @@ export class ClusterState {
     return {
       type: 'HTPasswd',
       name: htpasswd.name || 'htpasswd',
-      secretName: htpasswd.htpasswd?.fileData?.name || htpasswd.htpasswd?.secret?.name || 'htpasswd-secret',
+      secretName:
+        htpasswd.htpasswd?.fileData?.name || htpasswd.htpasswd?.secret?.name || 'htpasswd-secret',
       namespace: 'openshift-config',
     };
   }
@@ -2954,20 +3181,26 @@ export class ClusterState {
     }
     const internalRef = `${IMAGE_REGISTRY_HOST}/${namespace}/${imageStreamName}:${tag}`;
     const dockerImageReference = options.dockerImageReference || internalRef;
-    const image = options.image || `sha256:${this._fakeDigest(`${namespace}/${imageStreamName}:${tag}`)}`;
+    const image =
+      options.image || `sha256:${this._fakeDigest(`${namespace}/${imageStreamName}:${tag}`)}`;
 
     imageStream.spec.tags = imageStream.spec.tags || [];
     if (!imageStream.spec.tags.some((entry) => entry.name === tag)) {
       imageStream.spec.tags.push({
         name: tag,
-        from: { kind: options.isExternal ? 'DockerImage' : 'ImageStreamTag', name: dockerImageReference },
+        from: {
+          kind: options.isExternal ? 'DockerImage' : 'ImageStreamTag',
+          name: dockerImageReference,
+        },
         generation: 1,
         importPolicy: { insecure: false },
       });
     }
 
     imageStream.status = imageStream.status || {};
-    imageStream.status.dockerImageRepository = imageStream.status.dockerImageRepository || `${IMAGE_REGISTRY_HOST}/${namespace}/${imageStreamName}`;
+    imageStream.status.dockerImageRepository =
+      imageStream.status.dockerImageRepository ||
+      `${IMAGE_REGISTRY_HOST}/${namespace}/${imageStreamName}`;
     imageStream.status.tags = imageStream.status.tags || [];
     let tagEntry = imageStream.status.tags.find((entry) => entry.tag === tag);
     if (!tagEntry) {
@@ -2975,7 +3208,9 @@ export class ClusterState {
       imageStream.status.tags.push(tagEntry);
     }
     const previous = tagEntry.items?.[0]?.dockerImageReference;
-    tagEntry.items = [{ dockerImageReference, image, generation: 1, created: new Date().toISOString() }];
+    tagEntry.items = [
+      { dockerImageReference, image, generation: 1, created: new Date().toISOString() },
+    ];
     tagEntry.updated = new Date().toISOString();
     this.update(imageStream.uid, imageStream);
 
@@ -3009,16 +3244,21 @@ export class ClusterState {
 
   /** Active (not finished) Build for a BuildConfig. */
   getActiveBuildFor(buildConfig) {
-    return this.getChildren(buildConfig.uid).find(
-      (child) => child.kind === 'Build' && ['New', 'Pending', 'Running'].includes(child.status.phase)
-    ) || null;
+    return (
+      this.getChildren(buildConfig.uid).find(
+        (child) =>
+          child.kind === 'Build' && ['New', 'Pending', 'Running'].includes(child.status.phase)
+      ) || null
+    );
   }
 
   /** Builds owned by a BuildConfig, newest first. */
   getBuildsForConfig(buildConfig) {
     return this.getChildren(buildConfig.uid)
       .filter((child) => child.kind === 'Build')
-      .sort((a, b) => new Date(b.metadata.creationTimestamp) - new Date(a.metadata.creationTimestamp));
+      .sort(
+        (a, b) => new Date(b.metadata.creationTimestamp) - new Date(a.metadata.creationTimestamp)
+      );
   }
 
   /**
@@ -3032,7 +3272,10 @@ export class ClusterState {
     if (!buildConfig) return { success: false, message: 'BuildConfig not found' };
     const active = this.getActiveBuildFor(buildConfig);
     if (active && buildConfig.spec?.runPolicy === 'Serial') {
-      return { success: false, message: `cannot start build: Build "${active.metadata.name}" is already running for BuildConfig "${buildConfig.metadata.name}"` };
+      return {
+        success: false,
+        message: `cannot start build: Build "${active.metadata.name}" is already running for BuildConfig "${buildConfig.metadata.name}"`,
+      };
     }
     const version = (buildConfig.status?.lastVersion || 0) + 1;
     const buildName = `${buildConfig.metadata.name}-${version}`;
@@ -3108,7 +3351,11 @@ export class ClusterState {
    */
   isRouteAdmitted(route) {
     const ingress = route.status?.ingress || [];
-    return ingress.some((entry) => (entry.conditions || []).some((condition) => condition.type === 'Admitted' && condition.status === 'True'));
+    return ingress.some((entry) =>
+      (entry.conditions || []).some(
+        (condition) => condition.type === 'Admitted' && condition.status === 'True'
+      )
+    );
   }
 
   // ── ClusterOperators / ClusterVersion ──────────────────────────────────
@@ -3120,7 +3367,9 @@ export class ClusterState {
 
   /** @returns {object[]} */
   getClusterOperators() {
-    return this.getByKind('ClusterOperator').sort((a, b) => a.metadata.name.localeCompare(b.metadata.name));
+    return this.getByKind('ClusterOperator').sort((a, b) =>
+      a.metadata.name.localeCompare(b.metadata.name)
+    );
   }
 
   /** @returns {object|null} the ClusterVersion singleton */
@@ -3138,13 +3387,28 @@ export class ClusterState {
     const operator = this.getClusterOperator(name);
     if (!operator) return null;
     if (state.available !== undefined) {
-      operator.setCondition('Available', state.available ? 'True' : 'False', state.available ? 'AsExpected' : 'Unavailable', state.message || '');
+      operator.setCondition(
+        'Available',
+        state.available ? 'True' : 'False',
+        state.available ? 'AsExpected' : 'Unavailable',
+        state.message || ''
+      );
     }
     if (state.progressing !== undefined) {
-      operator.setCondition('Progressing', state.progressing ? 'True' : 'False', state.progressing ? 'Working' : 'AsExpected', state.message || '');
+      operator.setCondition(
+        'Progressing',
+        state.progressing ? 'True' : 'False',
+        state.progressing ? 'Working' : 'AsExpected',
+        state.message || ''
+      );
     }
     if (state.degraded !== undefined) {
-      operator.setCondition('Degraded', state.degraded ? 'True' : 'False', state.degraded ? 'Degraded' : 'AsExpected', state.message || '');
+      operator.setCondition(
+        'Degraded',
+        state.degraded ? 'True' : 'False',
+        state.degraded ? 'Degraded' : 'AsExpected',
+        state.message || ''
+      );
     }
     this.update(operator.uid, operator);
     return operator;
@@ -3154,8 +3418,12 @@ export class ClusterState {
   getClusterHealth() {
     const operators = this.getClusterOperators();
     const available = operators.filter((operator) => operator.isConditionTrue('Available')).length;
-    const degraded = operators.filter((operator) => operator.isConditionTrue('Degraded')).map((operator) => operator.metadata.name);
-    const progressing = operators.filter((operator) => operator.isConditionTrue('Progressing')).map((operator) => operator.metadata.name);
+    const degraded = operators
+      .filter((operator) => operator.isConditionTrue('Degraded'))
+      .map((operator) => operator.metadata.name);
+    const progressing = operators
+      .filter((operator) => operator.isConditionTrue('Progressing'))
+      .map((operator) => operator.metadata.name);
     const total = operators.length;
     return {
       total,

@@ -143,10 +143,7 @@ export const GENERATION_KINDS = Object.freeze(
 /** @param {*} value @returns {*} */
 export function isPlainObject(value) {
   return (
-    value !== null &&
-    typeof value === 'object' &&
-    !Array.isArray(value) &&
-    !(value instanceof Date)
+    value !== null && typeof value === 'object' && !Array.isArray(value) && !(value instanceof Date)
   );
 }
 

@@ -50,8 +50,7 @@ export const EX280_EXAM_FACTS = {
     'https://training-lms.redhat.com/public_content/redhat/training/Red%20Hat%20Certification%20Exam%20Objectives%20by%20Version.pdf',
   programGuideUrl:
     'https://docs.redhat.com/en/documentation/red_hat_learning_subscription/1-latest/html/red_hat_certification_program_guide/index',
-  docsBaseUrl:
-    'https://docs.redhat.com/en/documentation/openshift_container_platform/4.22',
+  docsBaseUrl: 'https://docs.redhat.com/en/documentation/openshift_container_platform/4.22',
   lastVerified: '2026-11-03',
 };
 
@@ -121,10 +120,8 @@ const DOCS = {
     'https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/network_security/index',
   networkPolicy:
     'https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/network_security/network-policy',
-  auth:
-    'https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/authentication_and_authorization/index',
-  rbac:
-    'https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/authentication_and_authorization/using-rbac',
+  auth: 'https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/authentication_and_authorization/index',
+  rbac: 'https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/authentication_and_authorization/using-rbac',
   serviceAccounts:
     'https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/authentication_and_authorization/understanding-and-creating-service-accounts',
   operators:
@@ -443,11 +440,7 @@ export const EX280_OBJECTIVE_GROUPS = [
         levels: [5],
         challenges: [4],
         quickLabs: ['lab-kustomize'],
-        commands: [
-          `oc apply -k base/`,
-          `oc kustomize base/`,
-          `oc get deploy -n <namespace>`,
-        ],
+        commands: [`oc apply -k base/`, `oc kustomize base/`, `oc get deploy -n <namespace>`],
       },
       {
         id: 'declarative-kustomize-overlays',
@@ -545,11 +538,7 @@ export const EX280_OBJECTIVE_GROUPS = [
         docsUrl: DOCS.buildingApps,
         levels: [10],
         challenges: [10],
-        commands: [
-          `oc get rs`,
-          `oc describe rs <replicaset>`,
-          `oc get deployment web -o yaml`,
-        ],
+        commands: [`oc get rs`, `oc describe rs <replicaset>`, `oc get deployment web -o yaml`],
       },
       {
         id: 'deploy-labels-selectors',
@@ -1109,8 +1098,14 @@ export const EX280_QUICK_LABS = [
       'Use oc get pods to confirm the Deployment created a pod.',
     ],
     steps: [
-      { command: `oc new-project ex280-lab --display-name="EX280 Lab"`, text: 'Create and switch to a new project.' },
-      { command: `oc new-app --image=registry.redhat.io/ubi9/ubi-minimal --name=lab-app`, text: 'Deploy a workload from a container image.' },
+      {
+        command: `oc new-project ex280-lab --display-name="EX280 Lab"`,
+        text: 'Create and switch to a new project.',
+      },
+      {
+        command: `oc new-app --image=registry.redhat.io/ubi9/ubi-minimal --name=lab-app`,
+        text: 'Deploy a workload from a container image.',
+      },
       { command: `oc get pods`, text: 'Confirm a pod is created in the new project.' },
       { command: `oc delete project ex280-lab`, text: 'Delete the project and everything in it.' },
     ],
@@ -1125,21 +1120,45 @@ export const EX280_QUICK_LABS = [
     summary:
       'Add a local user through the htpasswd secret and OAuth provider, log in, then rotate that user password the way the exam expects.',
     setup: { startingResources: [], manifestFiles: [] },
-    check: [{ type: 'login', user: 'ex280-user' }, { type: 'user', name: 'ex280-user' }],
+    check: [
+      { type: 'login', user: 'ex280-user' },
+      { type: 'user', name: 'ex280-user' },
+    ],
     hints: [
       'The htpasswd file key inside the secret must be named htpasswd.',
       'The OAuth CR is a cluster singleton named cluster.',
       'After changing the secret, give the authentication operator a few seconds to roll out before logging in with the new password.',
     ],
     steps: [
-      { command: `htpasswd -c -B -b users.htpasswd ex280-user 'Passw0rd!'`, text: 'Create the htpasswd file (bcrypt hashes).' },
-      { command: `oc create secret generic htpass-secret --from-file=htpasswd=users.htpasswd -n openshift-config`, text: 'Store the file in the openshift-config project.' },
-      { command: `oc edit oauth cluster`, text: 'Add an HTPasswd identityProvider to the OAuth cluster singleton: name htpasswd, fileData.name htpass-secret, mappingMethod claim.' },
+      {
+        command: `htpasswd -c -B -b users.htpasswd ex280-user 'Passw0rd!'`,
+        text: 'Create the htpasswd file (bcrypt hashes).',
+      },
+      {
+        command: `oc create secret generic htpass-secret --from-file=htpasswd=users.htpasswd -n openshift-config`,
+        text: 'Store the file in the openshift-config project.',
+      },
+      {
+        command: `oc edit oauth cluster`,
+        text: 'Add an HTPasswd identityProvider to the OAuth cluster singleton: name htpasswd, fileData.name htpass-secret, mappingMethod claim.',
+      },
       { command: `oc login -u ex280-user`, text: 'Log in as the new user and check oc whoami.' },
-      { command: `oc extract secret/htpass-secret -n openshift-config --to /tmp --confirm`, text: 'Rotate the password: extract the htpasswd file from the secret.' },
-      { command: `htpasswd -bB /tmp/htpasswd ex280-user 'Rotated0rd!'`, text: 'Set a new bcrypt hash in the extracted file.' },
-      { command: `oc set data secret/htpass-secret -n openshift-config --from-file=htpasswd=/tmp/htpasswd`, text: 'Write the updated file back into the secret and wait for the authentication operator rollout.' },
-      { command: `oc login -u ex280-user -p 'Rotated0rd!'`, text: 'Log in with the rotated password to verify it took effect.' },
+      {
+        command: `oc extract secret/htpass-secret -n openshift-config --to /tmp --confirm`,
+        text: 'Rotate the password: extract the htpasswd file from the secret.',
+      },
+      {
+        command: `htpasswd -bB /tmp/htpasswd ex280-user 'Rotated0rd!'`,
+        text: 'Set a new bcrypt hash in the extracted file.',
+      },
+      {
+        command: `oc set data secret/htpass-secret -n openshift-config --from-file=htpasswd=/tmp/htpasswd`,
+        text: 'Write the updated file back into the secret and wait for the authentication operator rollout.',
+      },
+      {
+        command: `oc login -u ex280-user -p 'Rotated0rd!'`,
+        text: 'Log in with the rotated password to verify it took effect.',
+      },
     ],
   },
   {
@@ -1149,7 +1168,8 @@ export const EX280_QUICK_LABS = [
     objectiveIds: ['deploy-expose-external', 'net-tls', 'net-routes'],
     docsUrl: DOCS.routes,
     mode: 'sandbox',
-    summary: 'Expose a Service with an edge TLS Route using a certificate secret and verify it is admitted.',
+    summary:
+      'Expose a Service with an edge TLS Route using a certificate secret and verify it is admitted.',
     setup: {
       startingResources: [],
       manifestFiles: ['manifests/service.yaml', 'manifests/route.yaml'],
@@ -1164,19 +1184,33 @@ export const EX280_QUICK_LABS = [
     ],
     steps: [
       { command: `oc new-project web`, text: 'Create a project for the app.' },
-      { command: `oc create secret tls web-tls --cert=tls.crt --key=tls.key`, text: 'Create the TLS secret.' },
-      { command: `oc create route edge web --service=web --hostname=web.apps.example.com --cert=tls.crt --key=tls.key`, text: 'Create an edge-terminated Route.' },
-      { command: `oc get route web -o yaml`, text: 'Check status.ingress conditions for Admitted=True.' },
+      {
+        command: `oc create secret tls web-tls --cert=tls.crt --key=tls.key`,
+        text: 'Create the TLS secret.',
+      },
+      {
+        command: `oc create route edge web --service=web --hostname=web.apps.example.com --cert=tls.crt --key=tls.key`,
+        text: 'Create an edge-terminated Route.',
+      },
+      {
+        command: `oc get route web -o yaml`,
+        text: 'Check status.ingress conditions for Admitted=True.',
+      },
     ],
   },
   {
     id: 'lab-build-imagestream',
     title: 'BuildConfig → Build → ImageStream',
     objectiveId: 'deploy-manage-deployments',
-    objectiveIds: ['deploy-manage-deployments', 'manage-locate-images', 'manage-images-tags-digests'],
+    objectiveIds: [
+      'deploy-manage-deployments',
+      'manage-locate-images',
+      'manage-images-tags-digests',
+    ],
     docsUrl: DOCS.buildingApps,
     mode: 'sandbox',
-    summary: 'Create an application build from source, wait for the Build to complete and read the resulting ImageStreamTag.',
+    summary:
+      'Create an application build from source, wait for the Build to complete and read the resulting ImageStreamTag.',
     setup: { startingResources: [], manifestFiles: ['examples/buildconfig.yaml'] },
     check: [
       { type: 'build', count: 1 },
@@ -1188,9 +1222,15 @@ export const EX280_QUICK_LABS = [
     ],
     steps: [
       { command: `oc new-project build-lab`, text: 'Create a project for the build.' },
-      { command: `oc new-app https://github.com/sclorg/nodejs-ex.git --name=app`, text: 'Create the app, BuildConfig and ImageStream.' },
+      {
+        command: `oc new-app https://github.com/sclorg/nodejs-ex.git --name=app`,
+        text: 'Create the app, BuildConfig and ImageStream.',
+      },
       { command: `oc logs -f bc/app`, text: 'Follow the build log until it completes.' },
-      { command: `oc get is app -o yaml`, text: 'Read status.tags for the latest ImageStreamTag digest.' },
+      {
+        command: `oc get is app -o yaml`,
+        text: 'Read status.tags for the latest ImageStreamTag digest.',
+      },
     ],
   },
   {
@@ -1200,10 +1240,15 @@ export const EX280_QUICK_LABS = [
     objectiveIds: ['declarative-kustomize', 'declarative-kustomize-overlays'],
     docsUrl: DOCS.cliTools,
     mode: 'sandbox',
-    summary: 'Apply a base deployment, then a prod overlay that changes namespace, image and replicas.',
+    summary:
+      'Apply a base deployment, then a prod overlay that changes namespace, image and replicas.',
     setup: {
       startingResources: [],
-      manifestFiles: ['kustomize/base/deployment.yaml', 'kustomize/base/kustomization.yaml', 'kustomize/overlays/prod/kustomization.yaml'],
+      manifestFiles: [
+        'kustomize/base/deployment.yaml',
+        'kustomize/base/kustomization.yaml',
+        'kustomize/overlays/prod/kustomization.yaml',
+      ],
     },
     check: [
       { type: 'kustomize', path: 'kustomize/overlays/prod' },
@@ -1214,18 +1259,29 @@ export const EX280_QUICK_LABS = [
       'On a real cluster, `oc kustomize <dir>` renders the YAML without applying it; in the simulator the Files engine renders on `oc apply -k`.',
     ],
     steps: [
-      { command: `oc apply -k kustomize/overlays/prod`, text: 'Apply the overlay into the webapp-prod namespace (the Files engine renders the merged Kustomize output; on a real cluster you can preview it with `oc kustomize kustomize/overlays/prod`).' },
-      { command: `oc get deployment -n webapp-prod`, text: 'Verify the image tag and replica count match the overlay.' },
+      {
+        command: `oc apply -k kustomize/overlays/prod`,
+        text: 'Apply the overlay into the webapp-prod namespace (the Files engine renders the merged Kustomize output; on a real cluster you can preview it with `oc kustomize kustomize/overlays/prod`).',
+      },
+      {
+        command: `oc get deployment -n webapp-prod`,
+        text: 'Verify the image tag and replica count match the overlay.',
+      },
     ],
   },
   {
     id: 'lab-quota',
     title: 'ResourceQuota + LimitRange',
     objectiveId: 'selfservice-project-quotas',
-    objectiveIds: ['selfservice-project-quotas', 'selfservice-limit-ranges', 'selfservice-resource-requirements'],
+    objectiveIds: [
+      'selfservice-project-quotas',
+      'selfservice-limit-ranges',
+      'selfservice-resource-requirements',
+    ],
     docsUrl: DOCS.quotas,
     mode: 'sandbox',
-    summary: 'Cap a project with a compute quota and a LimitRange, then deploy a compliant workload.',
+    summary:
+      'Cap a project with a compute quota and a LimitRange, then deploy a compliant workload.',
     setup: {
       startingResources: [{ kind: 'Project', name: 'quota-lab' }],
       manifestFiles: ['examples/quota.yaml', 'examples/limitrange.yaml'],
@@ -1240,8 +1296,14 @@ export const EX280_QUICK_LABS = [
     ],
     steps: [
       { command: `oc new-project quota-lab`, text: 'Create the project.' },
-      { command: `oc create quota compute-quota --hard=pods=4,requests.cpu=1,requests.memory=1Gi --namespace=quota-lab`, text: 'Create a compute quota.' },
-      { command: `oc create -f examples/limitrange.yaml -n quota-lab`, text: 'Create a LimitRange with defaults.' },
+      {
+        command: `oc create quota compute-quota --hard=pods=4,requests.cpu=1,requests.memory=1Gi --namespace=quota-lab`,
+        text: 'Create a compute quota.',
+      },
+      {
+        command: `oc create -f examples/limitrange.yaml -n quota-lab`,
+        text: 'Create a LimitRange with defaults.',
+      },
       { command: `oc get quota,limits -n quota-lab`, text: 'Verify both objects exist.' },
     ],
   },
@@ -1249,17 +1311,21 @@ export const EX280_QUICK_LABS = [
     id: 'lab-scc',
     title: 'Service account + SCC grant',
     objectiveId: 'security-scc',
-    objectiveIds: ['security-service-accounts', 'security-scc', 'security-privileged', 'security-api-access'],
+    objectiveIds: [
+      'security-service-accounts',
+      'security-scc',
+      'security-privileged',
+      'security-api-access',
+    ],
     docsUrl: DOCS.auth,
     mode: 'sandbox',
-    summary: 'Create a service account, grant it an SCC and validate the pod annotation that proves it took effect.',
+    summary:
+      'Create a service account, grant it an SCC and validate the pod annotation that proves it took effect.',
     setup: {
       startingResources: [],
       manifestFiles: [],
     },
-    check: [
-      { type: 'scc', scc: 'anyuid', subject: 'system:serviceaccount:scc-lab:robot' },
-    ],
+    check: [{ type: 'scc', scc: 'anyuid', subject: 'system:serviceaccount:scc-lab:robot' }],
     hints: [
       'Grant the SCC to the workload service account with -z, not to default if you can avoid it.',
       'The pod annotation openshift.io/scc reveals which SCC admitted it.',
@@ -1267,8 +1333,14 @@ export const EX280_QUICK_LABS = [
     steps: [
       { command: `oc new-project scc-lab`, text: 'Create the project.' },
       { command: `oc create sa robot -n scc-lab`, text: 'Create the service account.' },
-      { command: `oc adm policy add-scc-to-user anyuid -z robot -n scc-lab`, text: 'Grant anyuid to the service account.' },
-      { command: `oc get pod <pod> -o jsonpath='{.metadata.annotations.openshift\\.io/scc}'`, text: 'Confirm the pod was admitted by anyuid.' },
+      {
+        command: `oc adm policy add-scc-to-user anyuid -z robot -n scc-lab`,
+        text: 'Grant anyuid to the service account.',
+      },
+      {
+        command: `oc get pod <pod> -o jsonpath='{.metadata.annotations.openshift\\.io/scc}'`,
+        text: 'Confirm the pod was admitted by anyuid.',
+      },
     ],
   },
   {
@@ -1278,24 +1350,38 @@ export const EX280_QUICK_LABS = [
     objectiveIds: ['ops-install', 'ops-uninstall', 'ops-delete'],
     docsUrl: DOCS.operators,
     mode: 'sandbox',
-    summary: 'Install the MetalLB operator from a Subscription, watch the CSV succeed and then uninstall it.',
+    summary:
+      'Install the MetalLB operator from a Subscription, watch the CSV succeed and then uninstall it.',
     setup: {
       startingResources: [{ kind: 'Project', name: 'operators-lab' }],
       manifestFiles: ['examples/subscription.yaml'],
     },
-    check: [
-      { type: 'operator', name: 'metallb', installed: true },
-    ],
+    check: [{ type: 'operator', name: 'metallb', installed: true }],
     hints: [
       'The simulator installs into the openshift-operators project (AllNamespaces); a real cluster documents MetalLB in metallb-system.',
       'The Subscription needs channel, name, source and sourceNamespace; the CSV (not the Subscription) reports Installing → Succeeded.',
     ],
     steps: [
-      { command: `oc new-project operators-lab`, text: 'Create a project to hold operator operands.' },
-      { command: `oc get packagemanifests -n openshift-marketplace`, text: 'Find the operator package, channel and catalog source.' },
-      { command: `oc apply -f examples/subscription.yaml`, text: 'First edit examples/subscription.yaml in the Files panel so metadata.name, spec.name and the package are metallb, then create the Subscription.' },
-      { command: `oc get sub,csv,installplan -n openshift-operators`, text: 'Wait for the CSV to reach Succeeded (oc describe sub metallb shows installedCSV).' },
-      { command: `oc delete subscription metallb -n openshift-operators`, text: 'Uninstall by deleting the Subscription, then the CSV it installed.' },
+      {
+        command: `oc new-project operators-lab`,
+        text: 'Create a project to hold operator operands.',
+      },
+      {
+        command: `oc get packagemanifests -n openshift-marketplace`,
+        text: 'Find the operator package, channel and catalog source.',
+      },
+      {
+        command: `oc apply -f examples/subscription.yaml`,
+        text: 'First edit examples/subscription.yaml in the Files panel so metadata.name, spec.name and the package are metallb, then create the Subscription.',
+      },
+      {
+        command: `oc get sub,csv,installplan -n openshift-operators`,
+        text: 'Wait for the CSV to reach Succeeded (oc describe sub metallb shows installedCSV).',
+      },
+      {
+        command: `oc delete subscription metallb -n openshift-operators`,
+        text: 'Uninstall by deleting the Subscription, then the CSV it installed.',
+      },
     ],
   },
   {
@@ -1305,7 +1391,8 @@ export const EX280_QUICK_LABS = [
     objectiveIds: ['security-jobs', 'security-cronjobs'],
     docsUrl: DOCS.nodes,
     mode: 'sandbox',
-    summary: 'Run a one-time Job to completion and create a CronJob that spawns Jobs on a schedule.',
+    summary:
+      'Run a one-time Job to completion and create a CronJob that spawns Jobs on a schedule.',
     setup: { startingResources: [{ kind: 'Project', name: 'jobs-lab' }], manifestFiles: [] },
     check: [
       { type: 'complete', kind: 'Job', count: 1 },
@@ -1317,9 +1404,15 @@ export const EX280_QUICK_LABS = [
     ],
     steps: [
       { command: `oc new-project jobs-lab`, text: 'Create the project.' },
-      { command: `oc create job pi --image=perl -- perl -Mbignum=bpi -wle 'print bpi(2000)'`, text: 'Create and launch a one-time Job.' },
+      {
+        command: `oc create job pi --image=perl -- perl -Mbignum=bpi -wle 'print bpi(2000)'`,
+        text: 'Create and launch a one-time Job.',
+      },
       { command: `oc get jobs`, text: 'Wait for the Job to show COMPLETIONS 1/1.' },
-      { command: `oc create cronjob pi --image=perl --schedule='*/1 * * * *' -- perl -Mbignum=bpi -wle 'print bpi(2000)'`, text: 'Create a CronJob that runs every minute.' },
+      {
+        command: `oc create cronjob pi --image=perl --schedule='*/1 * * * *' -- perl -Mbignum=bpi -wle 'print bpi(2000)'`,
+        text: 'Create a CronJob that runs every minute.',
+      },
     ],
   },
 ];
@@ -1336,7 +1429,10 @@ export const EX280_CHEATSHEET = [
       { cmd: `oc login -u <user>`, note: 'Interactive login (or oc login --token=<token>).' },
       { cmd: `oc whoami`, note: 'Current user.' },
       { cmd: `oc status`, note: 'Quick overview of the current project.' },
-      { cmd: `oc new-project <name> --display-name="..." --description="..."`, note: 'Create and switch to a project.' },
+      {
+        cmd: `oc new-project <name> --display-name="..." --description="..."`,
+        note: 'Create and switch to a project.',
+      },
       { cmd: `oc projects`, note: 'List projects you can access.' },
       { cmd: `oc project <name>`, note: 'Switch current project.' },
       { cmd: `oc delete project <name>`, note: 'Delete a project and its resources.' },
@@ -1351,8 +1447,14 @@ export const EX280_CHEATSHEET = [
     items: [
       { cmd: `oc get pods -o wide`, note: 'Wide output (node, IP).' },
       { cmd: `oc get deploy -o yaml`, note: 'Full object YAML.' },
-      { cmd: `oc get pods -o jsonpath='{range .items[*]}{.metadata.name}{"\\n"}{end}'`, note: 'Extract fields.' },
-      { cmd: `oc get pods -o custom-columns=NAME:.metadata.name,NODE:.spec.nodeName`, note: 'Tabular custom columns.' },
+      {
+        cmd: `oc get pods -o jsonpath='{range .items[*]}{.metadata.name}{"\\n"}{end}'`,
+        note: 'Extract fields.',
+      },
+      {
+        cmd: `oc get pods -o custom-columns=NAME:.metadata.name,NODE:.spec.nodeName`,
+        note: 'Tabular custom columns.',
+      },
       { cmd: `oc get pods -l app=web --show-labels`, note: 'Filter by label and show labels.' },
       { cmd: `oc get pods --field-selector spec.nodeName=<node>`, note: 'Field selector.' },
       { cmd: `oc get events --sort-by=.lastTimestamp`, note: 'Sort events by recency.' },
@@ -1369,16 +1471,43 @@ export const EX280_CHEATSHEET = [
       { cmd: `oc kustomize <dir>`, note: 'Render Kustomize output without applying.' },
       { cmd: `oc create -f <file>`, note: 'Create from YAML/JSON.' },
       { cmd: `oc replace -f <file>`, note: 'Replace an existing object.' },
-      { cmd: `oc get deploy web -o yaml > web.yaml`, note: 'Export a resource (oc export is removed).' },
+      {
+        cmd: `oc get deploy web -o yaml > web.yaml`,
+        note: 'Export a resource (oc export is removed).',
+      },
       { cmd: `oc diff -f <file>`, note: 'Show differences before applying.' },
-      { cmd: `oc edit <kind>/<name>`, note: 'Live-edit an object. Real oc opens $EDITOR (vi/vim by default) in the terminal; the simulator opens its manifest editor.' },
-      { cmd: `oc extract secret/<name> -n <ns> --to <dir> --confirm`, note: 'Extract a secret (or configmap) to files, e.g. the htpasswd database.' },
-      { cmd: `oc set data secret/<name> -n <ns> --from-file=<key>=<path>`, note: 'Update one key in an existing secret/configmap (password rotation).' },
-      { cmd: `oc create secret generic <name> --from-file=<key>=<path> --dry-run=client -o yaml -n <ns> | oc replace -f -`, note: 'Alternative rotate pipeline — one correctly piped command.' },
-      { cmd: `oc create secret generic <name> --from-literal=K=V --from-file=<key>=<path>`, note: 'Create an Opaque secret.' },
-      { cmd: `oc create secret tls <name> --cert=tls.crt --key=tls.key`, note: 'Create a kubernetes.io/tls secret.' },
-      { cmd: `oc create configmap <name> --from-literal=K=V --from-file=<path> --from-env-file=<file>`, note: 'Create a ConfigMap.' },
-      { cmd: `oc set env deployment/web --from=secret/<name>`, note: 'Inject a secret into env vars.' },
+      {
+        cmd: `oc edit <kind>/<name>`,
+        note: 'Live-edit an object. Real oc opens $EDITOR (vi/vim by default) in the terminal; the simulator opens its manifest editor.',
+      },
+      {
+        cmd: `oc extract secret/<name> -n <ns> --to <dir> --confirm`,
+        note: 'Extract a secret (or configmap) to files, e.g. the htpasswd database.',
+      },
+      {
+        cmd: `oc set data secret/<name> -n <ns> --from-file=<key>=<path>`,
+        note: 'Update one key in an existing secret/configmap (password rotation).',
+      },
+      {
+        cmd: `oc create secret generic <name> --from-file=<key>=<path> --dry-run=client -o yaml -n <ns> | oc replace -f -`,
+        note: 'Alternative rotate pipeline — one correctly piped command.',
+      },
+      {
+        cmd: `oc create secret generic <name> --from-literal=K=V --from-file=<key>=<path>`,
+        note: 'Create an Opaque secret.',
+      },
+      {
+        cmd: `oc create secret tls <name> --cert=tls.crt --key=tls.key`,
+        note: 'Create a kubernetes.io/tls secret.',
+      },
+      {
+        cmd: `oc create configmap <name> --from-literal=K=V --from-file=<path> --from-env-file=<file>`,
+        note: 'Create a ConfigMap.',
+      },
+      {
+        cmd: `oc set env deployment/web --from=secret/<name>`,
+        note: 'Inject a secret into env vars.',
+      },
     ],
   },
   {
@@ -1386,22 +1515,49 @@ export const EX280_CHEATSHEET = [
     title: 'Workloads, rollouts, services',
     docsUrl: DOCS.buildingApps,
     items: [
-      { cmd: `oc new-app <git-url> --name=<name>`, note: 'Create an app from source (BuildConfig chain).' },
+      {
+        cmd: `oc new-app <git-url> --name=<name>`,
+        note: 'Create an app from source (BuildConfig chain).',
+      },
       { cmd: `oc new-app --image=<image> --name=<name>`, note: 'Create an app from an image.' },
       { cmd: `oc rollout status deployment/<name>`, note: 'Wait for a rollout.' },
       { cmd: `oc rollout history deployment/<name>`, note: 'List revisions.' },
       { cmd: `oc rollout undo deployment/<name>`, note: 'Roll back to the previous revision.' },
       { cmd: `oc rollout restart deployment/<name>`, note: 'Restart pods with a new ReplicaSet.' },
-      { cmd: `oc set image deployment/<name> <container>=<image>`, note: 'Update a deployment image.' },
+      {
+        cmd: `oc set image deployment/<name> <container>=<image>`,
+        note: 'Update a deployment image.',
+      },
       { cmd: `oc scale deployment/<name> --replicas=<n>`, note: 'Scale a deployment.' },
-      { cmd: `oc set resources deployment <name> -c=<container> --limits=cpu=200m,memory=512Mi`, note: 'Set requests/limits.' },
-      { cmd: `oc set triggers deploy/<name> --from-image=<is>:<tag> -c <container>`, note: 'Image change trigger.' },
+      {
+        cmd: `oc set resources deployment <name> -c=<container> --limits=cpu=200m,memory=512Mi`,
+        note: 'Set requests/limits.',
+      },
+      {
+        cmd: `oc set triggers deploy/<name> --from-image=<is>:<tag> -c <container>`,
+        note: 'Image change trigger.',
+      },
       { cmd: `oc expose svc/<name>`, note: 'Create an HTTP route for a service.' },
-      { cmd: `oc create route edge <name> --service=<svc> --cert=tls.crt --key=tls.key`, note: 'Edge TLS route.' },
-      { cmd: `oc create route passthrough <name> --service=<svc> --port=8080`, note: 'Passthrough TLS route.' },
-      { cmd: `oc create service loadbalancer <name> --tcp=8080:8080`, note: 'LoadBalancer service for non-HTTP.' },
-      { cmd: `oc create service nodeport <name> --tcp=3306:3306`, note: 'NodePort service (30000-32767).' },
-      { cmd: `oc get ingresses.config/cluster -o jsonpath={.spec.domain}`, note: 'Default apps domain.' },
+      {
+        cmd: `oc create route edge <name> --service=<svc> --cert=tls.crt --key=tls.key`,
+        note: 'Edge TLS route.',
+      },
+      {
+        cmd: `oc create route passthrough <name> --service=<svc> --port=8080`,
+        note: 'Passthrough TLS route.',
+      },
+      {
+        cmd: `oc create service loadbalancer <name> --tcp=8080:8080`,
+        note: 'LoadBalancer service for non-HTTP.',
+      },
+      {
+        cmd: `oc create service nodeport <name> --tcp=3306:3306`,
+        note: 'NodePort service (30000-32767).',
+      },
+      {
+        cmd: `oc get ingresses.config/cluster -o jsonpath={.spec.domain}`,
+        note: 'Default apps domain.',
+      },
     ],
   },
   {
@@ -1416,8 +1572,14 @@ export const EX280_CHEATSHEET = [
       { cmd: `oc describe istag/<is>:<tag>`, note: 'One ImageStreamTag in detail.' },
       { cmd: `oc tag <source> <dest-is>:<tag>`, note: 'Create a permanent tag.' },
       { cmd: `oc tag --alias=true <source> <dest-is>:<tag>`, note: 'Create a tracking tag.' },
-      { cmd: `oc import-image <istag> --from=<image> --confirm`, note: 'Import an external image.' },
-      { cmd: `oc delete bc <name>`, note: 'Delete a BuildConfig (add --cascade=orphan to avoid cascading dependent objects).' },
+      {
+        cmd: `oc import-image <istag> --from=<image> --confirm`,
+        note: 'Import an external image.',
+      },
+      {
+        cmd: `oc delete bc <name>`,
+        note: 'Delete a BuildConfig (add --cascade=orphan to avoid cascading dependent objects).',
+      },
     ],
   },
   {
@@ -1425,19 +1587,46 @@ export const EX280_CHEATSHEET = [
     title: 'Users, groups, RBAC',
     docsUrl: DOCS.auth,
     items: [
-      { cmd: `htpasswd -c -B -b users.htpasswd <user> <password>`, note: 'Create the htpasswd file.' },
-      { cmd: `oc create secret generic htpass-secret --from-file=htpasswd=users.htpasswd -n openshift-config`, note: 'HTPasswd secret.' },
+      {
+        cmd: `htpasswd -c -B -b users.htpasswd <user> <password>`,
+        note: 'Create the htpasswd file.',
+      },
+      {
+        cmd: `oc create secret generic htpass-secret --from-file=htpasswd=users.htpasswd -n openshift-config`,
+        note: 'HTPasswd secret.',
+      },
       { cmd: `oc edit oauth cluster`, note: 'Configure the OAuth CR (type HTPasswd).' },
-      { cmd: `oc create user <name> --full-name="..."`, note: 'Create a User object (power user).' },
-      { cmd: `oc delete user <name>; oc delete identity <provider>:<name>`, note: 'Remove a user completely.' },
+      {
+        cmd: `oc create user <name> --full-name="..."`,
+        note: 'Create a User object (power user).',
+      },
+      {
+        cmd: `oc delete user <name>; oc delete identity <provider>:<name>`,
+        note: 'Remove a user completely.',
+      },
       { cmd: `oc adm groups new <group> <users...>`, note: 'Create a group.' },
       { cmd: `oc adm groups add-users <group> <users...>`, note: 'Manage membership.' },
-      { cmd: `oc adm policy add-role-to-user <role> <user> -n <ns>`, note: 'Namespace role binding.' },
-      { cmd: `oc adm policy add-role-to-group <role> <group> -n <ns>`, note: 'Group role binding.' },
-      { cmd: `oc adm policy add-cluster-role-to-user <role> <user>`, note: 'Cluster-wide role binding.' },
-      { cmd: `oc create role <name> --verb=get,list,watch --resource=pods,configmaps -n <ns>`, note: 'Custom namespaced role (comma-separated --verb/--resource flags).' },
+      {
+        cmd: `oc adm policy add-role-to-user <role> <user> -n <ns>`,
+        note: 'Namespace role binding.',
+      },
+      {
+        cmd: `oc adm policy add-role-to-group <role> <group> -n <ns>`,
+        note: 'Group role binding.',
+      },
+      {
+        cmd: `oc adm policy add-cluster-role-to-user <role> <user>`,
+        note: 'Cluster-wide role binding.',
+      },
+      {
+        cmd: `oc create role <name> --verb=get,list,watch --resource=pods,configmaps -n <ns>`,
+        note: 'Custom namespaced role (comma-separated --verb/--resource flags).',
+      },
       { cmd: `oc auth can-i <verb> <resource> -n <ns>`, note: 'Check permissions.' },
-      { cmd: `oc auth can-i list pods --as=system:serviceaccount:<ns>:<sa>`, note: 'Check as a service account.' },
+      {
+        cmd: `oc auth can-i list pods --as=system:serviceaccount:<ns>:<sa>`,
+        note: 'Check as a service account.',
+      },
     ],
   },
   {
@@ -1450,12 +1639,18 @@ export const EX280_CHEATSHEET = [
       { cmd: `oc set serviceaccount deployment <deploy> <sa>`, note: 'Run a workload as an SA.' },
       { cmd: `oc get scc`, note: 'List security context constraints.' },
       { cmd: `oc describe scc <name>`, note: 'Inspect an SCC.' },
-      { cmd: `oc adm policy add-scc-to-user <scc> -z <sa>`, note: 'Grant an SCC to a service account.' },
+      {
+        cmd: `oc adm policy add-scc-to-user <scc> -z <sa>`,
+        note: 'Grant an SCC to a service account.',
+      },
       { cmd: `oc adm policy add-scc-to-group <scc> <group>`, note: 'Grant an SCC to a group.' },
       { cmd: `oc adm policy who-can use scc <scc>`, note: 'Who can use an SCC.' },
       { cmd: `oc auth can-i use scc/<scc>`, note: 'Check SCC RBAC only.' },
       { cmd: `oc create job <name> --image=<img> -- <cmd>`, note: 'One-time Job.' },
-      { cmd: `oc create cronjob <name> --image=<img> --schedule='*/1 * * * *' -- <cmd>`, note: 'Scheduled Job.' },
+      {
+        cmd: `oc create cronjob <name> --image=<img> --schedule='*/1 * * * *' -- <cmd>`,
+        note: 'Scheduled Job.',
+      },
     ],
   },
   {
@@ -1463,17 +1658,38 @@ export const EX280_CHEATSHEET = [
     title: 'Quotas & self-service',
     docsUrl: DOCS.quotas,
     items: [
-      { cmd: `oc create quota <name> --hard=pods=4,requests.cpu=1,limits.memory=2Gi`, note: 'Project ResourceQuota.' },
-      { cmd: `oc create quota <name> --hard=count/deployments.apps=2`, note: 'Object-count quota.' },
-      { cmd: `oc create clusterquota <name> --project-label-selector=k=v --hard=pods=10`, note: 'ClusterResourceQuota by label.' },
-      { cmd: `oc describe AppliedClusterResourceQuota -n <ns>`, note: 'Quota applied to a project.' },
+      {
+        cmd: `oc create quota <name> --hard=pods=4,requests.cpu=1,limits.memory=2Gi`,
+        note: 'Project ResourceQuota.',
+      },
+      {
+        cmd: `oc create quota <name> --hard=count/deployments.apps=2`,
+        note: 'Object-count quota.',
+      },
+      {
+        cmd: `oc create clusterquota <name> --project-label-selector=k=v --hard=pods=10`,
+        note: 'ClusterResourceQuota by label.',
+      },
+      {
+        cmd: `oc describe AppliedClusterResourceQuota -n <ns>`,
+        note: 'Quota applied to a project.',
+      },
       { cmd: `oc create -f examples/limitrange.yaml -n <ns>`, note: 'Create a LimitRange.' },
       { cmd: `oc get limits -n <ns>`, note: 'List LimitRanges.' },
       { cmd: `oc describe limits <name> -n <ns>`, note: 'Inspect limits/defaults.' },
-      { cmd: `oc adm create-bootstrap-project-template -o yaml > template.yaml`, note: 'Generate the default project-request template (4.22: a fresh cluster has no stored template until you create one).' },
-      { cmd: `oc create -f template.yaml -n openshift-config`, note: 'Store the customized project template.' },
+      {
+        cmd: `oc adm create-bootstrap-project-template -o yaml > template.yaml`,
+        note: 'Generate the default project-request template (4.22: a fresh cluster has no stored template until you create one).',
+      },
+      {
+        cmd: `oc create -f template.yaml -n openshift-config`,
+        note: 'Store the customized project template.',
+      },
       { cmd: `oc get templates -n openshift-config`, note: 'Stored project templates.' },
-      { cmd: `oc edit project.config.openshift.io/cluster`, note: 'Point spec.projectRequestTemplate.name at project-request ($EDITOR=vi/vim on a real cluster; simulator opens the manifest editor).' },
+      {
+        cmd: `oc edit project.config.openshift.io/cluster`,
+        note: 'Point spec.projectRequestTemplate.name at project-request ($EDITOR=vi/vim on a real cluster; simulator opens the manifest editor).',
+      },
       { cmd: `oc new-project <name>`, note: 'New projects inherit the template objects.' },
     ],
   },
@@ -1483,12 +1699,24 @@ export const EX280_CHEATSHEET = [
     docsUrl: DOCS.operators,
     items: [
       { cmd: `oc get packagemanifests -n openshift-marketplace`, note: 'Catalog packages.' },
-      { cmd: `oc describe packagemanifests <operator> -n openshift-marketplace`, note: 'Channels/install modes.' },
-      { cmd: `oc get operatorgroup -n <ns>`, note: 'Inspect OperatorGroups (required for SingleNamespace installs).' },
-      { cmd: `oc apply -f examples/subscription.yaml`, note: 'Subscribe to an operator (shipped local example).' },
+      {
+        cmd: `oc describe packagemanifests <operator> -n openshift-marketplace`,
+        note: 'Channels/install modes.',
+      },
+      {
+        cmd: `oc get operatorgroup -n <ns>`,
+        note: 'Inspect OperatorGroups (required for SingleNamespace installs).',
+      },
+      {
+        cmd: `oc apply -f examples/subscription.yaml`,
+        note: 'Subscribe to an operator (shipped local example).',
+      },
       { cmd: `oc get sub,csv,installplan -n <ns>`, note: 'Operator install status.' },
       { cmd: `oc describe sub <name> -n <ns>`, note: 'Conditions and installedCSV.' },
-      { cmd: `oc delete subscription.operators.coreos.com <name> -n <ns>`, note: 'Uninstall: delete subscription.' },
+      {
+        cmd: `oc delete subscription.operators.coreos.com <name> -n <ns>`,
+        note: 'Uninstall: delete subscription.',
+      },
       { cmd: `oc delete clusterserviceversion <csv> -n <ns>`, note: 'Delete the CSV.' },
     ],
   },
@@ -1512,7 +1740,10 @@ export const EX280_CHEATSHEET = [
       { cmd: `oc adm must-gather`, note: 'Collect diagnostics.' },
       { cmd: `oc adm inspect clusteroperator`, note: 'Namespace/operator dump.' },
       { cmd: `oc get network/cluster -o yaml`, note: 'Cluster network config.' },
-      { cmd: `oc get ingresscontroller -n openshift-ingress-operator`, note: 'Ingress controller/router config.' },
+      {
+        cmd: `oc get ingresscontroller -n openshift-ingress-operator`,
+        note: 'Ingress controller/router config.',
+      },
     ],
   },
 ];
@@ -1525,7 +1756,7 @@ export const EX280_OBJECTIVE_BULLETS = EX280_OBJECTIVE_GROUPS.flatMap((group) =>
     ...bullet,
     groupId: group.id,
     groupTitle: group.title,
-  })),
+  }))
 );
 
 export const EX280_OBJECTIVE_COUNT = EX280_OBJECTIVE_BULLETS.length;

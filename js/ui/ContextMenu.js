@@ -20,9 +20,25 @@
 
 import { KIND_DEFS, isClusterScopedKind } from '../data/kindRegistry.js';
 
-const DELETE_ACTION = { id: 'delete', label: 'Delete', shortcut: 'Del', event: 'resource:delete', danger: true };
-const EDIT_ACTION = { id: 'edit-yaml', label: 'Edit YAML', shortcut: 'Y', event: 'ui:edit-resource' };
-const DESCRIBE_ACTION = { id: 'describe', label: 'Describe', shortcut: 'D', event: 'resource:describe' };
+const DELETE_ACTION = {
+  id: 'delete',
+  label: 'Delete',
+  shortcut: 'Del',
+  event: 'resource:delete',
+  danger: true,
+};
+const EDIT_ACTION = {
+  id: 'edit-yaml',
+  label: 'Edit YAML',
+  shortcut: 'Y',
+  event: 'ui:edit-resource',
+};
+const DESCRIBE_ACTION = {
+  id: 'describe',
+  label: 'Describe',
+  shortcut: 'D',
+  event: 'resource:describe',
+};
 const LOGS_KINDS = new Set(['Pod', 'Deployment', 'BuildConfig', 'Build']);
 const SCALE_KINDS = new Set(['Deployment', 'ReplicaSet', 'StatefulSet']);
 const ROLLOUT_KINDS = new Set(['Deployment', 'ReplicaSet', 'StatefulSet', 'DaemonSet']);
@@ -66,7 +82,9 @@ export class ContextMenu {
         this._ignoreNextContextMenu = true;
         // The engine event is emitted from the native contextmenu handler; keep
         // the close-on-right-click guard from swallowing a later, unrelated click.
-        setTimeout(() => { this._ignoreNextContextMenu = false; }, 0);
+        setTimeout(() => {
+          this._ignoreNextContextMenu = false;
+        }, 0);
         this.show(data.x ?? 0, data.y ?? 0);
       };
       this._deleteHandler = () => this.hide();
@@ -149,29 +167,72 @@ export class ContextMenu {
     const inspect = [DESCRIBE_ACTION];
 
     if (LOGS_KINDS.has(kind)) {
-      const ref = kind === 'BuildConfig' ? `bc/${resource.metadata?.name}` : kind === 'Build' ? `build/${resource.metadata?.name}` : kind === 'Deployment' ? `deploy/${resource.metadata?.name}` : resource.metadata?.name;
-      inspect.push({ id: 'logs', label: 'View Logs', shortcut: 'L', event: 'pod:logs', command: `logs ${ref}${this._nsFlag()}` });
+      const ref =
+        kind === 'BuildConfig'
+          ? `bc/${resource.metadata?.name}`
+          : kind === 'Build'
+            ? `build/${resource.metadata?.name}`
+            : kind === 'Deployment'
+              ? `deploy/${resource.metadata?.name}`
+              : resource.metadata?.name;
+      inspect.push({
+        id: 'logs',
+        label: 'View Logs',
+        shortcut: 'L',
+        event: 'pod:logs',
+        command: `logs ${ref}${this._nsFlag()}`,
+      });
     }
-    inspect.push({ id: 'investigate', label: 'Investigate', shortcut: 'I', event: 'ui:investigate-resource' });
+    inspect.push({
+      id: 'investigate',
+      label: 'Investigate',
+      shortcut: 'I',
+      event: 'ui:investigate-resource',
+    });
     groups.push({ group: 'inspect', actions: inspect });
 
     const manage = [];
     switch (kind) {
       case 'Service':
-        manage.push({ id: 'expose', label: 'Expose Service → Route', shortcut: 'E', event: 'service:expose' });
+        manage.push({
+          id: 'expose',
+          label: 'Expose Service → Route',
+          shortcut: 'E',
+          event: 'service:expose',
+        });
         break;
       case 'BuildConfig':
-        manage.push({ id: 'start-build', label: 'Start Build', shortcut: 'B', event: 'build:start' });
+        manage.push({
+          id: 'start-build',
+          label: 'Start Build',
+          shortcut: 'B',
+          event: 'build:start',
+        });
         break;
       case 'Deployment':
       case 'ReplicaSet':
       case 'StatefulSet':
         manage.push({ id: 'scale', label: 'Scale', shortcut: 'S', event: 'deployment:scale' });
-        manage.push({ id: 'rollout-restart', label: 'Rollout Restart', shortcut: 'R', event: 'deployment:restart' });
-        manage.push({ id: 'rollout-undo', label: 'Rollout Undo', shortcut: 'U', event: 'deployment:rollback' });
+        manage.push({
+          id: 'rollout-restart',
+          label: 'Rollout Restart',
+          shortcut: 'R',
+          event: 'deployment:restart',
+        });
+        manage.push({
+          id: 'rollout-undo',
+          label: 'Rollout Undo',
+          shortcut: 'U',
+          event: 'deployment:rollback',
+        });
         break;
       case 'DaemonSet':
-        manage.push({ id: 'rollout-restart', label: 'Rollout Restart', shortcut: 'R', event: 'deployment:restart' });
+        manage.push({
+          id: 'rollout-restart',
+          label: 'Rollout Restart',
+          shortcut: 'R',
+          event: 'deployment:restart',
+        });
         break;
       case 'Node':
         manage.push({
@@ -184,7 +245,12 @@ export class ContextMenu {
         manage.push({ id: 'top-node', label: 'Top Node', shortcut: 'T', event: 'node:top' });
         break;
       case 'Project':
-        manage.push({ id: 'switch-project', label: 'Switch to Project', shortcut: 'P', event: 'project:switch' });
+        manage.push({
+          id: 'switch-project',
+          label: 'Switch to Project',
+          shortcut: 'P',
+          event: 'project:switch',
+        });
         break;
       case 'User':
       case 'Group':
@@ -192,7 +258,12 @@ export class ContextMenu {
         manage.push({ id: 'add-scc', label: 'Add to SCC', shortcut: 'A', event: 'scc:add' });
         break;
       case 'SecurityContextConstraints':
-        manage.push({ id: 'grant-scc-current', label: 'Add to SCC', shortcut: 'A', event: 'scc:grant' });
+        manage.push({
+          id: 'grant-scc-current',
+          label: 'Add to SCC',
+          shortcut: 'A',
+          event: 'scc:grant',
+        });
         break;
       case 'Subscription':
         manage.push({
@@ -220,7 +291,9 @@ export class ContextMenu {
     const name = this.resource.metadata?.name || 'unnamed';
     const def = KIND_DEFS[kind] || {};
     const apiVersion = this.resource.apiVersion || def.apiVersion || '';
-    const scope = isClusterScopedKind(kind) ? 'cluster-scoped' : (this.resource.metadata?.namespace || 'default');
+    const scope = isClusterScopedKind(kind)
+      ? 'cluster-scoped'
+      : this.resource.metadata?.namespace || 'default';
     const groups = this._actionsFor(this.resource);
 
     this.container.innerHTML = `
@@ -229,10 +302,14 @@ export class ContextMenu {
           <div class="text-white/90 text-xs font-medium truncate" data-testid="context-menu-title">${this._escapeHTML(name)}</div>
           <div class="text-white/30 text-[10px] truncate">${this._escapeHTML(kind)}${apiVersion ? ` · ${this._escapeHTML(apiVersion)}` : ''} · ${this._escapeHTML(scope)}</div>
         </div>
-        ${groups.map((group, groupIndex) => `
+        ${groups
+          .map(
+            (group, groupIndex) => `
           ${groupIndex > 0 ? '<div class="h-px bg-white/5"></div>' : ''}
           <div class="py-1" role="group">
-            ${group.actions.map((action) => `
+            ${group.actions
+              .map(
+                (action) => `
               <button
                 class="w-full flex items-center justify-between px-3 py-1.5 text-xs transition-colors ${action.danger ? 'text-red-400 hover:bg-red-400/10' : 'text-white/70 hover:bg-white/5'}"
                 data-action-id="${this._escapeHTML(action.id)}"
@@ -244,9 +321,13 @@ export class ContextMenu {
                 <span>${this._escapeHTML(action.label)}</span>
                 <span class="text-white/20 text-[10px] ml-4">${this._escapeHTML(action.shortcut || '')}</span>
               </button>
-            `).join('')}
+            `
+              )
+              .join('')}
           </div>
-        `).join('')}
+        `
+          )
+          .join('')}
         <div class="px-3 py-1.5 border-t border-white/5 text-[9px] text-white/20 flex items-center justify-between">
           <span>OpenShift 4.22 · oc</span>
           <span>Esc to close</span>
@@ -273,7 +354,9 @@ export class ContextMenu {
     this._opener = document.activeElement;
     document.addEventListener('click', this._boundClose);
     document.addEventListener('keydown', this._boundKeydown);
-    requestAnimationFrame(() => this.container?.querySelector('[data-action-id]')?.focus?.({ preventScroll: true }));
+    requestAnimationFrame(() =>
+      this.container?.querySelector('[data-action-id]')?.focus?.({ preventScroll: true })
+    );
   }
 
   hide() {
@@ -284,7 +367,11 @@ export class ContextMenu {
     document.removeEventListener('click', this._boundClose);
     document.removeEventListener('keydown', this._boundKeydown);
     if (this._opener && this._opener.isConnected) {
-      try { this._opener.focus({ preventScroll: true }); } catch { /* detached */ }
+      try {
+        this._opener.focus({ preventScroll: true });
+      } catch {
+        /* detached */
+      }
     }
     this._opener = null;
   }
@@ -310,13 +397,19 @@ export class ContextMenu {
       this.hide();
       return;
     }
-    if (event.key === 'ArrowDown' || event.key === 'ArrowUp' || event.key === 'Home' || event.key === 'End') {
+    if (
+      event.key === 'ArrowDown' ||
+      event.key === 'ArrowUp' ||
+      event.key === 'Home' ||
+      event.key === 'End'
+    ) {
       const items = [...(this.container?.querySelectorAll('[data-action-id]') || [])];
       if (items.length === 0) return;
       const index = items.indexOf(document.activeElement);
       let next = 0;
       if (event.key === 'ArrowDown') next = index < 0 ? 0 : (index + 1) % items.length;
-      else if (event.key === 'ArrowUp') next = index < 0 ? items.length - 1 : (index - 1 + items.length) % items.length;
+      else if (event.key === 'ArrowUp')
+        next = index < 0 ? items.length - 1 : (index - 1 + items.length) % items.length;
       else if (event.key === 'End') next = items.length - 1;
       event.preventDefault();
       items[next]?.focus?.({ preventScroll: true });
@@ -324,15 +417,24 @@ export class ContextMenu {
     }
     if (!this.resource) return;
     const target = event.target;
-    if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT' || target.isContentEditable)) return;
+    if (
+      target &&
+      (target.tagName === 'INPUT' ||
+        target.tagName === 'TEXTAREA' ||
+        target.tagName === 'SELECT' ||
+        target.isContentEditable)
+    )
+      return;
     if (event.ctrlKey || event.metaKey || event.altKey) return;
 
     const key = event.key;
     for (const group of this._actionsFor(this.resource)) {
       for (const action of group.actions) {
         if (!action.shortcut) continue;
-        const matchesLetter = action.shortcut.length === 1 && action.shortcut.toLowerCase() === key.toLowerCase();
-        const matchesDelete = action.shortcut === 'Del' && (key === 'Delete' || key === 'Backspace');
+        const matchesLetter =
+          action.shortcut.length === 1 && action.shortcut.toLowerCase() === key.toLowerCase();
+        const matchesDelete =
+          action.shortcut === 'Del' && (key === 'Delete' || key === 'Backspace');
         if (matchesLetter || matchesDelete) {
           event.preventDefault();
           this._executeAction(action);
@@ -347,7 +449,9 @@ export class ContextMenu {
     const button = event.target.closest?.('[data-action-id]');
     if (!button || !this.container?.contains(button)) return;
     const actionId = button.dataset.actionId;
-    const action = this._allActions().find((candidate) => candidate.id === actionId) || { id: actionId };
+    const action = this._allActions().find((candidate) => candidate.id === actionId) || {
+      id: actionId,
+    };
     if (button.dataset.command) action.command = button.dataset.command;
     this._executeAction(action);
     this.hide();
@@ -449,7 +553,8 @@ export class ContextMenu {
             result = null;
           }
         }
-        if (!result) this._runCommand(`rollout ${subcommand} ${kind || 'Deployment'}/${name}${nsFlag}`);
+        if (!result)
+          this._runCommand(`rollout ${subcommand} ${kind || 'Deployment'}/${name}${nsFlag}`);
         return;
       }
 
@@ -531,7 +636,13 @@ export class ContextMenu {
         if (!result && cluster?.remove && uid && cluster.getResource?.(uid)) {
           cluster.remove(uid);
         }
-        this._emit('resource:deleted', { uid, kind, name, namespace, message: result?.message || '' });
+        this._emit('resource:deleted', {
+          uid,
+          kind,
+          name,
+          namespace,
+          message: result?.message || '',
+        });
         return;
       }
 
@@ -560,19 +671,27 @@ export class ContextMenu {
       this._emit('ui:run-command', { command });
       return;
     }
-    this._emit('ui:edit-resource', { uid: resource.metadata?.uid, kind, name, namespace: resource.metadata?.namespace });
+    this._emit('ui:edit-resource', {
+      uid: resource.metadata?.uid,
+      kind,
+      name,
+      namespace: resource.metadata?.namespace,
+    });
   }
 
   _bestSCCName() {
     const cluster = this._cluster();
     let sccs = [];
     try {
-      sccs = cluster?.getResourcesByKind?.('SecurityContextConstraints') || cluster?.getByKind?.('SecurityContextConstraints') || [];
+      sccs =
+        cluster?.getResourcesByKind?.('SecurityContextConstraints') ||
+        cluster?.getByKind?.('SecurityContextConstraints') ||
+        [];
     } catch {
       sccs = [];
     }
     const names = sccs.map((scc) => scc.metadata?.name).filter(Boolean);
-    return names.includes('anyuid') ? 'anyuid' : (names[0] || 'anyuid');
+    return names.includes('anyuid') ? 'anyuid' : names[0] || 'anyuid';
   }
 
   _addToSCC(resource, gameEngine, nsFlag) {
@@ -582,7 +701,9 @@ export class ContextMenu {
     let result = null;
     try {
       if (kind === 'ServiceAccount' && typeof gameEngine?.addSCCToServiceAccount === 'function') {
-        result = gameEngine.addSCCToServiceAccount(sccName, name, { namespace: resource.metadata?.namespace });
+        result = gameEngine.addSCCToServiceAccount(sccName, name, {
+          namespace: resource.metadata?.namespace,
+        });
       } else if (kind === 'Group' && typeof gameEngine?.addSCCToGroup === 'function') {
         result = gameEngine.addSCCToGroup(sccName, name);
       } else if (typeof gameEngine?.addSCCToUser === 'function' && kind === 'User') {
@@ -630,7 +751,9 @@ export class ContextMenu {
       }
     }
     if (!result) {
-      this._runCommand(`create -f examples/subscription.yaml -n ${namespace || 'openshift-operators'}`);
+      this._runCommand(
+        `create -f examples/subscription.yaml -n ${namespace || 'openshift-operators'}`
+      );
     }
   }
 

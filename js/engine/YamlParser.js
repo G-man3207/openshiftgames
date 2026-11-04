@@ -50,7 +50,9 @@ export class YamlParseError extends Error {
 /** @param {string} text @param {{file?: string}} [opts] @returns {object[]} */
 export function parseYaml(text, opts = {}) {
   const file = opts.file;
-  const source = String(text ?? '').replace(/^\uFEFF/, '').replace(/\r\n?/g, '\n');
+  const source = String(text ?? '')
+    .replace(/^\uFEFF/, '')
+    .replace(/\r\n?/g, '\n');
   const rawLines = source.split('\n');
   /** @type {Array<Array<object>>} */
   const docSegments = [];
@@ -64,13 +66,20 @@ export function parseYaml(text, opts = {}) {
       current.push({ text: raw, lineNo: i + 1, indent, tabbed, content: '' });
       continue;
     }
-    if (indent === 0 && (trimmed === '---' || trimmed.startsWith('--- ') || trimmed.startsWith('---#'))) {
+    if (
+      indent === 0 &&
+      (trimmed === '---' || trimmed.startsWith('--- ') || trimmed.startsWith('---#'))
+    ) {
       // `---` starts a new document. Anything after the marker is a directive
       // or a complete document value; both are outside the practical subset.
       let rest = trimmed.slice(3).trim();
       if (rest.startsWith('#')) rest = '';
       if (rest) {
-        throw new YamlParseError('content after "---" document marker is not supported', i + 1, file);
+        throw new YamlParseError(
+          'content after "---" document marker is not supported',
+          i + 1,
+          file
+        );
       }
       docSegments.push(current);
       current = [];
@@ -204,7 +213,10 @@ function _parseSequence(tokens, index, indent, file) {
 
     const dash = line.text.indexOf('-', indent);
     let contentStart = dash + 1;
-    while (contentStart < line.text.length && (line.text[contentStart] === ' ' || line.text[contentStart] === '\t')) {
+    while (
+      contentStart < line.text.length &&
+      (line.text[contentStart] === ' ' || line.text[contentStart] === '\t')
+    ) {
       contentStart++;
     }
     const inline = line.text.slice(contentStart).replace(/\s+$/, '');
@@ -271,7 +283,11 @@ function _parseMapping(tokens, index, indent, file) {
 
     const colon = _findMappingColon(line.content);
     if (colon === -1) {
-      throw new YamlParseError(`could not find expected ':' in "${line.content}"`, line.lineNo, file);
+      throw new YamlParseError(
+        `could not find expected ':' in "${line.content}"`,
+        line.lineNo,
+        file
+      );
     }
     const key = _parseKey(line.content.slice(0, colon), line.lineNo, file);
     const restRaw = line.content.slice(colon + 1);
@@ -284,7 +300,11 @@ function _parseMapping(tokens, index, indent, file) {
         const nested = _parseNode(tokens, next, tokens[next].indent, file);
         value = nested.value;
         i = nested.index;
-      } else if (next < tokens.length && tokens[next].indent === indent && _isSeqIndicator(tokens[next].content)) {
+      } else if (
+        next < tokens.length &&
+        tokens[next].indent === indent &&
+        _isSeqIndicator(tokens[next].content)
+      ) {
         const nested = _parseSequence(tokens, next, indent, file);
         value = nested.value;
         i = nested.index;
@@ -341,7 +361,8 @@ function _findMappingColon(content) {
       continue;
     }
     if (ch === '#' && (i === 0 || /\s/.test(content[i - 1]))) return -1;
-    if (ch === ':' && depth === 0 && (i + 1 === content.length || /\s/.test(content[i + 1]))) return i;
+    if (ch === ':' && depth === 0 && (i + 1 === content.length || /\s/.test(content[i + 1])))
+      return i;
   }
   return -1;
 }
@@ -441,16 +462,36 @@ function _parseQuoted(text, lineNo, file) {
     if (ch === '\\') {
       const next = text[i + 1];
       switch (next) {
-        case 'n': out += '\n'; break;
-        case 't': out += '\t'; break;
-        case 'r': out += '\r'; break;
-        case 'b': out += '\b'; break;
-        case 'f': out += '\f'; break;
-        case '0': out += '\0'; break;
-        case '"': out += '"'; break;
-        case '\\': out += '\\'; break;
-        case '/': out += '/'; break;
-        case ' ': out += ' '; break;
+        case 'n':
+          out += '\n';
+          break;
+        case 't':
+          out += '\t';
+          break;
+        case 'r':
+          out += '\r';
+          break;
+        case 'b':
+          out += '\b';
+          break;
+        case 'f':
+          out += '\f';
+          break;
+        case '0':
+          out += '\0';
+          break;
+        case '"':
+          out += '"';
+          break;
+        case '\\':
+          out += '\\';
+          break;
+        case '/':
+          out += '/';
+          break;
+        case ' ':
+          out += ' ';
+          break;
         case 'u': {
           const hex = text.slice(i + 2, i + 6);
           if (!/^[0-9a-fA-F]{4}$/.test(hex)) {
@@ -494,7 +535,10 @@ function _inferScalar(s) {
     return str;
   }
   if (/^0x[0-9a-fA-F]+$/.test(str)) return parseInt(str, 16);
-  if (/^[-+]?(?:[0-9]+\.[0-9]*|\.[0-9]+|[0-9]+)(?:[eE][-+]?[0-9]+)?$/.test(str) && /[.eE]/.test(str)) {
+  if (
+    /^[-+]?(?:[0-9]+\.[0-9]*|\.[0-9]+|[0-9]+)(?:[eE][-+]?[0-9]+)?$/.test(str) &&
+    /[.eE]/.test(str)
+  ) {
     const n = Number(str);
     if (Number.isFinite(n)) return n;
   }
@@ -552,7 +596,11 @@ function _parseFlowValue(text, lineNo, file) {
   const value = parser.parseNode();
   parser.skipSpace();
   if (!parser.done()) {
-    throw new YamlParseError(`unexpected content in flow collection: "${parser.rest()}"`, lineNo, file);
+    throw new YamlParseError(
+      `unexpected content in flow collection: "${parser.rest()}"`,
+      lineNo,
+      file
+    );
   }
   return value;
 }
@@ -690,7 +738,10 @@ class _FlowParser {
       this.i++;
     }
     // YAML folds line breaks in flow plain scalars into a single space.
-    const raw = this.text.slice(start, this.i).replace(/\s*\n\s*/g, ' ').trim();
+    const raw = this.text
+      .slice(start, this.i)
+      .replace(/\s*\n\s*/g, ' ')
+      .trim();
     return _inferScalar(raw);
   }
 }
@@ -742,7 +793,8 @@ function _parseBlockScalar(tokens, startIndex, parentIndent, header, lineNo, fil
   else body = _foldBlockLines(contentLines);
 
   if (chomp === '-') body = body.replace(/\n+$/, '');
-  else if (chomp === '+') body = body; // keep every trailing line break
+  else if (chomp === '+')
+    body = body; // keep every trailing line break
   else body = body === '' ? '' : body.replace(/\n+$/, '') + '\n';
 
   return { value: body, index: i };
@@ -777,8 +829,24 @@ function _foldBlockLines(lines) {
 // ─── stringifier ────────────────────────────────────────────────────────────
 
 const RESERVED_WORDS = new Set([
-  'true', 'false', 'null', '~', 'True', 'False', 'Null', 'TRUE', 'FALSE', 'NULL',
-  'yes', 'no', 'on', 'off', 'Yes', 'No', 'On', 'Off',
+  'true',
+  'false',
+  'null',
+  '~',
+  'True',
+  'False',
+  'Null',
+  'TRUE',
+  'FALSE',
+  'NULL',
+  'yes',
+  'no',
+  'on',
+  'off',
+  'Yes',
+  'No',
+  'On',
+  'Off',
 ]);
 
 function _needsQuotes(str) {
@@ -966,7 +1034,9 @@ export function selfTest() {
   };
   const expectEqual = (actual, expected, label) => {
     if (!_deepEqual(actual, expected)) {
-      throw new Error(`${label || 'mismatch'}: expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`);
+      throw new Error(
+        `${label || 'mismatch'}: expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`
+      );
     }
   };
 
@@ -983,8 +1053,15 @@ quoted: "true"
 single: 'it''s ok'
 `);
     expectEqual(doc, {
-      name: 'web', replicas: 2, ratio: 0.5, enabled: true, disabled: false,
-      empty: null, tilde: null, quoted: 'true', single: "it's ok",
+      name: 'web',
+      replicas: 2,
+      ratio: 0.5,
+      enabled: true,
+      disabled: false,
+      empty: null,
+      tilde: null,
+      quoted: 'true',
+      single: "it's ok",
     });
   });
 
@@ -1106,7 +1183,12 @@ subjects: [
   {kind: Group, name: devs}
 ]
 `);
-    expectEqual(doc, { subjects: [{ kind: 'User', name: 'alice' }, { kind: 'Group', name: 'devs' }] });
+    expectEqual(doc, {
+      subjects: [
+        { kind: 'User', name: 'alice' },
+        { kind: 'Group', name: 'devs' },
+      ],
+    });
   });
 
   check('double-quoted escapes', () => {
@@ -1146,7 +1228,12 @@ requests.cpu: 100m
   });
 
   check('stringify simple map', () => {
-    const value = { apiVersion: 'apps/v1', kind: 'Deployment', metadata: { name: 'web', labels: { app: 'web' } }, spec: { replicas: 2 } };
+    const value = {
+      apiVersion: 'apps/v1',
+      kind: 'Deployment',
+      metadata: { name: 'web', labels: { app: 'web' } },
+      spec: { replicas: 2 },
+    };
     const text = stringifyYaml(value);
     expectEqual(parseDocument(text), value);
     return text.includes('apiVersion: apps/v1') && text.includes('kind: Deployment');
@@ -1182,8 +1269,18 @@ requests.cpu: 100m
 
   check('stringify multi-document round trip', () => {
     const docs = [
-      { apiVersion: 'v1', kind: 'Service', metadata: { name: 'web', namespace: 'demo' }, spec: { ports: [{ port: 8080, targetPort: 8080 }] } },
-      { apiVersion: 'route.openshift.io/v1', kind: 'Route', metadata: { name: 'web' }, spec: { to: { kind: 'Service', name: 'web' } } },
+      {
+        apiVersion: 'v1',
+        kind: 'Service',
+        metadata: { name: 'web', namespace: 'demo' },
+        spec: { ports: [{ port: 8080, targetPort: 8080 }] },
+      },
+      {
+        apiVersion: 'route.openshift.io/v1',
+        kind: 'Route',
+        metadata: { name: 'web' },
+        spec: { to: { kind: 'Service', name: 'web' } },
+      },
     ];
     const text = docs.map((d) => `---\n${stringifyYaml(d)}`).join('');
     expectEqual(parseYaml(text), docs);
@@ -1220,7 +1317,10 @@ spec:
               cpu: 500m
               memory: 512Mi
 `);
-    return doc.kind === 'Deployment' && doc.spec.template.spec.containers[0].ports[0].containerPort === 8080;
+    return (
+      doc.kind === 'Deployment' &&
+      doc.spec.template.spec.containers[0].ports[0].containerPort === 8080
+    );
   });
 
   check('JSON documents and root flow collections', () => {

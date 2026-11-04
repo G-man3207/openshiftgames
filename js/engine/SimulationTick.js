@@ -67,7 +67,8 @@ const OLM_CATALOG = [
     currentCSV: 'metallb-operator.v0.14.9',
     channel: 'stable',
     provider: 'Red Hat',
-    description: 'MetalLB is a load-balancer implementation for bare-metal clusters using standard routing protocols.',
+    description:
+      'MetalLB is a load-balancer implementation for bare-metal clusters using standard routing protocols.',
     crds: [{ kind: 'MetalLB', name: 'metallbs.metallb.io', version: 'v1beta1' }],
   },
   {
@@ -112,8 +113,10 @@ const RESERVED_MEMORY_MIB = 1024;
  * incident. The token may appear ANYWHERE in the tag (`:v9-nope` is also
  * unpullable, issue #26); public images are otherwise assumed pullable.
  */
-const IMAGE_PULL_FAILURE_TAG_RE = /(does-not-exist|doesnotexist|doesnt-exist|nonexistent|no-such|not-found|notfound|missing|invalid|bogus|nope|broken)/i;
-const IMAGE_PULL_FAILURE_REPO_RE = /(^|[\/])(does-not-exist|doesnotexist|nonexistent|no-such-repo|missing-repo)([\/:.]|$)/i;
+const IMAGE_PULL_FAILURE_TAG_RE =
+  /(does-not-exist|doesnotexist|doesnt-exist|nonexistent|no-such|not-found|notfound|missing|invalid|bogus|nope|broken)/i;
+const IMAGE_PULL_FAILURE_REPO_RE =
+  /(^|[\/])(does-not-exist|doesnotexist|nonexistent|no-such-repo|missing-repo)([\/:.]|$)/i;
 
 export class SimulationTick {
   /**
@@ -144,7 +147,8 @@ export class SimulationTick {
       eventBus.on('cluster:deleted:Pod', (data) => {
         const pod = data.resource;
         if (pod && pod.metadata.ownerReferences.length > 0) {
-          const ownerKey = pod.metadata.ownerReferences[0]?.uid || pod.metadata.ownerReferences[0]?.name;
+          const ownerKey =
+            pod.metadata.ownerReferences[0]?.uid || pod.metadata.ownerReferences[0]?.name;
           if (ownerKey) {
             const map = this.cluster._evictedOwnerCounts;
             map.set(ownerKey, (map.get(ownerKey) || 0) + 1);
@@ -304,7 +308,8 @@ export class SimulationTick {
   _tickProjects(dt) {
     for (const project of this.cluster.getByKind('Project')) {
       const name = project.metadata.name;
-      const terminating = project.status.phase === 'Terminating' || project.metadata.deletionTimestamp !== null;
+      const terminating =
+        project.status.phase === 'Terminating' || project.metadata.deletionTimestamp !== null;
       if (!terminating) {
         if (project.status.phase !== 'Active') project.setPhase('Active');
         continue;
@@ -340,18 +345,31 @@ export class SimulationTick {
       node.status.usage = {
         cpu: alloc.cpu.used,
         memory: alloc.memory.used,
-        cpuPercent: alloc.cpu.capacity > 0 ? Math.round((alloc.cpu.used / alloc.cpu.capacity) * 100) : 0,
-        memoryPercent: alloc.memory.capacity > 0 ? Math.round((alloc.memory.used / alloc.memory.capacity) * 100) : 0,
+        cpuPercent:
+          alloc.cpu.capacity > 0 ? Math.round((alloc.cpu.used / alloc.cpu.capacity) * 100) : 0,
+        memoryPercent:
+          alloc.memory.capacity > 0
+            ? Math.round((alloc.memory.used / alloc.memory.capacity) * 100)
+            : 0,
       };
 
       const isReady = node.status.phase !== 'NotReady' && node.status.phase !== 'Unknown';
-      node.setCondition('Ready', isReady ? 'True' : 'False', isReady ? 'KubeletReady' : 'KubeletNotReady');
+      node.setCondition(
+        'Ready',
+        isReady ? 'True' : 'False',
+        isReady ? 'KubeletReady' : 'KubeletNotReady'
+      );
       const freeMemory = alloc.memory.capacity - alloc.memory.used;
-      const memoryEvictionThreshold = Math.min(RESERVED_MEMORY_MIB, Math.max(100, alloc.memory.capacity * 0.1));
+      const memoryEvictionThreshold = Math.min(
+        RESERVED_MEMORY_MIB,
+        Math.max(100, alloc.memory.capacity * 0.1)
+      );
       node.setCondition(
         'MemoryPressure',
         freeMemory < memoryEvictionThreshold ? 'True' : 'False',
-        freeMemory < memoryEvictionThreshold ? 'KubeletHasInsufficientMemory' : 'KubeletHasSufficientMemory'
+        freeMemory < memoryEvictionThreshold
+          ? 'KubeletHasInsufficientMemory'
+          : 'KubeletHasSufficientMemory'
       );
       // PID exhaustion is not modelled; never derive it from CPU pressure.
       node.setCondition('PIDPressure', 'False', 'KubeletHasSufficientPIDs');
@@ -365,7 +383,11 @@ export class SimulationTick {
 
     // 1) Unbound Pending pods: normal scheduler path.
     const pendingPods = pods.filter(
-      (pod) => pod.status.phase === 'Pending' && !pod.spec.nodeName && !pod.isDeleting && !this._isPodBlocked(pod)
+      (pod) =>
+        pod.status.phase === 'Pending' &&
+        !pod.spec.nodeName &&
+        !pod.isDeleting &&
+        !this._isPodBlocked(pod)
     );
     for (const pod of pendingPods) {
       const node = this._findBestNode(pod, nodes);
@@ -382,7 +404,13 @@ export class SimulationTick {
     // spec.nodeName): they skip the scheduler but must still start. Cordoned
     // nodes keep running already-bound pods; only new placement is blocked.
     for (const pod of pods) {
-      if (pod.status.phase !== 'Pending' || !pod.spec.nodeName || pod.isDeleting || this._isPodBlocked(pod)) continue;
+      if (
+        pod.status.phase !== 'Pending' ||
+        !pod.spec.nodeName ||
+        pod.isDeleting ||
+        this._isPodBlocked(pod)
+      )
+        continue;
       if (pod._nodeBound) continue; // already bound; kubelet owns it now
       const node = nodes.find((entry) => entry.metadata.name === pod.spec.nodeName);
       if (!node) {
@@ -415,11 +443,27 @@ export class SimulationTick {
     pod.status.startTime = pod.status.startTime || new Date().toISOString();
     pod.status.hostIP = node.status.addresses?.[0]?.address || '10.0.0.1';
     pod.status.podIP = pod.status.podIP || this._generatePodIP();
-    pod.setCondition('PodScheduled', 'True', 'Scheduled', `Successfully assigned ${pod.metadata.namespace}/${pod.metadata.name} to ${node.metadata.name}`);
+    pod.setCondition(
+      'PodScheduled',
+      'True',
+      'Scheduled',
+      `Successfully assigned ${pod.metadata.namespace}/${pod.metadata.name} to ${node.metadata.name}`
+    );
     pod.setCondition('Initialized', 'True', 'PodInitialized');
-    pod.setCondition('Ready', 'False', 'ContainersNotReady', 'containers with unready status: [' + (pod.spec.containers || []).map((container) => container.name).join(' ') + ']');
+    pod.setCondition(
+      'Ready',
+      'False',
+      'ContainersNotReady',
+      'containers with unready status: [' +
+        (pod.spec.containers || []).map((container) => container.name).join(' ') +
+        ']'
+    );
     this._trackRescheduledPod(pod);
-    pod.recordEvent('Normal', 'Scheduled', `Successfully assigned ${pod.metadata.namespace}/${pod.metadata.name} to ${node.metadata.name}`);
+    pod.recordEvent(
+      'Normal',
+      'Scheduled',
+      `Successfully assigned ${pod.metadata.namespace}/${pod.metadata.name} to ${node.metadata.name}`
+    );
     this._initContainerStatuses(pod);
     pod.status.phase = 'Pending';
     this.cluster.update(pod.uid, pod);
@@ -432,25 +476,34 @@ export class SimulationTick {
    * ImagePullBackOff container states + kubelet events, never as Running pods.
    */
   _tickImagePulls(dt) {
-    const pendingPods = this.cluster.getByKind('Pod').filter(
-      (pod) => pod.status.phase === 'Pending' && pod._nodeBound && !pod.isDeleting
-        && !this._isPodBlocked(pod) && !this._isIncidentControlled(pod)
-    );
+    const pendingPods = this.cluster
+      .getByKind('Pod')
+      .filter(
+        (pod) =>
+          pod.status.phase === 'Pending' &&
+          pod._nodeBound &&
+          !pod.isDeleting &&
+          !this._isPodBlocked(pod) &&
+          !this._isIncidentControlled(pod)
+      );
     for (const pod of pendingPods) {
       if (pod._imagePullDone) continue;
       // Kubelet retries failed pulls on backoff; once the image/tag appears the
       // Pod recovers instead of being stuck in ImagePullBackOff forever. While
       // waiting for the next retry the state escalates ErrImagePull ->
       // ImagePullBackOff like a real kubelet (describe/get STATUS).
-      const retryDue = !pod._imagePullFailed
-        || typeof pod._nextImagePullRetryAt !== 'number'
-        || this.gameSeconds >= pod._nextImagePullRetryAt;
+      const retryDue =
+        !pod._imagePullFailed ||
+        typeof pod._nextImagePullRetryAt !== 'number' ||
+        this.gameSeconds >= pod._nextImagePullRetryAt;
       if (!retryDue) {
         let changed = false;
         for (const status of pod.status.containerStatuses || []) {
           const waitingReason = status.state?.waiting?.reason;
           if (waitingReason === 'ErrImagePull') {
-            status.state = { waiting: { reason: 'ImagePullBackOff', message: status.state.waiting.message } };
+            status.state = {
+              waiting: { reason: 'ImagePullBackOff', message: status.state.waiting.message },
+            };
             changed = true;
           }
         }
@@ -459,7 +512,10 @@ export class SimulationTick {
       }
       const containers = pod.spec.containers || [];
       if (containers.length === 0) continue;
-      if (!pod.status.containerStatuses || pod.status.containerStatuses.length !== containers.length) {
+      if (
+        !pod.status.containerStatuses ||
+        pod.status.containerStatuses.length !== containers.length
+      ) {
         this._initContainerStatuses(pod);
       }
       const results = containers.map((container) => this._resolveContainerImagePull(container));
@@ -472,8 +528,19 @@ export class SimulationTick {
         // them (the previous waiting reason may have been ImagePullBackOff).
         this._initContainerStatuses(pod);
         pod.status.phase = 'Running';
-        pod.setCondition('Ready', 'False', 'ContainersNotReady', 'containers with unready status: [' + containers.map((container) => container.name).join(' ') + ']');
-        pod.recordEvent('Normal', 'Pulled', `Successfully pulled image "${containers[0]?.image || ''}"`);
+        pod.setCondition(
+          'Ready',
+          'False',
+          'ContainersNotReady',
+          'containers with unready status: [' +
+            containers.map((container) => container.name).join(' ') +
+            ']'
+        );
+        pod.recordEvent(
+          'Normal',
+          'Pulled',
+          `Successfully pulled image "${containers[0]?.image || ''}"`
+        );
         this.cluster.update(pod.uid, pod);
         continue;
       }
@@ -492,13 +559,22 @@ export class SimulationTick {
         status.started = false;
         status.state = { waiting: { reason, message: containerFailure.message } };
       }
-      pod.setCondition('Ready', 'False', 'ContainersNotReady', `containers with unready status: [${containers.map((container) => container.name).join(' ')}]`);
+      pod.setCondition(
+        'Ready',
+        'False',
+        'ContainersNotReady',
+        `containers with unready status: [${containers.map((container) => container.name).join(' ')}]`
+      );
       // kubectl/oc describe show ErrImagePull first, then the exponential
       // ImagePullBackOff retries — throttle duplicate events like a real kubelet.
       const nextLog = pod._imagePullNextEventAt;
       if (typeof nextLog !== 'number' || this.gameSeconds >= nextLog) {
         if (!backoff) {
-          pod.recordEvent('Warning', 'Failed', `Failed to pull image "${failure.image}": ${message}`);
+          pod.recordEvent(
+            'Warning',
+            'Failed',
+            `Failed to pull image "${failure.image}": ${message}`
+          );
         } else {
           pod.recordEvent('Normal', 'BackOff', `Back-off pulling image "${failure.image}"`);
           if (!pod._imagePullBackOffLogged) {
@@ -527,7 +603,11 @@ export class SimulationTick {
     if (!image) return { ok: false, image, message: 'invalid reference format: image is required' };
     const internal = this._parseInternalImageReference(image);
     if (internal) {
-      const resolved = this.cluster.resolveImageStreamTag(internal.namespace, internal.name, internal.tag);
+      const resolved = this.cluster.resolveImageStreamTag(
+        internal.namespace,
+        internal.name,
+        internal.tag
+      );
       const available = Boolean(resolved.found && (resolved.tagEntry?.items || []).length > 0);
       if (!available) {
         return {
@@ -610,7 +690,8 @@ export class SimulationTick {
   _findBestNode(pod, nodes = this.cluster.getByKind('Node')) {
     const requested = this._getPodResourceRequests(pod);
     const nodeSelector = pod.spec.nodeSelector || {};
-    const requiredAffinity = pod.spec.affinity?.nodeAffinity?.requiredDuringSchedulingIgnoredDuringExecution;
+    const requiredAffinity =
+      pod.spec.affinity?.nodeAffinity?.requiredDuringSchedulingIgnoredDuringExecution;
     let bestNode = null;
     let bestScore = -Infinity;
 
@@ -628,15 +709,20 @@ export class SimulationTick {
       const tolerations = pod.spec.tolerations || [];
       for (const taint of node.spec.taints || []) {
         if (taint.effect !== 'PreferNoSchedule') continue;
-        if (!tolerations.some((toleration) => this._toleratesTaint(toleration, taint))) score -= 0.1;
+        if (!tolerations.some((toleration) => this._toleratesTaint(toleration, taint)))
+          score -= 0.1;
       }
 
       if (pod.spec.affinity?.nodeAffinity?.preferredDuringScheduling) {
         for (const preference of pod.spec.affinity.nodeAffinity.preferredDuringScheduling) {
-          const matchLabels = preference.matchLabels || preference.preference?.matchExpressions?.reduce((acc, expression) => {
-            if (expression.operator === 'In' && expression.values?.length) acc[expression.key] = expression.values[0];
-            return acc;
-          }, {}) || {};
+          const matchLabels =
+            preference.matchLabels ||
+            preference.preference?.matchExpressions?.reduce((acc, expression) => {
+              if (expression.operator === 'In' && expression.values?.length)
+                acc[expression.key] = expression.values[0];
+              return acc;
+            }, {}) ||
+            {};
           if (node.matchesSelector(matchLabels)) score += (preference.weight || 0) / 100;
         }
       }
@@ -653,16 +739,23 @@ export class SimulationTick {
     if (node.status.phase === 'Terminating') return 'node(s) were terminating';
     if (!node.isConditionTrue('Ready')) return 'node(s) were not ready';
     if (node.spec.unschedulable === true || node.isCordon) return 'node(s) were unschedulable';
-    if (!node.matchesSelector(pod.spec.nodeSelector || {})) return "node(s) didn't match Pod's node selector";
-    const requiredAffinity = pod.spec.affinity?.nodeAffinity?.requiredDuringSchedulingIgnoredDuringExecution;
-    if (requiredAffinity && !this._nodeMatchesRequiredAffinity(node, requiredAffinity)) return "node(s) didn't match Pod's node affinity";
+    if (!node.matchesSelector(pod.spec.nodeSelector || {}))
+      return "node(s) didn't match Pod's node selector";
+    const requiredAffinity =
+      pod.spec.affinity?.nodeAffinity?.requiredDuringSchedulingIgnoredDuringExecution;
+    if (requiredAffinity && !this._nodeMatchesRequiredAffinity(node, requiredAffinity))
+      return "node(s) didn't match Pod's node affinity";
     const taint = this._firstUntoleratedNoScheduleTaint(pod, node);
     if (taint) return `node(s) had untolerated taint {${taint.key}: ${taint.value ?? ''}}`;
     const available = this._nodeAvailableForScheduling(node);
     if (!available) return 'node(s) were unschedulable';
-    const podLimit = parseInt(node.status.allocatable?.pods || node.status.capacity?.pods || '110', 10);
+    const podLimit = parseInt(
+      node.status.allocatable?.pods || node.status.capacity?.pods || '110',
+      10
+    );
     if (Number.isFinite(podLimit) && available.podCount >= podLimit) return 'Too many pods';
-    if (this._hasHostPortConflict(node, pod)) return "node(s) didn't have free ports for the requested pod ports";
+    if (this._hasHostPortConflict(node, pod))
+      return "node(s) didn't have free ports for the requested pod ports";
     if (available.cpu < requested.cpu) return 'Insufficient cpu';
     if (available.memory < requested.memory) return 'Insufficient memory';
     return null;
@@ -686,7 +779,9 @@ export class SimulationTick {
     const detail = Array.from(reasons.entries())
       .map(([reason, count]) => `${count} ${reason}`)
       .join(', ');
-    return detail ? `0/${total} nodes are available: ${detail}.` : `0/${total} nodes are available: no node matched the pod requirements.`;
+    return detail
+      ? `0/${total} nodes are available: ${detail}.`
+      : `0/${total} nodes are available: no node matched the pod requirements.`;
   }
 
   /** Available resources on a node for scheduling (static allocatable - usage). */
@@ -694,7 +789,8 @@ export class SimulationTick {
     const alloc = this.cluster.getNodeAllocatable(node.metadata.name);
     if (!alloc) return null;
     const capacityCpu = alloc.cpu.capacity - Math.min(RESERVED_CPU_MILLICORES, alloc.cpu.capacity);
-    const capacityMemory = alloc.memory.capacity - Math.min(RESERVED_MEMORY_MIB, alloc.memory.capacity);
+    const capacityMemory =
+      alloc.memory.capacity - Math.min(RESERVED_MEMORY_MIB, alloc.memory.capacity);
     return {
       cpu: capacityCpu - alloc.cpu.used,
       memory: capacityMemory - alloc.memory.used,
@@ -734,8 +830,11 @@ export class SimulationTick {
       if (!term || typeof term !== 'object') return false;
       const expressions = term.matchExpressions || [];
       const fields = term.matchFields || [];
-      return expressions.every((expression) => this._labelsMatchExpression(node.metadata.labels || {}, expression))
-        && fields.every((expression) => this._nodeFieldMatchesExpression(node, expression));
+      return (
+        expressions.every((expression) =>
+          this._labelsMatchExpression(node.metadata.labels || {}, expression)
+        ) && fields.every((expression) => this._nodeFieldMatchesExpression(node, expression))
+      );
     });
   }
 
@@ -927,9 +1026,9 @@ export class SimulationTick {
   }
 
   _tickPodLifecycle(dt) {
-    const runningPods = this.cluster.getByKind('Pod').filter(
-      (pod) => pod.status.phase === 'Running' && !this._isIncidentControlled(pod)
-    );
+    const runningPods = this.cluster
+      .getByKind('Pod')
+      .filter((pod) => pod.status.phase === 'Running' && !this._isIncidentControlled(pod));
     for (const pod of runningPods) {
       if (!pod.status.containerStatuses) continue;
       const containers = pod.spec.containers || [];
@@ -944,8 +1043,10 @@ export class SimulationTick {
         // and immediately exits with Permission denied. The retry loop is the
         // normal CrashLoopBackOff one; only actual start attempts crash.
         const runtimeFailure = this._knownRootImageRuntimeFailure(pod, container);
-        if (runtimeFailure
-          && (status.state.running || status.state.waiting?.reason === 'ContainerCreating')) {
+        if (
+          runtimeFailure &&
+          (status.state.running || status.state.waiting?.reason === 'ContainerCreating')
+        ) {
           this._crashKnownRootImageContainer(pod, status, runtimeFailure);
           allReady = false;
           continue;
@@ -1030,9 +1131,23 @@ export class SimulationTick {
     if (restartPolicy === 'Never') {
       status.state = { terminated: { exitCode, reason, finishedAt: now } };
       pod.status.phase = 'Failed';
-      pod.setCondition('ContainersReady', 'False', 'ContainersNotReady', `container ${status.name} ${String(reason).toLowerCase()}`);
-      pod.setCondition('Ready', 'False', 'ContainersNotReady', `container ${status.name} ${String(reason).toLowerCase()}`);
-      pod.recordEvent('Warning', reason === 'OOMKilled' ? 'OOMKilled' : 'Failed', `Container ${status.name} failed (${reason}) with restartPolicy: Never`);
+      pod.setCondition(
+        'ContainersReady',
+        'False',
+        'ContainersNotReady',
+        `container ${status.name} ${String(reason).toLowerCase()}`
+      );
+      pod.setCondition(
+        'Ready',
+        'False',
+        'ContainersNotReady',
+        `container ${status.name} ${String(reason).toLowerCase()}`
+      );
+      pod.recordEvent(
+        'Warning',
+        reason === 'OOMKilled' ? 'OOMKilled' : 'Failed',
+        `Container ${status.name} failed (${reason}) with restartPolicy: Never`
+      );
     } else {
       status.state = { waiting: { reason: 'CrashLoopBackOff' } };
       pod.recordEvent('Warning', 'BackOff', `Back-off restarting failed container ${status.name}`);
@@ -1042,9 +1157,14 @@ export class SimulationTick {
 
   _tickContainerResources(dt) {
     const failureRate = this._effectiveFailureRatePerSecond();
-    const runningPods = this.cluster.getByKind('Pod').filter(
-      (pod) => pod.status.phase === 'Running' && pod.status.containerStatuses && !this._isIncidentControlled(pod)
-    );
+    const runningPods = this.cluster
+      .getByKind('Pod')
+      .filter(
+        (pod) =>
+          pod.status.phase === 'Running' &&
+          pod.status.containerStatuses &&
+          !this._isIncidentControlled(pod)
+      );
     for (const pod of runningPods) {
       for (const status of pod.status.containerStatuses) {
         if (!status.state.running) continue;
@@ -1053,18 +1173,24 @@ export class SimulationTick {
         status.resources.cpu = Math.max(0, baseLoad + (Math.random() - 0.5) * variance);
         // Smoothed CPU sample (HPA/metrics read an averaged window, not a
         // single instantaneous sample; avoids noise-driven rescales).
-        status._cpuSmooth = status._cpuSmooth === undefined
-          ? status.resources.cpu
-          : status._cpuSmooth * 0.9 + status.resources.cpu * 0.1;
+        status._cpuSmooth =
+          status._cpuSmooth === undefined
+            ? status.resources.cpu
+            : status._cpuSmooth * 0.9 + status.resources.cpu * 0.1;
         const memBase = status.resources.memoryRequest * 0.7;
         const memGrowth = status.resources.memoryRequest * 0.01 * Math.random();
         // Synthetic memory creeps up but must not exceed a configured limit on
         // its own: a healthy Guaranteed pod should not OOM just because time
         // passed (SIM-027). Chaos/incidents can still push it over the limit.
-        const memoryCeiling = status.resources.memoryLimit > 0 ? status.resources.memoryLimit * 0.95 : status.resources.memoryRequest * 2;
+        const memoryCeiling =
+          status.resources.memoryLimit > 0
+            ? status.resources.memoryLimit * 0.95
+            : status.resources.memoryRequest * 2;
         status.resources.memory = Math.min(
           memoryCeiling,
-          memBase + memGrowth + (status.resources.memory > memBase ? (status.resources.memory - memBase) * 0.99 : 0)
+          memBase +
+            memGrowth +
+            (status.resources.memory > memBase ? (status.resources.memory - memBase) * 0.99 : 0)
         );
 
         if (failureRate > 0 && Math.random() < failureRate * dt) {
@@ -1075,9 +1201,14 @@ export class SimulationTick {
   }
 
   _tickHealthChecks(dt) {
-    const runningPods = this.cluster.getByKind('Pod').filter(
-      (pod) => pod.status.phase === 'Running' && pod.status.containerStatuses && !this._isIncidentControlled(pod)
-    );
+    const runningPods = this.cluster
+      .getByKind('Pod')
+      .filter(
+        (pod) =>
+          pod.status.phase === 'Running' &&
+          pod.status.containerStatuses &&
+          !this._isIncidentControlled(pod)
+      );
     for (const pod of runningPods) {
       const containers = pod.spec.containers || [];
       for (let index = 0; index < containers.length; index++) {
@@ -1087,7 +1218,11 @@ export class SimulationTick {
 
         if (container.livenessProbe && !this._evaluateProbe(container.livenessProbe, status)) {
           this._handleContainerFailure(pod, status, 'LivenessProbeFailure', 137);
-          pod.recordEvent('Warning', 'Unhealthy', `Liveness probe failed for container ${status.name}`);
+          pod.recordEvent(
+            'Warning',
+            'Unhealthy',
+            `Liveness probe failed for container ${status.name}`
+          );
           continue;
         }
         if (container.startupProbe && !status._startupComplete) {
@@ -1099,7 +1234,11 @@ export class SimulationTick {
           const ready = !startupPending && this._evaluateProbe(container.readinessProbe, status);
           if (!ready && status.ready) {
             status.ready = false;
-            pod.recordEvent('Warning', 'Unhealthy', `Readiness probe failed for container ${status.name}`);
+            pod.recordEvent(
+              'Warning',
+              'Unhealthy',
+              `Readiness probe failed for container ${status.name}`
+            );
           } else if (ready && !status.ready) {
             status.ready = true;
             pod.recordEvent('Normal', 'Ready', `Container ${status.name} is ready`);
@@ -1128,8 +1267,12 @@ export class SimulationTick {
   _evaluateProbe(probe, containerStatus) {
     if (!containerStatus.state.running) return false;
     const failThreshold = probe.failureThreshold || 3;
-    const cpuOverloaded = containerStatus.resources.cpu > containerStatus.resources.cpuLimit * 0.95 && containerStatus.resources.cpuLimit > 0;
-    const memOverloaded = containerStatus.resources.memory > containerStatus.resources.memoryLimit * 0.95 && containerStatus.resources.memoryLimit > 0;
+    const cpuOverloaded =
+      containerStatus.resources.cpu > containerStatus.resources.cpuLimit * 0.95 &&
+      containerStatus.resources.cpuLimit > 0;
+    const memOverloaded =
+      containerStatus.resources.memory > containerStatus.resources.memoryLimit * 0.95 &&
+      containerStatus.resources.memoryLimit > 0;
     if (cpuOverloaded || memOverloaded) {
       containerStatus._probeFailCount = (containerStatus._probeFailCount || 0) + 1;
       return containerStatus._probeFailCount < failThreshold;
@@ -1139,9 +1282,14 @@ export class SimulationTick {
   }
 
   _tickOOMKiller(dt) {
-    const runningPods = this.cluster.getByKind('Pod').filter(
-      (pod) => pod.status.phase === 'Running' && pod.status.containerStatuses && !this._isIncidentControlled(pod)
-    );
+    const runningPods = this.cluster
+      .getByKind('Pod')
+      .filter(
+        (pod) =>
+          pod.status.phase === 'Running' &&
+          pod.status.containerStatuses &&
+          !this._isIncidentControlled(pod)
+      );
     for (const pod of runningPods) {
       for (const status of pod.status.containerStatuses) {
         if (!status.state.running) continue;
@@ -1194,7 +1342,9 @@ export class SimulationTick {
     if (!raw) return [];
     try {
       const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
-      return Array.isArray(parsed) ? parsed.filter((entry) => entry && typeof entry === 'object') : [];
+      return Array.isArray(parsed)
+        ? parsed.filter((entry) => entry && typeof entry === 'object')
+        : [];
     } catch (error) {
       return [];
     }
@@ -1218,7 +1368,8 @@ export class SimulationTick {
 
     for (const trigger of triggers) {
       if (trigger.paused === true) continue;
-      const from = trigger.from || trigger.imageChangeParams?.from || trigger.imageChange?.from || {};
+      const from =
+        trigger.from || trigger.imageChangeParams?.from || trigger.imageChange?.from || {};
       if (from.kind && from.kind !== 'ImageStreamTag') continue;
       const fromName = String(from.name || '');
       if (!fromName) continue;
@@ -1248,7 +1399,9 @@ export class SimulationTick {
         const container = containers[Number(fieldMatch[1])];
         if (container) targets.push(container);
       }
-      for (const name of trigger.imageChangeParams?.containerNames || trigger.containerNames || []) {
+      for (const name of trigger.imageChangeParams?.containerNames ||
+        trigger.containerNames ||
+        []) {
         const container = containers.find((entry) => entry.name === name);
         if (container && !targets.includes(container)) targets.push(container);
       }
@@ -1270,8 +1423,10 @@ export class SimulationTick {
         // at a different image: record the new image identity on the pod
         // template, exactly what makes the real trigger controller roll out.
         deployment.spec.template.metadata = deployment.spec.template.metadata || {};
-        deployment.spec.template.metadata.annotations = deployment.spec.template.metadata.annotations || {};
-        deployment.spec.template.metadata.annotations['openshiftgames/image-trigger'] = `${streamName}:${tag}@${token}`;
+        deployment.spec.template.metadata.annotations =
+          deployment.spec.template.metadata.annotations || {};
+        deployment.spec.template.metadata.annotations['openshiftgames/image-trigger'] =
+          `${streamName}:${tag}@${token}`;
       }
       changed = true;
       changedTag = `${streamName}:${tag}`;
@@ -1279,7 +1434,12 @@ export class SimulationTick {
 
     if (!changed) return;
     deployment.metadata.generation = (Number(deployment.metadata.generation) || 1) + 1;
-    deployment.setCondition('Progressing', 'True', 'ReplicaSetUpdated', changedTag ? `image change ${changedTag}` : 'image change');
+    deployment.setCondition(
+      'Progressing',
+      'True',
+      'ReplicaSetUpdated',
+      changedTag ? `image change ${changedTag}` : 'image change'
+    );
     this.cluster.update(deployment.uid, deployment);
     this.eventBus?.emit('rollout:triggered', {
       kind: 'Deployment',
@@ -1298,27 +1458,52 @@ export class SimulationTick {
   _reconcileDeployment(deploy) {
     const namespace = deploy.metadata.namespace;
     const desiredReplicas = Math.max(0, Number(deploy.spec.replicas ?? 1) || 0);
-    const template = deepClone(deploy.spec.template || { spec: { containers: [{ name: 'main', image: 'app:latest' }] } });
+    const template = deepClone(
+      deploy.spec.template || { spec: { containers: [{ name: 'main', image: 'app:latest' }] } }
+    );
     const templateHash = this._templateHash(template);
     const selector = deepClone(deploy.spec.selector?.matchLabels || deploy.metadata.labels || {});
     const strategy = deploy.spec.strategy || {};
     const strategyType = strategy.type || 'RollingUpdate';
-    const maxSurge = this._resolveStrategyNumber(strategy.rollingUpdate?.maxSurge, desiredReplicas, 'surge');
-    const maxUnavailable = this._resolveStrategyNumber(strategy.rollingUpdate?.maxUnavailable, desiredReplicas, 'unavailable');
+    const maxSurge = this._resolveStrategyNumber(
+      strategy.rollingUpdate?.maxSurge,
+      desiredReplicas,
+      'surge'
+    );
+    const maxUnavailable = this._resolveStrategyNumber(
+      strategy.rollingUpdate?.maxUnavailable,
+      desiredReplicas,
+      'unavailable'
+    );
     const minReadySeconds = Math.max(0, Number(deploy.spec.minReadySeconds) || 0);
     const progressDeadlineSeconds = Math.max(1, Number(deploy.spec.progressDeadlineSeconds) || 600);
-    const revisionHistoryLimit = Number.isFinite(Number(deploy.spec.revisionHistoryLimit)) ? Number(deploy.spec.revisionHistoryLimit) : 10;
+    const revisionHistoryLimit = Number.isFinite(Number(deploy.spec.revisionHistoryLimit))
+      ? Number(deploy.spec.revisionHistoryLimit)
+      : 10;
     const paused = deploy.spec.paused === true;
 
     // The controller derives everything from ReplicaSet/template state, never
     // from GameEngine's imperative `_rollout` hint.
     delete deploy._rollout;
 
-    const ownedSets = this.cluster.getChildren(deploy.uid).filter((child) => child.kind === 'ReplicaSet');
-    let currentSet = ownedSets.find((rs) => rs.metadata.labels?.['pod-template-hash'] === templateHash) || null;
+    const ownedSets = this.cluster
+      .getChildren(deploy.uid)
+      .filter((child) => child.kind === 'ReplicaSet');
+    let currentSet =
+      ownedSets.find((rs) => rs.metadata.labels?.['pod-template-hash'] === templateHash) || null;
     const oldSets = ownedSets.filter((rs) => rs !== currentSet);
     const templateChanged = !currentSet;
-    const status = { desiredReplicas, minReadySeconds, maxUnavailable, maxSurge, paused, strategyType, templateHash, currentSet, ownedSets };
+    const status = {
+      desiredReplicas,
+      minReadySeconds,
+      maxUnavailable,
+      maxSurge,
+      paused,
+      strategyType,
+      templateHash,
+      currentSet,
+      ownedSets,
+    };
 
     if (templateChanged && paused) {
       // A paused Deployment must not start a new rollout.
@@ -1327,7 +1512,13 @@ export class SimulationTick {
       return;
     }
     if (templateChanged) {
-      currentSet = this._createDeploymentReplicaSet(deploy, template, templateHash, selector, ownedSets);
+      currentSet = this._createDeploymentReplicaSet(
+        deploy,
+        template,
+        templateHash,
+        selector,
+        ownedSets
+      );
       if (currentSet && !ownedSets.includes(currentSet)) ownedSets.push(currentSet);
       status.currentSet = currentSet;
       status.ownedSets = ownedSets;
@@ -1335,7 +1526,10 @@ export class SimulationTick {
 
     // Reconcile a pre-existing ReplicaSet (legacy/saved state) whose template
     // no longer matches its hash label.
-    if (currentSet && this._stableStringify(currentSet.spec.template || {}) !== this._stableStringify(template)) {
+    if (
+      currentSet &&
+      this._stableStringify(currentSet.spec.template || {}) !== this._stableStringify(template)
+    ) {
       currentSet.spec.template = deepClone(template);
       this.cluster.update(currentSet.uid, currentSet);
     }
@@ -1344,7 +1538,8 @@ export class SimulationTick {
     const activeCurrent = currentSet ? this._activePodsOf(currentSet).length : 0;
 
     if (paused) {
-      for (const rs of [currentSet, ...oldSets]) if (rs) this._reconcileReplicaSet(rs, undefined, minReadySeconds);
+      for (const rs of [currentSet, ...oldSets])
+        if (rs) this._reconcileReplicaSet(rs, undefined, minReadySeconds);
     } else if (strategyType === 'Recreate') {
       if (activeOld > 0) {
         for (const rs of oldSets) this._reconcileReplicaSet(rs, 0, minReadySeconds);
@@ -1372,7 +1567,11 @@ export class SimulationTick {
         // ReplicaSet's leftovers after `oc rollout undo`.
         const minAvailable = Math.max(0, desiredReplicas - maxUnavailable);
         const newSetSpecReplicas = Math.max(0, Number(currentSet?.spec.replicas ?? 0) || 0);
-        const newUnavailable = Math.max(0, newSetSpecReplicas - (currentSet ? this._readyPodsOf(currentSet, minReadySeconds).length : 0));
+        const newUnavailable = Math.max(
+          0,
+          newSetSpecReplicas -
+            (currentSet ? this._readyPodsOf(currentSet, minReadySeconds).length : 0)
+        );
         const allPodsCount = activeOld + Math.max(activeCurrent, newSetSpecReplicas);
         const maxScaledDown = allPodsCount - minAvailable - newUnavailable;
         if (maxScaledDown > 0) {
@@ -1390,12 +1589,14 @@ export class SimulationTick {
         }
       }
       for (const rs of oldSets) {
-        if (rs.spec.replicas !== 0 && this._activePodsOf(rs).length === 0) this._reconcileReplicaSet(rs, 0, minReadySeconds);
+        if (rs.spec.replicas !== 0 && this._activePodsOf(rs).length === 0)
+          this._reconcileReplicaSet(rs, 0, minReadySeconds);
       }
     }
 
-    const rolloutPending = this._activePodsOf(currentSet).length < desiredReplicas
-      || oldSets.some((rs) => this._activePodsOf(rs).length > 0);
+    const rolloutPending =
+      this._activePodsOf(currentSet).length < desiredReplicas ||
+      oldSets.some((rs) => this._activePodsOf(rs).length > 0);
     this._updateDeploymentStatus(deploy, status, { rolloutPending });
     this._pruneDeploymentReplicaSets(deploy, status, revisionHistoryLimit);
   }
@@ -1404,15 +1605,17 @@ export class SimulationTick {
   _createDeploymentReplicaSet(deploy, template, templateHash, selector, ownedSets) {
     const namespace = deploy.metadata.namespace;
     const name = `${deploy.metadata.name}-${templateHash}`;
-    let revision = ownedSets.reduce((max, rs) => Math.max(max, this._replicaSetRevision(rs)), 0) + 1;
+    let revision =
+      ownedSets.reduce((max, rs) => Math.max(max, this._replicaSetRevision(rs)), 0) + 1;
     let rs = this.cluster.getByName('ReplicaSet', name, namespace);
     if (!rs) {
       // Real Deployment controller copies the Deployment's annotations onto each
       // new ReplicaSet, which is where `oc rollout history` reads
       // kubernetes.io/change-cause from.
-      const changeCause = deploy.metadata?.annotations?.['kubernetes.io/change-cause']
-        || template?.metadata?.annotations?.['kubernetes.io/change-cause']
-        || '';
+      const changeCause =
+        deploy.metadata?.annotations?.['kubernetes.io/change-cause'] ||
+        template?.metadata?.annotations?.['kubernetes.io/change-cause'] ||
+        '';
       const rsAnnotations = { 'deployment.kubernetes.io/revision': String(revision) };
       if (changeCause) rsAnnotations['kubernetes.io/change-cause'] = changeCause;
       rs = this.cluster.addResource({
@@ -1433,12 +1636,15 @@ export class SimulationTick {
     if (!rs) return null;
     this.cluster.addRelationship(deploy.uid, rs.uid);
     deploy.metadata.annotations = deploy.metadata.annotations || {};
-    const currentRevision = parseInt(deploy.metadata.annotations['deployment.kubernetes.io/revision'] || '0', 10) || 0;
+    const currentRevision =
+      parseInt(deploy.metadata.annotations['deployment.kubernetes.io/revision'] || '0', 10) || 0;
     revision = Math.max(revision, currentRevision + 1);
     deploy.metadata.annotations['deployment.kubernetes.io/revision'] = String(revision);
     rs.metadata.annotations = rs.metadata.annotations || {};
     rs.metadata.annotations['deployment.kubernetes.io/revision'] = String(revision);
-    this.cluster.updateMetadata(deploy.uid, { annotations: { 'deployment.kubernetes.io/revision': String(revision) } });
+    this.cluster.updateMetadata(deploy.uid, {
+      annotations: { 'deployment.kubernetes.io/revision': String(revision) },
+    });
     this.eventBus?.emit('rollout:triggered', {
       kind: 'Deployment',
       name: deploy.metadata.name,
@@ -1483,7 +1689,8 @@ export class SimulationTick {
         if (b.status.phase === 'Pending' && a.status.phase !== 'Pending') return 1;
         return new Date(b.metadata.creationTimestamp) - new Date(a.metadata.creationTimestamp);
       });
-      for (let index = 0; index < pods.length - target; index++) this.cluster.remove(sorted[index].uid);
+      for (let index = 0; index < pods.length - target; index++)
+        this.cluster.remove(sorted[index].uid);
     }
     this._refreshReplicaSetStatus(rs, this._activePodsOf(rs), minReadySeconds);
   }
@@ -1491,7 +1698,10 @@ export class SimulationTick {
   _refreshReplicaSetStatus(rs, pods, minReadySeconds = 0) {
     const ready = pods.filter((pod) => this._podIsReady(pod, minReadySeconds));
     rs.status.replicas = pods.length;
-    rs.status.fullyLabeledReplicas = pods.filter((pod) => pod.metadata.labels?.['pod-template-hash'] === rs.metadata.labels?.['pod-template-hash']).length;
+    rs.status.fullyLabeledReplicas = pods.filter(
+      (pod) =>
+        pod.metadata.labels?.['pod-template-hash'] === rs.metadata.labels?.['pod-template-hash']
+    ).length;
     rs.status.readyReplicas = ready.length;
     rs.status.availableReplicas = ready.length;
     rs.status.observedGeneration = rs.metadata.generation;
@@ -1514,18 +1724,27 @@ export class SimulationTick {
       .flatMap((rs) => this.cluster.getChildren(rs.uid))
       .filter((child) => child.kind === 'Pod' && this._isPodBlocked(child));
     const failingSets = ownedSets.filter((rs) => this._hasReplicaFailure(rs));
-    const replicaFailure = failingSets.length > 0
-      ? (failingSets[0].status.conditions || []).find((condition) => condition.type === 'ReplicaFailure')
-      : null;
+    const replicaFailure =
+      failingSets.length > 0
+        ? (failingSets[0].status.conditions || []).find(
+            (condition) => condition.type === 'ReplicaFailure'
+          )
+        : null;
     const admissionBlocked = Boolean(replicaFailure) || deniedPods.length > 0;
-    const admissionMessage = replicaFailure?.message
-      || deniedPods[0]?.metadata?.annotations?.['openshiftgames/denied-reason']
-      || '';
-    const oldSetPods = ownedSets.filter((rs) => rs !== currentSet).reduce((sum, rs) => sum + this._activePodsOf(rs).length, 0);
-    const rolloutPending = flags.rolloutPending === true
-      || oldSetPods > 0
-      || currentPods.length < desiredReplicas
-      || (currentSet && this._stableStringify(currentSet.spec.template || {}) !== this._stableStringify(deploy.spec.template || {}));
+    const admissionMessage =
+      replicaFailure?.message ||
+      deniedPods[0]?.metadata?.annotations?.['openshiftgames/denied-reason'] ||
+      '';
+    const oldSetPods = ownedSets
+      .filter((rs) => rs !== currentSet)
+      .reduce((sum, rs) => sum + this._activePodsOf(rs).length, 0);
+    const rolloutPending =
+      flags.rolloutPending === true ||
+      oldSetPods > 0 ||
+      currentPods.length < desiredReplicas ||
+      (currentSet &&
+        this._stableStringify(currentSet.spec.template || {}) !==
+          this._stableStringify(deploy.spec.template || {}));
 
     const previousSignature = deploy._deploymentStatusSignature;
     const progressDeadlineSeconds = Math.max(1, Number(deploy.spec.progressDeadlineSeconds) || 600);
@@ -1538,13 +1757,21 @@ export class SimulationTick {
     deploy.status.updatedReplicas = currentPods.length;
     deploy.status.unavailableReplicas = Math.max(0, desiredReplicas - available);
     deploy.status.observedGeneration = deploy.metadata.generation;
-    if (progressing && typeof deploy._progressingSince !== 'number') deploy._progressingSince = this.gameSeconds;
+    if (progressing && typeof deploy._progressingSince !== 'number')
+      deploy._progressingSince = this.gameSeconds;
     if (!progressing) deploy._progressingSince = undefined;
-    const timedOut = progressing && typeof deploy._progressingSince === 'number'
-      && this.gameSeconds - deploy._progressingSince >= progressDeadlineSeconds;
+    const timedOut =
+      progressing &&
+      typeof deploy._progressingSince === 'number' &&
+      this.gameSeconds - deploy._progressingSince >= progressDeadlineSeconds;
 
     if (admissionBlocked) {
-      deploy.setCondition('Available', 'False', 'MinimumReplicasUnavailable', `${available}/${desiredReplicas} replicas available`);
+      deploy.setCondition(
+        'Available',
+        'False',
+        'MinimumReplicasUnavailable',
+        `${available}/${desiredReplicas} replicas available`
+      );
       deploy.setCondition(
         'Progressing',
         timedOut ? 'False' : 'True',
@@ -1553,24 +1780,51 @@ export class SimulationTick {
           ? `ReplicaSet "${currentSet?.metadata?.name || 'new'}" has timed out progressing.`
           : `waiting for pods to be admitted: ${admissionMessage}`
       );
-      deploy.setCondition('ReplicaFailure', 'True', 'FailedCreate', admissionMessage || 'unable to admit pod');
+      deploy.setCondition(
+        'ReplicaFailure',
+        'True',
+        'FailedCreate',
+        admissionMessage || 'unable to admit pod'
+      );
     } else {
       deploy.setCondition('ReplicaFailure', 'False', 'NoReplicaFailure', '');
       if (paused) {
-        deploy.setCondition('Progressing', 'True', 'DeploymentPaused', 'deployment is paused; rollout will not continue until resumed');
+        deploy.setCondition(
+          'Progressing',
+          'True',
+          'DeploymentPaused',
+          'deployment is paused; rollout will not continue until resumed'
+        );
         deploy.setCondition(
           'Available',
           available >= Math.min(desiredReplicas, minAvailable) ? 'True' : 'False',
-          available >= Math.min(desiredReplicas, minAvailable) ? 'MinimumReplicasAvailable' : 'MinimumReplicasUnavailable',
+          available >= Math.min(desiredReplicas, minAvailable)
+            ? 'MinimumReplicasAvailable'
+            : 'MinimumReplicasUnavailable',
           `${available}/${desiredReplicas} replicas available`
         );
       } else if (rolloutPending) {
         if (timedOut) {
-          deploy.setCondition('Progressing', 'False', 'ProgressDeadlineExceeded', `ReplicaSet "${currentSet?.metadata?.name || 'new'}" has timed out progressing.`);
+          deploy.setCondition(
+            'Progressing',
+            'False',
+            'ProgressDeadlineExceeded',
+            `ReplicaSet "${currentSet?.metadata?.name || 'new'}" has timed out progressing.`
+          );
         } else {
-          deploy.setCondition('Progressing', 'True', 'ReplicaSetUpdated', `${readyCurrent.length} out of ${desiredReplicas} new replicas have been updated`);
+          deploy.setCondition(
+            'Progressing',
+            'True',
+            'ReplicaSetUpdated',
+            `${readyCurrent.length} out of ${desiredReplicas} new replicas have been updated`
+          );
         }
-        deploy.setCondition('Available', available >= minAvailable ? 'True' : 'False', available >= minAvailable ? 'MinimumReplicasAvailable' : 'MinimumReplicasUnavailable', `${available}/${desiredReplicas} replicas available`);
+        deploy.setCondition(
+          'Available',
+          available >= minAvailable ? 'True' : 'False',
+          available >= minAvailable ? 'MinimumReplicasAvailable' : 'MinimumReplicasUnavailable',
+          `${available}/${desiredReplicas} replicas available`
+        );
       } else {
         // The rollout has no pending ReplicaSet scale-up, but the Deployment can
         // still be unhealthy (crash-looping / unschedulable / unready Pods).
@@ -1588,7 +1842,12 @@ export class SimulationTick {
         // replica is available; a new ReplicaSet whose Pods exist but never
         // become Ready is still being updated.
         if (desiredReplicas > 0 && available < desiredReplicas) {
-          deploy.setCondition('Progressing', 'True', 'ReplicaSetUpdated', `${available} out of ${desiredReplicas} new replicas are available`);
+          deploy.setCondition(
+            'Progressing',
+            'True',
+            'ReplicaSetUpdated',
+            `${available} out of ${desiredReplicas} new replicas are available`
+          );
         } else {
           deploy.setCondition('Progressing', 'True', 'NewReplicaSetAvailable', '');
         }
@@ -1634,7 +1893,9 @@ export class SimulationTick {
       updated: deploy.status.updatedReplicas,
       unavailable: deploy.status.unavailableReplicas,
       observedGeneration: deploy.status.observedGeneration,
-      conditions: (deploy.status.conditions || []).map((condition) => `${condition.type}:${condition.status}:${condition.reason}`),
+      conditions: (deploy.status.conditions || []).map(
+        (condition) => `${condition.type}:${condition.status}:${condition.reason}`
+      ),
     });
     if (signature !== previousSignature) {
       deploy._deploymentStatusSignature = signature;
@@ -1746,18 +2007,26 @@ export class SimulationTick {
       };
       const progressing = resource.getCondition('Progressing');
       const paused = resource.spec.paused === true;
-      const timedOut = !paused && progressing?.status === 'False' && progressing.reason === 'ProgressDeadlineExceeded';
+      const timedOut =
+        !paused &&
+        progressing?.status === 'False' &&
+        progressing.reason === 'ProgressDeadlineExceeded';
       const failedCreate = (resource.status.conditions || []).some(
         (condition) => condition.type === 'ReplicaFailure' && condition.status === 'True'
       );
-      const complete = !paused && !timedOut && !failedCreate && !specUpdatePending
-        && status.updated >= desired
-        && status.available >= desired
-        && status.replicas <= desired;
+      const complete =
+        !paused &&
+        !timedOut &&
+        !failedCreate &&
+        !specUpdatePending &&
+        status.updated >= desired &&
+        status.available >= desired &&
+        status.replicas <= desired;
       const deadlineSeconds = Math.max(1, Number(resource.spec.progressDeadlineSeconds) || 600);
-      const remainingSeconds = typeof resource._progressingSince === 'number'
-        ? Math.max(0, deadlineSeconds - (this.gameSeconds - resource._progressingSince))
-        : null;
+      const remainingSeconds =
+        typeof resource._progressingSince === 'number'
+          ? Math.max(0, deadlineSeconds - (this.gameSeconds - resource._progressingSince))
+          : null;
       let message;
       if (timedOut) {
         message = `error: deployment "${name}" exceeded its progress deadline`;
@@ -1782,40 +2051,53 @@ export class SimulationTick {
         message,
         reason: timedOut
           ? 'ProgressDeadlineExceeded'
-          : (specUpdatePending ? 'SpecUpdatePending' : (complete ? 'NewReplicaSetAvailable' : (progressing?.reason || null))),
+          : specUpdatePending
+            ? 'SpecUpdatePending'
+            : complete
+              ? 'NewReplicaSetAvailable'
+              : progressing?.reason || null,
         generation,
         observedGeneration,
         specUpdatePending,
         deadlineSeconds,
         remainingSeconds,
-        revision: Number(resource.metadata?.annotations?.['deployment.kubernetes.io/revision']) || null,
+        revision:
+          Number(resource.metadata?.annotations?.['deployment.kubernetes.io/revision']) || null,
         status,
       };
     }
 
     const isDaemonSet = canonical === 'DaemonSet';
     const desired = isDaemonSet
-      ? Math.max(0, Number(resource.status.desiredNumberScheduled ?? resource.status.currentNumberScheduled ?? 0) || 0)
+      ? Math.max(
+          0,
+          Number(
+            resource.status.desiredNumberScheduled ?? resource.status.currentNumberScheduled ?? 0
+          ) || 0
+        )
       : Math.max(0, Number(resource.spec.replicas ?? 1) || 0);
     const status = isDaemonSet
       ? {
-        desired,
-        updated: Number(resource.status.updatedNumberScheduled || 0),
-        ready: Number(resource.status.numberReady || 0),
-        available: Number(resource.status.numberAvailable || 0),
-        replicas: Number(resource.status.currentNumberScheduled || 0),
-        unavailable: Number(resource.status.numberUnavailable || 0),
-      }
+          desired,
+          updated: Number(resource.status.updatedNumberScheduled || 0),
+          ready: Number(resource.status.numberReady || 0),
+          available: Number(resource.status.numberAvailable || 0),
+          replicas: Number(resource.status.currentNumberScheduled || 0),
+          unavailable: Number(resource.status.numberUnavailable || 0),
+        }
       : {
-        desired,
-        updated: Number(resource.status.updatedReplicas || resource.status.currentReplicas || 0),
-        ready: Number(resource.status.readyReplicas || 0),
-        available: Number(resource.status.availableReplicas || 0),
-        replicas: Number(resource.status.replicas || resource.status.currentReplicas || 0),
-        unavailable: Number(resource.status.unavailableReplicas || 0),
-      };
-    const complete = !specUpdatePending
-      && status.updated >= desired && status.available >= desired && status.replicas >= desired;
+          desired,
+          updated: Number(resource.status.updatedReplicas || resource.status.currentReplicas || 0),
+          ready: Number(resource.status.readyReplicas || 0),
+          available: Number(resource.status.availableReplicas || 0),
+          replicas: Number(resource.status.replicas || resource.status.currentReplicas || 0),
+          unavailable: Number(resource.status.unavailableReplicas || 0),
+        };
+    const complete =
+      !specUpdatePending &&
+      status.updated >= desired &&
+      status.available >= desired &&
+      status.replicas >= desired;
     const controllerName = isDaemonSet ? 'daemon set' : 'statefulset';
     return {
       found: true,
@@ -1824,10 +2106,14 @@ export class SimulationTick {
       timedOut: false,
       message: specUpdatePending
         ? `Waiting for ${controllerName} "${name}" spec update to be observed by the ${controllerName} controller...`
-        : (complete
+        : complete
           ? `${singular} "${name}" successfully rolled out`
-          : `Waiting for ${controllerName} "${name}" rollout to finish: ${status.available} of ${status.desired} updated pods are available...`),
-      reason: specUpdatePending ? 'SpecUpdatePending' : (complete ? 'NewReplicaSetAvailable' : 'ReplicaSetUpdated'),
+          : `Waiting for ${controllerName} "${name}" rollout to finish: ${status.available} of ${status.desired} updated pods are available...`,
+      reason: specUpdatePending
+        ? 'SpecUpdatePending'
+        : complete
+          ? 'NewReplicaSetAvailable'
+          : 'ReplicaSetUpdated',
       generation,
       observedGeneration,
       specUpdatePending,
@@ -1848,34 +2134,45 @@ export class SimulationTick {
   getRolloutHistory(kind, name, options = {}) {
     const { canonical, resource } = this._rolloutResource(kind, name, options);
     if (!resource || !['Deployment', 'StatefulSet', 'DaemonSet'].includes(canonical)) return [];
-    const ownedSets = this.cluster.getChildren(resource.uid).filter((child) => child.kind === 'ReplicaSet');
-    const history = ownedSets.map((rs) => {
-      const revision = this._replicaSetRevision(rs);
-      const activePods = this._activePodsOf(rs).length;
-      return {
-        revision,
-        changeCause: rs.metadata?.annotations?.['kubernetes.io/change-cause'] || '',
-        images: (rs.spec?.template?.spec?.containers || []).map((container) => `${container.name}=${container.image}`),
-        name: rs.metadata.name,
-        active: activePods > 0,
-        replicas: Number(rs.spec?.replicas || 0),
-        template: deepClone(rs.spec?.template || {}),
-      };
-    }).filter((entry) => entry.revision > 0);
+    const ownedSets = this.cluster
+      .getChildren(resource.uid)
+      .filter((child) => child.kind === 'ReplicaSet');
+    const history = ownedSets
+      .map((rs) => {
+        const revision = this._replicaSetRevision(rs);
+        const activePods = this._activePodsOf(rs).length;
+        return {
+          revision,
+          changeCause: rs.metadata?.annotations?.['kubernetes.io/change-cause'] || '',
+          images: (rs.spec?.template?.spec?.containers || []).map(
+            (container) => `${container.name}=${container.image}`
+          ),
+          name: rs.metadata.name,
+          active: activePods > 0,
+          replicas: Number(rs.spec?.replicas || 0),
+          template: deepClone(rs.spec?.template || {}),
+        };
+      })
+      .filter((entry) => entry.revision > 0);
     history.sort((a, b) => a.revision - b.revision);
     if (history.length > 0) return history;
     // Legacy/saved cluster without ReplicaSets: reflect the current template as
     // revision 1 so `rollout history` still has a row (no fake change-cause).
-    const currentRevision = Number(resource.metadata?.annotations?.['deployment.kubernetes.io/revision']) || 1;
-    return [{
-      revision: currentRevision,
-      changeCause: resource.metadata?.annotations?.['kubernetes.io/change-cause'] || '',
-      images: (resource.spec?.template?.spec?.containers || []).map((container) => `${container.name}=${container.image}`),
-      name: `${resource.metadata.name}-current`,
-      active: true,
-      replicas: Number(resource.spec?.replicas || 0),
-      template: deepClone(resource.spec?.template || {}),
-    }];
+    const currentRevision =
+      Number(resource.metadata?.annotations?.['deployment.kubernetes.io/revision']) || 1;
+    return [
+      {
+        revision: currentRevision,
+        changeCause: resource.metadata?.annotations?.['kubernetes.io/change-cause'] || '',
+        images: (resource.spec?.template?.spec?.containers || []).map(
+          (container) => `${container.name}=${container.image}`
+        ),
+        name: `${resource.metadata.name}-current`,
+        active: true,
+        replicas: Number(resource.spec?.replicas || 0),
+        template: deepClone(resource.spec?.template || {}),
+      },
+    ];
   }
 
   /**
@@ -1891,18 +2188,34 @@ export class SimulationTick {
   undoRollout(kind, name, options = {}) {
     const { canonical, resource } = this._rolloutResource(kind, name, options);
     const singular = String(canonical || 'resource').toLowerCase();
-    if (!resource) return { success: false, message: `Error from server (NotFound): ${singular}s "${name}" not found` };
+    if (!resource)
+      return {
+        success: false,
+        message: `Error from server (NotFound): ${singular}s "${name}" not found`,
+      };
     if (canonical !== 'Deployment') {
-      return { success: false, message: `error: no rollout history found for ${singular} "${name}"` };
+      return {
+        success: false,
+        message: `error: no rollout history found for ${singular} "${name}"`,
+      };
     }
     const history = this.getRolloutHistory(canonical, name, options);
-    if (history.length === 0) return { success: false, message: `error: no rollout history found for ${singular} "${name}"` };
-    const currentRevision = Number(resource.metadata?.annotations?.['deployment.kubernetes.io/revision']) || history[history.length - 1].revision;
+    if (history.length === 0)
+      return {
+        success: false,
+        message: `error: no rollout history found for ${singular} "${name}"`,
+      };
+    const currentRevision =
+      Number(resource.metadata?.annotations?.['deployment.kubernetes.io/revision']) ||
+      history[history.length - 1].revision;
     let target;
     if (options.revision !== undefined && options.revision !== null) {
       target = history.find((entry) => entry.revision === Number(options.revision));
       if (!target) {
-        return { success: false, message: `error: unable to find specified revision ${options.revision}` };
+        return {
+          success: false,
+          message: `error: unable to find specified revision ${options.revision}`,
+        };
       }
     } else {
       target = [...history].reverse().find((entry) => entry.revision < currentRevision);
@@ -1920,7 +2233,12 @@ export class SimulationTick {
     // Counters/events shared with the objective + scoring layers (the legacy
     // GameEngine.rollout('undo') path emitted these too).
     this.cluster._rollbackCount = (this.cluster._rollbackCount || 0) + 1;
-    this.eventBus?.emit('resource:rollback', { uid: resource.uid, kind: canonical, name, revision: target.revision });
+    this.eventBus?.emit('resource:rollback', {
+      uid: resource.uid,
+      kind: canonical,
+      name,
+      revision: target.revision,
+    });
     this.eventBus?.emit('rollout:triggered', {
       kind: canonical,
       name,
@@ -1938,9 +2256,14 @@ export class SimulationTick {
 
   _activePodsOf(owner) {
     if (!owner) return [];
-    return this.cluster.getChildren(owner.uid).filter(
-      (child) => child.kind === 'Pod' && child.status.phase !== 'Succeeded' && child.status.phase !== 'Failed'
-    );
+    return this.cluster
+      .getChildren(owner.uid)
+      .filter(
+        (child) =>
+          child.kind === 'Pod' &&
+          child.status.phase !== 'Succeeded' &&
+          child.status.phase !== 'Failed'
+      );
   }
 
   _readyPodsOf(owner, minReadySeconds = 0) {
@@ -1980,7 +2303,8 @@ export class SimulationTick {
   /** JSON with recursively sorted keys (stable across apply round-trips). */
   _stableStringify(value) {
     if (value === null || typeof value !== 'object') return JSON.stringify(value);
-    if (Array.isArray(value)) return `[${value.map((entry) => this._stableStringify(entry)).join(',')}]`;
+    if (Array.isArray(value))
+      return `[${value.map((entry) => this._stableStringify(entry)).join(',')}]`;
     const keys = Object.keys(value).sort();
     return `{${keys.map((key) => `${JSON.stringify(key)}:${this._stableStringify(value[key])}`).join(',')}}`;
   }
@@ -2000,7 +2324,12 @@ export class SimulationTick {
         for (let ordinal = 0; ordinal < desiredReplicas; ordinal++) {
           const podName = `${statefulSet.metadata.name}-${ordinal}`;
           const existing = this.cluster.getByName('Pod', podName, namespace);
-          if (existing && !existing.isDeleting && existing.status.phase !== 'Succeeded' && existing.status.phase !== 'Failed') {
+          if (
+            existing &&
+            !existing.isDeleting &&
+            existing.status.phase !== 'Succeeded' &&
+            existing.status.phase !== 'Failed'
+          ) {
             continue;
           }
           const created = this._createStatefulSetPod(statefulSet, ordinal, revisionName);
@@ -2019,22 +2348,28 @@ export class SimulationTick {
       let pods = this._activePodsOf(statefulSet);
       if (pods.length > desiredReplicas) {
         const sorted = [...pods].sort((a, b) => this._podOrdinal(b) - this._podOrdinal(a));
-        for (let index = 0; index < pods.length - desiredReplicas; index++) this.cluster.remove(sorted[index].uid);
+        for (let index = 0; index < pods.length - desiredReplicas; index++)
+          this.cluster.remove(sorted[index].uid);
         pods = this._activePodsOf(statefulSet);
       }
 
       const readyPods = pods.filter((pod) => this._podIsReady(pod));
-      const updatedPods = pods.filter((pod) => pod.metadata.labels?.['controller-revision-hash'] === revisionName);
+      const updatedPods = pods.filter(
+        (pod) => pod.metadata.labels?.['controller-revision-hash'] === revisionName
+      );
       statefulSet.status.replicas = pods.length;
       statefulSet.status.readyReplicas = readyPods.length;
       statefulSet.status.availableReplicas = readyPods.length;
       statefulSet.status.currentReplicas = pods.length;
       statefulSet.status.updatedReplicas = updatedPods.length;
       statefulSet.status.updateRevision = revisionName;
-      if (pods.length > 0 && updatedPods.length === pods.length) statefulSet.status.currentRevision = revisionName;
-      else if (!statefulSet.status.currentRevision) statefulSet.status.currentRevision = revisionName;
+      if (pods.length > 0 && updatedPods.length === pods.length)
+        statefulSet.status.currentRevision = revisionName;
+      else if (!statefulSet.status.currentRevision)
+        statefulSet.status.currentRevision = revisionName;
       statefulSet.status.observedGeneration = statefulSet.metadata.generation;
-      if (pods.length > 0 && statefulSet.status.phase !== 'Running') statefulSet.setPhase('Running');
+      if (pods.length > 0 && statefulSet.status.phase !== 'Running')
+        statefulSet.setPhase('Running');
     }
   }
 
@@ -2054,7 +2389,10 @@ export class SimulationTick {
       const volumes = podSpec.volumes || [];
       for (const claimTemplate of claimTemplates) {
         const claimBaseName = claimTemplate.metadata?.name || claimTemplate.name || 'data';
-        volumes.push({ name: claimBaseName, persistentVolumeClaim: { claimName: `${claimBaseName}-${podName}` } });
+        volumes.push({
+          name: claimBaseName,
+          persistentVolumeClaim: { claimName: `${claimBaseName}-${podName}` },
+        });
       }
       podSpec.volumes = volumes;
     }
@@ -2099,7 +2437,13 @@ export class SimulationTick {
       const podName = `${statefulSet.metadata.name}-${ordinal}`;
       for (const template of templates) {
         const claimName = `${template.metadata?.name || template.name || 'data'}-${podName}`;
-        if (!this.cluster.getByName('PersistentVolumeClaim', claimName, statefulSet.metadata.namespace)) {
+        if (
+          !this.cluster.getByName(
+            'PersistentVolumeClaim',
+            claimName,
+            statefulSet.metadata.namespace
+          )
+        ) {
           this.cluster.addResource({
             kind: 'PersistentVolumeClaim',
             metadata: {
@@ -2108,7 +2452,12 @@ export class SimulationTick {
               labels: { app: statefulSet.metadata.name, ...(template.metadata?.labels || {}) },
               annotations: deepClone(template.metadata?.annotations || {}),
             },
-            spec: deepClone(template.spec || { accessModes: ['ReadWriteOnce'], resources: { requests: { storage: '1Gi' } } }),
+            spec: deepClone(
+              template.spec || {
+                accessModes: ['ReadWriteOnce'],
+                resources: { requests: { storage: '1Gi' } },
+              }
+            ),
           });
         }
       }
@@ -2116,7 +2465,9 @@ export class SimulationTick {
   }
 
   _tickDaemonSets(dt) {
-    const allNodes = this.cluster.getByKind('Node').filter((node) => node.status.phase !== 'Terminating');
+    const allNodes = this.cluster
+      .getByKind('Node')
+      .filter((node) => node.status.phase !== 'Terminating');
     for (const daemonSet of this.cluster.getByKind('DaemonSet')) {
       const selectorLabels = daemonSet.spec.selector?.matchLabels || {};
       const nodeSelector = daemonSet.spec.nodeSelector || {};
@@ -2135,7 +2486,9 @@ export class SimulationTick {
       const blocked = pods.some((pod) => this._isPodBlocked(pod));
       if (!blocked) {
         for (const node of targetNodes) {
-          const scheduled = pods.some((pod) => pod.spec.nodeName === node.metadata.name && !pod.isDeleting);
+          const scheduled = pods.some(
+            (pod) => pod.spec.nodeName === node.metadata.name && !pod.isDeleting
+          );
           if (scheduled) continue;
           const pod = this._createPodForWorkload(daemonSet, daemonSet);
           if (!pod) continue;
@@ -2172,17 +2525,23 @@ export class SimulationTick {
       // Real Job.status.phase is only set to Complete/Failed; it is unset while
       // the Job is active (batch/v1 JobPhase has no Pending value).
       if (job.status.phase === 'Pending') delete job.status.phase;
-      if (typeof job._startedAtGameSeconds !== 'number') job._startedAtGameSeconds = this.gameSeconds;
+      if (typeof job._startedAtGameSeconds !== 'number')
+        job._startedAtGameSeconds = this.gameSeconds;
       if (!job.status.startTime) job.status.startTime = new Date().toISOString();
 
       const completions = Math.max(1, Number(job.spec.completions ?? 1) || 1);
       const parallelism = Math.max(1, Number(job.spec.parallelism ?? 1) || 1);
-      const backoffLimit = Number.isFinite(Number(job.spec.backoffLimit)) ? Number(job.spec.backoffLimit) : 6;
+      const backoffLimit = Number.isFinite(Number(job.spec.backoffLimit))
+        ? Number(job.spec.backoffLimit)
+        : 6;
       const activeDeadlineSeconds = Number(job.spec.activeDeadlineSeconds);
-      const jobPods = () => this.cluster.getChildren(job.uid).filter((child) => child.kind === 'Pod');
+      const jobPods = () =>
+        this.cluster.getChildren(job.uid).filter((child) => child.kind === 'Pod');
       const succeededPods = jobPods().filter((pod) => pod.status.phase === 'Succeeded');
       const failedPods = jobPods().filter((pod) => pod.status.phase === 'Failed');
-      const activePods = jobPods().filter((pod) => pod.status.phase === 'Running' || pod.status.phase === 'Pending');
+      const activePods = jobPods().filter(
+        (pod) => pod.status.phase === 'Running' || pod.status.phase === 'Pending'
+      );
       job.status.succeeded = succeededPods.length;
       job.status.failed = failedPods.length;
       job.status.active = activePods.length;
@@ -2192,7 +2551,12 @@ export class SimulationTick {
         job.status.completionTime = new Date().toISOString();
         job.status.reason = reason;
         job.status.message = message || '';
-        job.setCondition(phase === 'Complete' ? 'Complete' : 'Failed', 'True', reason, message || '');
+        job.setCondition(
+          phase === 'Complete' ? 'Complete' : 'Failed',
+          'True',
+          reason,
+          message || ''
+        );
         this.cluster.update(job.uid, job);
         return true;
       };
@@ -2207,16 +2571,33 @@ export class SimulationTick {
           // Terminate still-running pods and fail the Job (SIM-011).
           for (const pod of activePods) {
             pod.setPhase('Failed');
-            pod.setCondition('Ready', 'False', 'ContainersNotReady', 'job active deadline exceeded');
-            pod.recordEvent('Warning', 'DeadlineExceeded', 'Pod terminated because the Job activeDeadlineSeconds was exceeded');
+            pod.setCondition(
+              'Ready',
+              'False',
+              'ContainersNotReady',
+              'job active deadline exceeded'
+            );
+            pod.recordEvent(
+              'Warning',
+              'DeadlineExceeded',
+              'Pod terminated because the Job activeDeadlineSeconds was exceeded'
+            );
           }
           job.status.active = 0;
-          finishJob('Failed', 'DeadlineExceeded', `Job was active longer than specified deadline (${activeDeadlineSeconds}s)`);
+          finishJob(
+            'Failed',
+            'DeadlineExceeded',
+            `Job was active longer than specified deadline (${activeDeadlineSeconds}s)`
+          );
           continue;
         }
       }
       if (failedPods.length > backoffLimit) {
-        finishJob('Failed', 'BackoffLimitExceeded', `Job has reached the specified backoff limit (${backoffLimit})`);
+        finishJob(
+          'Failed',
+          'BackoffLimitExceeded',
+          `Job has reached the specified backoff limit (${backoffLimit})`
+        );
         continue;
       }
       if (jobPods().some((pod) => this._isPodBlocked(pod))) continue;
@@ -2224,21 +2605,25 @@ export class SimulationTick {
       // Exponential retry backoff (simulation time).
       if (failedPods.length > 0) {
         if (typeof job._nextPodCreateAtGameSeconds !== 'number') {
-          job._nextPodCreateAtGameSeconds = this.gameSeconds + Math.min(300, Math.pow(2, failedPods.length) * 10);
+          job._nextPodCreateAtGameSeconds =
+            this.gameSeconds + Math.min(300, Math.pow(2, failedPods.length) * 10);
         }
       } else {
         job._nextPodCreateAtGameSeconds = undefined;
       }
-      const backoffPending = failedPods.length > 0
-        && typeof job._nextPodCreateAtGameSeconds === 'number'
-        && this.gameSeconds < job._nextPodCreateAtGameSeconds;
+      const backoffPending =
+        failedPods.length > 0 &&
+        typeof job._nextPodCreateAtGameSeconds === 'number' &&
+        this.gameSeconds < job._nextPodCreateAtGameSeconds;
       const needed = Math.min(parallelism, completions - succeededPods.length) - activePods.length;
       for (let index = 0; index < needed; index++) {
         if (backoffPending) break;
         const pod = this._createPodForWorkload(job, job);
         if (!pod) break;
         pod.spec.restartPolicy = 'Never';
-        const duration = Math.max(1, Number(job.spec.estimatedDurationSeconds) || 30) * (0.8 + Math.random() * 0.4);
+        const duration =
+          Math.max(1, Number(job.spec.estimatedDurationSeconds) || 30) *
+          (0.8 + Math.random() * 0.4);
         pod._completionAtGameSeconds = this.gameSeconds + duration;
         pod._jobUid = job.uid;
       }
@@ -2246,10 +2631,19 @@ export class SimulationTick {
       // Simulated-time completion (was wall-clock Date.now() based).
       for (const pod of activePods) {
         if (pod.status.phase !== 'Running') continue;
-        if (typeof pod._completionAtGameSeconds === 'number' && this.gameSeconds >= pod._completionAtGameSeconds) {
+        if (
+          typeof pod._completionAtGameSeconds === 'number' &&
+          this.gameSeconds >= pod._completionAtGameSeconds
+        ) {
           pod.setPhase('Succeeded');
           for (const status of pod.status.containerStatuses || []) {
-            status.state = { terminated: { exitCode: 0, reason: 'Completed', finishedAt: new Date().toISOString() } };
+            status.state = {
+              terminated: {
+                exitCode: 0,
+                reason: 'Completed',
+                finishedAt: new Date().toISOString(),
+              },
+            };
             status.ready = false;
             status.started = false;
           }
@@ -2262,8 +2656,11 @@ export class SimulationTick {
       const succeededNow = jobPods().filter((pod) => pod.status.phase === 'Succeeded').length;
       job.status.succeeded = succeededNow;
       job.status.failed = jobPods().filter((pod) => pod.status.phase === 'Failed').length;
-      job.status.active = jobPods().filter((pod) => pod.status.phase === 'Running' || pod.status.phase === 'Pending').length;
-      if (succeededNow >= completions) finishJob('Complete', 'JobComplete', 'Job completed successfully');
+      job.status.active = jobPods().filter(
+        (pod) => pod.status.phase === 'Running' || pod.status.phase === 'Pending'
+      ).length;
+      if (succeededNow >= completions)
+        finishJob('Complete', 'JobComplete', 'Job completed successfully');
     }
   }
 
@@ -2271,11 +2668,22 @@ export class SimulationTick {
     for (const cronJob of this.cluster.getByKind('CronJob')) {
       const namespace = cronJob.metadata.namespace;
       const jobs = this.cluster.getChildren(cronJob.uid).filter((child) => child.kind === 'Job');
-      const running = jobs.filter((job) => job.status.phase !== 'Complete' && job.status.phase !== 'Failed' && !job.metadata.deletionTimestamp);
-      const completed = jobs.filter((job) => job.status.phase === 'Complete')
-        .sort((a, b) => new Date(a.metadata.creationTimestamp) - new Date(b.metadata.creationTimestamp));
-      const failed = jobs.filter((job) => job.status.phase === 'Failed')
-        .sort((a, b) => new Date(a.metadata.creationTimestamp) - new Date(b.metadata.creationTimestamp));
+      const running = jobs.filter(
+        (job) =>
+          job.status.phase !== 'Complete' &&
+          job.status.phase !== 'Failed' &&
+          !job.metadata.deletionTimestamp
+      );
+      const completed = jobs
+        .filter((job) => job.status.phase === 'Complete')
+        .sort(
+          (a, b) => new Date(a.metadata.creationTimestamp) - new Date(b.metadata.creationTimestamp)
+        );
+      const failed = jobs
+        .filter((job) => job.status.phase === 'Failed')
+        .sort(
+          (a, b) => new Date(a.metadata.creationTimestamp) - new Date(b.metadata.creationTimestamp)
+        );
 
       // CronJob.status.active is an array of Job object references (batch/v1).
       cronJob.status.active = running.map((job) => ({
@@ -2287,10 +2695,16 @@ export class SimulationTick {
       }));
       cronJob.status.suspend = cronJob.spec.suspend === true;
       const lastCompleted = completed[completed.length - 1];
-      if (lastCompleted) cronJob.status.lastSuccessfulTime = lastCompleted.status.completionTime || cronJob.status.lastSuccessfulTime;
+      if (lastCompleted)
+        cronJob.status.lastSuccessfulTime =
+          lastCompleted.status.completionTime || cronJob.status.lastSuccessfulTime;
 
-      const successLimit = Number.isFinite(Number(cronJob.spec.successfulJobsHistoryLimit)) ? Number(cronJob.spec.successfulJobsHistoryLimit) : 3;
-      const failedLimit = Number.isFinite(Number(cronJob.spec.failedJobsHistoryLimit)) ? Number(cronJob.spec.failedJobsHistoryLimit) : 1;
+      const successLimit = Number.isFinite(Number(cronJob.spec.successfulJobsHistoryLimit))
+        ? Number(cronJob.spec.successfulJobsHistoryLimit)
+        : 3;
+      const failedLimit = Number.isFinite(Number(cronJob.spec.failedJobsHistoryLimit))
+        ? Number(cronJob.spec.failedJobsHistoryLimit)
+        : 1;
       while (completed.length > successLimit) this.cluster.remove(completed.shift().uid);
       while (failed.length > failedLimit) this.cluster.remove(failed.shift().uid);
 
@@ -2303,15 +2717,27 @@ export class SimulationTick {
       if (!parsed.valid) {
         if (!cronJob._invalidScheduleLogged) {
           cronJob._invalidScheduleLogged = true;
-          cronJob.setCondition('ScheduleInvalid', 'True', 'InvalidSchedule', `invalid CronJob schedule: ${parsed.message || cronJob.spec.schedule}`);
-          cronJob.recordEvent('Warning', 'InvalidSchedule', `invalid CronJob schedule: ${parsed.message || cronJob.spec.schedule}`);
+          cronJob.setCondition(
+            'ScheduleInvalid',
+            'True',
+            'InvalidSchedule',
+            `invalid CronJob schedule: ${parsed.message || cronJob.spec.schedule}`
+          );
+          cronJob.recordEvent(
+            'Warning',
+            'InvalidSchedule',
+            `invalid CronJob schedule: ${parsed.message || cronJob.spec.schedule}`
+          );
           this.cluster.update(cronJob.uid, cronJob);
         }
         continue;
       }
       cronJob._invalidScheduleLogged = false;
       const nowMs = this._virtualNowMs();
-      if (typeof cronJob._nextScheduleAtMs !== 'number' || !Number.isFinite(cronJob._nextScheduleAtMs)) {
+      if (
+        typeof cronJob._nextScheduleAtMs !== 'number' ||
+        !Number.isFinite(cronJob._nextScheduleAtMs)
+      ) {
         const next = nextCronOccurrence(parsed, new Date(nowMs));
         cronJob._nextScheduleAtMs = next ? next.getTime() : Number.POSITIVE_INFINITY;
         this.cluster.update(cronJob.uid, cronJob);
@@ -2324,7 +2750,11 @@ export class SimulationTick {
       const policy = cronJob.spec.concurrencyPolicy || 'Allow';
       if (running.length > 0) {
         if (policy === 'Forbid') {
-          cronJob.recordEvent('Normal', 'JobAlreadyActive', 'Skipped scheduled job: concurrency policy Forbid');
+          cronJob.recordEvent(
+            'Normal',
+            'JobAlreadyActive',
+            'Skipped scheduled job: concurrency policy Forbid'
+          );
           cronJob.status.lastScheduleTime = scheduledAt.toISOString();
           const nextSkip = nextCronOccurrence(parsed, scheduledAt);
           cronJob._nextScheduleAtMs = nextSkip ? nextSkip.getTime() : Number.POSITIVE_INFINITY;
@@ -2333,7 +2763,11 @@ export class SimulationTick {
         }
         if (policy === 'Replace') {
           for (const job of running) this.cluster.remove(job.uid);
-          cronJob.recordEvent('Normal', 'JobReplaced', 'Replaced a running job due to concurrency policy Replace');
+          cronJob.recordEvent(
+            'Normal',
+            'JobReplaced',
+            'Replaced a running job due to concurrency policy Replace'
+          );
         }
       }
 
@@ -2361,7 +2795,10 @@ export class SimulationTick {
       if (!newJob) continue;
       this.cluster.addRelationship(cronJob.uid, newJob.uid);
       cronJob.status.lastScheduleTime = scheduledAt.toISOString();
-      cronJob.status.active = [...(cronJob.status.active || []), { apiVersion: 'batch/v1', kind: 'Job', name: jobName, namespace, uid: newJob.metadata.uid }];
+      cronJob.status.active = [
+        ...(cronJob.status.active || []),
+        { apiVersion: 'batch/v1', kind: 'Job', name: jobName, namespace, uid: newJob.metadata.uid },
+      ];
       cronJob.recordEvent('Normal', 'SuccessfulCreate', `Created job ${jobName}`);
       const nextAfterJob = nextCronOccurrence(parsed, new Date(scheduledAtMs + 1000));
       cronJob._nextScheduleAtMs = nextAfterJob ? nextAfterJob.getTime() : Number.POSITIVE_INFINITY;
@@ -2387,12 +2824,14 @@ export class SimulationTick {
     const typeFilter = options.type ? String(options.type) : null;
     const limit = Math.max(1, Math.min(1000, Number(options.limit) || 200));
     const events = [];
-    const resources = typeof this.cluster.getAllResources === 'function'
-      ? this.cluster.getAllResources()
-      : (this.cluster.getByKind('Pod') || []);
+    const resources =
+      typeof this.cluster.getAllResources === 'function'
+        ? this.cluster.getAllResources()
+        : this.cluster.getByKind('Pod') || [];
     for (const resource of resources) {
       if (!resource) continue;
-      const eventList = typeof resource.getEvents === 'function' ? resource.getEvents() : (resource.events || []);
+      const eventList =
+        typeof resource.getEvents === 'function' ? resource.getEvents() : resource.events || [];
       for (const event of eventList || []) {
         if (!event || !event.reason) continue;
         const involvedObject = event.involvedObject || {};
@@ -2438,15 +2877,29 @@ export class SimulationTick {
       hpa.status.observedGeneration = hpa.metadata.generation;
       const target = this.cluster.getByName(targetRef.kind, targetRef.name, hpa.namespace);
       if (!target) {
-        hpa.setCondition('ScalingActive', 'False', 'FailedGetScale', `the HPA controller was unable to get the target's current scale: ${String(targetRef.kind).toLowerCase()}s.apps "${targetRef.name}" not found`);
+        hpa.setCondition(
+          'ScalingActive',
+          'False',
+          'FailedGetScale',
+          `the HPA controller was unable to get the target's current scale: ${String(targetRef.kind).toLowerCase()}s.apps "${targetRef.name}" not found`
+        );
         this.cluster.update(hpa.uid, hpa);
         continue;
       }
 
       const currentReplicas = Math.max(0, Number(target.spec.replicas ?? 1) || 0);
-      const minReplicas = Number.isFinite(Number(hpa.spec.minReplicas)) ? Number(hpa.spec.minReplicas) : 1;
-      const maxReplicas = Number.isFinite(Number(hpa.spec.maxReplicas)) ? Number(hpa.spec.maxReplicas) : 10;
-      const metrics = hpa.spec.metrics || [{ type: 'Resource', resource: { name: 'cpu', target: { type: 'Utilization', averageUtilization: 50 } } }];
+      const minReplicas = Number.isFinite(Number(hpa.spec.minReplicas))
+        ? Number(hpa.spec.minReplicas)
+        : 1;
+      const maxReplicas = Number.isFinite(Number(hpa.spec.maxReplicas))
+        ? Number(hpa.spec.maxReplicas)
+        : 10;
+      const metrics = hpa.spec.metrics || [
+        {
+          type: 'Resource',
+          resource: { name: 'cpu', target: { type: 'Utilization', averageUtilization: 50 } },
+        },
+      ];
       let desiredReplicas = currentReplicas;
       let metricsAvailable = true;
       const statusMetrics = [];
@@ -2454,13 +2907,19 @@ export class SimulationTick {
       for (const metric of metrics) {
         if (metric.type !== 'Resource' || !metric.resource) continue;
         const resourceName = metric.resource.name || 'cpu';
-        const targetUtilization = Number(
-          metric.resource.targetAverageUtilization ?? metric.resource.target?.averageUtilization ?? 50
-        ) || 50;
+        const targetUtilization =
+          Number(
+            metric.resource.targetAverageUtilization ??
+              metric.resource.target?.averageUtilization ??
+              50
+          ) || 50;
         const measured = this._getWorkloadCpuUtilization(target);
         if (!measured.available) {
           metricsAvailable = false;
-          statusMetrics.push({ type: 'Resource', resource: { name: resourceName, current: { averageUtilization: 0 } } });
+          statusMetrics.push({
+            type: 'Resource',
+            resource: { name: resourceName, current: { averageUtilization: 0 } },
+          });
           continue;
         }
         statusMetrics.push({
@@ -2474,8 +2933,10 @@ export class SimulationTick {
           },
         });
         const ratio = measured.utilization / targetUtilization;
-        if (ratio > 1 + TOLERANCE) desiredReplicas = Math.max(desiredReplicas, Math.ceil(currentReplicas * ratio));
-        else if (ratio < 1 - TOLERANCE) desiredReplicas = Math.min(desiredReplicas, Math.ceil(currentReplicas * ratio));
+        if (ratio > 1 + TOLERANCE)
+          desiredReplicas = Math.max(desiredReplicas, Math.ceil(currentReplicas * ratio));
+        else if (ratio < 1 - TOLERANCE)
+          desiredReplicas = Math.min(desiredReplicas, Math.ceil(currentReplicas * ratio));
       }
 
       if (!metricsAvailable) {
@@ -2484,7 +2945,12 @@ export class SimulationTick {
         // last successful value (0 until the first successful sync).
         hpa.status.currentMetrics = [];
         hpa.status.desiredReplicas = Number(hpa.status.currentReplicas || 0) || 0;
-        hpa.setCondition('ScalingActive', 'False', 'FailedGetResourceMetric', 'the HPA was unable to compute the replica count: no metrics returned');
+        hpa.setCondition(
+          'ScalingActive',
+          'False',
+          'FailedGetResourceMetric',
+          'the HPA was unable to compute the replica count: no metrics returned'
+        );
         hpa.setCondition('ScalingLimited', 'False', 'DesiredWithinRange', '');
         this.cluster.update(hpa.uid, hpa);
         continue;
@@ -2494,11 +2960,26 @@ export class SimulationTick {
 
       const rawDesiredReplicas = Math.max(minReplicas, Math.min(maxReplicas, desiredReplicas));
       desiredReplicas = rawDesiredReplicas;
-      hpa.setCondition('ScalingActive', 'True', 'ValidMetricFound', 'the HPA was able to successfully calculate a replica count from cpu resource utilization');
+      hpa.setCondition(
+        'ScalingActive',
+        'True',
+        'ValidMetricFound',
+        'the HPA was able to successfully calculate a replica count from cpu resource utilization'
+      );
       if (desiredReplicas >= maxReplicas && currentReplicas < desiredReplicas) {
-        hpa.setCondition('ScalingLimited', 'True', 'TooManyReplicas', 'the desired replica count is more than the maximum replica count');
+        hpa.setCondition(
+          'ScalingLimited',
+          'True',
+          'TooManyReplicas',
+          'the desired replica count is more than the maximum replica count'
+        );
       } else if (desiredReplicas <= minReplicas && currentReplicas > desiredReplicas) {
-        hpa.setCondition('ScalingLimited', 'True', 'TooFewReplicas', 'the desired replica count is less than the minimum replica count');
+        hpa.setCondition(
+          'ScalingLimited',
+          'True',
+          'TooFewReplicas',
+          'the desired replica count is less than the minimum replica count'
+        );
       } else {
         hpa.setCondition('ScalingLimited', 'False', 'DesiredWithinRange', '');
       }
@@ -2507,11 +2988,15 @@ export class SimulationTick {
       const scaleUpLimit = Math.max(4, currentReplicas * 2);
       const scaleDownLimit = Math.max(1, Math.floor(currentReplicas * 0.5));
       let nextReplicas = desiredReplicas;
-      if (nextReplicas > currentReplicas) nextReplicas = Math.min(nextReplicas, currentReplicas + scaleUpLimit);
-      else if (nextReplicas < currentReplicas) nextReplicas = Math.max(nextReplicas, scaleDownLimit);
+      if (nextReplicas > currentReplicas)
+        nextReplicas = Math.min(nextReplicas, currentReplicas + scaleUpLimit);
+      else if (nextReplicas < currentReplicas)
+        nextReplicas = Math.max(nextReplicas, scaleDownLimit);
 
       if (nextReplicas !== currentReplicas) {
-        const lastScaleTime = hpa.status.lastScaleTime ? new Date(hpa.status.lastScaleTime).getTime() : 0;
+        const lastScaleTime = hpa.status.lastScaleTime
+          ? new Date(hpa.status.lastScaleTime).getTime()
+          : 0;
         const cooldown = nextReplicas > currentReplicas ? 30000 : 300000;
         if (Date.now() - lastScaleTime >= cooldown) {
           const direction = nextReplicas > currentReplicas ? 'up' : 'down';
@@ -2521,8 +3006,18 @@ export class SimulationTick {
           hpa.status.currentReplicas = nextReplicas;
           hpa.status.desiredReplicas = nextReplicas;
           hpa.status.lastScaleTime = new Date().toISOString();
-          hpa.recordEvent('Normal', 'SuccessfulRescale', `New size: ${nextReplicas}; reason: cpu resource utilization (percentage of request) above target`);
-          this.eventBus?.emit('hpa:scaled', { hpa: hpa.metadata.name, target: target.metadata.name, from: currentReplicas, to: nextReplicas, direction });
+          hpa.recordEvent(
+            'Normal',
+            'SuccessfulRescale',
+            `New size: ${nextReplicas}; reason: cpu resource utilization (percentage of request) above target`
+          );
+          this.eventBus?.emit('hpa:scaled', {
+            hpa: hpa.metadata.name,
+            target: target.metadata.name,
+            from: currentReplicas,
+            to: nextReplicas,
+            direction,
+          });
         }
       } else {
         hpa.status.desiredReplicas = desiredReplicas;
@@ -2537,9 +3032,12 @@ export class SimulationTick {
    */
   _getWorkloadCpuUtilization(workload) {
     const selector = workload.spec.selector?.matchLabels || workload.metadata.labels || {};
-    const pods = this.cluster.selectByLabels('Pod', selector).filter(
-      (pod) => pod.metadata.namespace === workload.metadata.namespace && pod.status.phase === 'Running'
-    );
+    const pods = this.cluster
+      .selectByLabels('Pod', selector)
+      .filter(
+        (pod) =>
+          pod.metadata.namespace === workload.metadata.namespace && pod.status.phase === 'Running'
+      );
     let totalUsage = 0;
     let totalRequest = 0;
     for (const pod of pods) {
@@ -2584,16 +3082,23 @@ export class SimulationTick {
 
       const existing = this.cluster.getByKind('PersistentVolume').find((volume) => {
         if (volume.status.phase !== 'Available') return false;
-        if ((volume.spec.storageClassName || '') !== (claim.spec.storageClassName || '')) return false;
+        if ((volume.spec.storageClassName || '') !== (claim.spec.storageClassName || ''))
+          return false;
         if (parseMemoryMi(volume.spec.capacity?.storage || '0') < requestMi) return false;
-        return accessModes.every((mode) => (volume.spec.accessModes || []).includes(mode))
-          && volume.matchesSelector(claim.spec.selector?.matchLabels || {});
+        return (
+          accessModes.every((mode) => (volume.spec.accessModes || []).includes(mode)) &&
+          volume.matchesSelector(claim.spec.selector?.matchLabels || {})
+        );
       });
 
       let volume = existing;
       if (!volume) {
         const storageClass = this._findStorageClass(claim.spec.storageClassName);
-        if (storageClass && storageClass.spec?.provisioner && storageClass.spec.provisioner !== 'kubernetes.io/no-provisioner') {
+        if (
+          storageClass &&
+          storageClass.spec?.provisioner &&
+          storageClass.spec.provisioner !== 'kubernetes.io/no-provisioner'
+        ) {
           volume = this.cluster.addResource({
             kind: 'PersistentVolume',
             metadata: {
@@ -2606,7 +3111,12 @@ export class SimulationTick {
               accessModes: [...accessModes],
               persistentVolumeReclaimPolicy: storageClass.spec.reclaimPolicy || 'Delete',
               storageClassName: storageClass.metadata.name,
-              claimRef: { kind: 'PersistentVolumeClaim', name: claim.metadata.name, namespace: claim.metadata.namespace, uid: claim.metadata.uid },
+              claimRef: {
+                kind: 'PersistentVolumeClaim',
+                name: claim.metadata.name,
+                namespace: claim.metadata.namespace,
+                uid: claim.metadata.uid,
+              },
             },
             status: { phase: 'Bound' },
           });
@@ -2614,7 +3124,12 @@ export class SimulationTick {
       }
 
       if (!volume) {
-        claim.setCondition('Pending', 'True', 'ProvisioningFailed', `no persistent volumes available for this claim and no storage class is set`);
+        claim.setCondition(
+          'Pending',
+          'True',
+          'ProvisioningFailed',
+          `no persistent volumes available for this claim and no storage class is set`
+        );
         continue;
       }
 
@@ -2629,7 +3144,11 @@ export class SimulationTick {
         namespace: claim.metadata.namespace,
         uid: claim.metadata.uid,
       };
-      claim.recordEvent('Normal', 'Bound', `PVC ${claim.metadata.name} bound to PV ${volume.metadata.name}`);
+      claim.recordEvent(
+        'Normal',
+        'Bound',
+        `PVC ${claim.metadata.name} bound to PV ${volume.metadata.name}`
+      );
       this.cluster.update(claim.uid, claim);
       this.cluster.update(volume.uid, volume);
       this.eventBus?.emit('pvc:bound', {
@@ -2644,10 +3163,18 @@ export class SimulationTick {
   /** Find a StorageClass by name (or the default storage class). */
   _findStorageClass(storageClassName) {
     const storageClasses = this.cluster.getByKind('StorageClass');
-    if (storageClassName) return storageClasses.find((entry) => entry.metadata.name === storageClassName) || null;
-    return storageClasses.find((entry) => entry.metadata.annotations?.['storageclass.kubernetes.io/is-default-class'] === 'true')
-      || storageClasses.find((entry) => (entry.spec?.provisioner || '') !== 'kubernetes.io/no-provisioner')
-      || null;
+    if (storageClassName)
+      return storageClasses.find((entry) => entry.metadata.name === storageClassName) || null;
+    return (
+      storageClasses.find(
+        (entry) =>
+          entry.metadata.annotations?.['storageclass.kubernetes.io/is-default-class'] === 'true'
+      ) ||
+      storageClasses.find(
+        (entry) => (entry.spec?.provisioner || '') !== 'kubernetes.io/no-provisioner'
+      ) ||
+      null
+    );
   }
 
   // ── OpenShift: routes / services / MetalLB ─────────────────────────────
@@ -2702,27 +3229,43 @@ export class SimulationTick {
       const previous = route._admittedState;
       route._admittedState = admitted;
       route.status = route.status || {};
-      route.status.ingress = [{
-        host,
-        routerName: 'default',
-        routerCanonicalHostname: `router-default.${APPS_DOMAIN}`,
-        wildcardPolicy: route.spec.wildcardPolicy || 'None',
-        conditions: [{
-          type: 'Admitted',
-          status: admitted ? 'True' : 'False',
-          reason,
-          message,
-          lastTransitionTime: new Date().toISOString(),
-        }],
-      }];
+      route.status.ingress = [
+        {
+          host,
+          routerName: 'default',
+          routerCanonicalHostname: `router-default.${APPS_DOMAIN}`,
+          wildcardPolicy: route.spec.wildcardPolicy || 'None',
+          conditions: [
+            {
+              type: 'Admitted',
+              status: admitted ? 'True' : 'False',
+              reason,
+              message,
+              lastTransitionTime: new Date().toISOString(),
+            },
+          ],
+        },
+      ];
       route.status.observedGeneration = route.metadata.generation;
 
       if (admitted && previous !== true) {
         this.cluster.update(route.uid, route);
-        this.eventBus?.emit('route:admitted', { route: route.metadata.name, host, namespace, resource: route });
+        this.eventBus?.emit('route:admitted', {
+          route: route.metadata.name,
+          host,
+          namespace,
+          resource: route,
+        });
       } else if (!admitted && previous !== false) {
         this.cluster.update(route.uid, route);
-        this.eventBus?.emit('route:not-admitted', { route: route.metadata.name, host, namespace, reason, message, resource: route });
+        this.eventBus?.emit('route:not-admitted', {
+          route: route.metadata.name,
+          host,
+          namespace,
+          reason,
+          message,
+          resource: route,
+        });
       }
     }
   }
@@ -2776,22 +3319,26 @@ export class SimulationTick {
             packageName: entry.name,
             defaultChannel: entry.channel,
             provider: { name: entry.provider },
-            channels: [{
-              name: entry.channel,
-              currentCSV: entry.currentCSV,
-              currentCSVDesc: {
-                displayName: entry.displayName,
-                version: (entry.currentCSV.match(/\.v?(\d+\.\d+\.\d+)/) || [])[1] || '1.0.0',
-                description: entry.description,
-                provider: { name: entry.provider },
+            channels: [
+              {
+                name: entry.channel,
+                currentCSV: entry.currentCSV,
+                currentCSVDesc: {
+                  displayName: entry.displayName,
+                  version: (entry.currentCSV.match(/\.v?(\d+\.\d+\.\d+)/) || [])[1] || '1.0.0',
+                  description: entry.description,
+                  provider: { name: entry.provider },
+                },
               },
-            }],
+            ],
           },
         });
       }
     }
-    if (this.cluster.getByName('Project', 'openshift-operators', '')
-      && !this.cluster.getByName('OperatorGroup', 'global-operators', 'openshift-operators')) {
+    if (
+      this.cluster.getByName('Project', 'openshift-operators', '') &&
+      !this.cluster.getByName('OperatorGroup', 'global-operators', 'openshift-operators')
+    ) {
       this.cluster.addResource({
         kind: 'OperatorGroup',
         metadata: { name: 'global-operators', namespace: 'openshift-operators' },
@@ -2805,7 +3352,8 @@ export class SimulationTick {
    * package-derived name (never the Subscription name — issue #9). */
   _csvNameForPackage(packageName) {
     const manifest = this.cluster.getByName('PackageManifest', packageName, '');
-    if (manifest && typeof manifest.currentCSV === 'string' && manifest.currentCSV) return manifest.currentCSV;
+    if (manifest && typeof manifest.currentCSV === 'string' && manifest.currentCSV)
+      return manifest.currentCSV;
     const channels = manifest?.spec?.channels || manifest?.status?.channels || [];
     const channel = channels.find((entry) => entry.currentCSV) || null;
     if (channel?.currentCSV) return channel.currentCSV;
@@ -2814,10 +3362,12 @@ export class SimulationTick {
 
   /** `oc rollout`-independent helper: package name a Subscription tracks. */
   _packageNameForSubscription(subscription) {
-    return subscription?.spec?.packageName
-      || subscription?.spec?.name
-      || subscription?.metadata?.name
-      || 'operator';
+    return (
+      subscription?.spec?.packageName ||
+      subscription?.spec?.name ||
+      subscription?.metadata?.name ||
+      'operator'
+    );
   }
 
   _csvVersionForPackage(packageName) {
@@ -2828,11 +3378,19 @@ export class SimulationTick {
 
   /** InstallPlan owned by a Subscription (created by this controller). */
   _installPlanForSubscription(subscription, namespace) {
-    const child = this.cluster.getChildren(subscription.uid).find((entry) => entry.kind === 'InstallPlan');
+    const child = this.cluster
+      .getChildren(subscription.uid)
+      .find((entry) => entry.kind === 'InstallPlan');
     if (child) return child;
-    return this.cluster.getByKindAndNamespace('InstallPlan', namespace).find(
-      (plan) => plan.metadata?.labels?.['operators.coreos.com/subscription'] === subscription.metadata.name
-    ) || null;
+    return (
+      this.cluster
+        .getByKindAndNamespace('InstallPlan', namespace)
+        .find(
+          (plan) =>
+            plan.metadata?.labels?.['operators.coreos.com/subscription'] ===
+            subscription.metadata.name
+        ) || null
+    );
   }
 
   /** CSV installed by a Subscription (status.installedCSV / currentCSV). */
@@ -2842,9 +3400,15 @@ export class SimulationTick {
       const named = this.cluster.getByName('ClusterServiceVersion', csvName, namespace);
       if (named) return named;
     }
-    return this.cluster.getByKindAndNamespace('ClusterServiceVersion', namespace).find(
-      (csv) => csv.metadata?.labels?.['operators.coreos.com/subscription'] === subscription.metadata.name
-    ) || null;
+    return (
+      this.cluster
+        .getByKindAndNamespace('ClusterServiceVersion', namespace)
+        .find(
+          (csv) =>
+            csv.metadata?.labels?.['operators.coreos.com/subscription'] ===
+            subscription.metadata.name
+        ) || null
+    );
   }
 
   /**
@@ -2856,28 +3420,36 @@ export class SimulationTick {
     if (!csv) return null;
     const namespace = csv.metadata.namespace;
     const strategyDeployment = csv.spec?.install?.spec?.deployments?.[0];
-    const deploymentName = strategyDeployment?.name
-      || `${String(csv.metadata.name).replace(/\.v\d.*$/, '')}-controller-manager`;
+    const deploymentName =
+      strategyDeployment?.name ||
+      `${String(csv.metadata.name).replace(/\.v\d.*$/, '')}-controller-manager`;
     const existing = this.cluster.getByName('Deployment', deploymentName, namespace);
     if (existing) {
       this._olmOperatorDeployments.set(csv.uid, existing.uid);
       return existing;
     }
-    const spec = deepClone(strategyDeployment?.spec || {
-      replicas: 1,
-      selector: { matchLabels: { name: `${packageName}-operator` } },
-      template: {
-        metadata: { labels: { name: `${packageName}-operator` } },
-        spec: {
-          serviceAccountName: 'default',
-          containers: [{
-            name: 'manager',
-            image: `${packageName.replace(/-operator$/, '')}-operator:latest`,
-            resources: { requests: { cpu: '10m', memory: '64Mi' }, limits: { cpu: '200m', memory: '256Mi' } },
-          }],
+    const spec = deepClone(
+      strategyDeployment?.spec || {
+        replicas: 1,
+        selector: { matchLabels: { name: `${packageName}-operator` } },
+        template: {
+          metadata: { labels: { name: `${packageName}-operator` } },
+          spec: {
+            serviceAccountName: 'default',
+            containers: [
+              {
+                name: 'manager',
+                image: `${packageName.replace(/-operator$/, '')}-operator:latest`,
+                resources: {
+                  requests: { cpu: '10m', memory: '64Mi' },
+                  limits: { cpu: '200m', memory: '256Mi' },
+                },
+              },
+            ],
+          },
         },
-      },
-    });
+      }
+    );
     if (!spec.selector) spec.selector = { matchLabels: { name: `${packageName}-operator` } };
     const deployment = this.cluster.addResource({
       kind: 'Deployment',
@@ -2931,11 +3503,14 @@ export class SimulationTick {
    * tears the operands down again.
    */
   _tickMetalLBOperands(dt) {
-    const csvReady = this.cluster.getByKind('ClusterServiceVersion').some(
-      (csv) => csv.status.phase === 'Succeeded'
-        && (/metallb/i.test(csv.metadata?.name || '')
-          || /^metallb/.test(String(csv.metadata?.labels?.['olm.package'] || '')))
-    );
+    const csvReady = this.cluster
+      .getByKind('ClusterServiceVersion')
+      .some(
+        (csv) =>
+          csv.status.phase === 'Succeeded' &&
+          (/metallb/i.test(csv.metadata?.name || '') ||
+            /^metallb/.test(String(csv.metadata?.labels?.['olm.package'] || '')))
+      );
     const crs = this.cluster.getByKind('MetalLB');
     const desired = new Map();
     if (csvReady) {
@@ -2952,13 +3527,18 @@ export class SimulationTick {
               metadata: { labels: { app: 'metallb', component: 'controller' } },
               spec: {
                 serviceAccountName: 'default',
-                containers: [{
-                  name: 'controller',
-                  image: 'quay.io/metallb/controller:v0.14.9',
-                  args: ['--port=7472', '--log-level=info'],
-                  ports: [{ name: 'monitoring', containerPort: 7472 }],
-                  resources: { requests: { cpu: '10m', memory: '32Mi' }, limits: { cpu: '100m', memory: '128Mi' } },
-                }],
+                containers: [
+                  {
+                    name: 'controller',
+                    image: 'quay.io/metallb/controller:v0.14.9',
+                    args: ['--port=7472', '--log-level=info'],
+                    ports: [{ name: 'monitoring', containerPort: 7472 }],
+                    resources: {
+                      requests: { cpu: '10m', memory: '32Mi' },
+                      limits: { cpu: '100m', memory: '128Mi' },
+                    },
+                  },
+                ],
               },
             },
           },
@@ -2973,13 +3553,18 @@ export class SimulationTick {
               metadata: { labels: { app: 'metallb', component: 'speaker' } },
               spec: {
                 serviceAccountName: 'default',
-                containers: [{
-                  name: 'speaker',
-                  image: 'quay.io/metallb/speaker:v0.14.9',
-                  args: ['--port=7472', '--log-level=info'],
-                  ports: [{ name: 'monitoring', containerPort: 7472 }],
-                  resources: { requests: { cpu: '10m', memory: '32Mi' }, limits: { cpu: '100m', memory: '128Mi' } },
-                }],
+                containers: [
+                  {
+                    name: 'speaker',
+                    image: 'quay.io/metallb/speaker:v0.14.9',
+                    args: ['--port=7472', '--log-level=info'],
+                    ports: [{ name: 'monitoring', containerPort: 7472 }],
+                    resources: {
+                      requests: { cpu: '10m', memory: '32Mi' },
+                      limits: { cpu: '100m', memory: '128Mi' },
+                    },
+                  },
+                ],
               },
             },
           },
@@ -2991,7 +3576,11 @@ export class SimulationTick {
     for (const wanted of desired.values()) {
       const existing = this.cluster.getByName(wanted.kind, wanted.name, wanted.namespace);
       if (existing) {
-        this._metallbOperands.set(existing.uid, { kind: wanted.kind, name: wanted.name, namespace: wanted.namespace });
+        this._metallbOperands.set(existing.uid, {
+          kind: wanted.kind,
+          name: wanted.name,
+          namespace: wanted.namespace,
+        });
         continue;
       }
       const created = this.cluster.addResource({
@@ -2999,11 +3588,20 @@ export class SimulationTick {
         metadata: {
           name: wanted.name,
           namespace: wanted.namespace,
-          labels: { app: 'metallb', component: wanted.kind === 'Deployment' ? 'controller' : 'speaker', 'app.kubernetes.io/managed-by': 'metallb-operator' },
+          labels: {
+            app: 'metallb',
+            component: wanted.kind === 'Deployment' ? 'controller' : 'speaker',
+            'app.kubernetes.io/managed-by': 'metallb-operator',
+          },
         },
         spec: deepClone(wanted.spec),
       });
-      if (created) this._metallbOperands.set(created.uid, { kind: wanted.kind, name: wanted.name, namespace: wanted.namespace });
+      if (created)
+        this._metallbOperands.set(created.uid, {
+          kind: wanted.kind,
+          name: wanted.name,
+          namespace: wanted.namespace,
+        });
     }
 
     // Remove operands that are no longer desired (CR or operator removed).
@@ -3024,11 +3622,13 @@ export class SimulationTick {
     // MetalLB only programs LoadBalancer Services when the operator is
     // installed AND the MetalLB operand CR exists (real MetalLB flow).
     const metallbCRs = this.cluster.getByKind('MetalLB');
-    const csvReady = this.cluster.getByKind('ClusterServiceVersion').some(
-      (csv) => csv.status.phase === 'Succeeded' && /metallb/i.test(csv.metadata?.name || '')
-    );
+    const csvReady = this.cluster
+      .getByKind('ClusterServiceVersion')
+      .some((csv) => csv.status.phase === 'Succeeded' && /metallb/i.test(csv.metadata?.name || ''));
     const metallbInstalled = metallbCRs.length > 0 && csvReady;
-    const pools = this.cluster.getByKind('IPAddressPool').filter((pool) => (pool.spec?.addresses || []).length > 0);
+    const pools = this.cluster
+      .getByKind('IPAddressPool')
+      .filter((pool) => (pool.spec?.addresses || []).length > 0);
     const advertisements = this.cluster.getByKind('L2Advertisement');
     const advertisedPools = new Set();
     for (const advertisement of advertisements) {
@@ -3042,7 +3642,9 @@ export class SimulationTick {
     }
     const usablePools = pools.filter((pool) => advertisedPools.has(pool.metadata.name));
 
-    const services = this.cluster.getByKind('Service').filter((service) => service.spec.type === 'LoadBalancer');
+    const services = this.cluster
+      .getByKind('Service')
+      .filter((service) => service.spec.type === 'LoadBalancer');
     if (services.length === 0) return;
 
     const usedIps = new Set();
@@ -3068,11 +3670,13 @@ export class SimulationTick {
       if (!address) continue;
       usedIps.add(address);
       service.status.loadBalancer = {
-        ingress: [{
-          ip: address,
-          ipMode: 'VIP',
-          hostname: '',
-        }],
+        ingress: [
+          {
+            ip: address,
+            ipMode: 'VIP',
+            hostname: '',
+          },
+        ],
       };
       this.cluster.update(service.uid, service);
       service.recordEvent('Normal', 'EnsuredLoadBalancer', `Assigned external IP ${address}`);
@@ -3087,9 +3691,10 @@ export class SimulationTick {
 
   /** Pick the first free IP from the advertised MetalLB pools. */
   _allocateMetalLBAddress(pools, usedIps, service = null) {
-    const requestedPool = service?.metadata?.annotations?.['metallb.universe.tf/address-pool']
-      || service?.metadata?.annotations?.['metallb.io/address-pool']
-      || '';
+    const requestedPool =
+      service?.metadata?.annotations?.['metallb.universe.tf/address-pool'] ||
+      service?.metadata?.annotations?.['metallb.io/address-pool'] ||
+      '';
     for (const pool of pools) {
       // autoAssign: false pools are only used by services that explicitly
       // request them via the address-pool annotation (MetalLB semantics).
@@ -3137,14 +3742,18 @@ export class SimulationTick {
       const network = this._ipToInt(parts) & ((0xffffffff << hostBits) >>> 0);
       const results = [];
       const maxAddresses = Math.min(2 ** hostBits, 1024);
-      for (let offset = 1; offset < maxAddresses; offset++) results.push(this._intToIp((network + offset) >>> 0));
+      for (let offset = 1; offset < maxAddresses; offset++)
+        results.push(this._intToIp((network + offset) >>> 0));
       return results;
     }
     return [value];
   }
 
   _ipToInt(parts) {
-    return (((parts[0] << 24) >>> 0) + ((parts[1] << 16) >>> 0) + ((parts[2] << 8) >>> 0) + parts[3]) >>> 0;
+    return (
+      (((parts[0] << 24) >>> 0) + ((parts[1] << 16) >>> 0) + ((parts[2] << 8) >>> 0) + parts[3]) >>>
+      0
+    );
   }
 
   _intToIp(value) {
@@ -3158,7 +3767,9 @@ export class SimulationTick {
     for (const buildConfig of this.cluster.getByKind('BuildConfig')) {
       if (!buildConfig._initialTriggerChecked) {
         buildConfig._initialTriggerChecked = true;
-        const hasConfigChange = (buildConfig.spec.triggers || []).some((trigger) => trigger.type === 'ConfigChange');
+        const hasConfigChange = (buildConfig.spec.triggers || []).some(
+          (trigger) => trigger.type === 'ConfigChange'
+        );
         const hasBuilds = this.cluster.getBuildsForConfig(buildConfig).length > 0;
         if (hasConfigChange && !hasBuilds) {
           buildConfig._autoBuildElapsed = 0;
@@ -3167,7 +3778,8 @@ export class SimulationTick {
       const triggers = buildConfig.spec.triggers || [];
       const hasConfigChange = triggers.some((trigger) => trigger.type === 'ConfigChange');
       const generation = Number(buildConfig.metadata.generation) || 1;
-      if (buildConfig._lastConfigChangeGeneration === undefined) buildConfig._lastConfigChangeGeneration = generation;
+      if (buildConfig._lastConfigChangeGeneration === undefined)
+        buildConfig._lastConfigChangeGeneration = generation;
       if (buildConfig._autoBuildElapsed !== undefined && buildConfig._autoBuildElapsed !== null) {
         buildConfig._autoBuildElapsed += dt;
         if (buildConfig._autoBuildElapsed >= 1) {
@@ -3214,8 +3826,9 @@ export class SimulationTick {
       if (!available) continue;
       const reference = `${tagItem.image || ''}|${resolved.dockerImageReference || ''}|${resolved.tagEntry?.updated || ''}`;
       let record = buildConfig.status.imageChangeTriggers.find(
-        (entry) => (entry.from?.name || entry.fromName) === fromName
-          && (entry.from?.namespace || streamNamespace) === streamNamespace
+        (entry) =>
+          (entry.from?.name || entry.fromName) === fromName &&
+          (entry.from?.namespace || streamNamespace) === streamNamespace
       );
       const previous = record?.lastTriggeredImageID;
       if (previous === reference) continue;
@@ -3226,11 +3839,14 @@ export class SimulationTick {
       // BuildConfig, so re-resolve the record from the fresh status array.
       buildConfig.status.imageChangeTriggers = buildConfig.status.imageChangeTriggers || [];
       let freshRecord = buildConfig.status.imageChangeTriggers.find(
-        (entry) => (entry.from?.name || entry.fromName) === fromName
-          && (entry.from?.namespace || streamNamespace) === streamNamespace
+        (entry) =>
+          (entry.from?.name || entry.fromName) === fromName &&
+          (entry.from?.namespace || streamNamespace) === streamNamespace
       );
       if (!freshRecord) {
-        freshRecord = { from: { kind: 'ImageStreamTag', name: fromName, namespace: streamNamespace } };
+        freshRecord = {
+          from: { kind: 'ImageStreamTag', name: fromName, namespace: streamNamespace },
+        };
         buildConfig.status.imageChangeTriggers.push(freshRecord);
       }
       freshRecord.lastTriggeredImageID = reference;
@@ -3291,9 +3907,17 @@ export class SimulationTick {
   }
 
   _findBuildConfigForBuild(build) {
-    const owner = build.metadata.ownerReferences.find((reference) => reference.kind === 'BuildConfig');
-    if (owner) return this.cluster.get(owner.uid) || this.cluster.getBuildConfig(build.namespace, owner.name);
-    return this.cluster.getBuildConfig(build.namespace, build.metadata.labels?.buildconfig || build.metadata.labels?.['buildconfig.openshift.io/name']);
+    const owner = build.metadata.ownerReferences.find(
+      (reference) => reference.kind === 'BuildConfig'
+    );
+    if (owner)
+      return (
+        this.cluster.get(owner.uid) || this.cluster.getBuildConfig(build.namespace, owner.name)
+      );
+    return this.cluster.getBuildConfig(
+      build.namespace,
+      build.metadata.labels?.buildconfig || build.metadata.labels?.['buildconfig.openshift.io/name']
+    );
   }
 
   /**
@@ -3308,10 +3932,15 @@ export class SimulationTick {
     const version = parseInt(String(build.metadata.name).split('-').pop(), 10);
     if (Number.isFinite(version) && version <= 1) return false;
     if (buildConfig?.spec?.failureRate !== undefined) {
-      return (this._hashString(`${build.metadata.name}:failure`) % 1000) / 1000 < Number(buildConfig.spec.failureRate);
+      return (
+        (this._hashString(`${build.metadata.name}:failure`) % 1000) / 1000 <
+        Number(buildConfig.spec.failureRate)
+      );
     }
     if (!(this.buildFailureRate > 0)) return false;
-    return (this._hashString(`${build.metadata.name}:failure`) % 1000) / 1000 < this.buildFailureRate;
+    return (
+      (this._hashString(`${build.metadata.name}:failure`) % 1000) / 1000 < this.buildFailureRate
+    );
   }
 
   /** Human-readable build failure message (mirrors `oc logs build/...`). */
@@ -3338,14 +3967,26 @@ export class SimulationTick {
         imageDigest: result.tagEntry?.items?.[0]?.image || '',
       };
       this.cluster.update(build.uid, build);
-      this._triggerImageChangeRollout(namespace, imageStreamName, tag, result.tagEntry?.items?.[0]?.dockerImageReference);
+      this._triggerImageChangeRollout(
+        namespace,
+        imageStreamName,
+        tag,
+        result.tagEntry?.items?.[0]?.dockerImageReference
+      );
     }
 
     if (buildConfig) {
-      buildConfig.status.lastVersion = Math.max(buildConfig.status?.lastVersion || 0, Number(build.status?.version) || buildConfig.status?.lastVersion || 0);
+      buildConfig.status.lastVersion = Math.max(
+        buildConfig.status?.lastVersion || 0,
+        Number(build.status?.version) || buildConfig.status?.lastVersion || 0
+      );
       this.cluster.update(buildConfig.uid, buildConfig);
     }
-    build.recordEvent('Normal', 'BuildCompleted', `Build ${build.metadata.name} completed successfully`);
+    build.recordEvent(
+      'Normal',
+      'BuildCompleted',
+      `Build ${build.metadata.name} completed successfully`
+    );
     this.eventBus?.emit('build:complete', {
       build: build.metadata.name,
       buildConfig: buildConfig?.metadata.name || '',
@@ -3394,8 +4035,9 @@ export class SimulationTick {
     for (const imageStream of this.cluster.getByKind('ImageStream')) {
       const namespace = imageStream.metadata.namespace;
       imageStream.status = imageStream.status || {};
-      imageStream.status.dockerImageRepository = imageStream.status.dockerImageRepository
-        || `${IMAGE_REGISTRY_HOST}/${namespace}/${imageStream.metadata.name}`;
+      imageStream.status.dockerImageRepository =
+        imageStream.status.dockerImageRepository ||
+        `${IMAGE_REGISTRY_HOST}/${namespace}/${imageStream.metadata.name}`;
       imageStream.status.publicDockerImageRepository = `${IMAGE_REGISTRY_HOST}/${namespace}/${imageStream.metadata.name}`;
       imageStream.status.tags = imageStream.status.tags || [];
 
@@ -3406,13 +4048,19 @@ export class SimulationTick {
           statusTag = { tag: tagName, items: [] };
           imageStream.status.tags.push(statusTag);
         }
-        if (statusTag.items.length === 0 && specTag.from?.kind === 'DockerImage' && specTag.from.name) {
-          statusTag.items = [{
-            dockerImageReference: specTag.from.name,
-            image: `sha256:${this.cluster._fakeDigest(specTag.from.name)}`,
-            generation: 1,
-            created: new Date().toISOString(),
-          }];
+        if (
+          statusTag.items.length === 0 &&
+          specTag.from?.kind === 'DockerImage' &&
+          specTag.from.name
+        ) {
+          statusTag.items = [
+            {
+              dockerImageReference: specTag.from.name,
+              image: `sha256:${this.cluster._fakeDigest(specTag.from.name)}`,
+              generation: 1,
+              created: new Date().toISOString(),
+            },
+          ];
         }
       }
     }
@@ -3426,7 +4074,12 @@ export class SimulationTick {
     subscription.status.phase = 'UpgradePending';
     subscription.status.reason = 'ConstraintsNotSatisfiable';
     subscription.status.message = resolutionMessage;
-    subscription.setCondition('ResolutionFailed', 'True', 'ConstraintsNotSatisfiable', resolutionMessage);
+    subscription.setCondition(
+      'ResolutionFailed',
+      'True',
+      'ConstraintsNotSatisfiable',
+      resolutionMessage
+    );
     subscription.setCondition('InstallPlanPending', 'False', 'NoInstallPlan', '');
     this.cluster.update(subscription.uid, subscription);
     subscription.recordEvent('Warning', 'ResolutionFailed', resolutionMessage);
@@ -3489,10 +4142,20 @@ export class SimulationTick {
         if (subscription.status.phase !== 'Failed') {
           subscription.status.phase = 'Failed';
           subscription.status.reason = 'InstallFailed';
-          subscription.status.message = subscription.spec.failureMessage || `operator ${packageName} failed to install`;
-          subscription.setCondition('InstallPlanComplete', 'False', 'InstallFailed', subscription.status.message);
+          subscription.status.message =
+            subscription.spec.failureMessage || `operator ${packageName} failed to install`;
+          subscription.setCondition(
+            'InstallPlanComplete',
+            'False',
+            'InstallFailed',
+            subscription.status.message
+          );
           this.cluster.update(subscription.uid, subscription);
-          this.eventBus?.emit('operator:failed', { name: subscription.metadata.name, namespace, packageName });
+          this.eventBus?.emit('operator:failed', {
+            name: subscription.metadata.name,
+            namespace,
+            packageName,
+          });
         }
         continue;
       }
@@ -3510,8 +4173,17 @@ export class SimulationTick {
         setStatus('NamespaceNotFound', `namespaces "${namespace}" not found`);
         if (!subscription._noNamespaceLogged) {
           subscription._noNamespaceLogged = true;
-          subscription.setCondition('InstallPlanPending', 'False', 'NamespaceNotFound', `namespaces "${namespace}" not found`);
-          subscription.recordEvent('Warning', 'FailedCreate', `namespaces "${namespace}" not found`);
+          subscription.setCondition(
+            'InstallPlanPending',
+            'False',
+            'NamespaceNotFound',
+            `namespaces "${namespace}" not found`
+          );
+          subscription.recordEvent(
+            'Warning',
+            'FailedCreate',
+            `namespaces "${namespace}" not found`
+          );
           this.cluster.update(subscription.uid, subscription);
         }
         continue;
@@ -3556,13 +4228,23 @@ export class SimulationTick {
       // namespaces require one (SingleNamespace installs) before OLM can deploy
       // the CSV (real 4.22 semantics — issue #9).
       const globalNamespace = namespace === 'openshift-operators';
-      const operatorGroup = this.cluster.getByKindAndNamespace('OperatorGroup', namespace)[0] || null;
+      const operatorGroup =
+        this.cluster.getByKindAndNamespace('OperatorGroup', namespace)[0] || null;
       if (!globalNamespace && !operatorGroup) {
         setStatus('NoOperatorGroup', `no operator group found in namespace "${namespace}"`);
         if (!subscription._noOperatorGroupLogged) {
           subscription._noOperatorGroupLogged = true;
-          subscription.setCondition('InstallPlanPending', 'False', 'NoOperatorGroup', `no operator group found in namespace "${namespace}"`);
-          subscription.recordEvent('Warning', 'NoOperatorGroup', 'OperatorGroup required to install this operator in the namespace');
+          subscription.setCondition(
+            'InstallPlanPending',
+            'False',
+            'NoOperatorGroup',
+            `no operator group found in namespace "${namespace}"`
+          );
+          subscription.recordEvent(
+            'Warning',
+            'NoOperatorGroup',
+            'OperatorGroup required to install this operator in the namespace'
+          );
           this.cluster.update(subscription.uid, subscription);
           this.eventBus?.emit('operator:no-operatorgroup', {
             name: subscription.metadata.name,
@@ -3579,7 +4261,11 @@ export class SimulationTick {
       // operator installed while the Subscription exists). Only deleting the
       // Subscription too makes the CSV deletion the real uninstall.
       let csv = this._csvForSubscription(subscription, namespace);
-      if ((subscription.status.phase === 'Succeeded' || subscription.status.installPlanComplete === true) && !csv) {
+      if (
+        (subscription.status.phase === 'Succeeded' ||
+          subscription.status.installPlanComplete === true) &&
+        !csv
+      ) {
         subscription.status.phase = 'Installing';
         subscription.status.reason = 'Installing';
         subscription.status.installedCSV = '';
@@ -3595,7 +4281,12 @@ export class SimulationTick {
         subscription.status.reason = 'Installing';
         subscription.status.message = `installing operator ${packageName}`;
         this.cluster.update(subscription.uid, subscription);
-        this.eventBus?.emit('operator:installing', { name: subscription.metadata.name, namespace, packageName, csv: csvName });
+        this.eventBus?.emit('operator:installing', {
+          name: subscription.metadata.name,
+          namespace,
+          packageName,
+          csv: csvName,
+        });
       }
       subscription._installElapsed += dt;
       const elapsed = subscription._installElapsed;
@@ -3643,18 +4334,31 @@ export class SimulationTick {
         this.cluster.update(plan.uid, plan);
       }
       if (plan.spec.approved !== true) {
-        subscription.setCondition('InstallPlanPending', 'False', 'RequiresApproval', `install plan ${plan.metadata.name} requires approval`);
+        subscription.setCondition(
+          'InstallPlanPending',
+          'False',
+          'RequiresApproval',
+          `install plan ${plan.metadata.name} requires approval`
+        );
         setStatus('RequiresApproval', `install plan ${plan.metadata.name} requires approval`);
         continue;
       }
-      if (typeof plan._approvedAtGameSeconds !== 'number') plan._approvedAtGameSeconds = this.gameSeconds;
+      if (typeof plan._approvedAtGameSeconds !== 'number')
+        plan._approvedAtGameSeconds = this.gameSeconds;
       if (plan.status.phase !== 'Complete') {
-        if (elapsed >= 1 || this.gameSeconds - plan._approvedAtGameSeconds >= INSTALLPLAN_COMPLETE_SECONDS) {
+        if (
+          elapsed >= 1 ||
+          this.gameSeconds - plan._approvedAtGameSeconds >= INSTALLPLAN_COMPLETE_SECONDS
+        ) {
           plan.markComplete();
           this.cluster.update(plan.uid, plan);
           subscription.status.installPlanRef = { name: plan.metadata.name, namespace };
           this.cluster.update(subscription.uid, subscription);
-          this.eventBus?.emit('installplan:complete', { name: plan.metadata.name, namespace, subscription: subscription.metadata.name });
+          this.eventBus?.emit('installplan:complete', {
+            name: plan.metadata.name,
+            namespace,
+            subscription: subscription.metadata.name,
+          });
         } else {
           setStatus('Installing', `waiting for InstallPlan ${plan.metadata.name} to complete`);
           continue;
@@ -3675,10 +4379,17 @@ export class SimulationTick {
             },
             annotations: {
               'olm.operatorNamespace': namespace,
-              'olm.operatorGroup': operatorGroup ? `${operatorGroup.metadata.namespace}/${operatorGroup.metadata.name}` : '',
-              'olm.targetNamespaces': operatorGroup && Array.isArray(operatorGroup.spec.targetNamespaces) && operatorGroup.spec.targetNamespaces.length > 0
-                ? operatorGroup.spec.targetNamespaces.join(',')
-                : (globalNamespace ? '' : namespace),
+              'olm.operatorGroup': operatorGroup
+                ? `${operatorGroup.metadata.namespace}/${operatorGroup.metadata.name}`
+                : '',
+              'olm.targetNamespaces':
+                operatorGroup &&
+                Array.isArray(operatorGroup.spec.targetNamespaces) &&
+                operatorGroup.spec.targetNamespaces.length > 0
+                  ? operatorGroup.spec.targetNamespaces.join(',')
+                  : globalNamespace
+                    ? ''
+                    : namespace,
             },
           },
           spec: {
@@ -3695,7 +4406,12 @@ export class SimulationTick {
           this._knownCSVs.set(csv.uid, { name: csvName, namespace, packageName });
           subscription.status.currentCSV = csvName;
           this.cluster.update(subscription.uid, subscription);
-          this.eventBus?.emit('operator:csv-created', { name: csvName, namespace, packageName, subscription: subscription.metadata.name });
+          this.eventBus?.emit('operator:csv-created', {
+            name: csvName,
+            namespace,
+            packageName,
+            subscription: subscription.metadata.name,
+          });
         }
       }
       if (!csv) continue;
@@ -3747,14 +4463,26 @@ export class SimulationTick {
     // during level teardown) performs the uninstall cleanup exactly once.
     for (const csv of this.cluster.getByKind('ClusterServiceVersion')) {
       if (!this._knownCSVs.has(csv.uid)) {
-        const packageName = csv.metadata?.labels?.['olm.package']
-          || String(csv.metadata?.name || '').replace(/\.v\d.*$/, '');
-        this._knownCSVs.set(csv.uid, { name: csv.metadata.name, namespace: csv.metadata.namespace, packageName });
+        const packageName =
+          csv.metadata?.labels?.['olm.package'] ||
+          String(csv.metadata?.name || '').replace(/\.v\d.*$/, '');
+        this._knownCSVs.set(csv.uid, {
+          name: csv.metadata.name,
+          namespace: csv.metadata.namespace,
+          packageName,
+        });
       }
     }
     for (const [uid, entry] of this._knownCSVs) {
       if (!this.cluster.get(uid)) {
-        this._onCSVDeleted({ ...entry, metadata: { name: entry.name, namespace: entry.namespace, labels: { 'olm.package': entry.packageName } } });
+        this._onCSVDeleted({
+          ...entry,
+          metadata: {
+            name: entry.name,
+            namespace: entry.namespace,
+            labels: { 'olm.package': entry.packageName },
+          },
+        });
         this._knownCSVs.delete(uid);
       }
     }
@@ -3764,7 +4492,9 @@ export class SimulationTick {
   _catalogDisplayName(packageName) {
     const entry = OLM_CATALOG.find((candidate) => candidate.name === packageName);
     if (entry) return entry.displayName;
-    return String(packageName).replace(/[-_]/g, ' ').replace(/\b\w/g, (character) => character.toUpperCase());
+    return String(packageName)
+      .replace(/[-_]/g, ' ')
+      .replace(/\b\w/g, (character) => character.toUpperCase());
   }
 
   /** CRDs advertised by the catalog for a package (CSV customresourcedefinitions). */
@@ -3789,7 +4519,11 @@ export class SimulationTick {
         if (resolution.allowed) {
           this._revivePod(pod, 'openshiftgames/scc-denied');
           pod.setAnnotation('openshift.io/scc', resolution.scc?.metadata.name || 'restricted-v2');
-          pod.recordEvent('Normal', 'SCCAdmitted', `Security context constraint ${resolution.scc?.metadata.name || 'restricted-v2'} admitted the pod`);
+          pod.recordEvent(
+            'Normal',
+            'SCCAdmitted',
+            `Security context constraint ${resolution.scc?.metadata.name || 'restricted-v2'} admitted the pod`
+          );
           this.cluster.update(pod.uid, pod);
         }
         continue;
@@ -3807,10 +4541,17 @@ export class SimulationTick {
       const container = podSpec.containers?.[0] || {};
       const message = 'unable to validate against any security context constraint';
       pod.setAnnotation('openshiftgames/scc-denied', 'true');
-      pod.setAnnotation('openshiftgames/denied-reason', `pods "${pod.metadata.name}" is forbidden: ${message}`);
+      pod.setAnnotation(
+        'openshiftgames/denied-reason',
+        `pods "${pod.metadata.name}" is forbidden: ${message}`
+      );
       pod.status.phase = 'Failed';
       pod.setCondition('Ready', 'False', 'SCCDenied', message);
-      pod.recordEvent('Warning', 'FailedCreate', `Error creating: pods "${pod.metadata.name}" is forbidden: ${message}`);
+      pod.recordEvent(
+        'Warning',
+        'FailedCreate',
+        `Error creating: pods "${pod.metadata.name}" is forbidden: ${message}`
+      );
       this.cluster.update(pod.uid, pod);
       this.eventBus?.emit('scc:denied', {
         pod: pod.metadata.name,
@@ -3855,17 +4596,30 @@ export class SimulationTick {
     const resolution = this.cluster.resolveSCCForPod(candidate);
     if (resolution.allowed) return resolution;
     if (resolution.candidates && resolution.candidates.length > 0) {
-      return { ...resolution, message: 'unable to validate against any security context constraint' };
+      return {
+        ...resolution,
+        message: 'unable to validate against any security context constraint',
+      };
     }
 
     // No SCC bound to the service account at all (e.g. a custom namespace the
     // player just created): restricted pods are still admitted, elevated ones
     // are not (matches the real default `system:authenticated` binding).
     const request = podSecurityRequest(podSpec || {});
-    const elevated = request.privileged || request.hostNetwork || request.hostPID || request.hostIPC || request.hostPath
-      || request.hostPorts.length > 0 || request.runAsUsers.includes(0);
+    const elevated =
+      request.privileged ||
+      request.hostNetwork ||
+      request.hostPID ||
+      request.hostIPC ||
+      request.hostPath ||
+      request.hostPorts.length > 0 ||
+      request.runAsUsers.includes(0);
     if (elevated) {
-      return { ...resolution, allowed: false, message: 'unable to validate against any security context constraint' };
+      return {
+        ...resolution,
+        allowed: false,
+        message: 'unable to validate against any security context constraint',
+      };
     }
     const restricted = this.cluster.getSCC('restricted-v2') || this.cluster.getSCCs()[0] || null;
     if (restricted && this.cluster.sccAllowsPod(restricted, podSpec || {})) {
@@ -3889,13 +4643,21 @@ export class SimulationTick {
     // failure reason so a controller retrying every tick does not flood Events.
     const signature = reason;
     const last = parent._lastFailedCreate;
-    if (last && last.signature === signature && this.gameSeconds - last.at < FAILED_CREATE_EVENT_SECONDS) {
+    if (
+      last &&
+      last.signature === signature &&
+      this.gameSeconds - last.at < FAILED_CREATE_EVENT_SECONDS
+    ) {
       return null;
     }
     parent._lastFailedCreate = { signature, at: this.gameSeconds };
     const fullMessage = `Error creating: pods "${podName}" ${reason}`;
     parent.recordEvent('Warning', 'FailedCreate', fullMessage);
-    if (parent.kind === 'ReplicaSet' || parent.kind === 'StatefulSet' || parent.kind === 'DaemonSet') {
+    if (
+      parent.kind === 'ReplicaSet' ||
+      parent.kind === 'StatefulSet' ||
+      parent.kind === 'DaemonSet'
+    ) {
       parent.setCondition('ReplicaFailure', 'True', 'FailedCreate', `pods "${podName}" ${reason}`);
       parent.status.replicas = parent.status.replicas || 0;
       parent.status.readyReplicas = 0;
@@ -3956,9 +4718,11 @@ export class SimulationTick {
   /** Whether a Pod is blocked by SCC/LimitRange/quota admission. */
   _isPodBlocked(pod) {
     const annotations = pod.metadata.annotations || {};
-    return annotations['openshiftgames/scc-denied'] === 'true'
-      || annotations['openshiftgames/limitrange-denied'] === 'true'
-      || annotations['openshiftgames/quota-denied'] === 'true';
+    return (
+      annotations['openshiftgames/scc-denied'] === 'true' ||
+      annotations['openshiftgames/limitrange-denied'] === 'true' ||
+      annotations['openshiftgames/quota-denied'] === 'true'
+    );
   }
 
   /** Put a previously denied pod back into Pending so controllers retry it. */
@@ -3984,10 +4748,17 @@ export class SimulationTick {
       if (pod.status.phase === 'Succeeded') continue;
       const denied = pod.metadata.annotations['openshiftgames/limitrange-denied'] === 'true';
       if (denied) {
-        const violations = this.cluster.checkLimitRange(pod.metadata.namespace, pod.spec || {}).violations;
+        const violations = this.cluster.checkLimitRange(
+          pod.metadata.namespace,
+          pod.spec || {}
+        ).violations;
         if (violations.length === 0) {
           this._revivePod(pod, 'openshiftgames/limitrange-denied');
-          pod.recordEvent('Normal', 'LimitRangeAdmitted', 'Pod now satisfies the project LimitRange');
+          pod.recordEvent(
+            'Normal',
+            'LimitRangeAdmitted',
+            'Pod now satisfies the project LimitRange'
+          );
           this.cluster.update(pod.uid, pod);
         }
         continue;
@@ -4004,10 +4775,17 @@ export class SimulationTick {
       const check = this.cluster.checkLimitRange(namespace, pod.spec);
       if (!check.allowed) {
         pod.setAnnotation('openshiftgames/limitrange-denied', 'true');
-        pod.setAnnotation('openshiftgames/denied-reason', `pods "${pod.metadata.name}" is forbidden: ${check.violations[0]}`);
+        pod.setAnnotation(
+          'openshiftgames/denied-reason',
+          `pods "${pod.metadata.name}" is forbidden: ${check.violations[0]}`
+        );
         pod.status.phase = 'Failed';
         pod.setCondition('Ready', 'False', 'LimitRangeViolation', check.violations[0]);
-        pod.recordEvent('Warning', 'FailedCreate', `Error creating: pods "${pod.metadata.name}" is forbidden: ${check.violations[0]}`);
+        pod.recordEvent(
+          'Warning',
+          'FailedCreate',
+          `Error creating: pods "${pod.metadata.name}" is forbidden: ${check.violations[0]}`
+        );
         this.cluster.update(pod.uid, pod);
         this.eventBus?.emit('limitrange:violation', {
           pod: pod.metadata.name,
@@ -4034,7 +4812,9 @@ export class SimulationTick {
       const annotations = pod.metadata.annotations;
       if (annotations['openshiftgames/quota-denied'] === 'true') {
         const requests = this._getPodResourceRequests(pod);
-        if (this.cluster.checkQuota(pod.metadata.namespace, requests.cpu, requests.memory).allowed) {
+        if (
+          this.cluster.checkQuota(pod.metadata.namespace, requests.cpu, requests.memory).allowed
+        ) {
           this._revivePod(pod, 'openshiftgames/quota-denied');
           pod.recordEvent('Normal', 'QuotaAdmitted', 'Pod now fits within the project quota');
           this.cluster.update(pod.uid, pod);
@@ -4052,10 +4832,17 @@ export class SimulationTick {
       }
 
       pod.setAnnotation('openshiftgames/quota-denied', 'true');
-      pod.setAnnotation('openshiftgames/denied-reason', `pods "${pod.metadata.name}" is forbidden: ${result.violations[0] || 'exceeded quota'}`);
+      pod.setAnnotation(
+        'openshiftgames/denied-reason',
+        `pods "${pod.metadata.name}" is forbidden: ${result.violations[0] || 'exceeded quota'}`
+      );
       pod.status.phase = 'Failed';
       pod.setCondition('Ready', 'False', 'QuotaExceeded', result.violations[0] || 'exceeded quota');
-      pod.recordEvent('Warning', 'FailedCreate', `Error creating: pods "${pod.metadata.name}" is forbidden: ${result.violations[0] || 'exceeded quota'}`);
+      pod.recordEvent(
+        'Warning',
+        'FailedCreate',
+        `Error creating: pods "${pod.metadata.name}" is forbidden: ${result.violations[0] || 'exceeded quota'}`
+      );
       this.cluster.update(pod.uid, pod);
       this.eventBus?.emit('quota:exceeded', {
         namespace: pod.metadata.namespace,
@@ -4073,7 +4860,11 @@ export class SimulationTick {
       if (!result.allowed) {
         violating.add(namespace);
         if (!this._quotaViolationNamespaces.has(namespace)) {
-          this.eventBus?.emit('quota:exceeded', { namespace, violations: result.violations, usage: result.usage });
+          this.eventBus?.emit('quota:exceeded', {
+            namespace,
+            violations: result.violations,
+            usage: result.usage,
+          });
         }
       }
     }
@@ -4101,13 +4892,17 @@ export class SimulationTick {
       oauth.status.lastRollout = new Date().toISOString();
       oauth.status.observedGeneration = oauth.metadata.generation;
       oauth.status.rollingOut = false;
-      oauth.status.conditions = [{
-        type: provider ? 'Available' : 'Progressing',
-        status: 'True',
-        reason: provider ? 'IdentityProviderReady' : 'NoIdentityProviders',
-        message: provider ? `identity provider ${provider.name} is ready` : 'no identity providers configured',
-        lastTransitionTime: new Date().toISOString(),
-      }];
+      oauth.status.conditions = [
+        {
+          type: provider ? 'Available' : 'Progressing',
+          status: 'True',
+          reason: provider ? 'IdentityProviderReady' : 'NoIdentityProviders',
+          message: provider
+            ? `identity provider ${provider.name} is ready`
+            : 'no identity providers configured',
+          lastTransitionTime: new Date().toISOString(),
+        },
+      ];
       oauth._bumpResourceVersion();
     }
     this.eventBus?.emit('auth:provider-ready', {
@@ -4125,14 +4920,25 @@ export class SimulationTick {
         operator.setCondition('Progressing', 'False', 'AsExpected', 'All is well');
         operator.setCondition('Degraded', 'False', 'AsExpected', 'All is well');
       }
-      operator.status.versions = operator.status.versions && operator.status.versions.length > 0
-        ? operator.status.versions.map((entry) => ({ ...entry, version }))
-        : [{ name: 'operator', version }];
+      operator.status.versions =
+        operator.status.versions && operator.status.versions.length > 0
+          ? operator.status.versions.map((entry) => ({ ...entry, version }))
+          : [{ name: 'operator', version }];
       if (operator._forceDegraded) {
-        operator.setCondition('Degraded', 'True', 'Degraded', operator._degradedMessage || 'component is degraded');
+        operator.setCondition(
+          'Degraded',
+          'True',
+          'Degraded',
+          operator._degradedMessage || 'component is degraded'
+        );
       }
       if (operator._forceUnavailable) {
-        operator.setCondition('Available', 'False', 'Unavailable', operator._unavailableMessage || 'component is unavailable');
+        operator.setCondition(
+          'Available',
+          'False',
+          'Unavailable',
+          operator._unavailableMessage || 'component is unavailable'
+        );
       }
       operator.status.observedGeneration = operator.metadata.generation;
     }
@@ -4153,7 +4959,9 @@ export class SimulationTick {
 
   _tickChaos(dt) {
     if (this.chaosConfig.podKillRate > 0) {
-      for (const pod of this.cluster.getByKind('Pod').filter((entry) => entry.status.phase === 'Running')) {
+      for (const pod of this.cluster
+        .getByKind('Pod')
+        .filter((entry) => entry.status.phase === 'Running')) {
         if (Math.random() < this.chaosConfig.podKillRate * dt) {
           pod.setPhase('Failed');
           pod.recordEvent('Warning', 'ChaosKilled', 'Pod killed by chaos engineering');
@@ -4162,14 +4970,16 @@ export class SimulationTick {
       }
     }
     if (this.chaosConfig.nodeFailRate > 0) {
-      for (const node of this.cluster.getByKind('Node').filter((entry) => entry.isConditionTrue('Ready'))) {
+      for (const node of this.cluster
+        .getByKind('Node')
+        .filter((entry) => entry.isConditionTrue('Ready'))) {
         if (Math.random() < this.chaosConfig.nodeFailRate * dt) {
           node.setPhase('NotReady');
           node.setCondition('Ready', 'False', 'ChaosNodeFailure');
           node.recordEvent('Warning', 'ChaosNodeDown', 'Node failed due to chaos injection');
-          const pods = this.cluster.getByKind('Pod').filter(
-            (pod) => pod.spec.nodeName === node.name && pod.status.phase === 'Running'
-          );
+          const pods = this.cluster
+            .getByKind('Pod')
+            .filter((pod) => pod.spec.nodeName === node.name && pod.status.phase === 'Running');
           for (const pod of pods) {
             pod.setPhase('Failed');
             pod.recordEvent('Warning', 'NodeLost', `Node ${node.name} became unreachable`);
@@ -4179,11 +4989,16 @@ export class SimulationTick {
       }
     }
     if (this.chaosConfig.cpuStress > 0 || this.chaosConfig.memoryStress > 0) {
-      for (const pod of this.cluster.getByKind('Pod').filter((entry) => entry.status.phase === 'Running' && entry.status.containerStatuses)) {
+      for (const pod of this.cluster
+        .getByKind('Pod')
+        .filter((entry) => entry.status.phase === 'Running' && entry.status.containerStatuses)) {
         for (const status of pod.status.containerStatuses) {
           if (!status.state.running) continue;
-          if (this.chaosConfig.cpuStress > 0) status.resources.cpu += status.resources.cpuRequest * this.chaosConfig.cpuStress;
-          if (this.chaosConfig.memoryStress > 0) status.resources.memory += status.resources.memoryRequest * this.chaosConfig.memoryStress;
+          if (this.chaosConfig.cpuStress > 0)
+            status.resources.cpu += status.resources.cpuRequest * this.chaosConfig.cpuStress;
+          if (this.chaosConfig.memoryStress > 0)
+            status.resources.memory +=
+              status.resources.memoryRequest * this.chaosConfig.memoryStress;
         }
       }
     }
@@ -4192,7 +5007,11 @@ export class SimulationTick {
   _createPodForWorkload(parent, templateSource, nameOverride) {
     if (!parent) return null;
     // Do not spin up replacement pods while an admission-denied pod exists.
-    if (this.cluster.getChildren(parent.uid).some((child) => child.kind === 'Pod' && this._isPodBlocked(child))) {
+    if (
+      this.cluster
+        .getChildren(parent.uid)
+        .some((child) => child.kind === 'Pod' && this._isPodBlocked(child))
+    ) {
       return null;
     }
 
@@ -4206,16 +5025,22 @@ export class SimulationTick {
 
     const template = templateSource.spec.template || {};
     const podSpec = deepClone(template.spec || {});
-    podSpec.containers = podSpec.containers || [{
-      name: 'main',
-      image: 'app:latest',
-      resources: { requests: { cpu: '100m', memory: '128Mi' }, limits: { cpu: '500m', memory: '512Mi' } },
-    }];
+    podSpec.containers = podSpec.containers || [
+      {
+        name: 'main',
+        image: 'app:latest',
+        resources: {
+          requests: { cpu: '100m', memory: '128Mi' },
+          limits: { cpu: '500m', memory: '512Mi' },
+        },
+      },
+    ];
     const selectorLabels = templateSource.spec?.selector?.matchLabels || {};
     const templateLabels = template.metadata?.labels || templateSource.metadata.labels || {};
     // The pod-template-hash must be identical on the ReplicaSet and all pods it
     // creates (it is the RS name suffix, not a per-pod random value).
-    const templateHash = templateLabels['pod-template-hash'] || templateSource.metadata.labels?.['pod-template-hash'];
+    const templateHash =
+      templateLabels['pod-template-hash'] || templateSource.metadata.labels?.['pod-template-hash'];
     const labels = { ...selectorLabels, ...templateLabels };
     if (templateHash) labels['pod-template-hash'] = templateHash;
 
@@ -4263,9 +5088,12 @@ export class SimulationTick {
   /** Match a LabelSelector ({matchLabels,matchExpressions}) against labels. */
   _labelSelectorMatches(selector, labels) {
     if (!selector || typeof selector !== 'object') return true;
-    const matchLabels = selector.matchLabels && typeof selector.matchLabels === 'object'
-      ? selector.matchLabels
-      : (selector.matchExpressions ? {} : selector);
+    const matchLabels =
+      selector.matchLabels && typeof selector.matchLabels === 'object'
+        ? selector.matchLabels
+        : selector.matchExpressions
+          ? {}
+          : selector;
     for (const [key, value] of Object.entries(matchLabels)) {
       if ((labels || {})[key] !== value) return false;
     }
@@ -4313,7 +5141,8 @@ export class SimulationTick {
   /** Policies that isolate `pod` for the given direction ('Ingress'|'Egress'). */
   _policiesForPod(pod, direction) {
     return this._networkPoliciesIn(pod?.metadata?.namespace || 'default').filter(
-      (policy) => this._policyTypes(policy).includes(direction) && this._policySelectsPod(policy, pod)
+      (policy) =>
+        this._policyTypes(policy).includes(direction) && this._policySelectsPod(policy, pod)
     );
   }
 
@@ -4324,17 +5153,27 @@ export class SimulationTick {
       const ruleProtocol = String(rulePort.protocol || 'TCP').toUpperCase();
       const wantedProtocol = String(protocol || 'TCP').toUpperCase();
       if (ruleProtocol !== wantedProtocol) continue;
-      if (rulePort.port === undefined || rulePort.port === null || rulePort.port === '') return true;
+      if (rulePort.port === undefined || rulePort.port === null || rulePort.port === '')
+        return true;
       const numeric = Number(rulePort.port);
       if (Number.isFinite(numeric)) {
         if (Number(port) === numeric) return true;
-        if (Number.isFinite(Number(rulePort.endPort)) && Number(port) >= numeric && Number(port) <= Number(rulePort.endPort)) return true;
+        if (
+          Number.isFinite(Number(rulePort.endPort)) &&
+          Number(port) >= numeric &&
+          Number(port) <= Number(rulePort.endPort)
+        )
+          return true;
         continue;
       }
       // Named port: resolve against the destination container ports.
-      const matched = (destinationPod?.spec?.containers || []).some((container) => (container.ports || []).some(
-        (containerPort) => containerPort.name === rulePort.port && Number(containerPort.containerPort) === Number(port)
-      ));
+      const matched = (destinationPod?.spec?.containers || []).some((container) =>
+        (container.ports || []).some(
+          (containerPort) =>
+            containerPort.name === rulePort.port &&
+            Number(containerPort.containerPort) === Number(port)
+        )
+      );
       if (matched) return true;
     }
     return false;
@@ -4347,13 +5186,19 @@ export class SimulationTick {
     const toInt = (value) => {
       const parts = String(value).split('.').map(Number);
       if (parts.length !== 4 || parts.some((part) => !Number.isFinite(part))) return null;
-      return (((parts[0] << 24) >>> 0) + ((parts[1] << 16) >>> 0) + ((parts[2] << 8) >>> 0) + parts[3]) >>> 0;
+      return (
+        (((parts[0] << 24) >>> 0) +
+          ((parts[1] << 16) >>> 0) +
+          ((parts[2] << 8) >>> 0) +
+          parts[3]) >>>
+        0
+      );
     };
     const ipValue = toInt(ip);
     const networkValue = toInt(network);
     if (ipValue === null || networkValue === null || !Number.isFinite(prefix)) return false;
     if (prefix <= 0) return true;
-    const mask = prefix >= 32 ? 0xffffffff : ((0xffffffff << (32 - prefix)) >>> 0);
+    const mask = prefix >= 32 ? 0xffffffff : (0xffffffff << (32 - prefix)) >>> 0;
     return (ipValue & mask) === (networkValue & mask);
   }
 
@@ -4376,12 +5221,16 @@ export class SimulationTick {
     const hasNamespaceSelector = Boolean(peer.namespaceSelector);
     if (!hasPodSelector && !hasNamespaceSelector) return true; // empty peer: everything
     if (hasNamespaceSelector) {
-      if (!this._labelSelectorMatches(peer.namespaceSelector, this._namespaceLabels(targetNamespace))) return false;
+      if (
+        !this._labelSelectorMatches(peer.namespaceSelector, this._namespaceLabels(targetNamespace))
+      )
+        return false;
     } else if (targetNamespace !== peerNamespace) {
       // A bare podSelector only matches Pods in the policy's own namespace.
       return false;
     }
-    if (hasPodSelector) return this._labelSelectorMatches(peer.podSelector, targetPod?.metadata?.labels || {});
+    if (hasPodSelector)
+      return this._labelSelectorMatches(peer.podSelector, targetPod?.metadata?.labels || {});
     return true;
   }
 
@@ -4390,8 +5239,10 @@ export class SimulationTick {
     for (const rule of rules) {
       if (!rule || typeof rule !== 'object') continue;
       const peers = rule[peerKey];
-      const peersMatch = !Array.isArray(peers) || peers.length === 0
-        || peers.some((peer) => this._peerMatchesPod(peer, peerNamespace, peerPod));
+      const peersMatch =
+        !Array.isArray(peers) ||
+        peers.length === 0 ||
+        peers.some((peer) => this._peerMatchesPod(peer, peerNamespace, peerPod));
       if (!peersMatch) continue;
       if (!this._networkPolicyPortMatches(rule.ports, port, protocol, destinationPod)) continue;
       return true;
@@ -4422,28 +5273,50 @@ export class SimulationTick {
       let blockedBy = null;
       if (!egressAllowed) {
         for (const policy of egressPolicies) {
-          if (this._rulesAllowTraffic(policy.spec?.egress, 'to', policy.metadata.namespace, destinationPod, port, protocol, destinationPod)) {
+          if (
+            this._rulesAllowTraffic(
+              policy.spec?.egress,
+              'to',
+              policy.metadata.namespace,
+              destinationPod,
+              port,
+              protocol,
+              destinationPod
+            )
+          ) {
             egressAllowed = true;
             break;
           }
           blockedBy = blockedBy || policy.metadata.name;
         }
       }
-      if (!egressAllowed) return { allowed: false, reason: 'egress', policy: blockedBy, pods: destination.pods };
+      if (!egressAllowed)
+        return { allowed: false, reason: 'egress', policy: blockedBy, pods: destination.pods };
 
       const ingressPolicies = this._policiesForPod(destinationPod, 'Ingress');
       let ingressAllowed = ingressPolicies.length === 0;
       blockedBy = null;
       if (!ingressAllowed) {
         for (const policy of ingressPolicies) {
-          if (this._rulesAllowTraffic(policy.spec?.ingress, 'from', policy.metadata.namespace, source, port, protocol, destinationPod)) {
+          if (
+            this._rulesAllowTraffic(
+              policy.spec?.ingress,
+              'from',
+              policy.metadata.namespace,
+              source,
+              port,
+              protocol,
+              destinationPod
+            )
+          ) {
             ingressAllowed = true;
             break;
           }
           blockedBy = blockedBy || policy.metadata.name;
         }
       }
-      if (!ingressAllowed) return { allowed: false, reason: 'ingress', policy: blockedBy, pods: destination.pods };
+      if (!ingressAllowed)
+        return { allowed: false, reason: 'ingress', policy: blockedBy, pods: destination.pods };
       return { allowed: true, reason: 'allowed', pods: destination.pods };
     }
     return { allowed: false, reason: 'no-endpoints', pods: [] };
@@ -4472,7 +5345,17 @@ export class SimulationTick {
     if (egressPolicies.length === 0) return { allowed: true, reason: 'no-egress-policy' };
     for (const policy of egressPolicies) {
       for (const protocol of ['UDP', 'TCP']) {
-        if (this._rulesAllowTraffic(policy.spec?.egress, 'to', policy.metadata.namespace, dnsPod, 5353, protocol, dnsPod)) {
+        if (
+          this._rulesAllowTraffic(
+            policy.spec?.egress,
+            'to',
+            policy.metadata.namespace,
+            dnsPod,
+            5353,
+            protocol,
+            dnsPod
+          )
+        ) {
           return { allowed: true, reason: 'dns-egress-allowed', policy: policy.metadata.name };
         }
       }
@@ -4498,16 +5381,24 @@ export class SimulationTick {
     if (typeof target === 'object') {
       if (target.kind === 'Service' || target.spec?.selector) {
         const pods = this.cluster.getServiceEndpoints(target);
-        const port = Number(options.port ?? target.spec?.ports?.[0]?.targetPort ?? target.spec?.ports?.[0]?.port ?? 80);
+        const port = Number(
+          options.port ?? target.spec?.ports?.[0]?.targetPort ?? target.spec?.ports?.[0]?.port ?? 80
+        );
         return { kind: 'Service', name: target.metadata?.name, pods, port };
       }
       if (target.kind === 'Pod' || (target.metadata && target.spec)) {
         const pod = this._resolvePodLike(target, namespace);
-        const port = Number(options.port ?? pod?.spec?.containers?.[0]?.ports?.[0]?.containerPort ?? 80);
+        const port = Number(
+          options.port ?? pod?.spec?.containers?.[0]?.ports?.[0]?.containerPort ?? 80
+        );
         return pod ? { kind: 'Pod', name: pod.metadata.name, pods: [pod], port } : null;
       }
       if (target.kind && target.name) {
-        const resource = this.cluster.getByName(target.kind, target.name, target.namespace || namespace);
+        const resource = this.cluster.getByName(
+          target.kind,
+          target.name,
+          target.namespace || namespace
+        );
         return resource ? this._resolveTrafficDestination(resource, options) : null;
       }
       return null;
@@ -4524,18 +5415,27 @@ export class SimulationTick {
     }
     if (/^\d{1,3}(?:\.\d{1,3}){3}$/.test(host)) {
       const pod = this.cluster.getByKind('Pod').find((entry) => entry.status?.podIP === host);
-      return pod ? { kind: 'Pod', name: pod.metadata.name, pods: [pod], port: port ?? 80, host, requiresDNS: false } : { kind: 'IP', name: host, pods: [], port: port ?? 80, host, requiresDNS: false };
+      return pod
+        ? {
+            kind: 'Pod',
+            name: pod.metadata.name,
+            pods: [pod],
+            port: port ?? 80,
+            host,
+            requiresDNS: false,
+          }
+        : { kind: 'IP', name: host, pods: [], port: port ?? 80, host, requiresDNS: false };
     }
-    const svcMatch = host.match(/^([a-z0-9-]+)(?:\.([a-z0-9-]+))?(?:\.svc(?:\.cluster\.local)?)?$/i);
+    const svcMatch = host.match(
+      /^([a-z0-9-]+)(?:\.([a-z0-9-]+))?(?:\.svc(?:\.cluster\.local)?)?$/i
+    );
     const serviceName = svcMatch ? svcMatch[1] : host;
     const serviceNamespace = svcMatch && svcMatch[2] ? svcMatch[2] : namespace;
     const service = this.cluster.getByName('Service', serviceName, serviceNamespace);
     if (service) {
       const pods = this.cluster.getServiceEndpoints(service);
-      const servicePort = port
-        ?? service.spec?.ports?.[0]?.targetPort
-        ?? service.spec?.ports?.[0]?.port
-        ?? 80;
+      const servicePort =
+        port ?? service.spec?.ports?.[0]?.targetPort ?? service.spec?.ports?.[0]?.port ?? 80;
       const numericPort = Number(servicePort);
       return {
         kind: 'Service',
@@ -4564,11 +5464,21 @@ export class SimulationTick {
     const namespace = options.namespace || 'default';
     const source = this._resolvePodLike(sourcePod, namespace);
     if (!source) {
-      return { allowed: false, reason: 'source-not-found', policy: null, lines: ['error: unable to resolve the source Pod'] };
+      return {
+        allowed: false,
+        reason: 'source-not-found',
+        policy: null,
+        lines: ['error: unable to resolve the source Pod'],
+      };
     }
     const destination = this._resolveTrafficDestination(options.target, { ...options, namespace });
     if (!destination) {
-      return { allowed: false, reason: 'target-not-found', policy: null, lines: [`curl: (6) Could not resolve host: ${String(options.target || '')}`] };
+      return {
+        allowed: false,
+        reason: 'target-not-found',
+        policy: null,
+        lines: [`curl: (6) Could not resolve host: ${String(options.target || '')}`],
+      };
     }
     const host = destination.host || destination.name || String(options.target || '');
     const port = Number(options.port ?? destination.port ?? 80);
@@ -4594,7 +5504,9 @@ export class SimulationTick {
           allowed: false,
           reason: 'egress',
           policy: egressPolicies[0]?.metadata?.name || null,
-          lines: [`curl: (7) Failed to connect to ${host} port ${port} after 0 ms: Connection timed out`],
+          lines: [
+            `curl: (7) Failed to connect to ${host} port ${port} after 0 ms: Connection timed out`,
+          ],
         };
       }
       return {
@@ -4609,7 +5521,9 @@ export class SimulationTick {
         allowed: false,
         reason: 'no-endpoints',
         policy: null,
-        lines: [`curl: (7) Failed to connect to ${host} port ${port} after 0 ms: Couldn't connect to server`],
+        lines: [
+          `curl: (7) Failed to connect to ${host} port ${port} after 0 ms: Couldn't connect to server`,
+        ],
       };
     }
     // The destination is already resolved to concrete Pods; evaluate against
@@ -4624,7 +5538,9 @@ export class SimulationTick {
         allowed: false,
         reason: reach.reason,
         policy: reach.policy || null,
-        lines: [`curl: (7) Failed to connect to ${host} port ${port} after 0 ms: Couldn't connect to server`],
+        lines: [
+          `curl: (7) Failed to connect to ${host} port ${port} after 0 ms: Couldn't connect to server`,
+        ],
       };
     }
     const destinationPod = reach.pods?.[0] || destination.pods[0];
@@ -4706,7 +5622,13 @@ export class SimulationTick {
     this.pendingScaleDecisions.clear();
     this.metricsHistory.clear();
     this.enableChaos = false;
-    this.chaosConfig = { podKillRate: 0, nodeFailRate: 0, networkPartition: false, cpuStress: 0, memoryStress: 0 };
+    this.chaosConfig = {
+      podKillRate: 0,
+      nodeFailRate: 0,
+      networkPartition: false,
+      cpuStress: 0,
+      memoryStress: 0,
+    };
     this._oauthPending = null;
     this._sccDirty = false;
     this._quotaViolationNamespaces = new Set();

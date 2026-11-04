@@ -12,20 +12,20 @@ import * as THREE from 'three';
  */
 
 export const RELATIONSHIP_COLORS = {
-  ownership:    0x8899ab,
-  containment:  0x56657a,
-  network:      0x5b9fd4,
-  route:        0xd94a42, // softened OpenShift red
-  build:        0xd98a4a, // softened OpenShift orange
-  image:        0x9a86cc,
-  security:     0xc2a04a,
-  identity:     0x4fa9a4,
-  storage:      0x6f8a86,
-  config:       0xb79a4a,
-  scaling:      0x9c86c9,
-  operator:     0xd08a54,
-  custom:       0x5b9fd4,
-  default:      0x56657a,
+  ownership: 0x8899ab,
+  containment: 0x56657a,
+  network: 0x5b9fd4,
+  route: 0xd94a42, // softened OpenShift red
+  build: 0xd98a4a, // softened OpenShift orange
+  image: 0x9a86cc,
+  security: 0xc2a04a,
+  identity: 0x4fa9a4,
+  storage: 0x6f8a86,
+  config: 0xb79a4a,
+  scaling: 0x9c86c9,
+  operator: 0xd08a54,
+  custom: 0x5b9fd4,
+  default: 0x56657a,
 };
 
 /**
@@ -34,20 +34,20 @@ export const RELATIONSHIP_COLORS = {
  * is allowed a little more presence. Hover/selection multiplies these.
  */
 export const RELATIONSHIP_OPACITY = {
-  ownership:    0.14,
-  containment:  0.045,
-  network:      0.2,
-  route:        0.3,
-  build:        0.24,
-  image:        0.2,
-  security:     0.16,
-  identity:     0.16,
-  storage:      0.14,
-  config:       0.16,
-  scaling:      0.16,
-  operator:     0.2,
-  custom:       0.26,
-  default:      0.12,
+  ownership: 0.14,
+  containment: 0.045,
+  network: 0.2,
+  route: 0.3,
+  build: 0.24,
+  image: 0.2,
+  security: 0.16,
+  identity: 0.16,
+  storage: 0.14,
+  config: 0.16,
+  scaling: 0.16,
+  operator: 0.2,
+  custom: 0.26,
+  default: 0.12,
 };
 
 /** Human-readable relationship labels (used by tooltips / debugging). */
@@ -177,8 +177,10 @@ export class ConnectionLineManager {
       const sourcePos = sourceGroup.position;
       const targetPos = targetGroup.position;
 
-      if (sourcePos.distanceToSquared(entry.sourcePos) < 0.001 &&
-          targetPos.distanceToSquared(entry.targetPos) < 0.001) {
+      if (
+        sourcePos.distanceToSquared(entry.sourcePos) < 0.001 &&
+        targetPos.distanceToSquared(entry.targetPos) < 0.001
+      ) {
         continue;
       }
 
@@ -190,9 +192,7 @@ export class ConnectionLineManager {
       midpoint.y += Math.min(distance * ARC_RATIO, ARC_MAX) + 0.35;
       entry.midpoint.copy(midpoint);
 
-      const curve = new THREE.QuadraticBezierCurve3(
-        sourcePos.clone(), midpoint, targetPos.clone(),
-      );
+      const curve = new THREE.QuadraticBezierCurve3(sourcePos.clone(), midpoint, targetPos.clone());
       entry.curve = curve;
       entry.line.userData.curve = curve;
 
@@ -248,8 +248,7 @@ export class ConnectionLineManager {
   getConnectionsForResource(resourceId) {
     const result = [];
     for (const entry of this.connections.values()) {
-      if (entry.connection.sourceId === resourceId ||
-          entry.connection.targetId === resourceId) {
+      if (entry.connection.sourceId === resourceId || entry.connection.targetId === resourceId) {
         result.push(entry.connection);
       }
     }
@@ -258,8 +257,8 @@ export class ConnectionLineManager {
 
   highlightConnectionsForResource(resourceId) {
     for (const entry of this.connections.values()) {
-      const isRelated = entry.connection.sourceId === resourceId ||
-                        entry.connection.targetId === resourceId;
+      const isRelated =
+        entry.connection.sourceId === resourceId || entry.connection.targetId === resourceId;
       entry.line.material.opacity = isRelated ? HOVER_OPACITY : MIN_OPACITY;
       entry.line.material.color.set(isRelated ? entry.line.userData.baseColor : 0x33404f);
       entry.line.userData.flowSpeed = FLOW_SPEED * (isRelated ? 3.2 : 0.6);
@@ -269,7 +268,9 @@ export class ConnectionLineManager {
   resetHighlight() {
     for (const entry of this.connections.values()) {
       entry.line.material.opacity = entry.line.userData.baseOpacity ?? MIN_OPACITY;
-      entry.line.material.color.set(entry.line.userData.baseColor ?? colorForRelationship(entry.connection.type));
+      entry.line.material.color.set(
+        entry.line.userData.baseColor ?? colorForRelationship(entry.connection.type)
+      );
       entry.line.userData.flowSpeed = FLOW_SPEED * (0.6 + Math.random() * 0.5);
     }
   }

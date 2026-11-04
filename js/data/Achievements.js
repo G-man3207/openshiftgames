@@ -266,7 +266,13 @@ const ACHIEVEMENTS = [
     category: 'Advanced',
     // Optional ScoringEngine counters; safe if absent.
     condition: (stats) =>
-      stat(stats, 'resourceQuotasCreated', 'resourceQuotaCreated', 'quotasCreated', 'limitRangesCreated') >= 1,
+      stat(
+        stats,
+        'resourceQuotasCreated',
+        'resourceQuotaCreated',
+        'quotasCreated',
+        'limitRangesCreated'
+      ) >= 1,
     xpReward: 150,
   },
   {

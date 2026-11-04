@@ -170,10 +170,12 @@ const KIND_STAT_MAP = {
 };
 
 /** Kinds whose `cluster:added:<Kind>` events we listen for. */
-const TRACKED_KINDS = Array.from(new Set([
-  ...RESOURCE_KINDS,
-  'Namespace', // legacy alias: ClusterState canonicalises it to Project
-]));
+const TRACKED_KINDS = Array.from(
+  new Set([
+    ...RESOURCE_KINDS,
+    'Namespace', // legacy alias: ClusterState canonicalises it to Project
+  ])
+);
 
 const SENSITIVE_CONFIGMAP_KEY = /password|passwd|secret|token|key|credential/i;
 
@@ -181,48 +183,108 @@ const SENSITIVE_CONFIGMAP_KEY = /password|passwd|secret|token|key|credential/i;
 
 /** Resource-name aliases used when normalising learner command evidence. */
 const KIND_ALIASES = {
-  pod: 'pod', pods: 'pod',
-  deploy: 'deployment', deployment: 'deployment', deployments: 'deployment',
-  rs: 'replicaset', replicaset: 'replicaset', replicasets: 'replicaset',
-  sts: 'statefulset', statefulset: 'statefulset', statefulsets: 'statefulset',
-  ds: 'daemonset', daemonset: 'daemonset', daemonsets: 'daemonset',
-  svc: 'service', service: 'service', services: 'service',
-  is: 'imagestream', imagestream: 'imagestream', imagestreams: 'imagestream',
-  istag: 'istag', imagestreamtag: 'istag', imagestreamtags: 'istag',
-  bc: 'buildconfig', buildconfig: 'buildconfig', buildconfigs: 'buildconfig',
-  build: 'build', builds: 'build',
-  route: 'route', routes: 'route',
-  cm: 'configmap', configmap: 'configmap', configmaps: 'configmap',
-  secret: 'secret', secrets: 'secret',
-  sa: 'serviceaccount', serviceaccount: 'serviceaccount', serviceaccounts: 'serviceaccount',
-  user: 'user', users: 'user',
-  group: 'group', groups: 'group',
-  role: 'role', roles: 'role',
-  rolebinding: 'rolebinding', rolebindings: 'rolebinding',
-  clusterrole: 'clusterrole', clusterroles: 'clusterrole',
-  clusterrolebinding: 'clusterrolebinding', clusterrolebindings: 'clusterrolebinding',
-  netpol: 'networkpolicy', networkpolicy: 'networkpolicy', networkpolicies: 'networkpolicy',
-  quota: 'resourcequota', resourcequota: 'resourcequota', resourcequotas: 'resourcequota',
-  limitrange: 'limitrange', limitranges: 'limitrange',
-  clusterquota: 'clusterresourcequota', clusterresourcequota: 'clusterresourcequota',
-  scc: 'scc', securitycontextconstraint: 'scc', securitycontextconstraints: 'scc',
-  job: 'job', jobs: 'job',
-  cronjob: 'cronjob', cronjobs: 'cronjob',
-  node: 'node', nodes: 'node',
-  project: 'project', projects: 'project',
-  namespace: 'project', namespaces: 'project',
-  template: 'template', templates: 'template',
-  oauth: 'oauth', clusteroperator: 'clusteroperator', clusteroperators: 'clusteroperator',
-  subscription: 'subscription', sub: 'subscription', subscriptions: 'subscription',
-  csv: 'csv', clusterserviceversion: 'csv', clusterserviceversions: 'csv',
-  installplan: 'installplan', installplans: 'installplan',
-  packagemanifest: 'packagemanifest', packagemanifests: 'packagemanifest',
-  pvc: 'pvc', persistentvolumeclaim: 'pvc', persistentvolumeclaims: 'pvc',
-  pv: 'pv', persistentvolume: 'pv', persistentvolumes: 'pv',
-  hpa: 'hpa', horizontalpodautoscaler: 'hpa',
-  pdb: 'pdb', poddisruptionbudget: 'pdb',
-  ingress: 'ingress', ingresses: 'ingress',
-  operatorgroup: 'operatorgroup', operatorgroups: 'operatorgroup',
+  pod: 'pod',
+  pods: 'pod',
+  deploy: 'deployment',
+  deployment: 'deployment',
+  deployments: 'deployment',
+  rs: 'replicaset',
+  replicaset: 'replicaset',
+  replicasets: 'replicaset',
+  sts: 'statefulset',
+  statefulset: 'statefulset',
+  statefulsets: 'statefulset',
+  ds: 'daemonset',
+  daemonset: 'daemonset',
+  daemonsets: 'daemonset',
+  svc: 'service',
+  service: 'service',
+  services: 'service',
+  is: 'imagestream',
+  imagestream: 'imagestream',
+  imagestreams: 'imagestream',
+  istag: 'istag',
+  imagestreamtag: 'istag',
+  imagestreamtags: 'istag',
+  bc: 'buildconfig',
+  buildconfig: 'buildconfig',
+  buildconfigs: 'buildconfig',
+  build: 'build',
+  builds: 'build',
+  route: 'route',
+  routes: 'route',
+  cm: 'configmap',
+  configmap: 'configmap',
+  configmaps: 'configmap',
+  secret: 'secret',
+  secrets: 'secret',
+  sa: 'serviceaccount',
+  serviceaccount: 'serviceaccount',
+  serviceaccounts: 'serviceaccount',
+  user: 'user',
+  users: 'user',
+  group: 'group',
+  groups: 'group',
+  role: 'role',
+  roles: 'role',
+  rolebinding: 'rolebinding',
+  rolebindings: 'rolebinding',
+  clusterrole: 'clusterrole',
+  clusterroles: 'clusterrole',
+  clusterrolebinding: 'clusterrolebinding',
+  clusterrolebindings: 'clusterrolebinding',
+  netpol: 'networkpolicy',
+  networkpolicy: 'networkpolicy',
+  networkpolicies: 'networkpolicy',
+  quota: 'resourcequota',
+  resourcequota: 'resourcequota',
+  resourcequotas: 'resourcequota',
+  limitrange: 'limitrange',
+  limitranges: 'limitrange',
+  clusterquota: 'clusterresourcequota',
+  clusterresourcequota: 'clusterresourcequota',
+  scc: 'scc',
+  securitycontextconstraint: 'scc',
+  securitycontextconstraints: 'scc',
+  job: 'job',
+  jobs: 'job',
+  cronjob: 'cronjob',
+  cronjobs: 'cronjob',
+  node: 'node',
+  nodes: 'node',
+  project: 'project',
+  projects: 'project',
+  namespace: 'project',
+  namespaces: 'project',
+  template: 'template',
+  templates: 'template',
+  oauth: 'oauth',
+  clusteroperator: 'clusteroperator',
+  clusteroperators: 'clusteroperator',
+  subscription: 'subscription',
+  sub: 'subscription',
+  subscriptions: 'subscription',
+  csv: 'csv',
+  clusterserviceversion: 'csv',
+  clusterserviceversions: 'csv',
+  installplan: 'installplan',
+  installplans: 'installplan',
+  packagemanifest: 'packagemanifest',
+  packagemanifests: 'packagemanifest',
+  pvc: 'pvc',
+  persistentvolumeclaim: 'pvc',
+  persistentvolumeclaims: 'pvc',
+  pv: 'pv',
+  persistentvolume: 'pv',
+  persistentvolumes: 'pv',
+  hpa: 'hpa',
+  horizontalpodautoscaler: 'hpa',
+  pdb: 'pdb',
+  poddisruptionbudget: 'pdb',
+  ingress: 'ingress',
+  ingresses: 'ingress',
+  operatorgroup: 'operatorgroup',
+  operatorgroups: 'operatorgroup',
   configmapkey: 'configmap',
 };
 
@@ -231,13 +293,37 @@ const SUBCOMMAND_VERBS = new Set(['set', 'rollout', 'expose', 'adm', 'auth', 'po
 
 /** First-level oc verbs that take a resource kind as the next argument. */
 const RESOURCE_VERBS = new Set([
-  'get', 'describe', 'delete', 'create', 'apply', 'replace', 'edit', 'patch',
-  'label', 'annotate', 'run', 'logs', 'exec', 'rsh', 'cp', 'debug', 'wait',
-  'scale', 'expose', 'tag', 'import-image', 'image', 'observe', 'idle', 'rsync',
+  'get',
+  'describe',
+  'delete',
+  'create',
+  'apply',
+  'replace',
+  'edit',
+  'patch',
+  'label',
+  'annotate',
+  'run',
+  'logs',
+  'exec',
+  'rsh',
+  'cp',
+  'debug',
+  'wait',
+  'scale',
+  'expose',
+  'tag',
+  'import-image',
+  'image',
+  'observe',
+  'idle',
+  'rsync',
 ]);
 
 function normalizeKindWord(word) {
-  const key = String(word || '').toLowerCase().replace(/[^a-z-]/g, '');
+  const key = String(word || '')
+    .toLowerCase()
+    .replace(/[^a-z-]/g, '');
   return KIND_ALIASES[key] || '';
 }
 
@@ -252,7 +338,9 @@ function normalizeKindWord(word) {
  * alone must not claim mastery).
  */
 export function commandSignature(raw) {
-  const text = String(raw || '').trim().replace(/\s+/g, ' ');
+  const text = String(raw || '')
+    .trim()
+    .replace(/\s+/g, ' ');
   if (!text) return '';
   const tokens = text.match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g) || [];
   if (tokens.length === 0) return '';
@@ -281,7 +369,8 @@ export function commandSignature(raw) {
       const word = pushToken(token);
       if (!word) return words.join(' ');
       words.push(word);
-      if (!SUBCOMMAND_VERBS.has(word) && !RESOURCE_VERBS.has(word) && word !== 'get') return words.join(' ');
+      if (!SUBCOMMAND_VERBS.has(word) && !RESOURCE_VERBS.has(word) && word !== 'get')
+        return words.join(' ');
       continue;
     }
     if (words[1] === 'adm' || words[1] === 'auth') {
@@ -296,7 +385,8 @@ export function commandSignature(raw) {
       if (!word) return words.join(' ');
       // `oc set image`, `oc rollout status`, `oc expose service` … then stop or add kind.
       if (words.length >= 3) {
-        if (RESOURCE_VERBS.has(words[1]) || ['set', 'rollout'].includes(words[1])) return words.join(' ');
+        if (RESOURCE_VERBS.has(words[1]) || ['set', 'rollout'].includes(words[1]))
+          return words.join(' ');
       }
       words.push(word);
       if (words[1] === 'adm' || words[1] === 'auth') return words.join(' ');
@@ -482,9 +572,10 @@ class ScoringEngine {
     }
     // Levels/challenges completed through live objective evaluation (not a
     // console shortcut): their examObjectives bullets may count as evidence.
-    const objectiveEvidence = source.objectiveEvidence && typeof source.objectiveEvidence === 'object'
-      ? { ...source.objectiveEvidence }
-      : {};
+    const objectiveEvidence =
+      source.objectiveEvidence && typeof source.objectiveEvidence === 'object'
+        ? { ...source.objectiveEvidence }
+        : {};
 
     const progress = {
       xp: asNumber(source.xp, 0),
@@ -499,8 +590,12 @@ class ScoringEngine {
     };
 
     // Derived counters from saved progress objects.
-    progress.stats.levelsCompleted = Object.values(campaignProgress).filter((entry) => entry?.completed).length;
-    progress.stats.threeStarLevels = Object.values(campaignProgress).filter((entry) => entry?.stars === 3).length;
+    progress.stats.levelsCompleted = Object.values(campaignProgress).filter(
+      (entry) => entry?.completed
+    ).length;
+    progress.stats.threeStarLevels = Object.values(campaignProgress).filter(
+      (entry) => entry?.stars === 3
+    ).length;
     progress.stats.totalStars = Object.values(campaignProgress).reduce(
       (sum, entry) => sum + asNumber(entry?.stars, 0),
       0
@@ -508,8 +603,12 @@ class ScoringEngine {
     progress.stats.chaptersCompleted = CAMPAIGN_CHAPTERS.filter((chapter) =>
       chapter.every((levelId) => campaignProgress[levelId]?.completed)
     ).length;
-    progress.stats.challengesCompleted = Object.values(challengeProgress).filter((entry) => entry?.completed).length;
-    progress.stats.threeStarChallenges = Object.values(challengeProgress).filter((entry) => entry?.stars === 3).length;
+    progress.stats.challengesCompleted = Object.values(challengeProgress).filter(
+      (entry) => entry?.completed
+    ).length;
+    progress.stats.threeStarChallenges = Object.values(challengeProgress).filter(
+      (entry) => entry?.stars === 3
+    ).length;
     progress.stats.examPrepMastered = this._countMastered(examPrep);
 
     return progress;
@@ -521,11 +620,12 @@ class ScoringEngine {
     const out = {};
     const add = (id, value) => {
       if (!id) return;
-      const state = value === 'mastered' || value?.state === 'mastered'
-        ? 'mastered'
-        : value === 'practiced' || value?.state === 'practiced'
-          ? 'practiced'
-          : null;
+      const state =
+        value === 'mastered' || value?.state === 'mastered'
+          ? 'mastered'
+          : value === 'practiced' || value?.state === 'practiced'
+            ? 'practiced'
+            : null;
       if (!state) return;
       const updatedAt = asNumber(value?.updatedAt, 0) || Date.now();
       const previous = out[id];
@@ -539,7 +639,14 @@ class ScoringEngine {
     if (typeof raw !== 'object') return out;
     if (Array.isArray(raw.mastered)) for (const id of raw.mastered) add(id, 'mastered');
     if (Array.isArray(raw.practiced)) for (const id of raw.practiced) add(id, 'practiced');
-    const reserved = new Set(['objectives', 'bullets', 'states', 'mastered', 'practiced', 'updatedAt']);
+    const reserved = new Set([
+      'objectives',
+      'bullets',
+      'states',
+      'mastered',
+      'practiced',
+      'updatedAt',
+    ]);
     for (const [id, value] of Object.entries(raw)) {
       if (reserved.has(id)) continue;
       add(id, value);
@@ -623,7 +730,12 @@ class ScoringEngine {
       this._countedSccGrants.clear();
       this._suspendStats();
     });
-    for (const event of ['campaign:level-started', 'challenge:started', 'sandbox:started', 'chaos:started']) {
+    for (const event of [
+      'campaign:level-started',
+      'challenge:started',
+      'sandbox:started',
+      'chaos:started',
+    ]) {
       this._on(event, () => this._resumeStats());
     }
 
@@ -661,7 +773,8 @@ class ScoringEngine {
     this._on('template:processed', (data) => {
       if (this._statsSuspended) return;
       this._bumpStat('templatesProcessed');
-      this.progress.stats.lastTemplateProcessed = data?.name || data?.path || data?.templateName || null;
+      this.progress.stats.lastTemplateProcessed =
+        data?.name || data?.path || data?.templateName || null;
       this._afterStatChange();
     });
 
@@ -815,7 +928,8 @@ class ScoringEngine {
     if (!scope || id === undefined || id === null) return;
     const key = `${scope}:${id}`;
     if (!this.progress.drillCommandEvidence) this.progress.drillCommandEvidence = {};
-    if (!Array.isArray(this.progress.drillCommandEvidence[key])) this.progress.drillCommandEvidence[key] = [];
+    if (!Array.isArray(this.progress.drillCommandEvidence[key]))
+      this.progress.drillCommandEvidence[key] = [];
     this._activeDrillKey = key;
   }
 
@@ -831,7 +945,9 @@ class ScoringEngine {
    */
   _recordCommandEvidence(data = {}) {
     if (!this._activeDrillKey) return;
-    const raw = String(data.raw || data.command || '').trim().replace(/\s+/g, ' ');
+    const raw = String(data.raw || data.command || '')
+      .trim()
+      .replace(/\s+/g, ' ');
     if (!raw || raw.length > 220) return;
     if (!this.progress.drillCommandEvidence) this.progress.drillCommandEvidence = {};
     const list = this.progress.drillCommandEvidence[this._activeDrillKey] || [];
@@ -972,7 +1088,8 @@ class ScoringEngine {
     const cluster = this.gameEngine?.cluster;
     if (!cluster) return [];
     try {
-      if (typeof cluster.getResourcesByKind === 'function') return cluster.getResourcesByKind(kind) || [];
+      if (typeof cluster.getResourcesByKind === 'function')
+        return cluster.getResourcesByKind(kind) || [];
       if (typeof cluster.getByKind === 'function') return cluster.getByKind(kind) || [];
     } catch {
       /* ignore */
@@ -996,7 +1113,10 @@ class ScoringEngine {
       );
     }
     if (kind === 'Node' && data.nodeCount) {
-      this.progress.stats.maxNodes = Math.max(asNumber(this.progress.stats.maxNodes, 0), asNumber(data.nodeCount, 0));
+      this.progress.stats.maxNodes = Math.max(
+        asNumber(this.progress.stats.maxNodes, 0),
+        asNumber(data.nodeCount, 0)
+      );
     }
 
     if (!this._countResourceOnce(kind, data.name, data.namespace, data.uid)) {
@@ -1028,7 +1148,10 @@ class ScoringEngine {
     }
 
     if (data.combo) {
-      this.progress.stats.highestCombo = Math.max(asNumber(this.progress.stats.highestCombo, 0), data.combo);
+      this.progress.stats.highestCombo = Math.max(
+        asNumber(this.progress.stats.highestCombo, 0),
+        data.combo
+      );
     }
 
     if (data.xpEarned) {
@@ -1165,7 +1288,9 @@ class ScoringEngine {
       this.progress.campaignProgress[levelId] = {
         completed: true,
         stars,
-        bestTime: existing ? Math.min(asNumber(existing.bestTime, completionTime), completionTime) : completionTime,
+        bestTime: existing
+          ? Math.min(asNumber(existing.bestTime, completionTime), completionTime)
+          : completionTime,
         completedAt: Date.now(),
       };
     } else if (existing) {
@@ -1192,7 +1317,8 @@ class ScoringEngine {
     );
 
     if (!usedHints) {
-      this.progress.stats.completedWithoutHints = (this.progress.stats.completedWithoutHints || 0) + 1;
+      this.progress.stats.completedWithoutHints =
+        (this.progress.stats.completedWithoutHints || 0) + 1;
     }
 
     this.progress.stats.chaptersCompleted = CAMPAIGN_CHAPTERS.filter((chapter) =>
@@ -1241,7 +1367,9 @@ class ScoringEngine {
       this.progress.challengeProgress[challengeId] = {
         completed: completed || Boolean(existing?.completed),
         stars,
-        bestTime: existing ? Math.min(asNumber(existing.bestTime, completionTime), completionTime) : completionTime,
+        bestTime: existing
+          ? Math.min(asNumber(existing.bestTime, completionTime), completionTime)
+          : completionTime,
         completionPercentage,
       };
     } else if (existing) {
@@ -1301,7 +1429,8 @@ class ScoringEngine {
    */
   markExamPrep(bulletId, state) {
     if (!bulletId) return null;
-    const normalized = state === 'mastered' ? 'mastered' : state === 'practiced' ? 'practiced' : null;
+    const normalized =
+      state === 'mastered' ? 'mastered' : state === 'practiced' ? 'practiced' : null;
     if (!normalized) return null;
 
     if (!this.progress.examPrep || typeof this.progress.examPrep !== 'object') {
@@ -1346,9 +1475,12 @@ class ScoringEngine {
     };
 
     const values = Object.values(scores);
-    const total = values.length === 0 ? 0 : Math.round(
-      values.reduce((sum, category) => sum + asNumber(category.score, 0), 0) / values.length
-    );
+    const total =
+      values.length === 0
+        ? 0
+        : Math.round(
+            values.reduce((sum, category) => sum + asNumber(category.score, 0), 0) / values.length
+          );
 
     const stats = this.progress.stats;
     const previous = asNumber(stats.lastArchitectureScore, -1);
@@ -1368,7 +1500,8 @@ class ScoringEngine {
   _resources(state, kind) {
     if (!state) return [];
     try {
-      if (typeof state.getResourcesByKind === 'function') return asArray(state.getResourcesByKind(kind));
+      if (typeof state.getResourcesByKind === 'function')
+        return asArray(state.getResourcesByKind(kind));
       if (typeof state.getByKind === 'function') return asArray(state.getByKind(kind));
       if (typeof state.getAllResources === 'function') {
         return asArray(state.getAllResources()).filter((resource) => resource?.kind === kind);
@@ -1434,8 +1567,9 @@ class ScoringEngine {
   }
 
   _manifestState() {
-    const manifestEngine = this.gameEngine?.manifestEngine
-      || (typeof window !== 'undefined' ? window.game?.manifestEngine : null);
+    const manifestEngine =
+      this.gameEngine?.manifestEngine ||
+      (typeof window !== 'undefined' ? window.game?.manifestEngine : null);
     if (!manifestEngine) return null;
     try {
       if (typeof manifestEngine.getState === 'function') return manifestEngine.getState();
@@ -1457,22 +1591,30 @@ class ScoringEngine {
     }
 
     let score = 0;
-    const multiReplica = deployments.filter((deployment) => asNumber(resourceSpec(deployment).replicas, 1) > 1);
+    const multiReplica = deployments.filter(
+      (deployment) => asNumber(resourceSpec(deployment).replicas, 1) > 1
+    );
     score += ratio(multiReplica.length, deployments.length) * 40;
     if (multiReplica.length < deployments.length) {
-      recommendations.push('Set spec.replicas > 1 for every Deployment (oc scale deployment/<name> --replicas=2)');
+      recommendations.push(
+        'Set spec.replicas > 1 for every Deployment (oc scale deployment/<name> --replicas=2)'
+      );
     }
 
     const nodes = this._resources(state, 'Node');
     score += Math.min(30, nodes.length * 10);
     if (nodes.length < 3) {
-      recommendations.push('Run at least three worker Nodes so a single failure cannot take the platform down');
+      recommendations.push(
+        'Run at least three worker Nodes so a single failure cannot take the platform down'
+      );
     }
 
     const pdbs = this._resources(state, 'PodDisruptionBudget');
     score += Math.min(30, pdbs.length * 15);
     if (pdbs.length === 0) {
-      recommendations.push('Add PodDisruptionBudgets so drains/maintenance keep a minimum number of Pods available');
+      recommendations.push(
+        'Add PodDisruptionBudgets so drains/maintenance keep a minimum number of Pods available'
+      );
     }
 
     return { score: integer(score), recommendations };
@@ -1486,7 +1628,9 @@ class ScoringEngine {
     const netpols = this._resources(state, 'NetworkPolicy');
     score += Math.min(25, netpols.length * 10);
     if (netpols.length === 0) {
-      recommendations.push('Create NetworkPolicies (default-deny + explicit allows) to segment project traffic');
+      recommendations.push(
+        'Create NetworkPolicies (default-deny + explicit allows) to segment project traffic'
+      );
     }
 
     const roles = [...this._resources(state, 'Role'), ...this._resources(state, 'ClusterRole')];
@@ -1496,7 +1640,9 @@ class ScoringEngine {
     ];
     score += Math.min(25, (roles.length + bindings.length) * 5);
     if (roles.length === 0 && bindings.length === 0) {
-      recommendations.push('Use RBAC Roles/RoleBindings instead of shared administrator credentials');
+      recommendations.push(
+        'Use RBAC Roles/RoleBindings instead of shared administrator credentials'
+      );
     }
 
     const wildcardRoles = roles.filter((role) => {
@@ -1509,7 +1655,9 @@ class ScoringEngine {
     });
     if (wildcardRoles.length > 0) {
       score -= 10;
-      recommendations.push('Replace wildcard Role rules with the specific verbs/resources the workload needs');
+      recommendations.push(
+        'Replace wildcard Role rules with the specific verbs/resources the workload needs'
+      );
     }
 
     const secrets = this._resources(state, 'Secret');
@@ -1517,9 +1665,13 @@ class ScoringEngine {
     score += Math.min(25, secrets.length * 10);
     if (this._hasSensitiveConfigMap(configMaps)) {
       score -= 15;
-      recommendations.push('Move passwords/tokens/keys out of ConfigMaps into Secrets (or a Vault-backed provider)');
+      recommendations.push(
+        'Move passwords/tokens/keys out of ConfigMaps into Secrets (or a Vault-backed provider)'
+      );
     } else if (secrets.length === 0) {
-      recommendations.push('Store credentials and TLS material in Secrets, not in ConfigMaps or images');
+      recommendations.push(
+        'Store credentials and TLS material in Secrets, not in ConfigMaps or images'
+      );
     }
 
     const sccs = this._resources(state, 'SecurityContextConstraints');
@@ -1529,17 +1681,23 @@ class ScoringEngine {
     });
     if (grantedSccs.length > 0) score += 15;
     else {
-      recommendations.push('Grant SCCs to a ServiceAccount (oc adm policy add-scc-to-user anyuid -z <sa>), not to broad groups');
+      recommendations.push(
+        'Grant SCCs to a ServiceAccount (oc adm policy add-scc-to-user anyuid -z <sa>), not to broad groups'
+      );
     }
 
     const privilegedWorkloads = this._workloadKinds(state).filter((workload) => {
       const containers = this._containers(workload);
-      return containers.some((container) => container?.securityContext?.privileged === true)
-        || resourceSpec(workload)?.template?.spec?.securityContext?.privileged === true;
+      return (
+        containers.some((container) => container?.securityContext?.privileged === true) ||
+        resourceSpec(workload)?.template?.spec?.securityContext?.privileged === true
+      );
     });
     if (privilegedWorkloads.length === 0) score += 10;
     else {
-      recommendations.push('Avoid privileged containers; use anyuid/nonroot SCCs and drop Linux capabilities instead');
+      recommendations.push(
+        'Avoid privileged containers; use anyuid/nonroot SCCs and drop Linux capabilities instead'
+      );
     }
 
     return { score: integer(score), recommendations };
@@ -1554,34 +1712,48 @@ class ScoringEngine {
     const services = this._resources(state, 'Service');
     score += ratio(services.length, Math.max(1, deployments.length)) * 25;
     if (services.length < deployments.length) {
-      recommendations.push('Create a Service for every Deployment (oc expose deployment/<name> or a Service manifest)');
+      recommendations.push(
+        'Create a Service for every Deployment (oc expose deployment/<name> or a Service manifest)'
+      );
     }
 
     const routes = this._resources(state, 'Route');
     const admittedRoutes = this._routesAdmitted(routes);
     score += Math.min(25, routes.length * 10);
     if (routes.length === 0 && services.length > 0) {
-      recommendations.push('Expose a Service with a Route (oc expose svc/<name>) for external HTTP(S) access');
+      recommendations.push(
+        'Expose a Service with a Route (oc expose svc/<name>) for external HTTP(S) access'
+      );
     } else if (routes.length > 0 && admittedRoutes.length < routes.length) {
-      recommendations.push('Check Route admission: the router needs ready Service endpoints (oc get route, oc get endpoints)');
+      recommendations.push(
+        'Check Route admission: the router needs ready Service endpoints (oc get route, oc get endpoints)'
+      );
     }
 
     const tlsRoutes = routes.filter((route) => Boolean(resourceSpec(route).tls?.termination));
     score += ratio(tlsRoutes.length, Math.max(1, routes.length)) * 20;
     if (routes.length > 0 && tlsRoutes.length === 0) {
-      recommendations.push('Use TLS termination on Routes (oc create route edge/reencrypt/passthrough)');
+      recommendations.push(
+        'Use TLS termination on Routes (oc create route edge/reencrypt/passthrough)'
+      );
     }
 
-    const loadBalancers = services.filter((service) => resourceSpec(service).type === 'LoadBalancer');
+    const loadBalancers = services.filter(
+      (service) => resourceSpec(service).type === 'LoadBalancer'
+    );
     if (loadBalancers.length > 0) score += 15;
     else {
-      recommendations.push('For non-HTTP services on bare metal, install MetalLB and use a LoadBalancer Service');
+      recommendations.push(
+        'For non-HTTP services on bare metal, install MetalLB and use a LoadBalancer Service'
+      );
     }
 
     const netpols = this._resources(state, 'NetworkPolicy');
     score += Math.min(15, netpols.length * 5);
     if (netpols.length === 0 && services.length > 0) {
-      recommendations.push('Add NetworkPolicies so Routes/Services are not reachable from every Pod in every project');
+      recommendations.push(
+        'Add NetworkPolicies so Routes/Services are not reachable from every Pod in every project'
+      );
     }
 
     return { score: integer(score), recommendations };
@@ -1596,27 +1768,35 @@ class ScoringEngine {
     const hpas = this._resources(state, 'HorizontalPodAutoscaler');
     score += Math.min(40, hpas.length * 20);
     if (hpas.length === 0 && deployments.length > 0) {
-      recommendations.push('Add a HorizontalPodAutoscaler (oc autoscale deployment/<name> --min=2 --max=10 --cpu-percent=70)');
+      recommendations.push(
+        'Add a HorizontalPodAutoscaler (oc autoscale deployment/<name> --min=2 --max=10 --cpu-percent=70)'
+      );
     }
 
-    const multiReplica = deployments.filter((deployment) => asNumber(resourceSpec(deployment).replicas, 1) > 1);
+    const multiReplica = deployments.filter(
+      (deployment) => asNumber(resourceSpec(deployment).replicas, 1) > 1
+    );
     score += ratio(multiReplica.length, Math.max(1, deployments.length)) * 25;
     if (deployments.length > 0 && multiReplica.length < deployments.length) {
       recommendations.push('Run more than one replica for each stateless Deployment');
     }
 
-    const withRequests = deployments.filter((deployment) =>
-      this._containers(deployment).length > 0
-      && this._containers(deployment).every((container) => container?.resources?.requests)
+    const withRequests = deployments.filter(
+      (deployment) =>
+        this._containers(deployment).length > 0 &&
+        this._containers(deployment).every((container) => container?.resources?.requests)
     );
     score += ratio(withRequests.length, Math.max(1, deployments.length)) * 20;
     if (deployments.length > 0 && withRequests.length < deployments.length) {
-      recommendations.push('Set CPU/memory requests on every container so the scheduler and HPA have real data');
+      recommendations.push(
+        'Set CPU/memory requests on every container so the scheduler and HPA have real data'
+      );
     }
 
     const nodes = this._resources(state, 'Node');
     score += Math.min(15, nodes.length * 5);
-    if (nodes.length < 2) recommendations.push('Add worker Nodes or enable cluster autoscaling for burst capacity');
+    if (nodes.length < 2)
+      recommendations.push('Add worker Nodes or enable cluster autoscaling for burst capacity');
 
     return { score: integer(score), recommendations };
   }
@@ -1630,19 +1810,24 @@ class ScoringEngine {
     }
 
     let score = 60;
-    const overProvisioned = deployments.filter((deployment) => asNumber(resourceSpec(deployment).replicas, 1) > 5);
+    const overProvisioned = deployments.filter(
+      (deployment) => asNumber(resourceSpec(deployment).replicas, 1) > 5
+    );
     if (overProvisioned.length > 0) {
       score -= overProvisioned.length * 10;
-      recommendations.push('Review Deployments with more than five replicas; use an HPA instead of fixed overprovisioning');
+      recommendations.push(
+        'Review Deployments with more than five replicas; use an HPA instead of fixed overprovisioning'
+      );
     }
 
     const hpas = this._resources(state, 'HorizontalPodAutoscaler');
     score += Math.min(20, hpas.length * 10);
     if (hpas.length === 0) recommendations.push('Use an HPA to scale down during idle periods');
 
-    const withLimits = deployments.filter((deployment) =>
-      this._containers(deployment).length > 0
-      && this._containers(deployment).every((container) => container?.resources?.limits)
+    const withLimits = deployments.filter(
+      (deployment) =>
+        this._containers(deployment).length > 0 &&
+        this._containers(deployment).every((container) => container?.resources?.limits)
     );
     score += ratio(withLimits.length, deployments.length) * 20;
     if (withLimits.length < deployments.length) {
@@ -1660,15 +1845,21 @@ class ScoringEngine {
     const deployments = this._resources(state, 'Deployment');
     const withBothProbes = deployments.filter((deployment) => {
       const containers = this._containers(deployment);
-      return containers.length > 0
-        && containers.every((container) => container?.livenessProbe && container?.readinessProbe);
+      return (
+        containers.length > 0 &&
+        containers.every((container) => container?.livenessProbe && container?.readinessProbe)
+      );
     });
     score += ratio(withBothProbes.length, Math.max(1, deployments.length)) * 40;
     if (deployments.length > 0 && withBothProbes.length < deployments.length) {
-      recommendations.push('Add liveness and readiness probes to every container (oc set probe deployment/<name>)');
+      recommendations.push(
+        'Add liveness and readiness probes to every container (oc set probe deployment/<name>)'
+      );
     }
 
-    const multiReplica = deployments.filter((deployment) => asNumber(resourceSpec(deployment).replicas, 1) > 1);
+    const multiReplica = deployments.filter(
+      (deployment) => asNumber(resourceSpec(deployment).replicas, 1) > 1
+    );
     score += ratio(multiReplica.length, Math.max(1, deployments.length)) * 25;
 
     const pdbs = this._resources(state, 'PodDisruptionBudget');
@@ -1698,24 +1889,32 @@ class ScoringEngine {
     const secrets = this._resources(state, 'Secret');
     score += Math.min(35, (configMaps.length + secrets.length) * 10);
     if (configMaps.length === 0 && secrets.length === 0) {
-      recommendations.push('Externalise configuration with ConfigMaps and Secrets (do not bake it into images)');
+      recommendations.push(
+        'Externalise configuration with ConfigMaps and Secrets (do not bake it into images)'
+      );
     }
     if (this._hasSensitiveConfigMap(configMaps)) {
       score -= 15;
       recommendations.push('Move sensitive ConfigMap keys (password/token/key) into a Secret');
     }
 
-    const workloads = [...this._resources(state, 'Deployment'), ...this._resources(state, 'StatefulSet')];
+    const workloads = [
+      ...this._resources(state, 'Deployment'),
+      ...this._resources(state, 'StatefulSet'),
+    ];
     const withConfigRefs = workloads.filter((workload) => {
       if (asArray(resourceSpec(workload).template?.spec?.volumes).length > 0) return true;
       return this._containers(workload).some(
-        (container) => asArray(container?.envFrom).length > 0
-          || asArray(container?.env).some((entry) => entry?.valueFrom)
+        (container) =>
+          asArray(container?.envFrom).length > 0 ||
+          asArray(container?.env).some((entry) => entry?.valueFrom)
       );
     });
     score += ratio(withConfigRefs.length, Math.max(1, workloads.length)) * 30;
     if (workloads.length > 0 && withConfigRefs.length < workloads.length) {
-      recommendations.push('Consume ConfigMaps/Secrets via envFrom or volumes instead of hardcoded values');
+      recommendations.push(
+        'Consume ConfigMaps/Secrets via envFrom or volumes instead of hardcoded values'
+      );
     }
 
     const manifestState = this._manifestState();
@@ -1723,7 +1922,9 @@ class ScoringEngine {
     const appliedKustomize = asArray(manifestState?.appliedKustomize).length;
     if (appliedFiles + appliedKustomize > 0) score += 20;
     else {
-      recommendations.push('Manage configuration declaratively (oc apply -f / oc apply -k) so changes are reviewable');
+      recommendations.push(
+        'Manage configuration declaratively (oc apply -f / oc apply -k) so changes are reviewable'
+      );
     }
 
     return { score: integer(score), recommendations };
@@ -1740,7 +1941,9 @@ class ScoringEngine {
     if (statefulSets.length === 0 && pvcs.length === 0 && pvs.length === 0) {
       return {
         score: 50,
-        recommendations: ['If you run databases/queues, use StatefulSets with PVCs and a default StorageClass'],
+        recommendations: [
+          'If you run databases/queues, use StatefulSets with PVCs and a default StorageClass',
+        ],
       };
     }
 
@@ -1749,7 +1952,9 @@ class ScoringEngine {
       const boundPvcs = pvcs.filter((claim) => resourceStatus(claim).phase === 'Bound');
       score += ratio(boundPvcs.length, Math.max(statefulSets.length, pvcs.length)) * 30;
       if (boundPvcs.length < pvcs.length || boundPvcs.length < statefulSets.length) {
-        recommendations.push('Check PVC binding: inspect StorageClasses, PV capacity and access modes (oc get pvc, oc describe pvc)');
+        recommendations.push(
+          'Check PVC binding: inspect StorageClasses, PV capacity and access modes (oc get pvc, oc describe pvc)'
+        );
       }
     } else if (pvcs.length > 0) {
       const boundPvcs = pvcs.filter((claim) => resourceStatus(claim).phase === 'Bound');
@@ -1758,7 +1963,8 @@ class ScoringEngine {
 
     score += Math.min(25, pvs.length * 10);
     if (storageClasses.length > 0) score += 15;
-    else recommendations.push('Provide a default StorageClass so PVCs can be dynamically provisioned');
+    else
+      recommendations.push('Provide a default StorageClass so PVCs can be dynamically provisioned');
 
     return { score: integer(score), recommendations };
   }
@@ -1770,11 +1976,15 @@ class ScoringEngine {
 
     const deployments = this._resources(state, 'Deployment');
     const withProbes = deployments.filter((deployment) =>
-      this._containers(deployment).some((container) => container?.livenessProbe || container?.readinessProbe)
+      this._containers(deployment).some(
+        (container) => container?.livenessProbe || container?.readinessProbe
+      )
     );
     score += ratio(withProbes.length, Math.max(1, deployments.length)) * 30;
     if (deployments.length > 0 && withProbes.length < deployments.length) {
-      recommendations.push('Add probes so failures are visible to OpenShift and unhealthy Pods are replaced');
+      recommendations.push(
+        'Add probes so failures are visible to OpenShift and unhealthy Pods are replaced'
+      );
     }
 
     const operators = this._resources(state, 'ClusterOperator');
@@ -1787,7 +1997,9 @@ class ScoringEngine {
       });
       score += ratio(healthy.length, operators.length) * 40;
       if (healthy.length < operators.length) {
-        recommendations.push('Investigate degraded ClusterOperators (oc get co, oc describe co/<name>) before they page you at 03:00');
+        recommendations.push(
+          'Investigate degraded ClusterOperators (oc get co, oc describe co/<name>) before they page you at 03:00'
+        );
       }
     } else {
       recommendations.push('Watch ClusterOperators and ClusterVersion for platform-level health');
@@ -1797,9 +2009,14 @@ class ScoringEngine {
     const monitoring = daemonSets.some((daemonSet) =>
       /monitor|metric|log|fluent|prometheus|node-exporter/i.test(resourceName(daemonSet))
     );
-    const monitoringOperator = operators.some((operator) => resourceName(operator) === 'monitoring');
+    const monitoringOperator = operators.some(
+      (operator) => resourceName(operator) === 'monitoring'
+    );
     if (monitoring || monitoringOperator) score += 15;
-    else recommendations.push('Use the OpenShift monitoring stack (or a metrics/logging DaemonSet) for cluster-wide visibility');
+    else
+      recommendations.push(
+        'Use the OpenShift monitoring stack (or a metrics/logging DaemonSet) for cluster-wide visibility'
+      );
 
     const hpas = this._resources(state, 'HorizontalPodAutoscaler');
     score += Math.min(15, hpas.length * 5);
@@ -1815,7 +2032,9 @@ class ScoringEngine {
     const projects = this._resources(state, 'Project');
     score += Math.min(30, projects.length * 5);
     if (projects.length <= 1) {
-      recommendations.push('Organise workloads into Projects (one per team/environment) instead of one shared namespace');
+      recommendations.push(
+        'Organise workloads into Projects (one per team/environment) instead of one shared namespace'
+      );
     }
 
     const quotas = this._resources(state, 'ResourceQuota');
@@ -1832,10 +2051,14 @@ class ScoringEngine {
     }
 
     const allResources = this._allResources(state);
-    const labeled = allResources.filter((resource) => Object.keys(resourceLabels(resource)).length > 0);
+    const labeled = allResources.filter(
+      (resource) => Object.keys(resourceLabels(resource)).length > 0
+    );
     score += ratio(labeled.length, Math.max(1, allResources.length)) * 30;
     if (labeled.length < allResources.length * 0.5) {
-      recommendations.push('Label resources consistently (app, app.kubernetes.io/part-of, environment) for selectors and policy');
+      recommendations.push(
+        'Label resources consistently (app, app.kubernetes.io/part-of, environment) for selectors and policy'
+      );
     }
 
     return { score: integer(score), recommendations };
@@ -1936,19 +2159,24 @@ class ScoringEngine {
     if (!this.progress) return;
     try {
       if (typeof localStorage === 'undefined') return;
-      const achievements = Array.from(this.unlockedAchievements || this.progress.achievements || []);
+      const achievements = Array.from(
+        this.unlockedAchievements || this.progress.achievements || []
+      );
       this.progress.achievements = achievements;
-      localStorage.setItem(STORAGE_KEY, JSON.stringify({
-        xp: this.progress.xp,
-        level: this.progress.level,
-        stats: this.progress.stats,
-        achievements,
-        campaignProgress: this.progress.campaignProgress,
-        challengeProgress: this.progress.challengeProgress,
-        examPrep: this.progress.examPrep,
-        drillCommandEvidence: this.progress.drillCommandEvidence || {},
-        objectiveEvidence: this.progress.objectiveEvidence || {},
-      }));
+      localStorage.setItem(
+        STORAGE_KEY,
+        JSON.stringify({
+          xp: this.progress.xp,
+          level: this.progress.level,
+          stats: this.progress.stats,
+          achievements,
+          campaignProgress: this.progress.campaignProgress,
+          challengeProgress: this.progress.challengeProgress,
+          examPrep: this.progress.examPrep,
+          drillCommandEvidence: this.progress.drillCommandEvidence || {},
+          objectiveEvidence: this.progress.objectiveEvidence || {},
+        })
+      );
     } catch {
       /* storage unavailable/full — progress still lives in memory */
     }

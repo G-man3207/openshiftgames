@@ -129,7 +129,7 @@ export function visualStatusFor(resource, fallback = null) {
       if (hasCondition(conditions, 'Available', 'False')) return 'Unavailable';
       if (hasCondition(conditions, 'Progressing', 'True')) return 'Progressing';
       if (hasCondition(conditions, 'Available', 'True')) return 'Available';
-      return phase && phase !== 'Active' ? phase : (fallback || 'Unknown');
+      return phase && phase !== 'Active' ? phase : fallback || 'Unknown';
     }
 
     case 'ClusterVersion': {
@@ -137,14 +137,14 @@ export function visualStatusFor(resource, fallback = null) {
       if (hasCondition(conditions, 'Available', 'False')) return 'Unavailable';
       if (hasCondition(conditions, 'Progressing', 'True')) return 'Progressing';
       if (hasCondition(conditions, 'Available', 'True')) return 'Available';
-      return phase && phase !== 'Active' ? phase : (fallback || 'Unknown');
+      return phase && phase !== 'Active' ? phase : fallback || 'Unknown';
     }
 
     case 'Node': {
       const ready = conditionStatus(conditions, 'Ready');
       if (ready === 'True') return 'Ready';
       if (ready === 'False' || ready === 'Unknown') return 'NotReady';
-      return phase === 'Running' ? 'Ready' : (phase || fallback || 'Unknown');
+      return phase === 'Running' ? 'Ready' : phase || fallback || 'Unknown';
     }
 
     case 'Deployment': {
@@ -162,13 +162,14 @@ export function visualStatusFor(resource, fallback = null) {
         return desired === 0 || available >= desired ? 'Running' : 'Progressing';
       }
       if (hasCondition(conditions, 'Available', 'False')) {
-        const deadlineExceeded = String(progressing?.status) === 'False'
-          && String(progressing?.reason) === 'ProgressDeadlineExceeded';
+        const deadlineExceeded =
+          String(progressing?.status) === 'False' &&
+          String(progressing?.reason) === 'ProgressDeadlineExceeded';
         return deadlineExceeded ? 'Failed' : 'Progressing';
       }
       // No controller conditions yet (freshly applied object): keep the honest
       // phase rather than inventing a state.
-      return phase && phase !== 'Pending' ? phase : (fallback || 'Pending');
+      return phase && phase !== 'Pending' ? phase : fallback || 'Pending';
     }
 
     default:

@@ -31,8 +31,12 @@ const DEFAULT_INSTALL_MODES = [
 ];
 
 function renderKeyValueLines(entries) {
-  const rows = entries.filter(([, value]) => value !== undefined && value !== null && String(value) !== '');
-  return rows.map(([label, value]) => `  ${label}:${' '.repeat(Math.max(1, 26 - label.length))}${value}`).join('\n');
+  const rows = entries.filter(
+    ([, value]) => value !== undefined && value !== null && String(value) !== ''
+  );
+  return rows
+    .map(([label, value]) => `  ${label}:${' '.repeat(Math.max(1, 26 - label.length))}${value}`)
+    .join('\n');
 }
 
 // ─── OperatorGroup ─────────────────────────────────────────────────────────
@@ -43,9 +47,10 @@ export class OperatorGroup extends ResourceBase {
       ...metadata,
       apiVersion: metadata.apiVersion || 'operators.coreos.com/v1',
     });
-    const targetNamespaces = metadata.targetNamespaces
-      || metadata.spec?.targetNamespaces
-      || (metadata.namespace ? [metadata.namespace] : []);
+    const targetNamespaces =
+      metadata.targetNamespaces ||
+      metadata.spec?.targetNamespaces ||
+      (metadata.namespace ? [metadata.namespace] : []);
     this._initSpec({ targetNamespaces: [...targetNamespaces] }, metadata.spec);
     this._setInitialStatus({
       namespaces: [...(this.spec.targetNamespaces || [])],
@@ -64,8 +69,16 @@ export class OperatorGroup extends ResourceBase {
     return [
       `Name:           ${this.metadata.name}`,
       `Namespace:      ${this.metadata.namespace}`,
-      `Labels:         ${Object.entries(this.metadata.labels).map(([k, v]) => `${k}=${v}`).join(', ') || '<none>'}`,
-      `Annotations:    ${Object.entries(this.metadata.annotations).map(([k, v]) => `${k}=${v}`).join(', ') || '<none>'}`,
+      `Labels:         ${
+        Object.entries(this.metadata.labels)
+          .map(([k, v]) => `${k}=${v}`)
+          .join(', ') || '<none>'
+      }`,
+      `Annotations:    ${
+        Object.entries(this.metadata.annotations)
+          .map(([k, v]) => `${k}=${v}`)
+          .join(', ') || '<none>'
+      }`,
       'API Version:    operators.coreos.com/v1',
       'Kind:           OperatorGroup',
       'Metadata:',
@@ -78,7 +91,12 @@ export class OperatorGroup extends ResourceBase {
       '  Namespaces:',
       ...(this.status.namespaces || []).map((namespace) => `    ${namespace}`),
       'Events:',
-      `${this.events.slice(-10).map((event) => `  ${event.type}\t${event.reason}\t${event.message}`).join('\n') || '  <none>'}`,
+      `${
+        this.events
+          .slice(-10)
+          .map((event) => `  ${event.type}\t${event.reason}\t${event.message}`)
+          .join('\n') || '  <none>'
+      }`,
     ].join('\n');
   }
 }
@@ -91,9 +109,10 @@ export class InstallPlan extends ResourceBase {
       ...metadata,
       apiVersion: metadata.apiVersion || 'operators.coreos.com/v1alpha1',
     });
-    const csvNames = metadata.clusterServiceVersionNames
-      || metadata.spec?.clusterServiceVersionNames
-      || (metadata.csvName ? [metadata.csvName] : []);
+    const csvNames =
+      metadata.clusterServiceVersionNames ||
+      metadata.spec?.clusterServiceVersionNames ||
+      (metadata.csvName ? [metadata.csvName] : []);
     this._initSpec(
       {
         approval: metadata.approval || 'Automatic',
@@ -119,16 +138,18 @@ export class InstallPlan extends ResourceBase {
   }
 
   setPlan(csvName, version = '1.0.0') {
-    this.status.plan = [{
-      resolving: '',
-      resource: {
-        apiVersion: 'operators.coreos.com/v1alpha1',
-        kind: 'ClusterServiceVersion',
-        name: csvName,
-        version,
+    this.status.plan = [
+      {
+        resolving: '',
+        resource: {
+          apiVersion: 'operators.coreos.com/v1alpha1',
+          kind: 'ClusterServiceVersion',
+          name: csvName,
+          version,
+        },
+        status: 'Created',
       },
-      status: 'Created',
-    }];
+    ];
     this._bumpResourceVersion();
     return this;
   }
@@ -138,7 +159,12 @@ export class InstallPlan extends ResourceBase {
     this.status.startTime = this.status.startTime || timestamp();
     this.status.completionTime = timestamp();
     this.status.plan = (this.status.plan || []).map((entry) => ({ ...entry, status: 'Created' }));
-    this.setCondition('Installed', 'True', 'InstallPlanComplete', 'install plan approved and installed');
+    this.setCondition(
+      'Installed',
+      'True',
+      'InstallPlanComplete',
+      'install plan approved and installed'
+    );
     this._bumpResourceVersion();
     return this;
   }
@@ -151,8 +177,16 @@ export class InstallPlan extends ResourceBase {
     return [
       `Name:            ${this.metadata.name}`,
       `Namespace:       ${this.metadata.namespace}`,
-      `Labels:          ${Object.entries(this.metadata.labels).map(([k, v]) => `${k}=${v}`).join(', ') || '<none>'}`,
-      `Annotations:     ${Object.entries(this.metadata.annotations).map(([k, v]) => `${k}=${v}`).join(', ') || '<none>'}`,
+      `Labels:          ${
+        Object.entries(this.metadata.labels)
+          .map(([k, v]) => `${k}=${v}`)
+          .join(', ') || '<none>'
+      }`,
+      `Annotations:     ${
+        Object.entries(this.metadata.annotations)
+          .map(([k, v]) => `${k}=${v}`)
+          .join(', ') || '<none>'
+      }`,
       'API Version:     operators.coreos.com/v1alpha1',
       'Kind:            InstallPlan',
       'Metadata:',
@@ -168,7 +202,12 @@ export class InstallPlan extends ResourceBase {
       '  Plan:',
       ...(planRows.length ? planRows : ['    <none>']),
       'Events:',
-      `${this.events.slice(-10).map((event) => `  ${event.type}\t${event.reason}\t${event.message}`).join('\n') || '  <none>'}`,
+      `${
+        this.events
+          .slice(-10)
+          .map((event) => `  ${event.type}\t${event.reason}\t${event.message}`)
+          .join('\n') || '  <none>'
+      }`,
     ].join('\n');
   }
 }
@@ -182,8 +221,11 @@ export class ClusterServiceVersion extends ResourceBase {
       apiVersion: metadata.apiVersion || 'operators.coreos.com/v1alpha1',
     });
     const packageName = metadata.packageName || metadata.displayName || metadata.name || 'operator';
-    const displayName = metadata.displayName
-      || String(packageName).replace(/[-_]/g, ' ').replace(/\b\w/g, (character) => character.toUpperCase());
+    const displayName =
+      metadata.displayName ||
+      String(packageName)
+        .replace(/[-_]/g, ' ')
+        .replace(/\b\w/g, (character) => character.toUpperCase());
     const version = metadata.version || '1.0.0';
     this._initSpec(
       {
@@ -195,24 +237,33 @@ export class ClusterServiceVersion extends ResourceBase {
         install: {
           strategy: 'deployment',
           spec: {
-            deployments: [{
-              name: `${String(metadata.name || packageName).replace(/\.v\d+.*$/, '')}-controller-manager`,
-              spec: {
-                replicas: 1,
-                selector: { matchLabels: { name: `${packageName}-operator` } },
-                template: {
-                  metadata: { labels: { name: `${packageName}-operator` } },
-                  spec: {
-                    serviceAccountName: 'default',
-                    containers: [{
-                      name: 'manager',
-                      image: metadata.image || `${String(packageName).replace(/-operator$/, '')}-operator:latest`,
-                      resources: { requests: { cpu: '10m', memory: '64Mi' }, limits: { cpu: '200m', memory: '256Mi' } },
-                    }],
+            deployments: [
+              {
+                name: `${String(metadata.name || packageName).replace(/\.v\d+.*$/, '')}-controller-manager`,
+                spec: {
+                  replicas: 1,
+                  selector: { matchLabels: { name: `${packageName}-operator` } },
+                  template: {
+                    metadata: { labels: { name: `${packageName}-operator` } },
+                    spec: {
+                      serviceAccountName: 'default',
+                      containers: [
+                        {
+                          name: 'manager',
+                          image:
+                            metadata.image ||
+                            `${String(packageName).replace(/-operator$/, '')}-operator:latest`,
+                          resources: {
+                            requests: { cpu: '10m', memory: '64Mi' },
+                            limits: { cpu: '200m', memory: '256Mi' },
+                          },
+                        },
+                      ],
+                    },
                   },
                 },
               },
-            }],
+            ],
           },
         },
         customresourcedefinitions: { owned: metadata.ownedCrds ? [...metadata.ownedCrds] : [] },
@@ -262,13 +313,22 @@ export class ClusterServiceVersion extends ResourceBase {
 
   toDescribe() {
     const conditions = (this.status.conditions || []).map(
-      (condition) => `    Type:      ${condition.type}\n    Status:    ${condition.status}\n    Reason:    ${condition.reason || '<none>'}\n    Message:   ${condition.message || '<none>'}`
+      (condition) =>
+        `    Type:      ${condition.type}\n    Status:    ${condition.status}\n    Reason:    ${condition.reason || '<none>'}\n    Message:   ${condition.message || '<none>'}`
     );
     return [
       `Name:           ${this.metadata.name}`,
       `Namespace:      ${this.metadata.namespace}`,
-      `Labels:         ${Object.entries(this.metadata.labels).map(([k, v]) => `${k}=${v}`).join(', ') || '<none>'}`,
-      `Annotations:    ${Object.entries(this.metadata.annotations).map(([k, v]) => `${k}=${v}`).join(', ') || '<none>'}`,
+      `Labels:         ${
+        Object.entries(this.metadata.labels)
+          .map(([k, v]) => `${k}=${v}`)
+          .join(', ') || '<none>'
+      }`,
+      `Annotations:    ${
+        Object.entries(this.metadata.annotations)
+          .map(([k, v]) => `${k}=${v}`)
+          .join(', ') || '<none>'
+      }`,
       'API Version:    operators.coreos.com/v1alpha1',
       'Kind:           ClusterServiceVersion',
       'Metadata:',
@@ -281,7 +341,9 @@ export class ClusterServiceVersion extends ResourceBase {
         ['Maturity', this.spec.maturity],
       ]),
       '  Install Modes:',
-      ...(this.spec.installModes || []).map((mode) => `    ${mode.type}: ${mode.supported === true}`),
+      ...(this.spec.installModes || []).map(
+        (mode) => `    ${mode.type}: ${mode.supported === true}`
+      ),
       'Status:',
       `  Phase:        ${this.status.phase}`,
       `  Reason:       ${this.status.reason || '<none>'}`,
@@ -289,7 +351,12 @@ export class ClusterServiceVersion extends ResourceBase {
       '  Conditions:',
       ...(conditions.length ? conditions : ['    <none>']),
       'Events:',
-      `${this.events.slice(-10).map((event) => `  ${event.type}\t${event.reason}\t${event.message}`).join('\n') || '  <none>'}`,
+      `${
+        this.events
+          .slice(-10)
+          .map((event) => `  ${event.type}\t${event.reason}\t${event.message}`)
+          .join('\n') || '  <none>'
+      }`,
     ].join('\n');
   }
 }
@@ -329,7 +396,9 @@ export class PackageManifest extends ResourceBase {
     const defaultChannel = this.status.defaultChannel || this.spec.defaultChannel;
     const channel = channels.find((entry) => entry.name === defaultChannel) || channels[0];
     if (channel?.currentCSV) return channel.currentCSV;
-    const specChannel = (this.spec.channels || []).find((entry) => entry.name === defaultChannel) || (this.spec.channels || [])[0];
+    const specChannel =
+      (this.spec.channels || []).find((entry) => entry.name === defaultChannel) ||
+      (this.spec.channels || [])[0];
     return specChannel?.currentCSV || '';
   }
 
@@ -348,9 +417,17 @@ export class PackageManifest extends ResourceBase {
       `Source Namespace: ${this.status.catalogSourceNamespace || '<none>'}`,
       'Provider:    ' + (this.status.provider?.name || '<none>'),
       'Channels:',
-      ...channels.map((channel) => `  Name:     ${channel.name}\n    Current CSV:  ${channel.currentCSV || '<none>'}`),
+      ...channels.map(
+        (channel) =>
+          `  Name:     ${channel.name}\n    Current CSV:  ${channel.currentCSV || '<none>'}`
+      ),
       'Events:',
-      `${this.events.slice(-10).map((event) => `  ${event.type}\t${event.reason}\t${event.message}`).join('\n') || '  <none>'}`,
+      `${
+        this.events
+          .slice(-10)
+          .map((event) => `  ${event.type}\t${event.reason}\t${event.message}`)
+          .join('\n') || '  <none>'
+      }`,
     ].join('\n');
   }
 }
@@ -373,13 +450,15 @@ export class MetalLB extends ResourceBase {
     );
     this._setInitialStatus({
       phase: 'Ready',
-      conditions: [{
-        type: 'Ready',
-        status: 'True',
-        reason: 'MetalLBReady',
-        message: 'MetalLB is running',
-        lastTransitionTime: timestamp(),
-      }],
+      conditions: [
+        {
+          type: 'Ready',
+          status: 'True',
+          reason: 'MetalLBReady',
+          message: 'MetalLB is running',
+          lastTransitionTime: timestamp(),
+        },
+      ],
     });
   }
 
@@ -387,7 +466,11 @@ export class MetalLB extends ResourceBase {
     return [
       `Name:           ${this.metadata.name}`,
       `Namespace:      ${this.metadata.namespace}`,
-      `Labels:         ${Object.entries(this.metadata.labels).map(([k, v]) => `${k}=${v}`).join(', ') || '<none>'}`,
+      `Labels:         ${
+        Object.entries(this.metadata.labels)
+          .map(([k, v]) => `${k}=${v}`)
+          .join(', ') || '<none>'
+      }`,
       'API Version:    metallb.io/v1beta1',
       'Kind:           MetalLB',
       'Spec:',
@@ -396,7 +479,12 @@ export class MetalLB extends ResourceBase {
       'Status:',
       `  Phase:        ${this.status.phase}`,
       'Events:',
-      `${this.events.slice(-10).map((event) => `  ${event.type}\t${event.reason}\t${event.message}`).join('\n') || '  <none>'}`,
+      `${
+        this.events
+          .slice(-10)
+          .map((event) => `  ${event.type}\t${event.reason}\t${event.message}`)
+          .join('\n') || '  <none>'
+      }`,
     ].join('\n');
   }
 }

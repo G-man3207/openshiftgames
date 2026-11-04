@@ -24,7 +24,11 @@
  * defensive: this panel must never break the render loop.
  */
 
-import { INCIDENT_DEFS_BY_NAME, INCIDENT_CATEGORIES, SEVERITY_LEVELS } from '../data/IncidentDefs.js';
+import {
+  INCIDENT_DEFS_BY_NAME,
+  INCIDENT_CATEGORIES,
+  SEVERITY_LEVELS,
+} from '../data/IncidentDefs.js';
 
 const ENGINE_ANNOTATION = 'openshiftgames.io/incident';
 const LEGACY_STORAGE_KEY = 'k8sgames_investigation';
@@ -32,21 +36,78 @@ const STORAGE_KEY = 'openshiftgames_investigation';
 
 /** Severity number → Tailwind styling (the old code keyed on 'critical'/'warning'/'info' strings → bug G?). */
 const SEVERITY_STYLE = {
-  1: { icon: '\u2139', border: 'border-green-500/20', bg: 'bg-green-500/10', text: 'text-green-400', dot: 'bg-green-400', label: 'Low' },
-  2: { icon: '\u26a0', border: 'border-yellow-500/20', bg: 'bg-yellow-500/10', text: 'text-yellow-400', dot: 'bg-yellow-400', label: 'Medium' },
-  3: { icon: '\u26a0', border: 'border-orange-500/25', bg: 'bg-orange-500/10', text: 'text-orange-400', dot: 'bg-orange-400', label: 'High' },
-  4: { icon: '\u{1f6a8}', border: 'border-red-500/30', bg: 'bg-red-500/10', text: 'text-red-400', dot: 'bg-red-400', label: 'Critical' },
-  5: { icon: '\u{1f525}', border: 'border-red-600/40', bg: 'bg-red-600/15', text: 'text-red-300', dot: 'bg-red-500', label: 'Emergency' },
+  1: {
+    icon: '\u2139',
+    border: 'border-green-500/20',
+    bg: 'bg-green-500/10',
+    text: 'text-green-400',
+    dot: 'bg-green-400',
+    label: 'Low',
+  },
+  2: {
+    icon: '\u26a0',
+    border: 'border-yellow-500/20',
+    bg: 'bg-yellow-500/10',
+    text: 'text-yellow-400',
+    dot: 'bg-yellow-400',
+    label: 'Medium',
+  },
+  3: {
+    icon: '\u26a0',
+    border: 'border-orange-500/25',
+    bg: 'bg-orange-500/10',
+    text: 'text-orange-400',
+    dot: 'bg-orange-400',
+    label: 'High',
+  },
+  4: {
+    icon: '\u{1f6a8}',
+    border: 'border-red-500/30',
+    bg: 'bg-red-500/10',
+    text: 'text-red-400',
+    dot: 'bg-red-400',
+    label: 'Critical',
+  },
+  5: {
+    icon: '\u{1f525}',
+    border: 'border-red-600/40',
+    bg: 'bg-red-600/15',
+    text: 'text-red-300',
+    dot: 'bg-red-500',
+    label: 'Emergency',
+  },
 };
 
 const CATEGORY_ORDER = ['Pod', 'Network', 'Security', 'Build', 'Cluster', 'Storage', 'Identity'];
 
 /** Tokens replaced in investigation commands: <pod>, <node>, <route>, … */
 const TARGET_TOKENS = [
-  'pod', 'deployment', 'node', 'service', 'route', 'build', 'buildconfig',
-  'imagestream', 'imagestreamtag', 'configmap', 'secret', 'networkpolicy',
-  'ingress', 'pvc', 'pv', 'job', 'cronjob', 'hpa', 'quota', 'limitrange',
-  'clusterquota', 'subscription', 'user', 'group', 'serviceaccount', 'scc',
+  'pod',
+  'deployment',
+  'node',
+  'service',
+  'route',
+  'build',
+  'buildconfig',
+  'imagestream',
+  'imagestreamtag',
+  'configmap',
+  'secret',
+  'networkpolicy',
+  'ingress',
+  'pvc',
+  'pv',
+  'job',
+  'cronjob',
+  'hpa',
+  'quota',
+  'limitrange',
+  'clusterquota',
+  'subscription',
+  'user',
+  'group',
+  'serviceaccount',
+  'scc',
 ];
 const NAMESPACE_TOKENS = ['namespace', 'project'];
 
@@ -100,8 +161,7 @@ export class IncidentPanel {
     this._recentCommands = [];
     this.container = document.createElement('div');
     this.container.id = 'incident-panel';
-    this.container.className =
-      'panel-side panel-left';
+    this.container.className = 'panel-side panel-left';
     this.container.setAttribute('role', 'region');
     this.container.setAttribute('aria-label', 'OpenShift incidents');
     this.container.innerHTML = this._buildHTML();
@@ -189,7 +249,8 @@ export class IncidentPanel {
       if (!incident.engineIncidentId || activeIds.has(incident.engineIncidentId)) continue;
       incident.status = 'resolved';
       incident.resolvedAt = incident.resolvedAt || Date.now();
-      incident.lastAction = typeof incident.lastAction === 'string' ? incident.lastAction : 'manual';
+      incident.lastAction =
+        typeof incident.lastAction === 'string' ? incident.lastAction : 'manual';
       changed = true;
     }
     if (changed) this._loadInvestigationProgress();
@@ -352,7 +413,10 @@ export class IncidentPanel {
 
   /** Build a panel incident from an `incident:created` payload (engine summary + extras). */
   _incidentFromEvent(data = {}) {
-    const payload = data.incident && typeof data.incident === 'object' ? { ...data.incident, ...data } : { ...data };
+    const payload =
+      data.incident && typeof data.incident === 'object'
+        ? { ...data.incident, ...data }
+        : { ...data };
     const def = this._lookupDef(payload.name) || this._lookupDef(payload.defId) || null;
     const name = payload.name || def?.name || 'Unknown';
     const steps = (payload.investigationSteps || def?.investigationSteps || []).map((step) => ({
@@ -390,7 +454,9 @@ export class IncidentPanel {
 
   _findByEngineId(engineIncidentId) {
     if (!engineIncidentId) return null;
-    return this.incidents.find((incident) => incident.engineIncidentId === engineIncidentId) || null;
+    return (
+      this.incidents.find((incident) => incident.engineIncidentId === engineIncidentId) || null
+    );
   }
 
   _onNewIncident(data = {}) {
@@ -489,7 +555,11 @@ export class IncidentPanel {
     const singular = (token) => token.replace(/s$/, '');
     if (singular(uParts[1]) === singular(sParts[1])) {
       if (uParts.length >= 3 && sParts.length >= 3) {
-        return singular(uParts[2]) === singular(sParts[2]) || uParts[2].startsWith(sParts[2]) || sParts[2].startsWith(uParts[2]);
+        return (
+          singular(uParts[2]) === singular(sParts[2]) ||
+          uParts[2].startsWith(sParts[2]) ||
+          sParts[2].startsWith(uParts[2])
+        );
       }
       return true;
     }
@@ -519,8 +589,15 @@ export class IncidentPanel {
     // Local-only fallback (no engine, e.g. panel demo): resolve visually.
     incident.status = 'resolved';
     incident.resolvedAt = Date.now();
-    window.game?.engine?.emit('incident:resolved', { id: null, name: incident.name, severity: incident.severity });
-    window.game?.engine?.emit('xp:gain', { amount: this._getXPForResolve(incident), source: 'incident-panel' });
+    window.game?.engine?.emit('incident:resolved', {
+      id: null,
+      name: incident.name,
+      severity: incident.severity,
+    });
+    window.game?.engine?.emit('xp:gain', {
+      amount: this._getXPForResolve(incident),
+      source: 'incident-panel',
+    });
     this._emitCount();
     if (this.visible) this._renderList();
     return true;
@@ -566,7 +643,10 @@ export class IncidentPanel {
 
   _renderCard(incident) {
     const style = SEVERITY_STYLE[incident.severity] || SEVERITY_STYLE[3];
-    const category = INCIDENT_CATEGORIES[incident.category] || { label: incident.category, color: '#94a3b8' };
+    const category = INCIDENT_CATEGORIES[incident.category] || {
+      label: incident.category,
+      color: '#94a3b8',
+    };
     const elapsed = this._formatElapsed(Date.now() - incident.timestamp);
     const stars = this._getStarRating(incident);
     const completedCount = incident.completedSteps.size;

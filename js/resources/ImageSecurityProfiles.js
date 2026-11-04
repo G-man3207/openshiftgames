@@ -77,7 +77,7 @@ export const KNOWN_IMAGE_SECURITY_PROFILES = Object.freeze([
       exitCode: 1,
       lastStateReason: 'Error',
       logLines: [
-        '/docker-entrypoint.sh: 68: /docker-entrypoint.sh: mkdir: cannot create directory \'/var/cache/nginx/client_temp\': Permission denied',
+        "/docker-entrypoint.sh: 68: /docker-entrypoint.sh: mkdir: cannot create directory '/var/cache/nginx/client_temp': Permission denied",
         'nginx: [emerg] mkdir() "/var/cache/nginx/client_temp" failed (13: Permission denied)',
       ],
     },
@@ -106,4 +106,8 @@ export function knownImageRuntimeFailure(image) {
   return profile?.runtimeFailure || null;
 }
 
-export default { KNOWN_IMAGE_SECURITY_PROFILES, knownImageSecurityProfile, knownImageRuntimeFailure };
+export default {
+  KNOWN_IMAGE_SECURITY_PROFILES,
+  knownImageSecurityProfile,
+  knownImageRuntimeFailure,
+};

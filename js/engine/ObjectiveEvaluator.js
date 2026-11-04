@@ -84,13 +84,47 @@ export const OBJECTIVE_TYPES = [
 
 /** Types whose natural display is a simple done/not-done flag. */
 const BOOLEAN_TYPES = new Set([
-  'project', 'login', 'user', 'group', 'canI', 'connect', 'route', 'tls',
-  'imageStream', 'image', 'template', 'helm', 'kustomize', 'manifest',
-  'operator', 'scc', 'privileged', 'quota', 'limitRange', 'clusterQuota',
-  'cronJob', 'mount', 'envFrom', 'noConfigMap', 'resources', 'probes',
-  'stable', 'leastPrivilege', 'update', 'rollback', 'resolve', 'incident', 'investigate',
-  'uptime', 'clusterHealth', 'reschedule', 'nodeSelector', 'taint',
-  'examScore', 'architectureScore', 'label',
+  'project',
+  'login',
+  'user',
+  'group',
+  'canI',
+  'connect',
+  'route',
+  'tls',
+  'imageStream',
+  'image',
+  'template',
+  'helm',
+  'kustomize',
+  'manifest',
+  'operator',
+  'scc',
+  'privileged',
+  'quota',
+  'limitRange',
+  'clusterQuota',
+  'cronJob',
+  'mount',
+  'envFrom',
+  'noConfigMap',
+  'resources',
+  'probes',
+  'stable',
+  'leastPrivilege',
+  'update',
+  'rollback',
+  'resolve',
+  'incident',
+  'investigate',
+  'uptime',
+  'clusterHealth',
+  'reschedule',
+  'nodeSelector',
+  'taint',
+  'examScore',
+  'architectureScore',
+  'label',
 ]);
 
 const ADMIN_USERS = new Set(['kubeadmin', 'system:admin', 'system:cluster-admin']);
@@ -251,9 +285,7 @@ export function findResource(cluster, kind, name, namespace) {
 function findByPrefix(cluster, kind, needle) {
   const value = String(needle || '');
   if (!value) return null;
-  return (
-    listKind(cluster, kind).find((resource) => resourceName(resource).includes(value)) || null
-  );
+  return listKind(cluster, kind).find((resource) => resourceName(resource).includes(value)) || null;
 }
 
 /** Containers for Pod-like objects, resolving the spec.template path correctly. */
@@ -300,7 +332,9 @@ function getCurrentProject(c) {
  */
 function levelProjectNamespace(c) {
   const resources = asArray(c?.levelDef?.startingResources);
-  const projects = resources.filter((resource) => resource && resource.kind === 'Project' && resource.name);
+  const projects = resources.filter(
+    (resource) => resource && resource.kind === 'Project' && resource.name
+  );
   return projects.length === 1 ? projects[0].name : null;
 }
 
@@ -311,9 +345,23 @@ function levelProjectNamespace(c) {
  * a shared namespace such as openshift-config.
  */
 const LEVEL_SCOPED_KINDS = new Set([
-  'Deployment', 'StatefulSet', 'DaemonSet', 'Pod', 'ReplicaSet', 'Service',
-  'Route', 'Job', 'CronJob', 'Build', 'BuildConfig', 'ImageStream',
-  'ServiceAccount', 'ResourceQuota', 'LimitRange', 'NetworkPolicy', 'Template',
+  'Deployment',
+  'StatefulSet',
+  'DaemonSet',
+  'Pod',
+  'ReplicaSet',
+  'Service',
+  'Route',
+  'Job',
+  'CronJob',
+  'Build',
+  'BuildConfig',
+  'ImageStream',
+  'ServiceAccount',
+  'ResourceQuota',
+  'LimitRange',
+  'NetworkPolicy',
+  'Template',
 ]);
 
 function objectiveResourceNamespace(c, obj, kind = null) {
@@ -454,10 +502,12 @@ function manifestState(c) {
 }
 
 function normalizePath(path) {
-  return String(path || '')
-    .replace(/\\/g, '/')
-    .replace(/^\.\//, '')
-    .replace(/\/+$/, '') || '.';
+  return (
+    String(path || '')
+      .replace(/\\/g, '/')
+      .replace(/^\.\//, '')
+      .replace(/\/+$/, '') || '.'
+  );
 }
 
 function pathEquals(left, right) {
@@ -513,7 +563,11 @@ function matchCommands(c, pattern, options = {}) {
 
 function hasAppliedFile(c, file) {
   const state = manifestState(c);
-  if (!state) return matchCommands(c, `apply\\s+(-f|--filename(=|\\s+))\\s*\\S*${escapeRegex(String(file || ''))}`).length > 0;
+  if (!state)
+    return (
+      matchCommands(c, `apply\\s+(-f|--filename(=|\\s+))\\s*\\S*${escapeRegex(String(file || ''))}`)
+        .length > 0
+    );
   return appliedFiles(state).some((entry) => pathEquals(entry?.path || entry?.source, file));
 }
 
@@ -521,7 +575,9 @@ function hasAppliedKustomize(c, path) {
   const state = manifestState(c);
   const target = path || '.';
   if (!state) {
-    return matchCommands(c, `apply\\s+(-k|--kustomize(=|\\s+))\\s*\\S*${escapeRegex(target)}`).length > 0;
+    return (
+      matchCommands(c, `apply\\s+(-k|--kustomize(=|\\s+))\\s*\\S*${escapeRegex(target)}`).length > 0
+    );
   }
   return appliedKustomize(state).some((entry) => pathEquals(entry?.path, target));
 }
@@ -536,7 +592,8 @@ function activeIncidents(c) {
   const engine = c.incidentEngine;
   if (!engine) return [];
   try {
-    if (typeof engine.getActiveIncidents === 'function') return asArray(engine.getActiveIncidents());
+    if (typeof engine.getActiveIncidents === 'function')
+      return asArray(engine.getActiveIncidents());
   } catch {
     /* ignore */
   }
@@ -594,14 +651,15 @@ function architectureTotal(c) {
 function objectivesCompletionPercent(c, excludeTypes = new Set()) {
   const progress = c.objectiveProgress;
   if (!Array.isArray(progress) || progress.length === 0) return null;
-  const relevant = progress.filter((objective) => !excludeTypes.has(String(objective?.type || '').toLowerCase()));
+  const relevant = progress.filter(
+    (objective) => !excludeTypes.has(String(objective?.type || '').toLowerCase())
+  );
   if (relevant.length === 0) return null;
   const done = relevant.filter((objective) => objective?.completed).length;
   return (done / relevant.length) * 100;
 }
 
 // ─── individual objective evaluators ──────────────────────────────────────
-
 
 /**
  * The standard project-admin RoleBinding created automatically when a Project
@@ -631,11 +689,18 @@ function resourceIsUp(resource) {
   if (kind === 'Pod') {
     const phase = resourceStatus(resource).phase;
     if (phase === 'Running') {
-      return typeof resource.isConditionTrue === 'function' ? resource.isConditionTrue('Ready') : true;
+      return typeof resource.isConditionTrue === 'function'
+        ? resource.isConditionTrue('Ready')
+        : true;
     }
     return false;
   }
-  if (kind === 'Deployment' || kind === 'ReplicaSet' || kind === 'StatefulSet' || kind === 'DaemonSet') {
+  if (
+    kind === 'Deployment' ||
+    kind === 'ReplicaSet' ||
+    kind === 'StatefulSet' ||
+    kind === 'DaemonSet'
+  ) {
     const status = resourceStatus(resource);
     return asNumber(status.availableReplicas ?? status.readyReplicas, 0) > 0;
   }
@@ -657,12 +722,14 @@ function evaluateDeploy(obj, c) {
     return bool(!requireRunning || resourceIsUp(resource));
   }
   let resources = listKind(c.clusterState, kind);
-  if (namespace) resources = resources.filter((resource) => resourceNamespace(resource) === namespace);
+  if (namespace)
+    resources = resources.filter((resource) => resourceNamespace(resource) === namespace);
   // Count-only RBAC objectives ("bind a role in <project>") must be scoped to
   // the level's project; otherwise any RoleBinding anywhere in the cluster counts.
   if (!namespace && kind === 'RoleBinding') {
     const expected = levelProjectNamespace(c);
-    if (expected) resources = resources.filter((resource) => resourceNamespace(resource) === expected);
+    if (expected)
+      resources = resources.filter((resource) => resourceNamespace(resource) === expected);
   }
   // The auto-provisioned project `admin` binding is not learner-created: ignore
   // it for every RoleBinding-count objective (L14/L16) so the checklist still
@@ -685,7 +752,8 @@ function evaluateLabel(obj, c) {
   const namespace = objectiveResourceNamespace(c, obj, kind);
   let resources = listKind(c.clusterState, kind);
   if (name) resources = resources.filter((resource) => resourceName(resource) === name);
-  if (namespace) resources = resources.filter((resource) => resourceNamespace(resource) === namespace);
+  if (namespace)
+    resources = resources.filter((resource) => resourceNamespace(resource) === namespace);
   const matches = (resource) => {
     const labels = resourceLabels(resource);
     if (!hasOwn(labels, key)) return false;
@@ -718,9 +786,12 @@ function evaluateScale(obj, c) {
   let resources = listKind(c.clusterState, kind);
   if (obj.name) resources = resources.filter((resource) => resourceName(resource) === obj.name);
   const scaleNamespace = objectiveResourceNamespace(c, obj, kind);
-  if (scaleNamespace) resources = resources.filter((resource) => resourceNamespace(resource) === scaleNamespace);
+  if (scaleNamespace)
+    resources = resources.filter((resource) => resourceNamespace(resource) === scaleNamespace);
   if (resources.length === 0) return result(false, 0, replicas);
-  const maxReplicas = Math.max(...resources.map((resource) => asNumber(resourceSpec(resource).replicas, 0)));
+  const maxReplicas = Math.max(
+    ...resources.map((resource) => asNumber(resourceSpec(resource).replicas, 0))
+  );
   return result(maxReplicas >= replicas, Math.min(maxReplicas, replicas), replicas);
 }
 
@@ -802,7 +873,12 @@ function evaluateCanI(obj, c) {
       const check = engine.canI(verb, resource, namespace, user);
       allowed = check?.allowed === true;
     } else if (c.clusterState && typeof c.clusterState.canI === 'function') {
-      const check = c.clusterState.canI(user || engine?.currentUser || 'kubeadmin', verb, resource, namespace);
+      const check = c.clusterState.canI(
+        user || engine?.currentUser || 'kubeadmin',
+        verb,
+        resource,
+        namespace
+      );
       allowed = check?.allowed === true;
     }
   } catch {
@@ -842,7 +918,13 @@ function evaluateConnect(obj, c) {
   const to = obj.to || obj.service || obj.name;
   if (!to) return bool(false);
   const services = listKind(cluster, 'Service');
-  const workloads = listKinds(cluster, ['Deployment', 'StatefulSet', 'DaemonSet', 'Pod', 'ReplicaSet']);
+  const workloads = listKinds(cluster, [
+    'Deployment',
+    'StatefulSet',
+    'DaemonSet',
+    'Pod',
+    'ReplicaSet',
+  ]);
   const candidateServices = services.filter((service) => {
     const name = resourceName(service);
     return name === to || name === `${to}-svc` || resourceSpec(service).to?.name === to;
@@ -890,7 +972,9 @@ function routeAdmitted(route) {
   }
   const ingress = asArray(resourceStatus(route).ingress);
   for (const entry of ingress) {
-    const condition = asArray(entry?.conditions).find((candidate) => candidate?.type === 'Admitted');
+    const condition = asArray(entry?.conditions).find(
+      (candidate) => candidate?.type === 'Admitted'
+    );
     if (condition && String(condition.status) === 'True') return true;
   }
   return false;
@@ -927,7 +1011,8 @@ function evaluateTls(obj, c) {
 function evaluateBuild(obj, c) {
   let builds = listKind(c.clusterState, 'Build');
   const buildNamespace = objectiveResourceNamespace(c, obj, 'Build');
-  if (buildNamespace) builds = builds.filter((build) => resourceNamespace(build) === buildNamespace);
+  if (buildNamespace)
+    builds = builds.filter((build) => resourceNamespace(build) === buildNamespace);
   const complete = builds.filter((build) => resourceStatus(build).phase === 'Complete');
   if (obj.name) {
     const buildDirect = complete.some((build) => resourceName(build) === obj.name);
@@ -940,7 +1025,12 @@ function evaluateBuild(obj, c) {
     // A completed build named `<buildconfig>-<n>` belongs to the named config.
     if (complete.some((build) => resourceName(build).startsWith(`${obj.name}-`))) return bool(true);
     // A named BuildConfig whose last build completed also satisfies `build`.
-    const bc = findResource(c.clusterState, 'BuildConfig', obj.name, objectiveResourceNamespace(c, obj, 'BuildConfig'));
+    const bc = findResource(
+      c.clusterState,
+      'BuildConfig',
+      obj.name,
+      objectiveResourceNamespace(c, obj, 'BuildConfig')
+    );
     if (!bc) return bool(false);
     return bool(asNumber(resourceStatus(bc).lastVersion, 0) > 0);
   }
@@ -954,7 +1044,8 @@ function evaluateImageStream(obj, c) {
     const target = Math.max(1, asNumber(obj.count, 1));
     let streams = listKind(c.clusterState, 'ImageStream');
     const countNamespace = objectiveResourceNamespace(c, obj, 'ImageStream');
-    if (countNamespace) streams = streams.filter((stream) => resourceNamespace(stream) === countNamespace);
+    if (countNamespace)
+      streams = streams.filter((stream) => resourceNamespace(stream) === countNamespace);
     return result(streams.length >= target, Math.min(streams.length, target), target);
   }
   const streamNamespace = objectiveResourceNamespace(c, obj, 'ImageStream');
@@ -975,7 +1066,8 @@ function evaluateImage(obj, c) {
   let workloads = listKind(c.clusterState, kind);
   if (obj.name) workloads = workloads.filter((resource) => resourceName(resource) === obj.name);
   const imageNamespace = objectiveResourceNamespace(c, obj, kind);
-  if (imageNamespace) workloads = workloads.filter((resource) => resourceNamespace(resource) === imageNamespace);
+  if (imageNamespace)
+    workloads = workloads.filter((resource) => resourceNamespace(resource) === imageNamespace);
   const needle = String(obj.imageContains || obj.image || '');
   if (!needle) return bool(workloads.length > 0);
   const match = workloads.some((workload) =>
@@ -1010,13 +1102,19 @@ function evaluateTemplate(obj, c) {
   if (wantedName) {
     const processed = matchCommands(c, `process\\s+(-f\\s+)?\\S*${escapeRegex(wantedName)}`);
     const applied = matchCommands(c, 'apply\\s+(-f|--filename)(=|\\s+)\\S+');
-    const paramsOk = !params || processed.some((entry) =>
-      Object.entries(params).every(([key, value]) =>
-        new RegExp(`${escapeRegex(key)}\\s*=\\s*${escapeRegex(String(value))}`, 'i').test(entry.raw)
-      )
-    );
+    const paramsOk =
+      !params ||
+      processed.some((entry) =>
+        Object.entries(params).every(([key, value]) =>
+          new RegExp(`${escapeRegex(key)}\\s*=\\s*${escapeRegex(String(value))}`, 'i').test(
+            entry.raw
+          )
+        )
+      );
     const appliedAfterProcessing = applied.some((applyEntry) =>
-      processed.some((processEntry) => asNumber(applyEntry.timestamp, 0) >= asNumber(processEntry.timestamp, 0))
+      processed.some(
+        (processEntry) => asNumber(applyEntry.timestamp, 0) >= asNumber(processEntry.timestamp, 0)
+      )
     );
     if (processed.length > 0 && appliedAfterProcessing && paramsOk) return bool(true);
   }
@@ -1063,10 +1161,13 @@ function evaluateOperator(obj, c) {
   const matching = subscriptions.filter((subscription) => {
     if (!wanted) return true;
     const spec = resourceSpec(subscription);
-    const haystack = `${resourceName(subscription)} ${spec.name || ''} ${spec.packageName || ''}`.toLowerCase();
+    const haystack =
+      `${resourceName(subscription)} ${spec.name || ''} ${spec.packageName || ''}`.toLowerCase();
     return haystack.includes(wanted);
   });
-  const succeeded = matching.filter((subscription) => resourceStatus(subscription).phase === 'Succeeded').length;
+  const succeeded = matching.filter(
+    (subscription) => resourceStatus(subscription).phase === 'Succeeded'
+  ).length;
   const csvSucceeded = listKind(c.clusterState, 'ClusterServiceVersion').filter((csv) => {
     const name = resourceName(csv).toLowerCase();
     if (wanted && !name.includes(wanted)) return false;
@@ -1144,9 +1245,9 @@ function bindingSubjectMatches(subjects, wanted) {
     const subjectKind = subject.kind || 'User';
     if (kind === 'ServiceAccount') {
       return (
-        subjectKind === 'ServiceAccount'
-        && String(subject.name) === name
-        && (!namespace || !subject.namespace || String(subject.namespace) === namespace)
+        subjectKind === 'ServiceAccount' &&
+        String(subject.name) === name &&
+        (!namespace || !subject.namespace || String(subject.namespace) === namespace)
       );
     }
     if (kind === 'Group') return subjectKind === 'Group' && String(subject.name) === name;
@@ -1186,7 +1287,12 @@ function sccGrantState(c, sccName) {
     legacy.users = asArray(spec.users).map(String);
     legacy.groups = asArray(spec.groups).map(String);
   }
-  return { kind: foundBinding ? 'binding' : 'legacy', subjects, legacy, bindingCount: foundBinding ? 1 : 0 };
+  return {
+    kind: foundBinding ? 'binding' : 'legacy',
+    subjects,
+    legacy,
+    bindingCount: foundBinding ? 1 : 0,
+  };
 }
 
 /** Is `subject` granted the SCC under the 4.x binding model (or legacy seed)? */
@@ -1224,7 +1330,11 @@ function sccGrantedTo(c, sccName, subject) {
         /* ignore */
       }
     }
-    if (saName === 'default' && state.legacy.groups?.includes(`system:serviceaccounts:${namespace}`)) return true;
+    if (
+      saName === 'default' &&
+      state.legacy.groups?.includes(`system:serviceaccounts:${namespace}`)
+    )
+      return true;
   }
   if (subject.startsWith('group:')) return subjectMatches(state.legacy?.groups, subject.slice(6));
   const plain = subject.replace(/^user:/, '');
@@ -1265,7 +1375,9 @@ function workloadIsPrivileged(workload) {
   const podSpec = podTemplateSpecOf(workload);
   if (!podSpec) return false;
   if (podSpec.securityContext?.privileged === true) return true;
-  return containersOf(workload).some((container) => container?.securityContext?.privileged === true);
+  return containersOf(workload).some(
+    (container) => container?.securityContext?.privileged === true
+  );
 }
 
 function podIsPrivileged(pod) {
@@ -1326,7 +1438,8 @@ function evaluateComplete(obj, c) {
   let resources = listKind(c.clusterState, kind);
   if (obj.name) resources = resources.filter((resource) => resourceName(resource) === obj.name);
   const completeNamespace = objectiveResourceNamespace(c, obj, kind);
-  if (completeNamespace) resources = resources.filter((resource) => resourceNamespace(resource) === completeNamespace);
+  if (completeNamespace)
+    resources = resources.filter((resource) => resourceNamespace(resource) === completeNamespace);
   const complete = resources.filter((resource) => resourceStatus(resource).phase === 'Complete');
   const target = Math.max(1, asNumber(obj.count, 1));
   return result(complete.length >= target, Math.min(complete.length, target), target);
@@ -1336,7 +1449,8 @@ function evaluateCronJob(obj, c) {
   let cronJobs = listKind(c.clusterState, 'CronJob');
   if (obj.name) cronJobs = cronJobs.filter((cronJob) => resourceName(cronJob) === obj.name);
   const cronNamespace = objectiveResourceNamespace(c, obj, 'CronJob');
-  if (cronNamespace) cronJobs = cronJobs.filter((cronJob) => resourceNamespace(cronJob) === cronNamespace);
+  if (cronNamespace)
+    cronJobs = cronJobs.filter((cronJob) => resourceNamespace(cronJob) === cronNamespace);
   if (obj.suspended === false) {
     cronJobs = cronJobs.filter((cronJob) => resourceSpec(cronJob).suspend !== true);
   }
@@ -1382,7 +1496,8 @@ function envReferences(workload, kind, name) {
   return containers.some((container) => {
     const envFrom = asArray(container?.envFrom);
     const fromMatch = envFrom.some((entry) => {
-      if (kind === 'ConfigMap' && entry?.configMapRef) return !name || entry.configMapRef.name === name;
+      if (kind === 'ConfigMap' && entry?.configMapRef)
+        return !name || entry.configMapRef.name === name;
       if (kind === 'Secret' && entry?.secretRef) return !name || entry.secretRef.name === name;
       return false;
     });
@@ -1414,8 +1529,7 @@ function evaluateEnvFrom(obj, c) {
 }
 
 function evaluateNoConfigMap(obj, c) {
-  const sensitivePattern =
-    obj.sensitive === false ? null : SENSITIVE_CONFIGMAP_KEY;
+  const sensitivePattern = obj.sensitive === false ? null : SENSITIVE_CONFIGMAP_KEY;
   if (!sensitivePattern) return bool(true);
   const leaks = listKind(c.clusterState, 'ConfigMap').filter((configMap) => {
     const data = resourceSpec(configMap).data;
@@ -1432,7 +1546,12 @@ function resolveTargetKinds(obj, fallback = ['Deployment', 'StatefulSet']) {
 function collectContainersForWorkloads(cluster, kinds, name) {
   let workloads = listKinds(cluster, kinds);
   if (name) workloads = workloads.filter((workload) => resourceName(workload) === name);
-  return { workloads, containers: workloads.flatMap((workload) => containersOf(workload).map((container) => ({ workload, container }))) };
+  return {
+    workloads,
+    containers: workloads.flatMap((workload) =>
+      containersOf(workload).map((container) => ({ workload, container }))
+    ),
+  };
 }
 
 function evaluateResources(obj, c) {
@@ -1543,15 +1662,21 @@ function evaluateLeastPrivilege(obj, c) {
   let createdDuringLevel = true;
   if (c.levelDef) {
     const baseline = ensureBaseline(obj, () => ({
-      roles: listKinds(c.clusterState, ['Role', 'ClusterRole']).map((role) => role?.uid || resourceName(role)),
-      bindings: listKinds(c.clusterState, ['RoleBinding', 'ClusterRoleBinding']).map((binding) => binding?.uid || resourceName(binding)),
+      roles: listKinds(c.clusterState, ['Role', 'ClusterRole']).map(
+        (role) => role?.uid || resourceName(role)
+      ),
+      bindings: listKinds(c.clusterState, ['RoleBinding', 'ClusterRoleBinding']).map(
+        (binding) => binding?.uid || resourceName(binding)
+      ),
     }));
     const knownRoles = new Set(baseline.roles);
     const knownBindings = new Set(baseline.bindings);
     createdDuringLevel =
-      listKinds(c.clusterState, ['Role', 'ClusterRole']).some((role) => !knownRoles.has(role?.uid || resourceName(role)))
-      || listKinds(c.clusterState, ['RoleBinding', 'ClusterRoleBinding']).some(
-        (binding) => !knownBindings.has(binding?.uid || resourceName(binding)),
+      listKinds(c.clusterState, ['Role', 'ClusterRole']).some(
+        (role) => !knownRoles.has(role?.uid || resourceName(role))
+      ) ||
+      listKinds(c.clusterState, ['RoleBinding', 'ClusterRoleBinding']).some(
+        (binding) => !knownBindings.has(binding?.uid || resourceName(binding))
       );
   }
   const violations = collectRoleViolations(c);
@@ -1577,9 +1702,7 @@ function evaluateCoverage(obj, c) {
   if (nodes.length === 0) return result(false, 0, 1);
   if (daemonSets.length === 0) return result(false, 0, nodes.length);
   const pods = listKind(c.clusterState, 'Pod').filter((pod) =>
-    asArray(pod?.metadata?.ownerReferences).some(
-      (reference) => reference?.kind === 'DaemonSet'
-    )
+    asArray(pod?.metadata?.ownerReferences).some((reference) => reference?.kind === 'DaemonSet')
   );
   const covered = new Set(
     pods.map((pod) => resourceSpec(pod).nodeName).filter((nodeName) => Boolean(nodeName))
@@ -1591,7 +1714,8 @@ function evaluateUpdate(obj, c) {
   const kinds = resolveTargetKinds(obj, ['Deployment', 'StatefulSet', 'DaemonSet']);
   let workloads = listKinds(c.clusterState, kinds);
   if (obj.name) workloads = workloads.filter((workload) => resourceName(workload) === obj.name);
-  if (obj.namespace) workloads = workloads.filter((workload) => resourceNamespace(workload) === obj.namespace);
+  if (obj.namespace)
+    workloads = workloads.filter((workload) => resourceNamespace(workload) === obj.namespace);
   const target = Math.max(1, asNumber(obj.count, 1));
   if (workloads.length === 0) return result(false, 0, target);
   // A controller writing status.updatedReplicas during the initial rollout is
@@ -1628,7 +1752,9 @@ function evaluateRollback(obj, c) {
 function evaluateResolve(obj, c) {
   const resolved = resolvedIncidents(c);
   const wanted = obj.incidentType || obj.name || null;
-  const matching = wanted ? resolved.filter((incident) => matchesIncident(incident, wanted)) : resolved;
+  const matching = wanted
+    ? resolved.filter((incident) => matchesIncident(incident, wanted))
+    : resolved;
   let count = matching.length;
   if (!wanted) {
     const stats = c.incidentEngine?.getStats?.();
@@ -1649,7 +1775,8 @@ function evaluateIncident(obj, c) {
   const engine = c.incidentEngine;
   let history = null;
   try {
-    if (engine && typeof engine.getIncidentHistory === 'function') history = engine.getIncidentHistory();
+    if (engine && typeof engine.getIncidentHistory === 'function')
+      history = engine.getIncidentHistory();
   } catch {
     history = null;
   }
@@ -1660,7 +1787,9 @@ function evaluateIncident(obj, c) {
     // Fallback: incidents that are still active or were resolved.
     pool = [...activeIncidents(c), ...resolvedIncidents(c)];
   }
-  const count = wanted ? pool.filter((incident) => matchesIncident(incident, wanted)).length : pool.length;
+  const count = wanted
+    ? pool.filter((incident) => matchesIncident(incident, wanted)).length
+    : pool.length;
   return result(count >= min, Math.min(count, min), min);
 }
 
@@ -1724,8 +1853,7 @@ function evaluateClusterHealth(obj, c) {
           const available = conditions.find((condition) => condition?.type === 'Available');
           const degraded = conditions.find((condition) => condition?.type === 'Degraded');
           return (
-            available?.status === 'True' &&
-            (degraded === undefined || degraded.status !== 'True')
+            available?.status === 'True' && (degraded === undefined || degraded.status !== 'True')
           );
         });
     }
@@ -1766,7 +1894,8 @@ function evaluateNodeSelector(obj, c) {
       const spec = podTemplateSpecOf(workload) || {};
       const selector = spec.nodeSelector;
       return selector && Object.keys(selector).length > 0;
-    }) || pods.some((pod) => {
+    }) ||
+    pods.some((pod) => {
       const selector = resourceSpec(pod).nodeSelector;
       return selector && Object.keys(selector).length > 0;
     });
@@ -1942,9 +2071,10 @@ export function evaluateObjective(objective, ctx = {}) {
   try {
     const evaluated = evaluateByType(type, objective, c);
     if (evaluated) {
-      const fallbackTarget = typeIsBoolean(type) && !Number.isFinite(Number(objective.count))
-        ? 1
-        : asNumber(objective.count, 1);
+      const fallbackTarget =
+        typeIsBoolean(type) && !Number.isFinite(Number(objective.count))
+          ? 1
+          : asNumber(objective.count, 1);
       return {
         completed: Boolean(evaluated.completed),
         current: asNumber(evaluated.current, 0),

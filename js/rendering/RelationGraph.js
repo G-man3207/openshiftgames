@@ -82,9 +82,12 @@ function podTemplateVolumes(resource) {
 function podTemplateServiceAccount(resource) {
   const kind = kindOf(resource);
   const spec = specOf(resource);
-  const podSpec = kind === 'Pod'
-    ? spec
-    : (kind === 'CronJob' ? spec.jobTemplate?.spec?.template?.spec : spec.template?.spec);
+  const podSpec =
+    kind === 'Pod'
+      ? spec
+      : kind === 'CronJob'
+        ? spec.jobTemplate?.spec?.template?.spec
+        : spec.template?.spec;
   return podSpec?.serviceAccountName || podSpec?.serviceAccount || '';
 }
 
@@ -114,7 +117,8 @@ function imageStreamNamespaceFromRef(ref, fallback) {
   return ref?.namespace || fallback || '';
 }
 
-const INTERNAL_REGISTRY_RE = /image-registry\.openshift-image-registry\.svc(?::\d+)?\/([^/]+)\/([^:@/]+)(?::[^@]+)?(?:@sha256:[a-f0-9]+)?/i;
+const INTERNAL_REGISTRY_RE =
+  /image-registry\.openshift-image-registry\.svc(?::\d+)?\/([^/]+)\/([^:@/]+)(?::[^@]+)?(?:@sha256:[a-f0-9]+)?/i;
 
 function imageStreamFromImage(image) {
   if (!image) return null;
@@ -202,9 +206,10 @@ export function computeConnections(clusterState, options = {}) {
   const map = new Map();
   const { extraConnections = [], includeContainment = true } = options;
 
-  const resources = typeof clusterState?.getAllResources === 'function'
-    ? clusterState.getAllResources()
-    : Array.from(clusterState?.resources?.values?.() || []);
+  const resources =
+    typeof clusterState?.getAllResources === 'function'
+      ? clusterState.getAllResources()
+      : Array.from(clusterState?.resources?.values?.() || []);
 
   // Deterministic ordering independent of insertion order.
   resources.sort((a, b) => String(uidOf(a) || '').localeCompare(String(uidOf(b) || '')));
@@ -323,7 +328,8 @@ export function computeConnections(clusterState, options = {}) {
     for (const targetRef of spec.alternateBackends || []) {
       if (targetRef?.name) {
         const svc = findByRef('Service', targetRef.name, ns);
-        if (svc) addEdge('route', uidOf(route), uidOf(svc), 2, { traffic: routeIsLive(route, svc) });
+        if (svc)
+          addEdge('route', uidOf(route), uidOf(svc), 2, { traffic: routeIsLive(route, svc) });
       }
     }
   }
@@ -340,7 +346,13 @@ export function computeConnections(clusterState, options = {}) {
         addEdge('network', uidOf(svc), uidOf(pod), 2);
       }
     }
-    for (const workloadKind of ['Deployment', 'ReplicaSet', 'StatefulSet', 'DaemonSet', 'DeploymentConfig']) {
+    for (const workloadKind of [
+      'Deployment',
+      'ReplicaSet',
+      'StatefulSet',
+      'DaemonSet',
+      'DeploymentConfig',
+    ]) {
       for (const workload of ofKind(workloadKind)) {
         if (namespaceOf(workload) !== ns) continue;
         if (selectorMatches(selector, templateLabels(workload))) {
@@ -355,7 +367,11 @@ export function computeConnections(clusterState, options = {}) {
     const outputTo = specOf(buildConfig).output?.to;
     const isName = imageStreamNameFromRef(outputTo);
     if (isName) {
-      const stream = findByRef('ImageStream', isName, imageStreamNamespaceFromRef(outputTo, namespaceOf(buildConfig)));
+      const stream = findByRef(
+        'ImageStream',
+        isName,
+        imageStreamNamespaceFromRef(outputTo, namespaceOf(buildConfig))
+      );
       if (stream) addEdge('build', uidOf(buildConfig), uidOf(stream), 2);
     }
   }
@@ -369,7 +385,9 @@ export function computeConnections(clusterState, options = {}) {
       const stream = findByRef('ImageStream', isName, imageStreamNamespaceFromRef(outputTo, ns));
       if (stream) addEdge('build', uidOf(build), uidOf(stream), 2);
     }
-    const bcName = build.metadata?.labels?.['buildconfig'] || build.metadata?.labels?.['openshift.io/build-config.name'];
+    const bcName =
+      build.metadata?.labels?.['buildconfig'] ||
+      build.metadata?.labels?.['openshift.io/build-config.name'];
     if (bcName) {
       const bc = findByRef('BuildConfig', bcName, ns);
       if (bc) addEdge('build', uidOf(build), uidOf(bc), 1);
@@ -447,13 +465,21 @@ export function computeConnections(clusterState, options = {}) {
       const roleRef = spec.roleRef || {};
       if (roleRef.name) {
         const roleKind = roleRef.kind === 'ClusterRole' ? 'ClusterRole' : 'Role';
-        const role = findByRef(roleKind, roleRef.name, roleKind === 'Role' ? namespaceOf(binding) : undefined);
+        const role = findByRef(
+          roleKind,
+          roleRef.name,
+          roleKind === 'Role' ? namespaceOf(binding) : undefined
+        );
         if (role) addEdge('identity', uidOf(binding), uidOf(role), 2);
       }
       for (const subject of spec.subjects || []) {
         if (!subject?.name) continue;
         if (subject.kind === 'ServiceAccount') {
-          const sa = findByRef('ServiceAccount', subject.name, subject.namespace || namespaceOf(binding));
+          const sa = findByRef(
+            'ServiceAccount',
+            subject.name,
+            subject.namespace || namespaceOf(binding)
+          );
           if (sa) addEdge('identity', uidOf(binding), uidOf(sa), 1);
         } else if (subject.kind === 'User') {
           const user = findByRef('User', subject.name);
@@ -527,13 +553,15 @@ export function computeConnections(clusterState, options = {}) {
   const configMaps = new Map();
   for (const cm of ofKind('ConfigMap')) configMaps.set(`${namespaceOf(cm)}/${nameOf(cm)}`, cm);
   const secrets = new Map();
-  for (const secret of ofKind('Secret')) secrets.set(`${namespaceOf(secret)}/${nameOf(secret)}`, secret);
+  for (const secret of ofKind('Secret'))
+    secrets.set(`${namespaceOf(secret)}/${nameOf(secret)}`, secret);
 
   const addConfigEdge = (workload, refs) => {
     const ns = namespaceOf(workload);
     for (const [kind, refName] of refs) {
       if (!refName) continue;
-      const target = kind === 'ConfigMap' ? configMaps.get(`${ns}/${refName}`) : secrets.get(`${ns}/${refName}`);
+      const target =
+        kind === 'ConfigMap' ? configMaps.get(`${ns}/${refName}`) : secrets.get(`${ns}/${refName}`);
       if (target) addEdge('config', uidOf(workload), uidOf(target), 1);
     }
   };
@@ -547,8 +575,10 @@ export function computeConnections(clusterState, options = {}) {
           if (envFrom.secretRef?.name) refs.push(['Secret', envFrom.secretRef.name]);
         }
         for (const env of container?.env || []) {
-          if (env.valueFrom?.configMapKeyRef?.name) refs.push(['ConfigMap', env.valueFrom.configMapKeyRef.name]);
-          if (env.valueFrom?.secretKeyRef?.name) refs.push(['Secret', env.valueFrom.secretKeyRef.name]);
+          if (env.valueFrom?.configMapKeyRef?.name)
+            refs.push(['ConfigMap', env.valueFrom.configMapKeyRef.name]);
+          if (env.valueFrom?.secretKeyRef?.name)
+            refs.push(['Secret', env.valueFrom.secretKeyRef.name]);
         }
       };
       for (const container of podTemplateContainers(workload)) addContainerRefs(container);
@@ -567,7 +597,10 @@ export function computeConnections(clusterState, options = {}) {
     const installedCSV = subscription.status?.installedCSV || '';
     for (const co of ofKind('ClusterOperator')) {
       const coName = nameOf(co);
-      if (operatorNamesMatch(packageName, coName) || (installedCSV && operatorNamesMatch(installedCSV, coName))) {
+      if (
+        operatorNamesMatch(packageName, coName) ||
+        (installedCSV && operatorNamesMatch(installedCSV, coName))
+      ) {
         addEdge('operator', uidOf(subscription), uidOf(co), 2);
       }
     }

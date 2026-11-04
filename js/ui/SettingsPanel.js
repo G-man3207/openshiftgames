@@ -193,7 +193,16 @@ export class SettingsPanel {
     merged.cameraSpeed = Number.isFinite(Number(merged.cameraSpeed))
       ? Math.min(2, Math.max(0.5, Number(merged.cameraSpeed)))
       : 1;
-    for (const key of ['sound', 'particles', 'shadows', 'grid', 'showMinimap', 'showConnectionLines', 'autoExpandIncidents', 'showHints']) {
+    for (const key of [
+      'sound',
+      'particles',
+      'shadows',
+      'grid',
+      'showMinimap',
+      'showConnectionLines',
+      'autoExpandIncidents',
+      'showHints',
+    ]) {
       merged[key] = Boolean(merged[key]);
     }
 
@@ -316,12 +325,16 @@ export class SettingsPanel {
             <div class="text-white/60 text-xs font-semibold uppercase tracking-wider mb-1">Difficulty</div>
             <p class="text-white/30 text-[10px] mb-3">Incident pressure and cluster headroom for every OpenShift game mode.</p>
             <div class="grid grid-cols-2 gap-2">
-              ${Object.entries(DIFFICULTY_PRESETS).map(([key, preset]) => `
+              ${Object.entries(DIFFICULTY_PRESETS)
+                .map(
+                  ([key, preset]) => `
                 <button class="settings-difficulty px-3 py-2 rounded-lg border text-left transition-all ${key === difficulty ? 'border-openshift/50 bg-openshift/10' : 'border-white/5 bg-white/5 hover:bg-white/10'}" data-difficulty="${key}" data-testid="settings-difficulty-${key}" aria-pressed="${key === difficulty}">
                   <div class="text-sm font-medium ${key === difficulty ? 'text-openshift-light' : 'text-white/70'}">${preset.label}</div>
                   <div class="text-[10px] text-white/30 mt-0.5">${preset.description}</div>
                 </button>
-              `).join('')}
+              `
+                )
+                .join('')}
             </div>
           </div>
 
@@ -349,7 +362,12 @@ export class SettingsPanel {
             <div class="text-white/60 text-xs font-semibold uppercase tracking-wider mb-2">Difficulty select</div>
             <label class="text-[10px] text-white/30 block mb-1" for="${selectId}">Mirrored with the main-menu setting</label>
             <select id="${selectId}" data-setting-id="select-difficulty" data-action="difficulty-select" class="w-full bg-black/40 border border-white/10 rounded-lg px-3 py-2 text-sm text-white/80 outline-none focus:border-openshift/50" data-testid="settings-difficulty-select">
-              ${Object.entries(DIFFICULTY_PRESETS).map(([key, preset]) => `<option value="${key}" ${key === difficulty ? 'selected' : ''}>${preset.label}</option>`).join('')}
+              ${Object.entries(DIFFICULTY_PRESETS)
+                .map(
+                  ([key, preset]) =>
+                    `<option value="${key}" ${key === difficulty ? 'selected' : ''}>${preset.label}</option>`
+                )
+                .join('')}
             </select>
           </div>
 
@@ -403,7 +421,11 @@ export class SettingsPanel {
     const target = event.target.closest('[data-action], [data-difficulty], [data-key]');
     if (!target || !this.container?.contains(target)) return;
 
-    if (target.dataset.action === 'backdrop' || target.dataset.action === 'close' || target.dataset.action === 'done') {
+    if (
+      target.dataset.action === 'backdrop' ||
+      target.dataset.action === 'close' ||
+      target.dataset.action === 'done'
+    ) {
       this.hide();
       return;
     }
@@ -449,7 +471,8 @@ export class SettingsPanel {
   // ─── Data actions ──────────────────────────────────────────────────────
 
   _resetProgress() {
-    const message = 'Reset ALL OpenShift Games progress (campaign stars, timed labs, EX280 Prep, achievements) and reload? This cannot be undone.';
+    const message =
+      'Reset ALL OpenShift Games progress (campaign stars, timed labs, EX280 Prep, achievements) and reload? This cannot be undone.';
     let confirmed = true;
     try {
       if (typeof window.confirm === 'function') confirmed = window.confirm(message);
@@ -489,8 +512,10 @@ export class SettingsPanel {
   _exportSave() {
     const app = window.game?.app;
     const settings = app?.settings ? { ...app.settings, ...this.settings } : { ...this.settings };
-    const progress = this._readStorageJSON(PROGRESS_KEYS[0]) || this._readStorageJSON(PROGRESS_KEYS[1]);
-    const investigation = this._readStorageJSON(INVESTIGATION_KEYS[0]) || this._readStorageJSON(INVESTIGATION_KEYS[1]);
+    const progress =
+      this._readStorageJSON(PROGRESS_KEYS[0]) || this._readStorageJSON(PROGRESS_KEYS[1]);
+    const investigation =
+      this._readStorageJSON(INVESTIGATION_KEYS[0]) || this._readStorageJSON(INVESTIGATION_KEYS[1]);
     const payload = {
       app: 'OpenShift Games',
       platform: PLATFORM_LABEL,

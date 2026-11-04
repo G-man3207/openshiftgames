@@ -107,7 +107,10 @@ class Incident {
     this.description = def.description;
     this.visualEffect = def.visualEffect;
     this.affectedResourceTypes = [...(def.affectedResourceTypes || [])];
-    this.investigationSteps = (def.investigationSteps || []).map((s) => ({ ...s, completed: false }));
+    this.investigationSteps = (def.investigationSteps || []).map((s) => ({
+      ...s,
+      completed: false,
+    }));
     this.resolutionActions = (def.resolutionActions || []).map((a) => ({ ...a }));
     this.ocCommands = [...(def.ocCommands || [])];
     this.autoResolveTime = def.autoResolveTime ?? null;
@@ -313,7 +316,8 @@ class IncidentEngine {
   get cluster() {
     const ge = this.gameEngine;
     if (ge && ge.cluster) return ge.cluster;
-    if (typeof window !== 'undefined' && window.game && window.game.cluster) return window.game.cluster;
+    if (typeof window !== 'undefined' && window.game && window.game.cluster)
+      return window.game.cluster;
     return null;
   }
 
@@ -650,8 +654,8 @@ class IncidentEngine {
    */
   _announceIncident(incident) {
     const needsPod =
-      incident.resolution?.targetKind === 'Pod'
-      || (incident.affectedResourceTypes || []).includes('Pod');
+      incident.resolution?.targetKind === 'Pod' ||
+      (incident.affectedResourceTypes || []).includes('Pod');
     if (needsPod && !incident.targetPod && !incident.pendingTarget) {
       let attempts = 0;
       const timer = setInterval(() => {
@@ -689,7 +693,10 @@ class IncidentEngine {
     this.emit('incident:created', {
       ...incident.getSummary(),
       state: incident.state,
-      investigationSteps: incident.investigationSteps.map((s) => ({ command: s.command, hint: s.hint })),
+      investigationSteps: incident.investigationSteps.map((s) => ({
+        command: s.command,
+        hint: s.hint,
+      })),
       resolutionActions: incident.resolutionActions,
       ocCommands: incident.ocCommands,
       damagedSubject: incident.rbacSubject || incident.damagedSubject || null,
@@ -787,7 +794,8 @@ class IncidentEngine {
   _completeInvestigation(incident) {
     if (!incident) return;
     for (const step of incident.investigationSteps || []) step.completed = true;
-    incident.investigationProgress = incident.investigationSteps.length > 0 ? 1 : incident.investigationProgress;
+    incident.investigationProgress =
+      incident.investigationSteps.length > 0 ? 1 : incident.investigationProgress;
   }
 
   // ── Resolution ────────────────────────────────────────────────────────────
@@ -805,15 +813,15 @@ class IncidentEngine {
       this.resolvedIncidents.push(incident);
 
       const resolutionTime = incident.getResolutionTime();
-      const severityInfo = SEVERITY_LEVELS.find((s) => s.level === incident.severity) || SEVERITY_LEVELS[0];
+      const severityInfo =
+        SEVERITY_LEVELS.find((s) => s.level === incident.severity) || SEVERITY_LEVELS[0];
       let xpEarned = severityInfo.xpReward;
 
       const now = Date.now();
       // Combo window measured in simulation seconds so pausing does not grant
       // free combo multipliers (GAME-015).
-      const comboElapsed = this.lastResolveGameSeconds === null
-        ? Infinity
-        : gameSeconds - this.lastResolveGameSeconds;
+      const comboElapsed =
+        this.lastResolveGameSeconds === null ? Infinity : gameSeconds - this.lastResolveGameSeconds;
       if (comboElapsed * 1000 < this.comboWindow) {
         this.comboCount++;
         xpEarned = Math.floor(xpEarned * (1 + this.comboCount * 0.25));
@@ -829,13 +837,15 @@ class IncidentEngine {
 
       // Apply the cluster mutations BEFORE announcing the resolution so
       // listeners (scoring, objectives, renderer) observe the healed state.
-      const effect = this._safe(
-        () => this.applyResolutionEffects(incident, actionId),
-        { applied: false, reason: 'exception' }
-      );
+      const effect = this._safe(() => this.applyResolutionEffects(incident, actionId), {
+        applied: false,
+        reason: 'exception',
+      });
       incident.effectApplied = effect;
 
-      const cascadeChildren = incident.cascadeChildren.filter((cid) => this.activeIncidents.has(cid));
+      const cascadeChildren = incident.cascadeChildren.filter((cid) =>
+        this.activeIncidents.has(cid)
+      );
 
       this.emit('incident:resolved', {
         id: incident.id,
@@ -853,7 +863,12 @@ class IncidentEngine {
         combo: this.comboCount,
         cascadeChildrenRemaining: cascadeChildren.length,
         effect,
-        resolvedBy: actionId === 'auto' ? 'auto' : actionId === 'resource-fixed' ? 'cluster-change' : 'player',
+        resolvedBy:
+          actionId === 'auto'
+            ? 'auto'
+            : actionId === 'resource-fixed'
+              ? 'cluster-change'
+              : 'player',
       });
 
       if (incident.cascadeChildren && incident.cascadeChildren.length >= 2) {
@@ -885,11 +900,7 @@ class IncidentEngine {
     const loose = this._safe(() => state.getByName(kind, name));
     if (loose) return loose;
     const list = this._safe(() => state.getByKind(kind)) || [];
-    return (
-      list.find((r) => r.name === name) ||
-      list.find((r) => r.metadata?.name === name) ||
-      null
-    );
+    return list.find((r) => r.name === name) || list.find((r) => r.metadata?.name === name) || null;
   }
 
   _resolveTargetResource(incident) {
@@ -945,8 +956,21 @@ class IncidentEngine {
     const kinds = (def.affectedResourceTypes || []).filter((kind) => kind !== 'Pod');
     const kind = kinds[0] || (def.affectedResourceTypes || [])[0];
     if (!kind) return null;
-    const project = this.gameEngine?.currentProject || this._safe(() => state.getProjects?.()[0]?.name) || 'default';
-    const namespace = this._safe(() => state.getByKind(kind)?.[0]?.namespace) || (['ClusterOperator', 'ClusterVersion', 'SecurityContextConstraints', 'ClusterResourceQuota', 'Project'].includes(kind) ? '' : project);
+    const project =
+      this.gameEngine?.currentProject ||
+      this._safe(() => state.getProjects?.()[0]?.name) ||
+      'default';
+    const namespace =
+      this._safe(() => state.getByKind(kind)?.[0]?.namespace) ||
+      ([
+        'ClusterOperator',
+        'ClusterVersion',
+        'SecurityContextConstraints',
+        'ClusterResourceQuota',
+        'Project',
+      ].includes(kind)
+        ? ''
+        : project);
     const name = `${String(kind).toLowerCase()}-incident-${this.incidentCounter}`;
     const obj = {
       metadata: {
@@ -1128,36 +1152,40 @@ class IncidentEngine {
     if (!target && !incident.target) return { applied: false, reason: 'no-target' };
 
     const byName = {
-      CrashLoopBackOff: () => this._damagePod(incident, {
-        phase: 'CrashLoopBackOff',
-        waitingReason: 'CrashLoopBackOff',
-        lastReason: 'Error',
-        exitCode: 1,
-        restarts: 1,
-        eventReason: 'BackOff',
-        message: 'Back-off restarting failed container',
-      }),
-      ImagePullBackOff: () => this._damagePod(incident, {
-        phase: 'ImagePullBackOff',
-        waitingReason: 'ImagePullBackOff',
-        lastReason: '',
-        eventReason: 'Failed',
-        message: 'Failed to pull image: manifest unknown (image tag not found)',
-      }),
-      OOMKilled: () => this._damagePod(incident, {
-        phase: 'Running',
-        ready: false,
-        waitingReason: '',
-        lastReason: 'OOMKilled',
-        exitCode: 137,
-        restarts: 1,
-        eventReason: 'OOMKilling',
-        message: 'Container exceeded its memory limit and was OOM killed',
-        markPhase: 'CrashLoopBackOff',
-      }),
+      CrashLoopBackOff: () =>
+        this._damagePod(incident, {
+          phase: 'CrashLoopBackOff',
+          waitingReason: 'CrashLoopBackOff',
+          lastReason: 'Error',
+          exitCode: 1,
+          restarts: 1,
+          eventReason: 'BackOff',
+          message: 'Back-off restarting failed container',
+        }),
+      ImagePullBackOff: () =>
+        this._damagePod(incident, {
+          phase: 'ImagePullBackOff',
+          waitingReason: 'ImagePullBackOff',
+          lastReason: '',
+          eventReason: 'Failed',
+          message: 'Failed to pull image: manifest unknown (image tag not found)',
+        }),
+      OOMKilled: () =>
+        this._damagePod(incident, {
+          phase: 'Running',
+          ready: false,
+          waitingReason: '',
+          lastReason: 'OOMKilled',
+          exitCode: 137,
+          restarts: 1,
+          eventReason: 'OOMKilling',
+          message: 'Container exceeded its memory limit and was OOM killed',
+          markPhase: 'CrashLoopBackOff',
+        }),
       SCCForbidden: () => this._damageScc(incident),
       PendingScheduling: () => this._damagePendingScheduling(incident),
-      CreateContainerConfigError: () => this._damageConfigDependency(incident, 'CreateContainerConfigError'),
+      CreateContainerConfigError: () =>
+        this._damageConfigDependency(incident, 'CreateContainerConfigError'),
       ConfigMapMissing: () => this._damageConfigDependency(incident, 'CreateContainerConfigError'),
       SecretMissing: () => this._damageConfigDependency(incident, 'CreateContainerConfigError'),
       ReadinessProbeFailure: () => this._damageProbe(incident, 'readiness'),
@@ -1191,7 +1219,9 @@ class IncidentEngine {
     };
 
     const fn = byName[incident.name];
-    const result = fn ? this._safe(fn, { applied: false, reason: 'damage-exception' }) : { applied: false };
+    const result = fn
+      ? this._safe(fn, { applied: false, reason: 'damage-exception' })
+      : { applied: false };
     if (target && !incident.uid) {
       incident.uid = target.uid || target.metadata?.uid || null;
       incident.namespace = target.namespace || target.metadata?.namespace || incident.namespace;
@@ -1236,8 +1266,17 @@ class IncidentEngine {
     // Also flag the owning Deployment when relevant so the card targets a visible object.
     if (target && target.kind !== 'Pod') {
       this._markIncident(target, incident);
-      if (typeof target.kind === 'string' && (target.kind === 'Deployment' || target.kind === 'ReplicaSet')) {
-        this._setCondition(target, 'Available', 'False', 'MinimumReplicasUnavailable', 'The workload has unavailable replicas');
+      if (
+        typeof target.kind === 'string' &&
+        (target.kind === 'Deployment' || target.kind === 'ReplicaSet')
+      ) {
+        this._setCondition(
+          target,
+          'Available',
+          'False',
+          'MinimumReplicasUnavailable',
+          'The workload has unavailable replicas'
+        );
       }
       this._commit(target);
       // Snapshot the template/generation AFTER the onset commit (update()
@@ -1261,7 +1300,12 @@ class IncidentEngine {
       for (const pod of pods) this._markIncident(pod, incident);
     }
     for (const pod of pods) this._commit(pod);
-    return { applied: true, kind: 'pod', target: incident.targetPod || pods[0].name, pods: pods.length };
+    return {
+      applied: true,
+      kind: 'pod',
+      target: incident.targetPod || pods[0].name,
+      pods: pods.length,
+    };
   }
 
   /**
@@ -1292,18 +1336,23 @@ class IncidentEngine {
       node = this._safe(() => simulation._findBestNode(pod, nodes), null);
     }
     if (!node) {
-      node = nodes
-        .filter(
-          (candidate) =>
-            candidate
-            && candidate.status?.phase !== 'Terminating'
-            && candidate.spec?.unschedulable !== true
-            && !candidate.isCordon
-            && (typeof candidate.isConditionTrue === 'function' ? candidate.isConditionTrue('Ready') : true)
-        )
-        .sort((left, right) =>
-          String(left.metadata?.name || left.name || '').localeCompare(String(right.metadata?.name || right.name || ''))
-        )[0] || null;
+      node =
+        nodes
+          .filter(
+            (candidate) =>
+              candidate &&
+              candidate.status?.phase !== 'Terminating' &&
+              candidate.spec?.unschedulable !== true &&
+              !candidate.isCordon &&
+              (typeof candidate.isConditionTrue === 'function'
+                ? candidate.isConditionTrue('Ready')
+                : true)
+          )
+          .sort((left, right) =>
+            String(left.metadata?.name || left.name || '').localeCompare(
+              String(right.metadata?.name || right.name || '')
+            )
+          )[0] || null;
     }
     if (!node) return null;
     const nodeName = node.metadata?.name || node.name;
@@ -1318,9 +1367,10 @@ class IncidentEngine {
     pod.status.startTime = pod.status.startTime || nowIso();
     pod.status.hostIP = pod.status.hostIP || node.status?.addresses?.[0]?.address || '10.0.0.1';
     if (!pod.status.podIP) {
-      const generated = simulation && typeof simulation._generatePodIP === 'function'
-        ? this._safe(() => simulation._generatePodIP(), null)
-        : null;
+      const generated =
+        simulation && typeof simulation._generatePodIP === 'function'
+          ? this._safe(() => simulation._generatePodIP(), null)
+          : null;
       pod.status.podIP = generated || '10.244.0.10';
     }
     const message = `Successfully assigned ${namespace}/${podName} to ${nodeName}`;
@@ -1343,7 +1393,14 @@ class IncidentEngine {
     const unschedulablePending = opts?.phase === 'Pending' && !opts?.waitingReason;
     if (!unschedulablePending) this._safe(() => this._bindDamagedPodToNode(pod));
     const containers = pod.status?.containerStatuses || [];
-    const first = containers[0] || { name: 'main', ready: true, started: true, state: {}, lastState: {}, restartCount: 0 };
+    const first = containers[0] || {
+      name: 'main',
+      ready: true,
+      started: true,
+      state: {},
+      lastState: {},
+      restartCount: 0,
+    };
     const newState = { ...first };
     newState.ready = opts.ready ?? false;
     newState.started = false;
@@ -1365,11 +1422,23 @@ class IncidentEngine {
       };
     }
     pod.status = pod.status || {};
-    pod.status.containerStatuses = containers.length > 0 ? [newState, ...containers.slice(1)] : [newState];
+    pod.status.containerStatuses =
+      containers.length > 0 ? [newState, ...containers.slice(1)] : [newState];
     this._setPhase(pod, opts.markPhase || opts.phase || pod.status.phase || 'Running');
-    this._setCondition(pod, 'Ready', 'False', 'ContainersNotReady', opts.message || 'Container is not ready');
+    this._setCondition(
+      pod,
+      'Ready',
+      'False',
+      'ContainersNotReady',
+      opts.message || 'Container is not ready'
+    );
     this._setCondition(pod, 'ContainersReady', 'False', 'ContainersNotReady', opts.message || '');
-    this._recordEvent(pod, 'Warning', opts.eventReason || 'BackOff', opts.message || incident.description);
+    this._recordEvent(
+      pod,
+      'Warning',
+      opts.eventReason || 'BackOff',
+      opts.message || incident.description
+    );
     // Real `oc logs` output for THIS Pod (cli reads these annotations).
     this._applyPodLogAnnotations(incident, pod);
     // Expose the concrete Pod name for the panel's investigation commands.
@@ -1388,8 +1457,9 @@ class IncidentEngine {
       const ref = (current?.metadata?.ownerReferences || [])[0];
       if (!ref?.kind || !ref?.name) break;
       if (ref.kind !== 'ReplicaSet' && ref.kind !== 'ReplicationController') return ref.name;
-      const owner = this._safe(() => this.cluster?.get?.(ref.uid))
-        || this._findResource(ref.kind, ref.name, current?.namespace || current?.metadata?.namespace);
+      const owner =
+        this._safe(() => this.cluster?.get?.(ref.uid)) ||
+        this._findResource(ref.kind, ref.name, current?.namespace || current?.metadata?.namespace);
       if (!owner) return ref.name;
       current = owner;
       if (ref.kind === 'ReplicaSet') {
@@ -1416,17 +1486,22 @@ class IncidentEngine {
     // manifests (e.g. L20 webapp uses `name: webapp`) are not `main`, and the cli
     // only applies these logs when the requested container matches.
     let container = profile.container;
-    if (container && containers.length > 0 && !containers.some((entry) => entry.name === container)) {
+    if (
+      container &&
+      containers.length > 0 &&
+      !containers.some((entry) => entry.name === container)
+    ) {
       container = '';
     }
     container =
-      container
-      || containers[0]?.name
-      || (pod.status?.containerStatuses || [])[0]?.name
-      || profile.container
-      || 'main';
+      container ||
+      containers[0]?.name ||
+      (pod.status?.containerStatuses || [])[0]?.name ||
+      profile.container ||
+      'main';
     const podName = pod.metadata?.name || pod.name || incident.target || 'pod';
-    const containerSpec = containers.find((entry) => entry.name === container) || containers[0] || {};
+    const containerSpec =
+      containers.find((entry) => entry.name === container) || containers[0] || {};
     const image = containerSpec.image || (pod.status?.containerStatuses || [])[0]?.image || '';
     const workloadName = this._workloadNameForPod(pod) || incident.target || podName;
     const namespace = pod.namespace || pod.metadata?.namespace || incident.namespace || '';
@@ -1444,7 +1519,11 @@ class IncidentEngine {
   }
 
   _clearPodLogAnnotations(pod) {
-    for (const key of ['openshiftgames.io/logs', 'openshiftgames.io/logs-previous', 'openshiftgames.io/logs-container']) {
+    for (const key of [
+      'openshiftgames.io/logs',
+      'openshiftgames.io/logs-previous',
+      'openshiftgames.io/logs-container',
+    ]) {
       this._clearAnnotation(pod, key);
     }
   }
@@ -1482,7 +1561,12 @@ class IncidentEngine {
       });
       if (target.spec && target.spec.data) target.spec.data = {};
       this._markIncident(target, incident);
-      this._recordEvent(target, 'Warning', 'ReferenceBroken', `Workload references ${target.kind}/${target.name} but the required key is missing`);
+      this._recordEvent(
+        target,
+        'Warning',
+        'ReferenceBroken',
+        `Workload references ${target.kind}/${target.name} but the required key is missing`
+      );
       this._commit(target);
     }
     return this._damagePod(incident, {
@@ -1532,8 +1616,20 @@ class IncidentEngine {
     };
 
     if (target && target.kind !== 'Pod' && target.kind !== 'ServiceAccount') {
-      this._setCondition(target, 'Available', 'False', 'MinimumReplicasUnavailable', 'Pods rejected by security context constraints');
-      this._setCondition(target, 'ReplicaFailure', 'True', 'FailedCreate', 'pods is forbidden: unable to validate against any security context constraint');
+      this._setCondition(
+        target,
+        'Available',
+        'False',
+        'MinimumReplicasUnavailable',
+        'Pods rejected by security context constraints'
+      );
+      this._setCondition(
+        target,
+        'ReplicaFailure',
+        'True',
+        'FailedCreate',
+        'pods is forbidden: unable to validate against any security context constraint'
+      );
       this._recordEvent(
         target,
         'Warning',
@@ -1553,19 +1649,38 @@ class IncidentEngine {
 
   _damagePendingScheduling(incident) {
     const pod = this._pickPodForIncident(incident);
-    if (!pod) return this._damagePod(incident, { phase: 'Pending', markPhase: 'Pending', eventReason: 'FailedScheduling', message: 'No nodes available' });
+    if (!pod)
+      return this._damagePod(incident, {
+        phase: 'Pending',
+        markPhase: 'Pending',
+        eventReason: 'FailedScheduling',
+        message: 'No nodes available',
+      });
     this._saveRestore(incident, {
       uid: pod.uid,
       nodeName: pod.spec?.nodeName || null,
-      nodeSelector: pod.spec?.nodeSelector ? JSON.parse(JSON.stringify(pod.spec.nodeSelector)) : null,
+      nodeSelector: pod.spec?.nodeSelector
+        ? JSON.parse(JSON.stringify(pod.spec.nodeSelector))
+        : null,
     });
     if (pod.spec) {
       pod.spec.nodeName = null;
       pod.spec.nodeSelector = { 'openshiftgames.io/incident': 'no-such-label' };
     }
     this._setPhase(pod, 'Pending');
-    this._setCondition(pod, 'PodScheduled', 'False', 'Unschedulable', '0/3 nodes are available: 3 node(s) didn\'t match Pod\'s node affinity/anti-affinity.');
-    this._recordEvent(pod, 'Warning', 'FailedScheduling', '0/3 nodes are available: 3 node(s) didn\'t match Pod\'s node affinity/anti-affinity.');
+    this._setCondition(
+      pod,
+      'PodScheduled',
+      'False',
+      'Unschedulable',
+      "0/3 nodes are available: 3 node(s) didn't match Pod's node affinity/anti-affinity."
+    );
+    this._recordEvent(
+      pod,
+      'Warning',
+      'FailedScheduling',
+      "0/3 nodes are available: 3 node(s) didn't match Pod's node affinity/anti-affinity."
+    );
     this._markIncident(pod, incident);
     this._commit(pod);
     return { applied: true, kind: 'pod', target: pod.name };
@@ -1573,14 +1688,22 @@ class IncidentEngine {
 
   _damageProbe(incident, probeType) {
     const pod = this._pickPodForIncident(incident);
-    if (!pod) return this._damagePod(incident, { phase: 'Running', ready: false, eventReason: 'Unhealthy', message: `${probeType} probe failed` });
+    if (!pod)
+      return this._damagePod(incident, {
+        phase: 'Running',
+        ready: false,
+        eventReason: 'Unhealthy',
+        message: `${probeType} probe failed`,
+      });
     const containers = pod.status?.containerStatuses || [];
     const first = { ...(containers[0] || {}) };
     first.ready = false;
     first.started = true;
     if (probeType === 'liveness') {
       first.state = { waiting: { reason: 'CrashLoopBackOff', message: 'Liveness probe failed' } };
-      first.lastState = { terminated: { exitCode: 137, reason: 'LivenessProbeFailure', finishedAt: nowIso() } };
+      first.lastState = {
+        terminated: { exitCode: 137, reason: 'LivenessProbeFailure', finishedAt: nowIso() },
+      };
       first.restartCount = (first.restartCount || 0) + 1;
     } else {
       first.state = { running: { startedAt: nowIso() } };
@@ -1589,7 +1712,12 @@ class IncidentEngine {
     pod.status.containerStatuses = [first, ...containers.slice(1)];
     this._setPhase(pod, probeType === 'liveness' ? 'CrashLoopBackOff' : 'Running');
     this._setCondition(pod, 'Ready', 'False', 'ContainersNotReady', `${probeType} probe failed`);
-    this._recordEvent(pod, 'Warning', 'Unhealthy', `${probeType} probe failed for container ${first.name || 'main'}`);
+    this._recordEvent(
+      pod,
+      'Warning',
+      'Unhealthy',
+      `${probeType} probe failed for container ${first.name || 'main'}`
+    );
     this._markIncident(pod, incident);
 
     const target = this._resolveTargetResource(incident);
@@ -1599,7 +1727,6 @@ class IncidentEngine {
     }
     this._commit(pod);
     return { applied: true, kind: 'pod', target: pod.name };
-
   }
 
   _damageStuckTerminating(incident) {
@@ -1612,14 +1739,21 @@ class IncidentEngine {
       pod.metadata.finalizers.push('openshiftgames.io/incident-hold');
     }
     this._setPhase(pod, 'Terminating');
-    this._recordEvent(pod, 'Warning', 'FailedKillPod', 'Pod is stuck terminating because a finalizer is not being removed');
+    this._recordEvent(
+      pod,
+      'Warning',
+      'FailedKillPod',
+      'Pod is stuck terminating because a finalizer is not being removed'
+    );
     this._markIncident(pod, incident);
     this._commit(pod);
     return { applied: true, kind: 'pod', target: pod.name };
   }
 
   _damageRollout(incident) {
-    const deploy = this._resolveTargetResource(incident) || this._findResource('Deployment', incident.target, incident.namespace);
+    const deploy =
+      this._resolveTargetResource(incident) ||
+      this._findResource('Deployment', incident.target, incident.namespace);
     if (!deploy) return { applied: false };
     this._saveRestore(incident, {
       uid: deploy.uid,
@@ -1627,11 +1761,29 @@ class IncidentEngine {
     });
     // Break the newest pod template so the rollout cannot converge.
     if (deploy.spec?.template?.spec?.containers?.[0]) {
-      deploy.spec.template.spec.containers[0].image = 'image-registry.openshift-image-registry.svc:5000/openshift/broken-builder:not-found';
+      deploy.spec.template.spec.containers[0].image =
+        'image-registry.openshift-image-registry.svc:5000/openshift/broken-builder:not-found';
     }
-    this._setCondition(deploy, 'Progressing', 'False', 'ProgressDeadlineExceeded', 'ReplicaSet has timed out progressing.');
-    this._setCondition(deploy, 'Available', 'False', 'MinimumReplicasUnavailable', 'Deployment does not have minimum availability.');
-    this._recordEvent(deploy, 'Warning', 'FailedCreate', 'Error creating: pods ...: ImagePullBackOff');
+    this._setCondition(
+      deploy,
+      'Progressing',
+      'False',
+      'ProgressDeadlineExceeded',
+      'ReplicaSet has timed out progressing.'
+    );
+    this._setCondition(
+      deploy,
+      'Available',
+      'False',
+      'MinimumReplicasUnavailable',
+      'Deployment does not have minimum availability.'
+    );
+    this._recordEvent(
+      deploy,
+      'Warning',
+      'FailedCreate',
+      'Error creating: pods ...: ImagePullBackOff'
+    );
     this._markIncident(deploy, incident);
     this._commit(deploy);
     return { applied: true, kind: 'deployment', target: deploy.name };
@@ -1652,7 +1804,12 @@ class IncidentEngine {
     stream.status = stream.status || {};
     stream.status.tags = [];
     this._markIncident(stream, incident);
-    this._recordEvent(stream, 'Warning', 'ImageStreamTagNotFound', `imagestreamtag "${incident.target}" not found`);
+    this._recordEvent(
+      stream,
+      'Warning',
+      'ImageStreamTagNotFound',
+      `imagestreamtag "${incident.target}" not found`
+    );
     this._commit(stream);
     return { applied: true, kind: 'imagestream', target: stream.name };
   }
@@ -1687,10 +1844,24 @@ class IncidentEngine {
   }
 
   _damageHpa(incident) {
-    const hpa = this._resolveTargetResource(incident) || this._findResource('HorizontalPodAutoscaler', incident.target, incident.namespace);
+    const hpa =
+      this._resolveTargetResource(incident) ||
+      this._findResource('HorizontalPodAutoscaler', incident.target, incident.namespace);
     if (!hpa) return { applied: false };
-    this._setCondition(hpa, 'AbleToScale', 'False', 'FailedGetResourceMetric', 'failed to get cpu utilization: unable to get metrics for resource cpu');
-    this._setCondition(hpa, 'ScalingActive', 'False', 'FailedGetResourceMetric', 'the HPA was unable to compute the replica count');
+    this._setCondition(
+      hpa,
+      'AbleToScale',
+      'False',
+      'FailedGetResourceMetric',
+      'failed to get cpu utilization: unable to get metrics for resource cpu'
+    );
+    this._setCondition(
+      hpa,
+      'ScalingActive',
+      'False',
+      'FailedGetResourceMetric',
+      'the HPA was unable to compute the replica count'
+    );
     this._recordEvent(hpa, 'Warning', 'FailedGetResourceMetric', 'failed to get cpu utilization');
     this._markIncident(hpa, incident);
     this._commit(hpa);
@@ -1698,7 +1869,9 @@ class IncidentEngine {
   }
 
   _damageJob(incident) {
-    const job = this._resolveTargetResource(incident) || this._findResource('Job', incident.target, incident.namespace);
+    const job =
+      this._resolveTargetResource(incident) ||
+      this._findResource('Job', incident.target, incident.namespace);
     if (!job) return { applied: false };
     this._saveRestore(incident, {
       uid: job.uid,
@@ -1711,35 +1884,66 @@ class IncidentEngine {
     job.status = job.status || {};
     job.status.phase = 'Failed';
     job.status.conditions = [
-      { type: 'Failed', status: 'True', reason: 'DeadlineExceeded', message: 'Job was active longer than specified deadline', lastTransitionTime: nowIso() },
+      {
+        type: 'Failed',
+        status: 'True',
+        reason: 'DeadlineExceeded',
+        message: 'Job was active longer than specified deadline',
+        lastTransitionTime: nowIso(),
+      },
     ];
-    this._setCondition(job, 'Failed', 'True', 'DeadlineExceeded', 'Job was active longer than specified deadline');
+    this._setCondition(
+      job,
+      'Failed',
+      'True',
+      'DeadlineExceeded',
+      'Job was active longer than specified deadline'
+    );
     this._markIncident(job, incident);
-    this._recordEvent(job, 'Warning', 'DeadlineExceeded', 'Job was active longer than specified deadline');
+    this._recordEvent(
+      job,
+      'Warning',
+      'DeadlineExceeded',
+      'Job was active longer than specified deadline'
+    );
     this._commit(job);
     return { applied: true, kind: 'job', target: job.name };
   }
 
   _damageCronJob(incident) {
-    const cron = this._resolveTargetResource(incident) || this._findResource('CronJob', incident.target, incident.namespace);
+    const cron =
+      this._resolveTargetResource(incident) ||
+      this._findResource('CronJob', incident.target, incident.namespace);
     if (!cron) return { applied: false };
     this._saveRestore(incident, { uid: cron.uid, suspend: cron.spec?.suspend ?? false });
     if (cron.spec) cron.spec.suspend = true;
     cron.status = cron.status || {};
     cron.status.active = [];
-    this._recordEvent(cron, 'Warning', 'Suspended', 'CronJob has been suspended; no Jobs will be created');
+    this._recordEvent(
+      cron,
+      'Warning',
+      'Suspended',
+      'CronJob has been suspended; no Jobs will be created'
+    );
     this._markIncident(cron, incident);
     this._commit(cron);
     return { applied: true, kind: 'cronjob', target: cron.name };
   }
 
   _damagePvc(incident) {
-    const pvc = this._resolveTargetResource(incident) || this._findResource('PersistentVolumeClaim', incident.target, incident.namespace);
+    const pvc =
+      this._resolveTargetResource(incident) ||
+      this._findResource('PersistentVolumeClaim', incident.target, incident.namespace);
     if (!pvc) return { applied: false };
     this._saveRestore(incident, { uid: pvc.uid, volumeName: pvc.spec?.volumeName || null });
     if (pvc.spec) pvc.spec.volumeName = null;
     this._setPhase(pvc, 'Pending');
-    this._recordEvent(pvc, 'Warning', 'ProvisioningFailed', 'no persistent volumes available for this claim and no storage class is set');
+    this._recordEvent(
+      pvc,
+      'Warning',
+      'ProvisioningFailed',
+      'no persistent volumes available for this claim and no storage class is set'
+    );
     this._markIncident(pvc, incident);
     this._commit(pvc);
     return { applied: true, kind: 'pvc', target: pvc.name };
@@ -1748,44 +1952,79 @@ class IncidentEngine {
   _damageSecretExposed(incident) {
     const secret = this._resolveTargetResource(incident);
     const resource =
-      secret || this._findResource('Secret', incident.target, incident.namespace) || this._findResource('ConfigMap', incident.target, incident.namespace);
+      secret ||
+      this._findResource('Secret', incident.target, incident.namespace) ||
+      this._findResource('ConfigMap', incident.target, incident.namespace);
     if (!resource) return { applied: false };
     this._annotate(resource, 'openshiftgames.io/exposed', 'true');
     this._markIncident(resource, incident);
-    this._recordEvent(resource, 'Warning', 'CredentialExposed', 'Sensitive value found in a readable object; rotate the credential');
+    this._recordEvent(
+      resource,
+      'Warning',
+      'CredentialExposed',
+      'Sensitive value found in a readable object; rotate the credential'
+    );
     this._commit(resource);
     return { applied: true, kind: 'secret', target: resource.name };
   }
 
   _damageService(incident) {
-    const svc = this._resolveTargetResource(incident) || this._findResource('Service', incident.target, incident.namespace);
+    const svc =
+      this._resolveTargetResource(incident) ||
+      this._findResource('Service', incident.target, incident.namespace);
     if (!svc) return { applied: false };
     this._saveRestore(incident, {
       uid: svc.uid,
       selector: JSON.parse(JSON.stringify(svc.spec?.selector || {})),
     });
     if (svc.spec) svc.spec.selector = { 'openshiftgames.io/incident': 'no-matching-pods' };
-    this._recordEvent(svc, 'Warning', 'EndpointsNotFound', 'Endpoints not found for the service selector');
+    this._recordEvent(
+      svc,
+      'Warning',
+      'EndpointsNotFound',
+      'Endpoints not found for the service selector'
+    );
     this._markIncident(svc, incident);
     this._commit(svc);
     return { applied: true, kind: 'service', target: svc.name };
   }
 
   _damageRoute(incident, mode) {
-    const route = this._resolveTargetResource(incident) || this._findResource('Route', incident.target, incident.namespace);
+    const route =
+      this._resolveTargetResource(incident) ||
+      this._findResource('Route', incident.target, incident.namespace);
     if (!route) return { applied: false };
     route.status = route.status || {};
     const host =
-      route.spec?.host || `${route.name}-${route.namespace || incident.namespace || 'default'}.apps.cluster.example.com`;
-    const save = { uid: route.uid, host: route.spec?.host || '', tls: JSON.parse(JSON.stringify(route.spec?.tls || {})) };
+      route.spec?.host ||
+      `${route.name}-${route.namespace || incident.namespace || 'default'}.apps.cluster.example.com`;
+    const save = {
+      uid: route.uid,
+      host: route.spec?.host || '',
+      tls: JSON.parse(JSON.stringify(route.spec?.tls || {})),
+    };
     this._saveRestore(incident, save);
 
     if (mode === 'host-conflict') {
       if (route.spec) route.spec.host = 'conflict.apps.cluster.example.com';
-      this._recordEvent(route, 'Warning', 'HostAlreadyClaimed', `route "${route.name}" host "conflict.apps.cluster.example.com" is already claimed by another namespace`);
+      this._recordEvent(
+        route,
+        'Warning',
+        'HostAlreadyClaimed',
+        `route "${route.name}" host "conflict.apps.cluster.example.com" is already claimed by another namespace`
+      );
     } else if (mode === 'tls') {
-      this._annotate(route, 'openshiftgames.io/tls-error', 'certificate SAN does not match route host');
-      this._recordEvent(route, 'Warning', 'CertificateError', 'certificate is not valid for the requested host');
+      this._annotate(
+        route,
+        'openshiftgames.io/tls-error',
+        'certificate SAN does not match route host'
+      );
+      this._recordEvent(
+        route,
+        'Warning',
+        'CertificateError',
+        'certificate is not valid for the requested host'
+      );
     } else {
       this._recordEvent(route, 'Warning', 'ServiceUnavailable', 'no endpoints available');
     }
@@ -1799,8 +2038,18 @@ class IncidentEngine {
           {
             type: 'Admitted',
             status: 'False',
-            reason: mode === 'host-conflict' ? 'HostAlreadyClaimed' : mode === 'tls' ? 'CertificateError' : 'ServiceUnavailable',
-            message: mode === 'host-conflict' ? 'host already claimed' : mode === 'tls' ? 'bad certificate' : 'no endpoints available',
+            reason:
+              mode === 'host-conflict'
+                ? 'HostAlreadyClaimed'
+                : mode === 'tls'
+                  ? 'CertificateError'
+                  : 'ServiceUnavailable',
+            message:
+              mode === 'host-conflict'
+                ? 'host already claimed'
+                : mode === 'tls'
+                  ? 'bad certificate'
+                  : 'no endpoints available',
             lastTransitionTime: nowIso(),
           },
         ],
@@ -1812,7 +2061,9 @@ class IncidentEngine {
   }
 
   _damageNetworkPolicy(incident) {
-    const policy = this._resolveTargetResource(incident) || this._findResource('NetworkPolicy', incident.target, incident.namespace);
+    const policy =
+      this._resolveTargetResource(incident) ||
+      this._findResource('NetworkPolicy', incident.target, incident.namespace);
     if (!policy) return { applied: false };
     this._saveRestore(incident, {
       uid: policy.uid,
@@ -1827,20 +2078,36 @@ class IncidentEngine {
       policy.spec.ingress = [];
       policy.spec.egress = [];
     }
-    this._recordEvent(policy, 'Warning', 'TrafficDenied', 'default-deny policy blocks all ingress/egress traffic for selected pods');
+    this._recordEvent(
+      policy,
+      'Warning',
+      'TrafficDenied',
+      'default-deny policy blocks all ingress/egress traffic for selected pods'
+    );
     this._markIncident(policy, incident);
     this._commit(policy);
     if (typeof policy.updateAffectedPods === 'function') {
-      this._safe(() => policy.updateAffectedPods(this.cluster.getByKindAndNamespace('Pod', incident.namespace) || []));
+      this._safe(() =>
+        policy.updateAffectedPods(
+          this.cluster.getByKindAndNamespace('Pod', incident.namespace) || []
+        )
+      );
     }
     return { applied: true, kind: 'networkpolicy', target: policy.name };
   }
 
   _damageDns(incident) {
-    const dnsPods = this._safe(() => this.cluster?.getByKindAndNamespace('Pod', 'openshift-dns')) || [];
+    const dnsPods =
+      this._safe(() => this.cluster?.getByKindAndNamespace('Pod', 'openshift-dns')) || [];
     for (const pod of dnsPods) {
       this._setPhase(pod, 'CrashLoopBackOff');
-      this._setCondition(pod, 'Ready', 'False', 'ContainersNotReady', 'DNS resolver is unavailable');
+      this._setCondition(
+        pod,
+        'Ready',
+        'False',
+        'ContainersNotReady',
+        'DNS resolver is unavailable'
+      );
       this._recordEvent(pod, 'Warning', 'Unhealthy', 'CoreDNS container is not ready');
       this._markIncident(pod, incident);
       this._commit(pod);
@@ -1852,7 +2119,13 @@ class IncidentEngine {
     }
     const co = this._safe(() => this.cluster.getClusterOperator?.('dns'));
     if (co) {
-      this._setCondition(co, 'Degraded', 'True', 'DNSUnavailable', 'In-cluster DNS resolution is failing');
+      this._setCondition(
+        co,
+        'Degraded',
+        'True',
+        'DNSUnavailable',
+        'In-cluster DNS resolution is failing'
+      );
       this._commit(co);
     }
     // The incident is "real" even when no dns-default Pods are seeded: the
@@ -1866,7 +2139,13 @@ class IncidentEngine {
       this._findResource('ClusterOperator', 'ingress', '') ||
       this._findResource('ClusterOperator', incident.target, '');
     if (co) {
-      this._setCondition(co, 'Degraded', 'True', 'IngressDegraded', 'The ingress operator is reporting a degraded router deployment');
+      this._setCondition(
+        co,
+        'Degraded',
+        'True',
+        'IngressDegraded',
+        'The ingress operator is reporting a degraded router deployment'
+      );
       this._setCondition(co, 'Available', 'True', 'IngressAvailable', '');
       this._markIncident(co, incident);
       this._commit(co);
@@ -1880,12 +2159,19 @@ class IncidentEngine {
   }
 
   _damageLoadBalancer(incident) {
-    const svc = this._resolveTargetResource(incident) || this._findResource('Service', incident.target, incident.namespace);
+    const svc =
+      this._resolveTargetResource(incident) ||
+      this._findResource('Service', incident.target, incident.namespace);
     if (!svc) return { applied: false };
     svc.status = svc.status || {};
     svc.status.loadBalancer = { ingress: [] };
     this._annotate(svc, 'openshiftgames.io/lb-pending', 'true');
-    this._recordEvent(svc, 'Warning', 'PendingLoadBalancer', 'load balancer has not been provisioned yet');
+    this._recordEvent(
+      svc,
+      'Warning',
+      'PendingLoadBalancer',
+      'load balancer has not been provisioned yet'
+    );
     this._markIncident(svc, incident);
     this._commit(svc);
     return { applied: true, kind: 'service', target: svc.name };
@@ -1895,11 +2181,17 @@ class IncidentEngine {
     const sa =
       this._findResource('ServiceAccount', incident.target, incident.namespace) ||
       this._findResource('ServiceAccount', 'default', incident.namespace) ||
-      (this._safe(() => this.cluster?.getByKindAndNamespace('ServiceAccount', incident.namespace)) || [])[0];
+      (this._safe(() =>
+        this.cluster?.getByKindAndNamespace('ServiceAccount', incident.namespace)
+      ) || [])[0];
     const removed = [];
     if (sa) {
       incident.namespace = sa.namespace || sa.metadata?.namespace || incident.namespace;
-      incident.rbacSubject = { kind: 'ServiceAccount', name: sa.name, namespace: incident.namespace };
+      incident.rbacSubject = {
+        kind: 'ServiceAccount',
+        name: sa.name,
+        namespace: incident.namespace,
+      };
       const bindings =
         this._safe(() => this.cluster?.getByKindAndNamespace('RoleBinding', incident.namespace)) ||
         this._safe(() => this.cluster?.getByKind('RoleBinding')) ||
@@ -1907,8 +2199,26 @@ class IncidentEngine {
       const saUser = `system:serviceaccount:${sa.namespace}:${sa.name}`;
       for (const rb of bindings) {
         const subjects = rb.spec?.subjects || rb.subjects || [];
-        if (!subjects.some((s) => s.kind === 'ServiceAccount' ? `system:serviceaccount:${s.namespace || sa.namespace}:${s.name}` === saUser : s.name === saUser)) continue;
-        removed.push(JSON.parse(JSON.stringify({ uid: rb.uid, kind: rb.kind, name: rb.name, namespace: rb.namespace, spec: rb.spec, metadata: { name: rb.name, namespace: rb.namespace } })));
+        if (
+          !subjects.some((s) =>
+            s.kind === 'ServiceAccount'
+              ? `system:serviceaccount:${s.namespace || sa.namespace}:${s.name}` === saUser
+              : s.name === saUser
+          )
+        )
+          continue;
+        removed.push(
+          JSON.parse(
+            JSON.stringify({
+              uid: rb.uid,
+              kind: rb.kind,
+              name: rb.name,
+              namespace: rb.namespace,
+              spec: rb.spec,
+              metadata: { name: rb.name, namespace: rb.namespace },
+            })
+          )
+        );
         this._safe(() => this.cluster.remove(rb.uid));
       }
       this._markIncident(sa, incident);
@@ -1924,7 +2234,12 @@ class IncidentEngine {
     const target = this._resolveTargetResource(incident);
     if (target && target.kind === 'Pod') {
       this._setPhase(target, 'Running');
-      this._recordEvent(target, 'Warning', 'Forbidden', 'the server responded with 403 Forbidden: User cannot get resource "pods"');
+      this._recordEvent(
+        target,
+        'Warning',
+        'Forbidden',
+        'the server responded with 403 Forbidden: User cannot get resource "pods"'
+      );
       this._commit(target);
     }
     return { applied: removed.length > 0 || !!sa, removedBindings: removed.length };
@@ -1932,12 +2247,13 @@ class IncidentEngine {
 
   _damageOAuth(incident) {
     const provider = this._safe(() => this.cluster.getAuthProviderConfig?.()) || null;
-    const providerConfig = provider || this.gameEngine?.authProvider || {
-      type: 'HTPasswd',
-      name: 'htpasswd',
-      secretName: 'htpasswd-secret',
-      namespace: 'openshift-config',
-    };
+    const providerConfig = provider ||
+      this.gameEngine?.authProvider || {
+        type: 'HTPasswd',
+        name: 'htpasswd',
+        secretName: 'htpasswd-secret',
+        namespace: 'openshift-config',
+      };
     if (this.gameEngine) {
       this.gameEngine.authProvider = { ...providerConfig, ready: false };
     }
@@ -1948,23 +2264,44 @@ class IncidentEngine {
     const secret = this._findResource('Secret', secretName, 'openshift-config');
     if (secret) {
       const data = JSON.parse(JSON.stringify(secret.spec?.data || secret.data || {}));
-      this._saveRestore(incident, { ...(incident.restoreState || {}), oauthSecret: { uid: secret.uid, name: secretName, data } });
+      this._saveRestore(incident, {
+        ...(incident.restoreState || {}),
+        oauthSecret: { uid: secret.uid, name: secretName, data },
+      });
       if (secret.spec) secret.spec.data = {};
       else secret.data = {};
       this._markIncident(secret, incident);
-      this._recordEvent(secret, 'Warning', 'InvalidHTPasswdSecret', `Secret "${secretName}" is missing the required "htpasswd" key`);
+      this._recordEvent(
+        secret,
+        'Warning',
+        'InvalidHTPasswdSecret',
+        `Secret "${secretName}" is missing the required "htpasswd" key`
+      );
       this._commit(secret);
     }
-    const oauth = this._safe(() => this.cluster.getOAuth?.()) || this._findResource('OAuth', 'cluster', '');
+    const oauth =
+      this._safe(() => this.cluster.getOAuth?.()) || this._findResource('OAuth', 'cluster', '');
     if (oauth) {
-      this._setCondition(oauth, 'Available', 'False', 'OAuthServerNotReady', 'The authentication operator is not ready; oc login is rejected');
+      this._setCondition(
+        oauth,
+        'Available',
+        'False',
+        'OAuthServerNotReady',
+        'The authentication operator is not ready; oc login is rejected'
+      );
       this._recordEvent(oauth, 'Warning', 'LoginFailed', 'HTPasswd identity provider is not ready');
       this._markIncident(oauth, incident);
       this._commit(oauth);
     }
     const co = this._safe(() => this.cluster.getClusterOperator?.('authentication'));
     if (co) {
-      this._setCondition(co, 'Degraded', 'True', 'OAuthServerNotReady', 'The authentication operator is not ready');
+      this._setCondition(
+        co,
+        'Degraded',
+        'True',
+        'OAuthServerNotReady',
+        'The authentication operator is not ready'
+      );
       this._commit(co);
     }
     return { applied: !!oauth || !!co || !!secret };
@@ -1987,11 +2324,19 @@ class IncidentEngine {
       const tight = { ...savedHard };
       // Make the quota visibly exceeded: leave less capacity than currently used.
       tight.pods = String(Math.max(0, (usage.pods || 1) - 1));
-      if (tight['requests.cpu'] !== undefined) tight['requests.cpu'] = `${Math.max(0, Math.floor((usage['requests.cpu'] || 0) - 100))}m`;
-      if (tight['requests.memory'] !== undefined) tight['requests.memory'] = `${Math.max(0, Math.ceil((usage['requests.memory'] || 0) - 64))}Mi`;
+      if (tight['requests.cpu'] !== undefined)
+        tight['requests.cpu'] = `${Math.max(0, Math.floor((usage['requests.cpu'] || 0) - 100))}m`;
+      if (tight['requests.memory'] !== undefined)
+        tight['requests.memory'] =
+          `${Math.max(0, Math.ceil((usage['requests.memory'] || 0) - 64))}Mi`;
       quota.spec = { ...(quota.spec || {}), hard: tight };
       this._setCondition(quota, 'Exceeded', 'True', 'QuotaExceeded', 'exceeded quota: pods');
-      this._recordEvent(quota, 'Warning', 'QuotaExceeded', `exceeded quota: ${quota.name} is exhausted`);
+      this._recordEvent(
+        quota,
+        'Warning',
+        'QuotaExceeded',
+        `exceeded quota: ${quota.name} is exhausted`
+      );
       this._markIncident(quota, incident);
       this._commit(quota);
       this.emit('quota:exceeded', { namespace: ns, quota: quota.name });
@@ -2002,8 +2347,19 @@ class IncidentEngine {
     const pod = pods.find((p) => p.status?.phase === 'Pending') || pods[0];
     if (pod) {
       this._setPhase(pod, 'Pending');
-      this._setCondition(pod, 'PodScheduled', 'False', 'Unschedulable', 'FailedCreate: exceeded quota');
-      this._recordEvent(pod, 'Warning', 'FailedCreate', `Error creating: pods ... is forbidden: exceeded quota: ${quota ? quota.name : 'quota'}`);
+      this._setCondition(
+        pod,
+        'PodScheduled',
+        'False',
+        'Unschedulable',
+        'FailedCreate: exceeded quota'
+      );
+      this._recordEvent(
+        pod,
+        'Warning',
+        'FailedCreate',
+        `Error creating: pods ... is forbidden: exceeded quota: ${quota ? quota.name : 'quota'}`
+      );
       this._markIncident(pod, incident);
       this._commit(pod);
     }
@@ -2014,15 +2370,28 @@ class IncidentEngine {
     const lr =
       this._resolveTargetResource(incident) ||
       this._findResource('LimitRange', incident.target, incident.namespace) ||
-      (this._safe(() => this.cluster?.getByKindAndNamespace('LimitRange', incident.namespace)) || [])[0];
+      (this._safe(() => this.cluster?.getByKindAndNamespace('LimitRange', incident.namespace)) ||
+        [])[0];
     if (!lr) return { applied: false };
-    this._saveRestore(incident, { uid: lr.uid, limits: JSON.parse(JSON.stringify(lr.spec?.limits || [])) });
+    this._saveRestore(incident, {
+      uid: lr.uid,
+      limits: JSON.parse(JSON.stringify(lr.spec?.limits || [])),
+    });
     if (lr.spec) {
       lr.spec.limits = [
-        { type: 'Container', max: { cpu: '10m', memory: '16Mi' }, min: { cpu: '1', memory: '1Gi' } },
+        {
+          type: 'Container',
+          max: { cpu: '10m', memory: '16Mi' },
+          min: { cpu: '1', memory: '1Gi' },
+        },
       ];
     }
-    this._recordEvent(lr, 'Warning', 'LimitRangeViolation', 'pod resources are outside the allowed LimitRange min/max');
+    this._recordEvent(
+      lr,
+      'Warning',
+      'LimitRangeViolation',
+      'pod resources are outside the allowed LimitRange min/max'
+    );
     this._markIncident(lr, incident);
     this._commit(lr);
     return { applied: true };
@@ -2034,40 +2403,85 @@ class IncidentEngine {
       this._findResource('ClusterResourceQuota', incident.target, '') ||
       (this._safe(() => this.cluster?.getByKind('ClusterResourceQuota')) || [])[0];
     if (!crq) return { applied: false };
-    this._saveRestore(incident, { uid: crq.uid, status: JSON.parse(JSON.stringify(crq.status || {})) });
+    this._saveRestore(incident, {
+      uid: crq.uid,
+      status: JSON.parse(JSON.stringify(crq.status || {})),
+    });
     crq.status = crq.status || {};
     crq.status.total = crq.status.total || { hard: crq.spec?.quota?.hard || {}, used: {} };
     crq.status.total.used = { ...(crq.status.total.used || {}), pods: 9999 };
-    this._recordEvent(crq, 'Warning', 'QuotaExceeded', 'cluster resource quota exceeded across selected projects');
+    this._recordEvent(
+      crq,
+      'Warning',
+      'QuotaExceeded',
+      'cluster resource quota exceeded across selected projects'
+    );
     this._markIncident(crq, incident);
     this._commit(crq);
     return { applied: true };
   }
 
   _damageNodeReady(incident) {
-    const node = this._resolveTargetResource(incident) || this._findResource('Node', incident.target, '') || (this._safe(() => this.cluster?.getByKind('Node')) || [])[0];
+    const node =
+      this._resolveTargetResource(incident) ||
+      this._findResource('Node', incident.target, '') ||
+      (this._safe(() => this.cluster?.getByKind('Node')) || [])[0];
     if (!node) return { applied: false };
-    this._saveRestore(incident, { uid: node.uid, phase: node.status?.phase || 'Running', unschedulable: node.spec?.unschedulable ?? false });
+    this._saveRestore(incident, {
+      uid: node.uid,
+      phase: node.status?.phase || 'Running',
+      unschedulable: node.spec?.unschedulable ?? false,
+    });
     this._setPhase(node, 'NotReady');
-    this._setCondition(node, 'Ready', 'False', 'KubeletNotReady', 'kubelet stopped posting node status');
+    this._setCondition(
+      node,
+      'Ready',
+      'False',
+      'KubeletNotReady',
+      'kubelet stopped posting node status'
+    );
     if (node.spec) node.spec.unschedulable = true;
-    this._recordEvent(node, 'Warning', 'NodeNotReady', 'Node became NotReady; workloads are being rescheduled');
+    this._recordEvent(
+      node,
+      'Warning',
+      'NodeNotReady',
+      'Node became NotReady; workloads are being rescheduled'
+    );
     this._markIncident(node, incident);
     this._commit(node);
     return { applied: true, kind: 'node', target: node.name };
   }
 
   _damageNodePressure(incident, pressure) {
-    const node = this._resolveTargetResource(incident) || this._findResource('Node', incident.target, '') || (this._safe(() => this.cluster?.getByKind('Node')) || [])[0];
+    const node =
+      this._resolveTargetResource(incident) ||
+      this._findResource('Node', incident.target, '') ||
+      (this._safe(() => this.cluster?.getByKind('Node')) || [])[0];
     if (!node) return { applied: false };
-    const saved = { uid: node.uid, conditions: JSON.parse(JSON.stringify(node.status?.conditions || [])), memory: node.spec?.memory, allocatable: node.status?.allocatable };
+    const saved = {
+      uid: node.uid,
+      conditions: JSON.parse(JSON.stringify(node.status?.conditions || [])),
+      memory: node.spec?.memory,
+      allocatable: node.status?.allocatable,
+    };
     this._saveRestore(incident, saved);
     if (pressure === 'MemoryPressure' && node.spec) {
       // Shrink the node so _tickNodes keeps reporting the pressure condition.
       node.spec.memory = '1Gi';
     }
-    this._setCondition(node, pressure, 'True', 'KubeletHasInsufficientResources', pressure === 'DiskPressure' ? 'node is running out of disk' : 'node is under memory pressure');
-    this._recordEvent(node, 'Warning', pressure, `Node reports ${pressure}=True; kubelet is evicting pods`);
+    this._setCondition(
+      node,
+      pressure,
+      'True',
+      'KubeletHasInsufficientResources',
+      pressure === 'DiskPressure' ? 'node is running out of disk' : 'node is under memory pressure'
+    );
+    this._recordEvent(
+      node,
+      'Warning',
+      pressure,
+      `Node reports ${pressure}=True; kubelet is evicting pods`
+    );
     this._markIncident(node, incident);
     this._commit(node);
     return { applied: true, kind: 'node', target: node.name };
@@ -2079,7 +2493,10 @@ class IncidentEngine {
       this._findResource('Subscription', incident.target, incident.namespace) ||
       (this._safe(() => this.cluster?.getByKind('Subscription')) || [])[0];
     if (!sub) return { applied: false };
-    this._saveRestore(incident, { uid: sub.uid, status: JSON.parse(JSON.stringify(sub.status || {})) });
+    this._saveRestore(incident, {
+      uid: sub.uid,
+      status: JSON.parse(JSON.stringify(sub.status || {})),
+    });
     sub.status = sub.status || {};
     sub.status.state = 'AtLatestKnown';
     // Also flip the phase to Failed (unless the simulator owns it) so a
@@ -2099,7 +2516,12 @@ class IncidentEngine {
       },
     ];
     this._markIncident(sub, incident);
-    this._recordEvent(sub, 'Warning', 'InstallFailed', 'operator installation failed: catalog source is unhealthy');
+    this._recordEvent(
+      sub,
+      'Warning',
+      'InstallFailed',
+      'operator installation failed: catalog source is unhealthy'
+    );
     this._commit(sub);
 
     // If a CSV-style resource exists in the model, mark it Failed as well.
@@ -2127,7 +2549,12 @@ class IncidentEngine {
     if (target) this._clearAnnotation(target, INCIDENT_ANNOTATION);
     if (target) {
       this._annotate(target, HEAL_ANNOTATION, nowIso());
-      this._recordEvent(target, 'Normal', 'IncidentResolved', `${incident.name} resolved by ${actionId}`);
+      this._recordEvent(
+        target,
+        'Normal',
+        'IncidentResolved',
+        `${incident.name} resolved by ${actionId}`
+      );
       this._commit(target);
     }
 
@@ -2151,12 +2578,19 @@ class IncidentEngine {
     if (resolution.effect === 'rotate') this.emit('security:credential-rotated', payload);
     if (resolution.effect === 'install') this.emit('operator:installed', payload);
     if (resolution.effect === 'admit') this.emit('route:admitted', payload);
-    if (resolution.effect === 'complete' && resolution.kind === 'build') this.emit('build:complete', payload);
-    if (resolution.effect === 'clear' && resolution.kind === 'quota') this.emit('quota:cleared', payload);
+    if (resolution.effect === 'complete' && resolution.kind === 'build')
+      this.emit('build:complete', payload);
+    if (resolution.effect === 'clear' && resolution.kind === 'quota')
+      this.emit('quota:cleared', payload);
     if (resolution.kind === 'oauth') this.emit('auth:provider-ready', payload);
     if (resolution.kind === 'rbac') this.emit('scc:granted', payload);
 
-    return { applied: result?.applied !== false, kind: resolution.kind || 'cluster', effect: resolution.effect || 'heal', ...result };
+    return {
+      applied: result?.applied !== false,
+      kind: resolution.kind || 'cluster',
+      effect: resolution.effect || 'heal',
+      ...result,
+    };
   }
 
   _applyEffect(incident, target, resolution, actionId) {
@@ -2231,14 +2665,19 @@ class IncidentEngine {
       lastState: {},
     }));
     pod.status = pod.status || {};
-    pod.status.containerStatuses = healthy.length > 0 ? healthy : [{
-      name: 'main',
-      ready: true,
-      started: true,
-      restartCount: 0,
-      state: { running: { startedAt: nowIso() } },
-      lastState: {},
-    }];
+    pod.status.containerStatuses =
+      healthy.length > 0
+        ? healthy
+        : [
+            {
+              name: 'main',
+              ready: true,
+              started: true,
+              restartCount: 0,
+              state: { running: { startedAt: nowIso() } },
+              lastState: {},
+            },
+          ];
     this._setPhase(pod, 'Running');
     this._setCondition(pod, 'PodScheduled', 'True', 'Scheduled', 'Assigned to a node');
     this._setCondition(pod, 'Initialized', 'True', 'PodInitialized', '');
@@ -2268,11 +2707,20 @@ class IncidentEngine {
     if (incident.name === 'SCCForbidden') {
       const explicitGrant = actionId === 'grant-scc';
       if (explicitGrant) {
-        this._grantSccTo(incident, this._requiredSccForIncident(incident), incident.rbacSubject?.name);
+        this._grantSccTo(
+          incident,
+          this._requiredSccForIncident(incident),
+          incident.rbacSubject?.name
+        );
       } else if (!this._incidentSccGranted(incident)) {
         // No grant: do not fake a heal. Report the still-denied state.
         if (target) {
-          this._recordEvent(target, 'Warning', 'SCCDenied', 'Grant the privileged SCC to the ServiceAccount before the Pod can be admitted');
+          this._recordEvent(
+            target,
+            'Warning',
+            'SCCDenied',
+            'Grant the privileged SCC to the ServiceAccount before the Pod can be admitted'
+          );
           this._commit(target);
         }
         return { applied: false, kind: 'pod', reason: 'scc-not-granted' };
@@ -2285,11 +2733,20 @@ class IncidentEngine {
     let healed = 0;
     for (const pod of pods) {
       // Stuck terminating: clear finalizers and delete the pod object.
-      if (incident.name === 'PodStuckTerminating' || pod.status?.phase === 'Terminating' || pod.metadata?.deletionTimestamp) {
+      if (
+        incident.name === 'PodStuckTerminating' ||
+        pod.status?.phase === 'Terminating' ||
+        pod.metadata?.deletionTimestamp
+      ) {
         this._clearAnnotation(pod, INCIDENT_ANNOTATION);
         pod.metadata = pod.metadata || {};
         pod.metadata.finalizers = [];
-        this._recordEvent(pod, 'Normal', 'Killing', 'Pod finalizers released; pod will be recreated by its controller');
+        this._recordEvent(
+          pod,
+          'Normal',
+          'Killing',
+          'Pod finalizers released; pod will be recreated by its controller'
+        );
         this._commit(pod);
         this._safe(() => this.cluster.remove(pod.uid));
         healed++;
@@ -2321,7 +2778,12 @@ class IncidentEngine {
         delete pod.status.hostIP;
         pod.status.containerStatuses = [];
         this._setPhase(pod, 'Pending');
-        this._recordEvent(pod, 'Normal', 'SCCGranted', 'Security context constraint granted; Pod will be re-admitted');
+        this._recordEvent(
+          pod,
+          'Normal',
+          'SCCGranted',
+          'Security context constraint granted; Pod will be re-admitted'
+        );
         this._commit(pod);
         healed++;
         continue;
@@ -2340,9 +2802,11 @@ class IncidentEngine {
     // Also restore a broken Deployment template (rollout/config incidents).
     // SCC incidents are re-admitted by the simulator; do not fake availability.
     if (
-      incident.name !== 'SCCForbidden'
-      && target
-      && (target.kind === 'Deployment' || target.kind === 'ReplicaSet' || target.kind === 'StatefulSet')
+      incident.name !== 'SCCForbidden' &&
+      target &&
+      (target.kind === 'Deployment' ||
+        target.kind === 'ReplicaSet' ||
+        target.kind === 'StatefulSet')
     ) {
       this._healDeployment(incident, target);
     }
@@ -2363,8 +2827,8 @@ class IncidentEngine {
     const needsPrivileged = pods.some((pod) => {
       const spec = pod.spec || {};
       return (
-        spec.securityContext?.privileged === true
-        || (spec.containers || []).some((container) => container?.securityContext?.privileged === true)
+        spec.securityContext?.privileged === true ||
+        (spec.containers || []).some((container) => container?.securityContext?.privileged === true)
       );
     });
     if (needsPrivileged) return 'privileged';
@@ -2378,7 +2842,8 @@ class IncidentEngine {
    * `oc adm policy add-scc-to-user <scc> -z <sa>`, not from an auto-grant.
    */
   _incidentSccGranted(incident) {
-    const sccName = incident.resolution?.grantScc || this._requiredSccForIncident(incident) || 'privileged';
+    const sccName =
+      incident.resolution?.grantScc || this._requiredSccForIncident(incident) || 'privileged';
     const subject = incident.rbacSubject || {};
     const namespace = subject.namespace || incident.namespace || '';
     const saName = subject.kind === 'ServiceAccount' ? subject.name : null;
@@ -2389,14 +2854,17 @@ class IncidentEngine {
     if (!cluster) return false;
     const toNames = (grants) =>
       (Array.isArray(grants) ? grants : [])
-        .map((entry) => (typeof entry === 'string' ? entry : entry?.name || entry?.metadata?.name || ''))
+        .map((entry) =>
+          typeof entry === 'string' ? entry : entry?.name || entry?.metadata?.name || ''
+        )
         .filter(Boolean);
     try {
       if (typeof cluster.getSCCGrantsForSubject === 'function') {
         return toNames(cluster.getSCCGrantsForSubject(subjectStr)).includes(String(sccName));
       }
       if (saName && typeof cluster.getSCCsForServiceAccount === 'function') {
-        if (toNames(cluster.getSCCsForServiceAccount(namespace, saName)).includes(String(sccName))) return true;
+        if (toNames(cluster.getSCCsForServiceAccount(namespace, saName)).includes(String(sccName)))
+          return true;
       }
     } catch {
       /* fall through to the binding scan */
@@ -2408,14 +2876,16 @@ class IncidentEngine {
         const spec = binding.spec || {};
         if ((spec.roleRef?.name || '') !== roleName) continue;
         const subjects = spec.subjects || binding.subjects || [];
-        if (subjects.some((entry) => {
-          if (entry?.kind === 'ServiceAccount') {
-            return saName
-              ? entry.name === saName && (!entry.namespace || entry.namespace === namespace)
-              : `${entry.namespace || namespace}:${entry.name}` === incident.target;
-          }
-          return entry?.kind === 'User' && entry.name === subjectStr;
-        })) {
+        if (
+          subjects.some((entry) => {
+            if (entry?.kind === 'ServiceAccount') {
+              return saName
+                ? entry.name === saName && (!entry.namespace || entry.namespace === namespace)
+                : `${entry.namespace || namespace}:${entry.name}` === incident.target;
+            }
+            return entry?.kind === 'User' && entry.name === subjectStr;
+          })
+        ) {
           return true;
         }
       }
@@ -2425,7 +2895,10 @@ class IncidentEngine {
 
   _healDeployment(incident, target) {
     const deploy =
-      target && (target.kind === 'Deployment' || target.kind === 'ReplicaSet' || target.kind === 'StatefulSet')
+      target &&
+      (target.kind === 'Deployment' ||
+        target.kind === 'ReplicaSet' ||
+        target.kind === 'StatefulSet')
         ? target
         : this._findResource('Deployment', incident.target, incident.namespace) ||
           this._safe(() => (this.cluster?.getByKind('Deployment') || [])[0]);
@@ -2443,7 +2916,9 @@ class IncidentEngine {
 
     const desired = deploy.spec?.replicas ?? 1;
     const healthyPods = pods.filter(
-      (pod) => pod.status?.phase === 'Running' && (pod.isConditionTrue ? pod.isConditionTrue('Ready') : true)
+      (pod) =>
+        pod.status?.phase === 'Running' &&
+        (pod.isConditionTrue ? pod.isConditionTrue('Ready') : true)
     ).length;
     deploy.status = deploy.status || {};
     if (incident.name === 'SCCForbidden' && healthyPods < desired) {
@@ -2453,20 +2928,57 @@ class IncidentEngine {
       deploy.status.readyReplicas = healthyPods;
       deploy.status.availableReplicas = healthyPods;
       deploy.status.updatedReplicas = pods.length;
-      deploy.status.observedGeneration = deploy.metadata?.generation || deploy.status.observedGeneration;
-      this._setCondition(deploy, 'Available', 'False', 'MinimumReplicasUnavailable', `${healthyPods}/${desired} replicas available (SCC denied)`);
-      this._setCondition(deploy, 'Progressing', 'True', 'ReplicaSetUpdated', 'waiting for pods to be admitted');
-      this._recordEvent(deploy, 'Warning', 'SCCDenied', 'Pods are still rejected by security context constraints');
+      deploy.status.observedGeneration =
+        deploy.metadata?.generation || deploy.status.observedGeneration;
+      this._setCondition(
+        deploy,
+        'Available',
+        'False',
+        'MinimumReplicasUnavailable',
+        `${healthyPods}/${desired} replicas available (SCC denied)`
+      );
+      this._setCondition(
+        deploy,
+        'Progressing',
+        'True',
+        'ReplicaSetUpdated',
+        'waiting for pods to be admitted'
+      );
+      this._recordEvent(
+        deploy,
+        'Warning',
+        'SCCDenied',
+        'Pods are still rejected by security context constraints'
+      );
       this._commit(deploy);
-      return { applied: false, kind: 'deployment', target: deploy.name, pods: pods.length, reason: 'scc-denied' };
+      return {
+        applied: false,
+        kind: 'deployment',
+        target: deploy.name,
+        pods: pods.length,
+        reason: 'scc-denied',
+      };
     }
     deploy.status.replicas = Math.max(deploy.status.replicas || 0, desired);
     deploy.status.readyReplicas = desired;
     deploy.status.availableReplicas = desired;
     deploy.status.updatedReplicas = desired;
-    deploy.status.observedGeneration = deploy.metadata?.generation || deploy.status.observedGeneration;
-    this._setCondition(deploy, 'Available', 'True', 'MinimumReplicasAvailable', 'Deployment has minimum availability.');
-    this._setCondition(deploy, 'Progressing', 'True', 'NewReplicaSetAvailable', 'ReplicaSet has successfully progressed.');
+    deploy.status.observedGeneration =
+      deploy.metadata?.generation || deploy.status.observedGeneration;
+    this._setCondition(
+      deploy,
+      'Available',
+      'True',
+      'MinimumReplicasAvailable',
+      'Deployment has minimum availability.'
+    );
+    this._setCondition(
+      deploy,
+      'Progressing',
+      'True',
+      'NewReplicaSetAvailable',
+      'ReplicaSet has successfully progressed.'
+    );
     this._clearAnnotation(deploy, INCIDENT_ANNOTATION);
     this._recordEvent(deploy, 'Normal', 'Healed', 'Rollout completed; all replicas are available');
     this._commit(deploy);
@@ -2485,7 +2997,9 @@ class IncidentEngine {
       svc.spec.selector = incident.restoreState.selector;
     }
     const selector = svc.spec?.selector || {};
-    const pods = (this._safe(() => this.cluster?.getByKindAndNamespace('Pod', svc.namespace)) || []).filter((p) =>
+    const pods = (
+      this._safe(() => this.cluster?.getByKindAndNamespace('Pod', svc.namespace)) || []
+    ).filter((p) =>
       Object.entries(selector).every(([k, v]) => (p.metadata?.labels || {})[k] === v)
     );
     for (const pod of pods) this._healPodContainer(pod);
@@ -2494,7 +3008,12 @@ class IncidentEngine {
       svc.status = svc.status || {};
       svc.status.loadBalancer = { ingress: [{ ip: '203.0.113.10', hostname: '' }] };
       this._clearAnnotation(svc, 'openshiftgames.io/lb-pending');
-      this._recordEvent(svc, 'Normal', 'EnsuredLoadBalancer', 'Load balancer IP assigned from the MetalLB address pool');
+      this._recordEvent(
+        svc,
+        'Normal',
+        'EnsuredLoadBalancer',
+        'Load balancer IP assigned from the MetalLB address pool'
+      );
     }
     this._clearAnnotation(svc, INCIDENT_ANNOTATION);
     this._recordEvent(svc, 'Normal', 'Healed', 'Service has ready endpoints');
@@ -2504,7 +3023,9 @@ class IncidentEngine {
 
   _healRoute(incident, target, effect) {
     const route =
-      target && target.kind === 'Route' ? target : this._findResource('Route', incident.target, incident.namespace);
+      target && target.kind === 'Route'
+        ? target
+        : this._findResource('Route', incident.target, incident.namespace);
     if (!route) return { applied: false };
 
     const defaultHost = this._safe(
@@ -2517,19 +3038,26 @@ class IncidentEngine {
     if (effect === 'restore-tls') {
       route.spec = route.spec || {};
       route.spec.tls = { ...(incident.restoreState?.tls || {}), termination: 'edge' };
-      if (!route.spec.tls.certificate) route.spec.tls.certificate = '-----BEGIN CERTIFICATE-----\n[renewed]\n-----END CERTIFICATE-----';
-      if (!route.spec.tls.key) route.spec.tls.key = '-----BEGIN PRIVATE KEY-----\n[renewed]\n-----END PRIVATE KEY-----';
+      if (!route.spec.tls.certificate)
+        route.spec.tls.certificate =
+          '-----BEGIN CERTIFICATE-----\n[renewed]\n-----END CERTIFICATE-----';
+      if (!route.spec.tls.key)
+        route.spec.tls.key = '-----BEGIN PRIVATE KEY-----\n[renewed]\n-----END PRIVATE KEY-----';
       this._clearAnnotation(route, 'openshiftgames.io/tls-error');
     }
 
     // Heal the backing Service/Pods so admission stays valid for the controller.
-    const svc = this._safe(() => this.cluster.getRouteService?.(route)) || this._findResource('Service', route.spec?.to?.name, route.namespace);
+    const svc =
+      this._safe(() => this.cluster.getRouteService?.(route)) ||
+      this._findResource('Service', route.spec?.to?.name, route.namespace);
     if (svc) {
       if (typeof this.cluster?.getServiceEndpoints === 'function') {
         const endpoints = this._safe(() => this.cluster.getServiceEndpoints(svc)) || [];
         if (endpoints.length === 0) {
           const selector = svc.spec?.selector || {};
-          const pods = (this._safe(() => this.cluster?.getByKindAndNamespace('Pod', svc.namespace)) || []).filter((p) =>
+          const pods = (
+            this._safe(() => this.cluster?.getByKindAndNamespace('Pod', svc.namespace)) || []
+          ).filter((p) =>
             Object.entries(selector).every(([k, v]) => (p.metadata?.labels || {})[k] === v)
           );
           for (const pod of pods) this._healPodContainer(pod);
@@ -2556,7 +3084,12 @@ class IncidentEngine {
       },
     ];
     this._clearAnnotation(route, INCIDENT_ANNOTATION);
-    this._recordEvent(route, 'Normal', 'Admitted', `Route ${host} admitted by the default Ingress Controller`);
+    this._recordEvent(
+      route,
+      'Normal',
+      'Admitted',
+      `Route ${host} admitted by the default Ingress Controller`
+    );
     this._commit(route);
     return { applied: true, kind: 'route', target: route.name, host };
   }
@@ -2565,12 +3098,19 @@ class IncidentEngine {
     const build =
       target && target.kind === 'Build'
         ? target
-        : (this._safe(() => this.cluster?.getByKind('Build')) || []).find((b) => b.name === incident.target) ||
-          (this._safe(() => this.cluster?.getByKind('Build')) || [])[0];
+        : (this._safe(() => this.cluster?.getByKind('Build')) || []).find(
+            (b) => b.name === incident.target
+          ) || (this._safe(() => this.cluster?.getByKind('Build')) || [])[0];
     if (!build) {
       const bc = this._findResource('BuildConfig', incident.target, incident.namespace);
       if (bc) {
-        this._setCondition(bc, 'BuildFailed', 'False', 'BuildSucceeded', 'The latest build completed successfully');
+        this._setCondition(
+          bc,
+          'BuildFailed',
+          'False',
+          'BuildSucceeded',
+          'The latest build completed successfully'
+        );
         this._clearAnnotation(bc, INCIDENT_ANNOTATION);
         this._recordEvent(bc, 'Normal', 'BuildSucceeded', 'Latest build completed successfully');
         this._commit(bc);
@@ -2582,23 +3122,40 @@ class IncidentEngine {
     // Do not fabricate a Complete phase for a failed Build: a real retry starts
     // a NEW Build from the BuildConfig and lets it run (GAME-003).
     if (build.status?.phase === 'Failed' || build.status?.phase === 'Error') {
-      const bcName = build.spec?.buildConfig?.name
-        || (this._safe(() => this.cluster?.getByKind('BuildConfig')) || []).find(
-          (candidate) => candidate.namespace === build.namespace && build.metadata?.name?.startsWith(candidate.metadata?.name)
+      const bcName =
+        build.spec?.buildConfig?.name ||
+        (this._safe(() => this.cluster?.getByKind('BuildConfig')) || []).find(
+          (candidate) =>
+            candidate.namespace === build.namespace &&
+            build.metadata?.name?.startsWith(candidate.metadata?.name)
         )?.metadata?.name;
-      const buildConfig = bcName ? this._findResource('BuildConfig', bcName, build.namespace) : null;
+      const buildConfig = bcName
+        ? this._findResource('BuildConfig', bcName, build.namespace)
+        : null;
       let retried = null;
       if (buildConfig && typeof this.cluster?.startBuildFor === 'function') {
-        const result = this._safe(() => this.cluster.startBuildFor(buildConfig, { actor: 'kubeadmin', reason: 'Retry' }));
+        const result = this._safe(() =>
+          this.cluster.startBuildFor(buildConfig, { actor: 'kubeadmin', reason: 'Retry' })
+        );
         retried = result?.build || null;
       }
       this._clearAnnotation(build, INCIDENT_ANNOTATION);
       if (retried) {
-        this._recordEvent(build, 'Normal', 'Retried', `New build ${retried.metadata?.name || retried.name} started from ${bcName}`);
+        this._recordEvent(
+          build,
+          'Normal',
+          'Retried',
+          `New build ${retried.metadata?.name || retried.name} started from ${bcName}`
+        );
         this._recordEvent(retried, 'Normal', 'BuildStarted', 'Build retried after failure');
         this._commit(build);
         this._commit(retried);
-        return { applied: true, kind: 'build', target: build.name, retryBuild: retried.metadata?.name || retried.name };
+        return {
+          applied: true,
+          kind: 'build',
+          target: build.name,
+          retryBuild: retried.metadata?.name || retried.name,
+        };
       }
       // Fallback (no simulator build controller available): mark the failed
       // build as cancelled rather than pretending it succeeded.
@@ -2632,7 +3189,11 @@ class IncidentEngine {
       if (stream) this._ensureTag(stream, tagName);
     }
 
-    const bc = this._findResource('BuildConfig', build.spec?.buildConfig?.name || streamName, build.namespace);
+    const bc = this._findResource(
+      'BuildConfig',
+      build.spec?.buildConfig?.name || streamName,
+      build.namespace
+    );
     if (bc) {
       bc.status = bc.status || {};
       bc.status.lastVersion = Math.max(bc.status.lastVersion || 0, 1);
@@ -2640,8 +3201,12 @@ class IncidentEngine {
     }
 
     // Unstick deployments that referenced the tag.
-    for (const deploy of this._safe(() => this.cluster?.getByKindAndNamespace('Deployment', build.namespace)) || []) {
-      if (this._safe(() => JSON.stringify(deploy.spec?.template || {}).includes(streamName), false)) {
+    for (const deploy of this._safe(() =>
+      this.cluster?.getByKindAndNamespace('Deployment', build.namespace)
+    ) || []) {
+      if (
+        this._safe(() => JSON.stringify(deploy.spec?.template || {}).includes(streamName), false)
+      ) {
         this._healDeployment(incident, deploy);
       }
     }
@@ -2654,7 +3219,12 @@ class IncidentEngine {
       const streamName = String(incident.target || '').split(':')[0];
       stream =
         this._findResource('ImageStream', streamName, incident.namespace) ||
-        this._safe(() => this.cluster?.getImageStream?.(incident.namespace || this.gameEngine?.currentProject, streamName)) ||
+        this._safe(() =>
+          this.cluster?.getImageStream?.(
+            incident.namespace || this.gameEngine?.currentProject,
+            streamName
+          )
+        ) ||
         (this._safe(() => this.cluster?.getByKind('ImageStream')) || [])[0];
     }
     if (!stream) return { applied: false };
@@ -2666,18 +3236,29 @@ class IncidentEngine {
       this._commit(stream);
     } else if (typeof this.cluster?.updateImageStreamTag === 'function') {
       this._safe(() =>
-        this.cluster.updateImageStreamTag(stream.namespace || incident.namespace, stream.name, resolution.tag || 'latest')
+        this.cluster.updateImageStreamTag(
+          stream.namespace || incident.namespace,
+          stream.name,
+          resolution.tag || 'latest'
+        )
       );
     } else {
       this._ensureTag(stream, resolution.tag || 'latest');
     }
     this._clearAnnotation(stream, INCIDENT_ANNOTATION);
-    this._recordEvent(stream, 'Normal', 'TagRestored', 'ImageStreamTag restored from the internal registry');
+    this._recordEvent(
+      stream,
+      'Normal',
+      'TagRestored',
+      'ImageStreamTag restored from the internal registry'
+    );
     this._commit(stream);
 
     for (const deploy of this._safe(() => this.cluster?.getByKind('Deployment')) || []) {
       if ((deploy.namespace || '') === (stream.namespace || '')) {
-        if (this._safe(() => JSON.stringify(deploy.spec?.template || {}).includes(stream.name), false)) {
+        if (
+          this._safe(() => JSON.stringify(deploy.spec?.template || {}).includes(stream.name), false)
+        ) {
           this._healDeployment(incident, deploy);
         }
       }
@@ -2686,14 +3267,23 @@ class IncidentEngine {
   }
 
   _healNode(incident, target, effect) {
-    const node = target && target.kind === 'Node' ? target : this._findResource('Node', incident.target, '') || (this._safe(() => this.cluster?.getByKind('Node')) || [])[0];
+    const node =
+      target && target.kind === 'Node'
+        ? target
+        : this._findResource('Node', incident.target, '') ||
+          (this._safe(() => this.cluster?.getByKind('Node')) || [])[0];
     if (!node) return { applied: false };
 
     if (incident.restoreState?.memory && node.spec) node.spec.memory = incident.restoreState.memory;
     this._setPhase(node, 'Running');
     if (node.spec) node.spec.unschedulable = false;
     this._setCondition(node, 'Ready', 'True', 'KubeletReady', 'kubelet is posting ready status');
-    for (const pressure of ['MemoryPressure', 'DiskPressure', 'PIDPressure', 'NetworkUnavailable']) {
+    for (const pressure of [
+      'MemoryPressure',
+      'DiskPressure',
+      'PIDPressure',
+      'NetworkUnavailable',
+    ]) {
       this._setCondition(node, pressure, 'False', 'KubeletHasSufficientResources', '');
     }
     this._clearAnnotation(node, INCIDENT_ANNOTATION);
@@ -2717,7 +3307,9 @@ class IncidentEngine {
       target && target.kind === 'NetworkPolicy'
         ? target
         : this._findResource('NetworkPolicy', incident.target, incident.namespace) ||
-          (this._safe(() => this.cluster?.getByKindAndNamespace('NetworkPolicy', incident.namespace)) || [])[0];
+          (this._safe(() =>
+            this.cluster?.getByKindAndNamespace('NetworkPolicy', incident.namespace)
+          ) || [])[0];
     if (!policy) return { applied: false };
 
     if (incident.restoreState?.ingress) {
@@ -2732,24 +3324,43 @@ class IncidentEngine {
       policy.spec.ingress = [{ from: [{ podSelector: {} }] }];
       policy.spec.egress = [
         {
-          to: [{ namespaceSelector: { matchLabels: { 'kubernetes.io/metadata.name': 'openshift-dns' } } }],
-          ports: [{ protocol: 'UDP', port: 5353 }, { protocol: 'TCP', port: 5353 }],
+          to: [
+            {
+              namespaceSelector: {
+                matchLabels: { 'kubernetes.io/metadata.name': 'openshift-dns' },
+              },
+            },
+          ],
+          ports: [
+            { protocol: 'UDP', port: 5353 },
+            { protocol: 'TCP', port: 5353 },
+          ],
         },
         { to: [{ podSelector: {} }] },
       ];
     }
     this._clearAnnotation(policy, INCIDENT_ANNOTATION);
-    this._recordEvent(policy, 'Normal', 'TrafficAllowed', 'NetworkPolicy allow rules restored/added');
+    this._recordEvent(
+      policy,
+      'Normal',
+      'TrafficAllowed',
+      'NetworkPolicy allow rules restored/added'
+    );
     this._commit(policy);
     if (typeof policy.updateAffectedPods === 'function') {
-      this._safe(() => policy.updateAffectedPods(this.cluster.getByKindAndNamespace('Pod', policy.namespace) || []));
+      this._safe(() =>
+        policy.updateAffectedPods(this.cluster.getByKindAndNamespace('Pod', policy.namespace) || [])
+      );
     }
     return { applied: true, kind: 'networkpolicy', target: policy.name };
   }
 
   _healConfigObject(incident, target, kind) {
     const resourceKind = kind === 'secret' ? 'Secret' : 'ConfigMap';
-    let resource = target && target.kind === resourceKind ? target : this._findResource(resourceKind, incident.target, incident.namespace);
+    let resource =
+      target && target.kind === resourceKind
+        ? target
+        : this._findResource(resourceKind, incident.target, incident.namespace);
     if (!resource && incident.restoreState?.uid) {
       resource = this._safe(() => this.cluster?.getResource?.(incident.restoreState.uid));
     }
@@ -2757,7 +3368,8 @@ class IncidentEngine {
       // Restore removed data (ConfigMapMissing/SecretMissing onset clears it).
       // `data` is a read-only getter on the rich ConfigMap/Secret classes: write spec.data.
       resource.spec = resource.spec || {};
-      const currentData = resource.spec.data && typeof resource.spec.data === 'object' ? resource.spec.data : {};
+      const currentData =
+        resource.spec.data && typeof resource.spec.data === 'object' ? resource.spec.data : {};
       const restoredData =
         incident.restoreState?.data && Object.keys(incident.restoreState.data).length > 0
           ? JSON.parse(JSON.stringify(incident.restoreState.data))
@@ -2770,15 +3382,23 @@ class IncidentEngine {
       }
       resource.spec.data = restoredData;
       this._clearAnnotation(resource, INCIDENT_ANNOTATION);
-      this._recordEvent(resource, 'Normal', 'Healed', `${resourceKind} restored with the required keys`);
+      this._recordEvent(
+        resource,
+        'Normal',
+        'Healed',
+        `${resourceKind} restored with the required keys`
+      );
       this._commit(resource);
     }
 
     // Heal pods waiting on the restored object.
-    const pods = this._safe(() => this.cluster?.getByKindAndNamespace('Pod', incident.namespace)) || [];
+    const pods =
+      this._safe(() => this.cluster?.getByKindAndNamespace('Pod', incident.namespace)) || [];
     let healedPods = 0;
     for (const pod of pods) {
-      const waiting = pod.status?.containerStatuses?.some((cs) => cs.state?.waiting?.reason === 'CreateContainerConfigError');
+      const waiting = pod.status?.containerStatuses?.some(
+        (cs) => cs.state?.waiting?.reason === 'CreateContainerConfigError'
+      );
       if (waiting || pod.metadata?.annotations?.[INCIDENT_ANNOTATION] === incident.name) {
         this._healPodContainer(pod);
         healedPods++;
@@ -2803,14 +3423,22 @@ class IncidentEngine {
       // Guarantee the restored/bumped limits are strictly above current usage.
       restored.pods = String(Math.max(Number(restored.pods ?? 0), (usage.pods || 0) + 5));
       if (restored['requests.cpu'] !== undefined) {
-        restored['requests.cpu'] = `${Math.max(this._parseCpuMillis(restored['requests.cpu']), Math.ceil(usage['requests.cpu'] || 0) + 1000)}m`;
+        restored['requests.cpu'] =
+          `${Math.max(this._parseCpuMillis(restored['requests.cpu']), Math.ceil(usage['requests.cpu'] || 0) + 1000)}m`;
       }
       if (restored['requests.memory'] !== undefined) {
         const current = this._parseMemoryMi(restored['requests.memory']);
-        restored['requests.memory'] = `${Math.max(current, Math.ceil(usage['requests.memory'] || 0) + 512)}Mi`;
+        restored['requests.memory'] =
+          `${Math.max(current, Math.ceil(usage['requests.memory'] || 0) + 512)}Mi`;
       }
       quota.spec = { ...(quota.spec || {}), hard: restored };
-      this._setCondition(quota, 'Exceeded', 'False', 'WithinQuota', 'Project usage is within the quota');
+      this._setCondition(
+        quota,
+        'Exceeded',
+        'False',
+        'WithinQuota',
+        'Project usage is within the quota'
+      );
       this._clearAnnotation(quota, INCIDENT_ANNOTATION);
       this._recordEvent(quota, 'Normal', 'QuotaUpdated', 'Project quota limits restored');
       this._commit(quota);
@@ -2819,7 +3447,10 @@ class IncidentEngine {
 
     let retried = 0;
     for (const pod of this._safe(() => this.cluster?.getByKindAndNamespace('Pod', ns)) || []) {
-      if (pod.status?.phase === 'Pending' || pod.metadata?.annotations?.[INCIDENT_ANNOTATION] === incident.name) {
+      if (
+        pod.status?.phase === 'Pending' ||
+        pod.metadata?.annotations?.[INCIDENT_ANNOTATION] === incident.name
+      ) {
         this._setPhase(pod, 'Pending');
         this._clearAnnotation(pod, INCIDENT_ANNOTATION);
         this._commit(pod);
@@ -2850,7 +3481,9 @@ class IncidentEngine {
       target && target.kind === 'LimitRange'
         ? target
         : this._findResource('LimitRange', incident.target, incident.namespace) ||
-          (this._safe(() => this.cluster?.getByKindAndNamespace('LimitRange', incident.namespace)) || [])[0];
+          (this._safe(() =>
+            this.cluster?.getByKindAndNamespace('LimitRange', incident.namespace)
+          ) || [])[0];
     if (!lr) return { applied: false };
 
     if (incident.restoreState?.limits) {
@@ -2869,7 +3502,12 @@ class IncidentEngine {
       ];
     }
     this._clearAnnotation(lr, INCIDENT_ANNOTATION);
-    this._recordEvent(lr, 'Normal', 'LimitRangeUpdated', 'LimitRange bounds restored to a workable range');
+    this._recordEvent(
+      lr,
+      'Normal',
+      'LimitRangeUpdated',
+      'LimitRange bounds restored to a workable range'
+    );
     this._commit(lr);
     return { applied: true, kind: 'limitrange', target: lr.name };
   }
@@ -2882,14 +3520,27 @@ class IncidentEngine {
           (this._safe(() => this.cluster?.getByKind('ClusterResourceQuota')) || [])[0];
     if (!crq) return { applied: false };
     crq.status = crq.status || {};
-    const restored = incident.restoreState?.status ? JSON.parse(JSON.stringify(incident.restoreState.status)) : null;
+    const restored = incident.restoreState?.status
+      ? JSON.parse(JSON.stringify(incident.restoreState.status))
+      : null;
     crq.status = { ...crq.status, ...(restored || {}) };
-    crq.status.total = crq.status.total || { hard: crq.spec?.quota?.hard || { pods: '50' }, used: { pods: 0 } };
+    crq.status.total = crq.status.total || {
+      hard: crq.spec?.quota?.hard || { pods: '50' },
+      used: { pods: 0 },
+    };
     const hardPods = Number(crq.status.total.hard?.pods ?? crq.spec?.quota?.hard?.pods ?? 50);
     const usedPods = Number(crq.status.total.used?.pods ?? 0);
-    crq.status.total.used = { ...(crq.status.total.used || {}), pods: Math.max(0, Math.min(usedPods, hardPods - 1)) };
+    crq.status.total.used = {
+      ...(crq.status.total.used || {}),
+      pods: Math.max(0, Math.min(usedPods, hardPods - 1)),
+    };
     this._clearAnnotation(crq, INCIDENT_ANNOTATION);
-    this._recordEvent(crq, 'Normal', 'QuotaUpdated', 'ClusterResourceQuota usage is back within limits');
+    this._recordEvent(
+      crq,
+      'Normal',
+      'QuotaUpdated',
+      'ClusterResourceQuota usage is back within limits'
+    );
     this._commit(crq);
     return { applied: true, kind: 'clusterquota', target: crq.name };
   }
@@ -2923,7 +3574,13 @@ class IncidentEngine {
     job.status.phase = 'Complete';
     job.status.succeeded = Math.max(job.status.succeeded || 0, 1);
     job.status.conditions = [
-      { type: 'Complete', status: 'True', reason: 'JobCompleted', message: 'Job completed successfully', lastTransitionTime: nowIso() },
+      {
+        type: 'Complete',
+        status: 'True',
+        reason: 'JobCompleted',
+        message: 'Job completed successfully',
+        lastTransitionTime: nowIso(),
+      },
     ];
     this._setCondition(job, 'Complete', 'True', 'JobCompleted', 'Job completed successfully');
     this._setCondition(job, 'Failed', 'False', 'JobCompleted', '');
@@ -2941,7 +3598,13 @@ class IncidentEngine {
           (this._safe(() => this.cluster?.getByKind('HorizontalPodAutoscaler')) || [])[0];
     if (!hpa) return { applied: false };
     this._setCondition(hpa, 'AbleToScale', 'True', 'ReadyForNewScale', 'the HPA is able to scale');
-    this._setCondition(hpa, 'ScalingActive', 'True', 'ValidMetricFound', 'the HPA was able to successfully calculate a replica count');
+    this._setCondition(
+      hpa,
+      'ScalingActive',
+      'True',
+      'ValidMetricFound',
+      'the HPA was able to successfully calculate a replica count'
+    );
     hpa.status = hpa.status || {};
     hpa.status.currentReplicas = hpa.status.currentReplicas ?? hpa.status.desiredReplicas ?? 1;
     hpa.status.desiredReplicas = hpa.status.currentReplicas;
@@ -2978,7 +3641,10 @@ class IncidentEngine {
         },
         status: { phase: 'Available' },
       };
-      pv = typeof this.cluster?.addResource === 'function' ? this._safe(() => this.cluster.addResource(obj)) : null;
+      pv =
+        typeof this.cluster?.addResource === 'function'
+          ? this._safe(() => this.cluster.addResource(obj))
+          : null;
       if (!pv) {
         const r = new ResourceBase('PersistentVolume', 'v1', name, '');
         r.spec = obj.spec;
@@ -2992,7 +3658,12 @@ class IncidentEngine {
     pvc.spec.volumeName = pv.name;
     this._setPhase(pvc, 'Bound');
     pv.spec = pv.spec || {};
-    pv.spec.claimRef = { kind: 'PersistentVolumeClaim', name: pvc.name, namespace: pvc.namespace, uid: pvc.uid };
+    pv.spec.claimRef = {
+      kind: 'PersistentVolumeClaim',
+      name: pvc.name,
+      namespace: pvc.namespace,
+      uid: pvc.uid,
+    };
     pv.status = { ...(pv.status || {}), phase: 'Bound' };
     this._commit(pv);
     this._clearAnnotation(pvc, INCIDENT_ANNOTATION);
@@ -3008,7 +3679,9 @@ class IncidentEngine {
       (this._safe(() => this.cluster?.getByKind('Subscription')) || [])[0];
     if (!sub) return { applied: false };
 
-    const csvName = resolution.csvName || `${String(sub.spec?.name || sub.name || 'operator').split('.')[0]}.v1.0.0`;
+    const csvName =
+      resolution.csvName ||
+      `${String(sub.spec?.name || sub.name || 'operator').split('.')[0]}.v1.0.0`;
     sub.status = sub.status || {};
     sub.status.phase = 'Succeeded';
     sub.status.installedCSV = csvName;
@@ -3039,7 +3712,8 @@ class IncidentEngine {
     // Heal a matching ClusterOperator (e.g. the metallb operator).
     const operatorName = String(incident.target || '').toLowerCase();
     const co = (this._safe(() => this.cluster.getClusterOperators?.()) || []).find(
-      (op) => operatorName.includes(op.name) || (sub.spec?.name || '').toLowerCase().includes(op.name)
+      (op) =>
+        operatorName.includes(op.name) || (sub.spec?.name || '').toLowerCase().includes(op.name)
     );
     if (co) {
       this._setCondition(co, 'Available', 'True', 'Healthy', '');
@@ -3055,7 +3729,9 @@ class IncidentEngine {
       (target && target.kind === 'ClusterOperator' ? target : null) ||
       this._findResource('ClusterOperator', incident.target, '') ||
       this._safe(() => this.cluster.getClusterOperator?.('ingress')) ||
-      (this._safe(() => this.cluster?.getByKind('ClusterOperator')) || []).find((c) => c.name === 'ingress');
+      (this._safe(() => this.cluster?.getByKind('ClusterOperator')) || []).find(
+        (c) => c.name === 'ingress'
+      );
     if (!co) return { applied: false };
 
     if (typeof this.cluster?.setClusterOperatorState === 'function') {
@@ -3099,7 +3775,9 @@ class IncidentEngine {
     if (oauth) {
       // Make sure an HTPasswd identity provider is configured.
       oauth.spec = oauth.spec || {};
-      const providers = Array.isArray(oauth.spec.identityProviders) ? oauth.spec.identityProviders : [];
+      const providers = Array.isArray(oauth.spec.identityProviders)
+        ? oauth.spec.identityProviders
+        : [];
       if (!providers.some((provider) => provider.type === 'HTPasswd')) {
         oauth.spec.identityProviders = [
           ...providers,
@@ -3111,7 +3789,13 @@ class IncidentEngine {
           },
         ];
       }
-      this._setCondition(oauth, 'Available', 'True', 'OAuthServerReady', 'The OAuth server is ready');
+      this._setCondition(
+        oauth,
+        'Available',
+        'True',
+        'OAuthServerReady',
+        'The OAuth server is ready'
+      );
       this._clearAnnotation(oauth, INCIDENT_ANNOTATION);
       this._recordEvent(oauth, 'Normal', 'Healed', 'OAuth provider is ready; users can log in');
       this._commit(oauth);
@@ -3120,18 +3804,25 @@ class IncidentEngine {
     // Restore the htpasswd Secret content removed by onset damage.
     const savedSecret = incident.restoreState?.oauthSecret;
     if (savedSecret) {
-      const secret = (savedSecret.uid && this._safe(() => this.cluster.getResource?.(savedSecret.uid)))
-        || this._findResource('Secret', savedSecret.name || 'htpasswd-secret', 'openshift-config');
+      const secret =
+        (savedSecret.uid && this._safe(() => this.cluster.getResource?.(savedSecret.uid))) ||
+        this._findResource('Secret', savedSecret.name || 'htpasswd-secret', 'openshift-config');
       if (secret) {
         secret.spec = secret.spec || {};
         secret.spec.data = JSON.parse(JSON.stringify(savedSecret.data || {}));
         if (!secret.spec.data.htpasswd) {
-          secret.spec.data.htpasswd = (typeof Buffer !== 'undefined')
-            ? Buffer.from('placeholder-user:{SHA}placeholder\n').toString('base64')
-            : 'cGxhY2Vob2xkZXI=';
+          secret.spec.data.htpasswd =
+            typeof Buffer !== 'undefined'
+              ? Buffer.from('placeholder-user:{SHA}placeholder\n').toString('base64')
+              : 'cGxhY2Vob2xkZXI=';
         }
         this._clearAnnotation(secret, INCIDENT_ANNOTATION);
-        this._recordEvent(secret, 'Normal', 'HTPasswdRestored', 'htpasswd key restored from the identity-provider requirement');
+        this._recordEvent(
+          secret,
+          'Normal',
+          'HTPasswdRestored',
+          'htpasswd key restored from the identity-provider requirement'
+        );
         this._commit(secret);
       }
     }
@@ -3141,7 +3832,8 @@ class IncidentEngine {
       if (typeof this.gameEngine._syncAuthProviderFromOAuth === 'function') {
         this._safe(() => this.gameEngine._syncAuthProviderFromOAuth({ silent: true }));
       }
-      const provider = this.gameEngine.authProvider || this._safe(() => this.cluster.getAuthProviderConfig?.());
+      const provider =
+        this.gameEngine.authProvider || this._safe(() => this.cluster.getAuthProviderConfig?.());
       if (provider) {
         this.gameEngine.authProvider = { ...provider, ready: true };
       } else {
@@ -3168,11 +3860,20 @@ class IncidentEngine {
     const ns = incident.namespace || this.gameEngine?.currentProject || 'default';
     let sa = target && target.kind === 'ServiceAccount' ? target : null;
     if (!sa) sa = this._findResource('ServiceAccount', incident.target, ns);
-    if (!sa) sa = (this._safe(() => this.cluster?.getByKindAndNamespace('ServiceAccount', ns)) || [])[0] || null;
+    if (!sa)
+      sa =
+        (this._safe(() => this.cluster?.getByKindAndNamespace('ServiceAccount', ns)) || [])[0] ||
+        null;
 
     const addObject = (obj) => {
-      if (typeof this.cluster?.addResource === 'function') return this._safe(() => this.cluster.addResource(obj));
-      const rb = new ResourceBase(obj.kind || 'RoleBinding', 'rbac.authorization.k8s.io/v1', obj.metadata.name, obj.metadata.namespace);
+      if (typeof this.cluster?.addResource === 'function')
+        return this._safe(() => this.cluster.addResource(obj));
+      const rb = new ResourceBase(
+        obj.kind || 'RoleBinding',
+        'rbac.authorization.k8s.io/v1',
+        obj.metadata.name,
+        obj.metadata.namespace
+      );
       rb.spec = obj.spec;
       rb.status = obj.status || { phase: 'Active' };
       return this._safe(() => this.cluster.add(rb));
@@ -3195,9 +3896,12 @@ class IncidentEngine {
 
     // Ensure a view binding exists for the ServiceAccount.
     if (sa) {
-      const bindings = this._safe(() => this.cluster?.getByKindAndNamespace('RoleBinding', ns)) || [];
+      const bindings =
+        this._safe(() => this.cluster?.getByKindAndNamespace('RoleBinding', ns)) || [];
       const already = bindings.some((rb) =>
-        (rb.spec?.subjects || []).some((sub) => sub.kind === 'ServiceAccount' && sub.name === sa.name)
+        (rb.spec?.subjects || []).some(
+          (sub) => sub.kind === 'ServiceAccount' && sub.name === sa.name
+        )
       );
       if (!already) {
         addObject({
@@ -3205,14 +3909,23 @@ class IncidentEngine {
           kind: 'RoleBinding',
           metadata: { name: `${sa.name}-view`, namespace: ns },
           spec: {
-            roleRef: { apiGroup: 'rbac.authorization.k8s.io', kind: 'ClusterRole', name: resolution?.role || 'view' },
+            roleRef: {
+              apiGroup: 'rbac.authorization.k8s.io',
+              kind: 'ClusterRole',
+              name: resolution?.role || 'view',
+            },
             subjects: [{ kind: 'ServiceAccount', name: sa.name, namespace: ns }],
           },
           status: { phase: 'Active' },
         });
       }
       this._clearAnnotation(sa, INCIDENT_ANNOTATION);
-      this._recordEvent(sa, 'Normal', 'AccessGranted', `view role bound to service account ${sa.name}`);
+      this._recordEvent(
+        sa,
+        'Normal',
+        'AccessGranted',
+        `view role bound to service account ${sa.name}`
+      );
       this._commit(sa);
     }
     return { applied: !!sa || removed.length > 0, kind: 'rbac', restoredBindings: removed.length };
@@ -3220,7 +3933,8 @@ class IncidentEngine {
 
   _healClusterWide(incident, target, effect) {
     if (effect === 'dns') {
-      const dnsPods = this._safe(() => this.cluster?.getByKindAndNamespace('Pod', 'openshift-dns')) || [];
+      const dnsPods =
+        this._safe(() => this.cluster?.getByKindAndNamespace('Pod', 'openshift-dns')) || [];
       for (const pod of dnsPods) this._healPodContainer(pod);
       if (target && target.kind === 'Pod') this._healPodContainer(target);
       const co = this._safe(() => this.cluster.getClusterOperator?.('dns'));
@@ -3245,7 +3959,13 @@ class IncidentEngine {
       for (const cond of target.status.conditions) {
         if (cond.status !== 'True') continue;
         if (['Degraded', 'Available', 'Ready', 'Admitted'].includes(cond.type)) {
-          this._setCondition(target, cond.type, cond.type === 'Degraded' ? 'False' : 'True', 'Healed', '');
+          this._setCondition(
+            target,
+            cond.type,
+            cond.type === 'Degraded' ? 'False' : 'True',
+            'Healed',
+            ''
+          );
         }
       }
     }
@@ -3261,14 +3981,16 @@ class IncidentEngine {
     const namespace = incident.namespace || this.gameEngine?.currentProject || 'default';
     const saCandidates = saName
       ? [this._findResource('ServiceAccount', saName, namespace)]
-      : (this._safe(() => state.getByKindAndNamespace('ServiceAccount', namespace)) || []);
+      : this._safe(() => state.getByKindAndNamespace('ServiceAccount', namespace)) || [];
     const sa = saCandidates.find(Boolean) || null;
     const subject = sa
       ? { kind: 'ServiceAccount', name: sa.name, namespace: sa.namespace || namespace }
       : { kind: 'User', name: incident.target };
 
     if (typeof state.grantSCC === 'function') {
-      const result = this._safe(() => state.grantSCC(sccName, subject, { kind: subject.kind, namespace: subject.namespace }));
+      const result = this._safe(() =>
+        state.grantSCC(sccName, subject, { kind: subject.kind, namespace: subject.namespace })
+      );
       if (result && result.success) {
         this.emit('scc:granted', {
           scc: sccName,
@@ -3284,9 +4006,11 @@ class IncidentEngine {
     }
 
     // Fallback for older ClusterState: mutate the SCC users list directly.
-    const scc = (this._safe(() => state.getSCC?.(sccName))) || this._findResource('SecurityContextConstraints', sccName, '');
+    const scc =
+      this._safe(() => state.getSCC?.(sccName)) ||
+      this._findResource('SecurityContextConstraints', sccName, '');
     if (!scc) return false;
-    const list = (scc.spec?.users) || scc.users || [];
+    const list = scc.spec?.users || scc.users || [];
     const entry = sa ? `system:serviceaccount:${subject.namespace}:${sa.name}` : subject.name;
     if (!list.includes(entry)) {
       list.push(entry);
@@ -3309,7 +4033,9 @@ class IncidentEngine {
     // Investigation progress is driven by what the learner actually types:
     // `oc logs`/`oc describe` on any Pod owned by the incident target advances
     // the incident's investigation steps without the panel (GAME-004).
-    const offCommand = this._safe(() => engine.on('command:executed', (payload) => this._onCommandExecuted(payload)));
+    const offCommand = this._safe(() =>
+      engine.on('command:executed', (payload) => this._onCommandExecuted(payload))
+    );
     if (typeof offCommand === 'function') this._clusterUnsubscribers.push(offCommand);
   }
 
@@ -3352,7 +4078,24 @@ class IncidentEngine {
       const [kind, ...rest] = first.split('/');
       return { kind: kind.toLowerCase(), name: rest.join('/') || tokens[1] || '' };
     }
-    const kindPrefixes = ['pod', 'pods', 'deploy', 'deployments', 'deployment', 'rs', 'replicaset', 'ds', 'daemonset', 'sts', 'statefulset', 'job', 'jobs', 'bc', 'buildconfig', 'build'];
+    const kindPrefixes = [
+      'pod',
+      'pods',
+      'deploy',
+      'deployments',
+      'deployment',
+      'rs',
+      'replicaset',
+      'ds',
+      'daemonset',
+      'sts',
+      'statefulset',
+      'job',
+      'jobs',
+      'bc',
+      'buildconfig',
+      'build',
+    ];
     if (kindPrefixes.includes(first.toLowerCase()) && tokens[1]) {
       return { kind: first.toLowerCase(), name: tokens[1] };
     }
@@ -3366,10 +4109,22 @@ class IncidentEngine {
       [incident.target, target?.name, target?.metadata?.name].filter(Boolean).map(String)
     );
     const podNames = new Set(
-      this._workloadPods(target).map((pod) => pod.metadata?.name || pod.name).filter(Boolean)
+      this._workloadPods(target)
+        .map((pod) => pod.metadata?.name || pod.name)
+        .filter(Boolean)
     );
     if (incident.targetPod) podNames.add(incident.targetPod);
-    const workloadKinds = new Set(['deploy', 'deployments', 'deployment', 'rs', 'replicaset', 'ds', 'daemonset', 'sts', 'statefulset']);
+    const workloadKinds = new Set([
+      'deploy',
+      'deployments',
+      'deployment',
+      'rs',
+      'replicaset',
+      'ds',
+      'daemonset',
+      'sts',
+      'statefulset',
+    ]);
     if (workloadKinds.has(ref.kind)) {
       return workloadNames.has(ref.name);
     }
@@ -3396,9 +4151,7 @@ class IncidentEngine {
       if (wantsLogs) return command.includes('logs');
       return command.includes('describe') || command.includes('get pod');
     });
-    const index = candidate >= 0
-      ? candidate
-      : steps.findIndex((step) => !step.completed);
+    const index = candidate >= 0 ? candidate : steps.findIndex((step) => !step.completed);
     if (index < 0) return;
     incident.startInvestigation();
     this.completeStep(incident.id, index);
@@ -3439,7 +4192,10 @@ class IncidentEngine {
       // recover on its own here, so treat a SEMANTIC container change since
       // onset as the canonical remediation (GAME-006).
       if (!STATE_RESOLVABLE.has(incident.name) && incident.baseline?.workload) {
-        const healedByFix = this._safe(() => this._healPodIncidentFromWorkloadChange(incident, id), false);
+        const healedByFix = this._safe(
+          () => this._healPodIncidentFromWorkloadChange(incident, id),
+          false
+        );
         if (healedByFix) continue;
         // Not fixed yet: the controller may have recreated Pods (e.g. after
         // `oc delete pod`). Re-inject the same damage on healthy replacements so
@@ -3491,8 +4247,10 @@ class IncidentEngine {
     // healthy (otherwise this safety net would undo the fix).
     const base = incident.baseline?.workload;
     if (base) {
-      const currentContainers = this._safe(() => this._containerSemanticSignature(target), '') || '';
-      const currentTemplate = this._safe(() => JSON.stringify(target.spec?.template || {}), '') || '';
+      const currentContainers =
+        this._safe(() => this._containerSemanticSignature(target), '') || '';
+      const currentTemplate =
+        this._safe(() => JSON.stringify(target.spec?.template || {}), '') || '';
       const fixed = base.containers
         ? base.containers !== currentContainers
         : base.template !== currentTemplate;
@@ -3501,8 +4259,12 @@ class IncidentEngine {
     const pods = this._workloadPods(target);
     if (pods.length === 0) return false;
     const podHealthy = (pod) =>
-      !!pod && pod.status?.phase === 'Running' && (pod.isConditionTrue ? pod.isConditionTrue('Ready') : true);
-    const fresh = pods.filter((pod) => podHealthy(pod) && !pod.metadata?.annotations?.[INCIDENT_ANNOTATION]);
+      !!pod &&
+      pod.status?.phase === 'Running' &&
+      (pod.isConditionTrue ? pod.isConditionTrue('Ready') : true);
+    const fresh = pods.filter(
+      (pod) => podHealthy(pod) && !pod.metadata?.annotations?.[INCIDENT_ANNOTATION]
+    );
     if (fresh.length === 0) return false;
     incident._redamaging = true;
     try {
@@ -3542,11 +4304,11 @@ class IncidentEngine {
       'ReadinessProbeFailure',
       'LivenessProbeFailure',
     ]);
-    const semanticChanged =
-      Boolean(base.containers)
-        ? base.containers !== currentContainers
-        : currentTemplate !== base.template;
-    const templateChanged = currentTemplate !== base.template || currentGeneration > base.generation;
+    const semanticChanged = Boolean(base.containers)
+      ? base.containers !== currentContainers
+      : currentTemplate !== base.template;
+    const templateChanged =
+      currentTemplate !== base.template || currentGeneration > base.generation;
     const changed = semanticOnly.has(incident.name) ? semanticChanged : templateChanged;
     if (!changed) return false;
 
@@ -3559,7 +4321,9 @@ class IncidentEngine {
       this._annotate(pod, HEAL_ANNOTATION, nowIso());
     }
     const healthy = this._workloadPods(target).every(
-      (pod) => pod.status?.phase === 'Running' && (pod.isConditionTrue ? pod.isConditionTrue('Ready') : true)
+      (pod) =>
+        pod.status?.phase === 'Running' &&
+        (pod.isConditionTrue ? pod.isConditionTrue('Ready') : true)
     );
     if (healthy) {
       this._recordEvent(
@@ -3586,7 +4350,9 @@ class IncidentEngine {
     // a player fixing the resource via the CLI would never auto-clear the card.
 
     const podHealthy = (pod) =>
-      !!pod && pod.status?.phase === 'Running' && (pod.isConditionTrue ? pod.isConditionTrue('Ready') : true);
+      !!pod &&
+      pod.status?.phase === 'Running' &&
+      (pod.isConditionTrue ? pod.isConditionTrue('Ready') : true);
 
     switch (incident.name) {
       case 'CrashLoopBackOff':
@@ -3599,7 +4365,8 @@ class IncidentEngine {
       case 'ReadinessProbeFailure':
       case 'LivenessProbeFailure':
       case 'PodStuckTerminating': {
-        const pods = incident.name === 'PodStuckTerminating' ? [target] : this._workloadPods(target);
+        const pods =
+          incident.name === 'PodStuckTerminating' ? [target] : this._workloadPods(target);
         if (pods.length === 0) return podHealthy(target);
         return pods.every(podHealthy);
       }
@@ -3612,7 +4379,10 @@ class IncidentEngine {
       case 'DeploymentStuckRollout': {
         if (target.kind !== 'Deployment') return false;
         const desired = target.spec?.replicas ?? 1;
-        return (target.status?.availableReplicas || 0) >= desired && this._isConditionTrue(target, 'Available');
+        return (
+          (target.status?.availableReplicas || 0) >= desired &&
+          this._isConditionTrue(target, 'Available')
+        );
       }
       case 'NodeNotReady':
         return target.kind === 'Node' && this._isConditionTrue(target, 'Ready');
@@ -3623,16 +4393,23 @@ class IncidentEngine {
       case 'RouteNotAdmitted':
       case 'RouteTLSCertificateError':
       case 'RouteHostConflict':
-        return target.kind === 'Route' && (typeof this.cluster?.isRouteAdmitted === 'function'
-          ? !!this._safe(() => this.cluster.isRouteAdmitted(target))
-          : (target.status?.ingress || []).some((i) => (i.conditions || []).some((c) => c.type === 'Admitted' && c.status === 'True')));
+        return (
+          target.kind === 'Route' &&
+          (typeof this.cluster?.isRouteAdmitted === 'function'
+            ? !!this._safe(() => this.cluster.isRouteAdmitted(target))
+            : (target.status?.ingress || []).some((i) =>
+                (i.conditions || []).some((c) => c.type === 'Admitted' && c.status === 'True')
+              ))
+        );
       case 'ServiceNoEndpoints': {
         if (target.kind !== 'Service') return false;
         if (typeof this.cluster?.getServiceEndpoints === 'function') {
           return (this._safe(() => this.cluster.getServiceEndpoints(target)) || []).length > 0;
         }
         const selector = target.spec?.selector || {};
-        const pods = (this._safe(() => this.cluster?.getByKindAndNamespace('Pod', target.namespace)) || []).filter((p) =>
+        const pods = (
+          this._safe(() => this.cluster?.getByKindAndNamespace('Pod', target.namespace)) || []
+        ).filter((p) =>
           Object.entries(selector).every(([k, v]) => (p.metadata?.labels || {})[k] === v)
         );
         return pods.some(podHealthy);
@@ -3645,13 +4422,19 @@ class IncidentEngine {
         // The learner fix on OpenShift is an egress policy allowing the
         // dns-default Pod port (5353) to the openshift-dns namespace — accept
         // that as remediation even before the DNS Pods are re-admitted.
-        const policies = this._safe(() => this.cluster?.getByKindAndNamespace('NetworkPolicy', incident.namespace)) || [];
+        const policies =
+          this._safe(() =>
+            this.cluster?.getByKindAndNamespace('NetworkPolicy', incident.namespace)
+          ) || [];
         const allowsDns = policies.some((policy) => {
           const rules = Array.isArray(policy.spec?.egress) ? policy.spec.egress : [];
-          return rules.some((rule) => (rule.ports || []).some((port) => Number(port?.port) === 5353));
+          return rules.some((rule) =>
+            (rule.ports || []).some((port) => Number(port?.port) === 5353)
+          );
         });
         if (allowsDns) return true;
-        const dnsPods = this._safe(() => this.cluster?.getByKindAndNamespace('Pod', 'openshift-dns')) || [];
+        const dnsPods =
+          this._safe(() => this.cluster?.getByKindAndNamespace('Pod', 'openshift-dns')) || [];
         if (dnsPods.length === 0) {
           const co = this._safe(() => this.cluster.getClusterOperator?.('dns'));
           return !!co && !this._isConditionTrue(co, 'Degraded');
@@ -3667,14 +4450,18 @@ class IncidentEngine {
         // workload, not the ServiceAccount). Any real RoleBinding/ClusterRoleBinding
         // for that SA (e.g. `oc adm policy add-role-to-user view -z default`)
         // repairs the denial — the panel is not the only exit.
-        let subject = incident.rbacSubject
-          || (target.kind === 'ServiceAccount' ? { kind: 'ServiceAccount', name: target.name, namespace: target.namespace } : null);
+        let subject =
+          incident.rbacSubject ||
+          (target.kind === 'ServiceAccount'
+            ? { kind: 'ServiceAccount', name: target.name, namespace: target.namespace }
+            : null);
         if (!subject?.name) {
           // Derive from the workload's pod template / running Pods (default SA
           // when nothing is explicit) so older incidents still detect repairs.
           const podSpec = target.kind === 'Pod' ? target.spec : target.spec?.template?.spec;
           let saName = podSpec?.serviceAccountName || podSpec?.serviceAccount || '';
-          let saNamespace = incident.namespace || target.namespace || target.metadata?.namespace || '';
+          let saNamespace =
+            incident.namespace || target.namespace || target.metadata?.namespace || '';
           if (!saName) {
             const pods = target.kind === 'Pod' ? [target] : this._workloadPods(target);
             saName = pods[0]?.spec?.serviceAccountName || 'default';
@@ -3683,25 +4470,28 @@ class IncidentEngine {
         }
         const namespace = subject.namespace || incident.namespace;
         const bindings = [
-          ...(this._safe(() => this.cluster?.getByKindAndNamespace('RoleBinding', namespace)) || []),
+          ...(this._safe(() => this.cluster?.getByKindAndNamespace('RoleBinding', namespace)) ||
+            []),
           ...(this._safe(() => this.cluster?.getByKind('ClusterRoleBinding')) || []),
         ];
         return bindings.some((binding) => {
           const subjects = binding.spec?.subjects || binding.subjects || [];
           return subjects.some(
             (entry) =>
-              entry?.kind === 'ServiceAccount'
-              && entry.name === subject.name
-              && (!entry.namespace || entry.namespace === namespace)
+              entry?.kind === 'ServiceAccount' &&
+              entry.name === subject.name &&
+              (!entry.namespace || entry.namespace === namespace)
           );
         });
       }
       case 'HTPasswdAuthFailure': {
         // Provider must be ready AND the referenced htpasswd Secret must
         // actually contain the `htpasswd` key; an OAuth rollout alone is not a fix.
-        const provider = this.gameEngine?.authProvider || this._safe(() => this.cluster.getAuthProviderConfig?.());
+        const provider =
+          this.gameEngine?.authProvider || this._safe(() => this.cluster.getAuthProviderConfig?.());
         if (!provider?.ready) return false;
-        const secretName = provider.secretName || provider.htpasswd?.fileData?.name || 'htpasswd-secret';
+        const secretName =
+          provider.secretName || provider.htpasswd?.fileData?.name || 'htpasswd-secret';
         const secret = this._findResource('Secret', secretName, 'openshift-config');
         if (!secret) return false;
         const data = secret.spec?.data || secret.data || {};
@@ -3709,7 +4499,9 @@ class IncidentEngine {
         const oauth = this._safe(() => this.cluster.getOAuth?.());
         if (oauth && this._isConditionTrue(oauth, 'Available') === false) {
           const conditions = oauth.status?.conditions || [];
-          const unavailable = conditions.some((c) => c.type === 'Available' && c.status === 'False');
+          const unavailable = conditions.some(
+            (c) => c.type === 'Available' && c.status === 'False'
+          );
           if (unavailable) return false;
         }
         return true;
@@ -3733,7 +4525,10 @@ class IncidentEngine {
         // or a patch that replaces the Job. Resolve when a Job with the target
         // name completes after the damaged object was replaced/changed, keeping
         // the panel from being the only exit.
-        const job = target.kind === 'Job' ? target : this._findResource('Job', incident.target, incident.namespace);
+        const job =
+          target.kind === 'Job'
+            ? target
+            : this._findResource('Job', incident.target, incident.namespace);
         if (!job) return false;
         const phase = job.status?.phase;
         if (phase === 'Complete' || phase === 'Succeeded') return true;
@@ -3741,8 +4536,9 @@ class IncidentEngine {
         const recreated = restore.uid && job.uid && job.uid !== restore.uid;
         if (recreated) return phase !== 'Failed';
         const specChanged =
-          restore.activeDeadlineSeconds !== (job.spec?.activeDeadlineSeconds ?? null)
-          || (restore.containers && restore.containers !== this._safe(() => this._containerSemanticSignature(job), ''));
+          restore.activeDeadlineSeconds !== (job.spec?.activeDeadlineSeconds ?? null) ||
+          (restore.containers &&
+            restore.containers !== this._safe(() => this._containerSemanticSignature(job), ''));
         return specChanged && phase !== 'Failed';
       }
       case 'CronJobMissedSchedule':
@@ -3760,17 +4556,17 @@ class IncidentEngine {
       }
       case 'BuildFailed': {
         const targetName = target.kind === 'Build' ? resourceName(target) : incident.target;
-        const bcName = target.kind === 'Build'
-          ? (target.spec?.buildConfig?.name || null)
-          : (targetName || null);
+        const bcName =
+          target.kind === 'Build' ? target.spec?.buildConfig?.name || null : targetName || null;
         if (target.kind === 'Build' && target.status?.phase === 'Complete') return true;
         const builds = this._safe(() => this.cluster?.getByKind('Build')) || [];
         const onset = Number(incident.createdAt) || 0;
         const succeededSinceOnset = builds.some((build) => {
           if (build.status?.phase !== 'Complete') return false;
-          const sameConfig = bcName
-            && (build.spec?.buildConfig?.name === bcName
-              || resourceName(build).startsWith(`${bcName}-`));
+          const sameConfig =
+            bcName &&
+            (build.spec?.buildConfig?.name === bcName ||
+              resourceName(build).startsWith(`${bcName}-`));
           if (bcName ? !sameConfig : true) return false;
           const created = Date.parse(build.metadata?.creationTimestamp || '') || 0;
           return created >= onset;
@@ -3780,10 +4576,10 @@ class IncidentEngine {
         if (target.kind === 'BuildConfig') {
           return builds.some(
             (build) =>
-              build.status?.phase === 'Complete'
-              && (build.spec?.buildConfig?.name === resourceName(target)
-                || resourceName(build).startsWith(`${resourceName(target)}-`))
-              && (Date.parse(build.metadata?.creationTimestamp || '') || 0) >= onset
+              build.status?.phase === 'Complete' &&
+              (build.spec?.buildConfig?.name === resourceName(target) ||
+                resourceName(build).startsWith(`${resourceName(target)}-`)) &&
+              (Date.parse(build.metadata?.creationTimestamp || '') || 0) >= onset
           );
         }
         return false;
@@ -3796,7 +4592,8 @@ class IncidentEngine {
         if (!target.status?.installedCSV) return false;
         const conditions = Array.isArray(target.status?.conditions) ? target.status.conditions : [];
         const stillUnhealthy = conditions.some(
-          (condition) => condition?.type === 'CatalogSourcesUnhealthy' && String(condition.status) === 'True'
+          (condition) =>
+            condition?.type === 'CatalogSourcesUnhealthy' && String(condition.status) === 'True'
         );
         // The damaged condition must be cleared/replaced (panel heal, delete +
         // recreate Subscription, or a successful OLM reconcile) — a Succeeded
@@ -3890,7 +4687,8 @@ class IncidentEngine {
     const total = this.resolvedIncidents.length;
     const avgResolveTime =
       total > 0
-        ? this.resolvedIncidents.reduce((sum, inc) => sum + (inc.getResolutionTime() || 0), 0) / total
+        ? this.resolvedIncidents.reduce((sum, inc) => sum + (inc.getResolutionTime() || 0), 0) /
+          total
         : 0;
 
     const bySeverity = {};
@@ -3903,7 +4701,9 @@ class IncidentEngine {
       byCategory[inc.category] = (byCategory[inc.category] || 0) + 1;
     }
 
-    const cascadeCount = this.resolvedIncidents.filter((inc) => inc.cascadeChildren.length > 0).length;
+    const cascadeCount = this.resolvedIncidents.filter(
+      (inc) => inc.cascadeChildren.length > 0
+    ).length;
 
     return {
       totalResolved: total,

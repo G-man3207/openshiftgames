@@ -122,7 +122,15 @@ K.Pod = {
   columns: 'NAME       READY   STATUS    RESTARTS   AGE',
   palette: { section: 'workloads', label: 'Pod', shortcut: '1' },
   minimapSize: 8,
-  defaultSpec: () => ({ containers: [{ name: 'main', image: 'quay.io/openshift/origin-hello-openshift:latest', ports: [{ containerPort: 8080 }] }] }),
+  defaultSpec: () => ({
+    containers: [
+      {
+        name: 'main',
+        image: 'quay.io/openshift/origin-hello-openshift:latest',
+        ports: [{ containerPort: 8080 }],
+      },
+    ],
+  }),
   explain:
     'Pod is the smallest deployable unit: one or more containers sharing network\n' +
     'and storage. OpenShift runs pods under a SecurityContextConstraint; use a\n' +
@@ -142,7 +150,15 @@ K.Deployment = {
     strategy: { type: 'RollingUpdate', rollingUpdate: { maxSurge: '25%', maxUnavailable: '25%' } },
     template: {
       metadata: { labels: { app: 'app' } },
-      spec: { containers: [{ name: 'main', image: 'quay.io/openshift/origin-hello-openshift:latest', ports: [{ containerPort: 8080 }] }] },
+      spec: {
+        containers: [
+          {
+            name: 'main',
+            image: 'quay.io/openshift/origin-hello-openshift:latest',
+            ports: [{ containerPort: 8080 }],
+          },
+        ],
+      },
     },
     revisionHistoryLimit: 10,
     progressDeadlineSeconds: 600,
@@ -165,7 +181,12 @@ K.ReplicaSet = {
   defaultSpec: () => ({
     replicas: 3,
     selector: { matchLabels: { app: 'app' } },
-    template: { metadata: { labels: { app: 'app' } }, spec: { containers: [{ name: 'main', image: 'quay.io/openshift/origin-hello-openshift:latest' }] } },
+    template: {
+      metadata: { labels: { app: 'app' } },
+      spec: {
+        containers: [{ name: 'main', image: 'quay.io/openshift/origin-hello-openshift:latest' }],
+      },
+    },
   }),
   explain: 'ReplicaSet ensures a stable number of Pod replicas; normally managed by a Deployment.',
 };
@@ -181,7 +202,12 @@ K.StatefulSet = {
     replicas: 3,
     serviceName: 'app',
     selector: { matchLabels: { app: 'app' } },
-    template: { metadata: { labels: { app: 'app' } }, spec: { containers: [{ name: 'main', image: 'quay.io/openshift/origin-hello-openshift:latest' }] } },
+    template: {
+      metadata: { labels: { app: 'app' } },
+      spec: {
+        containers: [{ name: 'main', image: 'quay.io/openshift/origin-hello-openshift:latest' }],
+      },
+    },
   }),
   explain:
     'StatefulSet provides stable pod names and per-pod storage (volumeClaimTemplates)\n' +
@@ -197,9 +223,15 @@ K.DaemonSet = {
   minimapSize: 14,
   defaultSpec: () => ({
     selector: { matchLabels: { app: 'agent' } },
-    template: { metadata: { labels: { app: 'agent' } }, spec: { containers: [{ name: 'main', image: 'quay.io/openshift/origin-hello-openshift:latest' }] } },
+    template: {
+      metadata: { labels: { app: 'agent' } },
+      spec: {
+        containers: [{ name: 'main', image: 'quay.io/openshift/origin-hello-openshift:latest' }],
+      },
+    },
   }),
-  explain: 'DaemonSet runs exactly one Pod on every (matching) node — node agents, log collectors, CNI.',
+  explain:
+    'DaemonSet runs exactly one Pod on every (matching) node — node agents, log collectors, CNI.',
 };
 K.Job = {
   apiVersion: 'batch/v1',
@@ -212,7 +244,12 @@ K.Job = {
   defaultSpec: () => ({
     completions: 1,
     parallelism: 1,
-    template: { spec: { restartPolicy: 'Never', containers: [{ name: 'main', image: 'busybox:latest', command: ['sh', '-c', 'echo done'] }] } },
+    template: {
+      spec: {
+        restartPolicy: 'Never',
+        containers: [{ name: 'main', image: 'busybox:latest', command: ['sh', '-c', 'echo done'] }],
+      },
+    },
   }),
   explain: 'Job runs Pods to completion; use oc create job --from=cronjob/<name> for manual runs.',
 };
@@ -231,12 +268,16 @@ K.CronJob = {
     jobTemplate: {
       spec: {
         template: {
-          spec: { restartPolicy: 'Never', containers: [{ name: 'main', image: 'busybox:latest', command: ['sh', '-c', 'date'] }] },
+          spec: {
+            restartPolicy: 'Never',
+            containers: [{ name: 'main', image: 'busybox:latest', command: ['sh', '-c', 'date'] }],
+          },
         },
       },
     },
   }),
-  explain: 'CronJob creates Jobs on a cron schedule (`oc get cronjobs`, `oc patch cronjob ... -p \'{"spec":{"suspend":false}}\'`).',
+  explain:
+    'CronJob creates Jobs on a cron schedule (`oc get cronjobs`, `oc patch cronjob ... -p \'{"spec":{"suspend":false}}\'`).',
 };
 
 // ─── Builds & images ───────────────────────────────────────────────────────
@@ -276,12 +317,15 @@ K.Build = {
     source: { type: 'Git', git: { uri: '', ref: '' } },
     strategy: {
       type: 'Source',
-      sourceStrategy: { from: { kind: 'ImageStreamTag', name: 'nodejs:20-ubi9', namespace: 'openshift' } },
+      sourceStrategy: {
+        from: { kind: 'ImageStreamTag', name: 'nodejs:20-ubi9', namespace: 'openshift' },
+      },
     },
     output: { to: { kind: 'ImageStreamTag', name: 'app:latest' } },
     serviceAccount: 'builder',
   }),
-  explain: 'Build is one execution of a BuildConfig. Phases: New → Pending → Running → Complete/Failed/Cancelled.',
+  explain:
+    'Build is one execution of a BuildConfig. Phases: New → Pending → Running → Complete/Failed/Cancelled.',
 };
 K.ImageStream = {
   apiVersion: 'image.openshift.io/v1',
@@ -305,7 +349,11 @@ K.Service = {
   columns: 'NAME      TYPE        CLUSTER-IP      EXTERNAL-IP   PORT(S)   AGE',
   palette: { section: 'network', label: 'Service' },
   minimapSize: 12,
-  defaultSpec: () => ({ type: 'ClusterIP', selector: { app: 'app' }, ports: [{ name: 'http', port: 8080, targetPort: 8080 }] }),
+  defaultSpec: () => ({
+    type: 'ClusterIP',
+    selector: { app: 'app' },
+    ports: [{ name: 'http', port: 8080, targetPort: 8080 }],
+  }),
   explain:
     'Service provides a stable virtual IP/DNS name for a label-selected set of Pods.\n' +
     'OpenShift supports ClusterIP, NodePort, LoadBalancer and ExternalName services.',
@@ -314,7 +362,8 @@ K.Route = {
   apiVersion: 'route.openshift.io/v1',
   namespaced: true,
   aliases: ['route', 'routes'],
-  columns: 'NAME      HOST/PORT                              PATH      SERVICES   PORT   TERMINATION   WILDCARD',
+  columns:
+    'NAME      HOST/PORT                              PATH      SERVICES   PORT   TERMINATION   WILDCARD',
   palette: { section: 'network', label: 'Route' },
   minimapSize: 14,
   // Real oc expose routes omit `path` and `tls` (omitempty); the API assigns
@@ -338,7 +387,20 @@ K.Ingress = {
   palette: { section: 'network', label: 'Ingress' },
   minimapSize: 14,
   defaultSpec: () => ({
-    rules: [{ host: 'app.example.com', http: { paths: [{ path: '/', pathType: 'Prefix', backend: { service: { name: 'app', port: { number: 8080 } } } }] } }],
+    rules: [
+      {
+        host: 'app.example.com',
+        http: {
+          paths: [
+            {
+              path: '/',
+              pathType: 'Prefix',
+              backend: { service: { name: 'app', port: { number: 8080 } } },
+            },
+          ],
+        },
+      },
+    ],
   }),
   explain:
     'Ingress is the upstream Kubernetes L7 resource. On OpenShift, Routes are the\n' +
@@ -366,7 +428,11 @@ K.IPAddressPool = {
   columns: 'NAME      AGE',
   palette: { section: 'network', label: 'IPAddressPool' },
   minimapSize: 12,
-  defaultSpec: () => ({ addresses: ['192.168.100.200-192.168.100.210'], autoAssign: true, avoidBuggyIPs: false }),
+  defaultSpec: () => ({
+    addresses: ['192.168.100.200-192.168.100.210'],
+    autoAssign: true,
+    avoidBuggyIPs: false,
+  }),
   explain:
     'MetalLB IPAddressPool defines external IP ranges for LoadBalancer services.\n' +
     'Requires the MetalLB Operator and an L2Advertisement selecting the pool.',
@@ -392,7 +458,8 @@ K.ConfigMap = {
   palette: { section: 'config', label: 'CM' },
   minimapSize: 10,
   defaultSpec: () => ({ data: { 'app.properties': 'greeting=hello' } }),
-  explain: 'ConfigMap holds non-sensitive configuration as keys/files; consume via envFrom, env valueFrom or volume mounts.',
+  explain:
+    'ConfigMap holds non-sensitive configuration as keys/files; consume via envFrom, env valueFrom or volume mounts.',
 };
 K.Secret = {
   apiVersion: 'v1',
@@ -414,9 +481,18 @@ K.LimitRange = {
   palette: { section: 'config', label: 'LimitRange' },
   minimapSize: 12,
   defaultSpec: () => ({
-    limits: [{ type: 'Container', default: { cpu: '500m', memory: '512Mi' }, defaultRequest: { cpu: '100m' }, min: { cpu: '50m', memory: '64Mi' }, max: { cpu: '2', memory: '4Gi' } }],
+    limits: [
+      {
+        type: 'Container',
+        default: { cpu: '500m', memory: '512Mi' },
+        defaultRequest: { cpu: '100m' },
+        min: { cpu: '50m', memory: '64Mi' },
+        max: { cpu: '2', memory: '4Gi' },
+      },
+    ],
   }),
-  explain: 'LimitRange supplies default requests/limits and enforces min/max per Pod or Container in a project.',
+  explain:
+    'LimitRange supplies default requests/limits and enforces min/max per Pod or Container in a project.',
 };
 K.ResourceQuota = {
   apiVersion: 'v1',
@@ -425,8 +501,17 @@ K.ResourceQuota = {
   columns: 'NAME      AGE   REQUEST   LIMIT',
   palette: { section: 'config', label: 'ResourceQuota' },
   minimapSize: 14,
-  defaultSpec: () => ({ hard: { pods: '20', 'requests.cpu': '4', 'requests.memory': '8Gi', 'limits.cpu': '8', 'limits.memory': '16Gi' } }),
-  explain: 'ResourceQuota caps aggregate resource usage/object counts in a project; oc describe quota shows hard/used.',
+  defaultSpec: () => ({
+    hard: {
+      pods: '20',
+      'requests.cpu': '4',
+      'requests.memory': '8Gi',
+      'limits.cpu': '8',
+      'limits.memory': '16Gi',
+    },
+  }),
+  explain:
+    'ResourceQuota caps aggregate resource usage/object counts in a project; oc describe quota shows hard/used.',
 };
 K.Template = {
   apiVersion: 'template.openshift.io/v1',
@@ -436,10 +521,39 @@ K.Template = {
   palette: { section: 'config', label: 'Template' },
   minimapSize: 14,
   defaultSpec: () => ({
-    parameters: [{ name: 'APP_NAME', displayName: 'Application name', description: 'Name used for the deployed application', required: true, value: 'webapp' }],
+    parameters: [
+      {
+        name: 'APP_NAME',
+        displayName: 'Application name',
+        description: 'Name used for the deployed application',
+        required: true,
+        value: 'webapp',
+      },
+    ],
     objects: [
-      { apiVersion: 'apps/v1', kind: 'Deployment', metadata: { name: '${APP_NAME}' }, spec: { replicas: 2, selector: { matchLabels: { app: '${APP_NAME}' } }, template: { metadata: { labels: { app: '${APP_NAME}' } }, spec: { containers: [{ name: 'main', image: 'quay.io/openshift/origin-hello-openshift:latest' }] } } } },
-      { apiVersion: 'v1', kind: 'Service', metadata: { name: '${APP_NAME}' }, spec: { selector: { app: '${APP_NAME}' }, ports: [{ port: 8080, targetPort: 8080 }] } },
+      {
+        apiVersion: 'apps/v1',
+        kind: 'Deployment',
+        metadata: { name: '${APP_NAME}' },
+        spec: {
+          replicas: 2,
+          selector: { matchLabels: { app: '${APP_NAME}' } },
+          template: {
+            metadata: { labels: { app: '${APP_NAME}' } },
+            spec: {
+              containers: [
+                { name: 'main', image: 'quay.io/openshift/origin-hello-openshift:latest' },
+              ],
+            },
+          },
+        },
+      },
+      {
+        apiVersion: 'v1',
+        kind: 'Service',
+        metadata: { name: '${APP_NAME}' },
+        spec: { selector: { app: '${APP_NAME}' }, ports: [{ port: 8080, targetPort: 8080 }] },
+      },
     ],
     message: 'Application ${APP_NAME} deployed.',
   }),
@@ -451,21 +565,33 @@ K.PersistentVolume = {
   apiVersion: 'v1',
   namespaced: false,
   aliases: ['persistentvolume', 'persistentvolumes', 'pv'],
-  columns: 'NAME      CAPACITY   ACCESS MODES   RECLAIM POLICY   STATUS      CLAIM   STORAGECLASS   VOLUMEATTRIBUTESCLASS   REASON   AGE',
+  columns:
+    'NAME      CAPACITY   ACCESS MODES   RECLAIM POLICY   STATUS      CLAIM   STORAGECLASS   VOLUMEATTRIBUTESCLASS   REASON   AGE',
   palette: { section: 'storage', label: 'PV' },
   minimapSize: 14,
-  defaultSpec: () => ({ capacity: { storage: '10Gi' }, accessModes: ['ReadWriteOnce'], persistentVolumeReclaimPolicy: 'Retain', storageClassName: '' }),
-  explain: 'PersistentVolume is cluster storage provisioned by an admin or dynamically by a StorageClass.',
+  defaultSpec: () => ({
+    capacity: { storage: '10Gi' },
+    accessModes: ['ReadWriteOnce'],
+    persistentVolumeReclaimPolicy: 'Retain',
+    storageClassName: '',
+  }),
+  explain:
+    'PersistentVolume is cluster storage provisioned by an admin or dynamically by a StorageClass.',
 };
 K.PersistentVolumeClaim = {
   apiVersion: 'v1',
   namespaced: true,
   aliases: ['persistentvolumeclaim', 'persistentvolumeclaims', 'pvc'],
-  columns: 'NAME      STATUS   VOLUME   CAPACITY   ACCESS MODES   STORAGECLASS   VOLUMEATTRIBUTESCLASS   AGE',
+  columns:
+    'NAME      STATUS   VOLUME   CAPACITY   ACCESS MODES   STORAGECLASS   VOLUMEATTRIBUTESCLASS   AGE',
   palette: { section: 'storage', label: 'PVC' },
   minimapSize: 12,
-  defaultSpec: () => ({ accessModes: ['ReadWriteOnce'], resources: { requests: { storage: '10Gi' } } }),
-  explain: 'PersistentVolumeClaim requests storage; the cluster binds it to a PV or dynamically provisions one.',
+  defaultSpec: () => ({
+    accessModes: ['ReadWriteOnce'],
+    resources: { requests: { storage: '10Gi' } },
+  }),
+  explain:
+    'PersistentVolumeClaim requests storage; the cluster binds it to a PV or dynamically provisions one.',
 };
 K.StorageClass = {
   apiVersion: 'storage.k8s.io/v1',
@@ -474,8 +600,13 @@ K.StorageClass = {
   columns: 'NAME      PROVISIONER   RECLAIMPOLICY   VOLUMEBINDINGMODE   ALLOWVOLUMEEXPANSION   AGE',
   palette: { section: 'storage', label: 'StorageClass' },
   minimapSize: 12,
-  defaultSpec: () => ({ provisioner: 'kubernetes.io/no-provisioner', reclaimPolicy: 'Retain', volumeBindingMode: 'WaitForFirstConsumer' }),
-  explain: 'StorageClass describes a storage provisioner; `oc get storageclass` shows the default class.',
+  defaultSpec: () => ({
+    provisioner: 'kubernetes.io/no-provisioner',
+    reclaimPolicy: 'Retain',
+    volumeBindingMode: 'WaitForFirstConsumer',
+  }),
+  explain:
+    'StorageClass describes a storage provisioner; `oc get storageclass` shows the default class.',
 };
 
 // ─── Scaling / availability ────────────────────────────────────────────────
@@ -486,8 +617,19 @@ K.HorizontalPodAutoscaler = {
   columns: 'NAME      REFERENCE            TARGETS   MINPODS   MAXPODS   REPLICAS   AGE',
   palette: { section: 'scaling', label: 'HPA' },
   minimapSize: 12,
-  defaultSpec: () => ({ scaleTargetRef: { apiVersion: 'apps/v1', kind: 'Deployment', name: 'app' }, minReplicas: 2, maxReplicas: 10, metrics: [{ type: 'Resource', resource: { name: 'cpu', target: { type: 'Utilization', averageUtilization: 70 } } }] }),
-  explain: 'HPA scales a workload based on CPU/memory/custom metrics. Needs resource requests and the metrics server.',
+  defaultSpec: () => ({
+    scaleTargetRef: { apiVersion: 'apps/v1', kind: 'Deployment', name: 'app' },
+    minReplicas: 2,
+    maxReplicas: 10,
+    metrics: [
+      {
+        type: 'Resource',
+        resource: { name: 'cpu', target: { type: 'Utilization', averageUtilization: 70 } },
+      },
+    ],
+  }),
+  explain:
+    'HPA scales a workload based on CPU/memory/custom metrics. Needs resource requests and the metrics server.',
 };
 K.PodDisruptionBudget = {
   apiVersion: 'policy/v1',
@@ -509,7 +651,8 @@ K.ServiceAccount = {
   palette: { section: 'security', label: 'SA' },
   minimapSize: 10,
   defaultSpec: () => ({ secrets: [], imagePullSecrets: [], automountServiceAccountToken: true }),
-  explain: 'ServiceAccount is the identity Pods use to talk to the Kubernetes/OpenShift API. Grant it RBAC roles and SCCs.',
+  explain:
+    'ServiceAccount is the identity Pods use to talk to the Kubernetes/OpenShift API. Grant it RBAC roles and SCCs.',
 };
 K.Role = {
   apiVersion: 'rbac.authorization.k8s.io/v1',
@@ -545,8 +688,12 @@ K.RoleBinding = {
   columns: 'NAME      ROLE      AGE   USERS   GROUPS   SERVICEACCOUNTS',
   palette: { section: 'security', label: 'RoleBinding' },
   minimapSize: 10,
-  defaultSpec: () => ({ roleRef: { apiGroup: 'rbac.authorization.k8s.io', kind: 'Role', name: 'view' }, subjects: [{ kind: 'User', name: 'developer' }] }),
-  explain: 'RoleBinding binds a Role/ClusterRole to users, groups or service accounts in a project.',
+  defaultSpec: () => ({
+    roleRef: { apiGroup: 'rbac.authorization.k8s.io', kind: 'Role', name: 'view' },
+    subjects: [{ kind: 'User', name: 'developer' }],
+  }),
+  explain:
+    'RoleBinding binds a Role/ClusterRole to users, groups or service accounts in a project.',
 };
 K.ClusterRoleBinding = {
   apiVersion: 'rbac.authorization.k8s.io/v1',
@@ -555,14 +702,18 @@ K.ClusterRoleBinding = {
   columns: 'NAME      ROLE      AGE   USERS   GROUPS   SERVICEACCOUNTS',
   palette: { section: 'security', label: 'ClusterRoleBinding' },
   minimapSize: 10,
-  defaultSpec: () => ({ roleRef: { apiGroup: 'rbac.authorization.k8s.io', kind: 'ClusterRole', name: 'view' }, subjects: [{ kind: 'User', name: 'developer' }] }),
+  defaultSpec: () => ({
+    roleRef: { apiGroup: 'rbac.authorization.k8s.io', kind: 'ClusterRole', name: 'view' },
+    subjects: [{ kind: 'User', name: 'developer' }],
+  }),
   explain: 'ClusterRoleBinding grants a ClusterRole cluster-wide.',
 };
 K.SecurityContextConstraints = {
   apiVersion: 'security.openshift.io/v1',
   namespaced: false,
   aliases: ['securitycontextconstraints', 'securitycontextconstraint', 'scc'],
-  columns: 'NAME              PRIV   CAPS   SELINUX    RUNASUSER   FSGROUP    SUPGROUP   PRIORITY   READONLYROOTFS   VOLUMES',
+  columns:
+    'NAME              PRIV   CAPS   SELINUX    RUNASUSER   FSGROUP    SUPGROUP   PRIORITY   READONLYROOTFS   VOLUMES',
   palette: { section: 'security', label: 'SCC' },
   minimapSize: 14,
   // API-shaped default for an SCC created by an admin (docs restricted-style
@@ -586,7 +737,17 @@ K.SecurityContextConstraints = {
     fsGroup: { type: 'MustRunAs' },
     supplementalGroups: { type: 'MustRunAs' },
     seccompProfiles: ['runtime/default'],
-    volumes: ['configMap', 'csi', 'downwardAPI', 'emptyDir', 'ephemeral', 'image', 'persistentVolumeClaim', 'projected', 'secret'],
+    volumes: [
+      'configMap',
+      'csi',
+      'downwardAPI',
+      'emptyDir',
+      'ephemeral',
+      'image',
+      'persistentVolumeClaim',
+      'projected',
+      'secret',
+    ],
     users: [],
     groups: [],
   }),
@@ -607,7 +768,8 @@ K.User = {
   palette: { section: 'identity', label: 'User' },
   minimapSize: 10,
   defaultSpec: () => ({ fullName: '', groups: [], identities: [] }),
-  explain: 'User is an OpenShift identity created on login (e.g. via HTPasswd) or by an admin. Groups bundle users for RBAC.',
+  explain:
+    'User is an OpenShift identity created on login (e.g. via HTPasswd) or by an admin. Groups bundle users for RBAC.',
 };
 K.Group = {
   apiVersion: 'user.openshift.io/v1',
@@ -648,7 +810,8 @@ K.OAuth = {
       },
     ],
   }),
-  explain: 'OAuth cluster config defines identity providers (HTPasswd, LDAP, OIDC...). Edit with `oc edit oauth cluster`.',
+  explain:
+    'OAuth cluster config defines identity providers (HTPasswd, LDAP, OIDC...). Edit with `oc edit oauth cluster`.',
 };
 K.Subscription = {
   apiVersion: 'operators.coreos.com/v1alpha1',
@@ -680,7 +843,8 @@ K.ClusterOperator = {
   palette: { section: 'projects', label: 'ClusterOperator' },
   minimapSize: 12,
   defaultSpec: () => ({}),
-  explain: 'ClusterOperator reports the health of a core OpenShift component (Available/Progressing/Degraded).',
+  explain:
+    'ClusterOperator reports the health of a core OpenShift component (Available/Progressing/Degraded).',
 };
 K.ClusterVersion = {
   apiVersion: 'config.openshift.io/v1',
@@ -691,7 +855,8 @@ K.ClusterVersion = {
   palette: { section: 'projects', label: 'ClusterVersion' },
   minimapSize: 12,
   defaultSpec: () => ({ channel: 'stable-4.22' }),
-  explain: 'ClusterVersion is the singleton describing the desired/current OCP version (oc get clusterversion).',
+  explain:
+    'ClusterVersion is the singleton describing the desired/current OCP version (oc get clusterversion).',
 };
 
 K.OperatorGroup = {
@@ -774,7 +939,11 @@ K.MetalLB = {
   palette: { section: 'network', label: 'MetalLB' },
   minimapSize: 14,
   defaultNamespace: 'metallb-system',
-  defaultSpec: () => ({ nodeSelector: {}, speaker: { frr: {}, logLevel: 'info' }, controller: { logLevel: 'info' } }),
+  defaultSpec: () => ({
+    nodeSelector: {},
+    speaker: { frr: {}, logLevel: 'info' },
+    controller: { logLevel: 'info' },
+  }),
   explain:
     'MetalLB is the MetalLB Operator operand CR: the operator only deploys the\n' +
     'controller and speaker pods (in metallb-system) after this instance exists.\n' +
@@ -934,14 +1103,21 @@ export function getKindClass(kind) {
 export function createResource(kind, meta = {}) {
   if (!K[kind]) {
     // Unknown kind: still build a plain resource with the conventional apiVersion.
-    const fallback = new ResourceBase(kind, 'v1', meta?.name || 'unnamed', meta?.namespace ?? 'default');
+    const fallback = new ResourceBase(
+      kind,
+      'v1',
+      meta?.name || 'unnamed',
+      meta?.namespace ?? 'default'
+    );
     if (meta?.labels) Object.assign(fallback.metadata.labels, meta.labels);
     if (meta?.annotations) Object.assign(fallback.metadata.annotations, meta.annotations);
     if (meta?.spec) fallback.spec = deepClone(meta.spec);
     return fallback;
   }
 
-  const isManifest = Boolean(meta) && (typeof meta.metadata === 'object' || (meta.kind && meta.apiVersion && !meta.name));
+  const isManifest =
+    Boolean(meta) &&
+    (typeof meta.metadata === 'object' || (meta.kind && meta.apiVersion && !meta.name));
   const normalised = isManifest ? normalizeManifestObject(meta) : null;
 
   const def = K[kind];
@@ -980,8 +1156,10 @@ export function createResource(kind, meta = {}) {
   if (source.annotations && Object.keys(source.annotations).length > 0) {
     resource.metadata.annotations = deepMerge(resource.metadata.annotations, source.annotations);
   }
-  if (normalised?.ownerReferences?.length) resource.metadata.ownerReferences = deepClone(normalised.ownerReferences);
-  if (normalised?.finalizers?.length) resource.metadata.finalizers = deepClone(normalised.finalizers);
+  if (normalised?.ownerReferences?.length)
+    resource.metadata.ownerReferences = deepClone(normalised.ownerReferences);
+  if (normalised?.finalizers?.length)
+    resource.metadata.finalizers = deepClone(normalised.finalizers);
   if (source.status) resource.status = deepMerge(resource.status, source.status);
 
   return resource;

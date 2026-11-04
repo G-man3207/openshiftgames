@@ -46,16 +46,29 @@ export class ServiceAccount extends ResourceBase {
   toDescribe() {
     return `Name:                ${this.metadata.name}
 Namespace:           ${this.metadata.namespace}
-Labels:              ${Object.entries(this.metadata.labels).map(([k, v]) => `${k}=${v}`).join(', ') || '<none>'}
-Annotations:         ${Object.entries(this.metadata.annotations).map(([k, v]) => `${k}=${v}`).join(', ') || '<none>'}
+Labels:              ${
+      Object.entries(this.metadata.labels)
+        .map(([k, v]) => `${k}=${v}`)
+        .join(', ') || '<none>'
+    }
+Annotations:         ${
+      Object.entries(this.metadata.annotations)
+        .map(([k, v]) => `${k}=${v}`)
+        .join(', ') || '<none>'
+    }
 Image pull secrets:  ${this.imagePullSecrets.map((s) => s.name || s).join(', ') || '<none>'}
 Mountable secrets:   ${this.secrets.map((s) => s.name || s).join(', ') || '<none>'}
-Tokens:              ${this.secrets
-      .map((s) => s.name || s)
-      .filter((name) => String(name).includes('token'))
-      .join(', ') || '<none>'}
+Tokens:              ${
+      this.secrets
+        .map((s) => s.name || s)
+        .filter((name) => String(name).includes('token'))
+        .join(', ') || '<none>'
+    }
 Events:
-${this.events.slice(-10).map((e) => `  ${e.type}\t${e.reason}\t${e.message}`).join('\n')}`;
+${this.events
+  .slice(-10)
+  .map((e) => `  ${e.type}\t${e.reason}\t${e.message}`)
+  .join('\n')}`;
   }
 }
 
@@ -121,11 +134,22 @@ export class Role extends PolicyRulesResource {
   toDescribe() {
     return `Name:         ${this.metadata.name}
 Namespace:    ${this.metadata.namespace}
-Labels:       ${Object.entries(this.metadata.labels).map(([k, v]) => `${k}=${v}`).join(', ') || '<none>'}
-Annotations:  ${Object.entries(this.metadata.annotations).map(([k, v]) => `${k}=${v}`).join(', ') || '<none>'}
+Labels:       ${
+      Object.entries(this.metadata.labels)
+        .map(([k, v]) => `${k}=${v}`)
+        .join(', ') || '<none>'
+    }
+Annotations:  ${
+      Object.entries(this.metadata.annotations)
+        .map(([k, v]) => `${k}=${v}`)
+        .join(', ') || '<none>'
+    }
 ${this._rulesDescribe()}
 Events:
-${this.events.slice(-10).map((e) => `  ${e.type}\t${e.reason}\t${e.message}`).join('\n')}`;
+${this.events
+  .slice(-10)
+  .map((e) => `  ${e.type}\t${e.reason}\t${e.message}`)
+  .join('\n')}`;
   }
 }
 
@@ -144,11 +168,22 @@ export class ClusterRole extends PolicyRulesResource {
 
   toDescribe() {
     return `Name:         ${this.metadata.name}
-Labels:       ${Object.entries(this.metadata.labels).map(([k, v]) => `${k}=${v}`).join(', ') || '<none>'}
-Annotations:  ${Object.entries(this.metadata.annotations).map(([k, v]) => `${k}=${v}`).join(', ') || '<none>'}
+Labels:       ${
+      Object.entries(this.metadata.labels)
+        .map(([k, v]) => `${k}=${v}`)
+        .join(', ') || '<none>'
+    }
+Annotations:  ${
+      Object.entries(this.metadata.annotations)
+        .map(([k, v]) => `${k}=${v}`)
+        .join(', ') || '<none>'
+    }
 ${this._rulesDescribe()}
 Events:
-${this.events.slice(-10).map((e) => `  ${e.type}\t${e.reason}\t${e.message}`).join('\n')}`;
+${this.events
+  .slice(-10)
+  .map((e) => `  ${e.type}\t${e.reason}\t${e.message}`)
+  .join('\n')}`;
   }
 }
 
@@ -179,7 +214,10 @@ class BindingResource extends ResourceBase {
     this.spec.subjects = this.spec.subjects || [];
     const subject = makeSubject(kind, name, namespace);
     const exists = this.spec.subjects.some(
-      (s) => s.kind === subject.kind && s.name === subject.name && (s.namespace || '') === (subject.namespace || '')
+      (s) =>
+        s.kind === subject.kind &&
+        s.name === subject.name &&
+        (s.namespace || '') === (subject.namespace || '')
     );
     if (!exists) {
       if (subject.namespace === undefined) delete subject.namespace;
@@ -208,16 +246,17 @@ Subjects:
   Kind              Name              Namespace
   ----              ----              ---------
 ${(this.spec.subjects || [])
-  .map(
-    (s) => `  ${(s.kind || '').padEnd(18)} ${(s.name || '').padEnd(18)} ${s.namespace || ''}`
-  )
+  .map((s) => `  ${(s.kind || '').padEnd(18)} ${(s.name || '').padEnd(18)} ${s.namespace || ''}`)
   .join('\n')}`;
   }
 }
 
 export class RoleBinding extends BindingResource {
   constructor(metadata = {}) {
-    super('RoleBinding', { ...metadata, apiVersion: metadata.apiVersion || `${RBAC_API_GROUP}/v1` });
+    super('RoleBinding', {
+      ...metadata,
+      apiVersion: metadata.apiVersion || `${RBAC_API_GROUP}/v1`,
+    });
     const defaults = {
       roleRef: {
         apiGroup: RBAC_API_GROUP,
@@ -233,11 +272,22 @@ export class RoleBinding extends BindingResource {
   toDescribe() {
     return `Name:         ${this.metadata.name}
 Namespace:    ${this.metadata.namespace}
-Labels:       ${Object.entries(this.metadata.labels).map(([k, v]) => `${k}=${v}`).join(', ') || '<none>'}
-Annotations:  ${Object.entries(this.metadata.annotations).map(([k, v]) => `${k}=${v}`).join(', ') || '<none>'}
+Labels:       ${
+      Object.entries(this.metadata.labels)
+        .map(([k, v]) => `${k}=${v}`)
+        .join(', ') || '<none>'
+    }
+Annotations:  ${
+      Object.entries(this.metadata.annotations)
+        .map(([k, v]) => `${k}=${v}`)
+        .join(', ') || '<none>'
+    }
 ${this._bindingDescribe()}
 Events:
-${this.events.slice(-10).map((e) => `  ${e.type}\t${e.reason}\t${e.message}`).join('\n')}`;
+${this.events
+  .slice(-10)
+  .map((e) => `  ${e.type}\t${e.reason}\t${e.message}`)
+  .join('\n')}`;
   }
 }
 
@@ -262,11 +312,22 @@ export class ClusterRoleBinding extends BindingResource {
 
   toDescribe() {
     return `Name:         ${this.metadata.name}
-Labels:       ${Object.entries(this.metadata.labels).map(([k, v]) => `${k}=${v}`).join(', ') || '<none>'}
-Annotations:  ${Object.entries(this.metadata.annotations).map(([k, v]) => `${k}=${v}`).join(', ') || '<none>'}
+Labels:       ${
+      Object.entries(this.metadata.labels)
+        .map(([k, v]) => `${k}=${v}`)
+        .join(', ') || '<none>'
+    }
+Annotations:  ${
+      Object.entries(this.metadata.annotations)
+        .map(([k, v]) => `${k}=${v}`)
+        .join(', ') || '<none>'
+    }
 ${this._bindingDescribe()}
 Events:
-${this.events.slice(-10).map((e) => `  ${e.type}\t${e.reason}\t${e.message}`).join('\n')}`;
+${this.events
+  .slice(-10)
+  .map((e) => `  ${e.type}\t${e.reason}\t${e.message}`)
+  .join('\n')}`;
   }
 }
 

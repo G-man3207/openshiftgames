@@ -44,9 +44,7 @@ function bulletIcon() {
 }
 
 function arrowIcon(direction = 'right') {
-  const d = direction === 'diagonal'
-    ? 'M4 12 12 4M6 4h6v6'
-    : 'M2 8h11M9 3.5 13.5 8 9 12.5';
+  const d = direction === 'diagonal' ? 'M4 12 12 4M6 4h6v6' : 'M2 8h11M9 3.5 13.5 8 9 12.5';
   return `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${d}"/></svg>`;
 }
 
@@ -167,7 +165,8 @@ export class StartMenu {
       document.documentElement.classList.add('sp-menu-open');
       document.body.classList.add('sp-menu-open');
       this.attachStage();
-      for (const uid of [...(renderer.resourceMeshes?.keys?.() || [])]) renderer.removeResource(uid);
+      for (const uid of [...(renderer.resourceMeshes?.keys?.() || [])])
+        renderer.removeResource(uid);
       app.placedPositions?.clear?.();
 
       // Seed the default OpenShift 4.22 cluster (Projects, operators, SCCs, users, ...)
@@ -243,15 +242,45 @@ export class StartMenu {
       { kind: 'Project', name: 'payments' },
       { kind: 'BuildConfig', name: 'checkout', namespace: 'checkout', status: { phase: 'Active' } },
       { kind: 'ImageStream', name: 'checkout', namespace: 'checkout', status: { phase: 'Active' } },
-      { kind: 'Deployment', name: 'checkout', namespace: 'checkout', status: { phase: 'Available' } },
-      { kind: 'Deployment', name: 'payments', namespace: 'payments', status: { phase: 'Available' } },
-      { kind: 'Pod', name: 'checkout-6f9c9-2x7lq', namespace: 'checkout', status: { phase: 'Running' } },
-      { kind: 'Pod', name: 'checkout-6f9c9-9p4rb', namespace: 'checkout', status: { phase: 'Running' } },
-      { kind: 'Pod', name: 'payments-7d4b8-5kwmz', namespace: 'payments', status: { phase: 'Running' } },
+      {
+        kind: 'Deployment',
+        name: 'checkout',
+        namespace: 'checkout',
+        status: { phase: 'Available' },
+      },
+      {
+        kind: 'Deployment',
+        name: 'payments',
+        namespace: 'payments',
+        status: { phase: 'Available' },
+      },
+      {
+        kind: 'Pod',
+        name: 'checkout-6f9c9-2x7lq',
+        namespace: 'checkout',
+        status: { phase: 'Running' },
+      },
+      {
+        kind: 'Pod',
+        name: 'checkout-6f9c9-9p4rb',
+        namespace: 'checkout',
+        status: { phase: 'Running' },
+      },
+      {
+        kind: 'Pod',
+        name: 'payments-7d4b8-5kwmz',
+        namespace: 'payments',
+        status: { phase: 'Running' },
+      },
       { kind: 'Service', name: 'checkout', namespace: 'checkout', status: { phase: 'Active' } },
       { kind: 'Service', name: 'payments', namespace: 'payments', status: { phase: 'Active' } },
       { kind: 'Route', name: 'checkout', namespace: 'checkout', status: { phase: 'Admitted' } },
-      { kind: 'ConfigMap', name: 'checkout-config', namespace: 'checkout', status: { phase: 'Active' } },
+      {
+        kind: 'ConfigMap',
+        name: 'checkout-config',
+        namespace: 'checkout',
+        status: { phase: 'Active' },
+      },
       { kind: 'Secret', name: 'payments-tls', namespace: 'payments', status: { phase: 'Active' } },
       { kind: 'PVC', name: 'checkout-data', namespace: 'checkout', status: { phase: 'Bound' } },
     ];
@@ -301,7 +330,7 @@ export class StartMenu {
     try {
       const unlocked = this._unlockedCampaignLevels();
       const completed = LEVEL_ORDER.filter(
-        (id) => this.app?.scoringEngine?.getProgress?.()?.campaignProgress?.[id]?.completed,
+        (id) => this.app?.scoringEngine?.getProgress?.()?.campaignProgress?.[id]?.completed
       );
       // A finished campaign has nothing to "continue": replay from level 1.
       if (completed.length === LEVEL_ORDER.length) return 1;
@@ -414,7 +443,7 @@ export class StartMenu {
           this.observer.unobserve(entry.target);
         }
       },
-      { root: this.root, rootMargin: '0px 0px -8% 0px', threshold: 0.08 },
+      { root: this.root, rootMargin: '0px 0px -8% 0px', threshold: 0.08 }
     );
     for (const el of targets) this.observer.observe(el);
   }
@@ -430,7 +459,7 @@ export class StartMenu {
                 data-group="${group.id}" aria-controls="sp-exam-detail">
           <span class="sp-exam-btn-name">${this._escape(group.title)}</span>
           <span class="sp-exam-btn-count">${group.bullets.length} objective${group.bullets.length === 1 ? '' : 's'}</span>
-        </button>`,
+        </button>`
     ).join('');
     for (const btn of list.querySelectorAll('.sp-exam-btn')) {
       btn.addEventListener('click', () => this._selectExamGroup(btn.dataset.group));
@@ -439,9 +468,10 @@ export class StartMenu {
         event.preventDefault();
         const buttons = [...list.querySelectorAll('.sp-exam-btn')];
         const index = buttons.indexOf(btn);
-        const nextIndex = event.key === 'ArrowDown'
-          ? (index + 1) % buttons.length
-          : (index - 1 + buttons.length) % buttons.length;
+        const nextIndex =
+          event.key === 'ArrowDown'
+            ? (index + 1) % buttons.length
+            : (index - 1 + buttons.length) % buttons.length;
         buttons[nextIndex]?.focus();
         buttons[nextIndex]?.click();
       });
@@ -449,7 +479,8 @@ export class StartMenu {
   }
 
   _selectExamGroup(groupId) {
-    const group = EX280_OBJECTIVE_GROUPS.find((entry) => entry.id === groupId) || EX280_OBJECTIVE_GROUPS[0];
+    const group =
+      EX280_OBJECTIVE_GROUPS.find((entry) => entry.id === groupId) || EX280_OBJECTIVE_GROUPS[0];
     if (!group) return;
     this.selectedGroupId = group.id;
 
@@ -460,8 +491,12 @@ export class StartMenu {
     const detail = document.getElementById('sp-exam-detail');
     if (!detail) return;
 
-    const levels = [...new Set(group.bullets.flatMap((bullet) => bullet.levels || []))].sort((a, b) => a - b);
-    const challenges = [...new Set(group.bullets.flatMap((bullet) => bullet.challenges || []))].sort((a, b) => a - b);
+    const levels = [...new Set(group.bullets.flatMap((bullet) => bullet.levels || []))].sort(
+      (a, b) => a - b
+    );
+    const challenges = [
+      ...new Set(group.bullets.flatMap((bullet) => bullet.challenges || [])),
+    ].sort((a, b) => a - b);
     const visible = group.bullets.slice(0, MAX_VISIBLE_BULLETS);
     const remaining = group.bullets.length - visible.length;
     // Campaign levels unlock in order; never launch a locked level (the game would
@@ -483,12 +518,18 @@ export class StartMenu {
       </ul>
       ${remaining > 0 ? `<p class="sp-exam-more">and ${remaining} more, tracked in EX280 Prep.</p>` : ''}
       <div class="sp-exam-actions">
-        ${openLevel
-          ? `<button type="button" class="sp-btn-small" id="sp-exam-start" data-level="${openLevel}">Start level ${openLevel}${arrowIcon()}</button>`
-          : '<button type="button" class="sp-btn-small" id="sp-exam-start" data-level="">Open campaign' + arrowIcon() + '</button>'}
-        ${nextChallenge
-          ? `<button type="button" class="sp-btn-small" id="sp-exam-lab" data-start-challenge="${nextChallenge}">Timed lab ${nextChallenge}${arrowIcon()}</button>`
-          : ''}
+        ${
+          openLevel
+            ? `<button type="button" class="sp-btn-small" id="sp-exam-start" data-level="${openLevel}">Start level ${openLevel}${arrowIcon()}</button>`
+            : '<button type="button" class="sp-btn-small" id="sp-exam-start" data-level="">Open campaign' +
+              arrowIcon() +
+              '</button>'
+        }
+        ${
+          nextChallenge
+            ? `<button type="button" class="sp-btn-small" id="sp-exam-lab" data-start-challenge="${nextChallenge}">Timed lab ${nextChallenge}${arrowIcon()}</button>`
+            : ''
+        }
         <a class="sp-text-link" href="${group.docsUrl}" target="_blank" rel="noopener">Red Hat docs ${arrowIcon('diagonal')}</a>
       </div>`;
 
@@ -507,9 +548,17 @@ export class StartMenu {
   }
 
   _escape(value) {
-    return String(value ?? '').replace(/[&<>"']/g, (ch) => ({
-      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
-    }[ch]));
+    return String(value ?? '').replace(
+      /[&<>"']/g,
+      (ch) =>
+        ({
+          '&': '&amp;',
+          '<': '&lt;',
+          '>': '&gt;',
+          '"': '&quot;',
+          "'": '&#39;',
+        })[ch]
+    );
   }
 
   destroy() {

@@ -411,7 +411,10 @@ export class ResourceBase {
     } else if (!/^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$/.test(name)) {
       errors.push('metadata.name must be a lowercase RFC 1123 subdomain');
     }
-    if (this.metadata?.namespace && !/^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$/.test(this.metadata.namespace)) {
+    if (
+      this.metadata?.namespace &&
+      !/^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$/.test(this.metadata.namespace)
+    ) {
       errors.push('metadata.namespace must be a lowercase RFC 1123 label');
     }
     return { valid: errors.length === 0, errors };

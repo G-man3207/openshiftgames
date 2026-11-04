@@ -24,7 +24,8 @@ import { visualStatusFor, isAttentionStatus } from './ResourceStatus.js';
  *   dispose()
  */
 
-const FONT_STACK = "'Schibsted Grotesk', 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif";
+const FONT_STACK =
+  "'Schibsted Grotesk', 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif";
 const LABEL_FONT_SIZE = 13;
 const LABEL_HEIGHT = 22;
 const LABEL_GAP = 16; // px between anchor point and label bottom edge (game)
@@ -78,7 +79,9 @@ const KIND_DEDUPE_PRIORITY = {
 };
 
 function hexToCss(hex) {
-  return `#${Number(hex || 0x58a6ff).toString(16).padStart(6, '0')}`;
+  return `#${Number(hex || 0x58a6ff)
+    .toString(16)
+    .padStart(6, '0')}`;
 }
 
 function clamp01(value) {
@@ -322,9 +325,10 @@ export class ResourceLabelLayer {
     // Prefer the status the renderer derived for this group (it is refreshed
     // every tick and includes Route endpoint refinement); fall back to deriving
     // it from the live resource when the renderer has not pushed one yet.
-    const status = group?.userData?.status
-      || visualStatusFor(group?.userData?.resourceRef || null, null)
-      || null;
+    const status =
+      group?.userData?.status ||
+      visualStatusFor(group?.userData?.resourceRef || null, null) ||
+      null;
     if (info.status === status) return;
     info.status = status;
     if (info.dot) {
@@ -439,10 +443,15 @@ export class ResourceLabelLayer {
       const isMine = Boolean(info.mine);
       // Player-created objects win label collisions against seeded defaults: the
       // label layer is the first place a newcomer looks for "the thing I made".
-      const priority = isSelected ? -1e6
-        : isHovered ? -9e5
-          : dFocus * 1.35 + camDistance * 0.22 - kindBias * 2 - (isMine ? 26 : 0)
-            + (info.dimmed ? 18 : 0);
+      const priority = isSelected
+        ? -1e6
+        : isHovered
+          ? -9e5
+          : dFocus * 1.35 +
+            camDistance * 0.22 -
+            kindBias * 2 -
+            (isMine ? 26 : 0) +
+            (info.dimmed ? 18 : 0);
 
       // Distance fade relative to the framed camera distance — depth, not haze.
       const ratio = camDistance / focusDistance;
@@ -463,13 +472,14 @@ export class ResourceLabelLayer {
     const labelGap = menuMode ? LABEL_GAP_MENU : LABEL_GAP;
     const ranked = candidates.map((candidate) => ({
       ...candidate,
-      rank: (candidate.isSelected ? 1000 : 0)
-        + (candidate.isHovered ? 900 : 0)
-        + (candidate.isMine ? 140 : 0)
-        - (candidate.info.dimmed ? 60 : 0)
-        + (KIND_DEDUPE_PRIORITY[candidate.info.kind] || 0),
+      rank:
+        (candidate.isSelected ? 1000 : 0) +
+        (candidate.isHovered ? 900 : 0) +
+        (candidate.isMine ? 140 : 0) -
+        (candidate.info.dimmed ? 60 : 0) +
+        (KIND_DEDUPE_PRIORITY[candidate.info.kind] || 0),
     }));
-    ranked.sort((a, b) => (b.rank - a.rank) || (a.priority - b.priority));
+    ranked.sort((a, b) => b.rank - a.rank || a.priority - b.priority);
     const byName = new Map();
     for (const candidate of ranked) {
       const key = candidate.info.name.toLowerCase();
@@ -478,9 +488,7 @@ export class ResourceLabelLayer {
     const pooled = [...byName.values()].sort((a, b) => a.priority - b.priority);
 
     const area = width * height;
-    const cap = menuMode
-      ? MAX_LABELS_MENU
-      : area >= 1_150_000 ? 26 : area >= 780_000 ? 20 : 13;
+    const cap = menuMode ? MAX_LABELS_MENU : area >= 1_150_000 ? 26 : area >= 780_000 ? 20 : 13;
 
     const placed = [];
     const visibleIds = new Set();
@@ -525,7 +533,10 @@ export class ResourceLabelLayer {
         info.opacity = alpha;
         el.style.opacity = String(alpha);
       }
-      this._applyState(info, candidate.isSelected ? 'selected' : candidate.isHovered ? 'hovered' : 'default');
+      this._applyState(
+        info,
+        candidate.isSelected ? 'selected' : candidate.isHovered ? 'hovered' : 'default'
+      );
     }
 
     for (const info of this.labels.values()) {
@@ -537,7 +548,8 @@ export class ResourceLabelLayer {
     const right = left + info.width;
     const bottom = top + info.height;
     for (const rect of placed) {
-      if (left < rect.right && right > rect.left && top < rect.bottom && bottom > rect.top) return true;
+      if (left < rect.right && right > rect.left && top < rect.bottom && bottom > rect.top)
+        return true;
     }
     return false;
   }

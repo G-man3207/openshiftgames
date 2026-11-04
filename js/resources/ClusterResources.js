@@ -51,8 +51,11 @@ export class Node extends ResourceBase {
       ephemeralStorage: '50Gi',
     };
     const allocatable = {
-      cpu: metadata.cpuAllocatable || String(Math.max(0, parseCpuToMillis(capacity.cpu) - 200)) + 'm',
-      memory: metadata.memoryAllocatable || `${Math.max(0, Math.floor(parseMemoryToBytes(capacity.memory) / 1024 ** 3) - 1)}Gi`,
+      cpu:
+        metadata.cpuAllocatable || String(Math.max(0, parseCpuToMillis(capacity.cpu) - 200)) + 'm',
+      memory:
+        metadata.memoryAllocatable ||
+        `${Math.max(0, Math.floor(parseMemoryToBytes(capacity.memory) / 1024 ** 3) - 1)}Gi`,
       pods: '110',
       ephemeralStorage: '45Gi',
     };
@@ -71,9 +74,24 @@ export class Node extends ResourceBase {
       allocatable,
       conditions: [
         condition('Ready', 'True', 'KubeletReady', 'kubelet is posting ready status'),
-        condition('MemoryPressure', 'False', 'KubeletHasSufficientMemory', 'kubelet has sufficient memory available'),
-        condition('DiskPressure', 'False', 'KubeletHasNoDiskPressure', 'kubelet has no disk pressure'),
-        condition('PIDPressure', 'False', 'KubeletHasSufficientPID', 'kubelet has sufficient PID available'),
+        condition(
+          'MemoryPressure',
+          'False',
+          'KubeletHasSufficientMemory',
+          'kubelet has sufficient memory available'
+        ),
+        condition(
+          'DiskPressure',
+          'False',
+          'KubeletHasNoDiskPressure',
+          'kubelet has no disk pressure'
+        ),
+        condition(
+          'PIDPressure',
+          'False',
+          'KubeletHasSufficientPID',
+          'kubelet has sufficient PID available'
+        ),
         condition('NetworkUnavailable', 'False', 'NoNetworkPlugin', 'network plugin is ready'),
       ],
       nodeInfo: {
@@ -88,7 +106,10 @@ export class Node extends ResourceBase {
       },
       usage: { cpu: 0, memory: 0, cpuPercent: 0, memoryPercent: 0 },
       addresses: [
-        { type: 'InternalIP', address: `192.168.${1 + Math.floor(Math.random() * 250)}.${10 + Math.floor(Math.random() * 240)}` },
+        {
+          type: 'InternalIP',
+          address: `192.168.${1 + Math.floor(Math.random() * 250)}.${10 + Math.floor(Math.random() * 240)}`,
+        },
         { type: 'Hostname', address: metadata.name || 'node' },
       ],
     });
@@ -163,14 +184,18 @@ export class Node extends ResourceBase {
 
   getCpuUsagePercent() {
     const used = this.status.usage?.cpu || 0;
-    const capacity = parseCpuToMillis(this.status.allocatable?.cpu || this.status.capacity?.cpu || this.spec.cpu || '4');
+    const capacity = parseCpuToMillis(
+      this.status.allocatable?.cpu || this.status.capacity?.cpu || this.spec.cpu || '4'
+    );
     return capacity > 0 ? (used / capacity) * 100 : 0;
   }
 
   getMemoryUsagePercent() {
     // usage.memory is in MiB (ClusterState.getNodeAllocatable), allocatable in bytes
     const usedBytes = (this.status.usage?.memory || 0) * 1024 ** 2;
-    const capacity = parseMemoryToBytes(this.status.allocatable?.memory || this.status.capacity?.memory || this.spec.memory || '8Gi');
+    const capacity = parseMemoryToBytes(
+      this.status.allocatable?.memory || this.status.capacity?.memory || this.spec.memory || '8Gi'
+    );
     return capacity > 0 ? (usedBytes / capacity) * 100 : 0;
   }
 
@@ -198,11 +223,21 @@ export class Node extends ResourceBase {
   }
 
   toDescribe() {
-    const roleLabel = this.metadata.labels['node-role.kubernetes.io/master'] ?? this.metadata.labels['node-role.kubernetes.io/control-plane'];
+    const roleLabel =
+      this.metadata.labels['node-role.kubernetes.io/master'] ??
+      this.metadata.labels['node-role.kubernetes.io/control-plane'];
     return `Name:               ${this.metadata.name}
 Roles:              ${roleLabel !== undefined ? 'control-plane,master' : 'worker'}
-Labels:             ${Object.entries(this.metadata.labels).map(([k, v]) => `${k}=${v}`).join('\n                    ') || '<none>'}
-Annotations:        ${Object.entries(this.metadata.annotations).map(([k, v]) => `${k}=${v}`).join(', ') || '<none>'}
+Labels:             ${
+      Object.entries(this.metadata.labels)
+        .map(([k, v]) => `${k}=${v}`)
+        .join('\n                    ') || '<none>'
+    }
+Annotations:        ${
+      Object.entries(this.metadata.annotations)
+        .map(([k, v]) => `${k}=${v}`)
+        .join(', ') || '<none>'
+    }
 Taints:             ${(this.spec.taints || []).map((t) => `${t.key}=${t.value}:${t.effect}`).join(', ') || '<none>'}
 Unschedulable:      ${this.spec.unschedulable === true}
 Conditions:
@@ -227,13 +262,19 @@ Non-terminated Pods: (${this.pods.length} in total)
   CPU Usage:          ${Math.round(this.status.usage?.cpu || 0)}m / ${this.status.allocatable?.cpu || this.status.capacity?.cpu} (${this.getCpuUsagePercent().toFixed(1)}%)
   Memory Usage:       ${Math.round(this.status.usage?.memory || 0)}Mi / ${this.status.allocatable?.memory || this.status.capacity?.memory} (${this.getMemoryUsagePercent().toFixed(1)}%)
 Events:
-${this.events.slice(-10).map((e) => `  ${e.type}\t${e.reason}\t${e.message}`).join('\n')}`;
+${this.events
+  .slice(-10)
+  .map((e) => `  ${e.type}\t${e.reason}\t${e.message}`)
+  .join('\n')}`;
   }
 }
 
 export class HorizontalPodAutoscaler extends ResourceBase {
   constructor(metadata = {}) {
-    super('HorizontalPodAutoscaler', { ...metadata, apiVersion: metadata.apiVersion || 'autoscaling/v2' });
+    super('HorizontalPodAutoscaler', {
+      ...metadata,
+      apiVersion: metadata.apiVersion || 'autoscaling/v2',
+    });
     const defaults = {
       scaleTargetRef: {
         apiVersion: 'apps/v1',
@@ -283,7 +324,12 @@ export class HorizontalPodAutoscaler extends ResourceBase {
       currentMetrics: [],
       lastScaleTime: null,
       conditions: [
-        { type: 'AbleToScale', status: 'True', reason: 'ReadyForNewScale', lastTransitionTime: timestamp() },
+        {
+          type: 'AbleToScale',
+          status: 'True',
+          reason: 'ReadyForNewScale',
+          lastTransitionTime: timestamp(),
+        },
         {
           type: 'ScalingActive',
           status: 'False',
@@ -291,7 +337,12 @@ export class HorizontalPodAutoscaler extends ResourceBase {
           message: 'the HPA was unable to compute the replica count: no metrics returned',
           lastTransitionTime: timestamp(),
         },
-        { type: 'ScalingLimited', status: 'False', reason: 'DesiredWithinRange', lastTransitionTime: timestamp() },
+        {
+          type: 'ScalingLimited',
+          status: 'False',
+          reason: 'DesiredWithinRange',
+          lastTransitionTime: timestamp(),
+        },
       ],
     });
   }
@@ -318,7 +369,10 @@ ${target.kind}/${target.name} replicas: ${this.status.currentReplicas || 0}
 Conditions:
 ${(this.status.conditions || []).map((c) => `  Type: ${c.type}  Status: ${c.status}  Reason: ${c.reason}`).join('\n')}
 Events:
-${this.events.slice(-10).map((e) => `  ${e.type}\t${e.reason}\t${e.message}`).join('\n')}`;
+${this.events
+  .slice(-10)
+  .map((e) => `  ${e.type}\t${e.reason}\t${e.message}`)
+  .join('\n')}`;
   }
 }
 
@@ -358,9 +412,12 @@ export class ResourceQuota extends ResourceBase {
     const used = {};
     for (const key of Object.keys(this.spec.hard || {})) used[key] = '0';
     used.pods = String(inNamespace.filter((r) => r.kind === 'Pod').length);
-    if ('services' in used) used.services = String(inNamespace.filter((r) => r.kind === 'Service').length);
-    if ('configmaps' in used) used.configmaps = String(inNamespace.filter((r) => r.kind === 'ConfigMap').length);
-    if ('secrets' in used) used.secrets = String(inNamespace.filter((r) => r.kind === 'Secret').length);
+    if ('services' in used)
+      used.services = String(inNamespace.filter((r) => r.kind === 'Service').length);
+    if ('configmaps' in used)
+      used.configmaps = String(inNamespace.filter((r) => r.kind === 'ConfigMap').length);
+    if ('secrets' in used)
+      used.secrets = String(inNamespace.filter((r) => r.kind === 'Secret').length);
 
     let requestsCpu = 0;
     let requestsMemory = 0;
@@ -375,9 +432,11 @@ export class ResourceQuota extends ResourceBase {
       }
     }
     if ('requests.cpu' in used) used['requests.cpu'] = `${Math.round(requestsCpu)}m`;
-    if ('requests.memory' in used) used['requests.memory'] = `${Math.round(requestsMemory / 1024 ** 2)}Mi`;
+    if ('requests.memory' in used)
+      used['requests.memory'] = `${Math.round(requestsMemory / 1024 ** 2)}Mi`;
     if ('limits.cpu' in used) used['limits.cpu'] = `${Math.round(limitsCpu)}m`;
-    if ('limits.memory' in used) used['limits.memory'] = `${Math.round(limitsMemory / 1024 ** 2)}Mi`;
+    if ('limits.memory' in used)
+      used['limits.memory'] = `${Math.round(limitsMemory / 1024 ** 2)}Mi`;
     this.status.used = used;
     return used;
   }
@@ -402,7 +461,10 @@ Resource      Used    Hard
 --------      ----    ----
 ${keys.map((k) => `${k.padEnd(14)} ${String(this.status.used?.[k] ?? '0').padEnd(7)} ${this.spec.hard[k]}`).join('\n')}
 Events:
-${this.events.slice(-10).map((e) => `  ${e.type}\t${e.reason}\t${e.message}`).join('\n')}`;
+${this.events
+  .slice(-10)
+  .map((e) => `  ${e.type}\t${e.reason}\t${e.message}`)
+  .join('\n')}`;
   }
 }
 
@@ -413,10 +475,13 @@ export class PodDisruptionBudget extends ResourceBase {
     const defaults = {
       selector: { matchLabels: deepClone(metadata.matchLabels || {}) },
       minAvailable: hasMin ? metadata.minAvailable : null,
-      maxUnavailable: metadata.maxUnavailable !== undefined ? metadata.maxUnavailable : hasMin ? null : 1,
+      maxUnavailable:
+        metadata.maxUnavailable !== undefined ? metadata.maxUnavailable : hasMin ? null : 1,
       // API default when omitted is IfHealthyBudget; valid values are only
       // IfHealthyBudget | AlwaysAllow. Omit unless the caller sets one.
-      ...(metadata.unhealthyPodEvictionPolicy ? { unhealthyPodEvictionPolicy: metadata.unhealthyPodEvictionPolicy } : {}),
+      ...(metadata.unhealthyPodEvictionPolicy
+        ? { unhealthyPodEvictionPolicy: metadata.unhealthyPodEvictionPolicy }
+        : {}),
     };
     this._initSpec(defaults, metadata.spec);
     this._setInitialStatus({
@@ -467,14 +532,19 @@ export class PodDisruptionBudget extends ResourceBase {
     return `Name:                  ${this.metadata.name}
 Namespace:             ${this.metadata.namespace}
 ${specLine}
-Selector:              ${Object.entries(this.spec.selector?.matchLabels || {}).map(([k, v]) => `${k}=${v}`).join(', ')}
+Selector:              ${Object.entries(this.spec.selector?.matchLabels || {})
+      .map(([k, v]) => `${k}=${v}`)
+      .join(', ')}
 Status:
   Allowed Disruptions: ${this.status.disruptionsAllowed}
   Current Healthy:     ${this.status.currentHealthy}
   Desired Healthy:     ${this.status.desiredHealthy}
   Total:               ${this.status.expectedPods}
 Events:
-${this.events.slice(-10).map((e) => `  ${e.type}\t${e.reason}\t${e.message}`).join('\n')}`;
+${this.events
+  .slice(-10)
+  .map((e) => `  ${e.type}\t${e.reason}\t${e.message}`)
+  .join('\n')}`;
   }
 }
 

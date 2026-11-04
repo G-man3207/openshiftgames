@@ -15,7 +15,11 @@ import { deepClone } from './ManifestSerializer.js';
 
 export class User extends ResourceBase {
   constructor(metadata = {}) {
-    super('User', { ...metadata, namespace: '', apiVersion: metadata.apiVersion || 'user.openshift.io/v1' });
+    super('User', {
+      ...metadata,
+      namespace: '',
+      apiVersion: metadata.apiVersion || 'user.openshift.io/v1',
+    });
     this._initSpec(
       {
         fullName: metadata.fullName || '',
@@ -74,14 +78,18 @@ export class User extends ResourceBase {
 
   getIdentityNames() {
     return this.identities.map((identity) =>
-      typeof identity === 'string' ? identity : `${identity.providerName}:${identity.providerUserName}`
+      typeof identity === 'string'
+        ? identity
+        : `${identity.providerName}:${identity.providerUserName}`
     );
   }
 
   validate() {
     const result = super.validate();
-    if (!Array.isArray(this.spec.groups || [])) result.errors.push('spec.groups must be an array of group names');
-    if (!Array.isArray(this.spec.identities || [])) result.errors.push('spec.identities must be an array');
+    if (!Array.isArray(this.spec.groups || []))
+      result.errors.push('spec.groups must be an array of group names');
+    if (!Array.isArray(this.spec.identities || []))
+      result.errors.push('spec.identities must be an array');
     result.valid = result.errors.length === 0;
     return result;
   }
@@ -92,16 +100,31 @@ UID:          ${this.metadata.uid}
 Full Name:    ${this.fullName || '<none>'}
 Identities:   ${this.getIdentityNames().join(', ') || '<none>'}
 Groups:       ${this.groups.join(', ') || '<none>'}
-Labels:       ${Object.entries(this.metadata.labels).map(([k, v]) => `${k}=${v}`).join(', ') || '<none>'}
-Annotations:  ${Object.entries(this.metadata.annotations).map(([k, v]) => `${k}=${v}`).join(', ') || '<none>'}
+Labels:       ${
+      Object.entries(this.metadata.labels)
+        .map(([k, v]) => `${k}=${v}`)
+        .join(', ') || '<none>'
+    }
+Annotations:  ${
+      Object.entries(this.metadata.annotations)
+        .map(([k, v]) => `${k}=${v}`)
+        .join(', ') || '<none>'
+    }
 Events:
-${this.events.slice(-10).map((e) => `  ${e.type}\t${e.reason}\t${e.message}`).join('\n')}`;
+${this.events
+  .slice(-10)
+  .map((e) => `  ${e.type}\t${e.reason}\t${e.message}`)
+  .join('\n')}`;
   }
 }
 
 export class Group extends ResourceBase {
   constructor(metadata = {}) {
-    super('Group', { ...metadata, namespace: '', apiVersion: metadata.apiVersion || 'user.openshift.io/v1' });
+    super('Group', {
+      ...metadata,
+      namespace: '',
+      apiVersion: metadata.apiVersion || 'user.openshift.io/v1',
+    });
     this._initSpec({ users: deepClone(metadata.users || []) }, metadata.spec);
     this._setInitialStatus({ phase: 'Active' });
   }
@@ -135,7 +158,8 @@ export class Group extends ResourceBase {
 
   validate() {
     const result = super.validate();
-    if (!Array.isArray(this.spec.users || [])) result.errors.push('spec.users must be an array of user names');
+    if (!Array.isArray(this.spec.users || []))
+      result.errors.push('spec.users must be an array of user names');
     result.valid = result.errors.length === 0;
     return result;
   }
@@ -143,12 +167,23 @@ export class Group extends ResourceBase {
   toDescribe() {
     return `Name:         ${this.metadata.name}
 Created:      ${this.metadata.creationTimestamp}
-Labels:       ${Object.entries(this.metadata.labels).map(([k, v]) => `${k}=${v}`).join(', ') || '<none>'}
-Annotations:  ${Object.entries(this.metadata.annotations).map(([k, v]) => `${k}=${v}`).join(', ') || '<none>'}
+Labels:       ${
+      Object.entries(this.metadata.labels)
+        .map(([k, v]) => `${k}=${v}`)
+        .join(', ') || '<none>'
+    }
+Annotations:  ${
+      Object.entries(this.metadata.annotations)
+        .map(([k, v]) => `${k}=${v}`)
+        .join(', ') || '<none>'
+    }
 Users:
 ${this.users.map((user) => `  ${user}`).join('\n') || '  <none>'}
 Events:
-${this.events.slice(-10).map((e) => `  ${e.type}\t${e.reason}\t${e.message}`).join('\n')}`;
+${this.events
+  .slice(-10)
+  .map((e) => `  ${e.type}\t${e.reason}\t${e.message}`)
+  .join('\n')}`;
   }
 }
 
@@ -163,7 +198,8 @@ export class Identity extends ResourceBase {
     // real cluster (e.g. `htpasswd:alice`); parse it when no explicit values are
     // supplied so palette-created identities are self-consistent.
     const nameParts = String(metadata.name || '').split(':');
-    const providerName = metadata.providerName || (nameParts.length > 1 ? nameParts[0] : 'htpasswd');
+    const providerName =
+      metadata.providerName || (nameParts.length > 1 ? nameParts[0] : 'htpasswd');
     const providerUserName =
       metadata.providerUserName ||
       (nameParts.length > 1 ? nameParts.slice(1).join(':') : metadata.name || '');
@@ -220,9 +256,16 @@ Provider Name:    ${this.providerName}
 Provider Username:${this.providerUserName}
 User Name:        ${this.userName || '<none>'}
 User UID:         ${this.spec.user?.uid || '<none>'}
-Labels:           ${Object.entries(this.metadata.labels).map(([k, v]) => `${k}=${v}`).join(', ') || '<none>'}
+Labels:           ${
+      Object.entries(this.metadata.labels)
+        .map(([k, v]) => `${k}=${v}`)
+        .join(', ') || '<none>'
+    }
 Events:
-${this.events.slice(-10).map((e) => `  ${e.type}\t${e.reason}\t${e.message}`).join('\n')}`;
+${this.events
+  .slice(-10)
+  .map((e) => `  ${e.type}\t${e.reason}\t${e.message}`)
+  .join('\n')}`;
   }
 }
 

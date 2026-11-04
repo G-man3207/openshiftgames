@@ -64,13 +64,17 @@ const STATUS_META = {
 };
 
 const escapeHtml = (value) =>
-  String(value ?? '').replace(/[&<>"']/g, (char) => ({
-    '&': '&amp;',
-    '<': '&lt;',
-    '>': '&gt;',
-    '"': '&quot;',
-    "'": '&#39;',
-  }[char]));
+  String(value ?? '').replace(
+    /[&<>"']/g,
+    (char) =>
+      ({
+        '&': '&amp;',
+        '<': '&lt;',
+        '>': '&gt;',
+        '"': '&quot;',
+        "'": '&#39;',
+      })[char]
+  );
 
 const EX280_STYLES = `
 #exam-prep-overlay {
@@ -601,10 +605,12 @@ export class ExamPrepUI {
         </header>
 
         <nav class="ep-tabs" role="tablist" aria-label="EX280 Prep sections">
-          ${TABS.map((tab) => `
+          ${TABS.map(
+            (tab) => `
             <button type="button" class="ep-tab" role="tab" aria-selected="false"
               data-action="tab" data-tab="${tab.id}" data-testid="${tab.testId}">${escapeHtml(tab.label)}</button>
-          `).join('')}
+          `
+          ).join('')}
         </nav>
 
         <div class="ep-progress-row">
@@ -909,18 +915,24 @@ export class ExamPrepUI {
         pass: false,
         completed: 0,
         total: checks.length,
-        pending: ['Launch the lab in Sandbox first — completion is checked against the live cluster.'],
+        pending: [
+          'Launch the lab in Sandbox first — completion is checked against the live cluster.',
+        ],
       };
     }
     const progress = createObjectiveProgress(checks);
     try {
-      evaluateObjectives(checks, {
-        clusterState,
-        gameEngine: game?.gameEngine || null,
-        incidentEngine: game?.incidentEngine || null,
-        scoringEngine: this._scoring(),
-        manifestEngine: game?.manifestEngine || null,
-      }, { progress, recheckCompleted: true });
+      evaluateObjectives(
+        checks,
+        {
+          clusterState,
+          gameEngine: game?.gameEngine || null,
+          incidentEngine: game?.incidentEngine || null,
+          scoringEngine: this._scoring(),
+          manifestEngine: game?.manifestEngine || null,
+        },
+        { progress, recheckCompleted: true }
+      );
     } catch (error) {
       return {
         pass: false,
@@ -946,7 +958,12 @@ export class ExamPrepUI {
     const label = lab ? lab.title : objectiveId;
     const result = lab
       ? this._evaluateLabCheck(lab)
-      : { pass: false, completed: 0, total: 0, pending: ['Unknown quick lab — launch it in Sandbox first.'] };
+      : {
+          pass: false,
+          completed: 0,
+          total: 0,
+          pending: ['Unknown quick lab — launch it in Sandbox first.'],
+        };
     if (!result.pass) {
       const detail = result.pending.slice(0, 3).join('; ');
       const message = `“${label}” not marked complete yet — the live check is ${result.completed}/${result.total}. Still to do: ${detail}`;
@@ -983,7 +1000,10 @@ export class ExamPrepUI {
     };
     try {
       if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
-        navigator.clipboard.writeText(command).then(done).catch(() => this._fallbackCopy(command, done));
+        navigator.clipboard
+          .writeText(command)
+          .then(done)
+          .catch(() => this._fallbackCopy(command, done));
         return;
       }
     } catch {
@@ -1031,7 +1051,8 @@ export class ExamPrepUI {
     try {
       if (this.gameEngine?.eventBus) return this.gameEngine.eventBus;
       if (typeof window !== 'undefined' && window.game?.engine) return window.game.engine;
-      if (typeof window !== 'undefined' && window.game?.gameEngine?.eventBus) return window.game.gameEngine.eventBus;
+      if (typeof window !== 'undefined' && window.game?.gameEngine?.eventBus)
+        return window.game.gameEngine.eventBus;
     } catch {
       /* ignore */
     }
@@ -1041,7 +1062,9 @@ export class ExamPrepUI {
   _app() {
     if (this.app) return this.app;
     try {
-      return typeof window !== 'undefined' ? window.game?.app || window.__openshiftGamesApp || null : null;
+      return typeof window !== 'undefined'
+        ? window.game?.app || window.__openshiftGamesApp || null
+        : null;
     } catch {
       return null;
     }
@@ -1062,14 +1085,16 @@ export class ExamPrepUI {
     if (this._localState) return this._localState;
     const state = {};
     try {
-      const raw = typeof localStorage !== 'undefined' ? localStorage.getItem(LOCAL_STORAGE_KEY) : null;
+      const raw =
+        typeof localStorage !== 'undefined' ? localStorage.getItem(LOCAL_STORAGE_KEY) : null;
       if (raw) {
         const parsed = JSON.parse(raw);
         if (parsed && typeof parsed === 'object') {
           for (const [id, entry] of Object.entries(parsed)) {
             if (!entry) continue;
             if (entry === 'mastered' || entry === 'practiced') state[id] = entry;
-            else if (entry.state === 'mastered' || entry.state === 'practiced') state[id] = entry.state;
+            else if (entry.state === 'mastered' || entry.state === 'practiced')
+              state[id] = entry.state;
           }
         }
       }
@@ -1119,11 +1144,12 @@ export class ExamPrepUI {
     const state = {};
     const add = (id, value) => {
       if (!id) return;
-      const normalized = value === 'mastered' || value?.state === 'mastered'
-        ? 'mastered'
-        : value === 'practiced' || value?.state === 'practiced'
-          ? 'practiced'
-          : null;
+      const normalized =
+        value === 'mastered' || value?.state === 'mastered'
+          ? 'mastered'
+          : value === 'practiced' || value?.state === 'practiced'
+            ? 'practiced'
+            : null;
       if (!normalized) return;
       if (state[id] !== 'mastered') state[id] = normalized;
     };
@@ -1139,7 +1165,14 @@ export class ExamPrepUI {
     if (raw.mastered && typeof raw.mastered === 'object' && !Array.isArray(raw.mastered)) {
       for (const [id, value] of Object.entries(raw.mastered)) if (value) add(id, 'mastered');
     }
-    const reserved = new Set(['objectives', 'bullets', 'states', 'mastered', 'practiced', 'updatedAt']);
+    const reserved = new Set([
+      'objectives',
+      'bullets',
+      'states',
+      'mastered',
+      'practiced',
+      'updatedAt',
+    ]);
     for (const [id, value] of Object.entries(raw)) {
       if (reserved.has(id)) continue;
       add(id, value);
@@ -1181,7 +1214,8 @@ export class ExamPrepUI {
     const scoring = this._scoring();
     let progress = {};
     try {
-      if (scoring && typeof scoring.getProgress === 'function') progress = scoring.getProgress() || {};
+      if (scoring && typeof scoring.getProgress === 'function')
+        progress = scoring.getProgress() || {};
     } catch {
       progress = {};
     }
@@ -1191,12 +1225,14 @@ export class ExamPrepUI {
       // Drill-run-scoped command evidence (#20): { 'campaign:12': [...], ... }.
       // Sandbox/chaos commands never appear here, so free play cannot inflate
       // the EX280 readiness verdict.
-      drillCommandEvidence: progress?.drillCommandEvidence && typeof progress.drillCommandEvidence === 'object'
-        ? progress.drillCommandEvidence
-        : {},
-      objectiveEvidence: progress?.objectiveEvidence && typeof progress.objectiveEvidence === 'object'
-        ? progress.objectiveEvidence
-        : {},
+      drillCommandEvidence:
+        progress?.drillCommandEvidence && typeof progress.drillCommandEvidence === 'object'
+          ? progress.drillCommandEvidence
+          : {},
+      objectiveEvidence:
+        progress?.objectiveEvidence && typeof progress.objectiveEvidence === 'object'
+          ? progress.objectiveEvidence
+          : {},
     };
   }
 
@@ -1228,9 +1264,9 @@ export class ExamPrepUI {
       if (wantsOutputFormatting) {
         // "Format output with -o wide/yaml/json" style bullets: require an
         // output-formatting flag on an actual oc get/describe command.
-        const formatted = commandEvidence.some((raw) =>
-          /(?:^|\s)(?:-o|--output)(?:=|\s)/i.test(raw)
-          && /^oc\s+(get|describe)\b/i.test(raw)
+        const formatted = commandEvidence.some(
+          (raw) =>
+            /(?:^|\s)(?:-o|--output)(?:=|\s)/i.test(raw) && /^oc\s+(get|describe)\b/i.test(raw)
         );
         if (formatted) return true;
         continue;
@@ -1267,7 +1303,8 @@ export class ExamPrepUI {
       if (!lab) continue;
       if (examPrep[lab.objectiveId] === 'mastered') return 'mastered';
       if ((lab.objectiveIds || []).some((id) => examPrep[id] === 'mastered')) {
-        const linked = lab.objectiveId === bullet.id || (lab.objectiveIds || []).includes(bullet.id);
+        const linked =
+          lab.objectiveId === bullet.id || (lab.objectiveIds || []).includes(bullet.id);
         if (linked) return 'mastered';
       }
     }
@@ -1304,7 +1341,8 @@ export class ExamPrepUI {
       if (campaignProgress[levelId] ?? campaignProgress[String(levelId)]) return 'practiced';
     }
     for (const challengeId of bullet.challenges || []) {
-      if (challengeProgress[challengeId] ?? challengeProgress[String(challengeId)]) return 'practiced';
+      if (challengeProgress[challengeId] ?? challengeProgress[String(challengeId)])
+        return 'practiced';
     }
     return 'todo';
   }
@@ -1317,12 +1355,19 @@ export class ExamPrepUI {
     let masteredCount = 0;
     let evidenceCount = 0;
     for (const bullet of EX280_OBJECTIVE_BULLETS) {
-      const status = this._bulletStatus(bullet, examPrep, campaignProgress, challengeProgress, progressData);
+      const status = this._bulletStatus(
+        bullet,
+        examPrep,
+        campaignProgress,
+        challengeProgress,
+        progressData
+      );
       statuses.set(bullet.id, status);
       if (status === 'mastered') masteredCount += 1;
       if (status !== 'todo') evidenceCount += 1;
     }
-    const percent = EX280_OBJECTIVE_COUNT > 0 ? Math.round((masteredCount / EX280_OBJECTIVE_COUNT) * 100) : 0;
+    const percent =
+      EX280_OBJECTIVE_COUNT > 0 ? Math.round((masteredCount / EX280_OBJECTIVE_COUNT) * 100) : 0;
     const ready = masteredCount / (EX280_OBJECTIVE_COUNT || 1) >= EX280_READINESS_THRESHOLD;
     return { examPrep, statuses, masteredCount, evidenceCount, percent, ready, progressData };
   }
@@ -1373,7 +1418,11 @@ export class ExamPrepUI {
       const almost = !ready && snapshot.percent >= 60;
       this.readinessBadge.classList.toggle('is-ready', ready);
       this.readinessBadge.classList.toggle('is-close', almost);
-      this.readinessBadge.textContent = ready ? 'Drills verified' : almost ? 'Almost there' : 'Keep going';
+      this.readinessBadge.textContent = ready
+        ? 'Drills verified'
+        : almost
+          ? 'Almost there'
+          : 'Keep going';
       this.readinessBadge.title = `Evidence threshold: ${Math.round(EX280_READINESS_THRESHOLD * 100)}% of bullets have drill evidence (a passed quick-lab check, or a completed linked drill after running the bullet's own commands). Tracked study coverage — not a Red Hat pass prediction.`;
     }
     const track = this.overlay?.querySelector('.ep-progress-track');
@@ -1384,7 +1433,11 @@ export class ExamPrepUI {
   _matchesQuery(query, ...values) {
     if (!query) return true;
     const needle = query.toLowerCase();
-    return values.some((value) => String(value ?? '').toLowerCase().includes(needle));
+    return values.some((value) =>
+      String(value ?? '')
+        .toLowerCase()
+        .includes(needle)
+    );
   }
 
   _renderObjectivesList() {
@@ -1394,12 +1447,20 @@ export class ExamPrepUI {
     let visibleCount = 0;
     const html = EX280_OBJECTIVE_GROUPS.map((group) => {
       const bullets = group.bullets.filter((bullet) => {
-        const matches = this._matchesQuery(query, bullet.title, bullet.summary, bullet.id, ...(bullet.commands || []));
+        const matches = this._matchesQuery(
+          query,
+          bullet.title,
+          bullet.summary,
+          bullet.id,
+          ...(bullet.commands || [])
+        );
         if (matches) visibleCount += 1;
         return matches;
       });
       if (bullets.length === 0) return '';
-      const masteredInGroup = bullets.filter((bullet) => snapshot.statuses.get(bullet.id) === 'mastered').length;
+      const masteredInGroup = bullets.filter(
+        (bullet) => snapshot.statuses.get(bullet.id) === 'mastered'
+      ).length;
       return `
         <div class="ep-group" data-testid="exam-group-${escapeHtml(group.id)}">
           <div class="ep-group-head">
@@ -1411,12 +1472,14 @@ export class ExamPrepUI {
       `;
     }).join('');
 
-    this.objectivesList.innerHTML = html || '<div class="ep-empty">No objectives match your search.</div>';
+    this.objectivesList.innerHTML =
+      html || '<div class="ep-empty">No objectives match your search.</div>';
     const hint = this.overlay?.querySelector('.ep-hint');
     if (hint && query) {
       hint.textContent = `${visibleCount} of ${EX280_OBJECTIVE_COUNT} objectives match “${query}”.`;
     } else if (hint) {
-      hint.textContent = 'Mastered = drill evidence: a quick-lab check passed, or a linked level/challenge completed after running the bullet\'s own commands. A completed level alone only counts as Practiced.';
+      hint.textContent =
+        "Mastered = drill evidence: a quick-lab check passed, or a linked level/challenge completed after running the bullet's own commands. A completed level alone only counts as Practiced.";
     }
   }
 
@@ -1426,28 +1489,42 @@ export class ExamPrepUI {
     const meta = STATUS_META[effectiveStatus] || STATUS_META.todo;
     const statusTitle = consoleOnly
       ? 'Documentation only: the simulator has no web-console UI, so this bullet cannot be verified here — use the docs link.'
-      : 'Mastered = a passed quick-lab check, or a linked drill completed after running this bullet\'s own commands.';
-    const commands = (bullet.commands || []).map((command) => `
+      : "Mastered = a passed quick-lab check, or a linked drill completed after running this bullet's own commands.";
+    const commands = (bullet.commands || [])
+      .map(
+        (command) => `
       <div class="ep-cmd-row">
         <code>${escapeHtml(command)}</code>
         <button type="button" class="ep-icon-btn" data-action="copy-command"
           data-command="${escapeHtml(command)}" title="Copy command">Copy</button>
       </div>
-    `).join('');
-    const levelChips = (bullet.levels || []).map((levelId) => `
+    `
+      )
+      .join('');
+    const levelChips = (bullet.levels || [])
+      .map(
+        (levelId) => `
       <button type="button" class="ep-chip" data-action="start-level" data-level="${levelId}"
         title="Start campaign level ${levelId}: ${escapeHtml(levelTitle(levelId))}">Level ${levelId}</button>
-    `).join('');
-    const challengeChips = (bullet.challenges || []).map((challengeId) => `
+    `
+      )
+      .join('');
+    const challengeChips = (bullet.challenges || [])
+      .map(
+        (challengeId) => `
       <button type="button" class="ep-chip" data-action="start-challenge" data-challenge="${challengeId}"
         title="Start challenge ${challengeId}: ${escapeHtml(challengeTitle(challengeId))}">Challenge ${challengeId}</button>
-    `).join('');
-    const labChips = (bullet.quickLabs || []).map((labId) => {
-      const lab = EX280_QUICK_LABS.find((entry) => entry.id === labId);
-      if (!lab) return '';
-      return `<button type="button" class="ep-chip ep-chip-lab" data-action="open-lab" data-lab-id="${escapeHtml(lab.id)}"
+    `
+      )
+      .join('');
+    const labChips = (bullet.quickLabs || [])
+      .map((labId) => {
+        const lab = EX280_QUICK_LABS.find((entry) => entry.id === labId);
+        if (!lab) return '';
+        return `<button type="button" class="ep-chip ep-chip-lab" data-action="open-lab" data-lab-id="${escapeHtml(lab.id)}"
         title="Open quick lab: ${escapeHtml(lab.title)}">Lab: ${escapeHtml(lab.title)}</button>`;
-    }).join('');
+      })
+      .join('');
     return `
       <div class="ep-bullet" data-testid="exam-objective-${escapeHtml(bullet.id)}">
         <div class="ep-bullet-head">
@@ -1470,12 +1547,19 @@ export class ExamPrepUI {
     const examPrep = snapshot.examPrep || {};
     this.labsList.innerHTML = EX280_QUICK_LABS.map((lab) => {
       const objective = getEX280ObjectiveById(lab.objectiveId);
-      const isDone = examPrep[lab.objectiveId] === 'mastered'
-        || (lab.objectiveIds || []).some((id) => examPrep[id] === 'mastered');
-      const steps = (lab.steps || []).map((step) => `
+      const isDone =
+        examPrep[lab.objectiveId] === 'mastered' ||
+        (lab.objectiveIds || []).some((id) => examPrep[id] === 'mastered');
+      const steps = (lab.steps || [])
+        .map(
+          (step) => `
         <li>${escapeHtml(step.text)}${step.command ? `<br /><code>${escapeHtml(step.command)}</code>` : ''}</li>
-      `).join('');
-      const hints = (lab.hints || []).map((hint) => `<div class="ep-lab-hints">Tip: ${escapeHtml(hint)}</div>`).join('');
+      `
+        )
+        .join('');
+      const hints = (lab.hints || [])
+        .map((hint) => `<div class="ep-lab-hints">Tip: ${escapeHtml(hint)}</div>`)
+        .join('');
       return `
         <div class="ep-lab-card ${isDone ? 'is-done' : ''}" data-testid="exam-lab-${escapeHtml(lab.id)}">
           <div class="ep-lab-title">${escapeHtml(lab.title)}</div>
@@ -1504,14 +1588,18 @@ export class ExamPrepUI {
       const items = group.items.filter((item) => this._matchesQuery(query, item.cmd, item.note));
       if (items.length === 0) return '';
       visibleItems += items.length;
-      const rows = items.map((item) => `
+      const rows = items
+        .map(
+          (item) => `
         <div class="ep-cheat-item">
           <code>${escapeHtml(item.cmd)}</code>
           <button type="button" class="ep-icon-btn" data-action="copy-command"
             data-command="${escapeHtml(item.cmd)}" title="Copy command">Copy</button>
           <span class="ep-cheat-note">${escapeHtml(item.note)}</span>
         </div>
-      `).join('');
+      `
+        )
+        .join('');
       return `
         <div class="ep-cheat-group" data-testid="exam-cheat-${escapeHtml(group.id)}">
           <div class="ep-cheat-title">${escapeHtml(group.title)} <a class="ep-doc-link" href="${escapeHtml(group.docsUrl)}" target="_blank" rel="noopener noreferrer">docs →</a></div>
@@ -1523,7 +1611,9 @@ export class ExamPrepUI {
     const hint = this.overlay?.querySelector('[data-tab-panel="cheatsheet"] .ep-hint');
     if (hint) {
       const total = EX280_CHEATSHEET.reduce((count, group) => count + group.items.length, 0);
-      hint.textContent = query ? `${visibleItems} of ${total} commands match “${query}”.` : `${total} verified commands.`;
+      hint.textContent = query
+        ? `${visibleItems} of ${total} commands match “${query}”.`
+        : `${total} verified commands.`;
     }
   }
 }

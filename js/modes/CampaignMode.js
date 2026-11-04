@@ -212,8 +212,10 @@ class CampaignMode {
     clusterState._rescheduledCount = 0;
     clusterState._rescheduledPods = 0;
     try {
-      if (typeof this.gameEngine.clearCommandHistory === 'function') this.gameEngine.clearCommandHistory();
-      else if (Array.isArray(this.gameEngine._commandHistory)) this.gameEngine._commandHistory.length = 0;
+      if (typeof this.gameEngine.clearCommandHistory === 'function')
+        this.gameEngine.clearCommandHistory();
+      else if (Array.isArray(this.gameEngine._commandHistory))
+        this.gameEngine._commandHistory.length = 0;
     } catch {
       /* non-fatal */
     }
@@ -450,7 +452,9 @@ class CampaignMode {
 
     const completionTime = this.elapsedTime;
     const totalObjectives = this.objectiveProgress.length;
-    const completedObjectives = this.objectiveProgress.filter((objective) => objective.completed).length;
+    const completedObjectives = this.objectiveProgress.filter(
+      (objective) => objective.completed
+    ).length;
     const efficiency = totalObjectives === 0 ? 1 : completedObjectives / totalObjectives;
 
     let result = { stars: 1, xpEarned: 100 };

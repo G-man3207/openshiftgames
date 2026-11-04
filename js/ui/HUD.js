@@ -41,13 +41,16 @@ const WORKLOAD_KINDS = ['Deployment', 'StatefulSet', 'DaemonSet', 'ReplicaSet', 
 
 const SVG = {
   menu: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M2.5 4h11M2.5 8h11M2.5 12h11" stroke-linecap="round"/></svg>',
-  pause: '<svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><rect x="4" y="3" width="2.6" height="10" rx="1"/><rect x="9.4" y="3" width="2.6" height="10" rx="1"/></svg>',
+  pause:
+    '<svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><rect x="4" y="3" width="2.6" height="10" rx="1"/><rect x="9.4" y="3" width="2.6" height="10" rx="1"/></svg>',
   play: '<svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M5 3.6c0-.8.9-1.3 1.6-.9l6 4.4c.6.4.6 1.4 0 1.8l-6 4.4c-.7.4-1.6-.1-1.6-.9V3.6z"/></svg>',
   bell: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M4.3 6.8a3.7 3.7 0 017.4 0v2.4l1.1 1.7H3.2l1.1-1.7V6.8z" stroke-linejoin="round"/><path d="M6.5 12.6a1.6 1.6 0 003 0" stroke-linecap="round"/></svg>',
   gear: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><circle cx="8" cy="8" r="2.1"/><path d="M8 1.9v1.5M8 12.6v1.5M1.9 8h1.5M12.6 8h1.5M3.7 3.7l1 1M11.3 11.3l1 1M12.3 3.7l-1 1M4.7 11.3l-1 1" stroke-linecap="round"/></svg>',
   mark: '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="2.4" stroke-opacity=".28"/><circle cx="12" cy="12" r="3.4" fill="currentColor"/></svg>',
-  chevron: '<svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M4 7l2-2 2 2" stroke-linecap="round" stroke-linejoin="round"/></svg>',
-  frame: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M2.4 5.4V3.9a1.5 1.5 0 0 1 1.5-1.5h1.5M10.6 2.4h1.5a1.5 1.5 0 0 1 1.5 1.5v1.5M13.6 10.6v1.5a1.5 1.5 0 0 1-1.5 1.5h-1.5M5.4 13.6H3.9a1.5 1.5 0 0 1-1.5-1.5v-1.5" stroke-linecap="round"/><circle cx="8" cy="8" r="2.1" fill="currentColor" stroke="none"/></svg>',
+  chevron:
+    '<svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M4 7l2-2 2 2" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  frame:
+    '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M2.4 5.4V3.9a1.5 1.5 0 0 1 1.5-1.5h1.5M10.6 2.4h1.5a1.5 1.5 0 0 1 1.5 1.5v1.5M13.6 10.6v1.5a1.5 1.5 0 0 1-1.5 1.5h-1.5M5.4 13.6H3.9a1.5 1.5 0 0 1-1.5-1.5v-1.5" stroke-linecap="round"/><circle cx="8" cy="8" r="2.1" fill="currentColor" stroke="none"/></svg>',
 };
 
 export class HUD {
@@ -304,18 +307,55 @@ export class HUD {
 
   _cacheElements() {
     const ids = [
-      'hud-menu', 'hud-settings', 'hud-health', 'hud-health-dot', 'hud-health-label', 'hud-nodes',
-      'hud-projects', 'hud-workloads', 'hud-routes', 'hud-builds', 'hud-pods-running',
-      'hud-pods-pending', 'hud-pods-failed', 'hud-deployments', 'hud-services', 'hud-mode-name',
-      'hud-cpu-bar', 'hud-cpu-text', 'hud-mem-bar', 'hud-mem-text', 'hud-timer', 'hud-mode',
-      'hud-paused', 'hud-paused-reason',
-      'hud-level', 'hud-xp-bar', 'hud-pause', 'hud-pause-icon', 'hud-speed-1', 'hud-speed-2',
-      'hud-speed-4', 'hud-alert-badge', 'hud-alerts', 'hud-xp-container', 'hud-logo-text',
-      'hud-mission', 'hud-mission-count', 'hud-mission-fill', 'hud-level-name', 'hud-cluster-pop',
-      'hud-mine', 'hud-mine-count', 'hud-mine-focus', 'hud-platform', 'hud-platform-count',
+      'hud-menu',
+      'hud-settings',
+      'hud-health',
+      'hud-health-dot',
+      'hud-health-label',
+      'hud-nodes',
+      'hud-projects',
+      'hud-workloads',
+      'hud-routes',
+      'hud-builds',
+      'hud-pods-running',
+      'hud-pods-pending',
+      'hud-pods-failed',
+      'hud-deployments',
+      'hud-services',
+      'hud-mode-name',
+      'hud-cpu-bar',
+      'hud-cpu-text',
+      'hud-mem-bar',
+      'hud-mem-text',
+      'hud-timer',
+      'hud-mode',
+      'hud-paused',
+      'hud-paused-reason',
+      'hud-level',
+      'hud-xp-bar',
+      'hud-pause',
+      'hud-pause-icon',
+      'hud-speed-1',
+      'hud-speed-2',
+      'hud-speed-4',
+      'hud-alert-badge',
+      'hud-alerts',
+      'hud-xp-container',
+      'hud-logo-text',
+      'hud-mission',
+      'hud-mission-count',
+      'hud-mission-fill',
+      'hud-level-name',
+      'hud-cluster-pop',
+      'hud-mine',
+      'hud-mine-count',
+      'hud-mine-focus',
+      'hud-platform',
+      'hud-platform-count',
     ];
     for (const id of ids) {
-      this.elements[id] = this.container?.querySelector(`#${id}`) || document.getElementById(id) || null;
+      this.elements[id] =
+        this.container?.querySelector(`#${id}`) || document.getElementById(id) || null;
     }
   }
 
@@ -396,7 +436,8 @@ export class HUD {
 
   _togglePopover() {
     this._popOpen = !this._popOpen;
-    const pop = this.elements['hud-cluster-pop'] || this.container?.querySelector('#hud-cluster-pop');
+    const pop =
+      this.elements['hud-cluster-pop'] || this.container?.querySelector('#hud-cluster-pop');
     const health = this.elements['hud-health'];
     if (pop) pop.hidden = !this._popOpen;
     health?.setAttribute('aria-expanded', String(this._popOpen));
@@ -406,7 +447,8 @@ export class HUD {
   _closePopover() {
     if (!this._popOpen) return;
     this._popOpen = false;
-    const pop = this.elements['hud-cluster-pop'] || this.container?.querySelector('#hud-cluster-pop');
+    const pop =
+      this.elements['hud-cluster-pop'] || this.container?.querySelector('#hud-cluster-pop');
     const health = this.elements['hud-health'];
     if (pop) pop.hidden = true;
     health?.setAttribute('aria-expanded', 'false');
@@ -464,7 +506,8 @@ export class HUD {
   _pauseReasonLabel() {
     const app = window.game?.app;
     const reasons = app?._clockPauseReasons;
-    const has = (reason) => Boolean(reasons && typeof reasons.has === 'function' && reasons.has(reason));
+    const has = (reason) =>
+      Boolean(reasons && typeof reasons.has === 'function' && reasons.has(reason));
     if (has('files')) return 'Files open';
     if (has('tutorial')) return 'Guide open';
     if (has('examprep')) return 'EX280 Prep';
@@ -475,7 +518,8 @@ export class HUD {
 
   _updatePausedIndicator() {
     const chip = this.elements['hud-paused'] || this.container?.querySelector('#hud-paused');
-    const reasonEl = this.elements['hud-paused-reason'] || this.container?.querySelector('#hud-paused-reason');
+    const reasonEl =
+      this.elements['hud-paused-reason'] || this.container?.querySelector('#hud-paused-reason');
     if (!chip) return;
     const app = window.game?.app;
     const gameEngine = this._gameEngine();
@@ -487,7 +531,10 @@ export class HUD {
     if (reasonEl) reasonEl.textContent = reason;
     if (paused) {
       chip.title = reason ? `Simulation paused — ${reason}` : 'Simulation paused';
-      chip.setAttribute('aria-label', reason ? `Simulation paused: ${reason}` : 'Simulation paused');
+      chip.setAttribute(
+        'aria-label',
+        reason ? `Simulation paused: ${reason}` : 'Simulation paused'
+      );
     } else {
       chip.removeAttribute('title');
       chip.removeAttribute('aria-label');
@@ -644,19 +691,27 @@ export class HUD {
 
   _updateHealth(state) {
     const dot = this.elements['hud-health-dot'] || this.container?.querySelector('#hud-health-dot');
-    const label = this.elements['hud-health-label'] || this.container?.querySelector('#hud-health-label');
+    const label =
+      this.elements['hud-health-label'] || this.container?.querySelector('#hud-health-label');
     const button = this.elements['hud-health'];
     if (!dot) return;
     let health = state?.clusterHealth ?? 'healthy';
     if (health && typeof health === 'object') {
       const degraded = Array.isArray(health.degraded) ? health.degraded.length : 0;
       const percent = Number(health.percent);
-      health = degraded > 0 ? 'critical' : Number.isFinite(percent) && percent < 100 ? 'warning' : 'healthy';
+      health =
+        degraded > 0
+          ? 'critical'
+          : Number.isFinite(percent) && percent < 100
+            ? 'warning'
+            : 'healthy';
     }
-    const labelText = health === 'critical' ? 'Degraded' : health === 'warning' ? 'Warning' : 'Healthy';
+    const labelText =
+      health === 'critical' ? 'Degraded' : health === 'warning' ? 'Warning' : 'Healthy';
     dot.dataset.health = health;
     if (label) label.textContent = labelText;
-    if (button) button.setAttribute('aria-label', `Cluster health: ${labelText} (open cluster stats)`);
+    if (button)
+      button.setAttribute('aria-label', `Cluster health: ${labelText} (open cluster stats)`);
     this._setText('hud-pop-health', labelText);
   }
 
@@ -669,7 +724,10 @@ export class HUD {
       badge.textContent = this.incidentCount > 99 ? '99+' : String(this.incidentCount);
       badge.title = `${this.incidentCount} active OpenShift incident${this.incidentCount === 1 ? '' : 's'}`;
       button?.classList.add('has-alert');
-      button?.setAttribute('aria-label', `${this.incidentCount} active OpenShift incident${this.incidentCount === 1 ? '' : 's'} (open incidents panel)`);
+      button?.setAttribute(
+        'aria-label',
+        `${this.incidentCount} active OpenShift incident${this.incidentCount === 1 ? '' : 's'} (open incidents panel)`
+      );
     } else {
       badge.hidden = true;
       badge.textContent = '0';
@@ -740,7 +798,9 @@ export class HUD {
     if (!button) return;
     if (!isMission) {
       button.hidden = true;
-      if (levelName) levelName.textContent = mode === 'chaos' ? 'Incident survival' : mode === 'sandbox' ? 'Free build' : '';
+      if (levelName)
+        levelName.textContent =
+          mode === 'chaos' ? 'Incident survival' : mode === 'sandbox' ? 'Free build' : '';
       return;
     }
     const status = app?.modeInstance?.getStatus?.();
@@ -754,9 +814,12 @@ export class HUD {
     if (fill) fill.style.width = `${total ? Math.round((done / total) * 100) : 0}%`;
     button.classList.toggle('is-complete', total > 0 && done === total);
     if (levelName) {
-      levelName.textContent = mode === 'challenge'
-        ? (status.title || '')
-        : (status.levelTitle ? `L${status.currentLevel} · ${status.levelTitle}` : `Level ${status.currentLevel || ''}`);
+      levelName.textContent =
+        mode === 'challenge'
+          ? status.title || ''
+          : status.levelTitle
+            ? `L${status.currentLevel} · ${status.levelTitle}`
+            : `Level ${status.currentLevel || ''}`;
     }
   }
 
@@ -789,7 +852,8 @@ export class HUD {
       el.setAttribute('data-mode', rawMode);
       el.title = `OpenShift 4.22 · ${label}`;
     }
-    const nameEl = this.elements['hud-mode-name'] || this.container?.querySelector('#hud-mode-name');
+    const nameEl =
+      this.elements['hud-mode-name'] || this.container?.querySelector('#hud-mode-name');
     if (nameEl) {
       nameEl.textContent = label;
       this.elements['hud-mode-name'] = nameEl;
@@ -806,9 +870,10 @@ export class HUD {
     const button = this.elements['hud-mine'];
     if (button) {
       const noun = next === 1 ? 'resource' : 'resources';
-      const copy = next === 0
-        ? 'Show only resources you created (none yet)'
-        : `Show only the ${next} ${noun} you created`;
+      const copy =
+        next === 0
+          ? 'Show only resources you created (none yet)'
+          : `Show only the ${next} ${noun} you created`;
       button.title = copy;
       button.setAttribute('aria-label', copy);
       button.classList.toggle('is-empty', next === 0);
@@ -853,9 +918,10 @@ export class HUD {
     const button = this.elements['hud-platform'];
     if (!button) return;
     const count = this.platformCount;
-    const copy = count === 0
-      ? 'No seeded platform defaults in the cluster'
-      : `${this.platformRevealed ? 'Hide' : 'Show'} ${count} seeded OpenShift platform default${count === 1 ? '' : 's'}`;
+    const copy =
+      count === 0
+        ? 'No seeded platform defaults in the cluster'
+        : `${this.platformRevealed ? 'Hide' : 'Show'} ${count} seeded OpenShift platform default${count === 1 ? '' : 's'}`;
     button.title = copy;
     button.setAttribute('aria-label', copy);
     button.classList.toggle('is-empty', count === 0);
@@ -896,7 +962,11 @@ export class HUD {
     } catch {
       /* engine stopped */
     }
-    for (const [speed, id] of Object.entries({ 1: 'hud-speed-1', 2: 'hud-speed-2', 4: 'hud-speed-4' })) {
+    for (const [speed, id] of Object.entries({
+      1: 'hud-speed-1',
+      2: 'hud-speed-2',
+      4: 'hud-speed-4',
+    })) {
       const el = this.elements[id];
       if (!el) continue;
       el.classList.toggle('is-active', Number(speed) === multiplier);
@@ -953,7 +1023,8 @@ export class HUD {
       .party-mode * { animation: party-rainbow 0.6s linear infinite; }
     `;
     document.head.appendChild(style);
-    const target = document.getElementById('cluster-view') || document.querySelector('canvas') || document.body;
+    const target =
+      document.getElementById('cluster-view') || document.querySelector('canvas') || document.body;
     this._partyModeTarget = target;
     target.classList.add('party-mode');
     try {

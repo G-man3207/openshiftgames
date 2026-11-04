@@ -14,12 +14,31 @@
  *     resource classes import ResourceBase + ManifestSerializer only.
  */
 
-import { Pod, Deployment, ReplicaSet, StatefulSet, DaemonSet, Job, CronJob } from './WorkloadResources.js';
+import {
+  Pod,
+  Deployment,
+  ReplicaSet,
+  StatefulSet,
+  DaemonSet,
+  Job,
+  CronJob,
+} from './WorkloadResources.js';
 import { Service, Ingress, NetworkPolicy } from './NetworkResources.js';
 import { ConfigMap, Secret } from './ConfigResources.js';
 import { PersistentVolume, StorageClass, PersistentVolumeClaim } from './StorageResources.js';
-import { Node, HorizontalPodAutoscaler, ResourceQuota, PodDisruptionBudget } from './ClusterResources.js';
-import { ServiceAccount, Role, ClusterRole, RoleBinding, ClusterRoleBinding } from './RBACResources.js';
+import {
+  Node,
+  HorizontalPodAutoscaler,
+  ResourceQuota,
+  PodDisruptionBudget,
+} from './ClusterResources.js';
+import {
+  ServiceAccount,
+  Role,
+  ClusterRole,
+  RoleBinding,
+  ClusterRoleBinding,
+} from './RBACResources.js';
 import {
   Project,
   Route,

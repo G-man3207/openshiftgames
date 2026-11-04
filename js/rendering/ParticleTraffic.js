@@ -21,11 +21,11 @@ const MAX_SPAWNS_PER_UPDATE = 16;
 
 const TRAFFIC_COLORS = {
   healthy: new THREE.Color(0x4fb47f),
-  error:   new THREE.Color(0xd95c55),
-  slow:    new THREE.Color(0xc2a04a),
-  route:   new THREE.Color(0xd94a42), // softened OpenShift red
-  build:   new THREE.Color(0xd98a4a), // softened OpenShift orange
-  image:   new THREE.Color(0x9a86cc),
+  error: new THREE.Color(0xd95c55),
+  slow: new THREE.Color(0xc2a04a),
+  route: new THREE.Color(0xd94a42), // softened OpenShift red
+  build: new THREE.Color(0xd98a4a), // softened OpenShift orange
+  image: new THREE.Color(0x9a86cc),
   operator: new THREE.Color(0xd08a54),
   network: new THREE.Color(0x5b9fd4),
   default: new THREE.Color(0x5b9fd4),
@@ -326,7 +326,8 @@ export class ParticleTrafficSystem {
           trail.active = true;
           trail.routeId = route.id;
           trail.progress = -(t + 1) * 0.03;
-          trail.speed = PARTICLE_MIN_SPEED + Math.random() * (PARTICLE_MAX_SPEED - PARTICLE_MIN_SPEED);
+          trail.speed =
+            PARTICLE_MIN_SPEED + Math.random() * (PARTICLE_MAX_SPEED - PARTICLE_MIN_SPEED);
           trail.color.copy(route.color);
           trail.alpha = 0;
           trail.size = PARTICLE_BASE_SIZE * (0.5 - t * 0.12);
@@ -356,7 +357,7 @@ export class ParticleTrafficSystem {
         continue;
       }
 
-      particle.progress += particle.speed * delta / route.curve.getLength();
+      particle.progress += (particle.speed * delta) / route.curve.getLength();
 
       if (particle.progress >= 1.0) {
         this._deactivateParticle(particle);
@@ -376,7 +377,7 @@ export class ParticleTrafficSystem {
       } else if (t > FADE_OUT_START) {
         alpha = 1.0 - (t - FADE_OUT_START) / (1.0 - FADE_OUT_START);
       }
-      alpha *= (1.0 - particle.trailIndex * 0.3);
+      alpha *= 1.0 - particle.trailIndex * 0.3;
       particle.alpha = Math.max(0, alpha);
 
       this.alphas[i] = particle.alpha;
@@ -453,9 +454,14 @@ export class ParticleTrafficSystem {
         continue;
       }
       if (existing.trafficType !== route.trafficType) {
-        this.updateRoute(routeId, { trafficType: route.trafficType, requestRate: route.requestRate });
+        this.updateRoute(routeId, {
+          trafficType: route.trafficType,
+          requestRate: route.requestRate,
+        });
       }
-      const moved = !existing.sourcePos || !existing.targetPos ||
+      const moved =
+        !existing.sourcePos ||
+        !existing.targetPos ||
         existing.sourcePos.distanceToSquared(route.sourcePos) > 0.001 ||
         existing.targetPos.distanceToSquared(route.targetPos) > 0.001;
       if (moved) {

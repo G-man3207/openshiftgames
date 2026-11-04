@@ -28,8 +28,16 @@ const PROJECT_COLORS = {
 };
 
 const FALLBACK_PROJECT_COLORS = [
-  '#60a5fa', '#34d399', '#a78bfa', '#fbbf24', '#f87171',
-  '#fb923c', '#2f81f7', '#3fb950', '#d2a8ff', '#39c5cf',
+  '#60a5fa',
+  '#34d399',
+  '#a78bfa',
+  '#fbbf24',
+  '#f87171',
+  '#fb923c',
+  '#2f81f7',
+  '#3fb950',
+  '#d2a8ff',
+  '#39c5cf',
 ];
 
 const MINIMAP_WIDTH = 180;
@@ -125,7 +133,10 @@ export class Minimap {
     if (this.canvas) this.canvas.style.display = this._collapsed ? 'none' : '';
     if (this.toggleButton) {
       this.toggleButton.textContent = this._collapsed ? '+' : '-';
-      this.toggleButton.setAttribute('aria-label', this._collapsed ? 'Expand cluster map' : 'Collapse cluster map');
+      this.toggleButton.setAttribute(
+        'aria-label',
+        this._collapsed ? 'Expand cluster map' : 'Collapse cluster map'
+      );
       this.toggleButton.setAttribute('aria-expanded', this._collapsed ? 'false' : 'true');
     }
   }
@@ -184,7 +195,13 @@ export class Minimap {
 
       const position = r._position || null;
       if (position) {
-        this.resourcePositions.set(uid, { x: position.x, y: position.y, kind, namespace, status: phase });
+        this.resourcePositions.set(uid, {
+          x: position.x,
+          y: position.y,
+          kind,
+          namespace,
+          status: phase,
+        });
       } else {
         const hash = this._hashString(uid);
         this.resourcePositions.set(uid, {
@@ -251,9 +268,17 @@ export class Minimap {
       ctx.beginPath();
       ctx.arc(x, y, size, 0, Math.PI * 2);
 
-      if (pos.status === 'Failed' || pos.status === 'CrashLoopBackOff' || pos.status === 'Degraded') {
+      if (
+        pos.status === 'Failed' ||
+        pos.status === 'CrashLoopBackOff' ||
+        pos.status === 'Degraded'
+      ) {
         ctx.fillStyle = '#f87171';
-      } else if (pos.status === 'Pending' || pos.status === 'Progressing' || pos.status === 'Installing') {
+      } else if (
+        pos.status === 'Pending' ||
+        pos.status === 'Progressing' ||
+        pos.status === 'Installing'
+      ) {
         ctx.fillStyle = '#fbbf24';
       } else {
         ctx.fillStyle = this._colorForResource(pos);
@@ -271,7 +296,7 @@ export class Minimap {
       padding + this.viewport.x * drawW,
       padding + this.viewport.y * drawH,
       this.viewport.w * drawW,
-      this.viewport.h * drawH,
+      this.viewport.h * drawH
     );
     ctx.setLineDash([]);
 
@@ -280,7 +305,7 @@ export class Minimap {
       padding + this.viewport.x * drawW,
       padding + this.viewport.y * drawH,
       this.viewport.w * drawW,
-      this.viewport.h * drawH,
+      this.viewport.h * drawH
     );
   }
 
@@ -288,7 +313,7 @@ export class Minimap {
     let hash = 0;
     for (let i = 0; i < str.length; i++) {
       const char = str.charCodeAt(i);
-      hash = ((hash << 5) - hash) + char;
+      hash = (hash << 5) - hash + char;
       hash |= 0;
     }
     return Math.abs(hash);

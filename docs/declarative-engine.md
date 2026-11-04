@@ -8,17 +8,17 @@ Files: `js/engine/YamlParser.js`, `js/engine/ManifestEngine.js`, `js/ui/Manifest
 The declarative engine makes the simulator's virtual filesystem the source of truth for the
 workflows EX280V422 explicitly tests:
 
-| Exam workflow | Command | Engine call |
-|---|---|---|
-| Deploy from a manifest | `oc apply -f manifests/deployment.yaml` | `applyFile(path)` |
-| Create / replace from a manifest | `oc create -f` / `oc replace -f` | `applyFile(path)` (upsert) |
-| Kustomize base and overlays | `oc apply -k kustomize/overlays/prod` | `applyKustomize(dir)` |
-| Process a template | `oc process -f templates/webapp-template.yaml -p APP_NAME=web` | `processTemplate(path, params)` |
-| Template → apply | `oc process ... \| oc apply -f -` | `applyObjects(objects)` / `applyFile(<stdin temp>)` |
-| Delete from a manifest | `oc delete -f manifests/route.yaml` | `deleteFileObjects(path)` |
-| Helm lifecycle | `helm install/upgrade/list/uninstall` | `installHelm` / `upgradeHelm` / `listHelm` / `uninstallHelm` |
-| HTPasswd identity provider | `htpasswd -c/-b/-D <file> <user>` | `htpasswdAdd` / `htpasswdUpdate` / `htpasswdDelete` / `htpasswdList` |
-| Export / edit loop | `oc get deploy web -o yaml > web.yaml`, `oc edit` | `writeFile` / `readFile`, `ManifestPanel.show(resource)` |
+| Exam workflow                    | Command                                                        | Engine call                                                          |
+| -------------------------------- | -------------------------------------------------------------- | -------------------------------------------------------------------- |
+| Deploy from a manifest           | `oc apply -f manifests/deployment.yaml`                        | `applyFile(path)`                                                    |
+| Create / replace from a manifest | `oc create -f` / `oc replace -f`                               | `applyFile(path)` (upsert)                                           |
+| Kustomize base and overlays      | `oc apply -k kustomize/overlays/prod`                          | `applyKustomize(dir)`                                                |
+| Process a template               | `oc process -f templates/webapp-template.yaml -p APP_NAME=web` | `processTemplate(path, params)`                                      |
+| Template → apply                 | `oc process ... \| oc apply -f -`                              | `applyObjects(objects)` / `applyFile(<stdin temp>)`                  |
+| Delete from a manifest           | `oc delete -f manifests/route.yaml`                            | `deleteFileObjects(path)`                                            |
+| Helm lifecycle                   | `helm install/upgrade/list/uninstall`                          | `installHelm` / `upgradeHelm` / `listHelm` / `uninstallHelm`         |
+| HTPasswd identity provider       | `htpasswd -c/-b/-D <file> <user>`                              | `htpasswdAdd` / `htpasswdUpdate` / `htpasswdDelete` / `htpasswdList` |
+| Export / edit loop               | `oc get deploy web -o yaml > web.yaml`, `oc edit`              | `writeFile` / `readFile`, `ManifestPanel.show(resource)`             |
 
 No dependencies, no build step, pure ES modules. Nothing here touches the DOM at module load, so
 all modules can be imported in Node for model tests.
@@ -27,13 +27,13 @@ all modules can be imported in Node for model tests.
 
 ## 1. Files and responsibilities
 
-| File | Responsibility |
-|---|---|
-| `js/engine/YamlParser.js` | Practical YAML subset parser + stringifier + structured errors + `selfTest()` |
-| `js/engine/ManifestEngine.js` | Virtual FS, apply/apply -k/process/delete, Helm releases, HTPasswd file, objective state, events |
-| `js/data/ManifestFiles.js` | Default virtual files (`MANIFEST_FILES`), realistic OCP 4.22 content |
-| `js/ui/ManifestPanel.js` | Self-contained "Files & Manifests" modal (own DOM/CSS, file tree, editor, apply buttons, errors, docs links) |
-| `docs/declarative-engine.md` | This API reference |
+| File                          | Responsibility                                                                                               |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| `js/engine/YamlParser.js`     | Practical YAML subset parser + stringifier + structured errors + `selfTest()`                                |
+| `js/engine/ManifestEngine.js` | Virtual FS, apply/apply -k/process/delete, Helm releases, HTPasswd file, objective state, events             |
+| `js/data/ManifestFiles.js`    | Default virtual files (`MANIFEST_FILES`), realistic OCP 4.22 content                                         |
+| `js/ui/ManifestPanel.js`      | Self-contained "Files & Manifests" modal (own DOM/CSS, file tree, editor, apply buttons, errors, docs links) |
+| `docs/declarative-engine.md`  | This API reference                                                                                           |
 
 The engine never imports `GameEngine`/`CommandBar`; it resolves the live game lazily through
 `window.game` (or the object passed to its constructor). That keeps the dependency direction
@@ -49,17 +49,20 @@ one-way and lets the verifier import the engine in Node.
 
 ```js
 const mod = await import('./js/ui/ManifestPanel.js');
-const panel = new mod.ManifestPanel(this.engine);   // GameEngine instance
-panel.init();                                       // creates DOM + engine + globals
-panel.show();                                       // opens modal
-panel.setContext({ manifestFiles: ['manifests/deployment.yaml'], focusFiles: ['manifests/deployment.yaml'] });
+const panel = new mod.ManifestPanel(this.engine); // GameEngine instance
+panel.init(); // creates DOM + engine + globals
+panel.show(); // opens modal
+panel.setContext({
+  manifestFiles: ['manifests/deployment.yaml'],
+  focusFiles: ['manifests/deployment.yaml'],
+});
 ```
 
 `panel.init()` sets:
 
 ```js
-window.game.manifestPanel  = panel;
-window.game.manifestEngine = panel.manifestEngine;  // ManifestEngine
+window.game.manifestPanel = panel;
+window.game.manifestEngine = panel.manifestEngine; // ManifestEngine
 ```
 
 The level/session boot calls `_ensureManifestPanel()` at mode start, so the engine is available
@@ -70,8 +73,8 @@ to the command bar before the player opens the modal.
 ```js
 globalThis.window = {
   game: {
-    cluster: fakeCluster,                       // getByName/getByKind/getByNamespace/add/remove
-    gameEngine: { currentProject: 'demo', currentUser: 'kubeadmin', emit(){} },
+    cluster: fakeCluster, // getByName/getByKind/getByNamespace/add/remove
+    gameEngine: { currentProject: 'demo', currentUser: 'kubeadmin', emit() {} },
   },
 };
 const { ManifestEngine } = await import('./js/engine/ManifestEngine.js');
@@ -88,20 +91,25 @@ engine falls back to `kindRegistry.createResource()` + `ClusterState`. See §6.3
 
 ```js
 import {
-  parseYaml, parseDocument, parseYamlSafe, stringifyYaml,
-  toYamlError, YamlParseError, selfTest,
+  parseYaml,
+  parseDocument,
+  parseYamlSafe,
+  stringifyYaml,
+  toYamlError,
+  YamlParseError,
+  selfTest,
 } from './js/engine/YamlParser.js';
 ```
 
-| Export | Signature | Returns |
-|---|---|---|
-| `parseYaml` | `(text, {file?} = {})` | `Array<object>` — one entry per non-empty `---` document |
-| `parseDocument` | `(text, {file?} = {})` | `object|null` — first document (`null` when empty) |
-| `parseYamlSafe` | `(text, {file?} = {})` | `{ok: boolean, docs: object[], errors: [{line, message, file?}]}` |
-| `stringifyYaml` | `(value)` | `string` (single YAML document, trailing newline) |
-| `toYamlError` | `(err)` | `{line, message, file?}` |
+| Export           | Signature                                  | Returns                                                                   |
+| ---------------- | ------------------------------------------ | ------------------------------------------------------------------------- |
+| `parseYaml`      | `(text, {file?} = {})`                     | `Array<object>` — one entry per non-empty `---` document                  |
+| `parseDocument`  | `(text, {file?} = {})`                     | `object                                                                   | null` — first document (`null` when empty) |
+| `parseYamlSafe`  | `(text, {file?} = {})`                     | `{ok: boolean, docs: object[], errors: [{line, message, file?}]}`         |
+| `stringifyYaml`  | `(value)`                                  | `string` (single YAML document, trailing newline)                         |
+| `toYamlError`    | `(err)`                                    | `{line, message, file?}`                                                  |
 | `YamlParseError` | `new YamlParseError(message, line, file?)` | `Error` with `.name === 'YamlParseError'`, `.line`, `.file?`, `.toJSON()` |
-| `selfTest` | `()` | `{ok: boolean, failures: Array<{name, error}>}` (27 cases) |
+| `selfTest`       | `()`                                       | `{ok: boolean, failures: Array<{name, error}>}` (27 cases)                |
 
 ### Supported YAML
 
@@ -117,7 +125,7 @@ import {
 
 Not supported (raises a structured error or documented limitation): YAML anchors/aliases
 (`&a`, `*a`), merge keys (`<<`), complex keys (`? key`), custom tags (tags are stripped), and
-multi-line *plain* (unfolded) scalars. Use `|`/`>` for multi-line strings.
+multi-line _plain_ (unfolded) scalars. Use `|`/`>` for multi-line strings.
 
 ### Errors
 
@@ -127,10 +135,10 @@ Parser errors always carry a 1-based line and the optional file name:
 try {
   parseYaml('metadata:\n  name: x\n   bad: 1\n', { file: 'manifests/deployment.yaml' });
 } catch (err) {
-  err.name;    // 'YamlParseError'
-  err.line;    // 3
+  err.name; // 'YamlParseError'
+  err.line; // 3
   err.message; // "bad indentation of a mapping entry"
-  err.file;    // 'manifests/deployment.yaml'
+  err.file; // 'manifests/deployment.yaml'
 }
 ```
 
@@ -177,15 +185,15 @@ Success results also include `template?: {path, name}` when the applied objects 
 
 ### 4.1 Virtual filesystem
 
-| Method | Signature | Notes |
-|---|---|---|
-| `listFiles` | `()` → `string[]` | sorted, normalized paths (`manifests/deployment.yaml`) |
-| `getFileTree` | `()` → `[{path, kind: 'directory'\|'file', name, depth, extension?}]` | flat tree representation for the panel |
-| `readFile` | `(path)` → `string\|null` | `null` when missing |
-| `writeFile` | `(path, text)` → `string` | creates parent directories implicitly; overwrites |
-| `deleteFile` | `(path)` → `boolean` | does not delete cluster objects |
-| `resetFiles` | `()` → `string[]` | restores `MANIFEST_FILES`, clears apply/template/Helm records, emits `manifest:reset` |
-| `exists` | `(path)` → `boolean` | helper |
+| Method        | Signature                                                             | Notes                                                                                 |
+| ------------- | --------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
+| `listFiles`   | `()` → `string[]`                                                     | sorted, normalized paths (`manifests/deployment.yaml`)                                |
+| `getFileTree` | `()` → `[{path, kind: 'directory'\|'file', name, depth, extension?}]` | flat tree representation for the panel                                                |
+| `readFile`    | `(path)` → `string\|null`                                             | `null` when missing                                                                   |
+| `writeFile`   | `(path, text)` → `string`                                             | creates parent directories implicitly; overwrites                                     |
+| `deleteFile`  | `(path)` → `boolean`                                                  | does not delete cluster objects                                                       |
+| `resetFiles`  | `()` → `string[]`                                                     | restores `MANIFEST_FILES`, clears apply/template/Helm records, emits `manifest:reset` |
+| `exists`      | `(path)` → `boolean`                                                  | helper                                                                                |
 
 All paths are virtual, POSIX-like and relative to the workspace root (`./` is stripped, `..` is
 resolved). `htpasswd` lives at the root of this filesystem.
@@ -231,18 +239,18 @@ engine.applyKustomize('kustomize/overlays/prod');
 
 Supported `kustomization.yaml` fields:
 
-| Field | Behaviour |
-|---|---|
-| `resources` / `bases` | relative files or directories (recursive, cycle-detected); remote URLs are rejected |
-| `namespace` | sets `metadata.namespace` on all namespaced kinds |
+| Field                       | Behaviour                                                                                                                                              |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `resources` / `bases`       | relative files or directories (recursive, cycle-detected); remote URLs are rejected                                                                    |
+| `namespace`                 | sets `metadata.namespace` on all namespaced kinds                                                                                                      |
 | `namePrefix` / `nameSuffix` | rewrites `metadata.name` and known name references (Route.spec.to, StatefulSet.serviceName, HPA.scaleTargetRef, RoleBinding.roleRef, Ingress backends) |
-| `commonLabels` | added to `metadata.labels`, workload pod-template labels and selectors (Service selector, Deployment/STS/DS/RS selector.matchLabels) |
-| `labels` | pairs added like `commonLabels`; selectors only when `includeSelectors: true` |
-| `commonAnnotations` | added to `metadata.annotations` |
-| `images` | `[{name, newName?, newTag?, digest?}]`, applied to every `containers`/`initContainers` image whose repository matches `name` |
-| `replicas` | `[{name, count}]` sets `spec.replicas` on matching Deployment/StatefulSet/ReplicaSet (matches original or prefixed name) |
-| `patchesStrategicMerge` | file path, inline YAML string, or object; deep-merge maps, **lists replaced**; target matched by kind+`metadata.name` |
-| `patches` | file-based strategic patches (`path`), subset documented below |
+| `commonLabels`              | added to `metadata.labels`, workload pod-template labels and selectors (Service selector, Deployment/STS/DS/RS selector.matchLabels)                   |
+| `labels`                    | pairs added like `commonLabels`; selectors only when `includeSelectors: true`                                                                          |
+| `commonAnnotations`         | added to `metadata.annotations`                                                                                                                        |
+| `images`                    | `[{name, newName?, newTag?, digest?}]`, applied to every `containers`/`initContainers` image whose repository matches `name`                           |
+| `replicas`                  | `[{name, count}]` sets `spec.replicas` on matching Deployment/StatefulSet/ReplicaSet (matches original or prefixed name)                               |
+| `patchesStrategicMerge`     | file path, inline YAML string, or object; deep-merge maps, **lists replaced**; target matched by kind+`metadata.name`                                  |
+| `patches`                   | file-based strategic patches (`path`), subset documented below                                                                                         |
 
 Transformation order: load resources → apply patches (patches match the **original** names) →
 `namespace` → `namePrefix`/`nameSuffix` + references → labels/annotations → images → replicas → apply.
@@ -257,7 +265,10 @@ and `patchesJson6902` are not implemented.
 ### 4.4 OpenShift templates — `oc process`
 
 ```js
-const t = engine.processTemplate('templates/webapp-template.yaml', { APP_NAME: 'web', REPLICAS: '3' });
+const t = engine.processTemplate('templates/webapp-template.yaml', {
+  APP_NAME: 'web',
+  REPLICAS: '3',
+});
 // {
 //   ok: true,
 //   objects: [ /* 3 substituted objects */ ],
@@ -295,13 +306,13 @@ Parses the file first; invalid YAML changes nothing. Missing objects produce rea
 ### 4.6 Helm
 
 ```js
-engine.installHelm('webapp', 'helm/webapp');                     // → {ok, released, resources, …}
+engine.installHelm('webapp', 'helm/webapp'); // → {ok, released, resources, …}
 engine.upgradeHelm('webapp', 'helm/webapp', 'values-prod.yaml'); // revision++, re-applies objects
 engine.listHelm();
 // [{name, chart, chartVersion, status:'deployed', namespace, revision,
 //   chartDir, resources:[{kind,name,namespace}], updatedAt}]
-engine.uninstallHelm('webapp');                                   // → {ok, deleted, notFound, errors}
-engine.renderHelm('webapp', 'helm/webapp');                      // render only (no apply)
+engine.uninstallHelm('webapp'); // → {ok, deleted, notFound, errors}
+engine.renderHelm('webapp', 'helm/webapp'); // render only (no apply)
 engine.getHelmRelease('webapp');
 ```
 
@@ -325,10 +336,10 @@ engine.getHelmRelease('webapp');
 ### 4.7 HTPasswd file
 
 ```js
-engine.htpasswdAdd('alice', 'ChangeMe123!');   // → {ok, user, file:'htpasswd', errors:[]}
+engine.htpasswdAdd('alice', 'ChangeMe123!'); // → {ok, user, file:'htpasswd', errors:[]}
 engine.htpasswdUpdate('alice', 'NewPass456!'); // → {ok, user, updated:true|false, …}
-engine.htpasswdDelete('alice');                // → {ok, user, …}
-engine.htpasswdList();                         // → ['alice', …]
+engine.htpasswdDelete('alice'); // → {ok, user, …}
+engine.htpasswdList(); // → ['alice', …]
 engine.htpasswdAuthenticate('alice', 'NewPass456!'); // → true (used by `oc login`)
 engine.verifyHtpasswd('alice', 'NewPass456!'); // alias
 ```
@@ -361,15 +372,15 @@ Convenience helpers: `hasAppliedFile(path)`, `hasAppliedKustomize(path)`, `getAp
 Events (emitted on `window.game.gameEngine`/EventBus **and** as DOM
 `CustomEvent('openshiftgames:<event-with-dashes>')`):
 
-| Event | Payload |
-|---|---|
-| `manifest:applied` | `{file, path, source, resources, created, updated, warnings}` |
-| `kustomize:applied` | `{path, source, resources, created, updated, warnings}` |
+| Event                | Payload                                                             |
+| -------------------- | ------------------------------------------------------------------- |
+| `manifest:applied`   | `{file, path, source, resources, created, updated, warnings}`       |
+| `kustomize:applied`  | `{path, source, resources, created, updated, warnings}`             |
 | `template:processed` | `{path, name, templateName, params, resources}` (only when applied) |
-| `helm:installed` | `{release, name, chart, namespace, resources}` |
-| `helm:upgraded` | `{release, name, chart, namespace, resources}` |
-| `helm:uninstalled` | `{release, name, deleted}` |
-| `manifest:reset` | `{files}` (from `resetFiles()`) |
+| `helm:installed`     | `{release, name, chart, namespace, resources}`                      |
+| `helm:upgraded`      | `{release, name, chart, namespace, resources}`                      |
+| `helm:uninstalled`   | `{release, name, deleted}`                                          |
+| `manifest:reset`     | `{files}` (from `resetFiles()`)                                     |
 
 ---
 
@@ -377,24 +388,24 @@ Events (emitted on `window.game.gameEngine`/EventBus **and** as DOM
 
 All 18 YAML files parse with `YamlParser` and round-trip through `stringifyYaml`.
 
-| Path | Purpose |
-|---|---|
-| `manifests/deployment.yaml` | `apps/v1` Deployment `webapp`, 2 replicas, hello-openshift image, ports 8080, requests/limits, readiness probe |
-| `manifests/service.yaml` | `v1` Service ClusterIP 8080 → 8080, selector `app: webapp` |
-| `manifests/route.yaml` | `route.openshift.io/v1` Route, edge TLS + `Redirect`, `externalCertificate.name: webapp-tls` (OCP 4.22), service `webapp` |
-| `kustomize/base/kustomization.yaml` | base `resources`, `commonLabels` |
-| `kustomize/base/deployment.yaml`, `service.yaml` | unprefixed base objects |
-| `kustomize/overlays/dev/kustomization.yaml` | `namePrefix: dev-`, namespace `webapp-dev`, dev labels, replicas 1 |
-| `kustomize/overlays/prod/kustomization.yaml` | `namePrefix: prod-`, namespace `webapp-prod`, tag `1.0.0`, replicas 3, `patchesStrategicMerge` |
-| `kustomize/overlays/prod/patch-deployment.yaml` | adds `APP_ENV=production`, larger resources |
-| `templates/webapp-template.yaml` | `template.openshift.io/v1` Template with `APP_NAME`/`IMAGE`/`REPLICAS`, Deployment+Service+Route objects |
-| `helm/webapp/Chart.yaml`, `values.yaml` | chart `webapp` 0.1.0, replicaCount/image/service/resources values |
-| `helm/webapp/templates/deployment.yaml`, `service.yaml` | Helm-templated Deployment + Service |
-| `htpasswd` | empty HTPasswd database |
-| `examples/quota.yaml` | ResourceQuota `compute-quota` |
-| `examples/limitrange.yaml` | LimitRange `resource-limits` |
-| `examples/subscription.yaml` | MetalLB-style Subscription `ansible-automation-platform-operator` in `openshift-operators` |
-| `examples/buildconfig.yaml` | BuildConfig `webapp` (Git → nodejs:20 S2I → ImageStreamTag webapp:latest) |
+| Path                                                    | Purpose                                                                                                                   |
+| ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| `manifests/deployment.yaml`                             | `apps/v1` Deployment `webapp`, 2 replicas, hello-openshift image, ports 8080, requests/limits, readiness probe            |
+| `manifests/service.yaml`                                | `v1` Service ClusterIP 8080 → 8080, selector `app: webapp`                                                                |
+| `manifests/route.yaml`                                  | `route.openshift.io/v1` Route, edge TLS + `Redirect`, `externalCertificate.name: webapp-tls` (OCP 4.22), service `webapp` |
+| `kustomize/base/kustomization.yaml`                     | base `resources`, `commonLabels`                                                                                          |
+| `kustomize/base/deployment.yaml`, `service.yaml`        | unprefixed base objects                                                                                                   |
+| `kustomize/overlays/dev/kustomization.yaml`             | `namePrefix: dev-`, namespace `webapp-dev`, dev labels, replicas 1                                                        |
+| `kustomize/overlays/prod/kustomization.yaml`            | `namePrefix: prod-`, namespace `webapp-prod`, tag `1.0.0`, replicas 3, `patchesStrategicMerge`                            |
+| `kustomize/overlays/prod/patch-deployment.yaml`         | adds `APP_ENV=production`, larger resources                                                                               |
+| `templates/webapp-template.yaml`                        | `template.openshift.io/v1` Template with `APP_NAME`/`IMAGE`/`REPLICAS`, Deployment+Service+Route objects                  |
+| `helm/webapp/Chart.yaml`, `values.yaml`                 | chart `webapp` 0.1.0, replicaCount/image/service/resources values                                                         |
+| `helm/webapp/templates/deployment.yaml`, `service.yaml` | Helm-templated Deployment + Service                                                                                       |
+| `htpasswd`                                              | empty HTPasswd database                                                                                                   |
+| `examples/quota.yaml`                                   | ResourceQuota `compute-quota`                                                                                             |
+| `examples/limitrange.yaml`                              | LimitRange `resource-limits`                                                                                              |
+| `examples/subscription.yaml`                            | MetalLB-style Subscription `ansible-automation-platform-operator` in `openshift-operators`                                |
+| `examples/buildconfig.yaml`                             | BuildConfig `webapp` (Git → nodejs:20 S2I → ImageStreamTag webapp:latest)                                                 |
 
 Levels may pass `manifestFiles` (files to surface) and `focusFiles` (file to open) through
 `panel.setContext(...)`; the panel always shows the complete default tree. Session/level start calls
@@ -419,18 +430,18 @@ Levels may pass `manifestFiles` (files to surface) and `focusFiles` (file to ope
 
 ### 6.2 `CommandBar` (owned by cli-dev; delegated helpers already call this API)
 
-| CLI command | Engine call | CLI result handling |
-|---|---|---|
-| `oc apply/create/replace -f <file>` | `applyFile(file)` | `_normalizeApplyResult` reads `created`/`updated` (`{kind,name}`); failures via `result.error` |
-| `oc apply -f -` (pipe/stdin) | CommandBar writes `.oc/stdin-N.yaml`, then `applyFile` | same; a pending template result is marked applied + `template:processed` |
-| `oc apply -k <dir>` | `applyKustomize(dir)` | same as apply |
-| `oc delete -f <file>` | `deleteFileObjects(file)` | `deleted` entries rendered as `<resource> "<name>" deleted`; failures via `result.error` |
-| `oc process -f <file> -p K=V` | `processTemplate(file, params)` | use `result.yaml`/`result.objects`; failures via `result.error` (`ok:false` also set) |
-| `helm install/upgrade/list/uninstall` | `installHelm`, `upgradeHelm`, `listHelm`, `uninstallHelm` | failures carry `result.error`; list returns an array |
-| `htpasswd -c/-b/-D` | `htpasswdAdd`, `htpasswdUpdate`, `htpasswdDelete` | failures carry `result.error`; success has `ok:true` |
-| `oc login -u/-p` | `manifestEngine.htpasswdAuthenticate(user, pass)` | boolean gate for HTPasswd login |
-| `oc get ... -o yaml > file` | `writeFile(path, text)` | CommandBar handles redirect writing |
-| `oc edit` | `window.game.manifestPanel.show(resource)` | opens the resource as an editable manifest file |
+| CLI command                           | Engine call                                               | CLI result handling                                                                            |
+| ------------------------------------- | --------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| `oc apply/create/replace -f <file>`   | `applyFile(file)`                                         | `_normalizeApplyResult` reads `created`/`updated` (`{kind,name}`); failures via `result.error` |
+| `oc apply -f -` (pipe/stdin)          | CommandBar writes `.oc/stdin-N.yaml`, then `applyFile`    | same; a pending template result is marked applied + `template:processed`                       |
+| `oc apply -k <dir>`                   | `applyKustomize(dir)`                                     | same as apply                                                                                  |
+| `oc delete -f <file>`                 | `deleteFileObjects(file)`                                 | `deleted` entries rendered as `<resource> "<name>" deleted`; failures via `result.error`       |
+| `oc process -f <file> -p K=V`         | `processTemplate(file, params)`                           | use `result.yaml`/`result.objects`; failures via `result.error` (`ok:false` also set)          |
+| `helm install/upgrade/list/uninstall` | `installHelm`, `upgradeHelm`, `listHelm`, `uninstallHelm` | failures carry `result.error`; list returns an array                                           |
+| `htpasswd -c/-b/-D`                   | `htpasswdAdd`, `htpasswdUpdate`, `htpasswdDelete`         | failures carry `result.error`; success has `ok:true`                                           |
+| `oc login -u/-p`                      | `manifestEngine.htpasswdAuthenticate(user, pass)`         | boolean gate for HTPasswd login                                                                |
+| `oc get ... -o yaml > file`           | `writeFile(path, text)`                                   | CommandBar handles redirect writing                                                            |
+| `oc edit`                             | `window.game.manifestPanel.show(resource)`                | opens the resource as an editable manifest file                                                |
 
 `window.game.manifestEngine` may briefly be `null` before the panel is initialised; CommandBar's
 `_manifestNotReady()` guard covers that (the session boot initialises it early).
@@ -441,7 +452,10 @@ Levels may pass `manifestFiles` (files to surface) and `focusFiles` (file to ope
 
 ```js
 const returned = gameEngine.applyManifestObject({
-  apiVersion, kind, metadata: {name, namespace, labels, annotations}, spec,
+  apiVersion,
+  kind,
+  metadata: { name, namespace, labels, annotations },
+  spec,
 });
 // accepted return: ResourceBase | {resource: ResourceBase, created?: boolean} | undefined
 ```
@@ -485,7 +499,7 @@ Environment: Node v26.10.0, Chrome (puppeteer-core from `/tmp/verify-tools`). Te
 2. **Parser self-test** — `YamlParser.selfTest()`:
 
    ```json
-   {"ok": true, "failures": []}
+   { "ok": true, "failures": [] }
    ```
 
    27 cases: mappings/types, comments, nested sequences, indentless sequences, multi-document split,
@@ -535,6 +549,7 @@ Environment: Node v26.10.0, Chrome (puppeteer-core from `/tmp/verify-tools`). Te
 ## 8. Limitations (simulator scope)
 
 **YAML parser**
+
 - No anchors/aliases, merge keys (`<<`), complex keys, custom tags (tags stripped), directives,
   or multi-line plain scalars.
 - Flow collections do not support comments that themselves contain brackets.
@@ -545,6 +560,7 @@ Environment: Node v26.10.0, Chrome (puppeteer-core from `/tmp/verify-tools`). Te
 - Duplicate keys: last value wins (no error).
 
 **Manifest engine**
+
 - `oc create -f` is an upsert in the simulator (real `oc create` fails when the object exists);
   `oc replace -f` behaves like apply. This keeps level/reset replay forgiving.
 - Invalid YAML/validation is transactional (nothing applied); a runtime error thrown mid-file by a
@@ -575,12 +591,12 @@ Environment: Node v26.10.0, Chrome (puppeteer-core from `/tmp/verify-tools`). Te
 
 ## 9. EX280V422 coverage
 
-| Objective area | Covered by |
-|---|---|
-| Manage OpenShift declaratively | `applyFile` (create/update/delete), export/edit loop, Files panel editor |
-| Work with Kustomize | `applyKustomize` base/dev/prod overlays, patches, images, replicas, namespace, labels |
-| Deploy applications from templates | `processTemplate` + `applyObjects`/`applyTemplate`, parameters and message |
-| Deploy applications from Helm charts | `installHelm`/`upgradeHelm`/`listHelm`/`uninstallHelm`, local chart |
-| Configure developers' self-service (quota/limits) | `examples/quota.yaml`, `examples/limitrange.yaml` apply through the same engine |
-| Configure HTPasswd authentication | `htpasswdAdd/Update/Delete/List`, raw-password-free hash storage, `htpasswdAuthenticate` |
-| Install/manage operators | `examples/subscription.yaml` apply; controller install/CSV states remain engine-dev |
+| Objective area                                    | Covered by                                                                               |
+| ------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| Manage OpenShift declaratively                    | `applyFile` (create/update/delete), export/edit loop, Files panel editor                 |
+| Work with Kustomize                               | `applyKustomize` base/dev/prod overlays, patches, images, replicas, namespace, labels    |
+| Deploy applications from templates                | `processTemplate` + `applyObjects`/`applyTemplate`, parameters and message               |
+| Deploy applications from Helm charts              | `installHelm`/`upgradeHelm`/`listHelm`/`uninstallHelm`, local chart                      |
+| Configure developers' self-service (quota/limits) | `examples/quota.yaml`, `examples/limitrange.yaml` apply through the same engine          |
+| Configure HTPasswd authentication                 | `htpasswdAdd/Update/Delete/List`, raw-password-free hash storage, `htpasswdAuthenticate` |
+| Install/manage operators                          | `examples/subscription.yaml` apply; controller install/CSV states remain engine-dev      |

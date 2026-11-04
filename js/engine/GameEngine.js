@@ -19,7 +19,14 @@
  * @module engine/GameEngine
  */
 
-import { ClusterState, IMAGE_REGISTRY_HOST, OPENSHIFT_VERSION, deepClone, deepMerge, isClusterScopedKind } from './ClusterState.js';
+import {
+  ClusterState,
+  IMAGE_REGISTRY_HOST,
+  OPENSHIFT_VERSION,
+  deepClone,
+  deepMerge,
+  isClusterScopedKind,
+} from './ClusterState.js';
 import { SimulationTick } from './SimulationTick.js';
 import {
   BUILTIN_ROLE_NAMES,
@@ -35,11 +42,7 @@ import {
   resolvePatchType,
   strategicMergePatch,
 } from './MergePatch.js';
-import {
-  apiVersionForKind,
-  createResource,
-  normalizeKind,
-} from '../data/kindRegistry.js';
+import { apiVersionForKind, createResource, normalizeKind } from '../data/kindRegistry.js';
 
 // ─── SHA1 + base64 helpers (for the simulated {SHA} htpasswd hashes) ──────
 
@@ -57,7 +60,8 @@ function base64FromBytes(bytes) {
     const byte1 = bytes[index++];
     const byte2 = index < bytes.length ? bytes[index++] : NaN;
     const byte3 = index < bytes.length ? bytes[index++] : NaN;
-    const triplet = (byte1 << 16) | ((Number.isNaN(byte2) ? 0 : byte2) << 8) | (Number.isNaN(byte3) ? 0 : byte3);
+    const triplet =
+      (byte1 << 16) | ((Number.isNaN(byte2) ? 0 : byte2) << 8) | (Number.isNaN(byte3) ? 0 : byte3);
     output += BASE64_ALPHABET[(triplet >> 18) & 0x3f];
     output += BASE64_ALPHABET[(triplet >> 12) & 0x3f];
     output += Number.isNaN(byte2) ? '=' : BASE64_ALPHABET[(triplet >> 6) & 0x3f];
@@ -83,8 +87,15 @@ function utf8Bytes(text) {
     }
     if (code < 0x80) bytes.push(code);
     else if (code < 0x800) bytes.push(0xc0 | (code >> 6), 0x80 | (code & 0x3f));
-    else if (code < 0x10000) bytes.push(0xe0 | (code >> 12), 0x80 | ((code >> 6) & 0x3f), 0x80 | (code & 0x3f));
-    else bytes.push(0xf0 | (code >> 18), 0x80 | ((code >> 12) & 0x3f), 0x80 | ((code >> 6) & 0x3f), 0x80 | (code & 0x3f));
+    else if (code < 0x10000)
+      bytes.push(0xe0 | (code >> 12), 0x80 | ((code >> 6) & 0x3f), 0x80 | (code & 0x3f));
+    else
+      bytes.push(
+        0xf0 | (code >> 18),
+        0x80 | ((code >> 12) & 0x3f),
+        0x80 | ((code >> 6) & 0x3f),
+        0x80 | (code & 0x3f)
+      );
   }
   return Uint8Array.from(bytes);
 }
@@ -193,9 +204,11 @@ function bcryptBase64FromBytes(bytes) {
     const byte2 = i + 1 < bytes.length ? bytes[i + 1] : undefined;
     const byte3 = i + 2 < bytes.length ? bytes[i + 2] : undefined;
     output += BCRYPT_BASE64_ALPHABET[byte1 >> 2];
-    output += BCRYPT_BASE64_ALPHABET[((byte1 & 0x03) << 4) | (byte2 === undefined ? 0 : byte2 >> 4)];
+    output +=
+      BCRYPT_BASE64_ALPHABET[((byte1 & 0x03) << 4) | (byte2 === undefined ? 0 : byte2 >> 4)];
     if (byte2 === undefined) break;
-    output += BCRYPT_BASE64_ALPHABET[((byte2 & 0x0f) << 2) | (byte3 === undefined ? 0 : byte3 >> 6)];
+    output +=
+      BCRYPT_BASE64_ALPHABET[((byte2 & 0x0f) << 2) | (byte3 === undefined ? 0 : byte3 >> 6)];
     if (byte3 === undefined) break;
     output += BCRYPT_BASE64_ALPHABET[byte3 & 0x3f];
   }
@@ -245,7 +258,10 @@ function bcryptSimulatorDigest(salt, password) {
     state = sha1Bytes(input);
     for (const byte of state) collected.push(byte);
   }
-  return bcryptBase64FromBytes(Uint8Array.from(collected.slice(0, 23))).slice(0, BCRYPT_DIGEST_CHARS);
+  return bcryptBase64FromBytes(Uint8Array.from(collected.slice(0, 23))).slice(
+    0,
+    BCRYPT_DIGEST_CHARS
+  );
 }
 
 /**
@@ -268,7 +284,9 @@ export function hashPasswordBcrypt(password) {
  * @returns {boolean}
  */
 export function verifyBcryptPasswordHash(hash, password) {
-  const match = String(hash || '').match(/^\$(2[abxy])\$(\d{2})\$([./A-Za-z0-9]{22})([./A-Za-z0-9]{31})$/);
+  const match = String(hash || '').match(
+    /^\$(2[abxy])\$(\d{2})\$([./A-Za-z0-9]{22})([./A-Za-z0-9]{31})$/
+  );
   if (!match) return false;
   const salt = match[3];
   const expected = match[4];
@@ -294,7 +312,12 @@ export function verifyPasswordHash(hash, password) {
     return digest === base64FromBytes(sha1Bytes(utf8Bytes(password)));
   }
   if (/^\$2[abxy]\$/.test(value)) return verifyBcryptPasswordHash(value, password);
-  if (value.startsWith('{SSHA}') || value.startsWith('$apr1$') || value.startsWith('$5$') || value.startsWith('$6$')) {
+  if (
+    value.startsWith('{SSHA}') ||
+    value.startsWith('$apr1$') ||
+    value.startsWith('$5$') ||
+    value.startsWith('$6$')
+  ) {
     return null;
   }
   if (value.includes(':')) return null;
@@ -327,7 +350,8 @@ export function htpasswdSimulatorHash(user, pass) {
   }
   h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
   h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
-  const digest = (h2 >>> 0).toString(16).padStart(8, '0') + (h1 >>> 0).toString(16).padStart(8, '0');
+  const digest =
+    (h2 >>> 0).toString(16).padStart(8, '0') + (h1 >>> 0).toString(16).padStart(8, '0');
   return `{SHA}${base64FromBytes(utf8Bytes(digest)).replace(/=+$/, '')}`;
 }
 
@@ -416,13 +440,21 @@ class EventBus {
     this._onceHandlers.get(event).push(handler);
     return () => {
       const list = this._onceHandlers.get(event);
-      if (list) this._onceHandlers.set(event, list.filter((entry) => entry !== handler));
+      if (list)
+        this._onceHandlers.set(
+          event,
+          list.filter((entry) => entry !== handler)
+        );
     };
   }
 
   off(event, handler) {
     const list = this._handlers.get(event);
-    if (list) this._handlers.set(event, list.filter((entry) => entry !== handler));
+    if (list)
+      this._handlers.set(
+        event,
+        list.filter((entry) => entry !== handler)
+      );
   }
 
   emit(event, data) {
@@ -577,15 +609,67 @@ const AUTHORIZATION_EXEMPT_COMMANDS = new Set([
 
 /** Every oc subcommand the authorization gate understands (bare form allowed). */
 const KNOWN_OC_BASE_COMMANDS = new Set([
-  'get', 'describe', 'logs', 'events', 'explain', 'create', 'apply', 'replace',
-  'delete', 'scale', 'edit', 'label', 'annotate', 'patch', 'set', 'rollout',
-  'expose', 'run', 'exec', 'rsh', 'cp', 'port-forward', 'debug', 'tag',
-  'import-image', 'extract', 'new-app', 'new-build', 'start-build',
-  'cancel-build', 'process', 'kustomize', 'adm', 'auth', 'helm', 'htpasswd',
-  'help', 'login', 'logout', 'whoami', 'project', 'projects', 'new-project',
-  'delete-project', 'status', 'config', 'version', 'api-resources', 'cordon',
-  'uncordon', 'drain', 'top', 'quota', 'limitrange', 'clusterquota', 'user',
-  'group', 'sa', 'serviceaccount', 'install', 'uninstall',
+  'get',
+  'describe',
+  'logs',
+  'events',
+  'explain',
+  'create',
+  'apply',
+  'replace',
+  'delete',
+  'scale',
+  'edit',
+  'label',
+  'annotate',
+  'patch',
+  'set',
+  'rollout',
+  'expose',
+  'run',
+  'exec',
+  'rsh',
+  'cp',
+  'port-forward',
+  'debug',
+  'tag',
+  'import-image',
+  'extract',
+  'new-app',
+  'new-build',
+  'start-build',
+  'cancel-build',
+  'process',
+  'kustomize',
+  'adm',
+  'auth',
+  'helm',
+  'htpasswd',
+  'help',
+  'login',
+  'logout',
+  'whoami',
+  'project',
+  'projects',
+  'new-project',
+  'delete-project',
+  'status',
+  'config',
+  'version',
+  'api-resources',
+  'cordon',
+  'uncordon',
+  'drain',
+  'top',
+  'quota',
+  'limitrange',
+  'clusterquota',
+  'user',
+  'group',
+  'sa',
+  'serviceaccount',
+  'install',
+  'uninstall',
 ]);
 
 /** `adm` subcommands that are client-side / read-only checks. */
@@ -597,24 +681,119 @@ const ADM_EXEMPT_SUBCOMMANDS = new Set([
 
 /** Long `--flags` that consume the next token as their value. */
 const CLI_LONG_VALUE_FLAGS = new Set([
-  'namespace', 'as', 'as-group', 'patch', 'type', 'filename', 'kustomize', 'output',
-  'selector', 'field-selector', 'container', 'containers', 'replicas', 'image', 'env',
-  'from', 'from-file', 'from-literal', 'from-env-file', 'display-name', 'description',
-  'serviceaccount', 'user', 'group', 'role', 'clusterrole', 'hard', 'default',
-  'default-request', 'min', 'max', 'limits', 'requests', 'schedule', 'restart', 'to',
-  'dry-run', 'revision', 'timeout', 'grace-period', 'cascade', 'service', 'port',
-  'hostname', 'mount-path', 'claim-name', 'claim-size', 'claim-mode', 'claim-class',
-  'name', 'prefix', 'remove', 'overwrite', 'target-port', 'external-name', 'from-dir',
-  'commit', 'allow', 'liveness', 'readiness', 'verb', 'resource', 'resource-name',
-  'api-group', 'users', 'field-manager', 'interval', 'for', 'sort-by', 'cluster',
-  'context', 'token', 'server', 'username', 'password', 'to-namespace', 'source',
-  'destination', 'reference', 'secret-name', 'configmap-name', 'scheduler-name',
-  'host-prefix', 'cert', 'key', 'ca-cert', 'dest', 'path', 'overwrite-file',
-  'mount-path', 'read-only', 'environment', 'pull-policy', 'source-secret',
+  'namespace',
+  'as',
+  'as-group',
+  'patch',
+  'type',
+  'filename',
+  'kustomize',
+  'output',
+  'selector',
+  'field-selector',
+  'container',
+  'containers',
+  'replicas',
+  'image',
+  'env',
+  'from',
+  'from-file',
+  'from-literal',
+  'from-env-file',
+  'display-name',
+  'description',
+  'serviceaccount',
+  'user',
+  'group',
+  'role',
+  'clusterrole',
+  'hard',
+  'default',
+  'default-request',
+  'min',
+  'max',
+  'limits',
+  'requests',
+  'schedule',
+  'restart',
+  'to',
+  'dry-run',
+  'revision',
+  'timeout',
+  'grace-period',
+  'cascade',
+  'service',
+  'port',
+  'hostname',
+  'mount-path',
+  'claim-name',
+  'claim-size',
+  'claim-mode',
+  'claim-class',
+  'name',
+  'prefix',
+  'remove',
+  'overwrite',
+  'target-port',
+  'external-name',
+  'from-dir',
+  'commit',
+  'allow',
+  'liveness',
+  'readiness',
+  'verb',
+  'resource',
+  'resource-name',
+  'api-group',
+  'users',
+  'field-manager',
+  'interval',
+  'for',
+  'sort-by',
+  'cluster',
+  'context',
+  'token',
+  'server',
+  'username',
+  'password',
+  'to-namespace',
+  'source',
+  'destination',
+  'reference',
+  'secret-name',
+  'configmap-name',
+  'scheduler-name',
+  'host-prefix',
+  'cert',
+  'key',
+  'ca-cert',
+  'dest',
+  'path',
+  'overwrite-file',
+  'mount-path',
+  'read-only',
+  'environment',
+  'pull-policy',
+  'source-secret',
 ]);
 
 /** Short `-f` style flags that consume the next token as their value. */
-const CLI_SHORT_VALUE_FLAGS = new Set(['n', 'f', 'k', 'p', 'z', 'c', 'l', 'o', 'u', 'e', 'i', 't', 'v', 'w']);
+const CLI_SHORT_VALUE_FLAGS = new Set([
+  'n',
+  'f',
+  'k',
+  'p',
+  'z',
+  'c',
+  'l',
+  'o',
+  'u',
+  'e',
+  'i',
+  't',
+  'v',
+  'w',
+]);
 
 /** Create subcommands whose API resource is not a registry kind. */
 const CREATE_VIRTUAL_RESOURCES = {
@@ -734,7 +913,11 @@ function parseCommandArgs(tokens) {
         flags[token.slice(2, eq)] = token.slice(eq + 1);
       } else {
         const name = token.slice(2);
-        if (CLI_LONG_VALUE_FLAGS.has(name) && i + 1 < tokens.length && !String(tokens[i + 1]).startsWith('-')) {
+        if (
+          CLI_LONG_VALUE_FLAGS.has(name) &&
+          i + 1 < tokens.length &&
+          !String(tokens[i + 1]).startsWith('-')
+        ) {
           flags[name] = String(tokens[++i]);
         } else {
           flags[name] = true;
@@ -747,7 +930,11 @@ function parseCommandArgs(tokens) {
       if (body.includes('=')) {
         const [name, value] = body.split('=');
         flags[name] = value;
-      } else if (CLI_SHORT_VALUE_FLAGS.has(body) && i + 1 < tokens.length && !String(tokens[i + 1]).startsWith('-')) {
+      } else if (
+        CLI_SHORT_VALUE_FLAGS.has(body) &&
+        i + 1 < tokens.length &&
+        !String(tokens[i + 1]).startsWith('-')
+      ) {
         flags[body] = String(tokens[++i]);
       } else if (CLI_SHORT_VALUE_FLAGS.has(body[0]) && body.length > 1 && !/^-?\d/.test(body)) {
         // `-nfoo`-style clustered shorthand
@@ -850,7 +1037,21 @@ function resourceInfoFromToken(token) {
   }
   if (Object.prototype.hasOwnProperty.call(VIRTUAL_RESOURCE_API_GROUPS, base)) {
     const apiGroup = VIRTUAL_RESOURCE_API_GROUPS[base];
-    const clusterScoped = ['projectrequests', 'projectrequest', 'namespaces', 'namespace', 'nodes', 'users', 'groups', 'identities', 'oauths', 'securitycontextconstraints', 'sccs', 'scc', 'projects'].includes(base);
+    const clusterScoped = [
+      'projectrequests',
+      'projectrequest',
+      'namespaces',
+      'namespace',
+      'nodes',
+      'users',
+      'groups',
+      'identities',
+      'oauths',
+      'securitycontextconstraints',
+      'sccs',
+      'scc',
+      'projects',
+    ].includes(base);
     return {
       kind: null,
       token: raw,
@@ -946,7 +1147,8 @@ export class GameEngine {
   }
 
   _applyDifficulty() {
-    const multiplier = this._difficultyMultipliers[this.difficulty] || this._difficultyMultipliers.normal;
+    const multiplier =
+      this._difficultyMultipliers[this.difficulty] || this._difficultyMultipliers.normal;
     this.simulation.randomFailureRate = 0.002 * multiplier.failureRate;
     this._scoreMultiplier = multiplier.scoreMultiplier;
     this._resourceMultiplier = multiplier.resourceMultiplier;
@@ -955,13 +1157,19 @@ export class GameEngine {
   /** Wire cross-cutting engine listeners (notifications, auth sync, score). */
   _setupEngineEvents() {
     this.eventBus.on('incident:oomkill', (data) => {
-      this._addNotification('warning', `OOMKill: ${data.container} in ${data.namespace}/${data.pod}`);
+      this._addNotification(
+        'warning',
+        `OOMKill: ${data.container} in ${data.namespace}/${data.pod}`
+      );
       this._score -= 10;
       this._reputation = Math.max(0, this._reputation - 5);
     });
 
     this.eventBus.on('hpa:scaled', (data) => {
-      this._addNotification('info', `HPA scaled ${data.target} ${data.direction} to ${data.to} replicas`);
+      this._addNotification(
+        'info',
+        `HPA scaled ${data.target} ${data.direction} to ${data.to} replicas`
+      );
       if (data.direction === 'up') this._score += 5 * this._scoreMultiplier;
     });
 
@@ -970,7 +1178,10 @@ export class GameEngine {
     });
 
     this.eventBus.on('chaos:nodefailure', (data) => {
-      this._addNotification('danger', `Chaos: Node ${data.node} failed, ${data.podsEvicted} pods evicted`);
+      this._addNotification(
+        'danger',
+        `Chaos: Node ${data.node} failed, ${data.podsEvicted} pods evicted`
+      );
       this._reputation = Math.max(0, this._reputation - 10);
     });
 
@@ -992,7 +1203,10 @@ export class GameEngine {
       this._score += 5 * this._scoreMultiplier;
     });
     this.eventBus.on('build:failed', (data) => {
-      this._addNotification('danger', `Build ${data.build} failed: ${data.message || 'build failed'}`);
+      this._addNotification(
+        'danger',
+        `Build ${data.build} failed: ${data.message || 'build failed'}`
+      );
     });
     this.eventBus.on('operator:installed', (data) => {
       this._addNotification('success', `Operator ${data.packageName || data.name} installed`);
@@ -1001,10 +1215,16 @@ export class GameEngine {
       this._addNotification('info', `Operator ${data.packageName || data.name} uninstalled`);
     });
     this.eventBus.on('route:not-admitted', (data) => {
-      this._addNotification('warning', `Route ${data.namespace}/${data.route} not admitted: ${data.message || 'no endpoints available'}`);
+      this._addNotification(
+        'warning',
+        `Route ${data.namespace}/${data.route} not admitted: ${data.message || 'no endpoints available'}`
+      );
     });
     this.eventBus.on('scc:denied', (data) => {
-      this._addNotification('danger', `SCC denied container for pod ${data.pod}: ${data.message || 'unable to validate against any security context constraint'}`);
+      this._addNotification(
+        'danger',
+        `SCC denied container for pod ${data.pod}: ${data.message || 'unable to validate against any security context constraint'}`
+      );
     });
 
     // Identity provider rollout and project lifecycle.
@@ -1013,12 +1233,19 @@ export class GameEngine {
     this.eventBus.on('auth:provider-ready', (data) => {
       const provider = data?.provider || null;
       this.authProvider = provider ? { ...provider, ready: true } : null;
-      this._addNotification('info', provider ? `Identity provider ${provider.name} is ready` : 'All identity providers removed');
+      this._addNotification(
+        'info',
+        provider ? `Identity provider ${provider.name} is ready` : 'All identity providers removed'
+      );
     });
     this.eventBus.on('cluster:deleted:Project', (data) => {
       if (data.name === this.currentProject) {
         this.currentProject = 'default';
-        this.eventBus.emit('project:switched', { from: data.name, to: 'default', reason: 'deleted' });
+        this.eventBus.emit('project:switched', {
+          from: data.name,
+          to: 'default',
+          reason: 'deleted',
+        });
       }
     });
     // Level changes / restarts call ClusterState.clear(): the previous level's
@@ -1080,7 +1307,10 @@ export class GameEngine {
   /** `oc auth can-i --list` data. */
   canIList(namespace, user) {
     const username = user === undefined ? this.currentUser : user;
-    return this.cluster.listPermissions(username || '', namespace || this.currentProject || 'default');
+    return this.cluster.listPermissions(
+      username || '',
+      namespace || this.currentProject || 'default'
+    );
   }
 
   /** `oc adm policy who-can <verb> <resource>` data. */
@@ -1113,11 +1343,15 @@ export class GameEngine {
     const projectName = this.currentProject;
     const project = projectName ? this.cluster.getProject(projectName) : null;
     if (project && !this.cluster.isProjectTerminating(projectName)) return this.currentProject;
-    const candidates = ['default', ...this.cluster.getProjects().map((entry) => entry.metadata.name)];
-    const next = candidates.find((name) => {
-      const candidate = this.cluster.getProject(name);
-      return Boolean(candidate) && !this.cluster.isProjectTerminating(name);
-    }) || 'default';
+    const candidates = [
+      'default',
+      ...this.cluster.getProjects().map((entry) => entry.metadata.name),
+    ];
+    const next =
+      candidates.find((name) => {
+        const candidate = this.cluster.getProject(name);
+        return Boolean(candidate) && !this.cluster.isProjectTerminating(name);
+      }) || 'default';
     const from = projectName;
     this.currentProject = next;
     if (from !== next) this.eventBus.emit('project:switched', { from, to: next, reason: 'stale' });
@@ -1134,7 +1368,10 @@ export class GameEngine {
     if (!parsedOrRaw || typeof parsedOrRaw !== 'object') return '';
     if (typeof parsedOrRaw.raw === 'string') return parsedOrRaw.raw.trim();
     if (Array.isArray(parsedOrRaw.tokens)) {
-      return parsedOrRaw.tokens.filter((token) => token !== undefined && token !== null && token !== '').join(' ').trim();
+      return parsedOrRaw.tokens
+        .filter((token) => token !== undefined && token !== null && token !== '')
+        .join(' ')
+        .trim();
     }
     if (Array.isArray(parsedOrRaw.args)) {
       return [parsedOrRaw.baseCommand, ...parsedOrRaw.args]
@@ -1318,7 +1555,10 @@ export class GameEngine {
     let info = null;
     if (String(object.kind) === 'Namespace') {
       info = { resource: 'namespaces', apiGroup: '', clusterScoped: true };
-    } else if (normalizedKind === 'Project' && String(object.apiVersion || '').startsWith('config.openshift.io/')) {
+    } else if (
+      normalizedKind === 'Project' &&
+      String(object.apiVersion || '').startsWith('config.openshift.io/')
+    ) {
       info = { resource: 'projects', apiGroup: 'config.openshift.io', clusterScoped: true };
     } else if (normalizedKind === 'Project') {
       info = { resource: 'projects', apiGroup: 'project.openshift.io', clusterScoped: true };
@@ -1332,9 +1572,13 @@ export class GameEngine {
       };
     }
     if (!info) {
-      return { ...base, exempt: true, reason: `unknown object kind ${object.kind} (client-side error)` };
+      return {
+        ...base,
+        exempt: true,
+        reason: `unknown object kind ${object.kind} (client-side error)`,
+      };
     }
-    const namespace = info.clusterScoped ? '' : (metadata.namespace || defaultNamespace);
+    const namespace = info.clusterScoped ? '' : metadata.namespace || defaultNamespace;
     let checkVerb = String(verb || 'create').toLowerCase();
     if (checkVerb === 'apply') {
       const existing = this.cluster.getByName(normalizedKind || object.kind, name, namespace);
@@ -1350,7 +1594,13 @@ export class GameEngine {
       command: '',
     };
     if (!context.user) {
-      return { ...base, allowed: false, verb: checkVerb, reason: 'Unauthorized', message: 'error: You must be logged in to the server (Unauthorized)' };
+      return {
+        ...base,
+        allowed: false,
+        verb: checkVerb,
+        reason: 'Unauthorized',
+        message: 'error: You must be logged in to the server (Unauthorized)',
+      };
     }
     const denial = this._evaluateAuthorizationChecks([check], context);
     this.eventBus.emit('auth:checked', {
@@ -1391,14 +1641,15 @@ export class GameEngine {
     const makeCheck = (verb, token, name = null, options = {}) => {
       const info = resourceInfoFromToken(token);
       if (!info) return null;
-      const clusterScoped = options.clusterScoped !== undefined ? options.clusterScoped : info.clusterScoped;
+      const clusterScoped =
+        options.clusterScoped !== undefined ? options.clusterScoped : info.clusterScoped;
       return {
         verb,
         resource: options.resource || info.resource,
         apiGroup: options.apiGroup !== undefined ? options.apiGroup : info.apiGroup,
         clusterScoped,
         name: name || info.name || null,
-        namespace: clusterScoped ? '' : (options.namespace || namespace),
+        namespace: clusterScoped ? '' : options.namespace || namespace,
       };
     };
     const rawCheck = (verb, resource, apiGroup = '', options = {}) => ({
@@ -1407,22 +1658,31 @@ export class GameEngine {
       apiGroup,
       clusterScoped: options.clusterScoped !== false ? Boolean(options.clusterScoped) : false,
       name: options.name || null,
-      namespace: options.clusterScoped ? '' : (options.namespace || namespace),
+      namespace: options.clusterScoped ? '' : options.namespace || namespace,
     });
     const checks = (list) => ({ checks: list.filter(Boolean) });
 
     /** `project.config.openshift.io/cluster` is a cluster-scoped config object. */
-    const projectConfigCheck = (verb) => rawCheck(verb, 'projects', 'config.openshift.io', { clusterScoped: true });
+    const projectConfigCheck = (verb) =>
+      rawCheck(verb, 'projects', 'config.openshift.io', { clusterScoped: true });
 
     if (base === 'get') {
       if (positionals.length === 0) return exempt; // client-side usage error
       const rawToken = positionals[0];
-      if (/project\.config\.openshift\.io/i.test(rawToken)) return checks([projectConfigCheck('get')]);
-      if (/oauth\.config\.openshift\.io/i.test(rawToken)) return checks([rawCheck('get', 'oauths', 'config.openshift.io', { clusterScoped: true })]);
-      const tokensList = rawToken.split(',').map((token) => token.trim()).filter(Boolean);
+      if (/project\.config\.openshift\.io/i.test(rawToken))
+        return checks([projectConfigCheck('get')]);
+      if (/oauth\.config\.openshift\.io/i.test(rawToken))
+        return checks([rawCheck('get', 'oauths', 'config.openshift.io', { clusterScoped: true })]);
+      const tokensList = rawToken
+        .split(',')
+        .map((token) => token.trim())
+        .filter(Boolean);
       const [firstToken, firstSub] = rawToken.split('/');
       const resourceName = positionals[1] || (rawToken.includes('/') ? firstSub : null);
-      if (tokensList.length === 1 && ['projects', 'project'].includes(String(firstToken).toLowerCase())) {
+      if (
+        tokensList.length === 1 &&
+        ['projects', 'project'].includes(String(firstToken).toLowerCase())
+      ) {
         if (!resourceName) return { exempt: false, requiresProjectFilter: true, checks: [] };
         return checks([makeCheck('get', firstToken, resourceName, { clusterScoped: true })]);
       }
@@ -1432,7 +1692,11 @@ export class GameEngine {
           checkList.push(rawCheck('list', 'pods', '', { namespace }));
           continue;
         }
-        const tokenName = token.includes('/') ? token.split('/')[1] : (tokensList.length === 1 ? resourceName : null);
+        const tokenName = token.includes('/')
+          ? token.split('/')[1]
+          : tokensList.length === 1
+            ? resourceName
+            : null;
         const check = makeCheck(resourceName ? 'get' : 'list', token.split('/')[0], tokenName);
         if (check) checkList.push(check);
       }
@@ -1442,7 +1706,8 @@ export class GameEngine {
     if (base === 'describe') {
       if (positionals.length === 0) return exempt;
       const rawToken = positionals[0];
-      if (/project\.config\.openshift\.io/i.test(rawToken)) return checks([projectConfigCheck('get')]);
+      if (/project\.config\.openshift\.io/i.test(rawToken))
+        return checks([projectConfigCheck('get')]);
       const [token, sub] = rawToken.split('/');
       const name = positionals[1] || (rawToken.includes('/') ? sub : null);
       const check = makeCheck(name ? 'get' : 'list', token, name);
@@ -1456,10 +1721,14 @@ export class GameEngine {
       const info = resourceInfoFromToken(kindToken) || resourceInfoFromToken('pods');
       const podName = ref.includes('/') ? refName : ref;
       if (info?.kind === 'BuildConfig') {
-        return checks([rawCheck('get', 'buildconfigs/log', 'build.openshift.io', { name: podName, namespace })]);
+        return checks([
+          rawCheck('get', 'buildconfigs/log', 'build.openshift.io', { name: podName, namespace }),
+        ]);
       }
       if (info?.kind === 'Build') {
-        return checks([rawCheck('get', 'builds/log', 'build.openshift.io', { name: podName, namespace })]);
+        return checks([
+          rawCheck('get', 'builds/log', 'build.openshift.io', { name: podName, namespace }),
+        ]);
       }
       return checks([rawCheck('get', 'pods/log', '', { name: podName, namespace })]);
     }
@@ -1468,11 +1737,21 @@ export class GameEngine {
 
     if (base === 'new-project') {
       if (!positionals[0]) return exempt;
-      return checks([rawCheck('create', 'projectrequests', 'project.openshift.io', { clusterScoped: true, name: positionals[0] })]);
+      return checks([
+        rawCheck('create', 'projectrequests', 'project.openshift.io', {
+          clusterScoped: true,
+          name: positionals[0],
+        }),
+      ]);
     }
     if (base === 'delete-project') {
       if (!positionals[0]) return exempt;
-      return checks([rawCheck('delete', 'projects', 'project.openshift.io', { clusterScoped: true, name: positionals[0] })]);
+      return checks([
+        rawCheck('delete', 'projects', 'project.openshift.io', {
+          clusterScoped: true,
+          name: positionals[0],
+        }),
+      ]);
     }
 
     const manifestFlag = Boolean(flags.filename || flags.f || flags.kustomize || flags.k);
@@ -1481,14 +1760,21 @@ export class GameEngine {
       const sub = String(positionals[0] || '').toLowerCase();
       if (!sub) return exempt;
       if (sub === 'token') {
-        return checks([rawCheck('create', 'serviceaccounts/token', '', { name: positionals[1] || null, namespace })]);
+        return checks([
+          rawCheck('create', 'serviceaccounts/token', '', {
+            name: positionals[1] || null,
+            namespace,
+          }),
+        ]);
       }
       if (CREATE_VIRTUAL_RESOURCES[sub]) {
         const virtual = CREATE_VIRTUAL_RESOURCES[sub];
-        return checks([rawCheck('create', virtual.resource, virtual.apiGroup, {
-          clusterScoped: virtual.clusterScoped,
-          name: positionals[1] || null,
-        })]);
+        return checks([
+          rawCheck('create', virtual.resource, virtual.apiGroup, {
+            clusterScoped: virtual.clusterScoped,
+            name: positionals[1] || null,
+          }),
+        ]);
       }
       const info = resourceInfoFromToken(sub);
       if (!info) return exempt; // client-side "unknown resource type"
@@ -1518,7 +1804,13 @@ export class GameEngine {
       if (!info) return exempt;
       return checks([makeCheck('delete', rawToken, positionals[1] || null)]);
     }
-    if (base === 'patch' || base === 'edit' || base === 'label' || base === 'annotate' || base === 'scale') {
+    if (
+      base === 'patch' ||
+      base === 'edit' ||
+      base === 'label' ||
+      base === 'annotate' ||
+      base === 'scale'
+    ) {
       if (positionals.length === 0) return exempt;
       const rawToken = positionals[0];
       if (/project\.config\.openshift\.io/i.test(rawToken)) {
@@ -1528,14 +1820,19 @@ export class GameEngine {
       const name = positionals[1] || (rawToken.includes('/') ? sub : null);
       const info = resourceInfoFromToken(token);
       if (!info) return exempt;
-      const verb = base === 'patch' || base === 'label' || base === 'annotate' || base === 'scale' ? 'patch' : 'update';
+      const verb =
+        base === 'patch' || base === 'label' || base === 'annotate' || base === 'scale'
+          ? 'patch'
+          : 'update';
       const resource = base === 'scale' ? `${info.resource}/scale` : info.resource;
       return checks([makeCheck(verb, token, name, { resource })]);
     }
     if (base === 'set') {
       const sub = String(positionals[0] || '').toLowerCase();
       if (!sub) return exempt;
-      const ref = positionals.slice(1).find((token) => token && (token.includes('/') || resourceInfoFromToken(token)));
+      const ref = positionals
+        .slice(1)
+        .find((token) => token && (token.includes('/') || resourceInfoFromToken(token)));
       if (!ref) return exempt;
       const token = ref.split('/')[0];
       const info = resourceInfoFromToken(token);
@@ -1546,7 +1843,8 @@ export class GameEngine {
       const sub = String(positionals[0] || '').toLowerCase();
       const ref = positionals[1] || 'deployments';
       const token = ref.split('/')[0];
-      if (!['status', 'history', 'restart', 'undo', 'pause', 'resume', 'latest'].includes(sub)) return exempt;
+      if (!['status', 'history', 'restart', 'undo', 'pause', 'resume', 'latest'].includes(sub))
+        return exempt;
       const verb = ['status', 'history', 'latest'].includes(sub) ? 'get' : 'patch';
       const check = makeCheck(verb, token, ref.includes('/') ? ref.split('/')[1] : null);
       return check ? checks([check]) : exempt;
@@ -1557,23 +1855,34 @@ export class GameEngine {
       const [token, sub] = rawToken.split('/');
       const info = resourceInfoFromToken(rawToken) || resourceInfoFromToken(token);
       if (rawToken.includes('/') && info) {
-        if (info.kind === 'Service') return checks([rawCheck('create', 'routes', 'route.openshift.io', { name: sub, namespace })]);
+        if (info.kind === 'Service')
+          return checks([
+            rawCheck('create', 'routes', 'route.openshift.io', { name: sub, namespace }),
+          ]);
         if (info.kind === 'Deployment' || info.kind === 'Pod') {
           return checks([rawCheck('create', 'services', '', { name: sub, namespace })]);
         }
-        return checks([rawCheck('create', 'routes', 'route.openshift.io', { name: sub, namespace })]);
+        return checks([
+          rawCheck('create', 'routes', 'route.openshift.io', { name: sub, namespace }),
+        ]);
       }
-      return checks([rawCheck('create', 'routes', 'route.openshift.io', { name: rawToken, namespace })]);
+      return checks([
+        rawCheck('create', 'routes', 'route.openshift.io', { name: rawToken, namespace }),
+      ]);
     }
-    if (base === 'new-app') return checks([rawCheck('create', 'deployments', 'apps', { namespace })]);
-    if (base === 'new-build') return checks([rawCheck('create', 'buildconfigs', 'build.openshift.io', { namespace })]);
+    if (base === 'new-app')
+      return checks([rawCheck('create', 'deployments', 'apps', { namespace })]);
+    if (base === 'new-build')
+      return checks([rawCheck('create', 'buildconfigs', 'build.openshift.io', { namespace })]);
     if (base === 'start-build') {
       if (!positionals[0]) return exempt;
       const token = positionals[0].split('/')[0];
       if (positionals[0].includes('/')) {
         const info = resourceInfoFromToken(token);
-        if (info?.kind === 'BuildConfig') return checks([rawCheck('create', 'builds', 'build.openshift.io', { namespace })]);
-        if (info?.kind === 'Build') return checks([rawCheck('update', 'builds', 'build.openshift.io', { namespace })]);
+        if (info?.kind === 'BuildConfig')
+          return checks([rawCheck('create', 'builds', 'build.openshift.io', { namespace })]);
+        if (info?.kind === 'Build')
+          return checks([rawCheck('update', 'builds', 'build.openshift.io', { namespace })]);
       }
       return checks([rawCheck('create', 'builds', 'build.openshift.io', { namespace })]);
     }
@@ -1581,14 +1890,20 @@ export class GameEngine {
       return checks([rawCheck('update', 'builds', 'build.openshift.io', { namespace })]);
     }
     if (base === 'run') return checks([rawCheck('create', 'pods', '', { namespace })]);
-    if (base === 'exec' || base === 'rsh') return checks([rawCheck('create', 'pods/exec', '', { namespace })]);
+    if (base === 'exec' || base === 'rsh')
+      return checks([rawCheck('create', 'pods/exec', '', { namespace })]);
     if (base === 'cp') return checks([rawCheck('create', 'pods/exec', '', { namespace })]);
-    if (base === 'port-forward') return checks([rawCheck('create', 'pods/portforward', '', { namespace })]);
+    if (base === 'port-forward')
+      return checks([rawCheck('create', 'pods/portforward', '', { namespace })]);
     if (base === 'debug') return checks([rawCheck('create', 'pods', '', { namespace })]);
-    if (base === 'tag') return checks([rawCheck('create', 'imagestreamtags', 'image.openshift.io', { namespace })]);
-    if (base === 'import-image') return checks([rawCheck('create', 'imagestreams', 'image.openshift.io', { namespace })]);
+    if (base === 'tag')
+      return checks([rawCheck('create', 'imagestreamtags', 'image.openshift.io', { namespace })]);
+    if (base === 'import-image')
+      return checks([rawCheck('create', 'imagestreams', 'image.openshift.io', { namespace })]);
     if (base === 'extract') {
-      const ref = positionals.find((token) => token && (token.includes('/') || resourceInfoFromToken(token)));
+      const ref = positionals.find(
+        (token) => token && (token.includes('/') || resourceInfoFromToken(token))
+      );
       if (!ref) return exempt;
       const [token, sub] = ref.split('/');
       const info = resourceInfoFromToken(token);
@@ -1608,23 +1923,31 @@ export class GameEngine {
           const saForm = Boolean(flags.z || flags.serviceaccount);
           const sccName = positionals[2] || '';
           if (saForm || String(positionals[3] || '').startsWith('system:serviceaccount:')) {
-            const subjectNamespace = saForm ? namespace : String(positionals[3] || '').split(':')[2] || namespace;
-            return checks([rawCheck(verb, 'rolebindings', 'rbac.authorization.k8s.io', {
-              name: `system:openshift:scc:${sccName}`,
-              namespace: subjectNamespace,
-            })]);
+            const subjectNamespace = saForm
+              ? namespace
+              : String(positionals[3] || '').split(':')[2] || namespace;
+            return checks([
+              rawCheck(verb, 'rolebindings', 'rbac.authorization.k8s.io', {
+                name: `system:openshift:scc:${sccName}`,
+                namespace: subjectNamespace,
+              }),
+            ]);
           }
-          return checks([rawCheck(verb, 'clusterrolebindings', 'rbac.authorization.k8s.io', {
-            clusterScoped: true,
-            name: `system:openshift:scc:${sccName}`,
-          })]);
+          return checks([
+            rawCheck(verb, 'clusterrolebindings', 'rbac.authorization.k8s.io', {
+              clusterScoped: true,
+              name: `system:openshift:scc:${sccName}`,
+            }),
+          ]);
         }
         const clusterWide = policySub.includes('cluster-role');
         const resource = clusterWide ? 'clusterrolebindings' : 'rolebindings';
-        return checks([rawCheck(verb, resource, 'rbac.authorization.k8s.io', {
-          clusterScoped: clusterWide,
-          namespace: clusterWide ? '' : namespace,
-        })]);
+        return checks([
+          rawCheck(verb, resource, 'rbac.authorization.k8s.io', {
+            clusterScoped: clusterWide,
+            namespace: clusterWide ? '' : namespace,
+          }),
+        ]);
       }
       if (sub === 'groups') {
         const groupsSub = String(positionals[1] || '').toLowerCase();
@@ -1635,21 +1958,27 @@ export class GameEngine {
         return exempt;
       }
       if (['cordon', 'uncordon', 'drain', 'taint'].includes(sub)) {
-        return checks([rawCheck('update', 'nodes', '', { clusterScoped: true, name: positionals[1] || null })]);
+        return checks([
+          rawCheck('update', 'nodes', '', { clusterScoped: true, name: positionals[1] || null }),
+        ]);
       }
       if (sub === 'top') {
         const target = String(positionals[1] || 'nodes').toLowerCase();
         if (target.startsWith('pod')) return checks([rawCheck('get', 'pods', '', { namespace })]);
         return checks([rawCheck('get', 'nodes', '', { clusterScoped: true })]);
       }
-      if (['create-bootstrap-project-template', 'must-gather', 'inspect'].includes(sub)) return exempt;
+      if (['create-bootstrap-project-template', 'must-gather', 'inspect'].includes(sub))
+        return exempt;
       return exempt;
     }
     if (base === 'helm') {
       const sub = String(positionals[0] || '').toLowerCase();
-      if (['install', 'upgrade'].includes(sub)) return checks([rawCheck('create', 'deployments', 'apps', { namespace })]);
-      if (['uninstall', 'delete'].includes(sub)) return checks([rawCheck('delete', 'deployments', 'apps', { namespace })]);
-      if (['rollback'].includes(sub)) return checks([rawCheck('patch', 'deployments', 'apps', { namespace })]);
+      if (['install', 'upgrade'].includes(sub))
+        return checks([rawCheck('create', 'deployments', 'apps', { namespace })]);
+      if (['uninstall', 'delete'].includes(sub))
+        return checks([rawCheck('delete', 'deployments', 'apps', { namespace })]);
+      if (['rollback'].includes(sub))
+        return checks([rawCheck('patch', 'deployments', 'apps', { namespace })]);
       return exempt;
     }
     if (['quota', 'limitrange'].includes(base)) {
@@ -1657,15 +1986,21 @@ export class GameEngine {
       return checks([rawCheck('create', resource, '', { namespace })]);
     }
     if (base === 'clusterquota') {
-      return checks([rawCheck('create', 'clusterresourcequotas', 'quota.openshift.io', { clusterScoped: true })]);
+      return checks([
+        rawCheck('create', 'clusterresourcequotas', 'quota.openshift.io', { clusterScoped: true }),
+      ]);
     }
-    if (base === 'user') return checks([rawCheck('create', 'users', 'user.openshift.io', { clusterScoped: true })]);
-    if (base === 'group') return checks([rawCheck('create', 'groups', 'user.openshift.io', { clusterScoped: true })]);
+    if (base === 'user')
+      return checks([rawCheck('create', 'users', 'user.openshift.io', { clusterScoped: true })]);
+    if (base === 'group')
+      return checks([rawCheck('create', 'groups', 'user.openshift.io', { clusterScoped: true })]);
     if (base === 'sa' || base === 'serviceaccount') {
       return checks([rawCheck('create', 'serviceaccounts', '', { namespace })]);
     }
-    if (base === 'install') return checks([rawCheck('create', 'subscriptions', 'operators.coreos.com', { namespace })]);
-    if (base === 'uninstall') return checks([rawCheck('delete', 'subscriptions', 'operators.coreos.com', { namespace })]);
+    if (base === 'install')
+      return checks([rawCheck('create', 'subscriptions', 'operators.coreos.com', { namespace })]);
+    if (base === 'uninstall')
+      return checks([rawCheck('delete', 'subscriptions', 'operators.coreos.com', { namespace })]);
     if (['cordon', 'uncordon', 'drain'].includes(base)) {
       return checks([rawCheck('update', 'nodes', '', { clusterScoped: true })]);
     }
@@ -1680,7 +2015,8 @@ export class GameEngine {
     if (base === 'projects') return { exempt: true, requiresProjectFilter: true };
     if (AUTHORIZATION_EXEMPT_COMMANDS.has(base)) return exempt;
     if (ADM_EXEMPT_SUBCOMMANDS.has(base)) return exempt;
-    if (base === 'auth' || base === 'config' || base === 'version' || base === 'api-resources') return exempt;
+    if (base === 'auth' || base === 'config' || base === 'version' || base === 'api-resources')
+      return exempt;
     return exempt;
   }
 
@@ -1694,7 +2030,7 @@ export class GameEngine {
   _evaluateAuthorizationChecks(checks, context) {
     const defaultNamespace = context.namespace || this.currentProject || 'default';
     for (const check of checks || []) {
-      const namespace = check.clusterScoped ? '' : (check.namespace || defaultNamespace);
+      const namespace = check.clusterScoped ? '' : check.namespace || defaultNamespace;
       const result = this.cluster.canI(context.user, check.verb, check.resource, namespace);
       if (result.allowed) {
         check.reason = result.reason;
@@ -1728,7 +2064,8 @@ export class GameEngine {
   _forbiddenMessage(check, user, namespace) {
     const resource = check.resource;
     const apiGroup = check.apiGroup || '';
-    const withName = check.name && ['get', 'patch', 'update', 'delete', 'watch'].includes(check.verb);
+    const withName =
+      check.name && ['get', 'patch', 'update', 'delete', 'watch'].includes(check.verb);
     const baseLabel = apiGroup ? `${resource}.${apiGroup}` : resource;
     const resourceLabel = withName ? `${baseLabel} "${check.name}"` : baseLabel;
     const scope = check.clusterScoped
@@ -1754,11 +2091,13 @@ export class GameEngine {
     if (!config) {
       const wasConfigured = !!this.authProvider;
       this.authProvider = null;
-      if (wasConfigured && !options.silent) this.eventBus.emit('auth:provider-configuring', { provider: null });
+      if (wasConfigured && !options.silent)
+        this.eventBus.emit('auth:provider-configuring', { provider: null });
       return null;
     }
     this.authProvider = { ...config, ready: false };
-    if (!options.silent) this.eventBus.emit('auth:provider-configuring', { provider: { ...this.authProvider } });
+    if (!options.silent)
+      this.eventBus.emit('auth:provider-configuring', { provider: { ...this.authProvider } });
     return this.authProvider;
   }
 
@@ -1770,7 +2109,12 @@ export class GameEngine {
    */
   configureOAuth(identityProviders) {
     const oauth = this.cluster.getOAuth();
-    if (!oauth) return { success: false, oauth: null, message: 'Error from server (NotFound): oauth.config.openshift.io "cluster" not found' };
+    if (!oauth)
+      return {
+        success: false,
+        oauth: null,
+        message: 'Error from server (NotFound): oauth.config.openshift.io "cluster" not found',
+      };
     oauth.spec = oauth.spec || {};
     oauth.spec.identityProviders = deepClone(identityProviders || []);
     this.cluster.update(oauth.uid, oauth);
@@ -1818,10 +2162,12 @@ export class GameEngine {
    * @returns {string}
    */
   _providerSecretName() {
-    return this.authProvider?.secretName
-      || this.authProvider?.htpasswd?.fileData?.name
-      || this.authProvider?.htpasswd?.secret?.name
-      || 'htpasswd-secret';
+    return (
+      this.authProvider?.secretName ||
+      this.authProvider?.htpasswd?.fileData?.name ||
+      this.authProvider?.htpasswd?.secret?.name ||
+      'htpasswd-secret'
+    );
   }
 
   /**
@@ -1962,8 +2308,17 @@ export class GameEngine {
       this.currentUser = user === 'admin' ? 'admin' : 'kubeadmin';
       this._ensureUserResource(this.currentUser, null);
       this.ensureCurrentProject();
-      this.eventBus.emit('login', { user: this.currentUser, provider: 'kubeadmin', project: this.currentProject });
-      return { success: true, user: this.currentUser, message: "Login successful.\n\nYou have access to 0 projects, the server console URL for the cluster is https://console-openshift-console.apps.cluster.example.com." };
+      this.eventBus.emit('login', {
+        user: this.currentUser,
+        provider: 'kubeadmin',
+        project: this.currentProject,
+      });
+      return {
+        success: true,
+        user: this.currentUser,
+        message:
+          'Login successful.\n\nYou have access to 0 projects, the server console URL for the cluster is https://console-openshift-console.apps.cluster.example.com.',
+      };
     }
 
     if (!this.authProvider) {
@@ -1979,7 +2334,8 @@ export class GameEngine {
       return {
         success: false,
         reason: 'identity-provider-not-ready',
-        message: 'Login failed (401 Unauthorized)\nThe HTPasswd identity provider is not ready yet: wait for the OAuth rollout to complete (oc get clusteroperators authentication) and try again.',
+        message:
+          'Login failed (401 Unauthorized)\nThe HTPasswd identity provider is not ready yet: wait for the OAuth rollout to complete (oc get clusteroperators authentication) and try again.',
       };
     }
 
@@ -1995,8 +2351,8 @@ export class GameEngine {
         success: false,
         reason: 'identity-provider-secret-invalid',
         message:
-          `Login failed (401 Unauthorized)\nThe HTPasswd identity provider is not ready: `
-          + `Secret "${providerSecretName}" in project openshift-config is missing or has no "htpasswd" key.`,
+          `Login failed (401 Unauthorized)\nThe HTPasswd identity provider is not ready: ` +
+          `Secret "${providerSecretName}" in project openshift-config is missing or has no "htpasswd" key.`,
       };
     }
 
@@ -2005,7 +2361,8 @@ export class GameEngine {
       return {
         success: false,
         reason: 'invalid-credentials',
-        message: 'Login failed (401 Unauthorized)\nVerify you have provided the correct credentials.',
+        message:
+          'Login failed (401 Unauthorized)\nVerify you have provided the correct credentials.',
       };
     }
 
@@ -2016,13 +2373,18 @@ export class GameEngine {
     this.cluster.createIdentity(providerName, user, userResource.metadata.name);
     this.currentUser = userResource.metadata.name;
     this.ensureCurrentProject();
-    this.eventBus.emit('login', { user: this.currentUser, provider: providerName, project: this.currentProject });
+    this.eventBus.emit('login', {
+      user: this.currentUser,
+      provider: providerName,
+      project: this.currentProject,
+    });
     return { success: true, user: this.currentUser, message: 'Login successful.' };
   }
 
   /** Ensure a User resource exists for kubeadmin-style logins. */
   _ensureUserResource(username, provider) {
-    if (!this.cluster.getUser(username)) this.cluster.createUser(username, { fullName: 'Cluster administrator' });
+    if (!this.cluster.getUser(username))
+      this.cluster.createUser(username, { fullName: 'Cluster administrator' });
     if (provider) this.cluster.createIdentity(provider.name, username, username);
   }
 
@@ -2045,7 +2407,10 @@ export class GameEngine {
   switchProject(name) {
     const project = this.cluster.getProject(name);
     if (!project) {
-      return { success: false, message: `error: A project named "${name}" does not exist on the cluster.` };
+      return {
+        success: false,
+        message: `error: A project named "${name}" does not exist on the cluster.`,
+      };
     }
     if (project.status.phase === 'Terminating') {
       return { success: false, message: `error: project "${name}" is being terminated` };
@@ -2053,7 +2418,11 @@ export class GameEngine {
     const from = this.currentProject;
     this.currentProject = project.metadata.name;
     this.eventBus.emit('project:switched', { from, to: this.currentProject });
-    return { success: true, project, message: `Now using project "${this.currentProject}" on server "https://api.cluster.example.com:6443".` };
+    return {
+      success: true,
+      project,
+      message: `Now using project "${this.currentProject}" on server "https://api.cluster.example.com:6443".`,
+    };
   }
 
   /** @returns {object|null} the current Project resource */
@@ -2174,11 +2543,17 @@ export class GameEngine {
    * @returns {{success: boolean, project?: object, message: string}}
    */
   createProject(name, options = {}) {
-    if (!this.currentUser) return { success: false, message: 'error: You must be logged in to the server (Unauthorized)' };
+    if (!this.currentUser)
+      return {
+        success: false,
+        message: 'error: You must be logged in to the server (Unauthorized)',
+      };
     // Server-side authorizer: `oc new-project` creates a ProjectRequest and is
     // governed by the `self-provisioners` ClusterRoleBinding (issue #3).
     if (!options.bypassAuthorization) {
-      const authorization = this.authorizeCommand(`oc new-project ${name}`, { user: this.currentUser });
+      const authorization = this.authorizeCommand(`oc new-project ${name}`, {
+        user: this.currentUser,
+      });
       if (!authorization.allowed) return { success: false, message: authorization.message };
     }
     // The requester is part of the real `oc new-project` flow: ClusterState
@@ -2187,7 +2562,11 @@ export class GameEngine {
     const result = this.cluster.createProject(name, { ...options, requester: this.currentUser });
     if (!result.success) return result;
     this.switchProject(name);
-    return { success: true, project: result.project, message: `Now using project "${name}" on server "https://api.cluster.example.com:6443".` };
+    return {
+      success: true,
+      project: result.project,
+      message: `Now using project "${name}" on server "https://api.cluster.example.com:6443".`,
+    };
   }
 
   /**
@@ -2196,8 +2575,14 @@ export class GameEngine {
    * @returns {{success: boolean, message: string}}
    */
   deleteProject(name) {
-    if (!this.currentUser) return { success: false, message: 'error: You must be logged in to the server (Unauthorized)' };
-    const authorization = this.authorizeCommand(`oc delete project ${name}`, { user: this.currentUser });
+    if (!this.currentUser)
+      return {
+        success: false,
+        message: 'error: You must be logged in to the server (Unauthorized)',
+      };
+    const authorization = this.authorizeCommand(`oc delete project ${name}`, {
+      user: this.currentUser,
+    });
     if (!authorization.allowed) return { success: false, message: authorization.message };
     const result = this.cluster.deleteProject(name);
     if (!result.success) return result;
@@ -2264,7 +2649,13 @@ export class GameEngine {
     this.eventBus.emit('command:recorded', entry);
 
     const authorization = this._authorizationForCommand(entry);
-    if (authorization) this.canI(authorization.verb, authorization.resource, authorization.namespace, this.currentUser);
+    if (authorization)
+      this.canI(
+        authorization.verb,
+        authorization.resource,
+        authorization.namespace,
+        this.currentUser
+      );
     return entry;
   }
 
@@ -2387,9 +2778,9 @@ export class GameEngine {
     // this method with the apiVersion/kind preserved; configure project
     // provisioning (template / requester message) and never create a Project.
     if (
-      obj.apiVersion === 'config.openshift.io/v1'
-      && obj.kind === 'Project'
-      && (obj.metadata?.name || obj.name) === 'cluster'
+      obj.apiVersion === 'config.openshift.io/v1' &&
+      obj.kind === 'Project' &&
+      (obj.metadata?.name || obj.name) === 'cluster'
     ) {
       const spec = obj.spec && typeof obj.spec === 'object' ? deepClone(obj.spec) : {};
       const result = this.updateProjectConfig(spec);
@@ -2399,9 +2790,10 @@ export class GameEngine {
         return null;
       }
       this.lastApplyError = null;
-      const projectConfig = result.projectConfig && typeof result.projectConfig === 'object'
-        ? result.projectConfig
-        : this.getProjectConfig();
+      const projectConfig =
+        result.projectConfig && typeof result.projectConfig === 'object'
+          ? result.projectConfig
+          : this.getProjectConfig();
       try {
         this.eventBus.emit('resource:applied', {
           action: 'configured',
@@ -2445,12 +2837,21 @@ export class GameEngine {
     if (existing) {
       existing.spec = deepClone(normalised.spec || {});
       existing.metadata.labels = { ...existing.metadata.labels, ...(metadata.labels || {}) };
-      existing.metadata.annotations = { ...existing.metadata.annotations, ...(metadata.annotations || {}) };
+      existing.metadata.annotations = {
+        ...existing.metadata.annotations,
+        ...(metadata.annotations || {}),
+      };
       existing.metadata.generation++;
       this.cluster.update(existing.uid, existing);
       existing._applyAction = 'updated';
       this._syncHtpasswdFileFromSecret(kind, existing);
-      this.eventBus.emit('resource:applied', { action: 'updated', kind, name, namespace, resource: existing });
+      this.eventBus.emit('resource:applied', {
+        action: 'updated',
+        kind,
+        name,
+        namespace,
+        resource: existing,
+      });
       return existing;
     }
 
@@ -2506,7 +2907,13 @@ export class GameEngine {
     const added = this.cluster.add(resource);
     added._applyAction = 'created';
     this._syncHtpasswdFileFromSecret(kind, added);
-    this.eventBus.emit('resource:applied', { action: 'created', kind, name, namespace, resource: added });
+    this.eventBus.emit('resource:applied', {
+      action: 'created',
+      kind,
+      name,
+      namespace,
+      resource: added,
+    });
     return added;
   }
 
@@ -2556,7 +2963,10 @@ export class GameEngine {
 
   /** @param {string} value @returns {boolean} */
   _isUuidLike(value) {
-    return typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
+    return (
+      typeof value === 'string' &&
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value)
+    );
   }
 
   // ── Generic resource helpers ────────────────────────────────────────────
@@ -2573,7 +2983,10 @@ export class GameEngine {
   deleteResource(kind, name, namespace) {
     const resource = this.getResource(kind, name, namespace);
     if (!resource) {
-      return { success: false, message: `Error from server (NotFound): ${String(kind).toLowerCase()}s "${name}" not found` };
+      return {
+        success: false,
+        message: `Error from server (NotFound): ${String(kind).toLowerCase()}s "${name}" not found`,
+      };
     }
     this.cluster.remove(resource.uid);
     return { success: true, message: `${String(kind).toLowerCase()} "${name}" deleted` };
@@ -2588,8 +3001,17 @@ export class GameEngine {
     if (!resource) return { success: false, message: `${kind} "${name}" not found` };
     const oldReplicas = resource.spec.replicas ?? 1;
     resource.updateSpec({ replicas: Number(replicas) });
-    this.eventBus.emit('resource:updated', { kind, name, namespace: resource.metadata.namespace, reason: 'scale' });
-    return { success: true, oldReplicas, message: `${String(kind).toLowerCase()}.apps "${name}" scaled` };
+    this.eventBus.emit('resource:updated', {
+      kind,
+      name,
+      namespace: resource.metadata.namespace,
+      reason: 'scale',
+    });
+    return {
+      success: true,
+      oldReplicas,
+      message: `${String(kind).toLowerCase()}.apps "${name}" scaled`,
+    };
   }
 
   /**
@@ -2637,9 +3059,14 @@ export class GameEngine {
     const canonicalKind = this.cluster._canonicalKind(kind) || kind;
     const resource = this.getResource(kind, name, options.namespace);
     if (!resource) {
-      return { success: false, message: `Error from server (NotFound): ${String(kind).toLowerCase()}s "${name}" not found` };
+      return {
+        success: false,
+        message: `Error from server (NotFound): ${String(kind).toLowerCase()}s "${name}" not found`,
+      };
     }
-    const resolvedType = resolvePatchType(options, canonicalKind, (token) => this.cluster._canonicalKind(token));
+    const resolvedType = resolvePatchType(options, canonicalKind, (token) =>
+      this.cluster._canonicalKind(token)
+    );
     if (resolvedType.error) return { success: false, message: resolvedType.error };
     const patchType = resolvedType.type;
 
@@ -2664,12 +3091,18 @@ export class GameEngine {
       patched = result.result;
     } else if (patchType === 'merge') {
       if (!patch || typeof patch !== 'object' || Array.isArray(patch)) {
-        return { success: false, message: 'Error from server (BadRequest): patch must be a JSON object' };
+        return {
+          success: false,
+          message: 'Error from server (BadRequest): patch must be a JSON object',
+        };
       }
       patched = jsonMergePatch(candidate, patch);
     } else {
       if (!patch || typeof patch !== 'object' || Array.isArray(patch)) {
-        return { success: false, message: 'Error from server (BadRequest): patch must be a JSON object' };
+        return {
+          success: false,
+          message: 'Error from server (BadRequest): patch must be a JSON object',
+        };
       }
       patched = strategicMergePatch(candidate, patch);
     }
@@ -2688,8 +3121,18 @@ export class GameEngine {
     if (patched.status !== undefined) resource.status = patched.status;
     resource.metadata.generation = (resource.metadata.generation || 1) + 1;
     this.cluster.update(resource.uid, resource);
-    this.eventBus.emit('resource:updated', { kind: canonicalKind, name, namespace: resource.metadata.namespace, reason: 'patch' });
-    return { success: true, message: `${String(canonicalKind).toLowerCase()}.apps "${name}" patched`, resource, type: patchType };
+    this.eventBus.emit('resource:updated', {
+      kind: canonicalKind,
+      name,
+      namespace: resource.metadata.namespace,
+      reason: 'patch',
+    });
+    return {
+      success: true,
+      message: `${String(canonicalKind).toLowerCase()}.apps "${name}" patched`,
+      resource,
+      type: patchType,
+    };
   }
 
   /**
@@ -2702,9 +3145,14 @@ export class GameEngine {
    */
   validateWorkload(kind, resourceOrSpec = {}) {
     const canonical = this.cluster._canonicalKind(kind) || kind;
-    const payload = resourceOrSpec && typeof resourceOrSpec === 'object'
-      ? { kind: canonical, metadata: resourceOrSpec.metadata || {}, spec: resourceOrSpec.spec || {} }
-      : { kind: canonical, metadata: {}, spec: {} };
+    const payload =
+      resourceOrSpec && typeof resourceOrSpec === 'object'
+        ? {
+            kind: canonical,
+            metadata: resourceOrSpec.metadata || {},
+            spec: resourceOrSpec.spec || {},
+          }
+        : { kind: canonical, metadata: {}, spec: {} };
     const message = invalidWorkloadMessage(payload);
     return { valid: !message, message };
   }
@@ -2712,7 +3160,10 @@ export class GameEngine {
   /** Apply a single RFC-6902 JSON-patch operation to a resource. */
   _applyJsonPatchOperation(resource, operation) {
     if (!operation || !operation.op || !operation.path) return;
-    const path = String(operation.path).replace(/^\//, '').split('/').map((part) => part.replace(/~1/g, '/').replace(/~0/g, '~'));
+    const path = String(operation.path)
+      .replace(/^\//, '')
+      .split('/')
+      .map((part) => part.replace(/~1/g, '/').replace(/~0/g, '~'));
     let target = resource;
     for (let i = 0; i < path.length - 1; i++) {
       const key = path[i];
@@ -2744,7 +3195,9 @@ export class GameEngine {
    * @returns {string}
    */
   _appNameFor(source) {
-    const raw = String(source || '').split('|')[0].trim();
+    const raw = String(source || '')
+      .split('|')[0]
+      .trim();
     const withoutQuery = raw.split('?')[0];
     const segments = withoutQuery.replace(/\/+$/, '').split('/').filter(Boolean);
     let name = segments[segments.length - 1] || 'app';
@@ -2752,7 +3205,10 @@ export class GameEngine {
     if (name.includes(':')) name = name.split(':')[0];
     if (name.includes('@')) name = name.split('@')[0];
     // Repositories often look like "nodejs-ex"; strip generic prefixes.
-    name = name.replace(/[^a-zA-Z0-9-]/g, '-').toLowerCase().replace(/^-+|-+$/g, '');
+    name = name
+      .replace(/[^a-zA-Z0-9-]/g, '-')
+      .toLowerCase()
+      .replace(/^-+|-+$/g, '');
     return name || 'app';
   }
 
@@ -2787,9 +3243,10 @@ export class GameEngine {
       const params = trigger.imageChangeParams || trigger.imageChange || {};
       const from = params.from || trigger.from || null;
       if (!from || !from.name) continue;
-      const targets = Array.isArray(params.containerNames) && params.containerNames.length > 0
-        ? params.containerNames
-        : containerNames;
+      const targets =
+        Array.isArray(params.containerNames) && params.containerNames.length > 0
+          ? params.containerNames
+          : containerNames;
       for (const containerName of targets) {
         const index = Math.max(0, containerNames.indexOf(containerName));
         entries.push({
@@ -2843,7 +3300,10 @@ export class GameEngine {
     const name = options.name;
     const replicas = options.replicas ?? 1;
     const containerPort = options.containerPort || 8080;
-    const env = Object.entries(options.env || {}).map(([envName, value]) => ({ name: envName, value: String(value) }));
+    const env = Object.entries(options.env || {}).map(([envName, value]) => ({
+      name: envName,
+      value: String(value),
+    }));
     const container = {
       name: 'main',
       image: options.image,
@@ -2858,14 +3318,20 @@ export class GameEngine {
     const deploymentSpec = {
       replicas,
       selector: { matchLabels: { app: name } },
-      strategy: { type: 'RollingUpdate', rollingUpdate: { maxSurge: '25%', maxUnavailable: '25%' } },
+      strategy: {
+        type: 'RollingUpdate',
+        rollingUpdate: { maxSurge: '25%', maxUnavailable: '25%' },
+      },
       template: {
         metadata: { labels },
         spec: { containers: [container] },
       },
     };
-    if (options.serviceAccountName) deploymentSpec.template.spec.serviceAccountName = options.serviceAccountName;
-    const imageTriggerEntries = this._imageTriggerAnnotationEntries(options.triggers, [container.name]);
+    if (options.serviceAccountName)
+      deploymentSpec.template.spec.serviceAccountName = options.serviceAccountName;
+    const imageTriggerEntries = this._imageTriggerAnnotationEntries(options.triggers, [
+      container.name,
+    ]);
     const metadata = { name, namespace: options.namespace, labels };
     if (imageTriggerEntries.length > 0) {
       // apps/v1 Deployments have no spec.triggers: image triggers live in the
@@ -2915,7 +3381,10 @@ export class GameEngine {
     if (options.code || options.git) return this._newAppFromSource(options);
     if (options.imageStream) return this._newAppFromImageStream(options);
     if (options.image) return this._newAppFromImage(options);
-    return { success: false, message: 'error: no image, source or template specified for oc new-app' };
+    return {
+      success: false,
+      message: 'error: no image, source or template specified for oc new-app',
+    };
   }
 
   /** @param {object} options */
@@ -2923,13 +3392,27 @@ export class GameEngine {
     const namespace = options.namespace || this.currentProject;
     const name = options.name || this._appNameFor(options.image);
     const resources = [];
-    const deployment = this.applyManifestObject(this._buildDeploymentObject({ ...options, name, namespace, containerPort: options.port || options.containerPort || 8080 }));
-    if (!deployment) return { success: false, message: this.lastApplyError || 'failed to create deployment' };
+    const deployment = this.applyManifestObject(
+      this._buildDeploymentObject({
+        ...options,
+        name,
+        namespace,
+        containerPort: options.port || options.containerPort || 8080,
+      })
+    );
+    if (!deployment)
+      return { success: false, message: this.lastApplyError || 'failed to create deployment' };
     resources.push(deployment);
-    const service = this.applyManifestObject(this._buildServiceObject({ ...options, name, namespace }));
+    const service = this.applyManifestObject(
+      this._buildServiceObject({ ...options, name, namespace })
+    );
     if (service) resources.push(service);
     this.eventBus.emit('app:created', { name, namespace, resources, source: 'image' });
-    return { success: true, resources, message: `Deployment "${name}" created; Service "${name}" created` };
+    return {
+      success: true,
+      resources,
+      message: `Deployment "${name}" created; Service "${name}" created`,
+    };
   }
 
   /** @param {object} options */
@@ -2981,35 +3464,51 @@ export class GameEngine {
       },
     };
     if (options.buildEnv) {
-      buildConfigObject.spec.strategy.sourceStrategy.env = Object.entries(options.buildEnv).map(([envName, value]) => ({ name: envName, value: String(value) }));
+      buildConfigObject.spec.strategy.sourceStrategy.env = Object.entries(options.buildEnv).map(
+        ([envName, value]) => ({ name: envName, value: String(value) })
+      );
     }
     const buildConfig = this.applyManifestObject(buildConfigObject);
     if (buildConfig) resources.push(buildConfig);
 
-    const deployment = this.applyManifestObject(this._buildDeploymentObject({
-      ...options,
-      name,
-      namespace,
-      image: `${IMAGE_REGISTRY_HOST}/${namespace}/${name}:latest`,
-      triggers: [{
-        type: 'ImageChange',
-        imageChangeParams: {
-          automatic: true,
-          containerNames: ['main'],
-          from: { kind: 'ImageStreamTag', name: `${name}:latest` },
-        },
-      }],
-    }));
+    const deployment = this.applyManifestObject(
+      this._buildDeploymentObject({
+        ...options,
+        name,
+        namespace,
+        image: `${IMAGE_REGISTRY_HOST}/${namespace}/${name}:latest`,
+        triggers: [
+          {
+            type: 'ImageChange',
+            imageChangeParams: {
+              automatic: true,
+              containerNames: ['main'],
+              from: { kind: 'ImageStreamTag', name: `${name}:latest` },
+            },
+          },
+        ],
+      })
+    );
     if (deployment) resources.push(deployment);
-    const service = this.applyManifestObject(this._buildServiceObject({ ...options, name, namespace }));
+    const service = this.applyManifestObject(
+      this._buildServiceObject({ ...options, name, namespace })
+    );
     if (service) resources.push(service);
 
     const buildResult = this.startBuild(name, { namespace });
     this.eventBus.emit('app:created', { name, namespace, resources, source: 'git' });
     if (!buildResult.success) {
-      return { success: true, resources, message: `Deployment "${name}" created; ${buildResult.message}` };
+      return {
+        success: true,
+        resources,
+        message: `Deployment "${name}" created; ${buildResult.message}`,
+      };
     }
-    return { success: true, resources, message: `Deployment "${name}" created; Build "${buildResult.build?.metadata?.name}" started` };
+    return {
+      success: true,
+      resources,
+      message: `Deployment "${name}" created; Build "${buildResult.build?.metadata?.name}" started`,
+    };
   }
 
   /** @param {object} options */
@@ -3022,8 +3521,18 @@ export class GameEngine {
       apply: true,
     });
     if (!result.success) return result;
-    this.eventBus.emit('app:created', { name: options.name || template, namespace, resources: result.resources, source: 'template' });
-    return { success: true, resources: result.resources, objects: result.objects, message: `Template "${template}" processed` };
+    this.eventBus.emit('app:created', {
+      name: options.name || template,
+      namespace,
+      resources: result.resources,
+      source: 'template',
+    });
+    return {
+      success: true,
+      resources: result.resources,
+      objects: result.objects,
+      message: `Template "${template}" processed`,
+    };
   }
 
   /**
@@ -3036,7 +3545,16 @@ export class GameEngine {
     const name = options.name || this._appNameFor(options.code || options.imageStream || 'build');
     const strategy = options.dockerfile
       ? { type: 'Docker', dockerStrategy: { dockerfilePath: 'Dockerfile' } }
-      : { type: 'Source', sourceStrategy: { from: { kind: 'ImageStreamTag', name: options.imageStream || 'nodejs:20-ubi9', namespace: 'openshift' } } };
+      : {
+          type: 'Source',
+          sourceStrategy: {
+            from: {
+              kind: 'ImageStreamTag',
+              name: options.imageStream || 'nodejs:20-ubi9',
+              namespace: 'openshift',
+            },
+          },
+        };
     const buildConfig = this.applyManifestObject({
       apiVersion: 'build.openshift.io/v1',
       kind: 'BuildConfig',
@@ -3051,7 +3569,11 @@ export class GameEngine {
         runPolicy: 'Serial',
       },
     });
-    if (!buildConfig) return { success: false, message: this.lastApplyError || `failed to create BuildConfig ${name}` };
+    if (!buildConfig)
+      return {
+        success: false,
+        message: this.lastApplyError || `failed to create BuildConfig ${name}`,
+      };
     return { success: true, buildConfig, message: `BuildConfig "${name}" created` };
   }
 
@@ -3067,11 +3589,21 @@ export class GameEngine {
     const namespace = options.namespace || this.currentProject || 'default';
     const buildConfig = this.cluster.getBuildConfig(namespace, buildConfigName);
     if (!buildConfig) {
-      return { success: false, message: `Error from server (NotFound): buildconfigs.build.openshift.io "${buildConfigName}" not found` };
+      return {
+        success: false,
+        message: `Error from server (NotFound): buildconfigs.build.openshift.io "${buildConfigName}" not found`,
+      };
     }
-    const result = this.cluster.startBuildFor(buildConfig, { actor: this.currentUser || 'kubeadmin', reason: 'Manual' });
+    const result = this.cluster.startBuildFor(buildConfig, {
+      actor: this.currentUser || 'kubeadmin',
+      reason: 'Manual',
+    });
     if (!result.success) return result;
-    return { success: true, build: result.build, message: `build.build.openshift.io/${result.build.metadata.name} started` };
+    return {
+      success: true,
+      build: result.build,
+      message: `build.build.openshift.io/${result.build.metadata.name} started`,
+    };
   }
 
   /**
@@ -3087,13 +3619,25 @@ export class GameEngine {
       const buildConfig = this.cluster.getBuildConfig(namespace, name);
       if (buildConfig) build = this.cluster.getActiveBuildFor(buildConfig);
     }
-    if (!build) return { success: false, message: `Error from server (NotFound): builds.build.openshift.io "${name}" not found` };
+    if (!build)
+      return {
+        success: false,
+        message: `Error from server (NotFound): builds.build.openshift.io "${name}" not found`,
+      };
     build.setPhase('Cancelled');
     build.status.completionTime = new Date().toISOString();
     build.status.message = 'Build cancelled by user';
     this.cluster.update(build.uid, build);
-    this.eventBus.emit('build:cancelled', { build: build.metadata.name, namespace, resource: build });
-    return { success: true, build, message: `build.build.openshift.io/${build.metadata.name} cancelled` };
+    this.eventBus.emit('build:cancelled', {
+      build: build.metadata.name,
+      namespace,
+      resource: build,
+    });
+    return {
+      success: true,
+      build,
+      message: `build.build.openshift.io/${build.metadata.name} cancelled`,
+    };
   }
 
   /**
@@ -3106,7 +3650,10 @@ export class GameEngine {
     const namespace = options.namespace || this.currentProject || 'default';
     const service = this.cluster.getByName('Service', serviceName, namespace);
     if (!service) {
-      return { success: false, message: `Error from server (NotFound): services "${serviceName}" not found` };
+      return {
+        success: false,
+        message: `Error from server (NotFound): services "${serviceName}" not found`,
+      };
     }
     const routeName = options.name || service.metadata.name;
     const host = options.hostname || options.host || '';
@@ -3130,17 +3677,30 @@ export class GameEngine {
   createRoute(options = {}) {
     const namespace = options.namespace || this.currentProject || 'default';
     if (!this.cluster.getProject(namespace)) {
-      return { success: false, message: `Error from server (NotFound): project.project.openshift.io "${namespace}" not found` };
+      return {
+        success: false,
+        message: `Error from server (NotFound): project.project.openshift.io "${namespace}" not found`,
+      };
     }
     const service = this.cluster.getByName('Service', options.service, namespace);
     if (!service) {
-      return { success: false, message: `Error from server (NotFound): services "${options.service}" not found` };
+      return {
+        success: false,
+        message: `Error from server (NotFound): services "${options.service}" not found`,
+      };
     }
     const name = options.name || options.service;
     if (this.cluster.getByName('Route', name, namespace)) {
-      return { success: false, message: `Error from server (AlreadyExists): routes.route.openshift.io "${name}" already exists` };
+      return {
+        success: false,
+        message: `Error from server (AlreadyExists): routes.route.openshift.io "${name}" already exists`,
+      };
     }
-    const port = options.targetPort || options.port || service.spec.ports?.[0]?.name || service.spec.ports?.[0]?.port;
+    const port =
+      options.targetPort ||
+      options.port ||
+      service.spec.ports?.[0]?.name ||
+      service.spec.ports?.[0]?.port;
     const routeSpec = {
       host: options.host || '',
       path: options.path || '/',
@@ -3152,12 +3712,17 @@ export class GameEngine {
       const termination = options.termination || options.tls?.termination || 'edge';
       routeSpec.tls = {
         termination,
-        insecureEdgeTerminationPolicy: options.insecureEdgeTerminationPolicy || options.tls?.insecureEdgeTerminationPolicy || 'None',
+        insecureEdgeTerminationPolicy:
+          options.insecureEdgeTerminationPolicy ||
+          options.tls?.insecureEdgeTerminationPolicy ||
+          'None',
       };
       if (termination !== 'passthrough') {
-        if (options.certificate || options.tls?.certificate) routeSpec.tls.certificate = options.certificate || options.tls.certificate;
+        if (options.certificate || options.tls?.certificate)
+          routeSpec.tls.certificate = options.certificate || options.tls.certificate;
         if (options.key || options.tls?.key) routeSpec.tls.key = options.key || options.tls.key;
-        if (options.caCertificate || options.tls?.caCertificate) routeSpec.tls.caCertificate = options.caCertificate || options.tls.caCertificate;
+        if (options.caCertificate || options.tls?.caCertificate)
+          routeSpec.tls.caCertificate = options.caCertificate || options.tls.caCertificate;
       }
     }
     const route = this.applyManifestObject({
@@ -3179,10 +3744,16 @@ export class GameEngine {
   _getWorkload(kind, name, namespace) {
     const resource = this.getResource(kind, name, namespace);
     if (!resource) {
-      return { success: false, message: `Error from server (NotFound): ${String(kind).toLowerCase()}s "${name}" not found` };
+      return {
+        success: false,
+        message: `Error from server (NotFound): ${String(kind).toLowerCase()}s "${name}" not found`,
+      };
     }
     if (!resource.spec?.template) {
-      return { success: false, message: `error: ${String(kind).toLowerCase()}/${name} has no pod template` };
+      return {
+        success: false,
+        message: `error: ${String(kind).toLowerCase()}/${name} has no pod template`,
+      };
     }
     return { success: true, resource };
   }
@@ -3196,7 +3767,12 @@ export class GameEngine {
     resource.spec.template = template;
     resource.metadata.generation++;
     this.cluster.update(resource.uid, resource);
-    this.eventBus.emit('resource:updated', { kind: resource.kind, name: resource.metadata.name, namespace: resource.metadata.namespace, reason: 'set' });
+    this.eventBus.emit('resource:updated', {
+      kind: resource.kind,
+      name: resource.metadata.name,
+      namespace: resource.metadata.namespace,
+      reason: 'set',
+    });
     return resource;
   }
 
@@ -3213,13 +3789,25 @@ export class GameEngine {
 
     if (normalizedKind === 'BuildConfig') {
       const buildConfig = this.cluster.getByName('BuildConfig', name, namespace);
-      if (!buildConfig) return { success: false, message: `Error from server (NotFound): buildconfigs.build.openshift.io "${name}" not found` };
+      if (!buildConfig)
+        return {
+          success: false,
+          message: `Error from server (NotFound): buildconfigs.build.openshift.io "${name}" not found`,
+        };
       const strategy = buildConfig.spec.strategy || {};
-      const containerStrategy = strategy.sourceStrategy || strategy.dockerStrategy || strategy.customStrategy || (strategy.sourceStrategy = {});
+      const containerStrategy =
+        strategy.sourceStrategy ||
+        strategy.dockerStrategy ||
+        strategy.customStrategy ||
+        (strategy.sourceStrategy = {});
       containerStrategy.env = containerStrategy.env || [];
       this._mergeEnvArray(containerStrategy.env, options);
       this.cluster.update(buildConfig.uid, buildConfig);
-      return { success: true, message: `buildconfig.apps "${name}" updated`, resource: buildConfig };
+      return {
+        success: true,
+        message: `buildconfig.apps "${name}" updated`,
+        resource: buildConfig,
+      };
     }
 
     const workload = this._getWorkload(normalizedKind, name, namespace);
@@ -3230,36 +3818,59 @@ export class GameEngine {
     if (options.list) {
       const container = this._findContainer(resource, options.container);
       resultingEnv = container?.env || [];
-      return { success: true, message: 'environment variables listed', env: resultingEnv, resource };
+      return {
+        success: true,
+        message: 'environment variables listed',
+        env: resultingEnv,
+        resource,
+      };
     }
 
     this._updateTemplate(resource, (podSpec) => {
-      const containers = options.container ? podSpec.containers.filter((container) => container.name === options.container) : podSpec.containers;
+      const containers = options.container
+        ? podSpec.containers.filter((container) => container.name === options.container)
+        : podSpec.containers;
       for (const container of containers) {
         container.env = container.env || [];
         this._mergeEnvArray(container.env, options);
         resultingEnv = container.env;
         if (options.from) {
-          const from = typeof options.from === 'string'
-            ? { kind: options.from.startsWith('secret') ? 'Secret' : 'ConfigMap', name: options.from.split('/')[1] || options.from }
-            : options.from;
+          const from =
+            typeof options.from === 'string'
+              ? {
+                  kind: options.from.startsWith('secret') ? 'Secret' : 'ConfigMap',
+                  name: options.from.split('/')[1] || options.from,
+                }
+              : options.from;
           container.envFrom = container.envFrom || [];
-          const ref = from.kind === 'Secret' ? { secretRef: { name: from.name } } : { configMapRef: { name: from.name } };
+          const ref =
+            from.kind === 'Secret'
+              ? { secretRef: { name: from.name } }
+              : { configMapRef: { name: from.name } };
           if (options.prefix) ref.prefix = options.prefix;
-          if (!container.envFrom.some((entry) => JSON.stringify(entry) === JSON.stringify(ref))) container.envFrom.push(ref);
+          if (!container.envFrom.some((entry) => JSON.stringify(entry) === JSON.stringify(ref)))
+            container.envFrom.push(ref);
         }
       }
     });
     // Changing the template should roll the workload.
     resource._rollout = { reason: 'set env', startedAt: Date.now(), remaining: null };
-    return { success: true, message: `${String(normalizedKind).toLowerCase()}.apps "${name}" updated`, resource, env: resultingEnv };
+    return {
+      success: true,
+      message: `${String(normalizedKind).toLowerCase()}.apps "${name}" updated`,
+      resource,
+      env: resultingEnv,
+    };
   }
 
   /** Merge KEY=VALUE and --remove entries into a container env array. */
   _mergeEnvArray(envArray, options) {
     const entries = Array.isArray(options.env)
       ? options.env
-      : Object.entries(options.env || {}).map(([envName, value]) => ({ name: envName, value: String(value) }));
+      : Object.entries(options.env || {}).map(([envName, value]) => ({
+          name: envName,
+          value: String(value),
+        }));
     for (const entry of entries) {
       const existing = envArray.find((item) => item.name === entry.name);
       if (existing) Object.assign(existing, entry);
@@ -3305,14 +3916,21 @@ export class GameEngine {
 
     this._recordRevision(resource, `updating image to ${image}`);
     this._updateTemplate(resource, (podSpec) => {
-      const containers = containerName ? podSpec.containers.filter((container) => container.name === containerName) : podSpec.containers;
+      const containers = containerName
+        ? podSpec.containers.filter((container) => container.name === containerName)
+        : podSpec.containers;
       if (containerName && containers.length === 0) {
         podSpec.containers.push({ name: containerName, image });
       }
-      for (const container of containers.length > 0 ? containers : podSpec.containers) container.image = image;
+      for (const container of containers.length > 0 ? containers : podSpec.containers)
+        container.image = image;
     });
     resource._rollout = { reason: 'image change', startedAt: Date.now(), remaining: null };
-    return { success: true, message: `${String(kind).toLowerCase()}.apps "${name}" image updated`, resource };
+    return {
+      success: true,
+      message: `${String(kind).toLowerCase()}.apps "${name}" image updated`,
+      resource,
+    };
   }
 
   /**
@@ -3324,15 +3942,26 @@ export class GameEngine {
     if (!workload.success) return { success: false, message: workload.message };
     const resource = workload.resource;
     this._updateTemplate(resource, (podSpec) => {
-      const containers = options.container ? podSpec.containers.filter((container) => container.name === options.container) : podSpec.containers;
+      const containers = options.container
+        ? podSpec.containers.filter((container) => container.name === options.container)
+        : podSpec.containers;
       for (const container of containers) {
         container.resources = container.resources || {};
-        if (options.limits) container.resources.limits = { ...(container.resources.limits || {}), ...options.limits };
-        if (options.requests) container.resources.requests = { ...(container.resources.requests || {}), ...options.requests };
+        if (options.limits)
+          container.resources.limits = { ...(container.resources.limits || {}), ...options.limits };
+        if (options.requests)
+          container.resources.requests = {
+            ...(container.resources.requests || {}),
+            ...options.requests,
+          };
       }
     });
     resource._rollout = { reason: 'resource change', startedAt: Date.now(), remaining: null };
-    return { success: true, message: `${String(kind).toLowerCase()}.apps "${name}" resource requirements updated`, resource };
+    return {
+      success: true,
+      message: `${String(kind).toLowerCase()}.apps "${name}" resource requirements updated`,
+      resource,
+    };
   }
 
   /**
@@ -3347,7 +3976,9 @@ export class GameEngine {
     const resource = workload.resource;
 
     this._updateTemplate(resource, (podSpec) => {
-      const containers = options.container ? podSpec.containers.filter((container) => container.name === options.container) : podSpec.containers;
+      const containers = options.container
+        ? podSpec.containers.filter((container) => container.name === options.container)
+        : podSpec.containers;
       for (const container of containers) {
         if (options.remove) {
           delete container[probeKey];
@@ -3373,7 +4004,11 @@ export class GameEngine {
       }
     });
     resource._rollout = { reason: 'probe change', startedAt: Date.now(), remaining: null };
-    return { success: true, message: `${String(kind).toLowerCase()}.apps "${name}" ${probeType} probe updated`, resource };
+    return {
+      success: true,
+      message: `${String(kind).toLowerCase()}.apps "${name}" ${probeType} probe updated`,
+      resource,
+    };
   }
 
   /**
@@ -3386,13 +4021,24 @@ export class GameEngine {
     const resource = workload.resource;
     const namespace = resource.metadata.namespace;
     if (!this.cluster.getByName('ServiceAccount', serviceAccount, namespace)) {
-      return { success: false, message: `Error from server (NotFound): serviceaccounts "${serviceAccount}" not found` };
+      return {
+        success: false,
+        message: `Error from server (NotFound): serviceaccounts "${serviceAccount}" not found`,
+      };
     }
     this._updateTemplate(resource, (podSpec) => {
       podSpec.serviceAccountName = serviceAccount;
     });
-    resource._rollout = { reason: 'service account change', startedAt: Date.now(), remaining: null };
-    return { success: true, message: `${String(kind).toLowerCase()}.apps "${name}" service account updated`, resource };
+    resource._rollout = {
+      reason: 'service account change',
+      startedAt: Date.now(),
+      remaining: null,
+    };
+    return {
+      success: true,
+      message: `${String(kind).toLowerCase()}.apps "${name}" service account updated`,
+      resource,
+    };
   }
 
   /**
@@ -3404,7 +4050,11 @@ export class GameEngine {
     const canonical = this.cluster._canonicalKind(kind);
     const namespace = options.namespace || this.currentProject || 'default';
     const resource = this.cluster.getByName(canonical, name, namespace);
-    if (!resource) return { success: false, message: `Error from server (NotFound): ${String(canonical).toLowerCase()}s "${name}" not found` };
+    if (!resource)
+      return {
+        success: false,
+        message: `Error from server (NotFound): ${String(canonical).toLowerCase()}s "${name}" not found`,
+      };
 
     // BuildConfig is the only kind with a spec.triggers field; workload image
     // triggers use the image.openshift.io/triggers annotation (OCP 4.x).
@@ -3417,13 +4067,18 @@ export class GameEngine {
           return String(entry?.from?.name || '') !== String(options.fromImage);
         });
         resource.metadata.annotations = resource.metadata.annotations || {};
-        if (next.length > 0) resource.metadata.annotations[IMAGE_TRIGGER_ANNOTATION] = JSON.stringify(next);
+        if (next.length > 0)
+          resource.metadata.annotations[IMAGE_TRIGGER_ANNOTATION] = JSON.stringify(next);
         else delete resource.metadata.annotations[IMAGE_TRIGGER_ANNOTATION];
         resource.metadata.generation++;
         this.cluster.update(resource.uid, resource);
         return { success: true, message: `${before - next.length} trigger(s) removed`, resource };
       }
-      if (!options.fromImage) return { success: false, message: 'error: you must specify --from-image=<imagestream>:<tag>' };
+      if (!options.fromImage)
+        return {
+          success: false,
+          message: 'error: you must specify --from-image=<imagestream>:<tag>',
+        };
       const [imageStreamName, tag = 'latest'] = String(options.fromImage).split(':');
       const containers = Array.isArray(resource.spec?.template?.spec?.containers)
         ? resource.spec.template.spec.containers.map((container) => container.name)
@@ -3437,23 +4092,30 @@ export class GameEngine {
         });
       });
       const added = this._imageTriggerAnnotationEntries(
-        [{
-          type: 'ImageChange',
-          imageChangeParams: {
-            automatic: true,
-            containerNames: targets,
-            from: { kind: 'ImageStreamTag', name: `${imageStreamName}:${tag}` },
+        [
+          {
+            type: 'ImageChange',
+            imageChangeParams: {
+              automatic: true,
+              containerNames: targets,
+              from: { kind: 'ImageStreamTag', name: `${imageStreamName}:${tag}` },
+            },
           },
-        }],
+        ],
         containers
       );
       const merged = [...nextEntries, ...added];
       resource.metadata.annotations = resource.metadata.annotations || {};
-      if (merged.length > 0) resource.metadata.annotations[IMAGE_TRIGGER_ANNOTATION] = JSON.stringify(merged);
+      if (merged.length > 0)
+        resource.metadata.annotations[IMAGE_TRIGGER_ANNOTATION] = JSON.stringify(merged);
       else delete resource.metadata.annotations[IMAGE_TRIGGER_ANNOTATION];
       resource.metadata.generation++;
       this.cluster.update(resource.uid, resource);
-      return { success: true, message: `triggers updated for ${String(canonical).toLowerCase()}/${name}`, resource };
+      return {
+        success: true,
+        message: `triggers updated for ${String(canonical).toLowerCase()}/${name}`,
+        resource,
+      };
     }
 
     resource.spec = resource.spec || {};
@@ -3462,24 +4124,44 @@ export class GameEngine {
       const before = resource.spec.triggers.length;
       resource.spec.triggers = resource.spec.triggers.filter((trigger) => {
         if (!options.fromImage) return false;
-        const triggerName = trigger.imageChange?.from?.name || trigger.imageChangeParams?.from?.name || '';
+        const triggerName =
+          trigger.imageChange?.from?.name || trigger.imageChangeParams?.from?.name || '';
         return triggerName !== options.fromImage;
       });
       this.cluster.update(resource.uid, resource);
-      return { success: true, message: `${before - resource.spec.triggers.length} trigger(s) removed`, resource };
+      return {
+        success: true,
+        message: `${before - resource.spec.triggers.length} trigger(s) removed`,
+        resource,
+      };
     }
-    if (!options.fromImage) return { success: false, message: 'error: you must specify --from-image=<imagestream>:<tag>' };
+    if (!options.fromImage)
+      return {
+        success: false,
+        message: 'error: you must specify --from-image=<imagestream>:<tag>',
+      };
     const [imageStreamName, tag = 'latest'] = String(options.fromImage).split(':');
     resource.spec.triggers = resource.spec.triggers.filter((entry) => entry.type !== 'ImageChange');
-    resource.spec.triggers.push({ type: 'ImageChange', imageChange: { from: { kind: 'ImageStreamTag', name: `${imageStreamName}:${tag}` } } });
+    resource.spec.triggers.push({
+      type: 'ImageChange',
+      imageChange: { from: { kind: 'ImageStreamTag', name: `${imageStreamName}:${tag}` } },
+    });
     this.cluster.update(resource.uid, resource);
-    return { success: true, message: `triggers updated for ${String(canonical).toLowerCase()}/${name}`, resource };
+    return {
+      success: true,
+      message: `triggers updated for ${String(canonical).toLowerCase()}/${name}`,
+      resource,
+    };
   }
 
   /** `oc set selector svc/<name> key=value`. */
   setSelector(kind, name, selector, options = {}) {
     const resource = this.getResource(kind, name, options.namespace);
-    if (!resource) return { success: false, message: `Error from server (NotFound): ${String(kind).toLowerCase()}s "${name}" not found` };
+    if (!resource)
+      return {
+        success: false,
+        message: `Error from server (NotFound): ${String(kind).toLowerCase()}s "${name}" not found`,
+      };
     resource.spec.selector = resource.spec.selector || {};
     for (const [key, value] of Object.entries(selector || {})) {
       if (value === null || value === undefined) delete resource.spec.selector[key];
@@ -3487,7 +4169,11 @@ export class GameEngine {
     }
     resource.metadata.generation++;
     this.cluster.update(resource.uid, resource);
-    return { success: true, message: `${String(kind).toLowerCase()}/${name} selector updated`, resource };
+    return {
+      success: true,
+      message: `${String(kind).toLowerCase()}/${name} selector updated`,
+      resource,
+    };
   }
 
   /** `oc set volumes <kind>/<name> --add --name=... --claim-name=... --mount-path=...`. */
@@ -3499,20 +4185,29 @@ export class GameEngine {
     this._updateTemplate(resource, (podSpec, template) => {
       podSpec.volumes = podSpec.volumes || [];
       let volume;
-      if (options.claimName) volume = { name: volumeName, persistentVolumeClaim: { claimName: options.claimName } };
-      else if (options.configMap) volume = { name: volumeName, configMap: { name: options.configMap } };
-      else if (options.secret) volume = { name: volumeName, secret: { secretName: options.secret } };
+      if (options.claimName)
+        volume = { name: volumeName, persistentVolumeClaim: { claimName: options.claimName } };
+      else if (options.configMap)
+        volume = { name: volumeName, configMap: { name: options.configMap } };
+      else if (options.secret)
+        volume = { name: volumeName, secret: { secretName: options.secret } };
       else volume = { name: volumeName, emptyDir: {} };
       podSpec.volumes = podSpec.volumes.filter((entry) => entry.name !== volumeName);
       podSpec.volumes.push(volume);
       for (const container of podSpec.containers) {
-        container.volumeMounts = (container.volumeMounts || []).filter((mount) => mount.name !== volumeName);
+        container.volumeMounts = (container.volumeMounts || []).filter(
+          (mount) => mount.name !== volumeName
+        );
         container.volumeMounts.push({ name: volumeName, mountPath: options.mountPath || '/data' });
       }
       template.metadata = template.metadata || {};
     });
     resource._rollout = { reason: 'volume change', startedAt: Date.now(), remaining: null };
-    return { success: true, message: `${String(kind).toLowerCase()}.apps "${name}" volumes updated`, resource };
+    return {
+      success: true,
+      message: `${String(kind).toLowerCase()}.apps "${name}" volumes updated`,
+      resource,
+    };
   }
 
   // ── rollout / revisions ─────────────────────────────────────────────────
@@ -3526,7 +4221,9 @@ export class GameEngine {
       changeCause,
       timestamp: Date.now(),
       template: deepClone(template),
-      images: (resource.spec?.template?.spec?.containers || []).map((container) => `${container.name}=${container.image}`),
+      images: (resource.spec?.template?.spec?.containers || []).map(
+        (container) => `${container.name}=${container.image}`
+      ),
     });
     if (resource._revisionHistory.length > 10) resource._revisionHistory.shift();
     return resource._revisionHistory[resource._revisionHistory.length - 1];
@@ -3544,7 +4241,11 @@ export class GameEngine {
   rollout(kind, subcommand, name, options = {}) {
     const canonical = this.cluster._canonicalKind(kind || 'Deployment');
     const resource = this.getResource(canonical, name, options.namespace);
-    if (!resource) return { success: false, message: `Error from server (NotFound): ${String(canonical).toLowerCase()}s "${name}" not found` };
+    if (!resource)
+      return {
+        success: false,
+        message: `Error from server (NotFound): ${String(canonical).toLowerCase()}s "${name}" not found`,
+      };
 
     // Prefer the runtime controller's rollout model when it provides one
     // (progress-deadline / ImagePullBackOff awareness lives in SimulationTick).
@@ -3573,10 +4274,13 @@ export class GameEngine {
         const status = {
           replicas: resource.status.replicas ?? resource.status.currentReplicas ?? 0,
           readyReplicas: resource.status.readyReplicas ?? resource.status.numberReady ?? 0,
-          availableReplicas: resource.status.availableReplicas ?? resource.status.numberAvailable ?? 0,
+          availableReplicas:
+            resource.status.availableReplicas ?? resource.status.numberAvailable ?? 0,
           updatedReplicas: resource.status.updatedReplicas ?? resource.status.currentReplicas ?? 0,
         };
-        const complete = status.replicas === resource.spec.replicas && status.readyReplicas === resource.spec.replicas;
+        const complete =
+          status.replicas === resource.spec.replicas &&
+          status.readyReplicas === resource.spec.replicas;
         return {
           success: true,
           status,
@@ -3593,15 +4297,28 @@ export class GameEngine {
           template.metadata.annotations[RESTARTED_AT_ANNOTATION] = new Date().toISOString();
         });
         resource._rollout = { reason: 'manual restart', startedAt: Date.now(), remaining: null };
-        this.eventBus.emit('resource:restarted', { kind: canonical, name, namespace: resource.metadata.namespace });
-        return { success: true, message: `${String(canonical).toLowerCase()}.apps "${name}" restarted`, resource };
+        this.eventBus.emit('resource:restarted', {
+          kind: canonical,
+          name,
+          namespace: resource.metadata.namespace,
+        });
+        return {
+          success: true,
+          message: `${String(canonical).toLowerCase()}.apps "${name}" restarted`,
+          resource,
+        };
       }
       case 'undo': {
         const history = resource._revisionHistory || [];
         if (history.length === 0) {
-          return { success: false, message: `error: no rollout history found for ${String(canonical).toLowerCase()} "${name}"` };
+          return {
+            success: false,
+            message: `error: no rollout history found for ${String(canonical).toLowerCase()} "${name}"`,
+          };
         }
-        const revision = options.revision || (history.length >= 2 ? history[history.length - 2] : history[history.length - 1]);
+        const revision =
+          options.revision ||
+          (history.length >= 2 ? history[history.length - 2] : history[history.length - 1]);
         if (revision?.template) {
           resource.spec.template = deepClone(revision.template);
           resource.metadata.generation++;
@@ -3609,12 +4326,25 @@ export class GameEngine {
         }
         resource._rollout = { reason: 'rollback', startedAt: Date.now(), remaining: null };
         this.cluster._rollbackCount = (this.cluster._rollbackCount || 0) + 1;
-        this.eventBus.emit('resource:rollback', { uid: resource.uid, kind: canonical, name, revision: revision?.revision });
-        return { success: true, message: `deployment.apps/${name} rolled back to revision ${revision?.revision}`, resource };
+        this.eventBus.emit('resource:rollback', {
+          uid: resource.uid,
+          kind: canonical,
+          name,
+          revision: revision?.revision,
+        });
+        return {
+          success: true,
+          message: `deployment.apps/${name} rolled back to revision ${revision?.revision}`,
+          resource,
+        };
       }
       case 'history':
       default:
-        return { success: true, history: this.getRolloutHistory(canonical, name, options), message: '' };
+        return {
+          success: true,
+          history: this.getRolloutHistory(canonical, name, options),
+          message: '',
+        };
     }
   }
 
@@ -3648,11 +4378,15 @@ export class GameEngine {
         timestamp: entry.timestamp,
       }));
     }
-    return [{
-      revision: Math.max(1, resource.metadata.generation || 1),
-      changeCause: 'original image',
-      images: (resource.spec?.template?.spec?.containers || []).map((container) => `${container.name}=${container.image}`),
-    }];
+    return [
+      {
+        revision: Math.max(1, resource.metadata.generation || 1),
+        changeCause: 'original image',
+        images: (resource.spec?.template?.spec?.containers || []).map(
+          (container) => `${container.name}=${container.image}`
+        ),
+      },
+    ];
   }
 
   // ── RBAC commands (oc adm policy / oc create user/group) ───────────────
@@ -3667,17 +4401,39 @@ export class GameEngine {
     if (subject && typeof subject === 'object') {
       const kind = subject.kind || options.kind || 'User';
       if (kind === 'ServiceAccount') {
-        const namespace = subject.namespace || options.namespace || this.currentProject || 'default';
+        const namespace =
+          subject.namespace || options.namespace || this.currentProject || 'default';
         return {
           subject: { kind: 'ServiceAccount', name: subject.name, namespace },
-          roleBindingSubject: { kind: 'ServiceAccount', name: subject.name, namespace, apiGroup: '' },
+          roleBindingSubject: {
+            kind: 'ServiceAccount',
+            name: subject.name,
+            namespace,
+            apiGroup: '',
+          },
           description: `serviceaccount ${namespace}/${subject.name}`,
         };
       }
       if (kind === 'Group') {
-        return { subject: { kind: 'Group', name: subject.name }, roleBindingSubject: { kind: 'Group', name: subject.name, apiGroup: 'rbac.authorization.k8s.io' }, description: `group ${subject.name}` };
+        return {
+          subject: { kind: 'Group', name: subject.name },
+          roleBindingSubject: {
+            kind: 'Group',
+            name: subject.name,
+            apiGroup: 'rbac.authorization.k8s.io',
+          },
+          description: `group ${subject.name}`,
+        };
       }
-      return { subject: { kind: 'User', name: subject.name }, roleBindingSubject: { kind: 'User', name: subject.name, apiGroup: 'rbac.authorization.k8s.io' }, description: `user ${subject.name}` };
+      return {
+        subject: { kind: 'User', name: subject.name },
+        roleBindingSubject: {
+          kind: 'User',
+          name: subject.name,
+          apiGroup: 'rbac.authorization.k8s.io',
+        },
+        description: `user ${subject.name}`,
+      };
     }
     const raw = String(subject || '').trim();
     if (raw.startsWith('system:serviceaccount:')) {
@@ -3692,15 +4448,27 @@ export class GameEngine {
     }
     if (raw.startsWith('group:')) {
       const name = raw.slice(6);
-      return { subject: { kind: 'Group', name }, roleBindingSubject: { kind: 'Group', name, apiGroup: 'rbac.authorization.k8s.io' }, description: `group ${name}` };
+      return {
+        subject: { kind: 'Group', name },
+        roleBindingSubject: { kind: 'Group', name, apiGroup: 'rbac.authorization.k8s.io' },
+        description: `group ${name}`,
+      };
     }
     if (raw.startsWith('user:')) {
       const name = raw.slice(5);
-      return { subject: { kind: 'User', name }, roleBindingSubject: { kind: 'User', name, apiGroup: 'rbac.authorization.k8s.io' }, description: `user ${name}` };
+      return {
+        subject: { kind: 'User', name },
+        roleBindingSubject: { kind: 'User', name, apiGroup: 'rbac.authorization.k8s.io' },
+        description: `user ${name}`,
+      };
     }
     const kind = options.kind || 'User';
     if (kind === 'Group') {
-      return { subject: { kind: 'Group', name: raw }, roleBindingSubject: { kind: 'Group', name: raw, apiGroup: 'rbac.authorization.k8s.io' }, description: `group ${raw}` };
+      return {
+        subject: { kind: 'Group', name: raw },
+        roleBindingSubject: { kind: 'Group', name: raw, apiGroup: 'rbac.authorization.k8s.io' },
+        description: `group ${raw}`,
+      };
     }
     if (kind === 'ServiceAccount') {
       const namespace = options.namespace || this.currentProject || 'default';
@@ -3710,7 +4478,11 @@ export class GameEngine {
         description: `serviceaccount ${namespace}/${raw}`,
       };
     }
-    return { subject: { kind: 'User', name: raw }, roleBindingSubject: { kind: 'User', name: raw, apiGroup: 'rbac.authorization.k8s.io' }, description: `user ${raw}` };
+    return {
+      subject: { kind: 'User', name: raw },
+      roleBindingSubject: { kind: 'User', name: raw, apiGroup: 'rbac.authorization.k8s.io' },
+      description: `user ${raw}`,
+    };
   }
 
   /**
@@ -3726,13 +4498,20 @@ export class GameEngine {
     const clusterWide = options.clusterWide === true || options.kind === 'ClusterRole';
     const roleName = options.role;
     if (!roleName) return { success: false, message: 'error: you must specify a role' };
-    const normalizedSubject = this._normalizeRbacSubject(options.subject, { namespace, kind: options.subjectKind });
+    const normalizedSubject = this._normalizeRbacSubject(options.subject, {
+      namespace,
+      kind: options.subjectKind,
+    });
 
     // Validate that the role exists (or is a built-in role).
     const roleExists = !!this.cluster.getByName('Role', roleName, namespace);
-    const clusterRoleExists = !!this.cluster.getByName('ClusterRole', roleName, '') || BUILTIN_ROLE_NAMES.has(roleName);
+    const clusterRoleExists =
+      !!this.cluster.getByName('ClusterRole', roleName, '') || BUILTIN_ROLE_NAMES.has(roleName);
     if (!roleExists && !clusterRoleExists) {
-      return { success: false, message: `Error from server (NotFound): clusterroles.rbac.authorization.k8s.io "${roleName}" not found` };
+      return {
+        success: false,
+        message: `Error from server (NotFound): clusterroles.rbac.authorization.k8s.io "${roleName}" not found`,
+      };
     }
     const roleKind = clusterWide || !roleExists ? 'ClusterRole' : 'Role';
 
@@ -3749,7 +4528,11 @@ export class GameEngine {
      * `roleKind` is the roleRef kind of the (new or existing) binding.
      */
     const outputDetails = (binding, fallbackRoleKind = roleKind) => {
-      const roleRef = binding?.spec?.roleRef || { apiGroup: 'rbac.authorization.k8s.io', kind: fallbackRoleKind, name: roleName };
+      const roleRef = binding?.spec?.roleRef || {
+        apiGroup: 'rbac.authorization.k8s.io',
+        kind: fallbackRoleKind,
+        name: roleName,
+      };
       return {
         role: roleName,
         roleKind: roleRef.kind || fallbackRoleKind,
@@ -3778,7 +4561,9 @@ export class GameEngine {
         if (roleRef.name !== roleName) continue;
         if (clusterWide && roleRef.kind !== 'ClusterRole') continue;
         const subjects = candidate.spec?.subjects || [];
-        const next = subjects.filter((subject) => !this._sameSubject(subject, normalizedSubject.roleBindingSubject));
+        const next = subjects.filter(
+          (subject) => !this._sameSubject(subject, normalizedSubject.roleBindingSubject)
+        );
         if (next.length === subjects.length) continue;
         candidate.spec.subjects = next;
         this.cluster.update(candidate.uid, candidate);
@@ -3799,8 +4584,14 @@ export class GameEngine {
           ...outputDetails(changedBinding),
         };
       }
-      if (!existing) return { success: true, message: `${bindingKind} "${bindingName}" not found; nothing to remove` };
-      const subjects = (existing.spec.subjects || []).filter((subject) => !this._sameSubject(subject, normalizedSubject.roleBindingSubject));
+      if (!existing)
+        return {
+          success: true,
+          message: `${bindingKind} "${bindingName}" not found; nothing to remove`,
+        };
+      const subjects = (existing.spec.subjects || []).filter(
+        (subject) => !this._sameSubject(subject, normalizedSubject.roleBindingSubject)
+      );
       existing.spec.subjects = subjects;
       this.cluster.update(existing.uid, existing);
       return {
@@ -3813,7 +4604,11 @@ export class GameEngine {
 
     if (existing) {
       existing.spec.subjects = existing.spec.subjects || [];
-      if (!existing.spec.subjects.some((subject) => this._sameSubject(subject, normalizedSubject.roleBindingSubject))) {
+      if (
+        !existing.spec.subjects.some((subject) =>
+          this._sameSubject(subject, normalizedSubject.roleBindingSubject)
+        )
+      ) {
         existing.spec.subjects.push(normalizedSubject.roleBindingSubject);
         this.cluster.update(existing.uid, existing);
       }
@@ -3834,8 +4629,14 @@ export class GameEngine {
         subjects: [normalizedSubject.roleBindingSubject],
       },
     });
-    if (!binding) return { success: false, message: this.lastApplyError || `failed to create ${bindingKind}` };
-    this.eventBus.emit('rbac:updated', { binding: bindingName, kind: bindingKind, role: roleName, subject: normalizedSubject.subject });
+    if (!binding)
+      return { success: false, message: this.lastApplyError || `failed to create ${bindingKind}` };
+    this.eventBus.emit('rbac:updated', {
+      binding: bindingName,
+      kind: bindingKind,
+      role: roleName,
+      subject: normalizedSubject.subject,
+    });
     return {
       success: true,
       message: `${normalizedSubject.description} added to role ${roleName}`,
@@ -3846,9 +4647,11 @@ export class GameEngine {
 
   /** @returns {boolean} whether two RBAC subjects refer to the same identity */
   _sameSubject(left, right) {
-    return left?.kind === right?.kind
-      && left?.name === right?.name
-      && (left?.namespace || '') === (right?.namespace || '');
+    return (
+      left?.kind === right?.kind &&
+      left?.name === right?.name &&
+      (left?.namespace || '') === (right?.namespace || '')
+    );
   }
 
   /**
@@ -3878,7 +4681,13 @@ export class GameEngine {
 
   /** `oc adm policy add-cluster-role-to-group <role> <group>` */
   addClusterRoleToGroup(role, group, options = {}) {
-    return this.modifyRoleBinding({ ...options, role, subject: group, subjectKind: 'Group', clusterWide: true });
+    return this.modifyRoleBinding({
+      ...options,
+      role,
+      subject: group,
+      subjectKind: 'Group',
+      clusterWide: true,
+    });
   }
 
   /** `oc adm policy remove-role-from-user <role> <user>` */
@@ -3888,17 +4697,36 @@ export class GameEngine {
 
   /** `oc adm policy remove-cluster-role-from-user <role> <user>` */
   removeClusterRoleFromUser(role, user, options = {}) {
-    return this.modifyRoleBinding({ ...options, role, subject: user, clusterWide: true, remove: true });
+    return this.modifyRoleBinding({
+      ...options,
+      role,
+      subject: user,
+      clusterWide: true,
+      remove: true,
+    });
   }
 
   /** `oc adm policy remove-role-from-group <role> <group>` */
   removeRoleFromGroup(role, group, options = {}) {
-    return this.modifyRoleBinding({ ...options, role, subject: group, subjectKind: 'Group', remove: true });
+    return this.modifyRoleBinding({
+      ...options,
+      role,
+      subject: group,
+      subjectKind: 'Group',
+      remove: true,
+    });
   }
 
   /** `oc adm policy remove-cluster-role-from-group <role> <group>` */
   removeClusterRoleFromGroup(role, group, options = {}) {
-    return this.modifyRoleBinding({ ...options, role, subject: group, subjectKind: 'Group', clusterWide: true, remove: true });
+    return this.modifyRoleBinding({
+      ...options,
+      role,
+      subject: group,
+      subjectKind: 'Group',
+      clusterWide: true,
+      remove: true,
+    });
   }
 
   /**
@@ -3914,7 +4742,12 @@ export class GameEngine {
       actor: this.currentUser || 'kubeadmin',
     });
     if (!result.success) return result;
-    return { success: true, message: `securitycontextconstraints.security.openshift.io/${sccName} added to ${result.subject.kind}: ${result.subject.name}`, scc: result.scc, subject: result.subject };
+    return {
+      success: true,
+      message: `securitycontextconstraints.security.openshift.io/${sccName} added to ${result.subject.kind}: ${result.subject.name}`,
+      scc: result.scc,
+      subject: result.subject,
+    };
   }
 
   /** `oc adm policy add-scc-to-user <scc> <user>` (or `-z <serviceaccount>`) */
@@ -3933,22 +4766,37 @@ export class GameEngine {
   /** `oc adm policy add-scc-to-user <scc> -z <sa>` */
   addSCCToServiceAccount(sccName, serviceAccount, options = {}) {
     const namespace = options.namespace || this.currentProject || 'default';
-    return this.addSCCTo({ kind: 'ServiceAccount', name: serviceAccount, namespace }, sccName, { ...options, namespace });
+    return this.addSCCTo({ kind: 'ServiceAccount', name: serviceAccount, namespace }, sccName, {
+      ...options,
+      namespace,
+    });
   }
 
   /** `oc adm policy remove-scc-from-user <scc> <user>` */
   removeSCCFromUser(sccName, user, options = {}) {
-    const result = this.cluster.revokeSCC(sccName, user, { kind: 'User', actor: this.currentUser || 'kubeadmin' });
+    const result = this.cluster.revokeSCC(sccName, user, {
+      kind: 'User',
+      actor: this.currentUser || 'kubeadmin',
+    });
     return result.success
-      ? { success: true, message: `securitycontextconstraints.security.openshift.io/${sccName} removed from user ${user}` }
+      ? {
+          success: true,
+          message: `securitycontextconstraints.security.openshift.io/${sccName} removed from user ${user}`,
+        }
       : result;
   }
 
   /** `oc adm policy remove-scc-from-group <scc> <group>` */
   removeSCCFromGroup(sccName, group, options = {}) {
-    const result = this.cluster.revokeSCC(sccName, group, { kind: 'Group', actor: this.currentUser || 'kubeadmin' });
+    const result = this.cluster.revokeSCC(sccName, group, {
+      kind: 'Group',
+      actor: this.currentUser || 'kubeadmin',
+    });
     return result.success
-      ? { success: true, message: `securitycontextconstraints.security.openshift.io/${sccName} removed from group ${group}` }
+      ? {
+          success: true,
+          message: `securitycontextconstraints.security.openshift.io/${sccName} removed from group ${group}`,
+        }
       : result;
   }
 
@@ -3961,7 +4809,10 @@ export class GameEngine {
   createUserResource(name, options = {}) {
     if (!name) return { success: false, message: 'error: you must specify a name' };
     if (this.cluster.getUser(name)) {
-      return { success: false, message: `Error from server (AlreadyExists): users.user.openshift.io "${name}" already exists` };
+      return {
+        success: false,
+        message: `Error from server (AlreadyExists): users.user.openshift.io "${name}" already exists`,
+      };
     }
     const user = this.cluster.createUser(name, { fullName: options.fullName || '' });
     if (options.groups?.length) this.cluster.addUserToGroup(options.groups[0], [name]);
@@ -3975,7 +4826,10 @@ export class GameEngine {
    */
   deleteUserResource(name) {
     if (!this.cluster.getUser(name)) {
-      return { success: false, message: `Error from server (NotFound): users.user.openshift.io "${name}" not found` };
+      return {
+        success: false,
+        message: `Error from server (NotFound): users.user.openshift.io "${name}" not found`,
+      };
     }
     this.cluster.deleteUser(name);
     this.eventBus.emit('user:deleted', { name });
@@ -3989,7 +4843,10 @@ export class GameEngine {
   createGroupResource(name, users = []) {
     if (!name) return { success: false, message: 'error: you must specify a name' };
     if (this.cluster.getGroup(name)) {
-      return { success: false, message: `Error from server (AlreadyExists): groups.user.openshift.io "${name}" already exists` };
+      return {
+        success: false,
+        message: `Error from server (AlreadyExists): groups.user.openshift.io "${name}" already exists`,
+      };
     }
     const group = this.cluster.createGroup(name, users);
     return { success: true, group, message: `group.user.openshift.io/${name} created` };
@@ -3998,17 +4855,35 @@ export class GameEngine {
   /** `oc adm groups add-users <group> <user...>` */
   addUsersToGroup(groupName, users) {
     const group = this.cluster.getGroup(groupName);
-    if (!group) return { success: false, message: `Error from server (NotFound): groups.user.openshift.io "${groupName}" not found` };
+    if (!group)
+      return {
+        success: false,
+        message: `Error from server (NotFound): groups.user.openshift.io "${groupName}" not found`,
+      };
     const result = this.cluster.addUserToGroup(groupName, users);
-    return { success: true, group: result.group, added: result.added, message: `group.user.openshift.io/${groupName} updated` };
+    return {
+      success: true,
+      group: result.group,
+      added: result.added,
+      message: `group.user.openshift.io/${groupName} updated`,
+    };
   }
 
   /** `oc adm groups remove-users <group> <user...>` */
   removeUsersFromGroup(groupName, users) {
     const group = this.cluster.getGroup(groupName);
-    if (!group) return { success: false, message: `Error from server (NotFound): groups.user.openshift.io "${groupName}" not found` };
+    if (!group)
+      return {
+        success: false,
+        message: `Error from server (NotFound): groups.user.openshift.io "${groupName}" not found`,
+      };
     const result = this.cluster.removeUserFromGroup(groupName, users);
-    return { success: true, group: result.group, removed: result.removed, message: `group.user.openshift.io/${groupName} updated` };
+    return {
+      success: true,
+      group: result.group,
+      removed: result.removed,
+      message: `group.user.openshift.io/${groupName} updated`,
+    };
   }
 
   // ── Quotas / LimitRange / ClusterResourceQuota ─────────────────────────
@@ -4022,9 +4897,16 @@ export class GameEngine {
    */
   createResourceQuota(name, hard, options = {}) {
     const namespace = options.namespace || this.currentProject || 'default';
-    if (!this.cluster.getProject(namespace)) return { success: false, message: `Error from server (NotFound): project.project.openshift.io "${namespace}" not found` };
+    if (!this.cluster.getProject(namespace))
+      return {
+        success: false,
+        message: `Error from server (NotFound): project.project.openshift.io "${namespace}" not found`,
+      };
     if (this.cluster.getByName('ResourceQuota', name, namespace)) {
-      return { success: false, message: `Error from server (AlreadyExists): resourcequotas "${name}" already exists` };
+      return {
+        success: false,
+        message: `Error from server (AlreadyExists): resourcequotas "${name}" already exists`,
+      };
     }
     const resource = this.cluster.addResource({
       kind: 'ResourceQuota',
@@ -4043,17 +4925,26 @@ export class GameEngine {
    */
   createLimitRange(name, options = {}) {
     const namespace = this.namespaceFor(options);
-    if (!this.cluster.getProject(namespace)) return { success: false, message: `Error from server (NotFound): project.project.openshift.io "${namespace}" not found` };
+    if (!this.cluster.getProject(namespace))
+      return {
+        success: false,
+        message: `Error from server (NotFound): project.project.openshift.io "${namespace}" not found`,
+      };
     if (this.cluster.getByName('LimitRange', name, namespace)) {
-      return { success: false, message: `Error from server (AlreadyExists): limitranges "${name}" already exists` };
+      return {
+        success: false,
+        message: `Error from server (AlreadyExists): limitranges "${name}" already exists`,
+      };
     }
-    const limits = options.limits || [{
-      type: options.type || 'Container',
-      default: options.default || {},
-      defaultRequest: options.defaultRequest || {},
-      min: options.min || {},
-      max: options.max || {},
-    }];
+    const limits = options.limits || [
+      {
+        type: options.type || 'Container',
+        default: options.default || {},
+        defaultRequest: options.defaultRequest || {},
+        min: options.min || {},
+        max: options.max || {},
+      },
+    ];
     const resource = this.cluster.addResource({
       kind: 'LimitRange',
       metadata: { name, namespace },
@@ -4070,7 +4961,10 @@ export class GameEngine {
    */
   createClusterResourceQuota(name, options = {}) {
     if (this.cluster.getByName('ClusterResourceQuota', name, '')) {
-      return { success: false, message: `Error from server (AlreadyExists): clusterresourcequotas.quota.openshift.io "${name}" already exists` };
+      return {
+        success: false,
+        message: `Error from server (AlreadyExists): clusterresourcequotas.quota.openshift.io "${name}" already exists`,
+      };
     }
     const matchLabels = options.selector?.labels?.matchLabels || options.selector || {};
     const resource = this.cluster.addResource({
@@ -4082,7 +4976,11 @@ export class GameEngine {
       },
     });
     this.cluster.recalculateQuotaStatus();
-    return { success: true, resource, message: `clusterresourcequota.quota.openshift.io/${name} created` };
+    return {
+      success: true,
+      resource,
+      message: `clusterresourcequota.quota.openshift.io/${name} created`,
+    };
   }
 
   /** @returns {string} namespace from options or the current project */
@@ -4104,18 +5002,39 @@ export class GameEngine {
       const [left, tagPart] = String(reference).split(':');
       const segments = left.split('/');
       const isName = segments.pop();
-      return { namespace: segments.length > 0 ? segments.pop() : namespace, name: isName, tag: tagPart || 'latest' };
+      return {
+        namespace: segments.length > 0 ? segments.pop() : namespace,
+        name: isName,
+        tag: tagPart || 'latest',
+      };
     };
     const sourceRef = parse(source);
     const destinationRef = parse(destination);
     const sourceImageStream = this.cluster.getImageStream(sourceRef.namespace, sourceRef.name);
-    if (!sourceImageStream) return { success: false, message: `Error from server (NotFound): imagestreams.image.openshift.io "${sourceRef.name}" not found` };
-    const sourceTag = this.cluster.resolveImageStreamTag(sourceRef.namespace, sourceRef.name, sourceRef.tag);
-    const result = this.cluster.updateImageStreamTag(destinationRef.namespace || namespace, destinationRef.name, destinationRef.tag, {
-      dockerImageReference: sourceTag.dockerImageReference,
-      image: sourceTag.tagEntry?.items?.[0]?.image || sourceTag.dockerImageReference,
-    });
-    return { success: true, message: `imagestreamtag.image.openshift.io/${destinationRef.name}:${destinationRef.tag} tagged`, imageStream: result.imageStream };
+    if (!sourceImageStream)
+      return {
+        success: false,
+        message: `Error from server (NotFound): imagestreams.image.openshift.io "${sourceRef.name}" not found`,
+      };
+    const sourceTag = this.cluster.resolveImageStreamTag(
+      sourceRef.namespace,
+      sourceRef.name,
+      sourceRef.tag
+    );
+    const result = this.cluster.updateImageStreamTag(
+      destinationRef.namespace || namespace,
+      destinationRef.name,
+      destinationRef.tag,
+      {
+        dockerImageReference: sourceTag.dockerImageReference,
+        image: sourceTag.tagEntry?.items?.[0]?.image || sourceTag.dockerImageReference,
+      }
+    );
+    return {
+      success: true,
+      message: `imagestreamtag.image.openshift.io/${destinationRef.name}:${destinationRef.tag} tagged`,
+      imageStream: result.imageStream,
+    };
   }
 
   /**
@@ -4126,8 +5045,12 @@ export class GameEngine {
   importImage(reference, options = {}) {
     const namespace = this.namespaceFor(options);
     const [name, tag = 'latest'] = String(reference).split(':');
-    if (!options.from) return { success: false, message: 'error: --from=<image> is required for oc import-image' };
-    const result = this.cluster.updateImageStreamTag(namespace, name, tag, { dockerImageReference: options.from, isExternal: true });
+    if (!options.from)
+      return { success: false, message: 'error: --from=<image> is required for oc import-image' };
+    const result = this.cluster.updateImageStreamTag(namespace, name, tag, {
+      dockerImageReference: options.from,
+      isExternal: true,
+    });
     return {
       success: true,
       imageStream: result.imageStream,
@@ -4153,14 +5076,25 @@ export class GameEngine {
 
     if (Array.isArray(source)) {
       objects = deepClone(source);
-    } else if (typeof source === 'string' && (source.endsWith('.yaml') || source.endsWith('.yml')) && this._getManifestEngine()) {
+    } else if (
+      typeof source === 'string' &&
+      (source.endsWith('.yaml') || source.endsWith('.yml')) &&
+      this._getManifestEngine()
+    ) {
       const manifestEngine = this._getManifestEngine();
       try {
-        const result = typeof manifestEngine.processTemplate === 'function'
-          ? manifestEngine.processTemplate(source, params)
-          : null;
+        const result =
+          typeof manifestEngine.processTemplate === 'function'
+            ? manifestEngine.processTemplate(source, params)
+            : null;
         if (result && typeof result === 'object') {
-          if (Array.isArray(result.resources)) return { success: true, objects: result.objects || [], resources: result.resources, message: 'Template processed' };
+          if (Array.isArray(result.resources))
+            return {
+              success: true,
+              objects: result.objects || [],
+              resources: result.resources,
+              message: 'Template processed',
+            };
           if (Array.isArray(result.objects)) objects = result.objects;
           if (result.error) return { success: false, message: result.error };
         }
@@ -4172,34 +5106,54 @@ export class GameEngine {
     if (!objects) {
       if (source && typeof source === 'object') templateObject = source;
       else {
-        const namespaceCandidates = options.namespaceCandidates || [this.namespaceFor(options), 'openshift', 'openshift-config'];
+        const namespaceCandidates = options.namespaceCandidates || [
+          this.namespaceFor(options),
+          'openshift',
+          'openshift-config',
+        ];
         for (const candidate of namespaceCandidates) {
           templateObject = this.cluster.getByName('Template', String(source), candidate);
           if (templateObject) break;
         }
       }
-      if (!templateObject) return { success: false, message: `Error from server (NotFound): templates.template.openshift.io "${source}" not found` };
+      if (!templateObject)
+        return {
+          success: false,
+          message: `Error from server (NotFound): templates.template.openshift.io "${source}" not found`,
+        };
       objects = deepClone(templateObject.spec?.objects || []);
     }
 
     const parameters = new Map();
     for (const parameter of templateObject?.spec?.parameters || []) {
       if (parameter.value !== undefined) parameters.set(parameter.name, String(parameter.value));
-      if (parameter.generate) parameters.set(parameter.name, parameter.generate === 'expression' ? `generated-${Math.random().toString(36).slice(2, 8)}` : parameter.value);
+      if (parameter.generate)
+        parameters.set(
+          parameter.name,
+          parameter.generate === 'expression'
+            ? `generated-${Math.random().toString(36).slice(2, 8)}`
+            : parameter.value
+        );
     }
     for (const [key, value] of Object.entries(params || {})) parameters.set(key, String(value));
 
     const missingRequired = [];
     for (const parameter of templateObject?.spec?.parameters || []) {
-      if (parameter.required && !parameters.has(parameter.name)) missingRequired.push(parameter.name);
+      if (parameter.required && !parameters.has(parameter.name))
+        missingRequired.push(parameter.name);
     }
     if (missingRequired.length > 0) {
-      return { success: false, message: `error: Missing required parameters: ${missingRequired.join(', ')}` };
+      return {
+        success: false,
+        message: `error: Missing required parameters: ${missingRequired.join(', ')}`,
+      };
     }
 
     const substitute = (value) => {
       if (typeof value === 'string') {
-        return value.replace(/\$\{([A-Za-z0-9_]+)\}/g, (match, name) => (parameters.has(name) ? parameters.get(name) : match));
+        return value.replace(/\$\{([A-Za-z0-9_]+)\}/g, (match, name) =>
+          parameters.has(name) ? parameters.get(name) : match
+        );
       }
       if (Array.isArray(value)) return value.map((item) => substitute(item));
       if (value && typeof value === 'object') {
@@ -4218,7 +5172,12 @@ export class GameEngine {
         if (resource) resources.push(resource);
       }
       if (resources.length !== renderedObjects.length) {
-        return { success: false, objects: renderedObjects, resources, message: this.lastApplyError || 'template apply failed' };
+        return {
+          success: false,
+          objects: renderedObjects,
+          resources,
+          message: this.lastApplyError || 'template apply failed',
+        };
       }
     }
     this.eventBus.emit('template:processed', {
@@ -4243,7 +5202,11 @@ export class GameEngine {
     this._lastTimestamp = performance.now();
     this._fpsTimestamp = performance.now();
     this._accumulator = 0;
-    this.eventBus.emit('engine:started', { mode: this.mode, difficulty: this.difficulty, timestamp: Date.now() });
+    this.eventBus.emit('engine:started', {
+      mode: this.mode,
+      difficulty: this.difficulty,
+      timestamp: Date.now(),
+    });
     this._rafId = requestAnimationFrame((timestamp) => this._gameLoop(timestamp));
   }
 
@@ -4303,7 +5266,12 @@ export class GameEngine {
     const alpha = this._accumulator / this._fixedTimeStep;
     for (const callback of this._renderCallbacks) callback(alpha, this._gameTime);
 
-    this.eventBus.emit('engine:frame', { fps: this._fps, gameTime: this._gameTime, realTime: this._realTime, alpha });
+    this.eventBus.emit('engine:frame', {
+      fps: this._fps,
+      gameTime: this._gameTime,
+      realTime: this._realTime,
+      alpha,
+    });
 
     if (!this._lastTickEmit || this._realTime - this._lastTickEmit > 500) {
       this._lastTickEmit = this._realTime;
@@ -4316,8 +5284,12 @@ export class GameEngine {
         fps: this._fps,
         mode: this.mode,
         metrics: { cpu: stats.cpu.percent, memory: stats.memory.percent },
-        clusterHealth: health.degraded.length > 0 || stats.cpu.percent > 90 || stats.memory.percent > 90 ? 'critical'
-          : health.percent < 100 || stats.cpu.percent > 70 || stats.memory.percent > 70 ? 'warning' : 'healthy',
+        clusterHealth:
+          health.degraded.length > 0 || stats.cpu.percent > 90 || stats.memory.percent > 90
+            ? 'critical'
+            : health.percent < 100 || stats.cpu.percent > 70 || stats.memory.percent > 70
+              ? 'warning'
+              : 'healthy',
       });
     }
 
@@ -4343,7 +5315,9 @@ export class GameEngine {
 
   getFrameTime() {
     if (this._frameTimes.length < 2) return 0;
-    return this._frameTimes[this._frameTimes.length - 1] - this._frameTimes[this._frameTimes.length - 2];
+    return (
+      this._frameTimes[this._frameTimes.length - 1] - this._frameTimes[this._frameTimes.length - 2]
+    );
   }
 
   _processInputQueue() {
@@ -4401,10 +5375,18 @@ export class GameEngine {
     const resource = this.applyManifestObject({
       apiVersion: apiVersionForKind(command.kind),
       kind: command.kind,
-      metadata: { name: command.name, namespace: command.namespace || this.currentProject, labels: command.labels || {} },
+      metadata: {
+        name: command.name,
+        namespace: command.namespace || this.currentProject,
+        labels: command.labels || {},
+      },
       spec: command.spec || {},
     });
-    if (!resource) return { success: false, message: this.lastApplyError || `${command.kind} "${command.name}" could not be created` };
+    if (!resource)
+      return {
+        success: false,
+        message: this.lastApplyError || `${command.kind} "${command.name}" could not be created`,
+      };
     this._addNotification('success', `Created ${command.kind} "${command.name}"`);
     this._score += 2 * this._scoreMultiplier;
     return { success: true, resource };
@@ -4417,9 +5399,14 @@ export class GameEngine {
   }
 
   _handleScale(command) {
-    const result = this.scale(command.kind, command.name, command.replicas, { namespace: command.namespace });
+    const result = this.scale(command.kind, command.name, command.replicas, {
+      namespace: command.namespace,
+    });
     if (result.success) {
-      this._addNotification('info', `Scaled ${command.kind} "${command.name}" from ${result.oldReplicas} to ${command.replicas} replicas`);
+      this._addNotification(
+        'info',
+        `Scaled ${command.kind} "${command.name}" from ${result.oldReplicas} to ${command.replicas} replicas`
+      );
       this._score += 3 * this._scoreMultiplier;
     }
     return result;
@@ -4451,12 +5438,14 @@ export class GameEngine {
     const node = this.cluster.getByName('Node', command.name, '');
     if (!node) return { success: false, message: `Node "${command.name}" not found` };
     node.spec.unschedulable = true;
-    const pods = this.cluster.getByKind('Pod').filter(
-      (pod) => pod.spec.nodeName === command.name && pod.status.phase === 'Running'
-    );
+    const pods = this.cluster
+      .getByKind('Pod')
+      .filter((pod) => pod.spec.nodeName === command.name && pod.status.phase === 'Running');
     let evicted = 0;
     for (const pod of pods) {
-      const isDaemonSet = pod.metadata.ownerReferences.some((reference) => reference.kind === 'DaemonSet');
+      const isDaemonSet = pod.metadata.ownerReferences.some(
+        (reference) => reference.kind === 'DaemonSet'
+      );
       if (isDaemonSet && !command.force) continue;
       pod.markForDeletion();
       evicted++;
@@ -4467,13 +5456,27 @@ export class GameEngine {
   }
 
   _handleRollout(command) {
-    const result = this.rollout(command.kind || 'Deployment', command.subcommand, command.name, { namespace: command.namespace });
+    const result = this.rollout(command.kind || 'Deployment', command.subcommand, command.name, {
+      namespace: command.namespace,
+    });
     if (result.success && command.subcommand === 'restart') {
-      this._addNotification('info', `Restarting rollout for ${command.kind || 'Deployment'} "${command.name}"`);
-      const failedPods = this.cluster.getByKind('Pod').filter((pod) => pod.status.phase === 'Failed');
-      if (failedPods.length === 0) this.eventBus.emit('rollout:zero-downtime', { kind: command.kind || 'Deployment', name: command.name });
+      this._addNotification(
+        'info',
+        `Restarting rollout for ${command.kind || 'Deployment'} "${command.name}"`
+      );
+      const failedPods = this.cluster
+        .getByKind('Pod')
+        .filter((pod) => pod.status.phase === 'Failed');
+      if (failedPods.length === 0)
+        this.eventBus.emit('rollout:zero-downtime', {
+          kind: command.kind || 'Deployment',
+          name: command.name,
+        });
     } else if (result.success && command.subcommand === 'undo') {
-      this._addNotification('info', `Rolled back ${command.kind || 'Deployment'} "${command.name}" to previous revision`);
+      this._addNotification(
+        'info',
+        `Rolled back ${command.kind || 'Deployment'} "${command.name}" to previous revision`
+      );
     }
     return result;
   }
@@ -4482,7 +5485,8 @@ export class GameEngine {
     const { podName, namespace, containerName, cmd } = command;
     const pod = this.cluster.getByName('Pod', podName, namespace ?? 'default');
     if (!pod) return { success: false, message: `Pod "${podName}" not found` };
-    if (pod.status.phase !== 'Running') return { success: false, message: `Pod "${podName}" is not running` };
+    if (pod.status.phase !== 'Running')
+      return { success: false, message: `Pod "${podName}" is not running` };
     this.eventBus.emit('command:exec', { pod: podName, container: containerName, command: cmd });
     return { success: true, output: `[simulated exec output for ${cmd}]` };
   }
@@ -4492,7 +5496,12 @@ export class GameEngine {
     const pod = this.cluster.getByName('Pod', podName, namespace ?? 'default');
     if (!pod) return { success: false, message: `Pod "${podName}" not found` };
     const events = pod.getEvents(20);
-    return { success: true, logs: events.map((event) => `${event.timestamp} [${event.type}] ${event.reason}: ${event.message}`) };
+    return {
+      success: true,
+      logs: events.map(
+        (event) => `${event.timestamp} [${event.type}] ${event.reason}: ${event.message}`
+      ),
+    };
   }
 
   _apiVersionForKind(kind) {
@@ -4503,9 +5512,19 @@ export class GameEngine {
     const oldMode = this.mode;
     this.mode = mode;
     if (mode === GAME_MODES.CHAOS) {
-      this.simulation.setChaosConfig({ podKillRate: 0.01, nodeFailRate: 0.002, cpuStress: 0.2, memoryStress: 0.1 });
+      this.simulation.setChaosConfig({
+        podKillRate: 0.01,
+        nodeFailRate: 0.002,
+        cpuStress: 0.2,
+        memoryStress: 0.1,
+      });
     } else {
-      this.simulation.setChaosConfig({ podKillRate: 0, nodeFailRate: 0, cpuStress: 0, memoryStress: 0 });
+      this.simulation.setChaosConfig({
+        podKillRate: 0,
+        nodeFailRate: 0,
+        cpuStress: 0,
+        memoryStress: 0,
+      });
     }
     this.eventBus.emit('engine:mode-changed', { from: oldMode, to: mode });
   }
@@ -4523,7 +5542,12 @@ export class GameEngine {
   }
 
   addObjective(id, objective) {
-    this._activeObjectives.set(id, { ...objective, id, startTime: this._gameTime, completed: false });
+    this._activeObjectives.set(id, {
+      ...objective,
+      id,
+      startTime: this._gameTime,
+      completed: false,
+    });
     this._addNotification('info', `New objective: ${objective.description}`);
     this.eventBus.emit('objective:added', { id, objective });
   }
@@ -4578,7 +5602,14 @@ export class GameEngine {
   }
 
   _addNotification(type, message) {
-    const notification = { id: Date.now() + Math.random(), type, message, timestamp: Date.now(), gameTime: this._gameTime, read: false };
+    const notification = {
+      id: Date.now() + Math.random(),
+      type,
+      message,
+      timestamp: Date.now(),
+      gameTime: this._gameTime,
+      read: false,
+    };
     this._notifications.push(notification);
     if (this._notifications.length > this._maxNotifications) this._notifications.shift();
     this.eventBus.emit('notification', notification);
@@ -4739,14 +5770,16 @@ export class GameEngine {
       for (const [key, value] of savedState.achievements) this._achievements.set(key, value);
     }
     if (savedState.completedObjectives) {
-      for (const objective of savedState.completedObjectives) this._completedObjectives.add(objective);
+      for (const objective of savedState.completedObjectives)
+        this._completedObjectives.add(objective);
     }
     if (savedState.notifications) this._notifications = savedState.notifications;
     if (savedState.commandHistory) this._commandHistory = savedState.commandHistory;
     if (savedState.simulationState) {
       this.simulation.tickCount = savedState.simulationState.tickCount || 0;
       this.simulation.tickRate = savedState.simulationState.tickRate || 1;
-      if (savedState.simulationState.chaosConfig) this.simulation.setChaosConfig(savedState.simulationState.chaosConfig);
+      if (savedState.simulationState.chaosConfig)
+        this.simulation.setChaosConfig(savedState.simulationState.chaosConfig);
     }
 
     this._applyDifficulty();

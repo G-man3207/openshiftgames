@@ -157,14 +157,16 @@ const SECTION_TO_TIER = {
 };
 
 /** kind → layout tier id, derived from the central registry. */
-export const KIND_TIER = Object.freeze((() => {
-  const map = {};
-  for (const kind of RESOURCE_KINDS) {
-    const section = paletteMeta(kind)?.section || 'projects';
-    map[kind] = SECTION_TO_TIER[section] || 'misc';
-  }
-  return map;
-})());
+export const KIND_TIER = Object.freeze(
+  (() => {
+    const map = {};
+    for (const kind of RESOURCE_KINDS) {
+      const section = paletteMeta(kind)?.section || 'projects';
+      map[kind] = SECTION_TO_TIER[section] || 'misc';
+    }
+    return map;
+  })()
+);
 
 const TIER_SECTION = {
   cluster: 'projects',
@@ -179,7 +181,9 @@ const TIER_SECTION = {
   misc: null,
 };
 
-const SECTION_LABELS = Object.fromEntries(KIND_SECTIONS.map((section) => [section.id, section.label]));
+const SECTION_LABELS = Object.fromEntries(
+  KIND_SECTIONS.map((section) => [section.id, section.label])
+);
 
 /** One calm accent per auto-align tier (matches the model category accents). */
 const TIER_ACCENTS = {
@@ -196,9 +200,8 @@ const TIER_ACCENTS = {
 };
 
 const PROJECT_COLORS = [
-  0xee0000, 0xf97316, 0x2f81f7, 0x3fb950, 0xa371f7,
-  0x39c5cf, 0xd29922, 0xf85149, 0xdb6d28, 0x8957e5,
-  0xb08800, 0x5a32a3,
+  0xee0000, 0xf97316, 0x2f81f7, 0x3fb950, 0xa371f7, 0x39c5cf, 0xd29922, 0xf85149, 0xdb6d28,
+  0x8957e5, 0xb08800, 0x5a32a3,
 ];
 
 /** Known OpenShift projects get stable brand-adjacent colours. */
@@ -222,11 +225,30 @@ const NAMED_PROJECT_COLORS = {
 const SHOWCASE_CAP = 24;
 /** Kinds that tell the application story in the hero (admin plumbing is not one). */
 const SHOWCASE_APP_KINDS = new Set([
-  'Deployment', 'Pod', 'Service', 'Route', 'StatefulSet', 'DaemonSet', 'ReplicaSet',
-  'Job', 'CronJob', 'BuildConfig', 'Build', 'ImageStream', 'Ingress', 'ConfigMap',
-  'Secret', 'PersistentVolumeClaim', 'PersistentVolume', 'NetworkPolicy',
-  'HorizontalPodAutoscaler', 'PodDisruptionBudget', 'Subscription', 'Template',
-  'ResourceQuota', 'LimitRange',
+  'Deployment',
+  'Pod',
+  'Service',
+  'Route',
+  'StatefulSet',
+  'DaemonSet',
+  'ReplicaSet',
+  'Job',
+  'CronJob',
+  'BuildConfig',
+  'Build',
+  'ImageStream',
+  'Ingress',
+  'ConfigMap',
+  'Secret',
+  'PersistentVolumeClaim',
+  'PersistentVolume',
+  'NetworkPolicy',
+  'HorizontalPodAutoscaler',
+  'PodDisruptionBudget',
+  'Subscription',
+  'Template',
+  'ResourceQuota',
+  'LimitRange',
 ]);
 const SHOWCASE_PRIORITY = {
   Node: 100,
@@ -327,11 +349,7 @@ function clamp(value, min, max) {
  * @returns {Map<string, {x:number,y:number,z:number}>} uid → position
  */
 export function layoutTargets(resources, options = {}) {
-  const {
-    maxRowWidth = MAX_ROW_WIDTH,
-    tierGap = TIER_GAP,
-    centerZ = LAYOUT_CENTER_Z,
-  } = options;
+  const { maxRowWidth = MAX_ROW_WIDTH, tierGap = TIER_GAP, centerZ = LAYOUT_CENTER_Z } = options;
   const targets = new Map();
   const buckets = new Map(LAYOUT_TIERS.map((tier) => [tier.id, []]));
 
@@ -358,12 +376,20 @@ export function layoutTargets(resources, options = {}) {
     const rows = Math.ceil(items.length / columns);
     const rowSpacing = tier.rowSpacing || 3;
     const rowSpan = (rows - 1) * rowSpacing;
-    plan.push({ tier, items, columns, rows, rowSpacing, rowSpan, depth: rowSpan + TIER_BAND_DEPTH });
+    plan.push({
+      tier,
+      items,
+      columns,
+      rows,
+      rowSpacing,
+      rowSpan,
+      depth: rowSpan + TIER_BAND_DEPTH,
+    });
   }
 
   // Pass 2: stack the occupied tiers back-to-front and centre the whole block.
-  const totalDepth = plan.reduce((sum, entry) => sum + entry.depth, 0)
-    + Math.max(0, plan.length - 1) * tierGap;
+  const totalDepth =
+    plan.reduce((sum, entry) => sum + entry.depth, 0) + Math.max(0, plan.length - 1) * tierGap;
   let cursor = centerZ - totalDepth / 2;
   for (const entry of plan) {
     const centerZ = cursor + entry.depth / 2;
@@ -505,12 +531,15 @@ export class ClusterRenderer {
     this.camera.lookAt(0, 0, 5);
   }
 
-  _cameraDirection(azimuth = this._azimuth ?? BASE_AZIMUTH, elevation = this._elevation ?? BASE_ELEVATION) {
+  _cameraDirection(
+    azimuth = this._azimuth ?? BASE_AZIMUTH,
+    elevation = this._elevation ?? BASE_ELEVATION
+  ) {
     const cosElevation = Math.cos(elevation);
     return new THREE.Vector3(
       Math.sin(azimuth) * cosElevation,
       Math.sin(elevation),
-      Math.cos(azimuth) * cosElevation,
+      Math.cos(azimuth) * cosElevation
     );
   }
 
@@ -643,7 +672,14 @@ export class ClusterRenderer {
     canvas.width = size;
     canvas.height = size;
     const ctx = canvas.getContext('2d');
-    const gradient = ctx.createRadialGradient(size / 2, size / 2, size * 0.02, size / 2, size / 2, size * 0.5);
+    const gradient = ctx.createRadialGradient(
+      size / 2,
+      size / 2,
+      size * 0.02,
+      size / 2,
+      size / 2,
+      size * 0.5
+    );
     gradient.addColorStop(0, '#19212c');
     gradient.addColorStop(0.3, '#131a23');
     gradient.addColorStop(0.58, '#0e131a');
@@ -684,7 +720,12 @@ export class ClusterRenderer {
       }
       const geometry = new THREE.BufferGeometry();
       geometry.setAttribute('position', new THREE.Float32BufferAttribute(points, 3));
-      const material = new THREE.LineBasicMaterial({ color, transparent: true, opacity, depthWrite: false });
+      const material = new THREE.LineBasicMaterial({
+        color,
+        transparent: true,
+        opacity,
+        depthWrite: false,
+      });
       const lines = new THREE.LineSegments(geometry, material);
       lines.renderOrder = 0;
       this.gridGroup.add(lines);
@@ -695,13 +736,22 @@ export class ClusterRenderer {
     buildLines(GRID_MAJOR_STEP, 0x53708f, 0.2, 0.003);
 
     const axisGeometry = new THREE.BufferGeometry();
-    axisGeometry.setAttribute('position', new THREE.Float32BufferAttribute([
-      -half, 0.004, 0, half, 0.004, 0,
-      0, 0.004, -half, 0, 0.004, half,
-    ], 3));
-    const axisLines = new THREE.LineSegments(axisGeometry, new THREE.LineBasicMaterial({
-      color: 0x6d8bab, transparent: true, opacity: 0.24, depthWrite: false,
-    }));
+    axisGeometry.setAttribute(
+      'position',
+      new THREE.Float32BufferAttribute(
+        [-half, 0.004, 0, half, 0.004, 0, 0, 0.004, -half, 0, 0.004, half],
+        3
+      )
+    );
+    const axisLines = new THREE.LineSegments(
+      axisGeometry,
+      new THREE.LineBasicMaterial({
+        color: 0x6d8bab,
+        transparent: true,
+        opacity: 0.24,
+        depthWrite: false,
+      })
+    );
     this.gridGroup.add(axisLines);
 
     this.scene.add(this.gridGroup);
@@ -811,14 +861,16 @@ export class ClusterRenderer {
     canvas.height = height;
     const ctx = canvas.getContext('2d');
     ctx.clearRect(0, 0, width, height);
-    ctx.font = '600 40px "Schibsted Grotesk", "Inter", -apple-system, BlinkMacSystemFont, sans-serif';
+    ctx.font =
+      '600 40px "Schibsted Grotesk", "Inter", -apple-system, BlinkMacSystemFont, sans-serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillStyle = 'rgba(216, 230, 246, 0.96)';
     const tracking = 12;
     const chars = [...text];
     const widths = chars.map((char) => ctx.measureText(char).width);
-    const totalWidth = widths.reduce((sum, value) => sum + value, 0) + tracking * (chars.length - 1);
+    const totalWidth =
+      widths.reduce((sum, value) => sum + value, 0) + tracking * (chars.length - 1);
     let x = width / 2 - totalWidth / 2;
     chars.forEach((char, index) => {
       ctx.fillText(char, x + widths[index] / 2, height / 2);
@@ -839,7 +891,13 @@ export class ClusterRenderer {
       const kind = group.userData?.resourceKind;
       const tier = tierOf(kind);
       const footprint = group.userData?.footprint || 1.1;
-      const entry = bounds.get(tier) || { minX: Infinity, maxX: -Infinity, minZ: Infinity, maxZ: -Infinity, count: 0 };
+      const entry = bounds.get(tier) || {
+        minX: Infinity,
+        maxX: -Infinity,
+        minZ: Infinity,
+        maxZ: -Infinity,
+        count: 0,
+      };
       entry.minX = Math.min(entry.minX, group.position.x - footprint);
       entry.maxX = Math.max(entry.maxX, group.position.x + footprint);
       entry.minZ = Math.min(entry.minZ, group.position.z);
@@ -1090,7 +1148,11 @@ export class ClusterRenderer {
 
     if (this.selectedResource) {
       const previous = this.resourceMeshes.get(this.selectedResource);
-      if (previous) this._setGroupEmphasis(previous, previous.userData.resourceId === this.hoveredResource ? 'hovered' : 'default');
+      if (previous)
+        this._setGroupEmphasis(
+          previous,
+          previous.userData.resourceId === this.hoveredResource ? 'hovered' : 'default'
+        );
     }
 
     this.selectedResource = resourceId;
@@ -1147,7 +1209,8 @@ export class ClusterRenderer {
     group.userData.targetScale = effect === 'selected' ? 1.08 : effect === 'hovered' ? 1.04 : 1;
     const statusMaterial = group.userData.statusMaterial;
     if (statusMaterial) {
-      statusMaterial.opacity = (group.userData.statusBaseOpacity ?? 0.5) * (effect === 'default' ? 1 : 1.4);
+      statusMaterial.opacity =
+        (group.userData.statusBaseOpacity ?? 0.5) * (effect === 'default' ? 1 : 1.4);
     }
   }
 
@@ -1351,7 +1414,8 @@ export class ClusterRenderer {
 
     group.userData.mineRing = ring;
     group.userData.minePool = pool;
-    group.userData.minePhase = ((group.position.x * 12.9898 + group.position.z * 78.233) % (Math.PI * 2)) || 0;
+    group.userData.minePhase =
+      (group.position.x * 12.9898 + group.position.z * 78.233) % (Math.PI * 2) || 0;
   }
 
   _removeMineAccent(group) {
@@ -1506,8 +1570,10 @@ export class ClusterRenderer {
         const backup = material.userData?._platformDim;
         if (!backup) continue;
         material.color.setHex(backup.color);
-        if (material.emissive && backup.emissive !== undefined) material.emissive.setHex(backup.emissive);
-        if (backup.emissiveIntensity !== undefined) material.emissiveIntensity = backup.emissiveIntensity;
+        if (material.emissive && backup.emissive !== undefined)
+          material.emissive.setHex(backup.emissive);
+        if (backup.emissiveIntensity !== undefined)
+          material.emissiveIntensity = backup.emissiveIntensity;
         delete material.userData._platformDim;
       }
       group.userData._dimMaterials = [];
@@ -1628,7 +1694,7 @@ export class ClusterRenderer {
     const focusTarget = new THREE.Vector3(
       group.position.x,
       Math.max(0.25, height * 0.35),
-      group.position.z,
+      group.position.z
     );
     // Gentle acknowledgement, not a jump cut: ~1/3 closer than the fitted view,
     // and never closer than a comfortable read distance.
@@ -1725,7 +1791,8 @@ export class ClusterRenderer {
     // Keep the live simulation object so condition-derived status (Route
     // admission, ClusterOperator health, ...) can be re-read on every tick.
     group.userData.resourceRef = normalized._ref || normalized;
-    group.userData.resourceNamespace = normalized.namespace || normalized._ref?.metadata?.namespace || '';
+    group.userData.resourceNamespace =
+      normalized.namespace || normalized._ref?.metadata?.namespace || '';
     group.position.set(resource.x || 0, resource.y || 0, resource.z || 0);
 
     group.traverse((child) => {
@@ -1839,9 +1906,10 @@ export class ClusterRenderer {
     // helper decide: condition-based kinds (ClusterOperator/Route/ClusterVersion/
     // Node) must not fall back to the often-static `status.phase`.
     const liveRef = group.userData.resourceRef || resource._ref || null;
-    const fallback = typeof resource.status === 'string'
-      ? resource.status
-      : (resource.status?.phase || resource._ref?.status?.phase || null);
+    const fallback =
+      typeof resource.status === 'string'
+        ? resource.status
+        : resource.status?.phase || resource._ref?.status?.phase || null;
     let status = visualStatusFor(liveRef || resource, fallback);
     // An admitted Route whose Service lost its endpoints is effectively down:
     // amber instead of green (matches the no-traffic rule in RelationGraph).
@@ -1984,9 +2052,10 @@ export class ClusterRenderer {
   autoAlign(clusterState, options = {}) {
     if (!clusterState) return new Map();
     const { duration = 800, filter = null, fit = true } = options;
-    const all = typeof clusterState.getAllResources === 'function'
-      ? clusterState.getAllResources()
-      : Array.from(clusterState.resources?.values?.() || []);
+    const all =
+      typeof clusterState.getAllResources === 'function'
+        ? clusterState.getAllResources()
+        : Array.from(clusterState.resources?.values?.() || []);
     const resources = filter ? all.filter(filter) : all;
     const targets = layoutTargets(resources);
     const intro = duration > 0 && !this._introPlayed && !this.menuMode;
@@ -2060,9 +2129,10 @@ export class ClusterRenderer {
     const currentIds = new Set(this.resourceMeshes.keys());
     const stateIds = new Set();
 
-    const resources = typeof clusterState.getAllResources === 'function'
-      ? clusterState.getAllResources()
-      : Array.from(clusterState.resources?.values?.() || []);
+    const resources =
+      typeof clusterState.getAllResources === 'function'
+        ? clusterState.getAllResources()
+        : Array.from(clusterState.resources?.values?.() || []);
 
     // New resources enter at their auto-align slot instead of piling at the origin
     // (important for the start-page showcase, which seeds before launching a mode).
@@ -2123,7 +2193,8 @@ export class ClusterRenderer {
         const rect = element.getBoundingClientRect();
         if (!rect.width || rect.height < 10) return 0;
         const style = window.getComputedStyle(element);
-        if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') return 0;
+        if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0')
+          return 0;
         return rect.right;
       } catch {
         return 0;
@@ -2152,8 +2223,16 @@ export class ClusterRenderer {
       if (group.visible === false) continue;
       const footprint = group.userData?.footprint || 1.1;
       const height = group.userData?.height || 1.8;
-      box.expandByPoint(new THREE.Vector3(group.position.x - footprint, 0, group.position.z - footprint));
-      box.expandByPoint(new THREE.Vector3(group.position.x + footprint, group.position.y + height, group.position.z + footprint));
+      box.expandByPoint(
+        new THREE.Vector3(group.position.x - footprint, 0, group.position.z - footprint)
+      );
+      box.expandByPoint(
+        new THREE.Vector3(
+          group.position.x + footprint,
+          group.position.y + height,
+          group.position.z + footprint
+        )
+      );
       count += 1;
     }
     if (count === 0) {
@@ -2177,12 +2256,16 @@ export class ClusterRenderer {
       const footprint = group.userData?.footprint || 1.1;
       const height = group.userData?.height || 1.8;
       const labelY = group.position.y + (group.userData?.labelY ?? height + 0.4);
-      box.expandByPoint(new THREE.Vector3(group.position.x - footprint, 0, group.position.z - footprint));
-      box.expandByPoint(new THREE.Vector3(
-        group.position.x + footprint,
-        group.position.y + height,
-        group.position.z + footprint,
-      ));
+      box.expandByPoint(
+        new THREE.Vector3(group.position.x - footprint, 0, group.position.z - footprint)
+      );
+      box.expandByPoint(
+        new THREE.Vector3(
+          group.position.x + footprint,
+          group.position.y + height,
+          group.position.z + footprint
+        )
+      );
       points.push(new THREE.Vector3(group.position.x, labelY, group.position.z));
       count += 1;
     }
@@ -2191,7 +2274,7 @@ export class ClusterRenderer {
       box.set(new THREE.Vector3(-15, 0, -16), new THREE.Vector3(15, 3, 27));
     }
 
-    for (const band of filter ? [] : (this.tierBands?.values?.() || [])) {
+    for (const band of filter ? [] : this.tierBands?.values?.() || []) {
       if (!band.group.visible) continue;
       // The tinted zone itself must stay inside the frame, otherwise a tier row
       // visually runs off the edge even when its models are framed.
@@ -2203,20 +2286,30 @@ export class ClusterRenderer {
       points.push(new THREE.Vector3(centreX + halfWidth, 0.02, centreZ + halfDepth));
       const labelHalfWidth = (12.3 * band.label.scale.x) / 2;
       const labelHalfDepth = (1.15 * band.label.scale.y) / 2;
-      points.push(new THREE.Vector3(
-        band.label.position.x - labelHalfWidth, 0.02, band.label.position.z - labelHalfDepth,
-      ));
-      points.push(new THREE.Vector3(
-        band.label.position.x + labelHalfWidth, 0.02, band.label.position.z + labelHalfDepth,
-      ));
+      points.push(
+        new THREE.Vector3(
+          band.label.position.x - labelHalfWidth,
+          0.02,
+          band.label.position.z - labelHalfDepth
+        )
+      );
+      points.push(
+        new THREE.Vector3(
+          band.label.position.x + labelHalfWidth,
+          0.02,
+          band.label.position.z + labelHalfDepth
+        )
+      );
     }
 
     for (let index = 0; index < 8; index++) {
-      points.push(new THREE.Vector3(
-        index & 1 ? box.max.x : box.min.x,
-        index & 2 ? box.max.y : box.min.y,
-        index & 4 ? box.max.z : box.min.z,
-      ));
+      points.push(
+        new THREE.Vector3(
+          index & 1 ? box.max.x : box.min.x,
+          index & 2 ? box.max.y : box.min.y,
+          index & 4 ? box.max.z : box.min.z
+        )
+      );
     }
 
     return { box, points };
@@ -2296,7 +2389,7 @@ export class ClusterRenderer {
       requiredDistance = Math.max(
         requiredDistance,
         lateralX / (tanH * fractionX) - alongView,
-        lateralY / (tanV * fractionY) - alongView,
+        lateralY / (tanV * fractionY) - alongView
       );
     }
 
@@ -2349,7 +2442,7 @@ export class ClusterRenderer {
 
     // Centre the composition inside the *usable* rect, not the raw viewport: with
     // the palette dock on the left the working set should sit right of it.
-    const rectCentreX = (insets.left + usableWidth / 2) / width * 2 - 1;
+    const rectCentreX = ((insets.left + usableWidth / 2) / width) * 2 - 1;
     if (Math.abs(rectCentreX) > 0.001) {
       target.addScaledVector(right, -rectCentreX * tanH * distance);
     }
@@ -2503,8 +2596,11 @@ export class ClusterRenderer {
     const pick = (predicate, limit) => {
       const list = entries
         .filter(([id, group]) => !chosen.has(id) && predicate(group))
-        .sort((a, b) => priorityOf(b[1]) - priorityOf(a[1])
-          || nameOfGroup(a[1]).localeCompare(nameOfGroup(b[1])));
+        .sort(
+          (a, b) =>
+            priorityOf(b[1]) - priorityOf(a[1]) ||
+            nameOfGroup(a[1]).localeCompare(nameOfGroup(b[1]))
+        );
       for (const [id] of list.slice(0, Math.max(0, limit))) chosen.add(id);
     };
 
@@ -2514,8 +2610,9 @@ export class ClusterRenderer {
     const projects = entries
       .filter(([id, group]) => !chosen.has(id) && group.userData.resourceKind === 'Project')
       .sort((a, b) => {
-        const difference = (namespaceCounts.get(nameOfGroup(b[1])) || 0)
-          - (namespaceCounts.get(nameOfGroup(a[1])) || 0);
+        const difference =
+          (namespaceCounts.get(nameOfGroup(b[1])) || 0) -
+          (namespaceCounts.get(nameOfGroup(a[1])) || 0);
         return difference || nameOfGroup(a[1]).localeCompare(nameOfGroup(b[1]));
       });
     for (const [id] of projects.slice(0, 4)) chosen.add(id);
@@ -2789,10 +2886,13 @@ export class ClusterRenderer {
         const base = group.userData.statusBaseOpacity ?? 0.5;
         const hovered = group.userData.resourceId === this.hoveredResource;
         const selected = group.userData.resourceId === this.selectedResource;
-        const boost = (selected ? 1.45 : hovered ? 1.2 : 1) * (isMine ? 1.12 : 1)
-          * (group.userData.dimmed ? PLATFORM_DIM_STATUS : 1);
+        const boost =
+          (selected ? 1.45 : hovered ? 1.2 : 1) *
+          (isMine ? 1.12 : 1) *
+          (group.userData.dimmed ? PLATFORM_DIM_STATUS : 1);
         if (group.userData.statusPulse) {
-          const pulse = 0.68 + 0.32 * Math.sin(time * (this.menuMode ? 1.1 : 1.9) + group.position.x * 0.7);
+          const pulse =
+            0.68 + 0.32 * Math.sin(time * (this.menuMode ? 1.1 : 1.9) + group.position.x * 0.7);
           statusMaterial.opacity = base * boost * pulse;
         } else {
           const resting = this.menuMode ? 0.7 + 0.14 * Math.sin(time * 0.8 + group.position.z) : 1;
@@ -2838,8 +2938,8 @@ export class ClusterRenderer {
     position.project(this.camera);
 
     return {
-      x: (position.x + 1) / 2 * this._viewportSize().width,
-      y: (-position.y + 1) / 2 * this._viewportSize().height,
+      x: ((position.x + 1) / 2) * this._viewportSize().width,
+      y: ((-position.y + 1) / 2) * this._viewportSize().height,
     };
   }
 
@@ -2854,7 +2954,7 @@ export class ClusterRenderer {
     const rect = this.canvas.getBoundingClientRect();
     const ndc = new THREE.Vector2(
       ((screenX - rect.left) / Math.max(1, rect.width)) * 2 - 1,
-      -((screenY - rect.top) / Math.max(1, rect.height)) * 2 + 1,
+      -((screenY - rect.top) / Math.max(1, rect.height)) * 2 + 1
     );
     const pos = this._raycastGround(ndc);
     return pos ? { x: pos.x, y: 0, z: pos.z } : null;

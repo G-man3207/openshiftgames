@@ -14,20 +14,20 @@ Method note: the redhat.com exam page and docs.redhat.com render their bodies wi
 
 ## 1. Exam facts
 
-| Fact | Value |
-|---|---|
-| Exam code (current version) | **EX280V422** |
-| Family code | EX280 / EX280K |
-| Exam name (LMS objectives PDF) | **Red Hat Certified Specialist in OpenShift Administration** |
-| Exam name (redhat.com page title) | Red Hat Certified System Administrator in OpenShift exam (EX280) |
-| Product/version tested | **Red Hat OpenShift Container Platform 4.22** |
-| Delivery | Hands-on, performance-based practical exam on a live 4.22 system |
-| Time limit | **3.0 hours** |
-| Documentation during exam | Relevant product documentation is provided; no outside assistance |
-| Results | Emailed by Red Hat Certification Central, usually within 3 U.S. business days; **total score only**, no per-item feedback |
-| Version policy | Multiple versions in use; review your designated version in the LMS |
-| Performance rule | Configurations and services must persist and stay functional across the normal platform lifecycle without manual intervention; LMS PDF: "configurations must persist after reboot without intervention" |
-| Recommended prep | RH124 or equivalent; RHCSA strongly recommended (not required); DO180; DO280; container experience recommended |
+| Fact                              | Value                                                                                                                                                                                                   |
+| --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Exam code (current version)       | **EX280V422**                                                                                                                                                                                           |
+| Family code                       | EX280 / EX280K                                                                                                                                                                                          |
+| Exam name (LMS objectives PDF)    | **Red Hat Certified Specialist in OpenShift Administration**                                                                                                                                            |
+| Exam name (redhat.com page title) | Red Hat Certified System Administrator in OpenShift exam (EX280)                                                                                                                                        |
+| Product/version tested            | **Red Hat OpenShift Container Platform 4.22**                                                                                                                                                           |
+| Delivery                          | Hands-on, performance-based practical exam on a live 4.22 system                                                                                                                                        |
+| Time limit                        | **3.0 hours**                                                                                                                                                                                           |
+| Documentation during exam         | Relevant product documentation is provided; no outside assistance                                                                                                                                       |
+| Results                           | Emailed by Red Hat Certification Central, usually within 3 U.S. business days; **total score only**, no per-item feedback                                                                               |
+| Version policy                    | Multiple versions in use; review your designated version in the LMS                                                                                                                                     |
+| Performance rule                  | Configurations and services must persist and stay functional across the normal platform lifecycle without manual intervention; LMS PDF: "configurations must persist after reboot without intervention" |
+| Recommended prep                  | RH124 or equivalent; RHCSA strongly recommended (not required); DO180; DO280; container experience recommended                                                                                          |
 
 **Naming conflict (flagged):** the live exam page still brands the credential "Red Hat Certified System Administrator in OpenShift" and says passing "counts towards earning a Red Hat Certified Architect in OpenShift", while the LMS objectives PDF lists `EX280K - Red Hat Certified Specialist in OpenShift Administration`, matching what the Lead reported as the rename. Both sources contain the identical `EX280V422` objective list. The game should use one name consistently; this guide uses "Red Hat Certified Specialist in OpenShift Administration (EX280V422)" per the Lead's direction and flags the discrepancy instead of silently harmonizing it.
 
@@ -41,7 +41,7 @@ Method note: the redhat.com exam page and docs.redhat.com render their bodies wi
 - Review the exam objectives.
 - Experience with container technology is recommended.
 
-The DO280 title printed on the exam page is *Operating a Production Kubernetes Cluster*. The redhat.com DO280 course page returned **HTTP 404** on 2026-11-03, so a current official course outline could not be verified. A partner-hosted DO280LS outline (based on OCP 4.14) confirms the same chapter structure as the V422 groups but still includes an "OpenShift Updates" chapter that the V422 exam dropped — treat it as secondary and possibly stale.
+The DO280 title printed on the exam page is _Operating a Production Kubernetes Cluster_. The redhat.com DO280 course page returned **HTTP 404** on 2026-11-03, so a current official course outline could not be verified. A partner-hosted DO280LS outline (based on OCP 4.14) confirms the same chapter structure as the V422 groups but still includes an "OpenShift Updates" chapter that the V422 exam dropped — treat it as secondary and possibly stale.
 
 **Retired/superseded versions (from LMS PDF):** `EX280V410K`, `EX280V45K`, `EX280V46K` are retired; `EX280V412K`, `EX280V414K` are older versions still listed. **`EX280V422` is current.** The old V412K/V414K objectives differ materially (see §5) — do not build curriculum from them.
 
@@ -166,7 +166,7 @@ Docs: Authentication and authorization (incl. SCC + service accounts) <https://d
 3. **Service-account tokens changed in 4.16.** No automatically created long-lived API token Secret for new SAs. Use `oc create token <sa>` (bound token, default expiry) or projected `serviceAccountToken` volumes. Existing long-lived tokens keep working.
 4. **SCCs are still enforced in 4.22, and `restricted-v2` is the documented default for authenticated users.** The 4.22 docs table also describes `restricted-v3` as the most restrictive new-install SCC that "will be used by default for authenticated users" — verify the actual default on the target cluster with `oc get scc` / `oc adm policy who-can use scc restricted-v3`. `privileged` is never granted by default; "Run privileged applications" = grant the appropriate SCC (`privileged` for `privileged: true`, `anyuid` for arbitrary UIDs) to the workload's service account (or a custom SCC), not just set `privileged: true`.
 5. **Kustomize and Helm are explicit bullets in V422 (not brand-new themes).** The LMS PDF's V412K/V414K section already names "Use Kustomize overlays to modify application configurations" and "Deploy applications from images, OpenShift templates, and Helm charts"; V422 splits these into the explicit "Deploy applications using Kustomize", "Work with Kustomize overlays" and "Deploy applications from templates and Helm charts" bullets. OCP product docs coverage of Kustomize remains thin (CLI help for `oc apply -k`/`oc kustomize`; MicroShift job doc), so rely on DO280-style hands-on practice.
-6. **Old sections are gone from V422.** V412K had *Manage storage for application configuration and data* (PV/PVC/storage classes/StatefulSets) and *Configure applications for reliability* (probes/limits/scaling); V414K had *Update OpenShift* (cluster updates/deprecated APIs/operator updates). None is a separate V422 objective. Do not spend primary study time there; keep only what naturally appears in manifests (e.g. a PVC in a template, probes inside a Deployment).
+6. **Old sections are gone from V422.** V412K had _Manage storage for application configuration and data_ (PV/PVC/storage classes/StatefulSets) and _Configure applications for reliability_ (probes/limits/scaling); V414K had _Update OpenShift_ (cluster updates/deprecated APIs/operator updates). None is a separate V422 objective. Do not spend primary study time there; keep only what naturally appears in manifests (e.g. a PVC in a template, probes inside a Deployment).
 7. **MetalLB/Multus sentence from V412K is gone.** V422 instead says "Configure a load balancer service" + "Configure external application access". You still need MetalLB knowledge to make `type: LoadBalancer` work on bare-metal/on-prem clusters, but do not assume the exam asks you to configure BGP/VRF.
 8. **Project templates are opt-in.** A fresh 4.22 cluster stores no project template; the API server synthesises a default unless `project.config.openshift.io/cluster` sets `spec.projectRequestTemplate.name`. Create a custom one by generating `oc adm create-bootstrap-project-template -o yaml`, editing it, creating it in `openshift-config`, and wiring it through the project-config singleton.
 9. **Route admission policy:** cross-namespace hostname claims are disabled by default; set `IngressController` `.spec.routeAdmission.namespaceOwnership` via `oc -n openshift-ingress-operator patch ingresscontroller/default ...`.
@@ -176,13 +176,13 @@ Docs: Authentication and authorization (incl. SCC + service accounts) <https://d
 
 From the LMS PDF's version sections:
 
-| V412K/V414K sections not in V422 | V422 sections that are new/changed |
-|---|---|
+| V412K/V414K sections not in V422                                                                               | V422 sections that are new/changed                                                                                                                                                   |
+| -------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | Manage storage for application configuration and data (secrets, configmaps, PV, storage classes, StatefulSets) | **Declarative Resource Management** (manifests, Kustomize base + overlays, secrets, config maps) — Kustomize/Helm were already named in V412K/V414K, now split into explicit bullets |
-| Configure applications for reliability (health probes, compute limits, scaling) | **Deploy applications** explicitly includes templates **and Helm charts**, replica sets, labels/selectors, services |
-| Manage application updates (image tags/digests, rollbacks, image streams, triggers) | Image tags/digests moved into **Manage OpenShift Container Platform**; rollbacks folded into "Manage application deployments" |
-| Update OpenShift (cluster updates, deprecated API usage, operator updates) | **No update objective** in V422 |
-| "Work with operators such as MetalLB and Multus" | Replaced by explicit **Expose non-HTTP/SNI Applications** group (LB service + external access) |
+| Configure applications for reliability (health probes, compute limits, scaling)                                | **Deploy applications** explicitly includes templates **and Helm charts**, replica sets, labels/selectors, services                                                                  |
+| Manage application updates (image tags/digests, rollbacks, image streams, triggers)                            | Image tags/digests moved into **Manage OpenShift Container Platform**; rollbacks folded into "Manage application deployments"                                                        |
+| Update OpenShift (cluster updates, deprecated API usage, operator updates)                                     | **No update objective** in V422                                                                                                                                                      |
+| "Work with operators such as MetalLB and Multus"                                                               | Replaced by explicit **Expose non-HTTP/SNI Applications** group (LB service + external access)                                                                                       |
 
 Also in V422, **service accounts**, **application access to Kubernetes APIs**, **jobs and CronJobs** are explicit bullets under Configure application security. The LMS PDF's V412K/V414K section already contained "Configure and manage service accounts", "Configure application access to Kubernetes APIs", "Configure Kubernetes cron jobs" and "Deploy jobs to perform one-time tasks" — V422 re-groups and re-words them rather than introducing them.
 
@@ -190,28 +190,28 @@ Also in V422, **service accounts**, **application access to Kubernetes APIs**, *
 
 All URLs below were fetched and returned HTTP 200 on 2026-11-03 unless marked "(guide index)".
 
-| Topic | URL |
-|---|---|
-| OCP 4.22 doc home | https://docs.redhat.com/en/documentation/openshift_container_platform/4.22 |
-| CLI tools / CLI reference | https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/cli_tools/index |
-| Web console | https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/web_console/index |
-| Authentication and authorization | https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/authentication_and_authorization/index |
-| RBAC chapter | https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/authentication_and_authorization/using-rbac |
-| Service accounts chapter | https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/authentication_and_authorization/understanding-and-creating-service-accounts |
-| Network security | https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/network_security/index |
-| Network policy chapter | https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/network_security/network-policy |
-| Ingress and load balancing | https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/ingress_and_load_balancing/index |
-| Routes chapter | https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/ingress_and_load_balancing/routes |
-| Building applications | https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/building_applications/index |
-| Images | https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/images/index |
-| Managing image streams chapter | https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/images/managing-image-streams |
-| Nodes | https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/nodes/index |
-| Operators | https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/operators/index |
-| Monitoring | https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/monitoring/index |
-| Using quotas and limit ranges chapter | https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/scalability_and_performance/compute-resource-quotas |
-| Exam objectives by version PDF (LMS) | https://training-lms.redhat.com/public_content/redhat/training/Red%20Hat%20Certification%20Exam%20Objectives%20by%20Version.pdf |
-| Official exam page | https://www.redhat.com/en/services/training/red-hat-certified-openshift-administrator-exam |
-| Red Hat Certification Program Guide | https://docs.redhat.com/en/documentation/red_hat_learning_subscription/1-latest/html/red_hat_certification_program_guide/index |
+| Topic                                 | URL                                                                                                                                                          |
+| ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| OCP 4.22 doc home                     | https://docs.redhat.com/en/documentation/openshift_container_platform/4.22                                                                                   |
+| CLI tools / CLI reference             | https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/cli_tools/index                                                              |
+| Web console                           | https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/web_console/index                                                            |
+| Authentication and authorization      | https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/authentication_and_authorization/index                                       |
+| RBAC chapter                          | https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/authentication_and_authorization/using-rbac                                  |
+| Service accounts chapter              | https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/authentication_and_authorization/understanding-and-creating-service-accounts |
+| Network security                      | https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/network_security/index                                                       |
+| Network policy chapter                | https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/network_security/network-policy                                              |
+| Ingress and load balancing            | https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/ingress_and_load_balancing/index                                             |
+| Routes chapter                        | https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/ingress_and_load_balancing/routes                                            |
+| Building applications                 | https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/building_applications/index                                                  |
+| Images                                | https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/images/index                                                                 |
+| Managing image streams chapter        | https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/images/managing-image-streams                                                |
+| Nodes                                 | https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/nodes/index                                                                  |
+| Operators                             | https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/operators/index                                                              |
+| Monitoring                            | https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/monitoring/index                                                             |
+| Using quotas and limit ranges chapter | https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/scalability_and_performance/compute-resource-quotas                          |
+| Exam objectives by version PDF (LMS)  | https://training-lms.redhat.com/public_content/redhat/training/Red%20Hat%20Certification%20Exam%20Objectives%20by%20Version.pdf                              |
+| Official exam page                    | https://www.redhat.com/en/services/training/red-hat-certified-openshift-administrator-exam                                                                   |
+| Red Hat Certification Program Guide   | https://docs.redhat.com/en/documentation/red_hat_learning_subscription/1-latest/html/red_hat_certification_program_guide/index                               |
 
 ## 7. Gaps and unverifiable claims
 

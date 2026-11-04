@@ -32,13 +32,48 @@
 
 /** Shell commands recognised without the `oc ` prefix (completion + dispatch). */
 export const SHELL_COMMANDS = [
-  'cat', 'echo', 'grep', 'tail', 'head', 'wc', 'vim', 'vi', 'sort', 'uniq', 'cut', 'tr',
-  'sed', 'ls', 'rm', 'cp', 'mv', 'touch', 'pwd', 'which', 'env', 'printenv', 'openssl',
-  'skopeo', 'htpasswd', 'clear', 'exit',
+  'cat',
+  'echo',
+  'grep',
+  'tail',
+  'head',
+  'wc',
+  'vim',
+  'vi',
+  'sort',
+  'uniq',
+  'cut',
+  'tr',
+  'sed',
+  'ls',
+  'rm',
+  'cp',
+  'mv',
+  'touch',
+  'pwd',
+  'which',
+  'env',
+  'printenv',
+  'openssl',
+  'skopeo',
+  'htpasswd',
+  'clear',
+  'exit',
 ];
 
 /** Commands that take file paths (Tab completion / suggestion hints). */
-export const SHELL_FILE_COMMANDS = new Set(['cat', 'vim', 'vi', 'head', 'tail', 'wc', 'grep', 'sed', 'rm', 'source']);
+export const SHELL_FILE_COMMANDS = new Set([
+  'cat',
+  'vim',
+  'vi',
+  'head',
+  'tail',
+  'wc',
+  'grep',
+  'sed',
+  'rm',
+  'source',
+]);
 
 const SHELL_COMMAND_SET = new Set(SHELL_COMMANDS);
 
@@ -163,7 +198,10 @@ function parseSedScript(script) {
       try {
         regex = new RegExp(patternSource, flagsText.includes('i') ? 'i' : '');
       } catch {
-        regex = new RegExp(patternSource.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), flagsText.includes('i') ? 'i' : '');
+        regex = new RegExp(
+          patternSource.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'),
+          flagsText.includes('i') ? 'i' : ''
+        );
       }
       commands.push({
         type: 'substitute',
@@ -175,7 +213,9 @@ function parseSedScript(script) {
       });
       continue;
     }
-    throw new Error(`unsupported command "${command}" (simulator supports: sed -n 'A,Bp', sed 's/foo/bar/')`);
+    throw new Error(
+      `unsupported command "${command}" (simulator supports: sed -n 'A,Bp', sed 's/foo/bar/')`
+    );
   }
   if (!commands.length) throw new Error('no script specified');
   return commands;
@@ -276,7 +316,9 @@ export class ShellTools {
 
   _listFiles(path = '') {
     const files = this.bar._manifestFileList();
-    const prefix = String(path || '').replace(/^\.\/+/, '').replace(/\/+$/, '');
+    const prefix = String(path || '')
+      .replace(/^\.\/+/, '')
+      .replace(/\/+$/, '');
     if (!prefix || prefix === '.') return files;
     return files.filter((file) => file === prefix || file.startsWith(`${prefix}/`));
   }
@@ -331,7 +373,11 @@ export class ShellTools {
         let end = lines.findIndex((line) => line.replace(/^\t+/, '').trimEnd() === delimiter);
         if (end < 0) end = lines.length;
         const bodyLines = lines.slice(0, end);
-        const command = header.replace(/<<-?\s*(['"]?)[A-Za-z_][A-Za-z0-9_]*\1/, ' ').replace(/\s{2,}/g, ' ').trim() || 'cat';
+        const command =
+          header
+            .replace(/<<-?\s*(['"]?)[A-Za-z_][A-Za-z0-9_]*\1/, ' ')
+            .replace(/\s{2,}/g, ' ')
+            .trim() || 'cat';
         return {
           command,
           stdin: `${bodyLines.join('\n')}\n`,
@@ -357,7 +403,11 @@ export class ShellTools {
       return { error: true, message: `bash: ${name}: command not found` };
     }
     try {
-      const result = handler.call(this, args, stdin === null || stdin === undefined ? null : String(stdin)) || { error: false, message: '' };
+      const result = handler.call(
+        this,
+        args,
+        stdin === null || stdin === undefined ? null : String(stdin)
+      ) || { error: false, message: '' };
       this.lastExitCode = result.error ? 1 : 0;
       return result;
     } catch (error) {
@@ -404,7 +454,8 @@ export class ShellTools {
       }
       const content = this._readFile(file);
       if (content === null) {
-        if (this._listFiles(file).length && file.endsWith('/')) return this._err(`cat: ${file}: Is a directory`);
+        if (this._listFiles(file).length && file.endsWith('/'))
+          return this._err(`cat: ${file}: Is a directory`);
         return this._err(`cat: ${file}: No such file or directory`);
       }
       chunks.push(content);
@@ -426,10 +477,7 @@ export class ShellTools {
     }
     let text = words.join(' ');
     if (interpret) {
-      text = text
-        .replace(/\\n/g, '\n')
-        .replace(/\\t/g, '\t')
-        .replace(/\\\\/g, '\\');
+      text = text.replace(/\\n/g, '\n').replace(/\\t/g, '\t').replace(/\\\\/g, '\\');
     }
     if (stdin !== null && stdin !== '') text = words.length ? `${text}\n${stdin}` : stdin;
     return this._ok(newline ? `${text}\n` : text);
@@ -439,9 +487,14 @@ export class ShellTools {
 
   _cmd_grep(args, stdin) {
     const flags = {
-      ignoreCase: false, invert: false, lineNumbers: false, count: false,
-      filesWithMatches: false, onlyMatching: false,
-      after: 0, before: 0,
+      ignoreCase: false,
+      invert: false,
+      lineNumbers: false,
+      count: false,
+      filesWithMatches: false,
+      onlyMatching: false,
+      after: 0,
+      before: 0,
     };
     let pattern = null;
     let fromPatternFlag = false;
@@ -466,7 +519,19 @@ export class ShellTools {
           const char = rest[0];
           if (char === 'A' || char === 'B' || char === 'C') {
             const attached = rest.slice(1);
-            const setter = char === 'A' ? (value) => { flags.after = value; } : char === 'B' ? (value) => { flags.before = value; } : (value) => { flags.after = value; flags.before = value; };
+            const setter =
+              char === 'A'
+                ? (value) => {
+                    flags.after = value;
+                  }
+                : char === 'B'
+                  ? (value) => {
+                      flags.before = value;
+                    }
+                  : (value) => {
+                      flags.after = value;
+                      flags.before = value;
+                    };
             if (attached) {
               parseContext(attached, setter);
               rest = '';
@@ -499,12 +564,16 @@ export class ShellTools {
       }
       files.push(arg);
     }
-    if (pattern === null) return this._err('usage: grep [-ivnc] [-A num] [-B num] [-C num] pattern [file ...]');
+    if (pattern === null)
+      return this._err('usage: grep [-ivnc] [-A num] [-B num] [-C num] pattern [file ...]');
     let matcher;
     try {
       matcher = new RegExp(pattern, flags.ignoreCase ? 'i' : '');
     } catch {
-      matcher = new RegExp(pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), flags.ignoreCase ? 'i' : '');
+      matcher = new RegExp(
+        pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'),
+        flags.ignoreCase ? 'i' : ''
+      );
     }
     const hasContext = flags.after > 0 || flags.before > 0;
     const sources = files.length
@@ -513,7 +582,8 @@ export class ShellTools {
     const output = [];
     let matchedAny = false;
     for (const source of sources) {
-      if (source.content === null) return this._err(`grep: ${source.label}: No such file or directory`);
+      if (source.content === null)
+        return this._err(`grep: ${source.label}: No such file or directory`);
       const lines = String(source.content).split('\n');
       if (lines.length && lines[lines.length - 1] === '') lines.pop();
       const matchedIndexes = [];
@@ -527,7 +597,11 @@ export class ShellTools {
         continue;
       }
       if (flags.count) {
-        output.push(sources.length > 1 && source.label ? `${source.label}:${matchedIndexes.length}` : String(matchedIndexes.length));
+        output.push(
+          sources.length > 1 && source.label
+            ? `${source.label}:${matchedIndexes.length}`
+            : String(matchedIndexes.length)
+        );
         continue;
       }
       const multiFilePrefix = sources.length > 1 && source.label ? `${source.label}:` : '';
@@ -536,7 +610,9 @@ export class ShellTools {
           const line = lines[index];
           const prefix = `${multiFilePrefix}${flags.lineNumbers ? `${index + 1}:` : ''}`;
           if (flags.onlyMatching) {
-            const matches = [...line.matchAll(new RegExp(matcher.source, flags.ignoreCase ? 'gi' : 'g'))].map((entry) => entry[0]);
+            const matches = [
+              ...line.matchAll(new RegExp(matcher.source, flags.ignoreCase ? 'gi' : 'g')),
+            ].map((entry) => entry[0]);
             for (const value of matches) output.push(`${prefix}${value}`);
           } else {
             output.push(`${prefix}${line}`);
@@ -561,7 +637,8 @@ export class ShellTools {
         previous = index;
       }
     }
-    if ((flags.count || flags.filesWithMatches) && output.length) return this._ok(output.join('\n'));
+    if ((flags.count || flags.filesWithMatches) && output.length)
+      return this._ok(output.join('\n'));
     if (!matchedAny) this.lastExitCode = 1;
     return this._ok(output.join('\n'));
   }
@@ -607,7 +684,8 @@ export class ShellTools {
     const out = [];
     for (const file of positional) {
       const content = this._readFile(file);
-      if (content === null) return this._err(`${name}: cannot open '${file}' for reading: No such file or directory`);
+      if (content === null)
+        return this._err(`${name}: cannot open '${file}' for reading: No such file or directory`);
       if (positional.length > 1) out.push(`==> ${file} <==`);
       out.push(run(content));
       if (positional.length > 1) out.push('');
@@ -616,19 +694,29 @@ export class ShellTools {
   }
 
   _cmd_wc(args, stdin) {
-    const flags = new Set(args.filter((arg) => /^-[lwc]+$/.test(arg)).flatMap((arg) => arg.slice(1).split('')));
+    const flags = new Set(
+      args.filter((arg) => /^-[lwc]+$/.test(arg)).flatMap((arg) => arg.slice(1).split(''))
+    );
     const files = args.filter((arg) => !arg.startsWith('-'));
     const countsFor = (content) => {
       const text = String(content ?? '');
       return {
-        l: text === '' ? 0 : text.split('\n').filter((line, index, list) => !(index === list.length - 1 && line === '')).length,
+        l:
+          text === ''
+            ? 0
+            : text
+                .split('\n')
+                .filter((line, index, list) => !(index === list.length - 1 && line === '')).length,
         w: countWords(text),
         c: text.length,
       };
     };
     const format = (counts) => {
       if (flags.size) {
-        return [...flags].sort().map((flag) => counts[flag]).join(' ');
+        return [...flags]
+          .sort()
+          .map((flag) => counts[flag])
+          .join(' ');
       }
       return `${counts.l} ${counts.w} ${counts.c}`;
     };
@@ -653,10 +741,21 @@ export class ShellTools {
     const reverse = args.includes('-r');
     const unique = args.includes('-u');
     const files = args.filter((arg) => !arg.startsWith('-'));
-    const input = files.length ? files.map((file) => this._readFile(file)).filter((text) => text !== null).join('\n') : stdin === null ? '' : stdin;
+    const input = files.length
+      ? files
+          .map((file) => this._readFile(file))
+          .filter((text) => text !== null)
+          .join('\n')
+      : stdin === null
+        ? ''
+        : stdin;
     let lines = String(input).split('\n');
     if (lines.length && lines[lines.length - 1] === '') lines.pop();
-    lines.sort((left, right) => (numeric ? Number.parseFloat(left) - Number.parseFloat(right) : String(left).localeCompare(String(right))));
+    lines.sort((left, right) =>
+      numeric
+        ? Number.parseFloat(left) - Number.parseFloat(right)
+        : String(left).localeCompare(String(right))
+    );
     if (reverse) lines.reverse();
     if (unique) lines = lines.filter((line, index) => index === 0 || line !== lines[index - 1]);
     return this._ok(lines.join('\n'));
@@ -672,7 +771,11 @@ export class ShellTools {
       if (count && last && last.line === line) last.n += 1;
       else out.push({ line, n: 1 });
     }
-    return this._ok(out.map((entry) => (count ? `${String(entry.n).padStart(7)} ${entry.line}` : entry.line)).join('\n'));
+    return this._ok(
+      out
+        .map((entry) => (count ? `${String(entry.n).padStart(7)} ${entry.line}` : entry.line))
+        .join('\n')
+    );
   }
 
   _cmd_cut(args, stdin) {
@@ -689,17 +792,27 @@ export class ShellTools {
         continue;
       }
       if (arg === '-f' || arg === '--fields') {
-        fields = String(args[++i] ?? '1').split(',').map((value) => Number.parseInt(value, 10) - 1);
+        fields = String(args[++i] ?? '1')
+          .split(',')
+          .map((value) => Number.parseInt(value, 10) - 1);
         continue;
       }
       if (arg.startsWith('-f') && arg.length > 2) {
-        fields = arg.slice(2).split(',').map((value) => Number.parseInt(value, 10) - 1);
+        fields = arg
+          .slice(2)
+          .split(',')
+          .map((value) => Number.parseInt(value, 10) - 1);
       }
     }
     if (!fields.length) fields = [0];
     const lines = String(stdin === null ? '' : stdin).split('\n');
     if (lines.length && lines[lines.length - 1] === '') lines.pop();
-    const out = lines.map((line) => line.split(delimiter).filter((value, index) => fields.includes(index)).join(delimiter));
+    const out = lines.map((line) =>
+      line
+        .split(delimiter)
+        .filter((value, index) => fields.includes(index))
+        .join(delimiter)
+    );
     return this._ok(out.join('\n'));
   }
 
@@ -711,7 +824,8 @@ export class ShellTools {
       const chars = [];
       for (let i = 0; i < set.length; i += 1) {
         if (set[i + 1] === '-' && i + 2 < set.length) {
-          for (let code = set.charCodeAt(i); code <= set.charCodeAt(i + 2); code += 1) chars.push(String.fromCharCode(code));
+          for (let code = set.charCodeAt(i); code <= set.charCodeAt(i + 2); code += 1)
+            chars.push(String.fromCharCode(code));
           i += 2;
         } else {
           chars.push(set[i]);
@@ -724,7 +838,7 @@ export class ShellTools {
     let out = '';
     for (const char of input) {
       const index = fromChars.indexOf(char);
-      out += index >= 0 ? toChars[index] ?? toChars[toChars.length - 1] ?? char : char;
+      out += index >= 0 ? (toChars[index] ?? toChars[toChars.length - 1] ?? char) : char;
     }
     return this._ok(out);
   }
@@ -756,7 +870,9 @@ export class ShellTools {
         break;
       }
       if (arg.startsWith('-') && arg !== '-') {
-        return this._err(`sed: unsupported option '${arg}' (simulator supports: sed [-n] [-e script] [script] [file ...])`);
+        return this._err(
+          `sed: unsupported option '${arg}' (simulator supports: sed [-n] [-e script] [script] [file ...])`
+        );
       }
       if (!scripts.length && !files.length) scripts.push(arg);
       else files.push(arg);
@@ -772,7 +888,8 @@ export class ShellTools {
       const chunks = [];
       for (const file of files) {
         const content = this._readFile(file);
-        if (content === null) return this._err(`sed: can't read ${file}: No such file or directory`);
+        if (content === null)
+          return this._err(`sed: can't read ${file}: No such file or directory`);
         chunks.push(content);
       }
       input = chunks.join('\n');
@@ -801,7 +918,9 @@ export class ShellTools {
         }
         if (command.type === 'substitute') {
           const global = command.global === true;
-          const regex = global ? new RegExp(command.regex.source, `${command.regex.flags.replace('g', '')}g`) : command.regex;
+          const regex = global
+            ? new RegExp(command.regex.source, `${command.regex.flags.replace('g', '')}g`)
+            : command.regex;
           pattern = pattern.replace(regex, sedReplacementString(command.replacement));
           if (command.printAfter && applies) output.push(pattern);
         }
@@ -827,16 +946,22 @@ export class ShellTools {
     if (!path) {
       if (panel && typeof panel.show === 'function') {
         panel.show();
-        return this._ok('Opening the Files panel (manifest editor). Use `vim <file>` to edit a specific manifest.');
+        return this._ok(
+          'Opening the Files panel (manifest editor). Use `vim <file>` to edit a specific manifest.'
+        );
       }
       return this._err('vim: the manifest editor is not available in this build');
     }
     if (!this._fileExists(path)) this._writeFile(path, '');
     if (panel && typeof panel.openFile === 'function') {
       panel.openFile(path);
-      return this._ok(`Opening ${path} in the Files panel (manifest editor).\nSave (Ctrl+S) to write the file, then apply it with \`oc apply -f ${path}\`.`);
+      return this._ok(
+        `Opening ${path} in the Files panel (manifest editor).\nSave (Ctrl+S) to write the file, then apply it with \`oc apply -f ${path}\`.`
+      );
     }
-    return this._ok(`${path}\n(On a real cluster vim opens this file in the terminal; this simulator opens the Files panel when available.)`);
+    return this._ok(
+      `${path}\n(On a real cluster vim opens this file in the terminal; this simulator opens the Files panel when available.)`
+    );
   }
 
   _cmd_ls(args, stdin) {
@@ -859,7 +984,8 @@ export class ShellTools {
         if (!force) errors.push(`rm: cannot remove '${file}': No such file or directory`);
         continue;
       }
-      if (typeof this.bar.manifestEngine?.deleteFile === 'function') this.bar.manifestEngine.deleteFile(file);
+      if (typeof this.bar.manifestEngine?.deleteFile === 'function')
+        this.bar.manifestEngine.deleteFile(file);
       this._refreshFilesPanel();
     }
     if (errors.length) return this._err(errors.join('\n'));
@@ -880,7 +1006,8 @@ export class ShellTools {
     if (files.length !== 2) return this._err('cp: missing destination file operand after source');
     const [source, destination] = files;
     const content = this._readFile(source);
-    if (content === null) return this._err(`cp: cannot stat '${source}': No such file or directory`);
+    if (content === null)
+      return this._err(`cp: cannot stat '${source}': No such file or directory`);
     this._writeFile(destination, content);
     return this._ok('');
   }
@@ -890,9 +1017,11 @@ export class ShellTools {
     if (files.length !== 2) return this._err('mv: missing destination file operand after source');
     const [source, destination] = files;
     const content = this._readFile(source);
-    if (content === null) return this._err(`mv: cannot stat '${source}': No such file or directory`);
+    if (content === null)
+      return this._err(`mv: cannot stat '${source}': No such file or directory`);
     this._writeFile(destination, content);
-    if (typeof this.bar.manifestEngine?.deleteFile === 'function') this.bar.manifestEngine.deleteFile(source);
+    if (typeof this.bar.manifestEngine?.deleteFile === 'function')
+      this.bar.manifestEngine.deleteFile(source);
     this._refreshFilesPanel();
     return this._ok('');
   }
@@ -909,7 +1038,7 @@ export class ShellTools {
           if (this.isShellLead(name) || name === 'oc') return `/usr/bin/${name}`;
           return `which: no ${name} in (/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin)`;
         })
-        .join('\n'),
+        .join('\n')
     );
   }
 
@@ -921,7 +1050,7 @@ export class ShellTools {
         `USER=${this.bar?.currentUser || 'kubeadmin'}`,
         'KUBECONFIG=/home/student/.kube/config',
         'SHELL=/bin/bash',
-      ].join('\n'),
+      ].join('\n')
     );
   }
 
@@ -934,7 +1063,9 @@ export class ShellTools {
   _cmd_openssl(args, stdin) {
     const sub = String(args[0] || '').toLowerCase();
     if (sub !== 'rand') {
-      return this._err(`openssl: unsupported subcommand "${sub || ''}" (simulator supports: openssl rand -hex|-base64 <n>)`);
+      return this._err(
+        `openssl: unsupported subcommand "${sub || ''}" (simulator supports: openssl rand -hex|-base64 <n>)`
+      );
     }
     let mode = 'hex';
     let length = 16;
@@ -948,12 +1079,14 @@ export class ShellTools {
     while (output.length < length * (mode === 'hex' ? 2 : 2)) {
       const seed = `${Date.now()}-${counter++}-${Math.random()}`;
       let hash = 0x811c9dc5;
-      for (let i = 0; i < seed.length; i += 1) hash = Math.imul(hash ^ seed.charCodeAt(i), 0x01000193) >>> 0;
+      for (let i = 0; i < seed.length; i += 1)
+        hash = Math.imul(hash ^ seed.charCodeAt(i), 0x01000193) >>> 0;
       output += hash.toString(16).padStart(8, '0');
     }
     if (mode === 'hex') return this._ok(output.slice(0, length * 2));
     const bytes = [];
-    for (let i = 0; i < output.length; i += 2) bytes.push(Number.parseInt(output.slice(i, i + 2), 16));
+    for (let i = 0; i < output.length; i += 2)
+      bytes.push(Number.parseInt(output.slice(i, i + 2), 16));
     const base =
       typeof Buffer !== 'undefined'
         ? Buffer.from(bytes).toString('base64')
@@ -968,7 +1101,9 @@ export class ShellTools {
   _cmd_skopeo(args, stdin) {
     const sub = String(args[0] || '').toLowerCase();
     if (sub !== 'inspect') {
-      return this._err(`FATA[0000] skopeo: unsupported command "${sub || ''}" (simulator supports: skopeo inspect [--format=...] docker://<image>)`);
+      return this._err(
+        `FATA[0000] skopeo: unsupported command "${sub || ''}" (simulator supports: skopeo inspect [--format=...] docker://<image>)`
+      );
     }
     let format = null;
     const positionals = [];
@@ -987,7 +1122,9 @@ export class ShellTools {
     }
     const reference = positionals[0];
     if (!reference) return this._err('FATA[0000] skopeo inspect: no image name given');
-    const bare = String(reference).replace(/^docker:\/\//, '').replace(/^oci:\/\//, '');
+    const bare = String(reference)
+      .replace(/^docker:\/\//, '')
+      .replace(/^oci:\/\//, '');
     const info = this.bar._imageInfoFor(bare, this.bar.currentProject);
     const tag = bare.includes(':') ? bare.split(':').pop() : 'latest';
     const inspect = {
@@ -1014,7 +1151,8 @@ export class ShellTools {
 
   _cmd_htpasswd(args, stdin) {
     const result = this.bar._cmdHtpasswd(args);
-    if (result && typeof result === 'object') return { error: Boolean(result.error), message: String(result.message ?? '') };
+    if (result && typeof result === 'object')
+      return { error: Boolean(result.error), message: String(result.message ?? '') };
     return this._ok(String(result ?? ''));
   }
 

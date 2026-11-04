@@ -77,16 +77,19 @@ function project(name, displayName = name) {
   };
 }
 
-function deployment(name, {
-  namespace = 'default',
-  replicas = 2,
-  image = DEFAULT_IMAGE,
-  app = name,
-  labels = {},
-  containerPort = 8080,
-  securityContext = null,
-  serviceAccountName = null,
-} = {}) {
+function deployment(
+  name,
+  {
+    namespace = 'default',
+    replicas = 2,
+    image = DEFAULT_IMAGE,
+    app = name,
+    labels = {},
+    containerPort = 8080,
+    securityContext = null,
+    serviceAccountName = null,
+  } = {}
+) {
   const container = {
     name: 'main',
     image,
@@ -115,14 +118,17 @@ function deployment(name, {
   };
 }
 
-function service(name, {
-  namespace = 'default',
-  app = name,
-  selector = null,
-  port = 8080,
-  targetPort = 8080,
-  type = 'ClusterIP',
-} = {}) {
+function service(
+  name,
+  {
+    namespace = 'default',
+    app = name,
+    selector = null,
+    port = 8080,
+    targetPort = 8080,
+    type = 'ClusterIP',
+  } = {}
+) {
   return {
     kind: 'Service',
     name,
@@ -136,14 +142,17 @@ function service(name, {
   };
 }
 
-function route(name, {
-  namespace = 'default',
-  serviceName = name,
-  host = '',
-  path = '/',
-  termination = 'edge',
-  insecureEdgeTerminationPolicy = 'Redirect',
-} = {}) {
+function route(
+  name,
+  {
+    namespace = 'default',
+    serviceName = name,
+    host = '',
+    path = '/',
+    termination = 'edge',
+    insecureEdgeTerminationPolicy = 'Redirect',
+  } = {}
+) {
   const spec = {
     host,
     path,
@@ -344,13 +353,54 @@ const CHALLENGES = [
     objectives: [
       { type: 'project', name: 'frontend', label: 'Create project frontend' },
       { type: 'project', name: 'backend', label: 'Create project backend' },
-      { type: 'deploy', kind: 'Deployment', name: 'frontend', namespace: 'frontend', label: 'Deploy frontend in project frontend' },
-      { type: 'deploy', kind: 'Deployment', name: 'backend', namespace: 'backend', label: 'Deploy backend in project backend' },
-      { type: 'deploy', kind: 'Deployment', name: 'database', namespace: 'backend', label: 'Deploy database tier in project backend' },
-      { type: 'deploy', kind: 'Service', name: 'frontend', namespace: 'frontend', label: 'Create Service frontend' },
-      { type: 'deploy', kind: 'Service', name: 'backend', namespace: 'backend', label: 'Create Service backend' },
-      { type: 'deploy', kind: 'Service', name: 'database', namespace: 'backend', label: 'Create Service database' },
-      { type: 'route', name: 'frontend', service: 'frontend', label: 'Expose the frontend with an admitted Route' },
+      {
+        type: 'deploy',
+        kind: 'Deployment',
+        name: 'frontend',
+        namespace: 'frontend',
+        label: 'Deploy frontend in project frontend',
+      },
+      {
+        type: 'deploy',
+        kind: 'Deployment',
+        name: 'backend',
+        namespace: 'backend',
+        label: 'Deploy backend in project backend',
+      },
+      {
+        type: 'deploy',
+        kind: 'Deployment',
+        name: 'database',
+        namespace: 'backend',
+        label: 'Deploy database tier in project backend',
+      },
+      {
+        type: 'deploy',
+        kind: 'Service',
+        name: 'frontend',
+        namespace: 'frontend',
+        label: 'Create Service frontend',
+      },
+      {
+        type: 'deploy',
+        kind: 'Service',
+        name: 'backend',
+        namespace: 'backend',
+        label: 'Create Service backend',
+      },
+      {
+        type: 'deploy',
+        kind: 'Service',
+        name: 'database',
+        namespace: 'backend',
+        label: 'Create Service database',
+      },
+      {
+        type: 'route',
+        name: 'frontend',
+        service: 'frontend',
+        label: 'Expose the frontend with an admitted Route',
+      },
     ],
     startingResources: nodes(3),
     availableResources: ['Project', 'Deployment', 'Service', 'Route', 'ConfigMap', 'Secret'],
@@ -370,8 +420,18 @@ const CHALLENGES = [
     timeLimit: 240,
     docsLinks: [DOCS.health, DOCS.cli],
     objectives: [
-      { type: 'investigate', incidentType: 'CrashLoopBackOff', progress: 0.5, label: 'Investigate the CrashLoopBackOff incident' },
-      { type: 'resolve', incidentType: 'CrashLoopBackOff', count: 1, label: 'Resolve CrashLoopBackOff' },
+      {
+        type: 'investigate',
+        incidentType: 'CrashLoopBackOff',
+        progress: 0.5,
+        label: 'Investigate the CrashLoopBackOff incident',
+      },
+      {
+        type: 'resolve',
+        incidentType: 'CrashLoopBackOff',
+        count: 1,
+        label: 'Resolve CrashLoopBackOff',
+      },
       { type: 'uptime', percentage: 90, label: 'Restore cluster health to at least 90%' },
       {
         type: 'command',
@@ -410,8 +470,20 @@ const CHALLENGES = [
     timeLimit: 300,
     docsLinks: [DOCS.routes, DOCS.network],
     objectives: [
-      { type: 'deploy', kind: 'Secret', name: 'app-tls', namespace: 'web', label: 'Create TLS Secret app-tls' },
-      { type: 'route', name: 'app', service: 'app-svc', termination: 'edge', label: 'Create an admitted edge Route' },
+      {
+        type: 'deploy',
+        kind: 'Secret',
+        name: 'app-tls',
+        namespace: 'web',
+        label: 'Create TLS Secret app-tls',
+      },
+      {
+        type: 'route',
+        name: 'app',
+        service: 'app-svc',
+        termination: 'edge',
+        label: 'Create an admitted edge Route',
+      },
       { type: 'tls', name: 'app', termination: 'edge', label: 'Route uses edge TLS termination' },
       {
         type: 'command',
@@ -443,9 +515,25 @@ const CHALLENGES = [
     timeLimit: 300,
     docsLinks: [DOCS.kustomize, DOCS.deployments],
     objectives: [
-      { type: 'kustomize', path: 'kustomize/overlays/prod', label: 'Apply kustomize/overlays/prod' },
-      { type: 'scale', kind: 'Deployment', name: 'prod-webapp', replicas: 3, label: 'prod-webapp runs 3 replicas' },
-      { type: 'image', kind: 'Deployment', name: 'prod-webapp', imageContains: 'origin-hello-openshift', label: 'prod-webapp uses the prod image' },
+      {
+        type: 'kustomize',
+        path: 'kustomize/overlays/prod',
+        label: 'Apply kustomize/overlays/prod',
+      },
+      {
+        type: 'scale',
+        kind: 'Deployment',
+        name: 'prod-webapp',
+        replicas: 3,
+        label: 'prod-webapp runs 3 replicas',
+      },
+      {
+        type: 'image',
+        kind: 'Deployment',
+        name: 'prod-webapp',
+        imageContains: 'origin-hello-openshift',
+        label: 'prod-webapp uses the prod image',
+      },
       {
         type: 'command',
         pattern: 'apply\\s+-k\\s+kustomize/overlays/prod',
@@ -454,8 +542,15 @@ const CHALLENGES = [
       },
     ],
     startingResources: [...nodes(2), project('webapp-prod', 'Webapp production')],
-    manifestFiles: ['kustomize/base/kustomization.yaml', 'kustomize/overlays/prod/kustomization.yaml', 'kustomize/overlays/prod/patch-deployment.yaml'],
-    focusFiles: ['kustomize/overlays/prod/kustomization.yaml', 'kustomize/overlays/prod/patch-deployment.yaml'],
+    manifestFiles: [
+      'kustomize/base/kustomization.yaml',
+      'kustomize/overlays/prod/kustomization.yaml',
+      'kustomize/overlays/prod/patch-deployment.yaml',
+    ],
+    focusFiles: [
+      'kustomize/overlays/prod/kustomization.yaml',
+      'kustomize/overlays/prod/patch-deployment.yaml',
+    ],
     availableResources: ['Project', 'Deployment', 'Service'],
     hints: [
       'Review kustomize/overlays/prod/kustomization.yaml in the Files panel: namespace, namePrefix, images, replicas and patchesStrategicMerge.',
@@ -479,14 +574,27 @@ const CHALLENGES = [
         label: 'Create/start a build with oc new-app or oc start-build',
       },
       { type: 'build', name: 'webapp', label: 'Build for webapp completes' },
-      { type: 'imageStream', name: 'webapp', tag: 'latest', label: 'ImageStream webapp:latest exists' },
+      {
+        type: 'imageStream',
+        name: 'webapp',
+        tag: 'latest',
+        label: 'ImageStream webapp:latest exists',
+      },
       { type: 'deploy', kind: 'Deployment', name: 'webapp', label: 'Deployment webapp exists' },
       { type: 'route', name: 'webapp', service: 'webapp', label: 'Route webapp is admitted' },
     ],
     startingResources: nodes(2),
     manifestFiles: ['examples/buildconfig.yaml'],
     focusFiles: ['examples/buildconfig.yaml'],
-    availableResources: ['BuildConfig', 'Build', 'ImageStream', 'Deployment', 'Service', 'Route', 'Project'],
+    availableResources: [
+      'BuildConfig',
+      'Build',
+      'ImageStream',
+      'Deployment',
+      'Service',
+      'Route',
+      'Project',
+    ],
     hints: [
       'Create the app from source (this also starts build #1): oc new-app https://github.com/openshift/nodejs-ex --name=webapp',
       'Watch the build: oc get builds; oc logs -f bc/webapp',
@@ -505,9 +613,25 @@ const CHALLENGES = [
     objectives: [
       { type: 'quota', namespace: 'quota-lab', label: 'Create a ResourceQuota in quota-lab' },
       { type: 'limitRange', namespace: 'quota-lab', label: 'Create a LimitRange in quota-lab' },
-      { type: 'deploy', kind: 'Deployment', name: 'api', namespace: 'quota-lab', label: 'Deploy api in quota-lab' },
-      { type: 'resources', kind: 'Deployment', name: 'api', label: 'api containers have requests and limits' },
-      { type: 'resolve', incidentType: 'ResourceQuotaExceeded', count: 1, label: 'Resolve ResourceQuotaExceeded' },
+      {
+        type: 'deploy',
+        kind: 'Deployment',
+        name: 'api',
+        namespace: 'quota-lab',
+        label: 'Deploy api in quota-lab',
+      },
+      {
+        type: 'resources',
+        kind: 'Deployment',
+        name: 'api',
+        label: 'api containers have requests and limits',
+      },
+      {
+        type: 'resolve',
+        incidentType: 'ResourceQuotaExceeded',
+        count: 1,
+        label: 'Resolve ResourceQuotaExceeded',
+      },
       {
         type: 'command',
         pattern: '(create\\s+(quota|limitrange))|(apply.*(quota|limitrange))',
@@ -517,11 +641,25 @@ const CHALLENGES = [
     ],
     startingResources: [...nodes(2), project('quota-lab', 'Quota lab')],
     preloadIncidents: [
-      { type: 'ResourceQuotaExceeded', target: 'team-quota', namespace: 'quota-lab', severity: 3, triggerTime: 30 },
+      {
+        type: 'ResourceQuotaExceeded',
+        target: 'team-quota',
+        namespace: 'quota-lab',
+        severity: 3,
+        triggerTime: 30,
+      },
     ],
     manifestFiles: ['examples/quota.yaml', 'examples/limitrange.yaml'],
     focusFiles: ['examples/quota.yaml', 'examples/limitrange.yaml'],
-    availableResources: ['Project', 'ResourceQuota', 'LimitRange', 'ClusterResourceQuota', 'Deployment', 'Service', 'Route'],
+    availableResources: [
+      'Project',
+      'ResourceQuota',
+      'LimitRange',
+      'ClusterResourceQuota',
+      'Deployment',
+      'Service',
+      'Route',
+    ],
     hints: [
       'Switch to the project: oc project quota-lab',
       'Create the project quota: oc create quota team-quota --hard=pods=10,requests.cpu=4,requests.memory=8Gi',
@@ -540,9 +678,28 @@ const CHALLENGES = [
     docsLinks: [DOCS.rbac, DOCS.cli],
     objectives: [
       { type: 'user', name: 'developer', label: 'Create User developer' },
-      { type: 'group', name: 'developers', users: ['developer'], label: 'Group developers contains developer' },
-      { type: 'deploy', kind: 'RoleBinding', name: 'edit-developers', namespace: 'team-dev', label: 'RoleBinding grants edit in team-dev' },
-      { type: 'canI', verb: 'delete', resource: 'pods', user: 'developer', namespace: 'team-dev', expected: true, label: 'developer can delete Pods in team-dev' },
+      {
+        type: 'group',
+        name: 'developers',
+        users: ['developer'],
+        label: 'Group developers contains developer',
+      },
+      {
+        type: 'deploy',
+        kind: 'RoleBinding',
+        name: 'edit-developers',
+        namespace: 'team-dev',
+        label: 'RoleBinding grants edit in team-dev',
+      },
+      {
+        type: 'canI',
+        verb: 'delete',
+        resource: 'pods',
+        user: 'developer',
+        namespace: 'team-dev',
+        expected: true,
+        label: 'developer can delete Pods in team-dev',
+      },
       { type: 'leastPrivilege', label: 'No wildcard or non-admin cluster-admin grants' },
       {
         type: 'command',
@@ -552,7 +709,15 @@ const CHALLENGES = [
       },
     ],
     startingResources: [...nodes(2), project('team-dev', 'Team development')],
-    availableResources: ['Project', 'User', 'Group', 'Role', 'RoleBinding', 'ClusterRole', 'ClusterRoleBinding'],
+    availableResources: [
+      'Project',
+      'User',
+      'Group',
+      'Role',
+      'RoleBinding',
+      'ClusterRole',
+      'ClusterRoleBinding',
+    ],
     hints: [
       'Create the user and group: oc create user developer; oc adm groups new developers developer',
       'Bind the built-in edit ClusterRole at project scope: oc adm policy add-role-to-group edit developers -n team-dev',
@@ -569,9 +734,26 @@ const CHALLENGES = [
     timeLimit: 300,
     docsLinks: [DOCS.scc, DOCS.rbac],
     objectives: [
-      { type: 'deploy', kind: 'Deployment', name: 'privileged-app', namespace: 'secure', label: 'Create privileged-app in project secure' },
-      { type: 'deploy', kind: 'ServiceAccount', name: 'priv-sa', namespace: 'secure', label: 'Create the dedicated ServiceAccount priv-sa' },
-      { type: 'scc', scc: 'privileged', subject: 'system:serviceaccount:secure:priv-sa', label: 'Grant the privileged SCC to the dedicated ServiceAccount priv-sa' },
+      {
+        type: 'deploy',
+        kind: 'Deployment',
+        name: 'privileged-app',
+        namespace: 'secure',
+        label: 'Create privileged-app in project secure',
+      },
+      {
+        type: 'deploy',
+        kind: 'ServiceAccount',
+        name: 'priv-sa',
+        namespace: 'secure',
+        label: 'Create the dedicated ServiceAccount priv-sa',
+      },
+      {
+        type: 'scc',
+        scc: 'privileged',
+        subject: 'system:serviceaccount:secure:priv-sa',
+        label: 'Grant the privileged SCC to the dedicated ServiceAccount priv-sa',
+      },
       { type: 'privileged', count: 1, label: 'Get a privileged: true Pod admitted and Running' },
       { type: 'resolve', incidentType: 'SCCForbidden', count: 1, label: 'Resolve SCCForbidden' },
       {
@@ -583,11 +765,24 @@ const CHALLENGES = [
     ],
     startingResources: [...nodes(2), project('secure', 'Secure workloads')],
     preloadIncidents: [
-      { type: 'SCCForbidden', target: 'privileged-app', namespace: 'secure', severity: 4, triggerTime: 40 },
+      {
+        type: 'SCCForbidden',
+        target: 'privileged-app',
+        namespace: 'secure',
+        severity: 4,
+        triggerTime: 40,
+      },
     ],
     manifestFiles: ['challenges/privileged-app.yaml'],
     focusFiles: ['challenges/privileged-app.yaml'],
-    availableResources: ['Project', 'Deployment', 'ServiceAccount', 'SecurityContextConstraints', 'Role', 'RoleBinding'],
+    availableResources: [
+      'Project',
+      'Deployment',
+      'ServiceAccount',
+      'SecurityContextConstraints',
+      'Role',
+      'RoleBinding',
+    ],
     hints: [
       'Apply the workload: oc apply -f challenges/privileged-app.yaml — it runs as the dedicated ServiceAccount priv-sa and requests privileged: true.',
       'The rejected Pod is never created on 4.x: oc get pods -n secure stays empty and oc describe deployment/privileged-app -n secure shows FailedCreate / "unable to validate against any security context constraint".',
@@ -605,11 +800,40 @@ const CHALLENGES = [
     timeLimit: 300,
     docsLinks: [DOCS.network, DOCS.routes],
     objectives: [
-      { type: 'deploy', kind: 'NetworkPolicy', name: 'deny-by-default', namespace: 'shop', label: 'Create default-deny NetworkPolicy' },
-      { type: 'deploy', kind: 'NetworkPolicy', name: 'allow-dns-egress', namespace: 'shop', label: 'Allow DNS egress on port 5353 (dns-default Pod port)' },
-      { type: 'deploy', kind: 'NetworkPolicy', name: 'allow-frontend-to-backend', namespace: 'shop', label: 'Allow frontend ingress to backend' },
-      { type: 'deploy', kind: 'NetworkPolicy', name: 'allow-frontend-egress', namespace: 'shop', label: 'Allow frontend egress to backend' },
-      { type: 'resolve', incidentType: 'DNSResolutionFailure', count: 1, label: 'Resolve DNSResolutionFailure' },
+      {
+        type: 'deploy',
+        kind: 'NetworkPolicy',
+        name: 'deny-by-default',
+        namespace: 'shop',
+        label: 'Create default-deny NetworkPolicy',
+      },
+      {
+        type: 'deploy',
+        kind: 'NetworkPolicy',
+        name: 'allow-dns-egress',
+        namespace: 'shop',
+        label: 'Allow DNS egress on port 5353 (dns-default Pod port)',
+      },
+      {
+        type: 'deploy',
+        kind: 'NetworkPolicy',
+        name: 'allow-frontend-to-backend',
+        namespace: 'shop',
+        label: 'Allow frontend ingress to backend',
+      },
+      {
+        type: 'deploy',
+        kind: 'NetworkPolicy',
+        name: 'allow-frontend-egress',
+        namespace: 'shop',
+        label: 'Allow frontend egress to backend',
+      },
+      {
+        type: 'resolve',
+        incidentType: 'DNSResolutionFailure',
+        count: 1,
+        label: 'Resolve DNSResolutionFailure',
+      },
       {
         type: 'command',
         pattern: '(networkpolicy|netpol)',
@@ -626,7 +850,13 @@ const CHALLENGES = [
       service('backend', { namespace: 'shop', app: 'backend' }),
     ],
     preloadIncidents: [
-      { type: 'DNSResolutionFailure', target: 'backend', namespace: 'shop', severity: 4, triggerTime: 45 },
+      {
+        type: 'DNSResolutionFailure',
+        target: 'backend',
+        namespace: 'shop',
+        severity: 4,
+        triggerTime: 45,
+      },
     ],
     manifestFiles: ['challenges/shop-networkpolicy.yaml'],
     focusFiles: ['challenges/shop-networkpolicy.yaml'],
@@ -647,11 +877,38 @@ const CHALLENGES = [
     timeLimit: 360,
     docsLinks: [DOCS.operators, DOCS.metallb],
     objectives: [
-      { type: 'operator', name: 'metallb-operator', installed: true, label: 'MetalLB operator CSV (metallb-operator.v0.14.9) reaches Succeeded' },
-      { type: 'deploy', kind: 'IPAddressPool', name: 'metallb-pool', namespace: 'metallb-system', label: 'Create IPAddressPool metallb-pool' },
-      { type: 'deploy', kind: 'L2Advertisement', name: 'metallb-l2', namespace: 'metallb-system', label: 'Create L2Advertisement metallb-l2' },
-      { type: 'serviceType', kind: 'LoadBalancer', count: 1, label: 'Create a LoadBalancer Service' },
-      { type: 'operator', name: 'ansible-automation-platform', installed: false, label: 'Uninstall the old AAP operator Subscription' },
+      {
+        type: 'operator',
+        name: 'metallb-operator',
+        installed: true,
+        label: 'MetalLB operator CSV (metallb-operator.v0.14.9) reaches Succeeded',
+      },
+      {
+        type: 'deploy',
+        kind: 'IPAddressPool',
+        name: 'metallb-pool',
+        namespace: 'metallb-system',
+        label: 'Create IPAddressPool metallb-pool',
+      },
+      {
+        type: 'deploy',
+        kind: 'L2Advertisement',
+        name: 'metallb-l2',
+        namespace: 'metallb-system',
+        label: 'Create L2Advertisement metallb-l2',
+      },
+      {
+        type: 'serviceType',
+        kind: 'LoadBalancer',
+        count: 1,
+        label: 'Create a LoadBalancer Service',
+      },
+      {
+        type: 'operator',
+        name: 'ansible-automation-platform',
+        installed: false,
+        label: 'Uninstall the old AAP operator Subscription',
+      },
       {
         type: 'command',
         pattern: '(metallb-operator|loadbalancer|delete\\s+subscription)',
@@ -680,7 +937,14 @@ const CHALLENGES = [
     ],
     manifestFiles: ['examples/subscription.yaml', 'challenges/metallb-operator.yaml'],
     focusFiles: ['challenges/metallb-operator.yaml'],
-    availableResources: ['Project', 'Subscription', 'IPAddressPool', 'L2Advertisement', 'Service', 'Deployment'],
+    availableResources: [
+      'Project',
+      'Subscription',
+      'IPAddressPool',
+      'L2Advertisement',
+      'Service',
+      'Deployment',
+    ],
     hints: [
       'Apply the whole OLM manifest set (OperatorGroup + Subscription for package metallb-operator + MetalLB CR + IPAddressPool + L2Advertisement, all in metallb-system): oc apply -f challenges/metallb-operator.yaml',
       'Watch OLM: oc get sub,csv,installplan -n metallb-system — an InstallPlan appears, then the CSV metallb-operator.v0.14.9 reaches Succeeded; oc get subscription -n metallb-system -o yaml shows status.installedCSV (redhat-operators package name is metallb-operator).',
@@ -699,18 +963,57 @@ const CHALLENGES = [
     docsLinks: [DOCS.idp, DOCS.auth, DOCS.rbac],
     objectives: [
       { type: 'command', pattern: 'htpasswd', count: 1, label: 'Create an htpasswd entry' },
-      { type: 'deploy', kind: 'Secret', name: 'htpass-secret', namespace: 'openshift-config', label: 'Create htpass-secret in openshift-config' },
-      { type: 'command', pattern: '(apply|replace|edit).*oauth|oauth.*(apply|replace)', count: 1, label: 'Apply the OAuth identity provider' },
+      {
+        type: 'deploy',
+        kind: 'Secret',
+        name: 'htpass-secret',
+        namespace: 'openshift-config',
+        label: 'Create htpass-secret in openshift-config',
+      },
+      {
+        type: 'command',
+        pattern: '(apply|replace|edit).*oauth|oauth.*(apply|replace)',
+        count: 1,
+        label: 'Apply the OAuth identity provider',
+      },
       { type: 'user', name: 'alice', label: 'User alice exists' },
       { type: 'login', user: 'alice', label: 'Log in as alice' },
-      { type: 'group', name: 'developers', users: ['alice'], label: 'Group developers contains alice' },
-      { type: 'deploy', kind: 'RoleBinding', namespace: 'onboarding', count: 1, label: 'Grant project access in onboarding' },
-      { type: 'canI', verb: 'get', resource: 'pods', user: 'alice', namespace: 'onboarding', expected: true, label: 'alice can get Pods in onboarding' },
+      {
+        type: 'group',
+        name: 'developers',
+        users: ['alice'],
+        label: 'Group developers contains alice',
+      },
+      {
+        type: 'deploy',
+        kind: 'RoleBinding',
+        namespace: 'onboarding',
+        count: 1,
+        label: 'Grant project access in onboarding',
+      },
+      {
+        type: 'canI',
+        verb: 'get',
+        resource: 'pods',
+        user: 'alice',
+        namespace: 'onboarding',
+        expected: true,
+        label: 'alice can get Pods in onboarding',
+      },
     ],
     startingResources: [...nodes(2), project('onboarding', 'Onboarding')],
     manifestFiles: ['htpasswd', 'challenges/oauth-htpasswd.yaml'],
     focusFiles: ['htpasswd', 'challenges/oauth-htpasswd.yaml'],
-    availableResources: ['Project', 'User', 'Group', 'Identity', 'OAuth', 'Secret', 'RoleBinding', 'ServiceAccount'],
+    availableResources: [
+      'Project',
+      'User',
+      'Group',
+      'Identity',
+      'OAuth',
+      'Secret',
+      'RoleBinding',
+      'ServiceAccount',
+    ],
     hints: [
       'Create the htpasswd entry (the simulator has a virtual htpasswd file): htpasswd -c -b htpasswd alice openshift',
       'Store it in openshift-config with the mandatory htpasswd key: oc create secret generic htpass-secret --from-file=htpasswd=htpasswd -n openshift-config',
@@ -730,15 +1033,49 @@ const CHALLENGES = [
     docsLinks: [DOCS.creating, DOCS.builds, DOCS.routes, DOCS.quotas, DOCS.jobs, DOCS.rbac],
     objectives: [
       { type: 'project', name: 'prod', label: 'Create project prod' },
-      { type: 'manifest', file: 'manifests/deployment.yaml', label: 'Apply manifests/deployment.yaml' },
-      { type: 'deploy', kind: 'Deployment', name: 'webapp', namespace: 'prod', label: 'Deployment webapp is running in prod' },
+      {
+        type: 'manifest',
+        file: 'manifests/deployment.yaml',
+        label: 'Apply manifests/deployment.yaml',
+      },
+      {
+        type: 'deploy',
+        kind: 'Deployment',
+        name: 'webapp',
+        namespace: 'prod',
+        label: 'Deployment webapp is running in prod',
+      },
       { type: 'build', name: 'builder', label: 'Build builder completes' },
-      { type: 'imageStream', name: 'builder', tag: 'latest', label: 'ImageStream builder:latest exists' },
-      { type: 'route', name: 'webapp', service: 'webapp', termination: 'edge', label: 'Edge-TLS Route webapp is admitted' },
-      { type: 'quota', name: 'prod-quota', namespace: 'prod', label: 'Create ResourceQuota prod-quota' },
+      {
+        type: 'imageStream',
+        name: 'builder',
+        tag: 'latest',
+        label: 'ImageStream builder:latest exists',
+      },
+      {
+        type: 'route',
+        name: 'webapp',
+        service: 'webapp',
+        termination: 'edge',
+        label: 'Edge-TLS Route webapp is admitted',
+      },
+      {
+        type: 'quota',
+        name: 'prod-quota',
+        namespace: 'prod',
+        label: 'Create ResourceQuota prod-quota',
+      },
       { type: 'complete', kind: 'Job', name: 'db-migrate', label: 'Job db-migrate completes' },
       { type: 'user', name: 'developer', label: 'Create User developer' },
-      { type: 'canI', verb: 'get', resource: 'pods', user: 'developer', namespace: 'prod', expected: true, label: 'developer can get Pods in prod' },
+      {
+        type: 'canI',
+        verb: 'get',
+        resource: 'pods',
+        user: 'developer',
+        namespace: 'prod',
+        expected: true,
+        label: 'developer can get Pods in prod',
+      },
       {
         type: 'command',
         pattern: 'apply\\s+-f|new-build|start-build',
@@ -749,7 +1086,18 @@ const CHALLENGES = [
     startingResources: nodes(3),
     manifestFiles: ['manifests/deployment.yaml', 'manifests/service.yaml', 'manifests/route.yaml'],
     focusFiles: ['manifests/deployment.yaml', 'manifests/service.yaml', 'manifests/route.yaml'],
-    availableResources: ['Project', 'Deployment', 'Service', 'Route', 'BuildConfig', 'ImageStream', 'ResourceQuota', 'Job', 'User', 'RoleBinding'],
+    availableResources: [
+      'Project',
+      'Deployment',
+      'Service',
+      'Route',
+      'BuildConfig',
+      'ImageStream',
+      'ResourceQuota',
+      'Job',
+      'User',
+      'RoleBinding',
+    ],
     hints: [
       'Create and switch to the project: oc new-project prod',
       'Apply the app manifests in order: oc apply -f manifests/deployment.yaml; oc apply -f manifests/service.yaml; oc apply -f manifests/route.yaml',
@@ -769,7 +1117,9 @@ const REGISTRY_KINDS = new Set(RESOURCE_KINDS);
 // rather than silently teaching a non-existent resource.
 for (const challenge of CHALLENGES) {
   if (Array.isArray(challenge.availableResources)) {
-    challenge.availableResources = challenge.availableResources.filter((kind) => REGISTRY_KINDS.has(kind));
+    challenge.availableResources = challenge.availableResources.filter((kind) =>
+      REGISTRY_KINDS.has(kind)
+    );
   }
 }
 
@@ -908,8 +1258,10 @@ class ChallengeMode {
 
     // Command objectives should only see commands issued during this challenge.
     try {
-      if (typeof this.gameEngine.clearCommandHistory === 'function') this.gameEngine.clearCommandHistory();
-      else if (Array.isArray(this.gameEngine._commandHistory)) this.gameEngine._commandHistory.length = 0;
+      if (typeof this.gameEngine.clearCommandHistory === 'function')
+        this.gameEngine.clearCommandHistory();
+      else if (Array.isArray(this.gameEngine._commandHistory))
+        this.gameEngine._commandHistory.length = 0;
     } catch {
       /* non-fatal */
     }
@@ -936,7 +1288,10 @@ class ChallengeMode {
       try {
         this.addStartingResource(clusterState, descriptor);
       } catch (error) {
-        console.warn(`ChallengeMode: could not seed ${descriptor?.kind}/${descriptor?.name}`, error);
+        console.warn(
+          `ChallengeMode: could not seed ${descriptor?.kind}/${descriptor?.name}`,
+          error
+        );
       }
     }
   }
@@ -944,9 +1299,10 @@ class ChallengeMode {
   addStartingResource(clusterState, descriptor) {
     if (!descriptor || !descriptor.kind) return null;
     const name = descriptor.name;
-    const namespace = descriptor.namespace
-      || descriptor.metadata?.namespace
-      || (descriptor.kind === 'Project' ? '' : 'default');
+    const namespace =
+      descriptor.namespace ||
+      descriptor.metadata?.namespace ||
+      (descriptor.kind === 'Project' ? '' : 'default');
     const labels = { app: name, ...(descriptor.labels || {}) };
 
     const added = clusterState.addResource({
@@ -985,11 +1341,13 @@ class ChallengeMode {
       spec.template.metadata = spec.template.metadata || {};
       spec.template.metadata.labels = { app: name, ...(spec.template.metadata.labels || {}) };
       spec.template.spec = spec.template.spec || {};
-      spec.template.spec.containers = spec.template.spec.containers || [{
-        name: 'main',
-        image: DEFAULT_IMAGE,
-        ports: [{ name: 'http', containerPort: 8080 }],
-      }];
+      spec.template.spec.containers = spec.template.spec.containers || [
+        {
+          name: 'main',
+          image: DEFAULT_IMAGE,
+          ports: [{ name: 'http', containerPort: 8080 }],
+        },
+      ];
     }
 
     if (descriptor.kind === 'Service') {
@@ -1021,7 +1379,8 @@ class ChallengeMode {
 
   getManifestEngine() {
     if (this.gameEngine?.manifestEngine) return this.gameEngine.manifestEngine;
-    if (typeof window !== 'undefined' && window.game?.manifestEngine) return window.game.manifestEngine;
+    if (typeof window !== 'undefined' && window.game?.manifestEngine)
+      return window.game.manifestEngine;
     return null;
   }
 
@@ -1055,9 +1414,8 @@ class ChallengeMode {
       ...(Array.isArray(def.manifestFiles) ? def.manifestFiles : []),
       ...Object.keys(CHALLENGE_FILES[def.id] || {}),
     ];
-    const focusFiles = Array.isArray(def.focusFiles) && def.focusFiles.length > 0
-      ? def.focusFiles
-      : files;
+    const focusFiles =
+      Array.isArray(def.focusFiles) && def.focusFiles.length > 0 ? def.focusFiles : files;
     if (typeof window !== 'undefined' && window.game?.manifestPanel?.setContext) {
       try {
         window.game.manifestPanel.setContext({ manifestFiles: files, focusFiles });
@@ -1143,7 +1501,8 @@ class ChallengeMode {
   }
 
   complete() {
-    if (this.state === CHALLENGE_STATE.COMPLETED || this.state === CHALLENGE_STATE.FAILED) return null;
+    if (this.state === CHALLENGE_STATE.COMPLETED || this.state === CHALLENGE_STATE.FAILED)
+      return null;
     this.state = CHALLENGE_STATE.COMPLETED;
     this.stopTicking();
     try {
@@ -1159,12 +1518,10 @@ class ChallengeMode {
         this.scoringEngine._lastObjectiveTypes = this.objectiveProgress
           .map((objective) => String(objective?.type || '').toLowerCase())
           .filter(Boolean);
-        result = this.scoringEngine.completeChallenge(
-          this.currentChallenge,
-          completionTime,
-          100,
-          { timeLimit: this.currentChallengeDef?.timeLimit, usedHints: this.usedHints }
-        );
+        result = this.scoringEngine.completeChallenge(this.currentChallenge, completionTime, 100, {
+          timeLimit: this.currentChallengeDef?.timeLimit,
+          usedHints: this.usedHints,
+        });
       }
     } catch (error) {
       console.warn('ChallengeMode: completeChallenge failed', error);
@@ -1200,7 +1557,8 @@ class ChallengeMode {
   }
 
   timeout() {
-    if (this.state === CHALLENGE_STATE.COMPLETED || this.state === CHALLENGE_STATE.FAILED) return null;
+    if (this.state === CHALLENGE_STATE.COMPLETED || this.state === CHALLENGE_STATE.FAILED)
+      return null;
     this.state = CHALLENGE_STATE.FAILED;
     this.stopTicking();
     try {
@@ -1302,7 +1660,9 @@ class ChallengeMode {
   /** Next challenge id in the catalog, or null for the last lab. */
   nextChallengeId() {
     const index = CHALLENGES.findIndex(
-      (challenge) => challenge.id === this.currentChallenge || String(challenge.id) === String(this.currentChallenge)
+      (challenge) =>
+        challenge.id === this.currentChallenge ||
+        String(challenge.id) === String(this.currentChallenge)
     );
     if (index < 0 || index + 1 >= CHALLENGES.length) return null;
     return CHALLENGES[index + 1].id;

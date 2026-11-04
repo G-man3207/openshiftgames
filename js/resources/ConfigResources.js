@@ -120,12 +120,24 @@ export class ConfigMap extends ResourceBase {
   toDescribe() {
     return `Name:         ${this.metadata.name}
 Namespace:    ${this.metadata.namespace}
-Labels:       ${Object.entries(this.metadata.labels).map(([k, v]) => `${k}=${v}`).join(', ') || '<none>'}
-Annotations:  ${Object.entries(this.metadata.annotations).map(([k, v]) => `${k}=${v}`).join(', ') || '<none>'}
+Labels:       ${
+      Object.entries(this.metadata.labels)
+        .map(([k, v]) => `${k}=${v}`)
+        .join(', ') || '<none>'
+    }
+Annotations:  ${
+      Object.entries(this.metadata.annotations)
+        .map(([k, v]) => `${k}=${v}`)
+        .join(', ') || '<none>'
+    }
 
 Data
 ====
-${Object.entries(this.data).map(([k, v]) => `${k}:\n----\n${v}`).join('\n') || '<none>'}
+${
+  Object.entries(this.data)
+    .map(([k, v]) => `${k}:\n----\n${v}`)
+    .join('\n') || '<none>'
+}
 
 BinaryData
 ====
@@ -135,7 +147,10 @@ Immutable:     ${this.immutable}
 Mounted By:    ${this.mountedBy.join(', ') || '<none>'}
 Env Injected:  ${this.envInjectedBy.join(', ') || '<none>'}
 Events:
-${this.events.slice(-10).map((e) => `  ${e.type}\t${e.reason}\t${e.message}`).join('\n')}`;
+${this.events
+  .slice(-10)
+  .map((e) => `  ${e.type}\t${e.reason}\t${e.message}`)
+  .join('\n')}`;
   }
 }
 
@@ -251,27 +266,40 @@ export class Secret extends ResourceBase {
   toDescribe() {
     return `Name:         ${this.metadata.name}
 Namespace:    ${this.metadata.namespace}
-Labels:       ${Object.entries(this.metadata.labels).map(([k, v]) => `${k}=${v}`).join(', ') || '<none>'}
-Annotations:  ${Object.entries(this.metadata.annotations).map(([k, v]) => `${k}=${v}`).join(', ') || '<none>'}
+Labels:       ${
+      Object.entries(this.metadata.labels)
+        .map(([k, v]) => `${k}=${v}`)
+        .join(', ') || '<none>'
+    }
+Annotations:  ${
+      Object.entries(this.metadata.annotations)
+        .map(([k, v]) => `${k}=${v}`)
+        .join(', ') || '<none>'
+    }
 
 Type:  ${this.type}
 
 Data
 ====
-${Object.entries(this.data).map(([k, v]) => `${k}:  ${b64decode(v).length} bytes`).join('\n') || '<none>'}
+${
+  Object.entries(this.data)
+    .map(([k, v]) => `${k}:  ${b64decode(v).length} bytes`)
+    .join('\n') || '<none>'
+}
 
 Immutable:     ${this.immutable}
 Mounted By:    ${this.mountedBy.join(', ') || '<none>'}
 Env Injected:  ${this.envInjectedBy.join(', ') || '<none>'}
 Events:
-${this.events.slice(-10).map((e) => `  ${e.type}\t${e.reason}\t${e.message}`).join('\n')}`;
+${this.events
+  .slice(-10)
+  .map((e) => `  ${e.type}\t${e.reason}\t${e.message}`)
+  .join('\n')}`;
   }
 }
 
-const SAMPLE_CERT =
-  '-----BEGIN CERTIFICATE-----\nMIIBxTCCAW...\n-----END CERTIFICATE-----';
-const SAMPLE_KEY =
-  '-----BEGIN PRIVATE KEY-----\nMIIEvgIBAD...\n-----END PRIVATE KEY-----';
+const SAMPLE_CERT = '-----BEGIN CERTIFICATE-----\nMIIBxTCCAW...\n-----END CERTIFICATE-----';
+const SAMPLE_KEY = '-----BEGIN PRIVATE KEY-----\nMIIEvgIBAD...\n-----END PRIVATE KEY-----';
 
 export { b64encode, b64decode };
 export default { ConfigMap, Secret };

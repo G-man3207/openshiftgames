@@ -19,7 +19,8 @@ export function defaultContainer(overrides = {}) {
 }
 
 function normalizeContainers(containers) {
-  const list = Array.isArray(containers) && containers.length > 0 ? containers : [defaultContainer()];
+  const list =
+    Array.isArray(containers) && containers.length > 0 ? containers : [defaultContainer()];
   return deepClone(list);
 }
 
@@ -69,7 +70,9 @@ export function visibleAnnotations(annotations) {
 
 /** Finalizers with simulator-internal bookkeeping removed. */
 export function visibleFinalizers(finalizers) {
-  return (Array.isArray(finalizers) ? finalizers : []).filter((name) => !isInternalMetadataKey(name));
+  return (Array.isArray(finalizers) ? finalizers : []).filter(
+    (name) => !isInternalMetadataKey(name)
+  );
 }
 
 /** `oc` timestamp format: `Thu, 06 Nov 2025 16:42:23 +0000`. */
@@ -78,7 +81,20 @@ export function formatDescribeTime(value) {
   const date = value instanceof Date ? value : new Date(value);
   if (!Number.isFinite(date.getTime())) return '<none>';
   const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  const months = [
+    'Jan',
+    'Feb',
+    'Mar',
+    'Apr',
+    'May',
+    'Jun',
+    'Jul',
+    'Aug',
+    'Sep',
+    'Oct',
+    'Nov',
+    'Dec',
+  ];
   const pad = (number) => String(number).padStart(2, '0');
   return `${days[date.getUTCDay()]}, ${pad(date.getUTCDate())} ${months[date.getUTCMonth()]} ${date.getUTCFullYear()} ${pad(date.getUTCHours())}:${pad(date.getUTCMinutes())}:${pad(date.getUTCSeconds())} +0000`;
 }
@@ -160,19 +176,30 @@ export function describeEventLines(eventList) {
       existing.last = Math.max(existing.last, last);
       existing.first = Math.min(existing.first, Number.isFinite(first) ? first : last);
     } else {
-      groups.set(key, { type, reason, message, source, count, last, first: Number.isFinite(first) ? first : last });
+      groups.set(key, {
+        type,
+        reason,
+        message,
+        source,
+        count,
+        last,
+        first: Number.isFinite(first) ? first : last,
+      });
     }
   }
   const rows = [...groups.values()].sort((left, right) => left.last - right.last);
   const headers = ['Type', 'Reason', 'Age', 'From', 'Message'];
   const body = rows.map((row) => {
     let age = formatDescribeAge(row.last);
-    if (row.count > 1) age = `${age} (x${row.count} over ${formatDescribeDuration(row.last - row.first)})`;
+    if (row.count > 1)
+      age = `${age} (x${row.count} over ${formatDescribeDuration(row.last - row.first)})`;
     return [row.type, row.reason, age, row.source, row.message];
   });
-  const widths = headers.slice(0, -1).map((header, index) =>
-    Math.max(header.length, 4, ...body.map((row) => String(row[index] ?? '').length)),
-  );
+  const widths = headers
+    .slice(0, -1)
+    .map((header, index) =>
+      Math.max(header.length, 4, ...body.map((row) => String(row[index] ?? '').length))
+    );
   const render = (cells) =>
     `  ${cells
       .slice(0, -1)
@@ -186,7 +213,9 @@ export function describeEventLines(eventList) {
 export function resolvePodNode(pod, cluster = null) {
   if (!pod) return { name: null, ip: null, derived: false };
   const nodeIp = (node) =>
-    node?.status?.addresses?.find((entry) => entry?.type === 'InternalIP')?.address || node?.status?.addresses?.[0]?.address || null;
+    node?.status?.addresses?.find((entry) => entry?.type === 'InternalIP')?.address ||
+    node?.status?.addresses?.[0]?.address ||
+    null;
   if (pod.spec?.nodeName) {
     const node = cluster?.getByName?.('Node', pod.spec.nodeName, '') || null;
     return { name: pod.spec.nodeName, ip: pod.status?.hostIP || nodeIp(node), derived: false };
@@ -196,12 +225,17 @@ export function resolvePodNode(pod, cluster = null) {
   // A Pod the kubelet has acted on must have been scheduled. Incidents that
   // damage a preload Pod before the scheduler binds it would otherwise make
   // describe print `<none>/<none>` for a container that is actually restarting.
-  const kubeletSawPod = statuses.length > 0 || ['Running', 'CrashLoopBackOff', 'Failed', 'Succeeded', 'Error'].includes(phase);
+  const kubeletSawPod =
+    statuses.length > 0 ||
+    ['Running', 'CrashLoopBackOff', 'Failed', 'Succeeded', 'Error'].includes(phase);
   if (!kubeletSawPod) return { name: null, ip: null, derived: false };
-  const nodes = (cluster?.getByKind?.('Node') || []).filter((node) => !node.metadata?.deletionTimestamp);
+  const nodes = (cluster?.getByKind?.('Node') || []).filter(
+    (node) => !node.metadata?.deletionTimestamp
+  );
   if (!nodes.length) return { name: null, ip: null, derived: false };
   let hash = 0;
-  for (const char of String(pod.metadata?.name || pod.metadata?.uid || 'pod')) hash = (Math.imul(hash, 31) + char.charCodeAt(0)) >>> 0;
+  for (const char of String(pod.metadata?.name || pod.metadata?.uid || 'pod'))
+    hash = (Math.imul(hash, 31) + char.charCodeAt(0)) >>> 0;
   const node = nodes[hash % nodes.length];
   return { name: node.metadata.name, ip: nodeIp(node), derived: true };
 }
@@ -210,7 +244,8 @@ export function resolvePodNode(pod, cluster = null) {
 export function describePodStatus(pod) {
   const phase = String(pod?.status?.phase || 'Pending');
   if (phase === 'CrashLoopBackOff') return 'Running';
-  if (phase === 'ImagePullBackOff' || phase === 'ErrImagePull' || phase === 'ContainerCreating') return 'Pending';
+  if (phase === 'ImagePullBackOff' || phase === 'ErrImagePull' || phase === 'ContainerCreating')
+    return 'Pending';
   return phase;
 }
 
@@ -306,7 +341,10 @@ export class Pod extends ResourceBase {
   }
 
   getRestartCount() {
-    return (this.status.containerStatuses || []).reduce((sum, cs) => sum + (cs.restartCount || 0), 0);
+    return (this.status.containerStatuses || []).reduce(
+      (sum, cs) => sum + (cs.restartCount || 0),
+      0
+    );
   }
 
   getPrimaryContainer() {
@@ -324,7 +362,11 @@ export class Pod extends ResourceBase {
       cs.state = { waiting: { reason: 'CrashLoopBackOff' } };
     }
     this.setPhase('CrashLoopBackOff');
-    this.addEvent('Warning', 'BackOff', `Back-off restarting failed container ${this.getPrimaryContainer()?.name || 'main'}`);
+    this.addEvent(
+      'Warning',
+      'BackOff',
+      `Back-off restarting failed container ${this.getPrimaryContainer()?.name || 'main'}`
+    );
     this.setCondition('Ready', 'False', 'ContainersNotReady', 'containers with unready status');
     return this;
   }
@@ -361,14 +403,29 @@ export class Pod extends ResourceBase {
     const conditions = this.status.conditions || [];
     const specContainers = this.spec.containers || [];
     const containers = specContainers.length
-      ? specContainers.map((container) => ({ container, status: statuses.find((status) => status.name === container.name) || null }))
-      : statuses.map((status) => ({ container: { name: status.name, image: status.image }, status }));
+      ? specContainers.map((container) => ({
+          container,
+          status: statuses.find((status) => status.name === container.name) || null,
+        }))
+      : statuses.map((status) => ({
+          container: { name: status.name, image: status.image },
+          status,
+        }));
     const node = resolvePodNode(this, cluster);
     const nodeLine = node.name ? `${node.name}/${node.ip || '<none>'}` : '<none>/<none>';
     const annotations = visibleAnnotations(this.metadata.annotations);
-    const annotationText = Object.entries(annotations).map(([key, value]) => `${key}=${value}`).join(', ') || '<none>';
-    const labelsText = Object.entries(this.metadata.labels || {}).map(([key, value]) => `${key}=${value}`).join(', ') || '<none>';
-    const owner = (this.metadata.ownerReferences || []).find((ref) => ref.controller) || (this.metadata.ownerReferences || [])[0] || null;
+    const annotationText =
+      Object.entries(annotations)
+        .map(([key, value]) => `${key}=${value}`)
+        .join(', ') || '<none>';
+    const labelsText =
+      Object.entries(this.metadata.labels || {})
+        .map(([key, value]) => `${key}=${value}`)
+        .join(', ') || '<none>';
+    const owner =
+      (this.metadata.ownerReferences || []).find((ref) => ref.controller) ||
+      (this.metadata.ownerReferences || [])[0] ||
+      null;
     const podIp = this.status.podIP || null;
 
     const lines = [
@@ -397,19 +454,29 @@ export class Pod extends ResourceBase {
       lines.push(`    Image:          ${container.image || status?.image || '<none>'}`);
       lines.push(`    Image ID:       ${status?.imageID || '<none>'}`);
       const ports = Array.isArray(container.ports) ? container.ports : [];
-      lines.push(`    Port:           ${ports.length ? ports.map((port) => `${port.containerPort}/${port.protocol || 'TCP'}`).join(', ') : '<none>'}`);
-      lines.push(`    Host Port:      ${ports.length ? ports.map((port) => `${port.hostPort || 0}/${port.protocol || 'TCP'}`).join(', ') : '<none>'}`);
+      lines.push(
+        `    Port:           ${ports.length ? ports.map((port) => `${port.containerPort}/${port.protocol || 'TCP'}`).join(', ') : '<none>'}`
+      );
+      lines.push(
+        `    Host Port:      ${ports.length ? ports.map((port) => `${port.hostPort || 0}/${port.protocol || 'TCP'}`).join(', ') : '<none>'}`
+      );
       if (status) {
         const state = status.state || {};
         const stateKind = Object.keys(state)[0];
         if (stateKind) {
           const stateDetail = state[stateKind] || {};
-          lines.push(`    State:          ${stateKind.charAt(0).toUpperCase()}${stateKind.slice(1)}`);
+          lines.push(
+            `    State:          ${stateKind.charAt(0).toUpperCase()}${stateKind.slice(1)}`
+          );
           if (stateDetail.reason) lines.push(`      Reason:       ${stateDetail.reason}`);
-          if (stateDetail.message && stateDetail.message !== stateDetail.reason) lines.push(`      Message:      ${stateDetail.message}`);
-          if (stateDetail.exitCode !== undefined) lines.push(`      Exit Code:    ${stateDetail.exitCode}`);
-          if (stateDetail.startedAt) lines.push(`      Started:      ${formatDescribeTime(stateDetail.startedAt)}`);
-          if (stateDetail.finishedAt) lines.push(`      Finished:     ${formatDescribeTime(stateDetail.finishedAt)}`);
+          if (stateDetail.message && stateDetail.message !== stateDetail.reason)
+            lines.push(`      Message:      ${stateDetail.message}`);
+          if (stateDetail.exitCode !== undefined)
+            lines.push(`      Exit Code:    ${stateDetail.exitCode}`);
+          if (stateDetail.startedAt)
+            lines.push(`      Started:      ${formatDescribeTime(stateDetail.startedAt)}`);
+          if (stateDetail.finishedAt)
+            lines.push(`      Finished:     ${formatDescribeTime(stateDetail.finishedAt)}`);
         }
         const lastState = status.lastState || {};
         const lastKind = Object.keys(lastState)[0];
@@ -417,23 +484,32 @@ export class Pod extends ResourceBase {
           const lastDetail = lastState[lastKind] || {};
           lines.push(`    Last State:     ${lastKind.charAt(0).toUpperCase()}${lastKind.slice(1)}`);
           if (lastDetail.reason) lines.push(`      Reason:       ${lastDetail.reason}`);
-          if (lastDetail.exitCode !== undefined) lines.push(`      Exit Code:    ${lastDetail.exitCode}`);
-          if (lastDetail.finishedAt) lines.push(`      Finished:     ${formatDescribeTime(lastDetail.finishedAt)}`);
+          if (lastDetail.exitCode !== undefined)
+            lines.push(`      Exit Code:    ${lastDetail.exitCode}`);
+          if (lastDetail.finishedAt)
+            lines.push(`      Finished:     ${formatDescribeTime(lastDetail.finishedAt)}`);
         }
         lines.push(`    Ready:          ${status.ready ? 'True' : 'False'}`);
         lines.push(`    Restart Count:  ${status.restartCount || 0}`);
       } else {
-        lines.push('    State:          Waiting', '      Reason:       ContainerCreating', '    Ready:          False', '    Restart Count:  0');
+        lines.push(
+          '    State:          Waiting',
+          '      Reason:       ContainerCreating',
+          '    Ready:          False',
+          '    Restart Count:  0'
+        );
       }
       const limitEntries = Object.entries(specResources.limits || {});
       if (limitEntries.length) {
         lines.push('    Limits:');
-        for (const [resource, value] of limitEntries) lines.push(`      ${`${resource}:`.padEnd(9)} ${value}`);
+        for (const [resource, value] of limitEntries)
+          lines.push(`      ${`${resource}:`.padEnd(9)} ${value}`);
       }
       const requestEntries = Object.entries(specResources.requests || {});
       if (requestEntries.length) {
         lines.push('    Requests:');
-        for (const [resource, value] of requestEntries) lines.push(`      ${`${resource}:`.padEnd(9)} ${value}`);
+        for (const [resource, value] of requestEntries)
+          lines.push(`      ${`${resource}:`.padEnd(9)} ${value}`);
       }
       const envEntries = Array.isArray(container.env) ? container.env : [];
       if (envEntries.length) {
@@ -447,26 +523,41 @@ export class Pod extends ResourceBase {
       }
       const mounts = Array.isArray(container.volumeMounts) ? container.volumeMounts : [];
       lines.push(mounts.length ? '    Mounts:' : '    Mounts:         <none>');
-      for (const mount of mounts) lines.push(`      ${mount.mountPath} from ${mount.name} (${mount.readOnly ? 'ro' : 'rw'})`);
+      for (const mount of mounts)
+        lines.push(`      ${mount.mountPath} from ${mount.name} (${mount.readOnly ? 'ro' : 'rw'})`);
     }
     lines.push('Conditions:');
     if (conditions.length) {
       lines.push('  Type              Status');
-      for (const condition of conditions) lines.push(`  ${String(condition.type).padEnd(18)}${condition.status}`);
+      for (const condition of conditions)
+        lines.push(`  ${String(condition.type).padEnd(18)}${condition.status}`);
     } else {
       lines.push('  <none>');
     }
     const volumes = this.spec.volumes || [];
     lines.push(`Volumes:${volumes.length ? '' : '            <none>'}`);
     for (const volume of volumes) {
-      lines.push(`  ${volume.name}:`, `    Type:  ${Object.keys(volume).find((key) => key !== 'name') || 'Unknown'}`);
+      lines.push(
+        `  ${volume.name}:`,
+        `    Type:  ${Object.keys(volume).find((key) => key !== 'name') || 'Unknown'}`
+      );
     }
     lines.push(`QoS Class:          ${this.status.qosClass || 'BestEffort'}`);
-    const nodeSelector = Object.entries(this.spec.nodeSelector || {}).map(([key, value]) => `${key}=${value}`).join(',');
+    const nodeSelector = Object.entries(this.spec.nodeSelector || {})
+      .map(([key, value]) => `${key}=${value}`)
+      .join(',');
     lines.push(`Node-Selectors:     ${nodeSelector || '<none>'}`);
     const tolerations = this.spec.tolerations || [];
     if (tolerations.length) {
-      lines.push('Tolerations:        ' + tolerations.map((toleration) => `${toleration.key || '*'}:${toleration.operator || 'Exists'}${toleration.effect ? `:${toleration.effect}` : ''}`).join('\n                    '));
+      lines.push(
+        'Tolerations:        ' +
+          tolerations
+            .map(
+              (toleration) =>
+                `${toleration.key || '*'}:${toleration.operator || 'Exists'}${toleration.effect ? `:${toleration.effect}` : ''}`
+            )
+            .join('\n                    ')
+      );
     } else {
       lines.push('Tolerations:        node.kubernetes.io/not-ready:NoExecute op=Exists for 300s');
       lines.push('                    node.kubernetes.io/unreachable:NoExecute op=Exists for 300s');
@@ -567,7 +658,12 @@ export class Deployment extends ResourceBase {
       'ScalingReplicaSet',
       `Scaled up replica set ${this.metadata.name}-${this.revision} to ${this.spec.strategy?.rollingUpdate?.maxSurge || '25%'}`
     );
-    this.setCondition('Progressing', 'True', 'ReplicaSetUpdated', `ReplicaSet "${this.metadata.name}-${this.revision}" is progressing.`);
+    this.setCondition(
+      'Progressing',
+      'True',
+      'ReplicaSetUpdated',
+      `ReplicaSet "${this.metadata.name}-${this.revision}" is progressing.`
+    );
     this.setPhase('Progressing');
     return `rev-${this.revision}`;
   }
@@ -613,16 +709,31 @@ export class Deployment extends ResourceBase {
     const rolling = strategy.rollingUpdate || {};
     const template = this.spec.template || {};
     const templateSpec = template.spec || {};
-    const labelsText = Object.entries(this.metadata.labels || {}).map(([key, value]) => `${key}=${value}`).join(', ') || '<none>';
+    const labelsText =
+      Object.entries(this.metadata.labels || {})
+        .map(([key, value]) => `${key}=${value}`)
+        .join(', ') || '<none>';
     const annotations = visibleAnnotations(this.metadata.annotations);
-    const annotationText = Object.entries(annotations).map(([key, value]) => `${key}=${value}`).join(', ') || '<none>';
+    const annotationText =
+      Object.entries(annotations)
+        .map(([key, value]) => `${key}=${value}`)
+        .join(', ') || '<none>';
 
-    const replicaSets = (cluster?.getChildren?.(this.uid) || []).filter((child) => child?.kind === 'ReplicaSet');
-    const revisionOf = (rs) => Number.parseInt(rs?.metadata?.annotations?.['deployment.kubernetes.io/revision'] || '0', 10) || 0;
-    const sortedSets = replicaSets.slice().sort((left, right) => revisionOf(left) - revisionOf(right));
+    const replicaSets = (cluster?.getChildren?.(this.uid) || []).filter(
+      (child) => child?.kind === 'ReplicaSet'
+    );
+    const revisionOf = (rs) =>
+      Number.parseInt(
+        rs?.metadata?.annotations?.['deployment.kubernetes.io/revision'] || '0',
+        10
+      ) || 0;
+    const sortedSets = replicaSets
+      .slice()
+      .sort((left, right) => revisionOf(left) - revisionOf(right));
     const currentSet = sortedSets.length ? sortedSets[sortedSets.length - 1] : null;
     const oldSets = sortedSets.slice(0, Math.max(0, sortedSets.length - 1));
-    const replicaSetLine = (rs) => `${rs.metadata?.name || '<none>'} (${rs.status?.replicas ?? 0}/${rs.spec?.replicas ?? 0} replicas created)`;
+    const replicaSetLine = (rs) =>
+      `${rs.metadata?.name || '<none>'} (${rs.status?.replicas ?? 0}/${rs.spec?.replicas ?? 0} replicas created)`;
     const oldReplicaSetText = oldSets.length ? oldSets.map(replicaSetLine).join(', ') : '<none>';
     const newReplicaSetText = currentSet ? replicaSetLine(currentSet) : '<none>';
 
@@ -632,13 +743,19 @@ export class Deployment extends ResourceBase {
       `CreationTimestamp:      ${formatDescribeTime(this.metadata.creationTimestamp)}`,
       `Labels:                 ${labelsText}`,
       `Annotations:            ${annotationText}`,
-      `Selector:               ${Object.entries(selector).map(([key, value]) => `${key}=${value}`).join(',')}`,
+      `Selector:               ${Object.entries(selector)
+        .map(([key, value]) => `${key}=${value}`)
+        .join(',')}`,
       `Replicas:               ${this.spec.replicas ?? 0} desired | ${this.status?.updatedReplicas ?? 0} updated | ${this.status?.replicas ?? 0} total | ${this.status?.availableReplicas ?? 0} available | ${this.status?.unavailableReplicas ?? 0} unavailable`,
       `StrategyType:           ${strategy.type || 'RollingUpdate'}`,
       `MinReadySeconds:        ${this.spec.minReadySeconds ?? 0}`,
       `RollingUpdateStrategy:  ${rolling.maxUnavailable ?? 0} max unavailable, ${rolling.maxSurge ?? 0} max surge`,
       'Pod Template:',
-      `  Labels:  ${Object.entries(template.metadata?.labels || {}).map(([key, value]) => `${key}=${value}`).join(', ') || '<none>'}`,
+      `  Labels:  ${
+        Object.entries(template.metadata?.labels || {})
+          .map(([key, value]) => `${key}=${value}`)
+          .join(', ') || '<none>'
+      }`,
       '  Containers:',
     ];
     const templateContainers = templateSpec.containers || [];
@@ -648,17 +765,23 @@ export class Deployment extends ResourceBase {
       const ports = Array.isArray(container.ports) ? container.ports : [];
       lines.push(`   ${container.name}:`);
       lines.push(`    Image:        ${container.image || '<none>'}`);
-      lines.push(`    Port:         ${ports.length ? ports.map((port) => `${port.containerPort}/${port.protocol || 'TCP'}`).join(', ') : '<none>'}`);
-      lines.push(`    Host Port:    ${ports.length ? ports.map((port) => `${port.hostPort || 0}/${port.protocol || 'TCP'}`).join(', ') : '<none>'}`);
+      lines.push(
+        `    Port:         ${ports.length ? ports.map((port) => `${port.containerPort}/${port.protocol || 'TCP'}`).join(', ') : '<none>'}`
+      );
+      lines.push(
+        `    Host Port:    ${ports.length ? ports.map((port) => `${port.hostPort || 0}/${port.protocol || 'TCP'}`).join(', ') : '<none>'}`
+      );
       const limitEntries = Object.entries(resources.limits || {});
       if (limitEntries.length) {
         lines.push('    Limits:');
-        for (const [resource, value] of limitEntries) lines.push(`      ${`${resource}:`.padEnd(9)} ${value}`);
+        for (const [resource, value] of limitEntries)
+          lines.push(`      ${`${resource}:`.padEnd(9)} ${value}`);
       }
       const requestEntries = Object.entries(resources.requests || {});
       if (requestEntries.length) {
         lines.push('    Requests:');
-        for (const [resource, value] of requestEntries) lines.push(`      ${`${resource}:`.padEnd(9)} ${value}`);
+        for (const [resource, value] of requestEntries)
+          lines.push(`      ${`${resource}:`.padEnd(9)} ${value}`);
       }
       const envEntries = Array.isArray(container.env) ? container.env : [];
       if (envEntries.length) {
@@ -673,7 +796,10 @@ export class Deployment extends ResourceBase {
       const mounts = Array.isArray(container.volumeMounts) ? container.volumeMounts : [];
       if (mounts.length) {
         lines.push('    Mounts:');
-        for (const mount of mounts) lines.push(`      ${mount.mountPath} from ${mount.name} (${mount.readOnly ? 'ro' : 'rw'})`);
+        for (const mount of mounts)
+          lines.push(
+            `      ${mount.mountPath} from ${mount.name} (${mount.readOnly ? 'ro' : 'rw'})`
+          );
       } else {
         lines.push('    Mounts:       <none>');
       }
@@ -682,7 +808,10 @@ export class Deployment extends ResourceBase {
     if (volumes.length) {
       lines.push('  Volumes:');
       for (const volume of volumes) {
-        lines.push(`   ${volume.name}:`, `    Type:  ${Object.keys(volume).find((key) => key !== 'name') || 'Unknown'}`);
+        lines.push(
+          `   ${volume.name}:`,
+          `    Type:  ${Object.keys(volume).find((key) => key !== 'name') || 'Unknown'}`
+        );
       }
     } else {
       lines.push('  Volumes:        <none>');
@@ -693,7 +822,9 @@ export class Deployment extends ResourceBase {
       lines.push('  Type           Status  Reason');
       lines.push('  ----           ------  ------');
       for (const condition of conditions) {
-        lines.push(`  ${String(condition.type).padEnd(15)}${String(condition.status).padEnd(8)}${condition.reason || ''}`);
+        lines.push(
+          `  ${String(condition.type).padEnd(15)}${String(condition.status).padEnd(8)}${condition.reason || ''}`
+        );
       }
     } else {
       lines.push('  <none>');
@@ -755,7 +886,9 @@ export class ReplicaSet extends ResourceBase {
     const selector = this.spec.selector?.matchLabels || {};
     return `Name:           ${this.metadata.name}
 Namespace:      ${this.metadata.namespace}
-Selector:       ${Object.entries(selector).map(([k, v]) => `${k}=${v}`).join(',')}
+Selector:       ${Object.entries(selector)
+      .map(([k, v]) => `${k}=${v}`)
+      .join(',')}
 Replicas:       ${this.spec.replicas || 0} desired | ${this.status.replicas || 0} current | ${this.status.readyReplicas || 0} ready
 Pod Template:
   Containers:
@@ -763,7 +896,10 @@ ${(this.spec.template?.spec?.containers || [])
   .map((c) => `   ${c.name}:\n    Image:  ${c.image}`)
   .join('\n')}
 Events:
-${this.events.slice(-10).map((e) => `  ${e.type}\t${e.reason}\t${e.message}`).join('\n')}`;
+${this.events
+  .slice(-10)
+  .map((e) => `  ${e.type}\t${e.reason}\t${e.message}`)
+  .join('\n')}`;
   }
 }
 
@@ -784,16 +920,15 @@ export class StatefulSet extends ResourceBase {
         metadata: { labels: deepClone(matchLabels) },
         spec: { containers: normalizeContainers(metadata.containers) },
       },
-      volumeClaimTemplates:
-        metadata.volumeClaimTemplates || [
-          {
-            metadata: { name: 'data' },
-            spec: {
-              accessModes: ['ReadWriteOnce'],
-              resources: { requests: { storage: '10Gi' } },
-            },
+      volumeClaimTemplates: metadata.volumeClaimTemplates || [
+        {
+          metadata: { name: 'data' },
+          spec: {
+            accessModes: ['ReadWriteOnce'],
+            resources: { requests: { storage: '10Gi' } },
           },
-        ],
+        },
+      ],
     };
     this._initSpec(defaults, metadata.spec);
     this.pods = [];
@@ -842,7 +977,9 @@ export class StatefulSet extends ResourceBase {
     const selector = this.spec.selector?.matchLabels || {};
     return `Name:               ${this.metadata.name}
 Namespace:          ${this.metadata.namespace}
-Selector:           ${Object.entries(selector).map(([k, v]) => `${k}=${v}`).join(',')}
+Selector:           ${Object.entries(selector)
+      .map(([k, v]) => `${k}=${v}`)
+      .join(',')}
 Replicas:           ${this.spec.replicas || 0} desired | ${this.status.currentReplicas || 0} total
 Update Strategy:    ${this.spec.updateStrategy?.type || 'RollingUpdate'}
 Pod Template:
@@ -859,7 +996,10 @@ ${(this.spec.volumeClaimTemplates || [])
   )
   .join('\n')}
 Events:
-${this.events.slice(-10).map((e) => `  ${e.type}\t${e.reason}\t${e.message}`).join('\n')}`;
+${this.events
+  .slice(-10)
+  .map((e) => `  ${e.type}\t${e.reason}\t${e.message}`)
+  .join('\n')}`;
   }
 }
 
@@ -924,8 +1064,14 @@ export class DaemonSet extends ResourceBase {
     const selector = this.spec.selector?.matchLabels || {};
     return `Name:           ${this.metadata.name}
 Namespace:      ${this.metadata.namespace}
-Selector:       ${Object.entries(selector).map(([k, v]) => `${k}=${v}`).join(',')}
-Node-Selector:  ${Object.entries(this.spec.template?.spec?.nodeSelector || {}).map(([k, v]) => `${k}=${v}`).join(',') || '<none>'}
+Selector:       ${Object.entries(selector)
+      .map(([k, v]) => `${k}=${v}`)
+      .join(',')}
+Node-Selector:  ${
+      Object.entries(this.spec.template?.spec?.nodeSelector || {})
+        .map(([k, v]) => `${k}=${v}`)
+        .join(',') || '<none>'
+    }
 Desired Number of Nodes Scheduled: ${this.status.desiredNumberScheduled || 0}
 Current Number of Nodes Scheduled: ${this.status.currentNumberScheduled || 0}
 Number Ready:   ${this.status.numberReady || 0}
@@ -935,7 +1081,10 @@ ${(this.spec.template?.spec?.containers || [])
   .map((c) => `   ${c.name}:\n    Image:  ${c.image}`)
   .join('\n')}
 Events:
-${this.events.slice(-10).map((e) => `  ${e.type}\t${e.reason}\t${e.message}`).join('\n')}`;
+${this.events
+  .slice(-10)
+  .map((e) => `  ${e.type}\t${e.reason}\t${e.message}`)
+  .join('\n')}`;
   }
 }
 
@@ -952,7 +1101,9 @@ export class Job extends ResourceBase {
       template: {
         spec: {
           containers: normalizeContainers(
-            metadata.containers || [{ name: 'worker', image: 'busybox:latest', command: ['sh', '-c', 'echo done'] }]
+            metadata.containers || [
+              { name: 'worker', image: 'busybox:latest', command: ['sh', '-c', 'echo done'] },
+            ]
           ),
           restartPolicy: 'Never',
         },
@@ -981,7 +1132,10 @@ export class Job extends ResourceBase {
   getDuration() {
     if (!this.status.startTime) return 0;
     const end = this.status.completionTime ? new Date(this.status.completionTime) : new Date();
-    return Math.max(0, Math.floor((end.getTime() - new Date(this.status.startTime).getTime()) / 1000));
+    return Math.max(
+      0,
+      Math.floor((end.getTime() - new Date(this.status.startTime).getTime()) / 1000)
+    );
   }
 
   isComplete() {
@@ -1009,7 +1163,10 @@ ${(this.spec.template?.spec?.containers || [])
   .map((c) => `   ${c.name}:\n    Image:  ${c.image}`)
   .join('\n')}
 Events:
-${this.events.slice(-10).map((e) => `  ${e.type}\t${e.reason}\t${e.message}`).join('\n')}`;
+${this.events
+  .slice(-10)
+  .map((e) => `  ${e.type}\t${e.reason}\t${e.message}`)
+  .join('\n')}`;
   }
 }
 
@@ -1036,8 +1193,18 @@ const CRON_DESCRIPTORS = {
 };
 
 const CRON_MONTH_NAMES = {
-  jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6,
-  jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12,
+  jan: 1,
+  feb: 2,
+  mar: 3,
+  apr: 4,
+  may: 5,
+  jun: 6,
+  jul: 7,
+  aug: 8,
+  sep: 9,
+  oct: 10,
+  nov: 11,
+  dec: 12,
 };
 const CRON_DAY_NAMES = { sun: 0, mon: 1, tue: 2, wed: 3, thu: 4, fri: 5, sat: 6 };
 
@@ -1058,7 +1225,8 @@ function parseCronField(field, min, max, { names = null, allowSevenAsZero = fals
     const start = parseNumber(startToken);
     const end = parseNumber(endToken);
     if (start === null || end === null) return `invalid range "${startToken}-${endToken}"`;
-    if (start < min || end > max || start > end) return `range "${startToken}-${endToken}" out of bounds ${min}-${max}`;
+    if (start < min || end > max || start > end)
+      return `range "${startToken}-${endToken}" out of bounds ${min}-${max}`;
     for (let value = start; value <= end; value += step) values.add(value);
     return null;
   };
@@ -1068,7 +1236,8 @@ function parseCronField(field, min, max, { names = null, allowSevenAsZero = fals
     const stepMatch = piece.match(/^(\*|[\w-]+)\/(\d+)$/);
     if (stepMatch) {
       const step = Number(stepMatch[2]);
-      if (!Number.isFinite(step) || step < 1) return { valid: false, detail: `invalid step in "${piece}"` };
+      if (!Number.isFinite(step) || step < 1)
+        return { valid: false, detail: `invalid step in "${piece}"` };
       if (stepMatch[1] === '*') {
         wildcard = true;
         for (let value = min; value <= max; value += step) values.add(value);
@@ -1078,7 +1247,8 @@ function parseCronField(field, min, max, { names = null, allowSevenAsZero = fals
         if (error) return { valid: false, detail: error };
       } else {
         const start = parseNumber(stepMatch[1]);
-        if (start === null || start < min || start > max) return { valid: false, detail: `invalid value in "${piece}"` };
+        if (start === null || start < min || start > max)
+          return { valid: false, detail: `invalid value in "${piece}"` };
         for (let value = start; value <= max; value += step) values.add(value);
       }
       continue;
@@ -1096,7 +1266,8 @@ function parseCronField(field, min, max, { names = null, allowSevenAsZero = fals
     }
     const value = parseNumber(piece);
     if (value === null) return { valid: false, detail: `invalid value "${piece}"` };
-    if (value < min || value > max) return { valid: false, detail: `value "${piece}" out of bounds ${min}-${max}` };
+    if (value < min || value > max)
+      return { valid: false, detail: `value "${piece}" out of bounds ${min}-${max}` };
     values.add(value);
   }
   return { valid: true, values, wildcard };
@@ -1117,7 +1288,10 @@ export function parseCronSchedule(schedule) {
   if (raw.startsWith('@')) {
     descriptor = raw.toLowerCase();
     if (!CRON_DESCRIPTORS[descriptor]) {
-      return { valid: false, message: `spec.schedule: Invalid value: "${raw}": unsupported descriptor` };
+      return {
+        valid: false,
+        message: `spec.schedule: Invalid value: "${raw}": unsupported descriptor`,
+      };
     }
     expression = CRON_DESCRIPTORS[descriptor];
   }
@@ -1129,15 +1303,38 @@ export function parseCronSchedule(schedule) {
     };
   }
   const minute = parseCronField(fields[0], 0, 59);
-  if (!minute.valid) return { valid: false, message: `spec.schedule: Invalid value: "${raw}": minute field: ${minute.detail}` };
+  if (!minute.valid)
+    return {
+      valid: false,
+      message: `spec.schedule: Invalid value: "${raw}": minute field: ${minute.detail}`,
+    };
   const hour = parseCronField(fields[1], 0, 23);
-  if (!hour.valid) return { valid: false, message: `spec.schedule: Invalid value: "${raw}": hour field: ${hour.detail}` };
+  if (!hour.valid)
+    return {
+      valid: false,
+      message: `spec.schedule: Invalid value: "${raw}": hour field: ${hour.detail}`,
+    };
   const dayOfMonth = parseCronField(fields[2], 1, 31);
-  if (!dayOfMonth.valid) return { valid: false, message: `spec.schedule: Invalid value: "${raw}": day-of-month field: ${dayOfMonth.detail}` };
+  if (!dayOfMonth.valid)
+    return {
+      valid: false,
+      message: `spec.schedule: Invalid value: "${raw}": day-of-month field: ${dayOfMonth.detail}`,
+    };
   const month = parseCronField(fields[3], 1, 12, { names: CRON_MONTH_NAMES });
-  if (!month.valid) return { valid: false, message: `spec.schedule: Invalid value: "${raw}": month field: ${month.detail}` };
-  const dayOfWeek = parseCronField(fields[4], 0, 6, { names: CRON_DAY_NAMES, allowSevenAsZero: true });
-  if (!dayOfWeek.valid) return { valid: false, message: `spec.schedule: Invalid value: "${raw}": day-of-week field: ${dayOfWeek.detail}` };
+  if (!month.valid)
+    return {
+      valid: false,
+      message: `spec.schedule: Invalid value: "${raw}": month field: ${month.detail}`,
+    };
+  const dayOfWeek = parseCronField(fields[4], 0, 6, {
+    names: CRON_DAY_NAMES,
+    allowSevenAsZero: true,
+  });
+  if (!dayOfWeek.valid)
+    return {
+      valid: false,
+      message: `spec.schedule: Invalid value: "${raw}": day-of-week field: ${dayOfWeek.detail}`,
+    };
   return {
     valid: true,
     descriptor,
@@ -1169,7 +1366,8 @@ export function validateCronSchedule(schedule) {
  * @returns {Date|null}
  */
 export function nextCronOccurrence(scheduleOrParsed, from = new Date()) {
-  const parsed = typeof scheduleOrParsed === 'string' ? parseCronSchedule(scheduleOrParsed) : scheduleOrParsed;
+  const parsed =
+    typeof scheduleOrParsed === 'string' ? parseCronSchedule(scheduleOrParsed) : scheduleOrParsed;
   if (!parsed || !parsed.valid) return null;
   const start = new Date(from.getTime() + 60 * 1000);
   start.setSeconds(0, 0);
@@ -1188,7 +1386,15 @@ export function nextCronOccurrence(scheduleOrParsed, from = new Date()) {
     if (!dayMatches) continue;
     for (const hour of hours) {
       for (const minute of minutes) {
-        const candidate = new Date(day.getFullYear(), day.getMonth(), day.getDate(), hour, minute, 0, 0);
+        const candidate = new Date(
+          day.getFullYear(),
+          day.getMonth(),
+          day.getDate(),
+          hour,
+          minute,
+          0,
+          0
+        );
         if (candidate.getTime() >= start.getTime()) return candidate;
       }
     }
@@ -1216,7 +1422,9 @@ export class CronJob extends ResourceBase {
           template: {
             spec: {
               containers: normalizeContainers(
-                metadata.containers || [{ name: 'cron-worker', image: 'busybox:latest', command: ['sh', '-c', 'date'] }]
+                metadata.containers || [
+                  { name: 'cron-worker', image: 'busybox:latest', command: ['sh', '-c', 'date'] },
+                ]
               ),
               restartPolicy: 'OnFailure',
             },
@@ -1241,7 +1449,9 @@ export class CronJob extends ResourceBase {
   }
 
   _parseSchedule(cron) {
-    const parts = String(cron || '').trim().split(/\s+/);
+    const parts = String(cron || '')
+      .trim()
+      .split(/\s+/);
     const minute = parts[0] || '*';
     const hour = parts[1] || '*';
     if (minute.startsWith('*/')) {
@@ -1256,7 +1466,11 @@ export class CronJob extends ResourceBase {
   _triggerJob() {
     if (this.spec.suspend) return null;
     if (this.spec.concurrencyPolicy === 'Forbid' && this.activeJobs.length > 0) {
-      this.addEvent('Normal', 'JobAlreadyActive', 'Skipped scheduled job: concurrency policy Forbid');
+      this.addEvent(
+        'Normal',
+        'JobAlreadyActive',
+        'Skipped scheduled job: concurrency policy Forbid'
+      );
       return null;
     }
     if (this.spec.concurrencyPolicy === 'Replace' && this.activeJobs.length > 0) {
@@ -1309,7 +1523,10 @@ Active Jobs:                   ${this.activeJobs.map((j) => j.metadata.name).joi
 Last Schedule Time:            ${this.status.lastScheduleTime || '<none>'}
 Last Successful Time:          ${this.status.lastSuccessfulTime || '<none>'}
 Events:
-${this.events.slice(-10).map((e) => `  ${e.type}\t${e.reason}\t${e.message}`).join('\n')}`;
+${this.events
+  .slice(-10)
+  .map((e) => `  ${e.type}\t${e.reason}\t${e.message}`)
+  .join('\n')}`;
   }
 }
 

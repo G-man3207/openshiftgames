@@ -307,7 +307,9 @@ export class InspectorPanel {
       status.currentReplicas,
       status.installedCSV,
       status.ingress?.[0]?.conditions?.[0]?.status,
-    ].filter((value) => value !== undefined && value !== null).join('|');
+    ]
+      .filter((value) => value !== undefined && value !== null)
+      .join('|');
   }
 
   // ─── Shell / header ────────────────────────────────────────────────────
@@ -365,7 +367,8 @@ export class InspectorPanel {
     const nameEl = this.container.querySelector('#inspector-name');
     if (nameEl) nameEl.textContent = name;
     const subtitleEl = this.container.querySelector('#inspector-subtitle');
-    if (subtitleEl) subtitleEl.textContent = `${kind} · ${namespace || 'cluster-scoped'} · ${status}`;
+    if (subtitleEl)
+      subtitleEl.textContent = `${kind} · ${namespace || 'cluster-scoped'} · ${status}`;
 
     const editBtn = this.container.querySelector('#inspector-edit');
     if (editBtn) {
@@ -391,7 +394,8 @@ export class InspectorPanel {
     const body = this.container?.querySelector('#inspector-body');
     if (!body) return;
     if (!this.resource) {
-      body.innerHTML = '<div class="text-white/30 text-sm text-center mt-8">Select a resource to inspect</div>';
+      body.innerHTML =
+        '<div class="text-white/30 text-sm text-center mt-8">Select a resource to inspect</div>';
       return;
     }
     switch (this.activeTab) {
@@ -444,13 +448,33 @@ export class InspectorPanel {
 
         ${this._renderKindDetails(r)}
 
-        ${this._section('Labels', `<div class="flex flex-wrap gap-1">${labels.length
-          ? labels.map(([key, value]) => `<span class="px-2 py-0.5 text-xs bg-white/5 border border-white/10 rounded text-white/60" title="${this._escapeHTML(`${key}=${value}`)}">${this._escapeHTML(key)}=${this._escapeHTML(value)}</span>`).join('')
-          : '<span class="text-white/20 text-xs">No labels</span>'}</div>`)}
+        ${this._section(
+          'Labels',
+          `<div class="flex flex-wrap gap-1">${
+            labels.length
+              ? labels
+                  .map(
+                    ([key, value]) =>
+                      `<span class="px-2 py-0.5 text-xs bg-white/5 border border-white/10 rounded text-white/60" title="${this._escapeHTML(`${key}=${value}`)}">${this._escapeHTML(key)}=${this._escapeHTML(value)}</span>`
+                  )
+                  .join('')
+              : '<span class="text-white/20 text-xs">No labels</span>'
+          }</div>`
+        )}
 
-        ${this._section('Annotations', `<div class="space-y-1">${annotations.length
-          ? annotations.map(([key, value]) => `<div class="text-xs break-words"><span class="text-white/40">${this._escapeHTML(key)}</span><span class="text-white/20">: </span><span class="text-white/60">${this._escapeHTML(value)}</span></div>`).join('')
-          : '<span class="text-white/20 text-xs">No annotations</span>'}</div>`)}
+        ${this._section(
+          'Annotations',
+          `<div class="space-y-1">${
+            annotations.length
+              ? annotations
+                  .map(
+                    ([key, value]) =>
+                      `<div class="text-xs break-words"><span class="text-white/40">${this._escapeHTML(key)}</span><span class="text-white/20">: </span><span class="text-white/60">${this._escapeHTML(value)}</span></div>`
+                  )
+                  .join('')
+              : '<span class="text-white/20 text-xs">No annotations</span>'
+          }</div>`
+        )}
 
         ${this._renderActions(r)}
       </div>
@@ -469,135 +493,206 @@ export class InspectorPanel {
         const countPods = this._countInProject(cluster, 'Pod', r.metadata?.name);
         const countRoutes = this._countInProject(cluster, 'Route', r.metadata?.name);
         const countBuilds = this._countInProject(cluster, 'Build', r.metadata?.name);
-        add('Project', [
-          kv('Display Name', r.spec?.displayName || r.metadata?.annotations?.['openshift.io/display-name'] || '—'),
-          kv('Description', r.spec?.description || r.metadata?.annotations?.['openshift.io/description'] || '—'),
-          kv('Phase', r.status?.phase),
-          kv('Pods', countPods),
-          kv('Routes', countRoutes),
-          kv('Builds', countBuilds),
-        ].join(''), 'inspector-project');
+        add(
+          'Project',
+          [
+            kv(
+              'Display Name',
+              r.spec?.displayName || r.metadata?.annotations?.['openshift.io/display-name'] || '—'
+            ),
+            kv(
+              'Description',
+              r.spec?.description || r.metadata?.annotations?.['openshift.io/description'] || '—'
+            ),
+            kv('Phase', r.status?.phase),
+            kv('Pods', countPods),
+            kv('Routes', countRoutes),
+            kv('Builds', countBuilds),
+          ].join(''),
+          'inspector-project'
+        );
         break;
       }
       case 'Route': {
         const ingress = r.status?.ingress?.[0];
         const condition = ingress?.conditions?.find((entry) => entry.type === 'Admitted');
         const admitted = condition ? condition.status === 'True' : Boolean(r.isAdmitted?.());
-        const host = r.spec?.host || (typeof r.effectiveHost === 'function' ? r.effectiveHost() : '<auto-generated>');
-        add('Route', [
-          kv('Host / Port', host),
-          kv('Path', r.spec?.path || '/'),
-          kv('TLS Termination', r.spec?.tls?.termination || 'none (HTTP)'),
-          kv('Insecure Policy', r.spec?.tls?.insecureEdgeTerminationPolicy || '—'),
-          kv('Target Service', `${r.spec?.to?.kind || 'Service'}/${r.spec?.to?.name || '—'}`),
-          kv('Target Port', r.spec?.port?.targetPort || '—'),
-          kv('Weight', r.spec?.to?.weight ?? 100),
-          kv('Admitted', admitted ? 'True' : 'False'),
-          kv('Reason', condition?.reason || '—'),
-          kv('Router', ingress?.routerName || 'default'),
-          condition?.message ? `<div class="text-[10px] text-white/30 mt-1 break-words">${this._escapeHTML(condition.message)}</div>` : '',
-        ].join(''), 'inspector-route');
+        const host =
+          r.spec?.host ||
+          (typeof r.effectiveHost === 'function' ? r.effectiveHost() : '<auto-generated>');
+        add(
+          'Route',
+          [
+            kv('Host / Port', host),
+            kv('Path', r.spec?.path || '/'),
+            kv('TLS Termination', r.spec?.tls?.termination || 'none (HTTP)'),
+            kv('Insecure Policy', r.spec?.tls?.insecureEdgeTerminationPolicy || '—'),
+            kv('Target Service', `${r.spec?.to?.kind || 'Service'}/${r.spec?.to?.name || '—'}`),
+            kv('Target Port', r.spec?.port?.targetPort || '—'),
+            kv('Weight', r.spec?.to?.weight ?? 100),
+            kv('Admitted', admitted ? 'True' : 'False'),
+            kv('Reason', condition?.reason || '—'),
+            kv('Router', ingress?.routerName || 'default'),
+            condition?.message
+              ? `<div class="text-[10px] text-white/30 mt-1 break-words">${this._escapeHTML(condition.message)}</div>`
+              : '',
+          ].join(''),
+          'inspector-route'
+        );
         break;
       }
       case 'BuildConfig': {
         const strategy = r.spec?.strategy || {};
-        add('BuildConfig', [
-          kv('Source Type', r.spec?.source?.type),
-          kv('Git Repository', r.spec?.source?.git?.uri || '—'),
-          kv('Git Ref', r.spec?.source?.git?.ref || '—'),
-          kv('Context Dir', r.spec?.source?.contextDir || '—'),
-          kv('Strategy', strategy.type || 'Source'),
-          kv('Builder Image', strategy.sourceStrategy?.from?.name || strategy.dockerStrategy?.dockerfilePath || '—'),
-          kv('Output', `${r.spec?.output?.to?.kind || 'ImageStreamTag'}/${r.spec?.output?.to?.name || '—'}`),
-          kv('Latest Version', r.status?.lastVersion ?? 0),
-          kv('Triggers', (r.spec?.triggers || []).map((trigger) => trigger.type).join(', ') || '—'),
-        ].join(''), 'inspector-buildconfig');
+        add(
+          'BuildConfig',
+          [
+            kv('Source Type', r.spec?.source?.type),
+            kv('Git Repository', r.spec?.source?.git?.uri || '—'),
+            kv('Git Ref', r.spec?.source?.git?.ref || '—'),
+            kv('Context Dir', r.spec?.source?.contextDir || '—'),
+            kv('Strategy', strategy.type || 'Source'),
+            kv(
+              'Builder Image',
+              strategy.sourceStrategy?.from?.name || strategy.dockerStrategy?.dockerfilePath || '—'
+            ),
+            kv(
+              'Output',
+              `${r.spec?.output?.to?.kind || 'ImageStreamTag'}/${r.spec?.output?.to?.name || '—'}`
+            ),
+            kv('Latest Version', r.status?.lastVersion ?? 0),
+            kv(
+              'Triggers',
+              (r.spec?.triggers || []).map((trigger) => trigger.type).join(', ') || '—'
+            ),
+          ].join(''),
+          'inspector-buildconfig'
+        );
         break;
       }
       case 'Build': {
-        add('Build', [
-          kv('Phase', r.status?.phase),
-          kv('Build Config', r.status?.config?.name || '—'),
-          kv('Message', r.status?.message || '—'),
-          kv('Started', r.status?.startTimestamp || '—'),
-          kv('Completed', r.status?.completionTimestamp || '—'),
-          kv('Duration', r.status?.duration ? `${r.status.duration}s` : '—'),
-          kv('Output Image', r.status?.output?.to?.dockerImageReference || '—'),
-        ].join(''), 'inspector-build');
+        add(
+          'Build',
+          [
+            kv('Phase', r.status?.phase),
+            kv('Build Config', r.status?.config?.name || '—'),
+            kv('Message', r.status?.message || '—'),
+            kv('Started', r.status?.startTimestamp || '—'),
+            kv('Completed', r.status?.completionTimestamp || '—'),
+            kv('Duration', r.status?.duration ? `${r.status.duration}s` : '—'),
+            kv('Output Image', r.status?.output?.to?.dockerImageReference || '—'),
+          ].join(''),
+          'inspector-build'
+        );
         break;
       }
       case 'ImageStream': {
-        const repository = (typeof r.getImageRepository === 'function' ? r.getImageRepository() : r.status?.dockerImageRepository) || '—';
+        const repository =
+          (typeof r.getImageRepository === 'function'
+            ? r.getImageRepository()
+            : r.status?.dockerImageRepository) || '—';
         const tags = r.status?.tags?.length ? r.status.tags : r.spec?.tags || [];
         const tagsHtml = tags.length
-          ? tags.map((tag) => {
-            const name = tag.tag || tag.name || 'latest';
-            const image = tag.items?.[0]?.dockerImageReference || tag.from?.name || '—';
-            return `<div class="flex items-start gap-2 text-xs py-0.5"><span class="text-amber-400 font-mono shrink-0">${this._escapeHTML(name)}</span><span class="text-white/50 break-all">${this._escapeHTML(image)}</span></div>`;
-          }).join('')
+          ? tags
+              .map((tag) => {
+                const name = tag.tag || tag.name || 'latest';
+                const image = tag.items?.[0]?.dockerImageReference || tag.from?.name || '—';
+                return `<div class="flex items-start gap-2 text-xs py-0.5"><span class="text-amber-400 font-mono shrink-0">${this._escapeHTML(name)}</span><span class="text-white/50 break-all">${this._escapeHTML(image)}</span></div>`;
+              })
+              .join('')
           : '<span class="text-white/20 text-xs">No tags</span>';
-        add('ImageStream', [
-          kv('Image Repository', repository),
-          kv('Lookup Policy', r.spec?.lookupPolicy?.local ? 'Local' : 'Source'),
-          `<div class="text-white/30 text-xs uppercase tracking-wider mb-1 mt-2">Tags</div>${tagsHtml}`,
-        ].join(''), 'inspector-imagestream');
+        add(
+          'ImageStream',
+          [
+            kv('Image Repository', repository),
+            kv('Lookup Policy', r.spec?.lookupPolicy?.local ? 'Local' : 'Source'),
+            `<div class="text-white/30 text-xs uppercase tracking-wider mb-1 mt-2">Tags</div>${tagsHtml}`,
+          ].join(''),
+          'inspector-imagestream'
+        );
         break;
       }
       case 'Template': {
         const parameters = r.spec?.parameters || [];
-        add('Template', [
-          kv('Parameters', parameters.length),
-          kv('Objects', (r.spec?.objects || []).length),
-          kv('Message', r.spec?.message || '—'),
-          `<div class="text-white/30 text-xs uppercase tracking-wider mb-1 mt-2">Parameters</div>${parameters.length
-            ? parameters.map((parameter) => `<div class="text-xs flex items-center justify-between gap-2 py-0.5"><span class="text-white/60 font-mono">${this._escapeHTML(parameter.name)}</span><span class="text-white/30">${this._escapeHTML(parameter.value ?? '<required>')}</span></div>`).join('')
-            : '<span class="text-white/20 text-xs">No parameters</span>'}`,
-        ].join(''), 'inspector-template');
+        add(
+          'Template',
+          [
+            kv('Parameters', parameters.length),
+            kv('Objects', (r.spec?.objects || []).length),
+            kv('Message', r.spec?.message || '—'),
+            `<div class="text-white/30 text-xs uppercase tracking-wider mb-1 mt-2">Parameters</div>${
+              parameters.length
+                ? parameters
+                    .map(
+                      (parameter) =>
+                        `<div class="text-xs flex items-center justify-between gap-2 py-0.5"><span class="text-white/60 font-mono">${this._escapeHTML(parameter.name)}</span><span class="text-white/30">${this._escapeHTML(parameter.value ?? '<required>')}</span></div>`
+                    )
+                    .join('')
+                : '<span class="text-white/20 text-xs">No parameters</span>'
+            }`,
+          ].join(''),
+          'inspector-template'
+        );
         break;
       }
       case 'Subscription': {
-        add('Operator Subscription', [
-          kv('Package', r.spec?.packageName || r.spec?.name || '—'),
-          kv('Channel', r.spec?.channel || '—'),
-          kv('Source', r.spec?.source || '—'),
-          kv('Source Namespace', r.spec?.sourceNamespace || '—'),
-          kv('Install Plan Approval', r.spec?.installPlanApproval || '—'),
-          kv('Phase', r.status?.phase),
-          kv('Installed CSV', r.status?.installedCSV || '—'),
-          kv('Current CSV', r.status?.currentCSV || '—'),
-          kv('Reason', r.status?.reason || '—'),
-          kv('Message', r.status?.message || '—'),
-        ].join(''), 'inspector-subscription');
+        add(
+          'Operator Subscription',
+          [
+            kv('Package', r.spec?.packageName || r.spec?.name || '—'),
+            kv('Channel', r.spec?.channel || '—'),
+            kv('Source', r.spec?.source || '—'),
+            kv('Source Namespace', r.spec?.sourceNamespace || '—'),
+            kv('Install Plan Approval', r.spec?.installPlanApproval || '—'),
+            kv('Phase', r.status?.phase),
+            kv('Installed CSV', r.status?.installedCSV || '—'),
+            kv('Current CSV', r.status?.currentCSV || '—'),
+            kv('Reason', r.status?.reason || '—'),
+            kv('Message', r.status?.message || '—'),
+          ].join(''),
+          'inspector-subscription'
+        );
         break;
       }
       case 'SecurityContextConstraints': {
-        add('Security Context Constraints', [
-          kv('Priority', r.spec?.priority),
-          kv('Allow Privileged', r.spec?.allowPrivilegedContainer ? 'true' : 'false'),
-          kv('Allow Host Network', r.spec?.allowHostNetwork ? 'true' : 'false'),
-          kv('Allow Host Ports', r.spec?.allowHostPorts ? 'true' : 'false'),
-          kv('Allow Host Dir Volume', r.spec?.allowHostDirVolumePlugin ? 'true' : 'false'),
-          kv('Read Only Root Filesystem', r.spec?.readOnlyRootFilesystem ? 'true' : 'false'),
-          kv('RunAsUser Strategy', r.spec?.runAsUser?.type || '—'),
-          kv('SELinux Strategy', r.spec?.seLinuxContext?.type || '—'),
-          kv('FSGroup Strategy', r.spec?.fsGroup?.type || '—'),
-          kv('Users', (r.spec?.users || []).join(', ') || '<none>'),
-          kv('Groups', (r.spec?.groups || []).join(', ') || '<none>'),
-        ].join(''), 'inspector-scc');
+        add(
+          'Security Context Constraints',
+          [
+            kv('Priority', r.spec?.priority),
+            kv('Allow Privileged', r.spec?.allowPrivilegedContainer ? 'true' : 'false'),
+            kv('Allow Host Network', r.spec?.allowHostNetwork ? 'true' : 'false'),
+            kv('Allow Host Ports', r.spec?.allowHostPorts ? 'true' : 'false'),
+            kv('Allow Host Dir Volume', r.spec?.allowHostDirVolumePlugin ? 'true' : 'false'),
+            kv('Read Only Root Filesystem', r.spec?.readOnlyRootFilesystem ? 'true' : 'false'),
+            kv('RunAsUser Strategy', r.spec?.runAsUser?.type || '—'),
+            kv('SELinux Strategy', r.spec?.seLinuxContext?.type || '—'),
+            kv('FSGroup Strategy', r.spec?.fsGroup?.type || '—'),
+            kv('Users', (r.spec?.users || []).join(', ') || '<none>'),
+            kv('Groups', (r.spec?.groups || []).join(', ') || '<none>'),
+          ].join(''),
+          'inspector-scc'
+        );
         break;
       }
       case 'ResourceQuota': {
-        add('ResourceQuota', [
-          kv('Hard', Object.keys(r.spec?.hard || {}).length),
-          kv('Used', Object.keys(r.status?.used || {}).length),
-          this._usageTable(r.spec?.hard, r.status?.used),
-        ].join(''), 'inspector-quota');
+        add(
+          'ResourceQuota',
+          [
+            kv('Hard', Object.keys(r.spec?.hard || {}).length),
+            kv('Used', Object.keys(r.status?.used || {}).length),
+            this._usageTable(r.spec?.hard, r.status?.used),
+          ].join(''),
+          'inspector-quota'
+        );
         break;
       }
       case 'LimitRange': {
         const limits = r.spec?.limits || [];
-        add('LimitRange', limits.length
-          ? limits.map((entry) => `<div class="p-2 bg-white/5 rounded-lg border border-white/5 mb-1">
+        add(
+          'LimitRange',
+          limits.length
+            ? limits
+                .map(
+                  (entry) => `<div class="p-2 bg-white/5 rounded-lg border border-white/5 mb-1">
               <div class="text-white/70 text-xs font-medium">${this._escapeHTML(entry.type || 'Container')}</div>
               <div class="grid grid-cols-2 gap-x-3 gap-y-0.5 mt-1 text-[10px]">
                 <span class="text-white/30">Default</span><span class="text-white/60">${this._escapeHTML(this._objectText(entry.default))}</span>
@@ -605,134 +700,240 @@ export class InspectorPanel {
                 <span class="text-white/30">Min</span><span class="text-white/60">${this._escapeHTML(this._objectText(entry.min))}</span>
                 <span class="text-white/30">Max</span><span class="text-white/60">${this._escapeHTML(this._objectText(entry.max))}</span>
               </div>
-            </div>`).join('')
-          : '<span class="text-white/20 text-xs">No limits defined</span>', 'inspector-limitrange');
+            </div>`
+                )
+                .join('')
+            : '<span class="text-white/20 text-xs">No limits defined</span>',
+          'inspector-limitrange'
+        );
         break;
       }
       case 'ClusterResourceQuota': {
         const hard = r.spec?.quota?.hard || r.spec?.hard || {};
         const used = r.status?.total?.used || r.status?.used || {};
-        add('ClusterResourceQuota', [
-          kv('Selector', this._objectText(r.spec?.selector?.labels?.matchLabels) || '<none>'),
-          kv('Namespaces', (r.status?.namespaces || []).join(', ') || '<none>'),
-          this._usageTable(hard, used),
-        ].join(''), 'inspector-clusterquota');
+        add(
+          'ClusterResourceQuota',
+          [
+            kv('Selector', this._objectText(r.spec?.selector?.labels?.matchLabels) || '<none>'),
+            kv('Namespaces', (r.status?.namespaces || []).join(', ') || '<none>'),
+            this._usageTable(hard, used),
+          ].join(''),
+          'inspector-clusterquota'
+        );
         break;
       }
       case 'ClusterOperator': {
         const conditions = r.status?.conditions || [];
-        add('ClusterOperator', [
-          kv('Version', (r.status?.versions || []).map((version) => version.version).join(', ') || '—'),
-          kv('Available', r.isConditionTrue?.('Available') ? 'True' : 'False'),
-          kv('Progressing', r.isConditionTrue?.('Progressing') ? 'True' : 'False'),
-          kv('Degraded', r.isConditionTrue?.('Degraded') ? 'True' : 'False'),
-          this._conditionsTable(conditions),
-        ].join(''), 'inspector-clusteroperator');
+        add(
+          'ClusterOperator',
+          [
+            kv(
+              'Version',
+              (r.status?.versions || []).map((version) => version.version).join(', ') || '—'
+            ),
+            kv('Available', r.isConditionTrue?.('Available') ? 'True' : 'False'),
+            kv('Progressing', r.isConditionTrue?.('Progressing') ? 'True' : 'False'),
+            kv('Degraded', r.isConditionTrue?.('Degraded') ? 'True' : 'False'),
+            this._conditionsTable(conditions),
+          ].join(''),
+          'inspector-clusteroperator'
+        );
         break;
       }
       case 'ClusterVersion': {
-        add('ClusterVersion', [
-          kv('Desired Version', r.status?.desired?.version || '—'),
-          kv('Channel', r.spec?.channel || r.status?.desired?.channel || '—'),
-          kv('Available', r.isConditionTrue?.('Available') ? 'True' : 'False'),
-          kv('Progressing', r.isConditionTrue?.('Progressing') ? 'True' : 'False'),
-          this._conditionsTable(r.status?.conditions || []),
-        ].join(''), 'inspector-clusterversion');
+        add(
+          'ClusterVersion',
+          [
+            kv('Desired Version', r.status?.desired?.version || '—'),
+            kv('Channel', r.spec?.channel || r.status?.desired?.channel || '—'),
+            kv('Available', r.isConditionTrue?.('Available') ? 'True' : 'False'),
+            kv('Progressing', r.isConditionTrue?.('Progressing') ? 'True' : 'False'),
+            this._conditionsTable(r.status?.conditions || []),
+          ].join(''),
+          'inspector-clusterversion'
+        );
         break;
       }
       case 'User': {
-        add('User', [
-          kv('Full Name', r.spec?.fullName || '—'),
-          kv('Identities', (r.spec?.identities || []).map((identity) => `${identity.providerName || 'htpasswd'}:${identity.providerUserName || '—'}`).join(', ') || '<none>'),
-          kv('Groups', (r.spec?.groups || []).join(', ') || '<none>'),
-        ].join(''), 'inspector-user');
+        add(
+          'User',
+          [
+            kv('Full Name', r.spec?.fullName || '—'),
+            kv(
+              'Identities',
+              (r.spec?.identities || [])
+                .map(
+                  (identity) =>
+                    `${identity.providerName || 'htpasswd'}:${identity.providerUserName || '—'}`
+                )
+                .join(', ') || '<none>'
+            ),
+            kv('Groups', (r.spec?.groups || []).join(', ') || '<none>'),
+          ].join(''),
+          'inspector-user'
+        );
         break;
       }
       case 'Group': {
-        add('Group', [
-          kv('Users', (r.spec?.users || []).join(', ') || '<none>'),
-          kv('Member Count', (r.spec?.users || []).length),
-        ].join(''), 'inspector-group');
+        add(
+          'Group',
+          [
+            kv('Users', (r.spec?.users || []).join(', ') || '<none>'),
+            kv('Member Count', (r.spec?.users || []).length),
+          ].join(''),
+          'inspector-group'
+        );
         break;
       }
       case 'Service': {
-        const ports = (r.spec?.ports || []).map((port) => `${port.name || 'port'} ${port.port}/${port.protocol || 'TCP'} → ${port.targetPort ?? port.port}`).join(', ');
-        const external = (r.status?.loadBalancer?.ingress || []).map((entry) => entry.ip || entry.hostname).join(', ');
-        const endpoints = Array.isArray(r.endpoints) ? r.endpoints.map((endpoint) => endpoint.ip).filter(Boolean).join(', ') : '';
-        add('Service', [
-          kv('Type', r.spec?.type || 'ClusterIP'),
-          kv('Cluster IP', r.spec?.clusterIP || '—'),
-          kv('External IP', external || (r.spec?.type === 'LoadBalancer' ? '<pending>' : '<none>')),
-          kv('Ports', ports || '<none>'),
-          kv('Selector', this._objectText(r.spec?.selector) || '<none>'),
-          kv('Endpoints', endpoints || '<none>'),
-        ].join(''), 'inspector-service');
+        const ports = (r.spec?.ports || [])
+          .map(
+            (port) =>
+              `${port.name || 'port'} ${port.port}/${port.protocol || 'TCP'} → ${port.targetPort ?? port.port}`
+          )
+          .join(', ');
+        const external = (r.status?.loadBalancer?.ingress || [])
+          .map((entry) => entry.ip || entry.hostname)
+          .join(', ');
+        const endpoints = Array.isArray(r.endpoints)
+          ? r.endpoints
+              .map((endpoint) => endpoint.ip)
+              .filter(Boolean)
+              .join(', ')
+          : '';
+        add(
+          'Service',
+          [
+            kv('Type', r.spec?.type || 'ClusterIP'),
+            kv('Cluster IP', r.spec?.clusterIP || '—'),
+            kv(
+              'External IP',
+              external || (r.spec?.type === 'LoadBalancer' ? '<pending>' : '<none>')
+            ),
+            kv('Ports', ports || '<none>'),
+            kv('Selector', this._objectText(r.spec?.selector) || '<none>'),
+            kv('Endpoints', endpoints || '<none>'),
+          ].join(''),
+          'inspector-service'
+        );
         break;
       }
       case 'Deployment':
       case 'ReplicaSet':
       case 'StatefulSet': {
         const containers = r.spec?.template?.spec?.containers || [];
-        add(kind, [
-          kv('Replicas', `${r.status?.readyReplicas ?? 0}/${r.spec?.replicas ?? 0} ready`),
-          kv('Updated', r.status?.updatedReplicas ?? '—'),
-          kv('Available', r.status?.availableReplicas ?? '—'),
-          kv('Strategy', r.spec?.strategy?.type || '—'),
-          kv('Images', containers.map((container) => container.image).join(', ') || '—'),
-          this._conditionsTable(r.status?.conditions || []),
-        ].join(''), `inspector-${kind.toLowerCase()}`);
+        add(
+          kind,
+          [
+            kv('Replicas', `${r.status?.readyReplicas ?? 0}/${r.spec?.replicas ?? 0} ready`),
+            kv('Updated', r.status?.updatedReplicas ?? '—'),
+            kv('Available', r.status?.availableReplicas ?? '—'),
+            kv('Strategy', r.spec?.strategy?.type || '—'),
+            kv('Images', containers.map((container) => container.image).join(', ') || '—'),
+            this._conditionsTable(r.status?.conditions || []),
+          ].join(''),
+          `inspector-${kind.toLowerCase()}`
+        );
         break;
       }
       case 'Pod': {
         const containers = r.status?.containerStatuses || [];
         const containerHtml = containers.length
-          ? containers.map((container) => `<div class="p-2 bg-white/5 rounded-lg border border-white/5 mb-1">
+          ? containers
+              .map(
+                (container) => `<div class="p-2 bg-white/5 rounded-lg border border-white/5 mb-1">
               <div class="flex items-center justify-between gap-2">
                 <span class="text-white/80 text-xs font-medium">${this._escapeHTML(container.name)}</span>
                 <span class="${container.ready ? 'text-green-400' : 'text-yellow-400'} text-[10px]">${container.ready ? 'Ready' : 'NotReady'}</span>
               </div>
               <div class="text-white/40 text-[10px] mt-0.5 break-all">${this._escapeHTML(container.image || '—')}</div>
               <div class="text-white/30 text-[10px] mt-0.5">Restarts: ${this._escapeHTML(container.restartCount ?? 0)} · ${this._escapeHTML(Object.keys(container.state || {})[0] || 'Unknown')}</div>
-            </div>`).join('')
-          : ((r.spec?.containers || []).map((container) => `<div class="text-xs text-white/60">${this._escapeHTML(container.name)} <span class="text-white/30">${this._escapeHTML(container.image || '')}</span></div>`).join('') || '<span class="text-white/20 text-xs">No containers</span>');
-        add('Pod', [
-          kv('Node', r.spec?.nodeName || 'unscheduled'),
-          kv('Pod IP', r.status?.podIP || '—'),
-          kv('QoS Class', r.status?.qosClass || '—'),
-          kv('Service Account', r.spec?.serviceAccountName || 'default'),
-          kv('Restarts', r.getRestartCount?.() ?? r.status?.restartCount ?? 0),
-          `<div class="text-white/30 text-xs uppercase tracking-wider mb-1 mt-2">Containers</div>${containerHtml}`,
-        ].join(''), 'inspector-pod');
+            </div>`
+              )
+              .join('')
+          : (r.spec?.containers || [])
+              .map(
+                (container) =>
+                  `<div class="text-xs text-white/60">${this._escapeHTML(container.name)} <span class="text-white/30">${this._escapeHTML(container.image || '')}</span></div>`
+              )
+              .join('') || '<span class="text-white/20 text-xs">No containers</span>';
+        add(
+          'Pod',
+          [
+            kv('Node', r.spec?.nodeName || 'unscheduled'),
+            kv('Pod IP', r.status?.podIP || '—'),
+            kv('QoS Class', r.status?.qosClass || '—'),
+            kv('Service Account', r.spec?.serviceAccountName || 'default'),
+            kv('Restarts', r.getRestartCount?.() ?? r.status?.restartCount ?? 0),
+            `<div class="text-white/30 text-xs uppercase tracking-wider mb-1 mt-2">Containers</div>${containerHtml}`,
+          ].join(''),
+          'inspector-pod'
+        );
         break;
       }
       case 'Node': {
         const ready = r.status?.conditions?.find((condition) => condition.type === 'Ready');
-        const role = r.metadata?.labels?.['node-role.kubernetes.io/master'] !== undefined || r.metadata?.labels?.['node-role.kubernetes.io/control-plane'] !== undefined ? 'control-plane' : 'worker';
-        add('Node', [
-          kv('Status', ready?.status === 'True' ? 'Ready' : (r.status?.phase || 'NotReady')),
-          kv('Roles', role),
-          kv('Unschedulable', r.spec?.unschedulable ? 'true' : 'false'),
-          kv('Capacity', this._objectText(r.status?.capacity)),
-          kv('Allocatable', this._objectText(r.status?.allocatable)),
-          kv('CPU Usage', r.status?.usage?.cpuPercent !== undefined ? `${r.status.usage.cpuPercent}%` : '—'),
-          kv('Memory Usage', r.status?.usage?.memoryPercent !== undefined ? `${r.status.usage.memoryPercent}%` : '—'),
-          kv('Taints', (r.spec?.taints || []).map((taint) => `${taint.key}=${taint.value}:${taint.effect}`).join(', ') || '<none>'),
-        ].join(''), 'inspector-node');
+        const role =
+          r.metadata?.labels?.['node-role.kubernetes.io/master'] !== undefined ||
+          r.metadata?.labels?.['node-role.kubernetes.io/control-plane'] !== undefined
+            ? 'control-plane'
+            : 'worker';
+        add(
+          'Node',
+          [
+            kv('Status', ready?.status === 'True' ? 'Ready' : r.status?.phase || 'NotReady'),
+            kv('Roles', role),
+            kv('Unschedulable', r.spec?.unschedulable ? 'true' : 'false'),
+            kv('Capacity', this._objectText(r.status?.capacity)),
+            kv('Allocatable', this._objectText(r.status?.allocatable)),
+            kv(
+              'CPU Usage',
+              r.status?.usage?.cpuPercent !== undefined ? `${r.status.usage.cpuPercent}%` : '—'
+            ),
+            kv(
+              'Memory Usage',
+              r.status?.usage?.memoryPercent !== undefined
+                ? `${r.status.usage.memoryPercent}%`
+                : '—'
+            ),
+            kv(
+              'Taints',
+              (r.spec?.taints || [])
+                .map((taint) => `${taint.key}=${taint.value}:${taint.effect}`)
+                .join(', ') || '<none>'
+            ),
+          ].join(''),
+          'inspector-node'
+        );
         break;
       }
       case 'ServiceAccount': {
-        add('ServiceAccount', [
-          kv('Secrets', (r.spec?.secrets || []).map((secret) => secret.name).join(', ') || '<none>'),
-          kv('Image Pull Secrets', (r.spec?.imagePullSecrets || []).map((secret) => secret.name).join(', ') || '<none>'),
-          kv('Automount Token', r.spec?.automountServiceAccountToken ?? true),
-        ].join(''), 'inspector-serviceaccount');
+        add(
+          'ServiceAccount',
+          [
+            kv(
+              'Secrets',
+              (r.spec?.secrets || []).map((secret) => secret.name).join(', ') || '<none>'
+            ),
+            kv(
+              'Image Pull Secrets',
+              (r.spec?.imagePullSecrets || []).map((secret) => secret.name).join(', ') || '<none>'
+            ),
+            kv('Automount Token', r.spec?.automountServiceAccountToken ?? true),
+          ].join(''),
+          'inspector-serviceaccount'
+        );
         break;
       }
       default: {
         const spec = r.spec && typeof r.spec === 'object' ? r.spec : {};
         const keys = Object.keys(spec).slice(0, 16);
         if (keys.length > 0) {
-          add('Spec (key fields)', keys.map((key) => kv(key, this._previewValue(spec[key]))).join(''), 'inspector-spec');
+          add(
+            'Spec (key fields)',
+            keys.map((key) => kv(key, this._previewValue(spec[key]))).join(''),
+            'inspector-spec'
+          );
         }
         break;
       }
@@ -748,7 +949,9 @@ export class InspectorPanel {
       const classes = options.danger
         ? 'px-2.5 py-1.5 text-xs rounded-lg border border-red-500/30 text-red-400 hover:bg-red-500/10 transition-colors'
         : 'px-2.5 py-1.5 text-xs rounded-lg border border-white/10 text-white/70 hover:bg-white/10 transition-colors';
-      buttons.push(`<button class="${classes}" data-inspector-action="${this._escapeHTML(action)}" data-testid="inspector-action-${this._escapeHTML(options.testid || action)}">${this._escapeHTML(label)}</button>`);
+      buttons.push(
+        `<button class="${classes}" data-inspector-action="${this._escapeHTML(action)}" data-testid="inspector-action-${this._escapeHTML(options.testid || action)}">${this._escapeHTML(label)}</button>`
+      );
     };
 
     if (kind === 'Service') addButton('expose', 'Expose Route', { testid: 'expose' });
@@ -764,7 +967,11 @@ export class InspectorPanel {
       buttons.push(this._renderSccPicker());
     }
     if (kind === 'Subscription') {
-      if (r.status?.phase === 'Succeeded') addButton('uninstall-operator', 'Uninstall Operator', { testid: 'uninstall-operator', danger: true });
+      if (r.status?.phase === 'Succeeded')
+        addButton('uninstall-operator', 'Uninstall Operator', {
+          testid: 'uninstall-operator',
+          danger: true,
+        });
       else addButton('install-operator', 'Install Operator', { testid: 'install-operator' });
     }
     if (kind === 'Node') {
@@ -779,7 +986,7 @@ export class InspectorPanel {
     const scaleHtml = SCALE_KINDS.has(kind)
       ? `<div class="flex items-center gap-2 mt-2">
           <label class="text-white/30 text-[10px] uppercase tracking-wider" for="inspector-scale-input">Replicas</label>
-          <input id="inspector-scale-input" data-inspector-scale data-testid="inspector-scale-input" type="number" min="0" max="100" value="${this._escapeHTML(this._scaleValue ?? (r.spec?.replicas ?? 1))}" class="w-20 px-2 py-1 text-xs text-white bg-black/40 border border-white/15 rounded-lg outline-none focus:border-openshift/50 font-mono" />
+          <input id="inspector-scale-input" data-inspector-scale data-testid="inspector-scale-input" type="number" min="0" max="100" value="${this._escapeHTML(this._scaleValue ?? r.spec?.replicas ?? 1)}" class="w-20 px-2 py-1 text-xs text-white bg-black/40 border border-white/15 rounded-lg outline-none focus:border-openshift/50 font-mono" />
           <button data-inspector-action="scale" data-testid="inspector-action-scale" class="px-2.5 py-1.5 text-xs rounded-lg border border-sky-500/30 text-sky-400 hover:bg-sky-500/10 transition-colors">Scale</button>
         </div>`
       : '';
@@ -796,13 +1003,24 @@ export class InspectorPanel {
     const cluster = this._cluster();
     let names = [];
     try {
-      const sccs = cluster?.getResourcesByKind?.('SecurityContextConstraints') || cluster?.getByKind?.('SecurityContextConstraints') || [];
-      names = sccs.map((scc) => scc.metadata?.name).filter(Boolean).sort();
+      const sccs =
+        cluster?.getResourcesByKind?.('SecurityContextConstraints') ||
+        cluster?.getByKind?.('SecurityContextConstraints') ||
+        [];
+      names = sccs
+        .map((scc) => scc.metadata?.name)
+        .filter(Boolean)
+        .sort();
     } catch {
       names = [];
     }
     if (names.length === 0) names = ['anyuid'];
-    const selected = this._sccChoice && names.includes(this._sccChoice) ? this._sccChoice : (names.includes('anyuid') ? 'anyuid' : names[0]);
+    const selected =
+      this._sccChoice && names.includes(this._sccChoice)
+        ? this._sccChoice
+        : names.includes('anyuid')
+          ? 'anyuid'
+          : names[0];
     return `<div class="flex items-center gap-2">
       <select data-inspector-scc data-testid="inspector-scc-select" aria-label="Security context constraint" class="px-2 py-1.5 text-xs text-white/80 bg-black/40 border border-white/15 rounded-lg outline-none focus:border-openshift/50">
         ${names.map((name) => `<option value="${this._escapeHTML(name)}" ${name === selected ? 'selected' : ''}>${this._escapeHTML(name)}</option>`).join('')}
@@ -901,7 +1119,12 @@ export class InspectorPanel {
     const r = this.resource;
     let events = [];
     try {
-      events = typeof r.getEvents === 'function' ? r.getEvents(50) : (Array.isArray(r._events) ? r._events : []);
+      events =
+        typeof r.getEvents === 'function'
+          ? r.getEvents(50)
+          : Array.isArray(r._events)
+            ? r._events
+            : [];
     } catch {
       events = [];
     }
@@ -911,7 +1134,9 @@ export class InspectorPanel {
     const sorted = [...events].reverse();
     return `
       <div class="space-y-2" data-testid="inspector-events">
-        ${sorted.map((event) => `
+        ${sorted
+          .map(
+            (event) => `
           <div class="p-2 bg-white/5 rounded-lg border border-white/5">
             <div class="flex items-center gap-2 mb-1">
               <div class="w-1.5 h-1.5 rounded-full ${event.type === 'Warning' ? 'bg-yellow-400' : 'bg-green-400'}"></div>
@@ -921,7 +1146,9 @@ export class InspectorPanel {
             </div>
             <div class="text-white/40 text-xs pl-3.5 break-words">${this._escapeHTML(event.message || '')}</div>
           </div>
-        `).join('')}
+        `
+          )
+          .join('')}
       </div>
     `;
   }
@@ -965,7 +1192,8 @@ export class InspectorPanel {
   }
 
   _onFocusIn(event) {
-    if (event.target?.matches?.('[data-inspector-scale], [data-inspector-scc]')) this._interacting = true;
+    if (event.target?.matches?.('[data-inspector-scale], [data-inspector-scc]'))
+      this._interacting = true;
   }
 
   _onFocusOut() {
@@ -1026,7 +1254,10 @@ export class InspectorPanel {
             finish(`Creating a Route for Service ${name}…`);
             return;
           }
-          finish(this._resultMessage(result, `Route for Service ${name} created`), result.success === false);
+          finish(
+            this._resultMessage(result, `Route for Service ${name} created`),
+            result.success === false
+          );
           return;
         }
 
@@ -1040,7 +1271,10 @@ export class InspectorPanel {
             finish(`Starting build for ${name}…`);
             return;
           }
-          finish(this._resultMessage(result, `Build for ${name} started`), result.success === false);
+          finish(
+            this._resultMessage(result, `Build for ${name} started`),
+            result.success === false
+          );
           return;
         }
 
@@ -1056,7 +1290,10 @@ export class InspectorPanel {
             finish(`Running oc rollout ${subcommand} ${kind}/${name}…`);
             return;
           }
-          finish(this._resultMessage(result, `oc rollout ${subcommand} ${kind}/${name} completed`), result.success === false);
+          finish(
+            this._resultMessage(result, `oc rollout ${subcommand} ${kind}/${name} completed`),
+            result.success === false
+          );
           return;
         }
 
@@ -1076,7 +1313,10 @@ export class InspectorPanel {
             return;
           }
           this._scaleValue = value;
-          finish(this._resultMessage(result, `Scaled ${kind}/${name} to ${value} replicas`), result.success === false);
+          finish(
+            this._resultMessage(result, `Scaled ${kind}/${name} to ${value} replicas`),
+            result.success === false
+          );
           return;
         }
 
@@ -1091,7 +1331,10 @@ export class InspectorPanel {
             finish(`Granting SCC ${name} to ${currentUser}…`);
             return;
           }
-          finish(this._resultMessage(result, `SCC ${name} added to ${currentUser}`), result.success === false);
+          finish(
+            this._resultMessage(result, `SCC ${name} added to ${currentUser}`),
+            result.success === false
+          );
           return;
         }
 
@@ -1099,7 +1342,10 @@ export class InspectorPanel {
           const select = this.container?.querySelector('[data-inspector-scc]');
           const sccName = select?.value || this._sccChoice || 'anyuid';
           let result = null;
-          if (kind === 'ServiceAccount' && typeof gameEngine?.addSCCToServiceAccount === 'function') {
+          if (
+            kind === 'ServiceAccount' &&
+            typeof gameEngine?.addSCCToServiceAccount === 'function'
+          ) {
             result = gameEngine.addSCCToServiceAccount(sccName, name, { namespace });
           } else if (kind === 'Group' && typeof gameEngine?.addSCCToGroup === 'function') {
             result = gameEngine.addSCCToGroup(sccName, name);
@@ -1113,7 +1359,10 @@ export class InspectorPanel {
             finish(`Granting SCC ${sccName} to ${name}…`);
             return;
           }
-          finish(this._resultMessage(result, `SCC ${sccName} added to ${name}`), result.success === false);
+          finish(
+            this._resultMessage(result, `SCC ${sccName} added to ${name}`),
+            result.success === false
+          );
           return;
         }
 
@@ -1133,14 +1382,22 @@ export class InspectorPanel {
             resource._installElapsed = 0;
             cluster?.update?.(resource.metadata?.uid, resource);
             emit('operator:installing', { name, namespace, packageName });
-            result = { success: true, message: `Installing operator ${packageName} in ${namespace || 'openshift-operators'}…` };
+            result = {
+              success: true,
+              message: `Installing operator ${packageName} in ${namespace || 'openshift-operators'}…`,
+            };
           }
           if (!result) {
-            command(`create -f examples/subscription.yaml -n ${namespace || 'openshift-operators'}`);
+            command(
+              `create -f examples/subscription.yaml -n ${namespace || 'openshift-operators'}`
+            );
             finish('Creating the operator Subscription…');
             return;
           }
-          finish(this._resultMessage(result, `Installing operator ${packageName}…`), result.success === false);
+          finish(
+            this._resultMessage(result, `Installing operator ${packageName}…`),
+            result.success === false
+          );
           return;
         }
 
@@ -1172,7 +1429,10 @@ export class InspectorPanel {
             finish(`Switching to project ${name}…`);
             return;
           }
-          finish(this._resultMessage(result, `Now using project ${name}`), result.success === false);
+          finish(
+            this._resultMessage(result, `Now using project ${name}`),
+            result.success === false
+          );
           return;
         }
 
@@ -1200,7 +1460,11 @@ export class InspectorPanel {
             if (navigator.clipboard?.writeText) {
               navigator.clipboard.writeText(yaml).then(
                 () => this._setActionMessage('YAML copied to the clipboard.'),
-                () => this._setActionMessage('Clipboard unavailable — select the YAML text to copy.', true)
+                () =>
+                  this._setActionMessage(
+                    'Clipboard unavailable — select the YAML text to copy.',
+                    true
+                  )
               );
               return;
             }
@@ -1309,11 +1573,17 @@ export class InspectorPanel {
       <div class="grid grid-cols-3 bg-white/5 px-2 py-1 text-[10px] uppercase tracking-wider text-white/30">
         <span>Resource</span><span class="text-right">Used</span><span class="text-right">Hard</span>
       </div>
-      ${keys.map((key) => `<div class="grid grid-cols-3 px-2 py-1 text-[11px] font-mono ${this._quotaRowOver(key, hard, used) ? 'bg-red-500/10' : ''}">
+      ${keys
+        .map(
+          (
+            key
+          ) => `<div class="grid grid-cols-3 px-2 py-1 text-[11px] font-mono ${this._quotaRowOver(key, hard, used) ? 'bg-red-500/10' : ''}">
         <span class="text-white/50 truncate">${this._escapeHTML(key)}</span>
         <span class="text-white/70 text-right">${this._escapeHTML(used?.[key] ?? '0')}</span>
         <span class="text-white/40 text-right">${this._escapeHTML(hard?.[key] ?? '—')}</span>
-      </div>`).join('')}
+      </div>`
+        )
+        .join('')}
     </div>`;
   }
 
@@ -1325,7 +1595,12 @@ export class InspectorPanel {
     if (/memory$/.test(key)) return this._parseMemory(usedValue) >= this._parseMemory(hardValue);
     const numericHard = Number.parseFloat(hardValue);
     const numericUsed = Number.parseFloat(usedValue);
-    return Number.isFinite(numericHard) && numericHard > 0 && Number.isFinite(numericUsed) && numericUsed >= numericHard;
+    return (
+      Number.isFinite(numericHard) &&
+      numericHard > 0 &&
+      Number.isFinite(numericUsed) &&
+      numericUsed >= numericHard
+    );
   }
 
   _parseCpu(value) {
@@ -1347,12 +1622,16 @@ export class InspectorPanel {
   _conditionsTable(conditions = []) {
     if (!conditions.length) return '<span class="text-white/20 text-xs">No conditions</span>';
     return `<div class="mt-1 space-y-1">
-      ${conditions.map((condition) => `<div class="flex items-center gap-2 text-[11px]">
+      ${conditions
+        .map(
+          (condition) => `<div class="flex items-center gap-2 text-[11px]">
         <span class="w-1.5 h-1.5 rounded-full ${condition.status === 'True' ? (condition.type === 'Degraded' || condition.type === 'Failing' ? 'bg-red-400' : 'bg-green-400') : 'bg-white/20'}"></span>
         <span class="text-white/60 font-mono w-24 shrink-0">${this._escapeHTML(condition.type)}</span>
         <span class="${condition.status === 'True' ? 'text-white/70' : 'text-white/35'}">${this._escapeHTML(condition.status)}</span>
         <span class="text-white/30 truncate">${this._escapeHTML(condition.reason || '')}</span>
-      </div>`).join('')}
+      </div>`
+        )
+        .join('')}
     </div>`;
   }
 
@@ -1395,8 +1674,13 @@ export class InspectorPanel {
   _objectText(value) {
     if (value === null || value === undefined) return '';
     if (typeof value !== 'object') return String(value);
-    if (Array.isArray(value)) return value.map((item) => (typeof item === 'object' ? JSON.stringify(item) : String(item))).join(', ');
-    return Object.entries(value).map(([key, item]) => `${key}: ${item}`).join(', ');
+    if (Array.isArray(value))
+      return value
+        .map((item) => (typeof item === 'object' ? JSON.stringify(item) : String(item)))
+        .join(', ');
+    return Object.entries(value)
+      .map(([key, item]) => `${key}: ${item}`)
+      .join(', ');
   }
 
   _previewValue(value) {
@@ -1410,7 +1694,12 @@ export class InspectorPanel {
 
   _text(value) {
     if (value === null || value === undefined || value === '') return '—';
-    if (Array.isArray(value)) return value.length ? value.map((item) => (typeof item === 'object' ? JSON.stringify(item) : String(item))).join(', ') : '—';
+    if (Array.isArray(value))
+      return value.length
+        ? value
+            .map((item) => (typeof item === 'object' ? JSON.stringify(item) : String(item)))
+            .join(', ')
+        : '—';
     if (typeof value === 'object') return JSON.stringify(value);
     return String(value);
   }

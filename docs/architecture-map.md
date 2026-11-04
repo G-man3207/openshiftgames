@@ -4,23 +4,25 @@
 (`chore: edge cache headers + UA-deflect bots + agent-aware robots (#33)`). Working tree was clean.
 **Scope:** every file in the repo except `.git/`, `LICENSE`, images.
 **Purpose:** this document is the contract between parallel conversion workstreams. It answers, for every
-feature you must convert: *where the code is, what shape the data has, what is wired to what, and what is
-broken/lying*. Line numbers are from the audited commit; they will drift as edits land — treat them as
+feature you must convert: _where the code is, what shape the data has, what is wired to what, and what is
+broken/lying_. Line numbers are from the audited commit; they will drift as edits land — treat them as
 anchors, not eternal truth.
 
 > **Companion documents — read both.**
+>
 > - `docs/CONVERSION-SPEC.md` (Team Lead) is the **authoritative build contract**: branding, target OCP
 >   4.22 / EX280V422, mandatory `js/data/kindRegistry.js`, acceptance criteria, workstream ownership.
->   Where this map's *recommendations* differ from the spec on scope/design, follow the spec.
+>   Where this map's _recommendations_ differ from the spec on scope/design, follow the spec.
 > - This file is the **source-code archaeology** that the spec's workstreams build against: exact
 >   files/lines, data schemas, dead code, and latent bugs.
 > - Note: a concurrent workstream had already created `js/data/kindRegistry.js` (new untracked file) while
 >   this map was being written. The fan-out list in §2.6/§8.6 is exactly what that registry must absorb.
 
 > **Read this first — the five structural surprises**
+>
 > 1. There is **no base class for game modes and no `KIND_DEFAULTS` registry**. Kind metadata is
 >    duplicated across **13+ hard-coded lists** (see §8.6/§11). Adding an OpenShift kind means touching
->    *many* files, not one.
+>    _many_ files, not one.
 > 2. There are **three incompatible resource-creation paths**. The UI palette instantiates rich
 >    subclasses (`new RESOURCE_CLASSES[kind]`); commands/modes/draw call `ClusterState.addResource()`,
 >    which **downgrades everything to a plain `ResourceBase` and regenerates the UID**. Controllers in
@@ -30,7 +32,7 @@ anchors, not eternal truth.
 >    `ResourceMeshes.CREATORS`). Classes like `PersistentVolumeClaim` therefore never bind.
 > 4. The **command parser does not accept a `kubectl` prefix**, even though the prompt says `$ kubectl`
 >    and every hint/incident step says "type `kubectl …`". You must type `get pods`, not `kubectl get pods`.
->    This is the single best argument for doing the `kubectl`→`oc` rename as an *accept-both-prefixes*
+>    This is the single best argument for doing the `kubectl`→`oc` rename as an _accept-both-prefixes_
 >    change rather than a string swap.
 > 5. Several campaign levels are **mathematically unwinnable** with the shipped UI (see §6.6). Any content
 >    conversion must fix the objective evaluator/data-path bugs, not just re-word the levels.
@@ -41,45 +43,45 @@ anchors, not eternal truth.
 
 ### 0.1 File inventory (all tracked source)
 
-| File | Lines | Role |
-|---|---:|---|
-| `index.html` | 1,988 | Game shell. 1,558-line inline `<script type="module">` (L429–L1986) = `K8sGamesApp` + app wiring. Loads all JS modules. |
-| `draw.html` | 1,046 | "K8s Draw" page. 761-line inline module (L284–L1044) = `K8sDraw`. |
-| `js/engine/GameEngine.js` | 920 | `EventBus`, `GameEngine` façade, command queue/handlers, game loop, objectives/achievements/notifications, save/load (unused). |
-| `js/engine/ClusterState.js` | 758 | In-memory cluster: resource maps/indices, relationships, queries, quota bookkeeping, `addResource` factory. |
-| `js/engine/SimulationTick.js` | 981 | **All controllers**: scheduler, pod lifecycle, Deployments/RS, STS, DS, Jobs, CronJobs, HPA, Services, quota, chaos, metrics. |
-| `js/engine/IncidentEngine.js` | 553 | Incident lifecycle, scripted/random spawning, cascade rules, health, resolution XP. |
-| `js/engine/ScoringEngine.js` | 821 | XP/levels, stars, campaign/challenge progress, Architecture Advisor (10 categories), achievements. |
-| `js/resources/ResourceBase.js` | 486 | Base resource model (metadata/spec/status, YAML, events, owner refs, clone). |
-| `js/resources/WorkloadResources.js` | 1,005 | `Pod, Deployment, ReplicaSet, StatefulSet, DaemonSet, Job, CronJob`. |
-| `js/resources/NetworkResources.js` | 437 | `Service, Ingress, NetworkPolicy`. |
-| `js/resources/ConfigResources.js` | 233 | `ConfigMap, Secret`. |
-| `js/resources/StorageResources.js` | 312 | `PersistentVolume, StorageClass, PersistentVolumeClaim`. |
-| `js/resources/ClusterResources.js` | 691 | `Node, Namespace, HorizontalPodAutoscaler, ResourceQuota, PodDisruptionBudget`. |
-| `js/resources/RBACResources.js` | 297 | `ServiceAccount, Role, ClusterRole, RoleBinding, ClusterRoleBinding`. |
-| `js/ui/CommandBar.js` | 1,231 | Terminal UI, tokenizer/aliases/completion, 16 commands, `kubectl explain` database. |
-| `js/ui/InspectorPanel.js` | 504 | Right drawer, tabs Overview/YAML/Events/Describe, Edit button. |
-| `js/ui/HUD.js` | 450 | Top bar (counters, CPU/MEM, timer, mode, XP, speed, alerts, GitHub badge). |
-| `js/ui/ContextMenu.js` | 250 | Right-click actions per kind. |
-| `js/ui/IncidentPanel.js` | 449 | Left drawer, incident cards, investigation-step matching, localStorage. |
-| `js/ui/MetricsDashboard.js` | 325 | Bottom charts CPU/Memory/Network/Pod count. |
-| `js/ui/Minimap.js` | 281 | Canvas minimap, `KIND_SIZES`. |
-| `js/ui/SettingsPanel.js` | 241 | In-game settings modal (second settings system). |
-| `js/rendering/ClusterRenderer.js` | 753 | Three.js scene, camera/OrbitControls, picking, namespace planes, animation. |
-| `js/rendering/ResourceMeshes.js` | 800 | Kind → Three.js mesh registry (`CREATORS`), status colors, label sprites. |
-| `js/rendering/ConnectionLines.js` | 199 | Animated dashed ownership/network curves. |
-| `js/rendering/ParticleTraffic.js` | 373 | GPU traffic particles — **installed but never fed routes** (see §8.4). |
-| `js/modes/CampaignMode.js` | 626 | 20-level campaign, **objective evaluator**, stars, hints, tutorials. |
-| `js/modes/ChallengeMode.js` | 688 | `CHALLENGES` data (10 timed scenarios), separate objective evaluator, timeout. |
-| `js/modes/ChaosMode.js` | 281 | Endless survival, health decay, waves. |
-| `js/modes/SandboxMode.js` | 288 | Free build, architecture score loop, YAML export. |
-| `js/data/CampaignLevels.js` | 613 | 20 level definitions + `CHAPTERS`. |
-| `js/data/IncidentDefs.js` | 722 | 34 incident definitions + categories + severity levels. |
-| `js/data/Achievements.js` | 416 | 45 achievements as predicate closures. |
-| `style.css` | 1,611 | All custom styling (menu, palette, HUD, tutorial, modals, responsive). |
-| `vercel.json` | 49 | Static hosting: `/draw` rewrite, cache headers, bot redirect. |
-| `og-image.html` / `og-image.png` / `screenshot.png` / `robots.txt` | — | Web assets only. `og-image.html` is a standalone 1200×630 marketing render, not part of the app. |
-| `README.md` | 101 | Marketing copy; several claims are stale (see §0.4) — **it is a conversion surface**. |
+| File                                                               | Lines | Role                                                                                                                           |
+| ------------------------------------------------------------------ | ----: | ------------------------------------------------------------------------------------------------------------------------------ |
+| `index.html`                                                       | 1,988 | Game shell. 1,558-line inline `<script type="module">` (L429–L1986) = `K8sGamesApp` + app wiring. Loads all JS modules.        |
+| `draw.html`                                                        | 1,046 | "K8s Draw" page. 761-line inline module (L284–L1044) = `K8sDraw`.                                                              |
+| `js/engine/GameEngine.js`                                          |   920 | `EventBus`, `GameEngine` façade, command queue/handlers, game loop, objectives/achievements/notifications, save/load (unused). |
+| `js/engine/ClusterState.js`                                        |   758 | In-memory cluster: resource maps/indices, relationships, queries, quota bookkeeping, `addResource` factory.                    |
+| `js/engine/SimulationTick.js`                                      |   981 | **All controllers**: scheduler, pod lifecycle, Deployments/RS, STS, DS, Jobs, CronJobs, HPA, Services, quota, chaos, metrics.  |
+| `js/engine/IncidentEngine.js`                                      |   553 | Incident lifecycle, scripted/random spawning, cascade rules, health, resolution XP.                                            |
+| `js/engine/ScoringEngine.js`                                       |   821 | XP/levels, stars, campaign/challenge progress, Architecture Advisor (10 categories), achievements.                             |
+| `js/resources/ResourceBase.js`                                     |   486 | Base resource model (metadata/spec/status, YAML, events, owner refs, clone).                                                   |
+| `js/resources/WorkloadResources.js`                                | 1,005 | `Pod, Deployment, ReplicaSet, StatefulSet, DaemonSet, Job, CronJob`.                                                           |
+| `js/resources/NetworkResources.js`                                 |   437 | `Service, Ingress, NetworkPolicy`.                                                                                             |
+| `js/resources/ConfigResources.js`                                  |   233 | `ConfigMap, Secret`.                                                                                                           |
+| `js/resources/StorageResources.js`                                 |   312 | `PersistentVolume, StorageClass, PersistentVolumeClaim`.                                                                       |
+| `js/resources/ClusterResources.js`                                 |   691 | `Node, Namespace, HorizontalPodAutoscaler, ResourceQuota, PodDisruptionBudget`.                                                |
+| `js/resources/RBACResources.js`                                    |   297 | `ServiceAccount, Role, ClusterRole, RoleBinding, ClusterRoleBinding`.                                                          |
+| `js/ui/CommandBar.js`                                              | 1,231 | Terminal UI, tokenizer/aliases/completion, 16 commands, `kubectl explain` database.                                            |
+| `js/ui/InspectorPanel.js`                                          |   504 | Right drawer, tabs Overview/YAML/Events/Describe, Edit button.                                                                 |
+| `js/ui/HUD.js`                                                     |   450 | Top bar (counters, CPU/MEM, timer, mode, XP, speed, alerts, GitHub badge).                                                     |
+| `js/ui/ContextMenu.js`                                             |   250 | Right-click actions per kind.                                                                                                  |
+| `js/ui/IncidentPanel.js`                                           |   449 | Left drawer, incident cards, investigation-step matching, localStorage.                                                        |
+| `js/ui/MetricsDashboard.js`                                        |   325 | Bottom charts CPU/Memory/Network/Pod count.                                                                                    |
+| `js/ui/Minimap.js`                                                 |   281 | Canvas minimap, `KIND_SIZES`.                                                                                                  |
+| `js/ui/SettingsPanel.js`                                           |   241 | In-game settings modal (second settings system).                                                                               |
+| `js/rendering/ClusterRenderer.js`                                  |   753 | Three.js scene, camera/OrbitControls, picking, namespace planes, animation.                                                    |
+| `js/rendering/ResourceMeshes.js`                                   |   800 | Kind → Three.js mesh registry (`CREATORS`), status colors, label sprites.                                                      |
+| `js/rendering/ConnectionLines.js`                                  |   199 | Animated dashed ownership/network curves.                                                                                      |
+| `js/rendering/ParticleTraffic.js`                                  |   373 | GPU traffic particles — **installed but never fed routes** (see §8.4).                                                         |
+| `js/modes/CampaignMode.js`                                         |   626 | 20-level campaign, **objective evaluator**, stars, hints, tutorials.                                                           |
+| `js/modes/ChallengeMode.js`                                        |   688 | `CHALLENGES` data (10 timed scenarios), separate objective evaluator, timeout.                                                 |
+| `js/modes/ChaosMode.js`                                            |   281 | Endless survival, health decay, waves.                                                                                         |
+| `js/modes/SandboxMode.js`                                          |   288 | Free build, architecture score loop, YAML export.                                                                              |
+| `js/data/CampaignLevels.js`                                        |   613 | 20 level definitions + `CHAPTERS`.                                                                                             |
+| `js/data/IncidentDefs.js`                                          |   722 | 34 incident definitions + categories + severity levels.                                                                        |
+| `js/data/Achievements.js`                                          |   416 | 45 achievements as predicate closures.                                                                                         |
+| `style.css`                                                        | 1,611 | All custom styling (menu, palette, HUD, tutorial, modals, responsive).                                                         |
+| `vercel.json`                                                      |    49 | Static hosting: `/draw` rewrite, cache headers, bot redirect.                                                                  |
+| `og-image.html` / `og-image.png` / `screenshot.png` / `robots.txt` |     — | Web assets only. `og-image.html` is a standalone 1200×630 marketing render, not part of the app.                               |
+| `README.md`                                                        |   101 | Marketing copy; several claims are stale (see §0.4) — **it is a conversion surface**.                                          |
 
 Totals at audit: **16,984 JS lines across 31 JS modules**, **2 HTML entry points**, ~22k source
 lines total (plus `docs/`, which did not exist at the audited commit — a concurrent workstream added
@@ -87,16 +89,16 @@ lines total (plus `docs/`, which did not exist at the audited commit — a concu
 
 ### 0.2 Runtime constraints (do not break these without an explicit decision)
 
-| Constraint | Evidence | Consequence for conversion |
-|---|---|---|
-| **No build step, no bundler, no package.json, no node_modules** | No `package.json` in tree (`git ls-files`); README:11,95–97 | Must stay plain ES modules served statically. New modules must be imported with relative paths + explicit `.js`. |
-| **CDN dependencies** | Tailwind `https://cdn.tailwindcss.com/3.4.1` (`index.html:23`, `draw.html:23`); Three.js r152 via import map `https://unpkg.com/three@0.152.0/...` (`index.html:44–51`, `draw.html:44–51`); Google Fonts (`index.html:20–22`) | Requires network at load. Offline/air-gapped demo or CSP-restricted hosting breaks. Tailwind CDN emits a console warning in production. |
-| **Import maps** | same blocks | All `three` imports in `js/rendering/*.js` resolve through the page's import map — every entry HTML must keep it. |
-| **WebGL required** | `index.html:532–539` creates a probe canvas, shows `_showWebGLError()` (L595–615) on failure; `draw.html` has **no** guard, `init().catch(console.error)` (L1042–1043) only | Conversion must preserve the guard (or replace renderer). Headless tests cannot import rendering modules without a WebGL stub. |
-| **Static hosting via Vercel** | `vercel.json:1–49`: `/draw`→`/draw.html` rewrite (L2–4), cache headers for `/js/(.*)` (L8–12), HTML/root (L19–36), UA-based redirect to `/robots.txt` for AI/SEO bots (L38–48) | Keep `/draw` route if the renamed page keeps that URL. Header/cache config unchanged unless file layout changes. |
-| **No tests, no CI, no `.github/`** | `git ls-files`; no test files | Conversion must add at minimum a Node-based smoke harness for pure modules (see Appendix B). Node ≥ 18 works: `node --input-type=module -e "import …"`. |
-| **Global browser coupling** | `window.game`, `document.getElementById`, `localStorage`, `requestAnimationFrame` everywhere | Pure model modules (`js/resources/*`, data) are testable in Node; UI/engine are not without DOM stubs. |
-| **License** | Apache-2.0 (`LICENSE`) | Keep headers/attribution when forking. |
+| Constraint                                                      | Evidence                                                                                                                                                                                                                      | Consequence for conversion                                                                                                                              |
+| --------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **No build step, no bundler, no package.json, no node_modules** | No `package.json` in tree (`git ls-files`); README:11,95–97                                                                                                                                                                   | Must stay plain ES modules served statically. New modules must be imported with relative paths + explicit `.js`.                                        |
+| **CDN dependencies**                                            | Tailwind `https://cdn.tailwindcss.com/3.4.1` (`index.html:23`, `draw.html:23`); Three.js r152 via import map `https://unpkg.com/three@0.152.0/...` (`index.html:44–51`, `draw.html:44–51`); Google Fonts (`index.html:20–22`) | Requires network at load. Offline/air-gapped demo or CSP-restricted hosting breaks. Tailwind CDN emits a console warning in production.                 |
+| **Import maps**                                                 | same blocks                                                                                                                                                                                                                   | All `three` imports in `js/rendering/*.js` resolve through the page's import map — every entry HTML must keep it.                                       |
+| **WebGL required**                                              | `index.html:532–539` creates a probe canvas, shows `_showWebGLError()` (L595–615) on failure; `draw.html` has **no** guard, `init().catch(console.error)` (L1042–1043) only                                                   | Conversion must preserve the guard (or replace renderer). Headless tests cannot import rendering modules without a WebGL stub.                          |
+| **Static hosting via Vercel**                                   | `vercel.json:1–49`: `/draw`→`/draw.html` rewrite (L2–4), cache headers for `/js/(.*)` (L8–12), HTML/root (L19–36), UA-based redirect to `/robots.txt` for AI/SEO bots (L38–48)                                                | Keep `/draw` route if the renamed page keeps that URL. Header/cache config unchanged unless file layout changes.                                        |
+| **No tests, no CI, no `.github/`**                              | `git ls-files`; no test files                                                                                                                                                                                                 | Conversion must add at minimum a Node-based smoke harness for pure modules (see Appendix B). Node ≥ 18 works: `node --input-type=module -e "import …"`. |
+| **Global browser coupling**                                     | `window.game`, `document.getElementById`, `localStorage`, `requestAnimationFrame` everywhere                                                                                                                                  | Pure model modules (`js/resources/*`, data) are testable in Node; UI/engine are not without DOM stubs.                                                  |
+| **License**                                                     | Apache-2.0 (`LICENSE`)                                                                                                                                                                                                        | Keep headers/attribution when forking.                                                                                                                  |
 
 ### 0.3 External services
 
@@ -107,14 +109,14 @@ lines total (plus `docs/`, which did not exist at the audited commit — a concu
 
 ### 0.4 Reality vs README claims (fix these as part of conversion)
 
-| README claim | Reality |
-|---|---|
+| README claim                                                | Reality                                                                                                                                                                                                                                                                                                 |
+| ----------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | "25 K8s resources … each has a unique 3D shape" (README:79) | 25 `ResourceBase` subclasses exist, but only **17 kinds have a 3D mesh** (`ResourceMeshes.CREATORS` L212–740); 8 kinds render as a grey fallback cube (`_createFallback` L756–778). The **game palette exposes 17** kinds (`index.html:173–323`), the **draw palette exposes 20** (`draw.html:83–260`). |
-| "29 incidents" (README:81) | **34** in `INCIDENT_DEFS` (`IncidentDefs.js:1–703`). |
-| "40 achievements" (README:91) | **45** in `ACHIEVEMENTS` (`Achievements.js:1–378`). |
-| "~50K lines across 90+ files" (README:97) | **16,984 JS lines across 31 modules + 2 HTML files.** |
-| "type real kubectl commands" (README:3/83) | Parser rejects the `kubectl` prefix (see §3.1). |
-| "Cube … Auto-Align (K8s architecture layout)" | Works, but tier lists include a `LimitRange` kind that does not exist (see §11 G15). |
+| "29 incidents" (README:81)                                  | **34** in `INCIDENT_DEFS` (`IncidentDefs.js:1–703`).                                                                                                                                                                                                                                                    |
+| "40 achievements" (README:91)                               | **45** in `ACHIEVEMENTS` (`Achievements.js:1–378`).                                                                                                                                                                                                                                                     |
+| "~50K lines across 90+ files" (README:97)                   | **16,984 JS lines across 31 modules + 2 HTML files.**                                                                                                                                                                                                                                                   |
+| "type real kubectl commands" (README:3/83)                  | Parser rejects the `kubectl` prefix (see §3.1).                                                                                                                                                                                                                                                         |
+| "Cube … Auto-Align (K8s architecture layout)"               | Works, but tier lists include a `LimitRange` kind that does not exist (see §11 G15).                                                                                                                                                                                                                    |
 
 ---
 
@@ -124,16 +126,16 @@ lines total (plus `docs/`, which did not exist at the audited commit — a concu
 
 **DOM structure (before the module):**
 
-| Region | Lines | Notes for conversion |
-|---|---|---|
-| `<canvas id="game-canvas">` | 55 | Single WebGL canvas. |
-| `#main-menu` | 57–120 | `.menu-btn[data-mode]` campaign/chaos/sandbox/challenge (74–95); `/draw` link (97–101); Settings/Achievements/Stats buttons `#btn-settings/#btn-achievements/#btn-stats` (103–107); keyboard hints (109–119). |
-| `#game-container` | 122–324 | Game UI overlay. |
-| `#objectives-panel` | 123–142 | Campaign/Challenge objective checklist + "Show Hint" (`#obj-panel-title`, `#obj-panel-desc`, `#obj-list`, `#hint-section`, `#hint-list`). |
-| GitHub badge | 144–148 | `#game-github-badge`, `#game-github-stars`. |
-| `#view-toolbar` | 149–172 | `#btn-auto-align` (150), `#btn-reset-camera` (154), `#btn-export-yaml` (158), `/` + `kubectl` chip (163–166), `#btn-help` (168). |
-| `#resource-palette` | 173–323 | **17 palette items** `.palette-item[data-resource=Kind]` with inline SVG + labels/tooltips: Workloads (Pod L176, Deployment L184 "Deploy", ReplicaSet L192 "RS", StatefulSet L200 "STS", DaemonSet L208 "DS", Job L216, CronJob L224); Network (Service L235 "Svc", Ingress L243, NetworkPolicy L251 "NetPol"); Config (ConfigMap L262 "CM", Secret L270); Storage (PersistentVolumeClaim L281 "PVC" — **PV and StorageClass are absent**); Cluster (Node L292, Namespace L300, HPA L308, ResourceQuota L316). Missing vs. `RESOURCE_CLASSES`: `PersistentVolume`, `StorageClass`, `PodDisruptionBudget`, `ServiceAccount`, `Role`, `ClusterRole`, `RoleBinding`, `ClusterRoleBinding`. |
-| Modals | 326–427 | `#level-select` (326), `#challenge-select` (336), `#settings-panel` (346, static toggles `#toggle-sound/particles/shadows/grid`, `#select-difficulty`), `#achievements-panel` (380), `#stats-panel` (390), `#modal-level-complete` (400), `#modal-game-over` (412), `#loading-screen` (424). |
+| Region                      | Lines   | Notes for conversion                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| --------------------------- | ------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `<canvas id="game-canvas">` | 55      | Single WebGL canvas.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| `#main-menu`                | 57–120  | `.menu-btn[data-mode]` campaign/chaos/sandbox/challenge (74–95); `/draw` link (97–101); Settings/Achievements/Stats buttons `#btn-settings/#btn-achievements/#btn-stats` (103–107); keyboard hints (109–119).                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| `#game-container`           | 122–324 | Game UI overlay.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| `#objectives-panel`         | 123–142 | Campaign/Challenge objective checklist + "Show Hint" (`#obj-panel-title`, `#obj-panel-desc`, `#obj-list`, `#hint-section`, `#hint-list`).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| GitHub badge                | 144–148 | `#game-github-badge`, `#game-github-stars`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `#view-toolbar`             | 149–172 | `#btn-auto-align` (150), `#btn-reset-camera` (154), `#btn-export-yaml` (158), `/` + `kubectl` chip (163–166), `#btn-help` (168).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| `#resource-palette`         | 173–323 | **17 palette items** `.palette-item[data-resource=Kind]` with inline SVG + labels/tooltips: Workloads (Pod L176, Deployment L184 "Deploy", ReplicaSet L192 "RS", StatefulSet L200 "STS", DaemonSet L208 "DS", Job L216, CronJob L224); Network (Service L235 "Svc", Ingress L243, NetworkPolicy L251 "NetPol"); Config (ConfigMap L262 "CM", Secret L270); Storage (PersistentVolumeClaim L281 "PVC" — **PV and StorageClass are absent**); Cluster (Node L292, Namespace L300, HPA L308, ResourceQuota L316). Missing vs. `RESOURCE_CLASSES`: `PersistentVolume`, `StorageClass`, `PodDisruptionBudget`, `ServiceAccount`, `Role`, `ClusterRole`, `RoleBinding`, `ClusterRoleBinding`. |
+| Modals                      | 326–427 | `#level-select` (326), `#challenge-select` (336), `#settings-panel` (346, static toggles `#toggle-sound/particles/shadows/grid`, `#select-difficulty`), `#achievements-panel` (380), `#stats-panel` (390), `#modal-level-complete` (400), `#modal-game-over` (412), `#loading-screen` (424).                                                                                                                                                                                                                                                                                                                                                                                            |
 
 **Inline module (L429–L1986):**
 
@@ -166,7 +168,7 @@ lines total (plus `docs/`, which did not exist at the audited commit — a concu
     `engine.cluster.add(resource)` (L968), then Service selector-picker (L970–972) and Ingress path-picker
     (L973–975).
   - Overlay editors: `_showIngressPathPicker` **L979–1060** (builds `ingress.spec.rules` from path→service
-    rows, hard-codes `host = <name>.example.com`, pathType `Prefix`; copy mentions "Level 10"), 
+    rows, hard-codes `host = <name>.example.com`, pathType `Prefix`; copy mentions "Level 10"),
     `_showSelectorPicker` **L1062–1113** (sets `service.spec.selector` from a Deployment/StatefulSet),
     `_showNamePrompt` **L1115–1170** (suggestion buttons), `_getNameSuggestions` **L1172–1188** (derives
     suggested names from `modeInstance.getStatus().objectives` for `deploy`/`scale` types),
@@ -212,7 +214,7 @@ lines total (plus `docs/`, which did not exist at the audited commit — a concu
   help L272–278; watermark L280.
 - Inline module L284–1044:
   - imports only `ClusterRenderer`, `ClusterState`, `GameEngine` (L285–287) — **no resource subclasses**.
-  - `RESOURCE_CLASSES_META` **L289–310**: kind → `{api}` — the *only* apiVersion registry used by this page.
+  - `RESOURCE_CLASSES_META` **L289–310**: kind → `{api}` — the _only_ apiVersion registry used by this page.
   - `VALID_KINDS` L312, `DEFAULT_SPECS` **L314–335** (kind → spec factory `(name) => ({...})`; 20 kinds).
   - `class K8sDraw` L337; `init` L349–413: creates `GameEngine({mode:'sandbox'})`, renderer, `window.game`
     **without** incident/scoring (L353–358), binds UI, `renderer.start()`, then **disables the simulation**
@@ -262,13 +264,13 @@ draw.html: imports (renderer, ClusterState, GameEngine only)
 
 ```js
 window.game = {
-  engine: this.engine.eventBus,     // ⚠ EventBus instance, NOT GameEngine
-  cluster: this.engine.cluster,     // ClusterState
-  renderer: null,                   // ClusterRenderer (set after WebGL probe)
-  gameEngine: this.engine,          // the actual GameEngine
+  engine: this.engine.eventBus, // ⚠ EventBus instance, NOT GameEngine
+  cluster: this.engine.cluster, // ClusterState
+  renderer: null, // ClusterRenderer (set after WebGL probe)
+  gameEngine: this.engine, // the actual GameEngine
   incidentEngine: this.incidentEngine,
   scoringEngine: this.scoringEngine,
-  app: this,                        // K8sGamesApp
+  app: this, // K8sGamesApp
 };
 ```
 
@@ -289,11 +291,11 @@ listenerCount`; **200-event history** (L10, L43–47); handler exceptions are ca
 
 ### 1.5 localStorage / persistence
 
-| Key | Written by | Read by | Schema |
-|---|---|---|---|
-| `k8sgames_settings` | `index.html:628` (`K8sGamesApp.saveSettings`) **and** `SettingsPanel.js:47` (different writer!) | `index.html:619`, `SettingsPanel.js:29` | **Two incompatible schemas colliding** (see G5). |
-| `k8sgames_progress` | `ScoringEngine.js:788` | `ScoringEngine.js:762` | `{xp, level, stats:{...}, achievements:[ids], campaignProgress:{}, challengeProgress:{}}` |
-| `k8sgames_investigation` | `IncidentPanel.js:420` | `IncidentPanel.js:426` | `[{id, completedSteps:[], status}]` — but `load` looks up incidents that are never repopulated, so it is effectively dead. |
+| Key                      | Written by                                                                                      | Read by                                 | Schema                                                                                                                     |
+| ------------------------ | ----------------------------------------------------------------------------------------------- | --------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `k8sgames_settings`      | `index.html:628` (`K8sGamesApp.saveSettings`) **and** `SettingsPanel.js:47` (different writer!) | `index.html:619`, `SettingsPanel.js:29` | **Two incompatible schemas colliding** (see G5).                                                                           |
+| `k8sgames_progress`      | `ScoringEngine.js:788`                                                                          | `ScoringEngine.js:762`                  | `{xp, level, stats:{...}, achievements:[ids], campaignProgress:{}, challengeProgress:{}}`                                  |
+| `k8sgames_investigation` | `IncidentPanel.js:420`                                                                          | `IncidentPanel.js:426`                  | `[{id, completedSteps:[], status}]` — but `load` looks up incidents that are never repopulated, so it is effectively dead. |
 
 **There is no cluster save/load UI.** `GameEngine.saveState()` (L837–860) and `loadState()` (L862–900) are
 fully implemented but **never called anywhere** (verified by grep). Cluster state is rebuilt from level
@@ -314,8 +316,8 @@ definitions each launch. `SettingsPanel` "Export Save" (L178–192) dumps the tw
 5. `InspectorPanel._renderYAML()` **L296–327** — live JSON→HTML tree of the resource object (not real YAML;
    includes internal `_events`/listeners? no — it serializes `resource` object recursively, so internal
    fields like `_deleted`, `_listeners` Map serialize oddly).
-Plus `CommandBar -o yaml` is **fake**: `CommandBar.js:385–391` builds 7 lines with
-`spec: ${JSON.stringify(spec)}` on one line.
+   Plus `CommandBar -o yaml` is **fake**: `CommandBar.js:385–391` builds 7 lines with
+   `spec: ${JSON.stringify(spec)}` on one line.
 
 **Conversion requirement:** pick one serializer (recommend a single `toManifest()` walking a schema map),
 teach it OpenShift kinds/apiVersions, make `oc apply -f` actually parse YAML, and reuse it for all five
@@ -323,18 +325,18 @@ surfaces.
 
 ### 1.7 Help / tutorial text locations
 
-| Text | Location |
-|---|---|
-| In-game help overlay ("How to Play", Controls) | `index.html:1708–1815` (`modeGoals` L1714, `controls` L1721, `modeRules` per mode L1736–1765) |
-| Per-mode menu descriptions | `index.html:74–95` (`.menu-btn-desc`: Campaign/Chaos/Sandbox/Challenges) |
-| Palette labels + tooltips + keyboard hints | `index.html:173–323` (labels "Deploy", "Svc", "NetPol", …), `draw.html:83–260` |
-| Campaign level descriptions/hints | `js/data/CampaignLevels.js` (`description`, `hints[]`, `tutorial.steps[]`) |
-| Challenge descriptions/hints | `js/modes/ChallengeMode.js:9–289` |
-| Incident investigation hints/commands | `js/data/IncidentDefs.js` (`investigationSteps[].hint`, `.command`, `kubectlCommands[]`) |
-| `kubectl explain` help DB | `js/ui/CommandBar.js:859–1127` (`EXPLAIN_DATA`) |
-| README marketing/controls tables | `README.md` entire file |
-| HTML `<title>`/meta/OG copy | `index.html:6–18`, `draw.html:6–18`, `og-image.html` |
-| CSS-only strings | `style.css` (no user text; only class names like `.menu-btn-desc` L231, `.palette-label` L378, `.tutorial-mode` L931) |
+| Text                                           | Location                                                                                                              |
+| ---------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| In-game help overlay ("How to Play", Controls) | `index.html:1708–1815` (`modeGoals` L1714, `controls` L1721, `modeRules` per mode L1736–1765)                         |
+| Per-mode menu descriptions                     | `index.html:74–95` (`.menu-btn-desc`: Campaign/Chaos/Sandbox/Challenges)                                              |
+| Palette labels + tooltips + keyboard hints     | `index.html:173–323` (labels "Deploy", "Svc", "NetPol", …), `draw.html:83–260`                                        |
+| Campaign level descriptions/hints              | `js/data/CampaignLevels.js` (`description`, `hints[]`, `tutorial.steps[]`)                                            |
+| Challenge descriptions/hints                   | `js/modes/ChallengeMode.js:9–289`                                                                                     |
+| Incident investigation hints/commands          | `js/data/IncidentDefs.js` (`investigationSteps[].hint`, `.command`, `kubectlCommands[]`)                              |
+| `kubectl explain` help DB                      | `js/ui/CommandBar.js:859–1127` (`EXPLAIN_DATA`)                                                                       |
+| README marketing/controls tables               | `README.md` entire file                                                                                               |
+| HTML `<title>`/meta/OG copy                    | `index.html:6–18`, `draw.html:6–18`, `og-image.html`                                                                  |
+| CSS-only strings                               | `style.css` (no user text; only class names like `.menu-btn-desc` L231, `.palette-label` L378, `.tutorial-mode` L931) |
 
 **Tutorial overlay targets are dead:** `CampaignLevels` levels 1–2 define `tutorial.steps[{target,text}]`
 with targets `command-bar`, `cluster-view`, `inspector`; `CampaignMode.advanceTutorial()` emits
@@ -380,27 +382,27 @@ construction. Subclasses mostly don't (see table).
 
 **Mutation / model API:**
 
-| Method | Line | Notes |
-|---|---:|---|
-| `setLabel/removeLabel` | 102/108 | bump resourceVersion |
-| `setAnnotation/removeAnnotation` | 114/120 | |
-| `matchesSelector(selector)` | 126 | simple equality on `metadata.labels`; `{}` matches all |
-| `matchesFieldSelector(field, value)` | 134 | dotted-path lookup |
-| `addOwnerReference(owner)` / `removeOwnerReference(uid)` | 144/165 | controller:true, blockOwnerDeletion:true |
-| `getControllerOwner()` | 173 | |
-| `addFinalizer/removeFinalizer` | 177/185 | |
-| `markForDeletion()` / `canBeRemoved()` | 193/202 | deletionTimestamp + finalizers |
-| `setCondition(type,status,reason,message)` / `getCondition` / `isConditionTrue` | 209/233/237 | preserves lastTransitionTime when status unchanged |
-| `setPhase(phase)` / `setStatus(phase)` | 242/256 | records `PhaseChange` Normal event |
-| `updateSpec(partial)` | 260 | shallow Object.assign + generation++ |
-| `tick(deltaTime)` | 271 | **no-op; never called** (G6) |
-| `addEvent/recordEvent` | 273/277 | dedupes identical consecutive reason+message; keeps last 50; event shape `{type,reason,message,timestamp,count,source,involvedObject{kind,name,namespace,uid}}` |
-| `getEvents(limit)` / `getWarningEvents()` | 307/314 | |
-| `on/off/emit` (resource-local) | 318–344 | |
-| `toJSON()` | 352 | deep-copies spec/status/metadata |
-| `toYAML(indent=0)` | 371 | generic YAML for any object; subclasses override |
-| `clone()` | 466 | returns **plain `ResourceBase`** (subclass lost), new UID, copies metadata/spec/status |
-| `equals` / `toString` | 476/481 | uid equality / `Kind/ns/name` |
+| Method                                                                          |        Line | Notes                                                                                                                                                           |
+| ------------------------------------------------------------------------------- | ----------: | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `setLabel/removeLabel`                                                          |     102/108 | bump resourceVersion                                                                                                                                            |
+| `setAnnotation/removeAnnotation`                                                |     114/120 |                                                                                                                                                                 |
+| `matchesSelector(selector)`                                                     |         126 | simple equality on `metadata.labels`; `{}` matches all                                                                                                          |
+| `matchesFieldSelector(field, value)`                                            |         134 | dotted-path lookup                                                                                                                                              |
+| `addOwnerReference(owner)` / `removeOwnerReference(uid)`                        |     144/165 | controller:true, blockOwnerDeletion:true                                                                                                                        |
+| `getControllerOwner()`                                                          |         173 |                                                                                                                                                                 |
+| `addFinalizer/removeFinalizer`                                                  |     177/185 |                                                                                                                                                                 |
+| `markForDeletion()` / `canBeRemoved()`                                          |     193/202 | deletionTimestamp + finalizers                                                                                                                                  |
+| `setCondition(type,status,reason,message)` / `getCondition` / `isConditionTrue` | 209/233/237 | preserves lastTransitionTime when status unchanged                                                                                                              |
+| `setPhase(phase)` / `setStatus(phase)`                                          |     242/256 | records `PhaseChange` Normal event                                                                                                                              |
+| `updateSpec(partial)`                                                           |         260 | shallow Object.assign + generation++                                                                                                                            |
+| `tick(deltaTime)`                                                               |         271 | **no-op; never called** (G6)                                                                                                                                    |
+| `addEvent/recordEvent`                                                          |     273/277 | dedupes identical consecutive reason+message; keeps last 50; event shape `{type,reason,message,timestamp,count,source,involvedObject{kind,name,namespace,uid}}` |
+| `getEvents(limit)` / `getWarningEvents()`                                       |     307/314 |                                                                                                                                                                 |
+| `on/off/emit` (resource-local)                                                  |     318–344 |                                                                                                                                                                 |
+| `toJSON()`                                                                      |         352 | deep-copies spec/status/metadata                                                                                                                                |
+| `toYAML(indent=0)`                                                              |         371 | generic YAML for any object; subclasses override                                                                                                                |
+| `clone()`                                                                       |         466 | returns **plain `ResourceBase`** (subclass lost), new UID, copies metadata/spec/status                                                                          |
+| `equals` / `toString`                                                           |     476/481 | uid equality / `Kind/ns/name`                                                                                                                                   |
 
 `toYAML()` (L371–464) is a hand-rolled emitter with quoting rules (quotes strings containing
 `\n : # '` or empty). It always prints `apiVersion`, `kind`, `metadata` (name, namespace, uid, labels,
@@ -413,33 +415,33 @@ and by `InspectorPanel._renderEvents`.
 
 All 25 kinds are `export class X extends ResourceBase` and call `super('<Kind>', metadata)`.
 
-| Kind | Class file:line | apiVersion truth (correct) | `.apiVersion` actually set in ctor | Mesh? (ResourceMeshes) | Custom `toYAML`/`toDescribe` |
-|---|---|---|---|---:|---|
-| Pod | `WorkloadResources.js:3` | `v1` | `v1` (correct) | yes L213 | 206 / 234 |
-| Deployment | `WorkloadResources.js:256` | `apps/v1` | **`v1` (wrong)** | yes L252 | 374 / 409 |
-| ReplicaSet | `WorkloadResources.js:426` | `apps/v1` | **`v1` (wrong)** | yes L282 | 472 / 492 |
-| StatefulSet | `WorkloadResources.js:507` | `apps/v1` | **`v1` (wrong)** | yes L303 | 584 / 613 |
-| DaemonSet | `WorkloadResources.js:633` | `apps/v1` | **`v1` (wrong)** | yes L329 | 694 / 714 |
-| Job | `WorkloadResources.js:732` | `batch/v1` | **`v1` (wrong)** | yes L658 | 802 / 827 |
-| CronJob | `WorkloadResources.js:846` | `batch/v1` | **`v1` (wrong)** | yes L693 | 964 / 991 |
-| Service | `NetworkResources.js:3` | `v1` | `v1` (correct) | yes L357 | 84 / 121 |
-| Ingress | `NetworkResources.js:155` | `networking.k8s.io/v1` | **`v1` (wrong)** | yes L389 | 235 / 267 |
-| NetworkPolicy | `NetworkResources.js:284` | `networking.k8s.io/v1` | **`v1` (wrong)** | yes L533 | 378 / 410 |
-| ConfigMap | `ConfigResources.js:3` | `v1` | `v1` | yes L416 | 70 / 87 |
-| Secret | `ConfigResources.js:110` | `v1` | `v1` | yes L445 | 201 / 216 |
-| PersistentVolume | `StorageResources.js:12` | `v1` | sets `'v1'` L15 | **no (cube)** | 68 / 96 |
-| StorageClass | `StorageResources.js:113` | `storage.k8s.io/v1` | sets it L116 | **no (cube)** | 136 / 151 |
-| PersistentVolumeClaim | `StorageResources.js:166` | `v1` | `v1` | yes L477 (`PVC` key) | 267 / 293 |
-| Node | `ClusterResources.js:3` | `v1` | `v1` | yes L585 | 182 / 216 |
-| Namespace | `ClusterResources.js:248` | `v1` | `v1` | yes L630 | 294 / 306 |
-| HorizontalPodAutoscaler | `ClusterResources.js:325` | `autoscaling/v2` | **`v1` (wrong)** | yes L500 (`HPA`) | 430 / 462 |
-| ResourceQuota | `ClusterResources.js:479` | `v1` | `v1` | yes L557 | 578 / 595 |
-| PodDisruptionBudget | `ClusterResources.js:606` | `policy/v1` | sets it L609 | **no (cube)** | 652 / 675 |
-| ServiceAccount | `RBACResources.js:3` | `v1` | sets it L6 | **no (cube)** | 29 / 43 |
-| Role | `RBACResources.js:56` | `rbac.authorization.k8s.io/v1` | sets it L59 | **no (cube)** | 91 / 104 |
-| ClusterRole | `RBACResources.js:118` | `rbac.authorization.k8s.io/v1` | sets it L121 | **no (cube)** | 148 / 160 |
-| RoleBinding | `RBACResources.js:173` | `rbac.authorization.k8s.io/v1` | sets it L176 | **no (cube)** | 203 / 220 |
-| ClusterRoleBinding | `RBACResources.js:237` | `rbac.authorization.k8s.io/v1` | sets it L240 | **no (cube)** | 267 / 283 |
+| Kind                    | Class file:line            | apiVersion truth (correct)     | `.apiVersion` actually set in ctor | Mesh? (ResourceMeshes) | Custom `toYAML`/`toDescribe` |
+| ----------------------- | -------------------------- | ------------------------------ | ---------------------------------- | ---------------------: | ---------------------------- |
+| Pod                     | `WorkloadResources.js:3`   | `v1`                           | `v1` (correct)                     |               yes L213 | 206 / 234                    |
+| Deployment              | `WorkloadResources.js:256` | `apps/v1`                      | **`v1` (wrong)**                   |               yes L252 | 374 / 409                    |
+| ReplicaSet              | `WorkloadResources.js:426` | `apps/v1`                      | **`v1` (wrong)**                   |               yes L282 | 472 / 492                    |
+| StatefulSet             | `WorkloadResources.js:507` | `apps/v1`                      | **`v1` (wrong)**                   |               yes L303 | 584 / 613                    |
+| DaemonSet               | `WorkloadResources.js:633` | `apps/v1`                      | **`v1` (wrong)**                   |               yes L329 | 694 / 714                    |
+| Job                     | `WorkloadResources.js:732` | `batch/v1`                     | **`v1` (wrong)**                   |               yes L658 | 802 / 827                    |
+| CronJob                 | `WorkloadResources.js:846` | `batch/v1`                     | **`v1` (wrong)**                   |               yes L693 | 964 / 991                    |
+| Service                 | `NetworkResources.js:3`    | `v1`                           | `v1` (correct)                     |               yes L357 | 84 / 121                     |
+| Ingress                 | `NetworkResources.js:155`  | `networking.k8s.io/v1`         | **`v1` (wrong)**                   |               yes L389 | 235 / 267                    |
+| NetworkPolicy           | `NetworkResources.js:284`  | `networking.k8s.io/v1`         | **`v1` (wrong)**                   |               yes L533 | 378 / 410                    |
+| ConfigMap               | `ConfigResources.js:3`     | `v1`                           | `v1`                               |               yes L416 | 70 / 87                      |
+| Secret                  | `ConfigResources.js:110`   | `v1`                           | `v1`                               |               yes L445 | 201 / 216                    |
+| PersistentVolume        | `StorageResources.js:12`   | `v1`                           | sets `'v1'` L15                    |          **no (cube)** | 68 / 96                      |
+| StorageClass            | `StorageResources.js:113`  | `storage.k8s.io/v1`            | sets it L116                       |          **no (cube)** | 136 / 151                    |
+| PersistentVolumeClaim   | `StorageResources.js:166`  | `v1`                           | `v1`                               |   yes L477 (`PVC` key) | 267 / 293                    |
+| Node                    | `ClusterResources.js:3`    | `v1`                           | `v1`                               |               yes L585 | 182 / 216                    |
+| Namespace               | `ClusterResources.js:248`  | `v1`                           | `v1`                               |               yes L630 | 294 / 306                    |
+| HorizontalPodAutoscaler | `ClusterResources.js:325`  | `autoscaling/v2`               | **`v1` (wrong)**                   |       yes L500 (`HPA`) | 430 / 462                    |
+| ResourceQuota           | `ClusterResources.js:479`  | `v1`                           | `v1`                               |               yes L557 | 578 / 595                    |
+| PodDisruptionBudget     | `ClusterResources.js:606`  | `policy/v1`                    | sets it L609                       |          **no (cube)** | 652 / 675                    |
+| ServiceAccount          | `RBACResources.js:3`       | `v1`                           | sets it L6                         |          **no (cube)** | 29 / 43                      |
+| Role                    | `RBACResources.js:56`      | `rbac.authorization.k8s.io/v1` | sets it L59                        |          **no (cube)** | 91 / 104                     |
+| ClusterRole             | `RBACResources.js:118`     | `rbac.authorization.k8s.io/v1` | sets it L121                       |          **no (cube)** | 148 / 160                    |
+| RoleBinding             | `RBACResources.js:173`     | `rbac.authorization.k8s.io/v1` | sets it L176                       |          **no (cube)** | 203 / 220                    |
+| ClusterRoleBinding      | `RBACResources.js:237`     | `rbac.authorization.k8s.io/v1` | sets it L240                       |          **no (cube)** | 267 / 283                    |
 
 **Correct API versions also live in** (must be kept in sync / unified):
 `GameEngine._apiVersionForKind` L601–615, `draw.html RESOURCE_CLASSES_META` L289–310,
@@ -535,26 +537,27 @@ limits.*}`, `used{}`; `updateUsage(resources)` L517 **never called by engine** (
 unhealthyPodEvictionPolicy}`; `updateStatus(matchingPods)` L624 never called; `canDisrupt` L644.
 
 **ServiceAccount / Role / ClusterRole / RoleBinding / ClusterRoleBinding** (`RBACResources.js`):
+
 - SA: `secrets[]`, `imagePullSecrets[]`, `automountServiceAccountToken`; add/removeSecret.
 - Role/ClusterRole: `spec.rules[]` (`apiGroups/resources/verbs`), `addRule/removeRule/hasWildcard` (wildcard
   used by scoring/`leastPrivilege`); ClusterRole also `aggregationRule`.
 - RoleBinding/ClusterRoleBinding: `spec.roleRef{apiGroup,kind,name}`, `subjects[]`; `addSubject/
-  removeSubject`; subject apiGroup `''` for ServiceAccount else `rbac.authorization.k8s.io`.
+removeSubject`; subject apiGroup `''` for ServiceAccount else `rbac.authorization.k8s.io`.
 
 ### 2.4 `ClusterState` registration, indices, APIs (`ClusterState.js`)
 
-- **`RESOURCE_KINDS`** (L9–16, 25 entries) seeds `kindIndex` for every kind. This is *not* a default-spec
+- **`RESOURCE_KINDS`** (L9–16, 25 entries) seeds `kindIndex` for every kind. This is _not_ a default-spec
   registry — there is **no `KIND_DEFAULTS`** in the codebase (task brief's assumption is wrong).
 - **`CLUSTER_SCOPED_KINDS`** (L3) = `Node, Namespace, PersistentVolume, StorageClass, ClusterRole,
-  ClusterRoleBinding`; exported `isClusterScopedKind(kind)` (L5–7).
+ClusterRoleBinding`; exported `isClusterScopedKind(kind)` (L5–7).
 - **`OWNER_CHAINS`** (L18–25) = `Deployment→[ReplicaSet], ReplicaSet→[Pod], StatefulSet→[Pod],
-  DaemonSet→[Pod], Job→[Pod], CronJob→[Job]`; exposed by `getExpectedChildKinds` L722.
+DaemonSet→[Pod], Job→[Pod], CronJob→[Job]`; exposed by `getExpectedChildKinds` L722.
 - Constructor L28–48: `resources Map(uid→resource)`, `relationships Map(parentUid→Set(childUid))`,
   `reverseRelationships`, `kindIndex Map(kind→Set(uid))`, `namespaceIndex`, `nameIndex`
   (`kind:ns:name`→uid), `labelIndex` (`k=v`→Set(uid)), `resourceQuotas Map(ns→{hard,used})`,
   `limitRanges Map` (unused), `_watchCallbacks`, batch mode.
 - **Default namespaces seeded** at construction and after `clear()`: `default, kube-system, kube-public,
-  kube-node-lease` with label `kubernetes.io/metadata.name` (L50–58). Conversion should swap these for
+kube-node-lease` with label `kubernetes.io/metadata.name` (L50–58). Conversion should swap these for
   OpenShift-appropriate defaults (`default`, `openshift-*`, `kube-*`) — but note many checks assume
   `default` exists.
 - Event emission `_emitEvent` L77–100: emits **both** `cluster:<type>` and `cluster:<type>:<Kind>`
@@ -581,8 +584,8 @@ unhealthyPodEvictionPolicy}`; `updateStatus(matchingPods)` L624 never called; `c
   created via `addResource({spec:{cpu,memory}})` use those), fallback 4000m/8192Mi; returns
   `{cpu:{capacity,used,available}, memory:{...}, podCount}` — units millis/Mi.
 - `getClusterStats()` L622–660: `{nodes:{total,ready}, pods:{total,Pending,Running,Succeeded,Failed,
-  Unknown}, deployments:{total,available}, services:{total}, namespaces:{total}, resources:{total},
-  cpu:{total,used,percent}, memory:{...}}`. **This is what the HUD/MetricsDashboard/`tick` event consume.**
+Unknown}, deployments:{total,available}, services:{total}, namespaces:{total}, resources:{total},
+cpu:{total,used,percent}, memory:{...}}`. **This is what the HUD/MetricsDashboard/`tick` event consume.**
 - `getResourceGraph()` L662–685; `snapshot()` L687–697 (JSON for save/load); `clear()` L699–720 (re-seeds
   default namespaces, emits `cluster:reset`); `getAllKinds()` L726.
 - **`addResource(obj)` L730–746 — the downgrade trap:** internally constructs
@@ -592,14 +595,15 @@ unhealthyPodEvictionPolicy}`; `updateStatus(matchingPods)` L624 never called; `c
 
 ### 2.5 Three incompatible creation paths (critical for conversion)
 
-| Path | Code | Instance class | UID | API version | Emits `resource:created` (scoring) | Subclass `toYAML/toDescribe` |
-|---|---|---|---|---|---|---|
-| A. UI palette / keyboard / drop | `index.html:932–977` (`new ResourceClass`) → `cluster.add` | **real subclass** | from constructor (used as position key, consistent) | possibly wrong (table §2.2) | **no** → not counted by ScoringEngine | yes |
-| B. Command bar (`kubectl create/run/apply`) | `CommandBar.js:614–665, 667–695, 581–612` → `cluster.addResource`; then handler emits `resource:created` manually (L604/658/683) | plain `ResourceBase` | **regenerated** (passed uid ignored) | default `'v1'` (`ClusterState.addResource`) | yes | no (generic base YAML) |
-| C. Mode setup / controllers | `CampaignMode.setupCluster` L144–173, `ChallengeMode.setupCluster` L371–390, `ChaosMode.setupCluster` L75–91, `SandboxMode.setupCluster` L47–63, `SimulationTick._createPodForWorkload` L867–893, `_tickDeployments` RS creation L462, `_tickCronJobs` Job creation L642 | plain `ResourceBase` | regenerated | `'v1'` | no (except `SandboxMode.addResource` L83–113 emits it) | no |
-| D. `GameEngine._handleCreate/_handleApply` L433–454/480–497 | `new ResourceBase(...)` + `cluster.add` | plain | fresh | `_apiVersionForKind` (correct-ish) | no | no |
+| Path                                                        | Code                                                                                                                                                                                                                                                                     | Instance class       | UID                                                 | API version                                 | Emits `resource:created` (scoring)                     | Subclass `toYAML/toDescribe` |
+| ----------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------- | --------------------------------------------------- | ------------------------------------------- | ------------------------------------------------------ | ---------------------------- |
+| A. UI palette / keyboard / drop                             | `index.html:932–977` (`new ResourceClass`) → `cluster.add`                                                                                                                                                                                                               | **real subclass**    | from constructor (used as position key, consistent) | possibly wrong (table §2.2)                 | **no** → not counted by ScoringEngine                  | yes                          |
+| B. Command bar (`kubectl create/run/apply`)                 | `CommandBar.js:614–665, 667–695, 581–612` → `cluster.addResource`; then handler emits `resource:created` manually (L604/658/683)                                                                                                                                         | plain `ResourceBase` | **regenerated** (passed uid ignored)                | default `'v1'` (`ClusterState.addResource`) | yes                                                    | no (generic base YAML)       |
+| C. Mode setup / controllers                                 | `CampaignMode.setupCluster` L144–173, `ChallengeMode.setupCluster` L371–390, `ChaosMode.setupCluster` L75–91, `SandboxMode.setupCluster` L47–63, `SimulationTick._createPodForWorkload` L867–893, `_tickDeployments` RS creation L462, `_tickCronJobs` Job creation L642 | plain `ResourceBase` | regenerated                                         | `'v1'`                                      | no (except `SandboxMode.addResource` L83–113 emits it) | no                           |
+| D. `GameEngine._handleCreate/_handleApply` L433–454/480–497 | `new ResourceBase(...)` + `cluster.add`                                                                                                                                                                                                                                  | plain                | fresh                                               | `_apiVersionForKind` (correct-ish)          | no                                                     | no                           |
 
 **Consequences you must handle:**
+
 - `CommandBar._cmdDescribe` (L469) only prints rich `toDescribe()` for palette-created resources; for
   simulated Pods/RSs it prints the generic 8-line fallback (L473–491). Inspect a Deployment's pods and
   you get different describe output depending on how it was created.
@@ -630,7 +634,7 @@ Adding one OpenShift kind (e.g. `Route`) currently requires touching **all** of:
 5. `GameEngine._apiVersionForKind` L601.
 6. `SandboxMode.ALL_RESOURCE_TYPES` L7 + `getApiVersion` L183.
 7. `CommandBar RESOURCE_TYPES` L1, `KIND_ALIASES` L13, `_dispatch`/`_cmdCreate` defaults L624, `_getHeader
-   ForKind` L410, `_formatResourceRow` L415, `EXPLAIN_DATA` L859.
+ForKind` L410, `_formatResourceRow` L415, `EXPLAIN_DATA` L859.
 8. `ResourceMeshes.CREATORS` L212 (else fallback cube), `STATUS_COLORS` L3.
 9. `Minimap.KIND_SIZES` L10.
 10. `ScoringEngine.trackResourceCreated` kind→stat map L156 and `createEmptySessionStats` L48.
@@ -661,7 +665,7 @@ interface before parallel workstreams start.
 - `KIND_ALIASES` (L13–42): token → Kind (incl. `pods/po/pod`, `deploy/deployments/deployment`, …,
   `quota`, `pdb`, `sc`, `limitrange`).
 - `COMMANDS` (L44) = `['get','describe','logs','scale','delete','apply','create','rollout','drain',
-  'cordon','uncordon','top','exec','label','run','explain']`.
+'cordon','uncordon','top','exec','label','run','explain']`.
 - Completion (`_updateSuggestions` L171–194): 1 token → command prefix; 2 tokens → resource-type prefix;
   ≥3 tokens → resource-name prefix from `window.game.cluster.getResourcesByKind(kind)`; Tab cycles
   (`_tabComplete` L221–228). No flag completion.
@@ -677,23 +681,23 @@ interface before parallel workstreams start.
 
 All handlers return `{error: boolean, message: string}` (some add extra fields).
 
-| Token | Method | Lines | Behavior / gaps |
-|---|---|---:|---|
-| `get <type> [name] [-n ns] [-l k=v] [--field-selector …] [-o wide\|yaml\|jsonpath]` | `_cmdGet` | 319–408 | Table formats per-kind `_getHeaderForKind` L410 / `_formatResourceRow` L415–443. `-o yaml` is synthetic L385–391. `--field-selector involvedObject.name=` returns **hard-coded** event lines L344–357; `spec.nodeName=` filters pods L358–365. `get events` (kind `Event`) always empty (no model). |
-| `describe <type> <name>` | `_cmdDescribe` | 457–492 | Calls `res.toDescribe()` if present (L469–471), else generic fallback (L473–491). |
-| `logs <pod> [-n ns] [--previous/-p]` | `_cmdLogs` | 494–530 | Fake log lines; `--previous` returns a canned crash trace L513–521. |
-| `scale <type> <name> --replicas=N` | `_cmdScale` | 532–558 | Only `Deployment/StatefulSet/ReplicaSet` (L540); queues `{type:'scale'}` (L552). |
-| `delete <type> <name> [-n ns]` | `_cmdDelete` | 560–579 | Queues `{type:'delete'}`. |
-| `apply -f <filename>` | `_cmdApply` | 581–612 | **Filename heuristic, not YAML**: `deploy` in name → Deployment, `svc/service` → Service, `node` → Node, else Pod (L586–590); fabricates a default spec. |
-| `create <type> <name> [--namespace ns]` | `_cmdCreate` | 614–665 | 18 default specs L624–643; `-n` short form **not** handled (only `--namespace`, L621); no flags for image/replicas/labels. |
-| `run <name> --image=img` | `_cmdRun` | 667–695 | Creates a Pod; `konami` easter egg L689–692. |
-| `label <type> <name> k=v …` | `_cmdLabel` | 697–723 | Also supports `k-` removal. Mutates `metadata.labels` directly (no reindex in `ClusterState`). |
-| `rollout <status\|restart\|undo\|history> <type> <name>` | `_cmdRollout` | 725–758 | **Space-separated form only** (`deployment nginx`), no `deployment/nginx` slash form. `status` is a canned string L738–740; `restart`/`undo` emit events only; `history` reads `res._revisionHistory` (never set by engine — always one fake row). |
-| `drain <node> [--force]` | `_cmdDrain` | 760–776 | Queues `{type:'drain'}`. |
-| `cordon/uncordon <node>` | `_cmdCordon` | 778–794 | Queues `{type:'cordon'|'uncordon'}`. |
-| `top nodes\|pods [name]` | `_cmdTop` | 796–835 | Reads non-existent `n.cpuUsage`/`p.memoryUsage` fields (mostly zeros), or `status.usage` for nodes. |
-| `exec <pod> -it -- cmd` | `_cmdExec` | 837–851 | Simulated text only. |
-| `explain <resource>[.field]` | `_cmdExplain` | 853–1189 | Database-driven; see §3.3. |
+| Token                                                                               | Method         |    Lines | Behavior / gaps                                                                                                                                                                                                                                                                                     |
+| ----------------------------------------------------------------------------------- | -------------- | -------: | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `get <type> [name] [-n ns] [-l k=v] [--field-selector …] [-o wide\|yaml\|jsonpath]` | `_cmdGet`      |  319–408 | Table formats per-kind `_getHeaderForKind` L410 / `_formatResourceRow` L415–443. `-o yaml` is synthetic L385–391. `--field-selector involvedObject.name=` returns **hard-coded** event lines L344–357; `spec.nodeName=` filters pods L358–365. `get events` (kind `Event`) always empty (no model). |
+| `describe <type> <name>`                                                            | `_cmdDescribe` |  457–492 | Calls `res.toDescribe()` if present (L469–471), else generic fallback (L473–491).                                                                                                                                                                                                                   |
+| `logs <pod> [-n ns] [--previous/-p]`                                                | `_cmdLogs`     |  494–530 | Fake log lines; `--previous` returns a canned crash trace L513–521.                                                                                                                                                                                                                                 |
+| `scale <type> <name> --replicas=N`                                                  | `_cmdScale`    |  532–558 | Only `Deployment/StatefulSet/ReplicaSet` (L540); queues `{type:'scale'}` (L552).                                                                                                                                                                                                                    |
+| `delete <type> <name> [-n ns]`                                                      | `_cmdDelete`   |  560–579 | Queues `{type:'delete'}`.                                                                                                                                                                                                                                                                           |
+| `apply -f <filename>`                                                               | `_cmdApply`    |  581–612 | **Filename heuristic, not YAML**: `deploy` in name → Deployment, `svc/service` → Service, `node` → Node, else Pod (L586–590); fabricates a default spec.                                                                                                                                            |
+| `create <type> <name> [--namespace ns]`                                             | `_cmdCreate`   |  614–665 | 18 default specs L624–643; `-n` short form **not** handled (only `--namespace`, L621); no flags for image/replicas/labels.                                                                                                                                                                          |
+| `run <name> --image=img`                                                            | `_cmdRun`      |  667–695 | Creates a Pod; `konami` easter egg L689–692.                                                                                                                                                                                                                                                        |
+| `label <type> <name> k=v …`                                                         | `_cmdLabel`    |  697–723 | Also supports `k-` removal. Mutates `metadata.labels` directly (no reindex in `ClusterState`).                                                                                                                                                                                                      |
+| `rollout <status\|restart\|undo\|history> <type> <name>`                            | `_cmdRollout`  |  725–758 | **Space-separated form only** (`deployment nginx`), no `deployment/nginx` slash form. `status` is a canned string L738–740; `restart`/`undo` emit events only; `history` reads `res._revisionHistory` (never set by engine — always one fake row).                                                  |
+| `drain <node> [--force]`                                                            | `_cmdDrain`    |  760–776 | Queues `{type:'drain'}`.                                                                                                                                                                                                                                                                            |
+| `cordon/uncordon <node>`                                                            | `_cmdCordon`   |  778–794 | Queues `{type:'cordon'                                                                                                                                                                                                                                                                              | 'uncordon'}`. |
+| `top nodes\|pods [name]`                                                            | `_cmdTop`      |  796–835 | Reads non-existent `n.cpuUsage`/`p.memoryUsage` fields (mostly zeros), or `status.usage` for nodes.                                                                                                                                                                                                 |
+| `exec <pod> -it -- cmd`                                                             | `_cmdExec`     |  837–851 | Simulated text only.                                                                                                                                                                                                                                                                                |
+| `explain <resource>[.field]`                                                        | `_cmdExplain`  | 853–1189 | Database-driven; see §3.3.                                                                                                                                                                                                                                                                          |
 
 ### 3.3 `kubectl explain` database (`CommandBar.js:859–1127`)
 
@@ -734,37 +738,37 @@ timeScale, score/level/experience/currency/reputation, achievements/objectives/n
 `_inputQueue`, `_commandHistory`, plugins, render/update callbacks, difficulty multipliers L191–196
 (`failureRate/resourceMultiplier/scoreMultiplier` for easy/normal/hard/nightmare).
 
-| API | Line | Notes |
-|---|---:|---|
-| `_applyDifficulty()` | 202 | sets `simulation.randomFailureRate` = `0.002 × failureRate` |
-| `_setupEngineEvents()` | 209 | incident/chaos/quota/cluster:added:Pod listeners (XP/notifications) |
-| `start/stop/pause/resume/togglePause` | 247–299 | RAF loop lifecycle |
-| `_gameLoop(timestamp)` | 301–355 | fixed-step loop: `_processInputQueue` → `simulation.tick(dt)` → update callbacks → `_checkObjectives`; render callbacks; emits `engine:frame`; emits `tick` ~every 500 ms with `{elapsed(gameTime ms), gameTime, realTime, fps, mode, metrics:{cpu,memory}, clusterHealth}` L340–352 |
-| `queueCommand(command)` | 391 | push + timestamp; processed next fixed step |
-| `_executeCommand(command)` | 398–431 | emits `command:executed`; switch `create,delete,scale,apply,cordon,uncordon,drain,rollout,exec,logs` |
-| `_handleCreate` | 433–454 | dead code (no caller queues `type:'create'`) |
-| `_handleDelete` | 456–465 | `cluster.remove` |
-| `_handleScale` | 467–478 | `resource.updateSpec({replicas})` (no `scale()` method call) |
-| `_handleApply` | 480–497 | dead code (no caller) |
-| `_handleCordon/Uncordon/Drain` | 499–537 | drain skips DaemonSet pods unless `force`; `markForDeletion` on others |
-| `_handleRollout` | 539–579 | `restart` sets `kubectl.kubernetes.io/restartedAt` annotation L549 then emits `rollout:zero-downtime` if no failed pods; `undo` increments `cluster._rollbackCount` L559; `status` reads `resource.status.*` |
-| `_handleExec/_handleLogs` | 581–599 | events-as-logs |
-| `_apiVersionForKind` | 601–615 | map for all 25 kinds (correct versions) |
-| `setMode` | 617–638 | chaos config toggling |
-| `setDifficulty` | 640 | |
-| `setTimeScale` | 646 | 0–10, also `simulation.setTickRate` |
-| `addObjective(id,{description,condition(cluster,engine),reward,xp,timeout})` | 652–661 | **generic objective plugin point** (different from CampaignMode's `type` evaluator) |
-| `_checkObjectives` | 663–691 | evaluates `condition` functions, timeout, emits `objective:*` |
-| `unlockAchievement` | 693 | |
-| `addScore/addCurrency/spendCurrency` | 706–719 | |
-| `_addNotification/getNotifications/...` | 721–755 | |
-| `onRender/onUpdate` | 757/764 | callback registration returns unsubscribe |
-| `registerPlugin(name, plugin)` / `getPlugin` | 771–781 | plugin `init(engine)` / `destroy()`; **only real plugin system**; emits `plugin:registered`; unused by game |
-| `getState()` | 783–804 | HUD reads `mode/elapsed?` (note: HUD `_onTick` gets event payload, not this) |
-| `getCommandHistory(limit)` | 806 | |
-| `reset()` | 811–835 | stops, clears cluster+simulation, resets score/time/etc |
-| `saveState()` / `loadState()` | 837/862 | complete but **never called** (G11) |
-| `destroy()` | 902 | plugins destroy + remove listeners |
+| API                                                                          |    Line | Notes                                                                                                                                                                                                                                                                                |
+| ---------------------------------------------------------------------------- | ------: | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `_applyDifficulty()`                                                         |     202 | sets `simulation.randomFailureRate` = `0.002 × failureRate`                                                                                                                                                                                                                          |
+| `_setupEngineEvents()`                                                       |     209 | incident/chaos/quota/cluster:added:Pod listeners (XP/notifications)                                                                                                                                                                                                                  |
+| `start/stop/pause/resume/togglePause`                                        | 247–299 | RAF loop lifecycle                                                                                                                                                                                                                                                                   |
+| `_gameLoop(timestamp)`                                                       | 301–355 | fixed-step loop: `_processInputQueue` → `simulation.tick(dt)` → update callbacks → `_checkObjectives`; render callbacks; emits `engine:frame`; emits `tick` ~every 500 ms with `{elapsed(gameTime ms), gameTime, realTime, fps, mode, metrics:{cpu,memory}, clusterHealth}` L340–352 |
+| `queueCommand(command)`                                                      |     391 | push + timestamp; processed next fixed step                                                                                                                                                                                                                                          |
+| `_executeCommand(command)`                                                   | 398–431 | emits `command:executed`; switch `create,delete,scale,apply,cordon,uncordon,drain,rollout,exec,logs`                                                                                                                                                                                 |
+| `_handleCreate`                                                              | 433–454 | dead code (no caller queues `type:'create'`)                                                                                                                                                                                                                                         |
+| `_handleDelete`                                                              | 456–465 | `cluster.remove`                                                                                                                                                                                                                                                                     |
+| `_handleScale`                                                               | 467–478 | `resource.updateSpec({replicas})` (no `scale()` method call)                                                                                                                                                                                                                         |
+| `_handleApply`                                                               | 480–497 | dead code (no caller)                                                                                                                                                                                                                                                                |
+| `_handleCordon/Uncordon/Drain`                                               | 499–537 | drain skips DaemonSet pods unless `force`; `markForDeletion` on others                                                                                                                                                                                                               |
+| `_handleRollout`                                                             | 539–579 | `restart` sets `kubectl.kubernetes.io/restartedAt` annotation L549 then emits `rollout:zero-downtime` if no failed pods; `undo` increments `cluster._rollbackCount` L559; `status` reads `resource.status.*`                                                                         |
+| `_handleExec/_handleLogs`                                                    | 581–599 | events-as-logs                                                                                                                                                                                                                                                                       |
+| `_apiVersionForKind`                                                         | 601–615 | map for all 25 kinds (correct versions)                                                                                                                                                                                                                                              |
+| `setMode`                                                                    | 617–638 | chaos config toggling                                                                                                                                                                                                                                                                |
+| `setDifficulty`                                                              |     640 |                                                                                                                                                                                                                                                                                      |
+| `setTimeScale`                                                               |     646 | 0–10, also `simulation.setTickRate`                                                                                                                                                                                                                                                  |
+| `addObjective(id,{description,condition(cluster,engine),reward,xp,timeout})` | 652–661 | **generic objective plugin point** (different from CampaignMode's `type` evaluator)                                                                                                                                                                                                  |
+| `_checkObjectives`                                                           | 663–691 | evaluates `condition` functions, timeout, emits `objective:*`                                                                                                                                                                                                                        |
+| `unlockAchievement`                                                          |     693 |                                                                                                                                                                                                                                                                                      |
+| `addScore/addCurrency/spendCurrency`                                         | 706–719 |                                                                                                                                                                                                                                                                                      |
+| `_addNotification/getNotifications/...`                                      | 721–755 |                                                                                                                                                                                                                                                                                      |
+| `onRender/onUpdate`                                                          | 757/764 | callback registration returns unsubscribe                                                                                                                                                                                                                                            |
+| `registerPlugin(name, plugin)` / `getPlugin`                                 | 771–781 | plugin `init(engine)` / `destroy()`; **only real plugin system**; emits `plugin:registered`; unused by game                                                                                                                                                                          |
+| `getState()`                                                                 | 783–804 | HUD reads `mode/elapsed?` (note: HUD `_onTick` gets event payload, not this)                                                                                                                                                                                                         |
+| `getCommandHistory(limit)`                                                   |     806 |                                                                                                                                                                                                                                                                                      |
+| `reset()`                                                                    | 811–835 | stops, clears cluster+simulation, resets score/time/etc                                                                                                                                                                                                                              |
+| `saveState()` / `loadState()`                                                | 837/862 | complete but **never called** (G11)                                                                                                                                                                                                                                                  |
+| `destroy()`                                                                  |     902 | plugins destroy + remove listeners                                                                                                                                                                                                                                                   |
 
 Queued commands actually used: `scale` (CommandBar L552, index scale dialog L1337), `delete` (CommandBar
 L573, ContextMenu L196), `rollout restart/undo` (ContextMenu L209/L214), `cordon/uncordon/drain`
@@ -772,47 +776,47 @@ L573, ContextMenu L196), `rollout restart/undo` (ContextMenu L209/L214), `cordon
 
 ### 3.5 SimEvents catalogue (producer → consumers)
 
-| Event | Emitted by | Consumed by |
-|---|---|---|
-| `engine:started/stopped/paused/resumed/frame` | GameEngine | (unused) |
-| `tick` | GameEngine L343 | HUD L194, Minimap L93, MetricsDashboard L111 |
-| `engine:mode-changed`, `engine:difficulty-changed`, `engine:timescale-changed`, `engine:reset`, `engine:loaded` | GameEngine | (unused) |
-| `command:executed` | GameEngine L404; CommandBar L272 | ScoringEngine L91 |
-| `command:raw` | CommandBar L271 | IncidentPanel L87 |
-| `command:exec`, `command:unknown` | GameEngine | (unused) |
-| `cluster:added/modified/deleted/reset` + `cluster:<type>:<Kind>` | ClusterState L77–100, L718 | index.html renderer sync L557–580; ScoringEngine `cluster:added:Pod` L236; SimulationTick `cluster:deleted:Pod` L11 |
-| `incident:created` | IncidentEngine L289 | index.html L736, IncidentPanel L86, HUD L195, Minimap L94 |
-| `incident:activated`, `incident:investigating`, `incident:step-completed`, `incident:cascade`, `incident:cascading-resolved` | IncidentEngine | **(no listener except cascading-resolved in ScoringEngine L103)** |
-| `incident:resolved` | IncidentEngine L403, IncidentPanel L137 | HUD L196, Minimap L95, ChaosMode L67, ScoringEngine L87 |
-| `incident:oomkill` | SimulationTick L436 | GameEngine L210 |
-| `hpa:scaled` | SimulationTick L743 | GameEngine L216 |
-| `chaos:podkill` / `chaos:nodefailure` | SimulationTick L820/L843 | GameEngine L223/L227 |
-| `quota:exceeded` | SimulationTick L802 | GameEngine L232 |
-| `resource:created` | CommandBar L604/658/683; SandboxMode L104 | ScoringEngine L83 |
-| `resource:applied` | CommandBar L609 | (unused) |
-| `resource:restarted` / `resource:rollback` | CommandBar L742/L747; GameEngine L562 | (unused) |
-| `resource:healed` / `resource:rescheduled` / `cluster:dns-restored` / `security:credential-rotated` | IncidentEngine L435–448 | **none — no listeners** (G9) |
-| `rollout:zero-downtime` | GameEngine L554 | ScoringEngine L115 |
-| `secret:exposed-fixed` | IncidentEngine L419 | ScoringEngine L109 |
-| `xp:gain` | CommandBar, IncidentPanel, HUD dialogs, index | HUD L197 (display only; does **not** add XP) |
-| `xp:gained`, `player:level-up`, `achievement:unlocked` | ScoringEngine | HUD L199 toast; index? no |
-| `score:changed`, `notification` | GameEngine | (unused) |
-| `resource:selected` / `resource:deselected` / `resource:hovered` / `resource:contextmenu` | index renderer callbacks L582–588; ContextMenu | InspectorPanel, HUD, MetricsDashboard, ContextMenu |
-| `ui:show-command-bar` | IncidentPanel L301 | CommandBar L116 |
-| `ui:run-command` | ContextMenu L227/L230 | index.html L749 → `commandBar._executeCommand` |
-| `ui:edit-resource` | InspectorPanel `_onEdit` (L474) | index.html L755 |
-| `ui:scale-dialog` | ContextMenu L205 | index.html L759 |
-| `ui:toggle-incidents` | HUD L181 | IncidentPanel L85 |
-| `campaign:*` (`level-started/update/level-completed/level-failed/paused/resumed/hint-used/tutorial-step/…`) | CampaignMode | **none** (index uses `mode:level-complete` only) |
-| `challenge:*` | ChallengeMode | none |
-| `chaos:*` | ChaosMode | none |
-| `sandbox:*`, `yaml:viewed` | SandboxMode | ScoringEngine L97 (`yaml:viewed`) |
-| `mode:level-complete` / `mode:game-over` | CampaignMode L481, ChallengeMode L588, ChaosMode L212 | index.html L722/L731 (modals) |
-| `objective:added/completed/failed` | GameEngine | (unused) |
-| `settings:changed` | SettingsPanel L211 | (unused) |
-| `easter-egg:triggered` | CommandBar L278, L690 | ScoringEngine L121 |
-| `plugin:registered` | GameEngine L776 | (unused) |
-| `simulation:tick` | SimulationTick L80 | (unused) |
+| Event                                                                                                                        | Emitted by                                            | Consumed by                                                                                                         |
+| ---------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `engine:started/stopped/paused/resumed/frame`                                                                                | GameEngine                                            | (unused)                                                                                                            |
+| `tick`                                                                                                                       | GameEngine L343                                       | HUD L194, Minimap L93, MetricsDashboard L111                                                                        |
+| `engine:mode-changed`, `engine:difficulty-changed`, `engine:timescale-changed`, `engine:reset`, `engine:loaded`              | GameEngine                                            | (unused)                                                                                                            |
+| `command:executed`                                                                                                           | GameEngine L404; CommandBar L272                      | ScoringEngine L91                                                                                                   |
+| `command:raw`                                                                                                                | CommandBar L271                                       | IncidentPanel L87                                                                                                   |
+| `command:exec`, `command:unknown`                                                                                            | GameEngine                                            | (unused)                                                                                                            |
+| `cluster:added/modified/deleted/reset` + `cluster:<type>:<Kind>`                                                             | ClusterState L77–100, L718                            | index.html renderer sync L557–580; ScoringEngine `cluster:added:Pod` L236; SimulationTick `cluster:deleted:Pod` L11 |
+| `incident:created`                                                                                                           | IncidentEngine L289                                   | index.html L736, IncidentPanel L86, HUD L195, Minimap L94                                                           |
+| `incident:activated`, `incident:investigating`, `incident:step-completed`, `incident:cascade`, `incident:cascading-resolved` | IncidentEngine                                        | **(no listener except cascading-resolved in ScoringEngine L103)**                                                   |
+| `incident:resolved`                                                                                                          | IncidentEngine L403, IncidentPanel L137               | HUD L196, Minimap L95, ChaosMode L67, ScoringEngine L87                                                             |
+| `incident:oomkill`                                                                                                           | SimulationTick L436                                   | GameEngine L210                                                                                                     |
+| `hpa:scaled`                                                                                                                 | SimulationTick L743                                   | GameEngine L216                                                                                                     |
+| `chaos:podkill` / `chaos:nodefailure`                                                                                        | SimulationTick L820/L843                              | GameEngine L223/L227                                                                                                |
+| `quota:exceeded`                                                                                                             | SimulationTick L802                                   | GameEngine L232                                                                                                     |
+| `resource:created`                                                                                                           | CommandBar L604/658/683; SandboxMode L104             | ScoringEngine L83                                                                                                   |
+| `resource:applied`                                                                                                           | CommandBar L609                                       | (unused)                                                                                                            |
+| `resource:restarted` / `resource:rollback`                                                                                   | CommandBar L742/L747; GameEngine L562                 | (unused)                                                                                                            |
+| `resource:healed` / `resource:rescheduled` / `cluster:dns-restored` / `security:credential-rotated`                          | IncidentEngine L435–448                               | **none — no listeners** (G9)                                                                                        |
+| `rollout:zero-downtime`                                                                                                      | GameEngine L554                                       | ScoringEngine L115                                                                                                  |
+| `secret:exposed-fixed`                                                                                                       | IncidentEngine L419                                   | ScoringEngine L109                                                                                                  |
+| `xp:gain`                                                                                                                    | CommandBar, IncidentPanel, HUD dialogs, index         | HUD L197 (display only; does **not** add XP)                                                                        |
+| `xp:gained`, `player:level-up`, `achievement:unlocked`                                                                       | ScoringEngine                                         | HUD L199 toast; index? no                                                                                           |
+| `score:changed`, `notification`                                                                                              | GameEngine                                            | (unused)                                                                                                            |
+| `resource:selected` / `resource:deselected` / `resource:hovered` / `resource:contextmenu`                                    | index renderer callbacks L582–588; ContextMenu        | InspectorPanel, HUD, MetricsDashboard, ContextMenu                                                                  |
+| `ui:show-command-bar`                                                                                                        | IncidentPanel L301                                    | CommandBar L116                                                                                                     |
+| `ui:run-command`                                                                                                             | ContextMenu L227/L230                                 | index.html L749 → `commandBar._executeCommand`                                                                      |
+| `ui:edit-resource`                                                                                                           | InspectorPanel `_onEdit` (L474)                       | index.html L755                                                                                                     |
+| `ui:scale-dialog`                                                                                                            | ContextMenu L205                                      | index.html L759                                                                                                     |
+| `ui:toggle-incidents`                                                                                                        | HUD L181                                              | IncidentPanel L85                                                                                                   |
+| `campaign:*` (`level-started/update/level-completed/level-failed/paused/resumed/hint-used/tutorial-step/…`)                  | CampaignMode                                          | **none** (index uses `mode:level-complete` only)                                                                    |
+| `challenge:*`                                                                                                                | ChallengeMode                                         | none                                                                                                                |
+| `chaos:*`                                                                                                                    | ChaosMode                                             | none                                                                                                                |
+| `sandbox:*`, `yaml:viewed`                                                                                                   | SandboxMode                                           | ScoringEngine L97 (`yaml:viewed`)                                                                                   |
+| `mode:level-complete` / `mode:game-over`                                                                                     | CampaignMode L481, ChallengeMode L588, ChaosMode L212 | index.html L722/L731 (modals)                                                                                       |
+| `objective:added/completed/failed`                                                                                           | GameEngine                                            | (unused)                                                                                                            |
+| `settings:changed`                                                                                                           | SettingsPanel L211                                    | (unused)                                                                                                            |
+| `easter-egg:triggered`                                                                                                       | CommandBar L278, L690                                 | ScoringEngine L121                                                                                                  |
+| `plugin:registered`                                                                                                          | GameEngine L776                                       | (unused)                                                                                                            |
+| `simulation:tick`                                                                                                            | SimulationTick L80                                    | (unused)                                                                                                            |
 
 ### 3.6 Exact extension points for the `kubectl` → `oc` rename + new commands
 
@@ -837,20 +841,20 @@ This fixes hint/incident UX and makes the rename idempotent. Then update the dis
 
 **Add commands (all require a handler + `COMMANDS` entry + completions + explain entry):**
 
-| New command | Insert where | What to clone |
-|---|---|---|
-| `new-app` (`--image`, `--code`, `--name`, `--template`) | new `_cmdNewApp` in CommandBar + dispatch L298 | `_cmdCreate` L614 for resource creation; needs Deployment/Service/ImageStream/BuildConfig synthesis |
-| `new-project` / `project` / `projects` | `_cmdNewProject` | `_cmdCreate` Namespace branch; should switch "current project" |
-| `expose` (`svc`, `deployment`) | `_cmdExpose` | `_cmdCreate` Service defaults L627 + `RESOURCE_CLASSES` Service |
-| `set` (`image`, `env`, `resources`, `probe`, `volume`) | `_cmdSet` | mutation patterns in `index._showEditDialog` L1190 + `ResourceBase.updateSpec` |
-| `attach` / `rsync` | optional | sim-only |
-| `auth can-i` / `adm policy` | `_cmdAuth` / `_cmdAdmPolicy` | RBAC model + a new evaluator (SCC/RBAC resolution) |
-| `process` (templates) | `_cmdProcess` | render `Template` data → resources; no existing parser |
-| `create route` | extend `_cmdCreate` + `KIND_ALIASES` + Route model | new mesh/registry work |
-| `start-build` / `logs bc/...` / `rollout` for DC | new `_cmdStartBuild` etc. | `_tickJobs` controller pattern (§4) |
-| `get scc`, `get route`, `get bc`, `get is`, `get dc`, `get project`, `get csv/sub/og` | widen `KIND_ALIASES` L13, `RESOURCE_TYPES` L1, `_getHeaderForKind` L410, `_formatResourceRow` L415, `EXPLAIN_DATA` | new kinds in the model registry |
-| `edit` / `patch` / `replace -f` | new handlers | needs a real YAML/JSON parser (see `_cmdApply` fix) |
-| `apply -f` (real) | rewrite `_cmdApply` L581 | YAML parser + `kindRegistry` to instantiate correct class |
+| New command                                                                           | Insert where                                                                                                       | What to clone                                                                                       |
+| ------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------- |
+| `new-app` (`--image`, `--code`, `--name`, `--template`)                               | new `_cmdNewApp` in CommandBar + dispatch L298                                                                     | `_cmdCreate` L614 for resource creation; needs Deployment/Service/ImageStream/BuildConfig synthesis |
+| `new-project` / `project` / `projects`                                                | `_cmdNewProject`                                                                                                   | `_cmdCreate` Namespace branch; should switch "current project"                                      |
+| `expose` (`svc`, `deployment`)                                                        | `_cmdExpose`                                                                                                       | `_cmdCreate` Service defaults L627 + `RESOURCE_CLASSES` Service                                     |
+| `set` (`image`, `env`, `resources`, `probe`, `volume`)                                | `_cmdSet`                                                                                                          | mutation patterns in `index._showEditDialog` L1190 + `ResourceBase.updateSpec`                      |
+| `attach` / `rsync`                                                                    | optional                                                                                                           | sim-only                                                                                            |
+| `auth can-i` / `adm policy`                                                           | `_cmdAuth` / `_cmdAdmPolicy`                                                                                       | RBAC model + a new evaluator (SCC/RBAC resolution)                                                  |
+| `process` (templates)                                                                 | `_cmdProcess`                                                                                                      | render `Template` data → resources; no existing parser                                              |
+| `create route`                                                                        | extend `_cmdCreate` + `KIND_ALIASES` + Route model                                                                 | new mesh/registry work                                                                              |
+| `start-build` / `logs bc/...` / `rollout` for DC                                      | new `_cmdStartBuild` etc.                                                                                          | `_tickJobs` controller pattern (§4)                                                                 |
+| `get scc`, `get route`, `get bc`, `get is`, `get dc`, `get project`, `get csv/sub/og` | widen `KIND_ALIASES` L13, `RESOURCE_TYPES` L1, `_getHeaderForKind` L410, `_formatResourceRow` L415, `EXPLAIN_DATA` | new kinds in the model registry                                                                     |
+| `edit` / `patch` / `replace -f`                                                       | new handlers                                                                                                       | needs a real YAML/JSON parser (see `_cmdApply` fix)                                                 |
+| `apply -f` (real)                                                                     | rewrite `_cmdApply` L581                                                                                           | YAML parser + `kindRegistry` to instantiate correct class                                           |
 
 **Fix `_cmdGet`** to support `-A/--all-namespaces` (currently parsed into `flagArgs` L334 but ignored),
 `-o yaml/name`, `-o jsonpath`, `--show-labels`, `--sort-by`, and the real event stream (there is none —
@@ -898,25 +902,25 @@ batch.
 
 ### 4.2 Controller inventory (what exists, what it converges, extension point)
 
-| Controller | Method:line | Reconciles | Creates / effects | State today |
-|---|---|---|---|---|
-| Node status | `_tickNodes` L88 | Node conditions/allocatable/usage from pods | conditions MemoryPressure/PIDPressure/Ready | Works for Node resources with `spec.cpu/memory` |
-| Scheduler | `_tickPodScheduling` L124 + `_findBestNode` L160 | Pending pods without `nodeName` | assigns node, sets `Running`, IP, conditions, `_initContainerStatuses` | NodeSelector/taints/tolerations/soft node affinity only; no SCC, no affinity/anti-affinity beyond preferred |
-| Pod lifecycle | `_tickPodLifecycle` L257 | containerStatuses state machine | ContainerCreating→Running, Ready conditions, deletion grace | no init containers, no volumes |
-| Container resource sim | `_tickContainerResources` L316 | synthetic CPU/mem; random crash | CrashLoopBackOff | difficulty-scaled `randomFailureRate` |
-| Probes | `_tickHealthChecks` L348 + `_evaluateProbe` L395 | liveness/readiness/startup | restarts, Ready toggles | probe = "overloaded" heuristic only |
-| OOM killer | `_tickOOMKiller` L408 | mem > limit | OOMKilled reset + `incident:oomkill` | no QoS eviction |
-| Deployment→ReplicaSet→Pod | `_tickDeployments` L449 | desired replicas, selector-matched RS | creates **plain** ReplicaSet L462–476 via `ResourceBase`, then pods via `_createPodForWorkload`; sets status counts/conditions; scales by creating/removing pods | no rolling-update strategy math; ignores `status.updatedReplicas` semantics (sets = total pods) |
-| StatefulSet | `_tickStatefulSets` L523 | ordinal pods | `_createPodForWorkload(sts, sts, name-ordinal)`; removes highest ordinal | no PVC binding (no volumes) |
-| DaemonSet | `_tickDaemonSets` L550 | one pod per selected Ready node | pods with `spec.nodeName` forced | nodeSelector only |
-| Job | `_tickJobs` L577 | completions/backoff/parallelism | pods; sets `phase Complete/Failed`, conditions | pod success is time-based (`_completionTime`, L613–625) |
-| CronJob | `_tickCronJobs` L630 | schedule via `Date.now()` vs `status.lastScheduleTime` | creates **plain** Job L642 | simplifies cron parsing (`_parseCronInterval` L663) |
-| HPA | `_tickHPA` L673 | target Deployment replicas from CPU util | writes `target.spec.replicas`, `hpa.status.*`, emits `hpa:scaled` | 30 s up / 300 s down cooldown; target found by `spec.scaleTargetRef` via `getByName` |
-| Service endpoints | `_tickProbes` L779 | ready endpoints per selector | `svc.status.readyEndpoints/totalEndpoints`; fake LoadBalancer IP | Ingress not reconciled |
-| Quota enforcement | `_tickQuotaEnforcement` L797 | `cluster.resourceQuotas` | emits `quota:exceeded` | uses separate quota map (not ResourceQuota resources) |
-| Chaos | `_tickChaos` L812 | random pod kill/node fail/stress | events `chaos:podkill`, `chaos:nodefailure` | gated by `setChaosConfig` |
-| Pod factory | `_createPodForWorkload(parent, templateSource, nameOverride)` **L867–893** | — | `new ResourceBase('Pod','v1',…)`, copies template spec via JSON clone, labels from template, `pod-template-hash`, `addOwnerReference(parent)`, `cluster.add`, `cluster.addRelationship` | **All controller-created pods are plain base objects** |
-| Metrics | `_recordMetrics` L895 | metricsHistory | ring of 60 `{cpu,memory,pods,nodes}` | consumed by `getMetricsHistory/summary` (no caller currently? MetricsDashboard uses cluster stats directly) |
+| Controller                | Method:line                                                                | Reconciles                                             | Creates / effects                                                                                                                                                                       | State today                                                                                                 |
+| ------------------------- | -------------------------------------------------------------------------- | ------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| Node status               | `_tickNodes` L88                                                           | Node conditions/allocatable/usage from pods            | conditions MemoryPressure/PIDPressure/Ready                                                                                                                                             | Works for Node resources with `spec.cpu/memory`                                                             |
+| Scheduler                 | `_tickPodScheduling` L124 + `_findBestNode` L160                           | Pending pods without `nodeName`                        | assigns node, sets `Running`, IP, conditions, `_initContainerStatuses`                                                                                                                  | NodeSelector/taints/tolerations/soft node affinity only; no SCC, no affinity/anti-affinity beyond preferred |
+| Pod lifecycle             | `_tickPodLifecycle` L257                                                   | containerStatuses state machine                        | ContainerCreating→Running, Ready conditions, deletion grace                                                                                                                             | no init containers, no volumes                                                                              |
+| Container resource sim    | `_tickContainerResources` L316                                             | synthetic CPU/mem; random crash                        | CrashLoopBackOff                                                                                                                                                                        | difficulty-scaled `randomFailureRate`                                                                       |
+| Probes                    | `_tickHealthChecks` L348 + `_evaluateProbe` L395                           | liveness/readiness/startup                             | restarts, Ready toggles                                                                                                                                                                 | probe = "overloaded" heuristic only                                                                         |
+| OOM killer                | `_tickOOMKiller` L408                                                      | mem > limit                                            | OOMKilled reset + `incident:oomkill`                                                                                                                                                    | no QoS eviction                                                                                             |
+| Deployment→ReplicaSet→Pod | `_tickDeployments` L449                                                    | desired replicas, selector-matched RS                  | creates **plain** ReplicaSet L462–476 via `ResourceBase`, then pods via `_createPodForWorkload`; sets status counts/conditions; scales by creating/removing pods                        | no rolling-update strategy math; ignores `status.updatedReplicas` semantics (sets = total pods)             |
+| StatefulSet               | `_tickStatefulSets` L523                                                   | ordinal pods                                           | `_createPodForWorkload(sts, sts, name-ordinal)`; removes highest ordinal                                                                                                                | no PVC binding (no volumes)                                                                                 |
+| DaemonSet                 | `_tickDaemonSets` L550                                                     | one pod per selected Ready node                        | pods with `spec.nodeName` forced                                                                                                                                                        | nodeSelector only                                                                                           |
+| Job                       | `_tickJobs` L577                                                           | completions/backoff/parallelism                        | pods; sets `phase Complete/Failed`, conditions                                                                                                                                          | pod success is time-based (`_completionTime`, L613–625)                                                     |
+| CronJob                   | `_tickCronJobs` L630                                                       | schedule via `Date.now()` vs `status.lastScheduleTime` | creates **plain** Job L642                                                                                                                                                              | simplifies cron parsing (`_parseCronInterval` L663)                                                         |
+| HPA                       | `_tickHPA` L673                                                            | target Deployment replicas from CPU util               | writes `target.spec.replicas`, `hpa.status.*`, emits `hpa:scaled`                                                                                                                       | 30 s up / 300 s down cooldown; target found by `spec.scaleTargetRef` via `getByName`                        |
+| Service endpoints         | `_tickProbes` L779                                                         | ready endpoints per selector                           | `svc.status.readyEndpoints/totalEndpoints`; fake LoadBalancer IP                                                                                                                        | Ingress not reconciled                                                                                      |
+| Quota enforcement         | `_tickQuotaEnforcement` L797                                               | `cluster.resourceQuotas`                               | emits `quota:exceeded`                                                                                                                                                                  | uses separate quota map (not ResourceQuota resources)                                                       |
+| Chaos                     | `_tickChaos` L812                                                          | random pod kill/node fail/stress                       | events `chaos:podkill`, `chaos:nodefailure`                                                                                                                                             | gated by `setChaosConfig`                                                                                   |
+| Pod factory               | `_createPodForWorkload(parent, templateSource, nameOverride)` **L867–893** | —                                                      | `new ResourceBase('Pod','v1',…)`, copies template spec via JSON clone, labels from template, `pod-template-hash`, `addOwnerReference(parent)`, `cluster.add`, `cluster.addRelationship` | **All controller-created pods are plain base objects**                                                      |
+| Metrics                   | `_recordMetrics` L895                                                      | metricsHistory                                         | ring of 60 `{cpu,memory,pods,nodes}`                                                                                                                                                    | consumed by `getMetricsHistory/summary` (no caller currently? MetricsDashboard uses cluster stats directly) |
 
 **Controllers that do NOT exist but are implied by the model:** PVC→PV binding (`PersistentVolumeClaim.tick`
 dead), Ingress→Service/endpoint reconciliation (`Ingress.tick` dead), ResourceQuota object status updates
@@ -958,7 +962,7 @@ designs that fit the existing style:
 2. **BuildConfig → Build → ImageStream.** Clone the Job/CronJob pattern: `_tickBuilds(dt)` transitions
    Build phases (`New→Pending→Running→Complete/Failed`, time-based) and on completion **mutates the
    referenced ImageStream status tags** (`image.openshift.io/v1` ImageStream `status.tags[{tag,items[
-   {image,dockerImageReference}]}]`) then (optionally) triggers a new rollout on workloads with
+{image,dockerImageReference}]}]`) then (optionally) triggers a new rollout on workloads with
    `imageChange` triggers. `_tickBuildConfigs(dt)` creates Builds on source change/webhook; the
    `Build→BuildConfig` owner relationship uses `cluster.addRelationship`.
 3. **Route admission.** New `_tickRoutes(dt)` after `_tickProbes` L779: for every
@@ -1012,7 +1016,7 @@ Do **not** put OpenShift logic in the resource subclass `tick()` methods — the
 ```
 
 - `INCIDENT_CATEGORIES` L705–712: `{Pod:#ef4444 w.3, Node:#f97316 w.2, Network:#eab308 w.2, Storage:
-  #8b5cf6 w.1, ControlPlane:#dc2626 w.1, Workload:#3b82f6 w.1}`.
+#8b5cf6 w.1, ControlPlane:#dc2626 w.1, Workload:#3b82f6 w.1}`.
 - `SEVERITY_LEVELS` L714–720: level → `{name, color, xpReward, timeMultiplier}`: 1 Low 25 / 1.5s ×,
   2 Medium 50 / 1.2, 3 High 100 / 1.0, 4 Critical 200 / 0.8, 5 Emergency 350 / 0.6.
 - `<pod>`, `<node>`, `<service>`, `<policy>`, `<ingress>`, `<namespace>` are placeholder tokens replaced by
@@ -1031,7 +1035,7 @@ Do **not** put OpenShift logic in the resource subclass `tick()` methods — the
   - constructor L70–113: `activeIncidents Map`, `resolvedIncidents[]`, difficulty weights L115–133,
     cascade rules L87–110, `paused`, `comboWindow=10000`, `maxCascadeDepth=3`.
   - **`start(mode)` L146–160 installs `setInterval(() => this.tick(1000), 1000)`.** `index.html:553`
-    *also* calls `incidentEngine.tick(dt)` (dt in **seconds**, ≈0.05) every fixed sim step. So incident
+    _also_ calls `incidentEngine.tick(dt)` (dt in **seconds**, ≈0.05) every fixed sim step. So incident
     time advances at ~1.05× realtime via two different clocks/units (G12). Modes call
     `incidentEngine.start(...)` after setup.
   - `tick(deltaMs)` L178–191: accumulate elapsed, `processScriptedIncidents` (triggerTime seconds),
@@ -1075,42 +1079,42 @@ Do **not** put OpenShift logic in the resource subclass `tick()` methods — the
 
 ### 5.3 Full incident inventory (34)
 
-| # | id | name | category | sev | affected kinds | auto-resolve |
-|---:|---|---|---|---:|---|---:|
-| 1 | crash-loop-backoff | CrashLoopBackOff | Pod | 3 | Pod, Deployment | — |
-| 2 | image-pull-backoff | ImagePullBackOff | Pod | 2 | Pod, Deployment | — |
-| 3 | oom-killed | OOMKilled | Pod | 3 | Pod, Deployment | — |
-| 4 | pod-eviction | PodEviction | Pod | 2 | Pod, Node | — |
-| 5 | readiness-probe-failure | ReadinessProbeFailure | Pod | 2 | Pod, Service | 60 s |
-| 6 | pod-stuck-terminating | PodStuckTerminating | Pod | 2 | Pod | 120 s |
-| 7 | node-not-ready | NodeNotReady | Node | 5 | Node, Pod | — |
-| 8 | node-disk-pressure | NodeDiskPressure | Node | 4 | Node | — |
-| 9 | node-memory-pressure | NodeMemoryPressure | Node | 4 | Node, Pod | — |
-| 10 | node-pid-pressure | NodePIDPressure | Node | 3 | Node | — |
-| 11 | service-endpoint-missing | ServiceEndpointMissing | Network | 3 | Service, Deployment | — |
-| 12 | dns-resolution-failure | DNSResolutionFailure | Network | 4 | Service, Pod | — |
-| 13 | network-policy-blocking | NetworkPolicyBlocking | Network | 3 | NetworkPolicy, Service, Pod | — |
-| 14 | ingress-misconfigured | IngressMisconfigured | Network | 3 | Ingress, Service | — |
-| 15 | unauthorized-access | UnauthorizedAccess | Network | 5 | Pod, ServiceAccount, Namespace | — |
-| 16 | pvc-pending | PVCPending | Storage | 3 | PVC, PV | — |
-| 17 | volume-mount-failure | VolumeMountFailure | Storage | 3 | Pod, PVC | — |
-| 18 | volume-capacity-full | VolumeCapacityFull | Storage | 4 | PV, PVC, Pod | — |
-| 19 | etcd-latency | EtcdLatency | ControlPlane | 5 | Node | — |
-| 20 | api-server-overloaded | APIServerOverloaded | ControlPlane | 5 | Node | — |
-| 21 | scheduler-failure | SchedulerFailure | ControlPlane | 4 | Pod, Node | — |
-| 22 | webhook-timeout | WebhookTimeout | ControlPlane | 4 | Pod, Deployment | 90 s |
-| 23 | deployment-stuck-rollout | DeploymentStuckRollout | Workload | 3 | Deployment, ReplicaSet | — |
-| 24 | hpa-scaling-failure | HPAScalingFailure | Workload | 2 | HPA, Deployment | — |
-| 25 | job-deadline-exceeded | JobDeadlineExceeded | Workload | 2 | Job, Pod | — |
-| 26 | liveness-probe-failure | LivenessProbeFailure | Pod | 3 | Pod, Deployment | — |
-| 27 | certificate-expiry | CertificateExpiry | ControlPlane | 5 | Secret, Ingress | — |
-| 28 | cronjob-missed-schedule | CronJobMissedSchedule | Workload | 2 | CronJob, Job | — |
-| 29 | secret-exposed | SecretExposed | ControlPlane | 5 | ConfigMap, Secret | — |
-| 30 | statefulset-ordered-ready-stuck | StatefulSetOrderedReadyStuck | Workload | 3 | StatefulSet, Pod | — |
-| 31 | resource-quota-exceeded | ResourceQuotaExceeded | Workload | 3 | Pod, Deployment, ResourceQuota | — |
-| 32 | init-container-crash | InitContainerCrash | Pod | 3 | Pod, Deployment | — |
-| 33 | loadbalancer-pending | LoadBalancerPending | Network | 2 | Service | — |
-| 34 | webhook-rejection | WebhookAdmissionRejection | ControlPlane | 4 | Pod, Deployment | 90 s |
+|   # | id                              | name                         | category     | sev | affected kinds                 | auto-resolve |
+| --: | ------------------------------- | ---------------------------- | ------------ | --: | ------------------------------ | -----------: |
+|   1 | crash-loop-backoff              | CrashLoopBackOff             | Pod          |   3 | Pod, Deployment                |            — |
+|   2 | image-pull-backoff              | ImagePullBackOff             | Pod          |   2 | Pod, Deployment                |            — |
+|   3 | oom-killed                      | OOMKilled                    | Pod          |   3 | Pod, Deployment                |            — |
+|   4 | pod-eviction                    | PodEviction                  | Pod          |   2 | Pod, Node                      |            — |
+|   5 | readiness-probe-failure         | ReadinessProbeFailure        | Pod          |   2 | Pod, Service                   |         60 s |
+|   6 | pod-stuck-terminating           | PodStuckTerminating          | Pod          |   2 | Pod                            |        120 s |
+|   7 | node-not-ready                  | NodeNotReady                 | Node         |   5 | Node, Pod                      |            — |
+|   8 | node-disk-pressure              | NodeDiskPressure             | Node         |   4 | Node                           |            — |
+|   9 | node-memory-pressure            | NodeMemoryPressure           | Node         |   4 | Node, Pod                      |            — |
+|  10 | node-pid-pressure               | NodePIDPressure              | Node         |   3 | Node                           |            — |
+|  11 | service-endpoint-missing        | ServiceEndpointMissing       | Network      |   3 | Service, Deployment            |            — |
+|  12 | dns-resolution-failure          | DNSResolutionFailure         | Network      |   4 | Service, Pod                   |            — |
+|  13 | network-policy-blocking         | NetworkPolicyBlocking        | Network      |   3 | NetworkPolicy, Service, Pod    |            — |
+|  14 | ingress-misconfigured           | IngressMisconfigured         | Network      |   3 | Ingress, Service               |            — |
+|  15 | unauthorized-access             | UnauthorizedAccess           | Network      |   5 | Pod, ServiceAccount, Namespace |            — |
+|  16 | pvc-pending                     | PVCPending                   | Storage      |   3 | PVC, PV                        |            — |
+|  17 | volume-mount-failure            | VolumeMountFailure           | Storage      |   3 | Pod, PVC                       |            — |
+|  18 | volume-capacity-full            | VolumeCapacityFull           | Storage      |   4 | PV, PVC, Pod                   |            — |
+|  19 | etcd-latency                    | EtcdLatency                  | ControlPlane |   5 | Node                           |            — |
+|  20 | api-server-overloaded           | APIServerOverloaded          | ControlPlane |   5 | Node                           |            — |
+|  21 | scheduler-failure               | SchedulerFailure             | ControlPlane |   4 | Pod, Node                      |            — |
+|  22 | webhook-timeout                 | WebhookTimeout               | ControlPlane |   4 | Pod, Deployment                |         90 s |
+|  23 | deployment-stuck-rollout        | DeploymentStuckRollout       | Workload     |   3 | Deployment, ReplicaSet         |            — |
+|  24 | hpa-scaling-failure             | HPAScalingFailure            | Workload     |   2 | HPA, Deployment                |            — |
+|  25 | job-deadline-exceeded           | JobDeadlineExceeded          | Workload     |   2 | Job, Pod                       |            — |
+|  26 | liveness-probe-failure          | LivenessProbeFailure         | Pod          |   3 | Pod, Deployment                |            — |
+|  27 | certificate-expiry              | CertificateExpiry            | ControlPlane |   5 | Secret, Ingress                |            — |
+|  28 | cronjob-missed-schedule         | CronJobMissedSchedule        | Workload     |   2 | CronJob, Job                   |            — |
+|  29 | secret-exposed                  | SecretExposed                | ControlPlane |   5 | ConfigMap, Secret              |            — |
+|  30 | statefulset-ordered-ready-stuck | StatefulSetOrderedReadyStuck | Workload     |   3 | StatefulSet, Pod               |            — |
+|  31 | resource-quota-exceeded         | ResourceQuotaExceeded        | Workload     |   3 | Pod, Deployment, ResourceQuota |            — |
+|  32 | init-container-crash            | InitContainerCrash           | Pod          |   3 | Pod, Deployment                |            — |
+|  33 | loadbalancer-pending            | LoadBalancerPending          | Network      |   2 | Service                        |            — |
+|  34 | webhook-rejection               | WebhookAdmissionRejection    | ControlPlane |   4 | Pod, Deployment                |         90 s |
 
 Notes for conversion: every `investigationSteps[].command`, `kubectlCommands[]`, and descriptive text is
 `kubectl`-worded; none reference OpenShift primitives (Route/Build/SCC/Project). New EX280 incidents to
@@ -1119,7 +1123,7 @@ ConfigMap/Secret, `Route` not admitted (host already claimed), `Build` failed (S
 `runAsUser`, quota exceeded on `DeploymentConfig`, `ImageStreamTag` not found, `oc new-app` failure,
 project self-provisioner denied, certificate expiry in `Route` edge TLS, `Operator` CSV failed.
 Resolution for incidents must eventually mutate cluster state (currently doesn't — G9); EX280 missions
-should require the *player to actually fix the resource*, then the card resolves.
+should require the _player to actually fix the resource_, then the card resolves.
 
 ---
 
@@ -1157,28 +1161,28 @@ the primary OpenShift content file to rewrite.
 
 ### 6.2 Level inventory (20)
 
-| id | ch | title | objective types used | scripted incidents |
-|---:|---:|---|---|---|
-| 1 | 1 | Your First Pod | deploy Pod, deploy Namespace | — |
-| 2 | 1 | Deployments & ReplicaSets | deploy Deployment, scale Deployment→3 | — |
-| 3 | 1 | Scheduling & Multi-Node Clusters | deploy Node×3, deploy Pod×6, distribute≥2 nodes | — |
-| 4 | 1 | CrashLoopBackOff | resolve CrashLoopBackOff, uptime 95% | CrashLoopBackOff @10s |
-| 5 | 2 | Self-Healing & Pod Eviction | deploy Deployment×3, replicas≥2, resolve PodEviction×2 | PodEviction @30/60 |
-| 6 | 2 | DaemonSets: One Pod Per Node | deploy DaemonSet, deploy Node×4, coverage | — |
-| 7 | 2 | Jobs & CronJobs: Batch Processing | deploy Job×2, complete Job×2, deploy CronJob | JobDeadlineExceeded @45 |
-| 8 | 2 | Rolling Updates & Rollbacks | update Deployment, rollback, uptime 90% | ImagePullBackOff @20 |
-| 9 | 3 | Services & Service Discovery | deploy Service×2, connect frontend→backend, serviceType NodePort | — |
-| 10 | 3 | Ingress: L7 HTTP Routing | deploy Ingress, route /api+/web, tls | — |
-| 11 | 3 | NetworkPolicies: Zero Trust | deploy NetworkPolicy×2, isolate database, allow backend→database | UnauthorizedAccess @30 |
-| 12 | 3 | DNS Debugging | resolve DNSResolutionFailure, verify DNS, deploy NetworkPolicy | DNSResolutionFailure @5 |
-| 13 | 4 | ConfigMap Essentials | deploy ConfigMap×2, mount ConfigMap, envFrom ConfigMap | — |
-| 14 | 4 | Secret Operations | deploy Secret×2, mount Secret, noConfigMap sensitive | SecretExposed @15 |
-| 15 | 4 | Persistent Storage | deploy PV×2, deploy PVC×2, bound PVC×2 | — |
-| 16 | 4 | StatefulSet Database | deploy StatefulSet, scale STS→3, headless Service, stable | PodStuckTerminating @60 |
-| 17 | 5 | Production Readiness | resources configured, probes liveness+readiness, hpa, resolve OOMKilled | OOMKilled @20, ReadinessProbeFailure @45 |
-| 18 | 5 | RBAC Fortress | deploy Role×2, RoleBinding×2, ServiceAccount×2, leastPrivilege | UnauthorizedAccess @25 |
-| 19 | 5 | Multi-Node Outage | resolve NodeNotReady×2, uptime 80%, reschedule×5, pdb | NodeNotReady @10/15, PodEviction @20 |
-| 20 | 5 | Full Stack Production | 9 deploy objectives + probes + architectureScore≥75 | CrashLoopBackOff @60, NodeNotReady @120, DNS @180 |
+|  id |  ch | title                             | objective types used                                                    | scripted incidents                                |
+| --: | --: | --------------------------------- | ----------------------------------------------------------------------- | ------------------------------------------------- |
+|   1 |   1 | Your First Pod                    | deploy Pod, deploy Namespace                                            | —                                                 |
+|   2 |   1 | Deployments & ReplicaSets         | deploy Deployment, scale Deployment→3                                   | —                                                 |
+|   3 |   1 | Scheduling & Multi-Node Clusters  | deploy Node×3, deploy Pod×6, distribute≥2 nodes                         | —                                                 |
+|   4 |   1 | CrashLoopBackOff                  | resolve CrashLoopBackOff, uptime 95%                                    | CrashLoopBackOff @10s                             |
+|   5 |   2 | Self-Healing & Pod Eviction       | deploy Deployment×3, replicas≥2, resolve PodEviction×2                  | PodEviction @30/60                                |
+|   6 |   2 | DaemonSets: One Pod Per Node      | deploy DaemonSet, deploy Node×4, coverage                               | —                                                 |
+|   7 |   2 | Jobs & CronJobs: Batch Processing | deploy Job×2, complete Job×2, deploy CronJob                            | JobDeadlineExceeded @45                           |
+|   8 |   2 | Rolling Updates & Rollbacks       | update Deployment, rollback, uptime 90%                                 | ImagePullBackOff @20                              |
+|   9 |   3 | Services & Service Discovery      | deploy Service×2, connect frontend→backend, serviceType NodePort        | —                                                 |
+|  10 |   3 | Ingress: L7 HTTP Routing          | deploy Ingress, route /api+/web, tls                                    | —                                                 |
+|  11 |   3 | NetworkPolicies: Zero Trust       | deploy NetworkPolicy×2, isolate database, allow backend→database        | UnauthorizedAccess @30                            |
+|  12 |   3 | DNS Debugging                     | resolve DNSResolutionFailure, verify DNS, deploy NetworkPolicy          | DNSResolutionFailure @5                           |
+|  13 |   4 | ConfigMap Essentials              | deploy ConfigMap×2, mount ConfigMap, envFrom ConfigMap                  | —                                                 |
+|  14 |   4 | Secret Operations                 | deploy Secret×2, mount Secret, noConfigMap sensitive                    | SecretExposed @15                                 |
+|  15 |   4 | Persistent Storage                | deploy PV×2, deploy PVC×2, bound PVC×2                                  | —                                                 |
+|  16 |   4 | StatefulSet Database              | deploy StatefulSet, scale STS→3, headless Service, stable               | PodStuckTerminating @60                           |
+|  17 |   5 | Production Readiness              | resources configured, probes liveness+readiness, hpa, resolve OOMKilled | OOMKilled @20, ReadinessProbeFailure @45          |
+|  18 |   5 | RBAC Fortress                     | deploy Role×2, RoleBinding×2, ServiceAccount×2, leastPrivilege          | UnauthorizedAccess @25                            |
+|  19 |   5 | Multi-Node Outage                 | resolve NodeNotReady×2, uptime 80%, reschedule×5, pdb                   | NodeNotReady @10/15, PodEviction @20              |
+|  20 |   5 | Full Stack Production             | 9 deploy objectives + probes + architectureScore≥75                     | CrashLoopBackOff @60, NodeNotReady @120, DNS @180 |
 
 ### 6.3 Objective evaluator (`CampaignMode.updateObjectives` L191–431)
 
@@ -1188,47 +1192,48 @@ and completion requires **all** objectives (`checkCompletion` L433–437). Unkno
 through the switch with **no default** → objective stays incomplete forever (a content typo bricks a
 level).
 
-| `type` | Fields read | Condition (CampaignMode) | Data-path verdict |
-|---|---|---|---|
-| `deploy` | `kind`, `count` | `getResourcesByKind(kind).length >= target` | OK (counts starting resources too) |
-| `scale` | `kind`, `replicas` | any resource of kind with `spec.replicas >= obj.replicas` | OK (often auto-satisfied because Deployment ctor defaults replicas=3) |
-| `resolve` | `incidentType`, `count` | `incidentEngine.getStats().totalResolved >= target` — **ignores incidentType** | Loose (any incident counts) |
-| `uptime` | `percentage` | `incidentEngine.getClusterHealth() >= percentage` | **Auto-true in a calm cluster (health=100)** |
-| `distribute` | `minNodes` | distinct non-empty `pod.spec.nodeName` count ≥ minNodes | OK |
-| `replicas` | `minPerDeployment` | every Deployment `spec.replicas >= min` | OK |
-| `coverage` | `kind` (DaemonSet) | DS-owned pods (`metadata.ownerReferences` kind=DaemonSet) node count ≥ node count | OK if DS controller ran |
-| `complete` | `kind`, `count` | `status.phase === 'Complete'` count | OK for Jobs |
-| `update` | `kind`, `count` | `status.updatedReplicas > 0` | Loose (engine sets = total pods immediately) |
-| `rollback` | `count` | `cluster._rollbackCount >= target` (set by `GameEngine._handleRollout undo` L559) | OK |
-| `connect` | `from`, `to` | a Service named `<to>-svc` or `<to>` with non-empty `spec.selector` | OK-ish (name-based) |
-| `serviceType` | `kind` (e.g. NodePort), `count` | `spec.type === obj.kind` | OK via Edit dialog |
-| `route` | `paths[]` | Ingress rule paths include all listed paths | OK via Ingress path picker |
-| `tls` | `enabled` | any Ingress `spec.tls.length > 0` | **No code path can create TLS → UNACHIEVABLE** |
-| `isolate` | `namespace` | a NetworkPolicy whose `spec.namespace` or `metadata.namespace` equals it | Only via `create … --namespace`; palette cannot set namespace |
-| `allow` | `from`, `to` | **any** NetworkPolicy exists (length>0) | Trivially true |
-| `investigate` | `incidentType` | investigationProgress ≥ 0.5 | Only challenges use it |
-| `verify` | `kind`, `dnsWorking` | cluster health ≥ 90 (ignores kind) | Trivially true |
-| `mount` | `kind`, `count` | **just counts resources of kind** (no volume check) | Weak |
-| `envFrom` | `kind`, `count` | same as mount | Weak |
-| `noConfigMap` | `sensitive` | no ConfigMap data key matching `/password|secret|key|token/i` | OK |
-| `bound` | `kind` (PVC), `count` | `status.phase === 'Bound'` | **PVC never binds (tick dead) → UNACHIEVABLE** |
-| `headless` | `kind`, `count` | Service `spec.clusterIP === 'None'` | **No code path sets None → UNACHIEVABLE** |
-| `stable` | `kind` (StatefulSet) | any StatefulSet exists | OK |
-| `resources` | `kind` (Deployment), `configured` | `d.spec.resources.requests && d.spec.resources.limits` at **Deployment top level** | **Wrong path** (real path is `spec.template.spec.containers[].resources`) → UNACHIEVABLE |
-| `probes` | `kind`, `liveness`, `readiness` | `d.spec.livenessProbe && d.spec.readinessProbe` at **Deployment top level** | **Wrong path** (real path `spec.template.spec.containers[].livenessProbe`) → UNACHIEVABLE |
-| `hpa` | `count` | HPA count ≥ target | OK (palette HPA) |
-| `leastPrivilege` | — | no Role rule verb includes `'*'` | Trivially true for empty-rule Roles |
-| `reschedule` | `count` | `cluster._rescheduledCount` (incremented in `_tickPodScheduling` L145 when a previously-evicted owner regains a pod) | OK-ish |
-| `pdb` | `count` | PDB count ≥ target | Only via `create pdb` command (palette has no PDB) |
-| `architectureScore` | `minScore` | `scoringEngine.calculateArchitectureScore(state).total >= minScore` | OK |
+| `type`              | Fields read                       | Condition (CampaignMode)                                                                                             | Data-path verdict                                                                         |
+| ------------------- | --------------------------------- | -------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| `deploy`            | `kind`, `count`                   | `getResourcesByKind(kind).length >= target`                                                                          | OK (counts starting resources too)                                                        |
+| `scale`             | `kind`, `replicas`                | any resource of kind with `spec.replicas >= obj.replicas`                                                            | OK (often auto-satisfied because Deployment ctor defaults replicas=3)                     |
+| `resolve`           | `incidentType`, `count`           | `incidentEngine.getStats().totalResolved >= target` — **ignores incidentType**                                       | Loose (any incident counts)                                                               |
+| `uptime`            | `percentage`                      | `incidentEngine.getClusterHealth() >= percentage`                                                                    | **Auto-true in a calm cluster (health=100)**                                              |
+| `distribute`        | `minNodes`                        | distinct non-empty `pod.spec.nodeName` count ≥ minNodes                                                              | OK                                                                                        |
+| `replicas`          | `minPerDeployment`                | every Deployment `spec.replicas >= min`                                                                              | OK                                                                                        |
+| `coverage`          | `kind` (DaemonSet)                | DS-owned pods (`metadata.ownerReferences` kind=DaemonSet) node count ≥ node count                                    | OK if DS controller ran                                                                   |
+| `complete`          | `kind`, `count`                   | `status.phase === 'Complete'` count                                                                                  | OK for Jobs                                                                               |
+| `update`            | `kind`, `count`                   | `status.updatedReplicas > 0`                                                                                         | Loose (engine sets = total pods immediately)                                              |
+| `rollback`          | `count`                           | `cluster._rollbackCount >= target` (set by `GameEngine._handleRollout undo` L559)                                    | OK                                                                                        |
+| `connect`           | `from`, `to`                      | a Service named `<to>-svc` or `<to>` with non-empty `spec.selector`                                                  | OK-ish (name-based)                                                                       |
+| `serviceType`       | `kind` (e.g. NodePort), `count`   | `spec.type === obj.kind`                                                                                             | OK via Edit dialog                                                                        |
+| `route`             | `paths[]`                         | Ingress rule paths include all listed paths                                                                          | OK via Ingress path picker                                                                |
+| `tls`               | `enabled`                         | any Ingress `spec.tls.length > 0`                                                                                    | **No code path can create TLS → UNACHIEVABLE**                                            |
+| `isolate`           | `namespace`                       | a NetworkPolicy whose `spec.namespace` or `metadata.namespace` equals it                                             | Only via `create … --namespace`; palette cannot set namespace                             |
+| `allow`             | `from`, `to`                      | **any** NetworkPolicy exists (length>0)                                                                              | Trivially true                                                                            |
+| `investigate`       | `incidentType`                    | investigationProgress ≥ 0.5                                                                                          | Only challenges use it                                                                    |
+| `verify`            | `kind`, `dnsWorking`              | cluster health ≥ 90 (ignores kind)                                                                                   | Trivially true                                                                            |
+| `mount`             | `kind`, `count`                   | **just counts resources of kind** (no volume check)                                                                  | Weak                                                                                      |
+| `envFrom`           | `kind`, `count`                   | same as mount                                                                                                        | Weak                                                                                      |
+| `noConfigMap`       | `sensitive`                       | no ConfigMap data key matching `/password                                                                            | secret                                                                                    | key | token/i` | OK  |
+| `bound`             | `kind` (PVC), `count`             | `status.phase === 'Bound'`                                                                                           | **PVC never binds (tick dead) → UNACHIEVABLE**                                            |
+| `headless`          | `kind`, `count`                   | Service `spec.clusterIP === 'None'`                                                                                  | **No code path sets None → UNACHIEVABLE**                                                 |
+| `stable`            | `kind` (StatefulSet)              | any StatefulSet exists                                                                                               | OK                                                                                        |
+| `resources`         | `kind` (Deployment), `configured` | `d.spec.resources.requests && d.spec.resources.limits` at **Deployment top level**                                   | **Wrong path** (real path is `spec.template.spec.containers[].resources`) → UNACHIEVABLE  |
+| `probes`            | `kind`, `liveness`, `readiness`   | `d.spec.livenessProbe && d.spec.readinessProbe` at **Deployment top level**                                          | **Wrong path** (real path `spec.template.spec.containers[].livenessProbe`) → UNACHIEVABLE |
+| `hpa`               | `count`                           | HPA count ≥ target                                                                                                   | OK (palette HPA)                                                                          |
+| `leastPrivilege`    | —                                 | no Role rule verb includes `'*'`                                                                                     | Trivially true for empty-rule Roles                                                       |
+| `reschedule`        | `count`                           | `cluster._rescheduledCount` (incremented in `_tickPodScheduling` L145 when a previously-evicted owner regains a pod) | OK-ish                                                                                    |
+| `pdb`               | `count`                           | PDB count ≥ target                                                                                                   | Only via `create pdb` command (palette has no PDB)                                        |
+| `architectureScore` | `minScore`                        | `scoringEngine.calculateArchitectureScore(state).total >= minScore`                                                  | OK                                                                                        |
 
 `ChallengeMode.updateObjectives` (L411–549) reimplements a subset with differences:
+
 - `deploy` supports `name` (exact resource-name match) in addition to `count`;
-- `connect` only checks a Service *name* exists (no selector check);
+- `connect` only checks a Service _name_ exists (no selector check);
 - `route` reads `i.spec.rules[].paths` (wrong: real path is `rules[].http.paths`) → **broken in challenges**;
 - adds `deny` (same as allow: any NetworkPolicy exists);
 - no `distribute/replicas/coverage/complete/update/rollback/verify/mount/envFrom/noConfigMap/bound/stable/
-  resources/hpa?` (hpa included), and no default case.
+resources/hpa?` (hpa included), and no default case.
 
 ### 6.4 Stars, scoring, XP
 
@@ -1238,7 +1243,7 @@ level).
   (`CampaignMode.completeLevel` L457–459, always 1 at completion).
 - `completeCampaignLevel` L294–357: stores best stars/bestTime; XP = `100 + levelId*25 + stars*50`;
   updates `stats.levelsCompleted/threeStarLevels/totalStars/levelTimes/completedWithoutHints/
-  chaptersCompleted`.
+chaptersCompleted`.
 - Challenge stars (`completeChallenge` L359–389): 1 star if 100% completion, 2 if ≤180 s, 3 if ≤120 s;
   XP = `floor(completionPercentage*2) + stars*75`.
 - Chaos survival: `recordChaosSurvival` L391–398 → `stats.longestChaosSurvival`.
@@ -1259,16 +1264,16 @@ level).
 
 ### 6.6 Campaign levels that cannot be completed today (blocking bugs to fix, not just reword)
 
-| Level | Blocking objective(s) | Root cause | Fix direction |
-|---|---|---|---|
-| 10 | `tls` | no UI/engine path can set `ingress.spec.tls` (`Ingress.addTLS` L187 never called; edit dialog L1190 can't) | add TLS editing/`create route … --cert` or Objective redefinition |
-| 11 | `isolate` | palette resources always land in `default`; only `create … --namespace` can set a namespace | add project/namespace picker to palette; or edit-dialog namespace field |
-| 15 | `deploy PersistentVolume ×2` | **PV is not in the game palette** (`index.html:173–323`), not in `_cmdCreate` defaults, and `_cmdApply`'s filename heuristic can't produce one | add PV creation/`oc create -f` real parser |
-| 15 | `bound PVC ×2` | `PersistentVolumeClaim.tick` L241 (which would bind) is never called (G6); no PV controller in SimulationTick | add `_tickPVCs` binding controller |
-| 16 | `headless` | no path sets `clusterIP:'None'` | add service `clusterIP` field to edit dialog / `create service --clusterip=None` |
-| 17 | `probes` | evaluator reads `Deployment.spec.livenessProbe` instead of container templates | fix evaluator (and add probe editing) |
-| 20 | `probes` | same bug | same |
-| (all) | any scene requiring PV/StorageClass/PDB/RBAC from palette | those kinds absent from palette | extend palette or convert to command-bar-first UX |
+| Level | Blocking objective(s)                                     | Root cause                                                                                                                                     | Fix direction                                                                    |
+| ----- | --------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| 10    | `tls`                                                     | no UI/engine path can set `ingress.spec.tls` (`Ingress.addTLS` L187 never called; edit dialog L1190 can't)                                     | add TLS editing/`create route … --cert` or Objective redefinition                |
+| 11    | `isolate`                                                 | palette resources always land in `default`; only `create … --namespace` can set a namespace                                                    | add project/namespace picker to palette; or edit-dialog namespace field          |
+| 15    | `deploy PersistentVolume ×2`                              | **PV is not in the game palette** (`index.html:173–323`), not in `_cmdCreate` defaults, and `_cmdApply`'s filename heuristic can't produce one | add PV creation/`oc create -f` real parser                                       |
+| 15    | `bound PVC ×2`                                            | `PersistentVolumeClaim.tick` L241 (which would bind) is never called (G6); no PV controller in SimulationTick                                  | add `_tickPVCs` binding controller                                               |
+| 16    | `headless`                                                | no path sets `clusterIP:'None'`                                                                                                                | add service `clusterIP` field to edit dialog / `create service --clusterip=None` |
+| 17    | `probes`                                                  | evaluator reads `Deployment.spec.livenessProbe` instead of container templates                                                                 | fix evaluator (and add probe editing)                                            |
+| 20    | `probes`                                                  | same bug                                                                                                                                       | same                                                                             |
+| (all) | any scene requiring PV/StorageClass/PDB/RBAC from palette | those kinds absent from palette                                                                                                                | extend palette or convert to command-bar-first UX                                |
 
 Also note levels 2/4/8/19 have objectives that auto-complete immediately (`scale` default replicas=3,
 `uptime` at 100% health) — the star/efficiency model gives no signal for these. EX280 conversion should
@@ -1348,12 +1353,12 @@ L115, `getArchitectureScore` L127 (emits `sandbox:architecture-score`), `refresh
 
 ### 7.5 Mode-specific content to convert
 
-| Mode | Content files | What changes |
-|---|---|---|
-| Campaign | `js/data/CampaignLevels.js` (20 levels), `js/modes/CampaignMode.js` evaluator + lifecycle text | Re-theme 5 chapters to EX280 domains (projects/oc CLI → workloads/S2I → networking/routes → storage/config/security → operations/troubleshooting); replace objective types per §6.3/§6.6; hints/tutorial copy; star criteria times. |
-| Challenges | `js/modes/ChallengeMode.js:9–289` | 10 timed exam-style tasks (e.g. "create project + deploy from S2I + expose route + scale"); align evaluator with new schema (fix `route` path bug). |
-| Chaos | `js/modes/ChaosMode.js:8–21` + IncidentDefs | OpenShift initial cluster (Deployment/DC/DCS…); new incident roster; health/XP carry-over. |
-| Sandbox | `js/modes/SandboxMode.js:7,150–240` + `ScoringEngine` advisor | New kinds in `ALL_RESOURCE_TYPES`/version map; EX280 Architecture Advisor rules (see §10.2); YAML export must emit OpenShift apiVersions. |
+| Mode       | Content files                                                                                  | What changes                                                                                                                                                                                                                        |
+| ---------- | ---------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Campaign   | `js/data/CampaignLevels.js` (20 levels), `js/modes/CampaignMode.js` evaluator + lifecycle text | Re-theme 5 chapters to EX280 domains (projects/oc CLI → workloads/S2I → networking/routes → storage/config/security → operations/troubleshooting); replace objective types per §6.3/§6.6; hints/tutorial copy; star criteria times. |
+| Challenges | `js/modes/ChallengeMode.js:9–289`                                                              | 10 timed exam-style tasks (e.g. "create project + deploy from S2I + expose route + scale"); align evaluator with new schema (fix `route` path bug).                                                                                 |
+| Chaos      | `js/modes/ChaosMode.js:8–21` + IncidentDefs                                                    | OpenShift initial cluster (Deployment/DC/DCS…); new incident roster; health/XP carry-over.                                                                                                                                          |
+| Sandbox    | `js/modes/SandboxMode.js:7,150–240` + `ScoringEngine` advisor                                  | New kinds in `ALL_RESOURCE_TYPES`/version map; EX280 Architecture Advisor rules (see §10.2); YAML export must emit OpenShift apiVersions.                                                                                           |
 
 ---
 
@@ -1362,8 +1367,8 @@ L115, `getArchitectureScore` L127 (emits `sandbox:architecture-score`), `refresh
 ### 8.1 `ResourceMeshes` (`js/rendering/ResourceMeshes.js`) — the kind→geometry/color registry
 
 - `STATUS_COLORS` L3–18: `Running #28a745, Pending #ffa657, Succeeded #3fb950, Failed #d73a49,
-  CrashLoop #f85149, Terminating #8b949e, Unknown #6e7681, Bound/Available #28a745, Progressing #58a6ff,
-  Active #326CE5, Completed #3fb950, Suspended #ffa657, default #326CE5`. `getStatusColor` L23 drives both
+CrashLoop #f85149, Terminating #8b949e, Unknown #6e7681, Bound/Available #28a745, Progressing #58a6ff,
+Active #326CE5, Completed #3fb950, Suspended #ffa657, default #326CE5`. `getStatusColor` L23 drives both
   material emissive and glow ring.
 - `CREATORS` object **L212–740**: `Pod L213` (extruded hexagon), `Deployment L252` (rounded rect + replica
   badge), `ReplicaSet L282` (stacked rects), `StatefulSet L303` (numbered hexagons), `DaemonSet L329`
@@ -1413,7 +1418,7 @@ L115, `getArchitectureScore` L127 (emits `sandbox:architecture-score`), `refresh
 ### 8.3 Connections (`js/rendering/ConnectionLines.js`) — what lines mean
 
 - `RELATIONSHIP_COLORS` L3–9: `ownership #c9d1d9, network #58a6ff, storage #8b949e, config #d29922,
-  default #6e7681`.
+default #6e7681`.
 - A connection object shape: `{id, sourceId, targetId, type, trafficVolume}` (see `addConnection` L27–77;
   `trafficVolume` controls opacity via `MIN_OPACITY + trafficVolume*0.05` L46–47).
 - Rendering: quadratic bezier arc lifted by `min(distance*0.3,3)`, dashed + animated `dashOffset`
@@ -1444,37 +1449,37 @@ delete the subsystem (`_initSubsystems` L196 + dispose L750) to cut ~370 lines.
 
 - `NAMESPACE_COLORS` L1–8: `default/kube-system/kube-public/monitoring/ingress/logging`.
 - **`KIND_SIZES` L10–20** (px radius): `Node 5, Deployment 3.5, Pod 2, Service 3, ConfigMap 1.5, Secret 1.5,
-  Ingress 3, StatefulSet 3.5, DaemonSet 3.5`; fallback `2` (L195). Other kinds are drawn at fallback size.
+Ingress 3, StatefulSet 3.5, DaemonSet 3.5`; fallback `2` (L195). Other kinds are drawn at fallback size.
 - Draws from `resourcePositions` updated on `tick`/`incident:created/resolved`/`viewport:change`; incident
   resources pulse; click navigates (`_navigateTo` L113).
 
 ### 8.6 Every hard-coded kind list (the fan-out you must keep in sync or refactor)
 
-| Where | Lines | Contents |
-|---|---|---|
-| `js/engine/ClusterState.js` | 3, 9–16, 18–25 | cluster-scoped kinds; 25 resource kinds; owner chains |
-| `index.html` | 173–323 | palette DOM (17 kinds) |
-| `index.html` | 456–463 | `RESOURCE_CLASSES` (25 classes) |
-| `index.html` | 796–804 | keyboard shortcuts (9 kinds) |
-| `index.html` | 1368–1379 | auto-align tiers (30 kind strings incl. LimitRange) |
-| `draw.html` | 83–260 | palette DOM (20 kinds) |
-| `draw.html` | 289–310 | `RESOURCE_CLASSES_META` (20 apiVersions) |
-| `draw.html` | 314–335 | `DEFAULT_SPECS` (20 factories) |
-| `draw.html` | 992–1006 | auto-layout tiers (incl. PV/StorageClass/ClusterRole/ClusterRoleBinding/LimitRange) |
-| `draw.html` | 696 | number-key map (9 kinds) |
-| `js/ui/CommandBar.js` | 1–11, 13–42, 624–643, 410–443, 859–1127 | completion types, aliases, create defaults (18), column headers/rows, explain DB (20) |
-| `js/engine/GameEngine.js` | 601–615 | apiVersion map (25) |
-| `js/engine/SimulationTick.js` | 49–75, 449–779 | controller list + `getByKind` names throughout |
-| `js/modes/SandboxMode.js` | 7–14, 183–200 | `ALL_RESOURCE_TYPES` (26), apiVersion map |
-| `js/modes/CampaignMode.js` | 198–429 | objective `kind` strings (data-driven from levels) |
-| `js/modes/ChallengeMode.js` | 9–289 | challenge objective/starting resource kinds |
-| `js/data/IncidentDefs.js` | 1–703 | `affectedResourceTypes` per incident |
-| `js/rendering/ResourceMeshes.js` | 212–740 | `CREATORS` (17) |
-| `js/ui/Minimap.js` | 10–20 | `KIND_SIZES` (8) |
-| `js/ui/ContextMenu.js` | 1–57 | `ACTION_MAP` + defaults |
-| `js/engine/ScoringEngine.js` | 48–77, 156–175 | session stat keys, kind→stat map |
-| `js/modes/Scoring`/`Achievements.js` | all | conditions reference kind counts by name |
-| `js/ui/InspectorPanel.js` | 219–295, 374–443 | per-kind detail/describe renderers |
+| Where                                | Lines                                   | Contents                                                                              |
+| ------------------------------------ | --------------------------------------- | ------------------------------------------------------------------------------------- |
+| `js/engine/ClusterState.js`          | 3, 9–16, 18–25                          | cluster-scoped kinds; 25 resource kinds; owner chains                                 |
+| `index.html`                         | 173–323                                 | palette DOM (17 kinds)                                                                |
+| `index.html`                         | 456–463                                 | `RESOURCE_CLASSES` (25 classes)                                                       |
+| `index.html`                         | 796–804                                 | keyboard shortcuts (9 kinds)                                                          |
+| `index.html`                         | 1368–1379                               | auto-align tiers (30 kind strings incl. LimitRange)                                   |
+| `draw.html`                          | 83–260                                  | palette DOM (20 kinds)                                                                |
+| `draw.html`                          | 289–310                                 | `RESOURCE_CLASSES_META` (20 apiVersions)                                              |
+| `draw.html`                          | 314–335                                 | `DEFAULT_SPECS` (20 factories)                                                        |
+| `draw.html`                          | 992–1006                                | auto-layout tiers (incl. PV/StorageClass/ClusterRole/ClusterRoleBinding/LimitRange)   |
+| `draw.html`                          | 696                                     | number-key map (9 kinds)                                                              |
+| `js/ui/CommandBar.js`                | 1–11, 13–42, 624–643, 410–443, 859–1127 | completion types, aliases, create defaults (18), column headers/rows, explain DB (20) |
+| `js/engine/GameEngine.js`            | 601–615                                 | apiVersion map (25)                                                                   |
+| `js/engine/SimulationTick.js`        | 49–75, 449–779                          | controller list + `getByKind` names throughout                                        |
+| `js/modes/SandboxMode.js`            | 7–14, 183–200                           | `ALL_RESOURCE_TYPES` (26), apiVersion map                                             |
+| `js/modes/CampaignMode.js`           | 198–429                                 | objective `kind` strings (data-driven from levels)                                    |
+| `js/modes/ChallengeMode.js`          | 9–289                                   | challenge objective/starting resource kinds                                           |
+| `js/data/IncidentDefs.js`            | 1–703                                   | `affectedResourceTypes` per incident                                                  |
+| `js/rendering/ResourceMeshes.js`     | 212–740                                 | `CREATORS` (17)                                                                       |
+| `js/ui/Minimap.js`                   | 10–20                                   | `KIND_SIZES` (8)                                                                      |
+| `js/ui/ContextMenu.js`               | 1–57                                    | `ACTION_MAP` + defaults                                                               |
+| `js/engine/ScoringEngine.js`         | 48–77, 156–175                          | session stat keys, kind→stat map                                                      |
+| `js/modes/Scoring`/`Achievements.js` | all                                     | conditions reference kind counts by name                                              |
+| `js/ui/InspectorPanel.js`            | 219–295, 374–443                        | per-kind detail/describe renderers                                                    |
 
 **Refactor recommendation:** `js/data/kindRegistry.js` + `js/data/openShiftKinds.js`, delete the duplicated
 maps, and make palette/auto-align/minimap/explain/columns all derive from the registry. This is the
@@ -1484,24 +1489,24 @@ highest-leverage refactor for parallel conversion work and should be workstream 
 
 ## 9. UI text surfaces (where K8s/kubectl strings live)
 
-| Surface | File:lines | Tabs / strings |
-|---|---|---|
-| Command bar | `CommandBar.js:91, 257, 269, 320, 537, 615, 669, 698, 727, 854`; help DB 859–1127 | prompt `$ kubectl`; usage strings; `EXPLAIN_DATA` descriptions; terminal title "Terminal" L78 |
-| HUD top bar | `HUD.js:44–153` | logo text **"K8s Games"** L55; counters `Nodes/Pods/Deploy/Svc` L58–79; CPU/MEM; mode label L103; speed `1x/2x/4x`; alerts; settings; GitHub star badge L148 |
-| Inspector drawer | `InspectorPanel.js:21–54, 374–443` | tabs **Overview / YAML / Events / Describe** L42–47; header Edit/close; generic describe prints `API Version:  v1` **hard-coded L382**; per-kind summary blocks for Pod/Deployment/Service/Node L374–443 |
-| Context menu | `ContextMenu.js:1–57` | Pod: View Logs/Describe/Exec Into/Port Forward/Delete; Deployment: Describe/Scale/Restart/Rollback/Delete; Service: Describe/View Endpoints/Delete; Node: Describe/Top/Cordon/Uncordon/Drain; default: Describe/Delete |
-| Incident panel | `IncidentPanel.js:44–73, 194–268` | title "Incidents"; filters Active/Resolved/All; "Investigation"; "Investigate first"; "Resolve"; severity icons; hints come from `IncidentDefs` |
-| Metrics dashboard | `MetricsDashboard.js:41–88` | 4 charts: **CPU %, Memory %, Network KB/s, Pod Count**; "Press M to toggle"; "Cluster-wide" |
-| Settings (in-game) | `SettingsPanel.js:51–117` | Difficulty (Easy/Normal/Hard/Nightmare), Display (minimap/connection lines/particle effects/auto-expand incidents), Gameplay (show hints), Camera Speed, Reset All Progress, Export Save |
-| Settings (main menu) | `index.html:346–378` | Sound Effects / Particles / Shadows / Grid / Difficulty select |
-| Objectives panel | `index.html:123–142` + `1504–1614` | "Level N", description, objective checklist, "Show Hint (n)" |
-| Menus/modals | `index.html:57–120, 326–427, 1708–1815` | mode names/descriptions; Campaign Levels; Challenges; Achievements; Statistics; Level Complete; Cluster Down; tutorial overlay text |
-| Draw page | `draw.html:57–82, 262–282` + `showProps` 715–815 | "K8s Draw — 3D Architecture Diagram", Draw Line, Auto-Layout, YAML/PNG/Share/Clear, Properties (Kind/Name/Namespace/Labels/Replicas), help lines, watermark `k8sgames.com/draw` |
-| HTML head / meta / OG | `index.html:6–18`, `draw.html:6–18` | titles/descriptions "K8s Games - Kubernetes Cluster Management Simulation", "K8s Draw" |
-| README | `README.md` | entire file (modes, controls, features, tech stack claims) |
-| `og-image.html` | whole file | 1200×630 marketing card titled "K8s Games" |
-| `robots.txt` | whole file | site policy (bot allow/deny) — no product strings except comments |
-| `style.css` | 1,611 lines | no user-visible text; class names only (`.menu-btn-desc`, `.palette-label`, `.tutorial-mode`, `.level-title`, `.challenge-name`, …) |
+| Surface               | File:lines                                                                        | Tabs / strings                                                                                                                                                                                                         |
+| --------------------- | --------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Command bar           | `CommandBar.js:91, 257, 269, 320, 537, 615, 669, 698, 727, 854`; help DB 859–1127 | prompt `$ kubectl`; usage strings; `EXPLAIN_DATA` descriptions; terminal title "Terminal" L78                                                                                                                          |
+| HUD top bar           | `HUD.js:44–153`                                                                   | logo text **"K8s Games"** L55; counters `Nodes/Pods/Deploy/Svc` L58–79; CPU/MEM; mode label L103; speed `1x/2x/4x`; alerts; settings; GitHub star badge L148                                                           |
+| Inspector drawer      | `InspectorPanel.js:21–54, 374–443`                                                | tabs **Overview / YAML / Events / Describe** L42–47; header Edit/close; generic describe prints `API Version:  v1` **hard-coded L382**; per-kind summary blocks for Pod/Deployment/Service/Node L374–443               |
+| Context menu          | `ContextMenu.js:1–57`                                                             | Pod: View Logs/Describe/Exec Into/Port Forward/Delete; Deployment: Describe/Scale/Restart/Rollback/Delete; Service: Describe/View Endpoints/Delete; Node: Describe/Top/Cordon/Uncordon/Drain; default: Describe/Delete |
+| Incident panel        | `IncidentPanel.js:44–73, 194–268`                                                 | title "Incidents"; filters Active/Resolved/All; "Investigation"; "Investigate first"; "Resolve"; severity icons; hints come from `IncidentDefs`                                                                        |
+| Metrics dashboard     | `MetricsDashboard.js:41–88`                                                       | 4 charts: **CPU %, Memory %, Network KB/s, Pod Count**; "Press M to toggle"; "Cluster-wide"                                                                                                                            |
+| Settings (in-game)    | `SettingsPanel.js:51–117`                                                         | Difficulty (Easy/Normal/Hard/Nightmare), Display (minimap/connection lines/particle effects/auto-expand incidents), Gameplay (show hints), Camera Speed, Reset All Progress, Export Save                               |
+| Settings (main menu)  | `index.html:346–378`                                                              | Sound Effects / Particles / Shadows / Grid / Difficulty select                                                                                                                                                         |
+| Objectives panel      | `index.html:123–142` + `1504–1614`                                                | "Level N", description, objective checklist, "Show Hint (n)"                                                                                                                                                           |
+| Menus/modals          | `index.html:57–120, 326–427, 1708–1815`                                           | mode names/descriptions; Campaign Levels; Challenges; Achievements; Statistics; Level Complete; Cluster Down; tutorial overlay text                                                                                    |
+| Draw page             | `draw.html:57–82, 262–282` + `showProps` 715–815                                  | "K8s Draw — 3D Architecture Diagram", Draw Line, Auto-Layout, YAML/PNG/Share/Clear, Properties (Kind/Name/Namespace/Labels/Replicas), help lines, watermark `k8sgames.com/draw`                                        |
+| HTML head / meta / OG | `index.html:6–18`, `draw.html:6–18`                                               | titles/descriptions "K8s Games - Kubernetes Cluster Management Simulation", "K8s Draw"                                                                                                                                 |
+| README                | `README.md`                                                                       | entire file (modes, controls, features, tech stack claims)                                                                                                                                                             |
+| `og-image.html`       | whole file                                                                        | 1200×630 marketing card titled "K8s Games"                                                                                                                                                                             |
+| `robots.txt`          | whole file                                                                        | site policy (bot allow/deny) — no product strings except comments                                                                                                                                                      |
+| `style.css`           | 1,611 lines                                                                       | no user-visible text; class names only (`.menu-btn-desc`, `.palette-label`, `.tutorial-mode`, `.level-title`, `.challenge-name`, …)                                                                                    |
 
 Search commands that produced the inventory (fast way to re-verify after edits):
 `grep -rn "kubectl" js/ index.html draw.html | grep -v node_modules`,
@@ -1520,30 +1525,30 @@ Current `kubectl` string counts per file: `IncidentDefs.js` 126, `CampaignLevels
 - **`XP_LEVELS` L3–34**: 30 levels with titles `Novice…CKA Candidate/Certified/CKA Master` —
   re-brand the last three (`CKA` → `EX280 Candidate / EX280 Certified / OpenShift Master`).
 - `STORAGE_KEY='k8sgames_progress'` L36; constructor L38–46; `createEmptySessionStats` L48–78 (all counters
-  + `resourceTypesUsed Set`); `bindEvents` L80–146 (resource:created, incident:resolved, command:executed,
-  yaml:viewed, incident:cascading-resolved, secret:exposed-fixed, rollout:zero-downtime,
-  easter-egg:triggered, night-owl timer); `trackResourceCreated` L148–203; `trackIncidentResolved`
-  L205–229; `addXP` L231 (emits `xp:gained`, `player:level-up`); `calculateLevel/getLevelInfo` L249/261;
-  `calculateStarRating/completeCampaignLevel/completeChallenge/recordChaosSurvival` L277–398;
-  `checkAchievements` L704–737; `getAchievements/getProgress` L739/747; `loadProgress/saveProgress/
-  resetProgress` L760–812.
+  - `resourceTypesUsed Set`); `bindEvents` L80–146 (resource:created, incident:resolved, command:executed,
+    yaml:viewed, incident:cascading-resolved, secret:exposed-fixed, rollout:zero-downtime,
+    easter-egg:triggered, night-owl timer); `trackResourceCreated` L148–203; `trackIncidentResolved`
+    L205–229; `addXP` L231 (emits `xp:gained`, `player:level-up`); `calculateLevel/getLevelInfo` L249/261;
+    `calculateStarRating/completeCampaignLevel/completeChallenge/recordChaosSurvival` L277–398;
+    `checkAchievements` L704–737; `getAchievements/getProgress` L739/747; `loadProgress/saveProgress/
+resetProgress` L760–812.
 - **Architecture Advisor `calculateArchitectureScore(clusterState)` L400–426** → averages 10 category
   scores (each 0–100 + `recommendations[]`), stores `stats.highestArchitectureScore`, returns
   `{total, categories}`. Consumed by SandboxMode (`getArchitectureScore`) and `architectureScore`
   objectives.
 
-| Category | Function | Rules (points) |
-|---|---|---|
-| High Availability | `scoreHighAvailability` L428 | +40 × fraction of Deployments with replicas>1; +30 Nodes×10 (max 3); +30 PDB×15 |
-| Security | `scoreSecurity` L458 | +30 NetPol×10; +25 (Roles+RoleBindings)×5; +25 Secrets×10, −15 if sensitive key in a ConfigMap; +20 SA×5 |
-| Scalability | `scoreScalability` L497 | +50 HPA×15; +30 × fraction of Deployments with `spec.resources.requests` (**wrong path — real requests are in containers**); +20 Nodes×5 |
-| Cost Efficiency | `scoreCostEfficiency` L521 | starts 60; −10 per Deployment replicas>5; +20 HPA×10; +20 × fraction with `spec.resources.limits` (**wrong path**) |
-| Reliability | `scoreReliability` L551 | +50 × fraction with `spec.livenessProbe\|\|readinessProbe` (**wrong path**); +30 × fraction replicas>1; +20 PDB×10 |
-| Networking | `scoreNetworking` L574 | +40 × services/deployments ratio; +30 Ingress×15; +30 NetPol×10 |
-| Storage | `scoreStorage` L598 | starts 50; +25 × pvcs/statefulsets ratio; +25 PV×10; reset rec if no stateful resources |
-| Configuration | `scoreConfiguration` L623 | +40 (ConfigMaps+Secrets)×10; −20 sensitive ConfigMap; +30 Secrets×15; +30 × fraction with `spec.envFrom\|\|env` (**wrong path**) |
-| Observability | `scoreObservability` L653 | starts 20; +40 × fraction probes (**wrong path**); +30 if a DaemonSet name matches `/monitor\|metric\|log\|fluentd\|prometheus/i`; +10 HPA×5 |
-| Organization | `scoreOrganization` L678 | +40 Namespaces×10; +30 Quota×15; +30 × fraction labeled resources |
+| Category          | Function                     | Rules (points)                                                                                                                               |
+| ----------------- | ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| High Availability | `scoreHighAvailability` L428 | +40 × fraction of Deployments with replicas>1; +30 Nodes×10 (max 3); +30 PDB×15                                                              |
+| Security          | `scoreSecurity` L458         | +30 NetPol×10; +25 (Roles+RoleBindings)×5; +25 Secrets×10, −15 if sensitive key in a ConfigMap; +20 SA×5                                     |
+| Scalability       | `scoreScalability` L497      | +50 HPA×15; +30 × fraction of Deployments with `spec.resources.requests` (**wrong path — real requests are in containers**); +20 Nodes×5     |
+| Cost Efficiency   | `scoreCostEfficiency` L521   | starts 60; −10 per Deployment replicas>5; +20 HPA×10; +20 × fraction with `spec.resources.limits` (**wrong path**)                           |
+| Reliability       | `scoreReliability` L551      | +50 × fraction with `spec.livenessProbe\|\|readinessProbe` (**wrong path**); +30 × fraction replicas>1; +20 PDB×10                           |
+| Networking        | `scoreNetworking` L574       | +40 × services/deployments ratio; +30 Ingress×15; +30 NetPol×10                                                                              |
+| Storage           | `scoreStorage` L598          | starts 50; +25 × pvcs/statefulsets ratio; +25 PV×10; reset rec if no stateful resources                                                      |
+| Configuration     | `scoreConfiguration` L623    | +40 (ConfigMaps+Secrets)×10; −20 sensitive ConfigMap; +30 Secrets×15; +30 × fraction with `spec.envFrom\|\|env` (**wrong path**)             |
+| Observability     | `scoreObservability` L653    | starts 20; +40 × fraction probes (**wrong path**); +30 if a DaemonSet name matches `/monitor\|metric\|log\|fluentd\|prometheus/i`; +10 HPA×5 |
+| Organization      | `scoreOrganization` L678     | +40 Namespaces×10; +30 Quota×15; +30 × fraction labeled resources                                                                            |
 
 **EX280 conversion:** replace the 10 heuristic categories with EX280-relevant ones and fix the
 container-path bugs: Projects & namespace isolation, Deployments/DC strategy, Builds & ImageStreams,
@@ -1637,7 +1642,7 @@ locally rather than fixed. Fix the parser (accept both `kubectl`/`oc`) and then 
 `IncidentEngine.applyResolutionEffects` (`IncidentEngine.js:427–450`) only emits
 `resource:healed/rescheduled/cluster:dns-restored/security:credential-rotated`; a grep for listeners finds
 none. `spawnIncident` also doesn't damage resources. "Resolving" is clicking a button after running the
-prescribed commands. EX280 conversion should drive incidents *from* real cluster state (e.g. a Pod in
+prescribed commands. EX280 conversion should drive incidents _from_ real cluster state (e.g. a Pod in
 CrashLoopBackOff creates the CrashLoop incident; changing the image/scale fixes it) and clear the incident
 by watching `cluster:modified`, not by emitting unhandled events.
 
@@ -1676,7 +1681,7 @@ default**. `Endpoints`/`Event` aliases exist in `CommandBar` (`:6, :29`) but can
 up (or implement) before adding OpenShift kinds, or the same "listed-but-missing" problem will multiply.
 
 **G16 — BLOCKER for EX280 — `kubectl apply -f` is a filename heuristic, not YAML parsing.**
-`CommandBar._cmdApply` L581–612 guesses kind from the *filename* (`*deploy*`→Deployment, `*svc*`→Service,
+`CommandBar._cmdApply` L581–612 guesses kind from the _filename_ (`*deploy*`→Deployment, `*svc*`→Service,
 `*node*`→Node, else Pod) and fabricates a default spec. `oc apply -f` is a core EX280 command; this needs a
 real (small) YAML subset parser + `kindRegistry` dispatch.
 
@@ -1684,7 +1689,7 @@ real (small) YAML subset parser + `kindRegistry` dispatch.
 `rollout <action> <type> <name>` (`CommandBar.js:725–736`); `oc rollout status deployment/nginx` (slash
 form) fails. `scale` requires `--replicas=` (L535) — fine — but rejects `--current-replicas`/`--resource-version`
 silently. `get` ignores `-A/--all-namespaces`, `--show-labels`, `--sort-by` (parsed but unused L334–335),
-and `get events` returns nothing. Fix these when adding `oc` commands so the game *teaches* correct syntax.
+and `get events` returns nothing. Fix these when adding `oc` commands so the game _teaches_ correct syntax.
 
 **G18 — GOTCHA — GitHub badge fetch is optional but affects layout.** `index.html:1970–1985`; if blocked,
 badges show `--`. No functional impact.
@@ -1753,25 +1758,25 @@ Renaming a kind/stat requires touching `ScoringEngine.createEmptySessionStats` L
 
 ### 12.1 Touchpoint matrix
 
-| Feature / surface | Files & functions | Required OpenShift change | Workstream |
-|---|---|---|---|
-| Terminal command surface | `CommandBar.js` all `_cmd*`, `COMMANDS` L44, prompt L91, echo L257/269, `_dispatch` L293, `_checkEasterEggs` L230 | Rename prompt/echo/usage to `oc`; accept both prefixes; add `new-app, new-project, project, expose, set, create route, start-build, process, auth, adm, apply -f (real), edit/patch/replace, get scc/route/bc/is/dc/project/csv/sub/og, rollout status dc/name`; fix `-A`, namespace `-n`, slash grammar; rebrand easter eggs | WS-A Command engine |
-| Command execution | `GameEngine.js` L391–615 (`_executeCommand` switch/handlers, `_apiVersionForKind` L601), L652–691 `addObjective` | Add command types for new verbs; one apiVersion resolver (retire `_apiVersionForKind` in favour of registry); make create/apply actually used | WS-A |
-| Resource kinds | `js/resources/*.js` (25 classes), `ResourceBase.js` | Add `js/resources/OpenShiftResources.js` with `Project, Route, BuildConfig, Build, ImageStream, ImageStreamTag(image refs), DeploymentConfig, ReplicationController, Template, SecurityContextConstraints, LimitRange, OperatorGroup, Subscription, ClusterServiceVersion, InstallPlan`; add fields/describes for SCC/RBAC-OpenShift (`system:admin`, `system:authenticated`), `ImageStream.status.tags` | WS-B Model |
-| Kind registry fan-out | 13 lists in §8.6 / §2.6 | Create `js/data/kindRegistry.js` + refactor all lists; add apiVersions: `route.openshift.io/v1`, `build.openshift.io/v1`, `image.openshift.io/v1`, `apps.openshift.io/v1`, `template.openshift.io/v1`, `security.openshift.io/v1`, `project.openshift.io/v1`, `operators.coreos.com/v1alpha1`, `operators.coreos.com/v1` | WS-B (workstream 0) |
-| Cluster model | `ClusterState.js` `RESOURCE_KINDS` L9, `CLUSTER_SCOPED_KINDS` L3, `OWNER_CHAINS` L18, default namespaces L50, quotas L514–571 | Add kinds/chains (`DeploymentConfig→ReplicationController→Pod`, `BuildConfig→Build`, `ImageStream` refs, `Route→Service`), seed `openshift-*` namespaces, replace quota map with real ResourceQuota/LimitRange model | WS-B |
-| Simulation | `SimulationTick.js` tick L43–86 and all `_tick*` | Add `_tickPVCs` (binding), `_tickBuildConfigs`, `_tickBuilds`, `_tickDeploymentConfigs`, `_tickRoutes`, `_tickSubscriptions`; SCC gating in scheduler; fix controller children to use registry factory (G4); image-stream trigger linkage | WS-C Simulation |
-| Campaign content | `js/data/CampaignLevels.js` (20 levels), `CampaignMode.js` L191–431 evaluator, L451–504 scoring hooks | Rewrite 5 chapters to EX280: (1) projects/oc/RBAC basics, (2) workloads S2I/BuildConfig/ImageStream, (3) routes/network/services, (4) storage/config/security (SCC), (5) operations (quota/probes/rollouts/operators). Fix objective types per §6.3/§6.6 and add OpenShift types (`createProject`, `buildComplete`, `imageStreamTag`, `routeAdmitted`, `sccGranted`, `quotaConfigured`, `dcRollout`, `templateProcessed`, `operatorInstalled`) | WS-D Content |
-| Challenges | `ChallengeMode.js:9–289` + evaluator L411–549 | 10 timed EX280 tasks; fix `route` path bug; align objective types with new schema | WS-D |
-| Incidents | `js/data/IncidentDefs.js` (34 defs), `IncidentEngine.js` (lifecycle/cascades L87–110, effects L427–450), `IncidentPanel.js` | Rewrite `kubectl`→`oc`; add OpenShift incidents (route not admitted, build failed, SCC forbidden, image pull from internal registry, ImageStreamTag missing, quota exceeded, CSV failed); make incidents state-driven (G9) and clearable by cluster change; fix severity styling/double-tick | WS-C/WS-D |
-| Scoring/achievements | `ScoringEngine.js` L3–34 (XP titles), L48–78/156–175 (stats/kind map), L400–702 (advisor), `Achievements.js` (45), `index.buildStats` L1903 | Rebrand XP titles to EX280; expand kind→stat map; rewrite advisor categories per §10.1; rewrite achievements for OpenShift actions; fix palette-count gap (G7) | WS-D |
-| Rendering | `ResourceMeshes.js` `CREATORS` L212, `STATUS_COLORS` L3; `ClusterRenderer.js` L193/427–493/610; `ConnectionLines.js`; `Minimap.js` L10; `ParticleTraffic.js` | Add mesh creators for new kinds (or a consistent "openShift badge" approach); add statuses (`Pending→Running→Complete` for Builds, `Admitted` for Routes); extend connection types (`route→service`, `build→imagestream`, `dc→rc`); either wire or delete particle traffic; extend `KIND_SIZES` | WS-E Render/UI |
-| UI copy/surfaces | `HUD.js`, `InspectorPanel.js` (tabs + `API Version: v1` L382), `ContextMenu.js`, `MetricsDashboard.js`, `SettingsPanel.js`, `index.html` palette/menu/tutorial, `draw.html` props/help | Counters → `Projects/Pods/Deploys/Routes/Builds`; inspector tabs add "Builds"/"Routes"/"SCC"; context actions per OpenShift kind (`Start Build`, `Expose`, `Edit SCC`); settings merge (G5); help copy EX280; palette sections `Projects / Workloads / Builds / Networking / Config & Security / Storage / Cluster` | WS-E |
-| Draw page | `draw.html` L289–335 (meta/specs), palette 83–260, autoLayout 992, export 823–899, share 915–949 | Add OpenShift kinds to META/DEFAULT_SPECS/palette/tiers/export apiVersions; fix uid/position bug (G4); draw semantics: ownership vs route/build connections | WS-F Draw |
-| Persistence | `ScoringEngine` load/save; `SettingsPanel` export/reset; `GameEngine.saveState/loadState` | Single versioned settings module; optional save slots per mode; migration for existing `k8sgames_*` keys (or namespace keys `openshiftgames_*`) | WS-G Infra/test |
-| Tests & CI | none | Add pure-Node smoke tests (cluster, simulation, objective evaluator, YAML, kindRegistry consistency), a `kindRegistry` completeness test (every kind has class/apiVersion/mesh/aliases), and an eval-report command; optionally a GitHub Action running `node --test` (no build step for the app itself) | WS-G |
-| Hosting/docs | `vercel.json`, `README.md`, `index.html`/`draw.html` meta, `og-image.html` | Keep `/draw` or add new rewrite; update descriptions/title/OG; README feature list; robots comments | WS-G |
-| Exam curriculum source | (new) `docs/research/ex280-*.md` from parallel research tasks | Map each EX280 objective to game content; use as acceptance criteria for levels/challenges | Content owner |
+| Feature / surface        | Files & functions                                                                                                                                                                      | Required OpenShift change                                                                                                                                                                                                                                                                                                                                                                                                                      | Workstream          |
+| ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------- |
+| Terminal command surface | `CommandBar.js` all `_cmd*`, `COMMANDS` L44, prompt L91, echo L257/269, `_dispatch` L293, `_checkEasterEggs` L230                                                                      | Rename prompt/echo/usage to `oc`; accept both prefixes; add `new-app, new-project, project, expose, set, create route, start-build, process, auth, adm, apply -f (real), edit/patch/replace, get scc/route/bc/is/dc/project/csv/sub/og, rollout status dc/name`; fix `-A`, namespace `-n`, slash grammar; rebrand easter eggs                                                                                                                  | WS-A Command engine |
+| Command execution        | `GameEngine.js` L391–615 (`_executeCommand` switch/handlers, `_apiVersionForKind` L601), L652–691 `addObjective`                                                                       | Add command types for new verbs; one apiVersion resolver (retire `_apiVersionForKind` in favour of registry); make create/apply actually used                                                                                                                                                                                                                                                                                                  | WS-A                |
+| Resource kinds           | `js/resources/*.js` (25 classes), `ResourceBase.js`                                                                                                                                    | Add `js/resources/OpenShiftResources.js` with `Project, Route, BuildConfig, Build, ImageStream, ImageStreamTag(image refs), DeploymentConfig, ReplicationController, Template, SecurityContextConstraints, LimitRange, OperatorGroup, Subscription, ClusterServiceVersion, InstallPlan`; add fields/describes for SCC/RBAC-OpenShift (`system:admin`, `system:authenticated`), `ImageStream.status.tags`                                       | WS-B Model          |
+| Kind registry fan-out    | 13 lists in §8.6 / §2.6                                                                                                                                                                | Create `js/data/kindRegistry.js` + refactor all lists; add apiVersions: `route.openshift.io/v1`, `build.openshift.io/v1`, `image.openshift.io/v1`, `apps.openshift.io/v1`, `template.openshift.io/v1`, `security.openshift.io/v1`, `project.openshift.io/v1`, `operators.coreos.com/v1alpha1`, `operators.coreos.com/v1`                                                                                                                       | WS-B (workstream 0) |
+| Cluster model            | `ClusterState.js` `RESOURCE_KINDS` L9, `CLUSTER_SCOPED_KINDS` L3, `OWNER_CHAINS` L18, default namespaces L50, quotas L514–571                                                          | Add kinds/chains (`DeploymentConfig→ReplicationController→Pod`, `BuildConfig→Build`, `ImageStream` refs, `Route→Service`), seed `openshift-*` namespaces, replace quota map with real ResourceQuota/LimitRange model                                                                                                                                                                                                                           | WS-B                |
+| Simulation               | `SimulationTick.js` tick L43–86 and all `_tick*`                                                                                                                                       | Add `_tickPVCs` (binding), `_tickBuildConfigs`, `_tickBuilds`, `_tickDeploymentConfigs`, `_tickRoutes`, `_tickSubscriptions`; SCC gating in scheduler; fix controller children to use registry factory (G4); image-stream trigger linkage                                                                                                                                                                                                      | WS-C Simulation     |
+| Campaign content         | `js/data/CampaignLevels.js` (20 levels), `CampaignMode.js` L191–431 evaluator, L451–504 scoring hooks                                                                                  | Rewrite 5 chapters to EX280: (1) projects/oc/RBAC basics, (2) workloads S2I/BuildConfig/ImageStream, (3) routes/network/services, (4) storage/config/security (SCC), (5) operations (quota/probes/rollouts/operators). Fix objective types per §6.3/§6.6 and add OpenShift types (`createProject`, `buildComplete`, `imageStreamTag`, `routeAdmitted`, `sccGranted`, `quotaConfigured`, `dcRollout`, `templateProcessed`, `operatorInstalled`) | WS-D Content        |
+| Challenges               | `ChallengeMode.js:9–289` + evaluator L411–549                                                                                                                                          | 10 timed EX280 tasks; fix `route` path bug; align objective types with new schema                                                                                                                                                                                                                                                                                                                                                              | WS-D                |
+| Incidents                | `js/data/IncidentDefs.js` (34 defs), `IncidentEngine.js` (lifecycle/cascades L87–110, effects L427–450), `IncidentPanel.js`                                                            | Rewrite `kubectl`→`oc`; add OpenShift incidents (route not admitted, build failed, SCC forbidden, image pull from internal registry, ImageStreamTag missing, quota exceeded, CSV failed); make incidents state-driven (G9) and clearable by cluster change; fix severity styling/double-tick                                                                                                                                                   | WS-C/WS-D           |
+| Scoring/achievements     | `ScoringEngine.js` L3–34 (XP titles), L48–78/156–175 (stats/kind map), L400–702 (advisor), `Achievements.js` (45), `index.buildStats` L1903                                            | Rebrand XP titles to EX280; expand kind→stat map; rewrite advisor categories per §10.1; rewrite achievements for OpenShift actions; fix palette-count gap (G7)                                                                                                                                                                                                                                                                                 | WS-D                |
+| Rendering                | `ResourceMeshes.js` `CREATORS` L212, `STATUS_COLORS` L3; `ClusterRenderer.js` L193/427–493/610; `ConnectionLines.js`; `Minimap.js` L10; `ParticleTraffic.js`                           | Add mesh creators for new kinds (or a consistent "openShift badge" approach); add statuses (`Pending→Running→Complete` for Builds, `Admitted` for Routes); extend connection types (`route→service`, `build→imagestream`, `dc→rc`); either wire or delete particle traffic; extend `KIND_SIZES`                                                                                                                                                | WS-E Render/UI      |
+| UI copy/surfaces         | `HUD.js`, `InspectorPanel.js` (tabs + `API Version: v1` L382), `ContextMenu.js`, `MetricsDashboard.js`, `SettingsPanel.js`, `index.html` palette/menu/tutorial, `draw.html` props/help | Counters → `Projects/Pods/Deploys/Routes/Builds`; inspector tabs add "Builds"/"Routes"/"SCC"; context actions per OpenShift kind (`Start Build`, `Expose`, `Edit SCC`); settings merge (G5); help copy EX280; palette sections `Projects / Workloads / Builds / Networking / Config & Security / Storage / Cluster`                                                                                                                            | WS-E                |
+| Draw page                | `draw.html` L289–335 (meta/specs), palette 83–260, autoLayout 992, export 823–899, share 915–949                                                                                       | Add OpenShift kinds to META/DEFAULT_SPECS/palette/tiers/export apiVersions; fix uid/position bug (G4); draw semantics: ownership vs route/build connections                                                                                                                                                                                                                                                                                    | WS-F Draw           |
+| Persistence              | `ScoringEngine` load/save; `SettingsPanel` export/reset; `GameEngine.saveState/loadState`                                                                                              | Single versioned settings module; optional save slots per mode; migration for existing `k8sgames_*` keys (or namespace keys `openshiftgames_*`)                                                                                                                                                                                                                                                                                                | WS-G Infra/test     |
+| Tests & CI               | none                                                                                                                                                                                   | Add pure-Node smoke tests (cluster, simulation, objective evaluator, YAML, kindRegistry consistency), a `kindRegistry` completeness test (every kind has class/apiVersion/mesh/aliases), and an eval-report command; optionally a GitHub Action running `node --test` (no build step for the app itself)                                                                                                                                       | WS-G                |
+| Hosting/docs             | `vercel.json`, `README.md`, `index.html`/`draw.html` meta, `og-image.html`                                                                                                             | Keep `/draw` or add new rewrite; update descriptions/title/OG; README feature list; robots comments                                                                                                                                                                                                                                                                                                                                            | WS-G                |
+| Exam curriculum source   | (new) `docs/research/ex280-*.md` from parallel research tasks                                                                                                                          | Map each EX280 objective to game content; use as acceptance criteria for levels/challenges                                                                                                                                                                                                                                                                                                                                                     | Content owner       |
 
 ### 12.2 Recommended workstreams and ordering
 
@@ -1808,7 +1813,7 @@ Wave 3 (integration & QA):
 2. **Resource instantiation factory** (`createResource(kind, {name, namespace, labels, spec})`) — replaces
    `ClusterState.addResource`'s downgrade; used by commands, modes, controllers, draw page.
 3. **Objective v2 schema** — `{type, ...params, label}` and a pure `evaluateObjective(obj, {cluster,
-   incidentEngine, scoringEngine, engine})` module with unit tests, so content and engine can proceed
+incidentEngine, scoringEngine, engine})` module with unit tests, so content and engine can proceed
    independently. (Current evaluator is a 240-line switch inside `CampaignMode.updateObjectives` — move it
    out before content conversion.)
 4. **Incident schema v2** — keep current shape but add `causedBy`/`clearedWhen` predicates so incidents can
@@ -1818,35 +1823,35 @@ Wave 3 (integration & QA):
 
 ### 12.3 EX280 curriculum mapping (feature → what to build)
 
-| EX280 area (per research tasks task-1/2/3) | Existing game structure to clone/extend | Minimal acceptance criterion |
-|---|---|---|
-| `oc` CLI, contexts, projects | `CommandBar` + new `Project` kind + `new-project/project/whoami` | `oc new-project app` then `oc get projects` lists it; objective `createProject` |
-| Workloads (Deployment/DC), `oc new-app`, S2I | `_tickDeployments` + `_tickBuildConfigs/_tickBuilds` + `ImageStream` tags | `oc new-app --image-stream=...` produces Build→(Complete)→Deployment→Pods→Service; objective `buildComplete` |
-| Builds/ImageStreams/triggers | `_tickJobs` pattern; `Build` phases; `oc start-build`, `oc set triggers` | Build log viewable, image push updates `ImageStream.status.tags[].items[].dockerImageReference` |
-| Templates | new `Template` data + `oc process` command | `oc process -f template.yaml -p KEY=VALUE \| oc apply -f -` creates resources |
-| Routes / networking | `Ingress` replaced/aliased by `Route`; `_tickRoutes`; Route admission status; `oc expose svc`/`create route edge` | `route.status.ingress[0].conditions[0].status === 'True'`; TLS termination fields on Route |
-| Scheduling | `_findBestNode`, cordon/drain (already present) | `oc adm cordon/drain/uncordon`, nodeSelector/taints reflected in Pod scheduling |
-| Storage | PV/PVC classes + new binding controller; `oc set volume` | PVC reaches `Bound`; StatefulSet volumeClaimTemplates works |
-| Config/secrets | ConfigMap/Secret classes + `oc set env --from`, mounts | objectives assert pod env/volume refs (fix data path) |
-| Security/SCC/RBAC | RBAC classes + `SecurityContextConstraints` + `oc adm policy` commands | `oc adm policy add-scc-to-user` allows/denies pods; `oc auth can-i` result correct |
-| Quotas/limits | ResourceQuota/LimitRange + `oc describe quota/limitrange` | Creation blocked when quota exceeded; LimitRange defaults applied |
-| Operators/OLM | new OLM kinds + `_tickSubscriptions` | `oc get csv/sub/og` shows install progression; operator Deployment created |
-| Troubleshooting | IncidentEngine + `oc describe/logs/events/top/debug` | Fault injected into real resource state; fixing the resource clears incident (G9 fix) |
+| EX280 area (per research tasks task-1/2/3)   | Existing game structure to clone/extend                                                                           | Minimal acceptance criterion                                                                                 |
+| -------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| `oc` CLI, contexts, projects                 | `CommandBar` + new `Project` kind + `new-project/project/whoami`                                                  | `oc new-project app` then `oc get projects` lists it; objective `createProject`                              |
+| Workloads (Deployment/DC), `oc new-app`, S2I | `_tickDeployments` + `_tickBuildConfigs/_tickBuilds` + `ImageStream` tags                                         | `oc new-app --image-stream=...` produces Build→(Complete)→Deployment→Pods→Service; objective `buildComplete` |
+| Builds/ImageStreams/triggers                 | `_tickJobs` pattern; `Build` phases; `oc start-build`, `oc set triggers`                                          | Build log viewable, image push updates `ImageStream.status.tags[].items[].dockerImageReference`              |
+| Templates                                    | new `Template` data + `oc process` command                                                                        | `oc process -f template.yaml -p KEY=VALUE \| oc apply -f -` creates resources                                |
+| Routes / networking                          | `Ingress` replaced/aliased by `Route`; `_tickRoutes`; Route admission status; `oc expose svc`/`create route edge` | `route.status.ingress[0].conditions[0].status === 'True'`; TLS termination fields on Route                   |
+| Scheduling                                   | `_findBestNode`, cordon/drain (already present)                                                                   | `oc adm cordon/drain/uncordon`, nodeSelector/taints reflected in Pod scheduling                              |
+| Storage                                      | PV/PVC classes + new binding controller; `oc set volume`                                                          | PVC reaches `Bound`; StatefulSet volumeClaimTemplates works                                                  |
+| Config/secrets                               | ConfigMap/Secret classes + `oc set env --from`, mounts                                                            | objectives assert pod env/volume refs (fix data path)                                                        |
+| Security/SCC/RBAC                            | RBAC classes + `SecurityContextConstraints` + `oc adm policy` commands                                            | `oc adm policy add-scc-to-user` allows/denies pods; `oc auth can-i` result correct                           |
+| Quotas/limits                                | ResourceQuota/LimitRange + `oc describe quota/limitrange`                                                         | Creation blocked when quota exceeded; LimitRange defaults applied                                            |
+| Operators/OLM                                | new OLM kinds + `_tickSubscriptions`                                                                              | `oc get csv/sub/og` shows install progression; operator Deployment created                                   |
+| Troubleshooting                              | IncidentEngine + `oc describe/logs/events/top/debug`                                                              | Fault injected into real resource state; fixing the resource clears incident (G9 fix)                        |
 
 ### 12.4 Risk register (top 10)
 
-| # | Risk | Impact | Mitigation |
-|---:|---|---|---|
-| 1 | Hidden kind-registry fan-out causes half-integrated kinds (e.g. kind can be created but not rendered/scored) | High — content feels broken | Wave 0 registry + consistency test asserting every registered kind has class/apiVersion/mesh/palette/alias/minimap/stat |
-| 2 | Objective evaluator data-path bugs persist into new content | High — levels unwinnable | Freeze objective v2 module + Node unit tests *before* writing levels; run automated playthrough simulation |
-| 3 | Plain-`ResourceBase` downgrade keeps leaking (G4) | High — YAML/describe/export wrong | Single `createResource` factory; ban direct `cluster.addResource` via grep/CI rule |
-| 4 | Incidents remain cosmetic (G9), so troubleshooting missions don't teach cause→effect | High — EX280 value proposition | State-driven incident v2 (`causedBy` predicate on cluster state) |
-| 5 | Renaming kinds/strings breaks event payload consumers (`cluster:added:Pod`, `resource:created`, `getByKind`) | Medium | Registry + grep gates; keep old aliases for one release |
-| 6 | localStorage schema collision (G5) corrupts player progress between versions | Medium | versioned key `openshiftgames_v2_*` + migration |
-| 7 | CDN-only deps break on offline/air-gapped demo | Medium | vendor Three.js/Tailwind locally or document network requirement explicitly |
-| 8 | No test harness means regressions are invisible until manual play | Medium | Node tests for pure modules + eval-report command; CI on PRs |
-| 9 | draw.html "diagram whiteboard" left behind | Medium (nice-to-have) | WS-F after game conversion stabilizes; otherwise hide `/draw` link |
-| 10 | Scope creep on OLM/Operators (real operator behavior is out of scope) | Medium | Limit to install/verify/inspect lifecycle ticks only |
+|   # | Risk                                                                                                         | Impact                            | Mitigation                                                                                                              |
+| --: | ------------------------------------------------------------------------------------------------------------ | --------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+|   1 | Hidden kind-registry fan-out causes half-integrated kinds (e.g. kind can be created but not rendered/scored) | High — content feels broken       | Wave 0 registry + consistency test asserting every registered kind has class/apiVersion/mesh/palette/alias/minimap/stat |
+|   2 | Objective evaluator data-path bugs persist into new content                                                  | High — levels unwinnable          | Freeze objective v2 module + Node unit tests _before_ writing levels; run automated playthrough simulation              |
+|   3 | Plain-`ResourceBase` downgrade keeps leaking (G4)                                                            | High — YAML/describe/export wrong | Single `createResource` factory; ban direct `cluster.addResource` via grep/CI rule                                      |
+|   4 | Incidents remain cosmetic (G9), so troubleshooting missions don't teach cause→effect                         | High — EX280 value proposition    | State-driven incident v2 (`causedBy` predicate on cluster state)                                                        |
+|   5 | Renaming kinds/strings breaks event payload consumers (`cluster:added:Pod`, `resource:created`, `getByKind`) | Medium                            | Registry + grep gates; keep old aliases for one release                                                                 |
+|   6 | localStorage schema collision (G5) corrupts player progress between versions                                 | Medium                            | versioned key `openshiftgames_v2_*` + migration                                                                         |
+|   7 | CDN-only deps break on offline/air-gapped demo                                                               | Medium                            | vendor Three.js/Tailwind locally or document network requirement explicitly                                             |
+|   8 | No test harness means regressions are invisible until manual play                                            | Medium                            | Node tests for pure modules + eval-report command; CI on PRs                                                            |
+|   9 | draw.html "diagram whiteboard" left behind                                                                   | Medium (nice-to-have)             | WS-F after game conversion stabilizes; otherwise hide `/draw` link                                                      |
+|  10 | Scope creep on OLM/Operators (real operator behavior is out of scope)                                        | Medium                            | Limit to install/verify/inspect lifecycle ticks only                                                                    |
 
 ---
 
@@ -1855,50 +1860,50 @@ Wave 3 (integration & QA):
 Legend: **C** = content/text rewrite, **S** = structure/code change, **N** = new file, **R** = review only
 (no change expected), **F** = fix latent bug while there.
 
-| File | Req | What |
-|---|---|---|
-| `index.html` | S+C | Palette/sections/kinds, tutorial copy, menu copy, meta/OG, keyboard shortcuts, `RESOURCE_CLASSES`, auto-align tiers, settings system merge, `showTutorial` text, stats modal labels, `kubectl` chip |
-| `draw.html` | S+C+F | `RESOURCE_CLASSES_META`, `DEFAULT_SPECS`, palette, auto-layout tiers, help copy, uid/position bug, export apiVersions |
-| `style.css` | R | Only if palette/menu structural classes change; keep `#draw-canvas` selector |
-| `vercel.json` | R/S | Only if `/draw` URL or cache policy changes |
-| `README.md` | C+F | Feature lists, counts, controls, tech claims, mode descriptions |
-| `og-image.html` | C | Marketing card title/copy |
-| `robots.txt` | R | Only if rebranding comments/domains |
-| `js/resources/ResourceBase.js` | S+F | Consider a real kind/apiVersion resolver; clone() subclass survival; YAML cleanup; add `toManifest()` |
-| `js/resources/WorkloadResources.js` | S+F | Add DC/RC (or new file), fix broken `addReplicaSet`/`addPod` helpers, apiVersion via super metadata, describe/YAML for OpenShift fields |
-| `js/resources/NetworkResources.js` | S+F | Route kind (new file or here), Ingress→Route semantics, TLS/termination, describe |
-| `js/resources/ConfigResources.js` | S | Add env/volume consumption tracking if objectives use it |
-| `js/resources/StorageResources.js` | S+F | PV/PVC binding fields, StorageClass default annotations, CSI-friendly describes |
-| `js/resources/ClusterResources.js` | S+F | Project/LimitRange/SCC-related; fix HPA describe shape drift; ResourceQuota usage |
-| `js/resources/RBACResources.js` | S | Add OpenShift default roles awareness, subject kind `User/Group/ServiceAccount`, `system:*` groups |
-| `js/resources/OpenShiftResources.js` | **N** | New classes: Project, Route, BuildConfig, Build, ImageStream, DeploymentConfig, ReplicationController, Template, SCC, LimitRange, OperatorGroup, Subscription, CSV, InstallPlan |
-| `js/data/kindRegistry.js` | **N** | Single source of truth for all kinds (apiVersion, namespaced, class, mesh, aliases, explain, palette, minimap, columns, owner chains, stats key) |
-| `js/data/CampaignLevels.js` | C+S | All 20 levels + chapters + hints + tutorials + starCriteria, new objective types |
-| `js/data/IncidentDefs.js` | C+S | All 34 incidents re-worded to `oc`; ~10 new OpenShift incidents; add state-driven fields |
-| `js/data/Achievements.js` | C+S | 45 achievements rebuilt for OpenShift actions/counters |
-| `js/engine/ClusterState.js` | S+F | Kinds/chains/default namespaces, real quota model, registry-backed `addResource`, `isClusterScopedKind` from registry |
-| `js/engine/GameEngine.js` | S+F | Command types for new verbs, apiVersion resolver, make create/apply reachable, save/load wiring optional, objective v2 integration |
-| `js/engine/SimulationTick.js` | S+F | PVC binding, BuildConfig/Build/ImageStream, Route admission, DeploymentConfig, SCC gate, OLM lifecycle, registry-backed pod/RS/Job creation |
-| `js/engine/IncidentEngine.js` | S+F | State-driven incidents, cascade rules for new incidents, fix double-tick, resolution effects that mutate resources |
-| `js/engine/ScoringEngine.js` | S+C+F | EX280 XP titles, kind→stat map, advisor categories (fix container data paths), progress schema/migration, palette creation counting |
-| `js/ui/CommandBar.js` | S+C | `oc` prompt/echo/usage, prefix normalization, new commands, real `apply -f`, get/rollout grammar, EXPLAIN_DATA for OpenShift kinds, aliases, headers/rows, create defaults |
-| `js/ui/InspectorPanel.js` | S+C | Tabs for Builds/Routes/SCC, `API Version` from resource, per-kind renderers, describe for new kinds |
-| `js/ui/ContextMenu.js` | S+C | Per-kind OpenShift actions (Start Build, Expose, Set Trigger, Edit SCC, …), Investigate action |
-| `js/ui/HUD.js` | S+C | Counters Projects/Builds/Routes, mode labels, logo/title, XP display |
-| `js/ui/IncidentPanel.js` | S+C+F | Severity fix, step matching for `oc`, state-driven resolve, remove dead localStorage |
-| `js/ui/MetricsDashboard.js` | S+C | Optionally replace Network KB/s with builds/routes metrics; labels |
-| `js/ui/Minimap.js` | S | `KIND_SIZES`/colors for new kinds |
-| `js/ui/SettingsPanel.js` | S+F | Merge settings schemas (G5), EX280 difficulty copy, localStorage keys |
-| `js/rendering/ResourceMeshes.js` | S | `CREATORS` for new kinds or generic OpenShift badge; `STATUS_COLORS` for build/route phases |
-| `js/rendering/ClusterRenderer.js` | S | Namespace/project plane semantics, new connection types, clean dead `syncWithState` |
-| `js/rendering/ConnectionLines.js` | S | Relationship types for route→service, build→imagestream, dc→rc |
-| `js/rendering/ParticleTraffic.js` | R/F | Wire routes or delete (dead subsystem) |
-| `js/modes/CampaignMode.js` | S+C | Objective v2 evaluator extraction, EX280 chapter flow, tutorial wiring or removal |
-| `js/modes/ChallengeMode.js` | S+C | New CHALLENGES data, evaluator alignment, fix route path bug |
-| `js/modes/ChaosMode.js` | S+C | OpenShift initial cluster, incident roster, health/waves copy |
-| `js/modes/SandboxMode.js` | S+C+F | Kind list/version map, advisor integration, export via single serializer |
-| `tests/*.test.js` | **N** | Pure-Node tests: registry consistency, objective evaluator, simulation controllers, YAML serializer, incident lifecycle |
-| `docs/*` | **N** | This map + research docs + conversion status/QA checklist |
+| File                                 | Req   | What                                                                                                                                                                                                |
+| ------------------------------------ | ----- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `index.html`                         | S+C   | Palette/sections/kinds, tutorial copy, menu copy, meta/OG, keyboard shortcuts, `RESOURCE_CLASSES`, auto-align tiers, settings system merge, `showTutorial` text, stats modal labels, `kubectl` chip |
+| `draw.html`                          | S+C+F | `RESOURCE_CLASSES_META`, `DEFAULT_SPECS`, palette, auto-layout tiers, help copy, uid/position bug, export apiVersions                                                                               |
+| `style.css`                          | R     | Only if palette/menu structural classes change; keep `#draw-canvas` selector                                                                                                                        |
+| `vercel.json`                        | R/S   | Only if `/draw` URL or cache policy changes                                                                                                                                                         |
+| `README.md`                          | C+F   | Feature lists, counts, controls, tech claims, mode descriptions                                                                                                                                     |
+| `og-image.html`                      | C     | Marketing card title/copy                                                                                                                                                                           |
+| `robots.txt`                         | R     | Only if rebranding comments/domains                                                                                                                                                                 |
+| `js/resources/ResourceBase.js`       | S+F   | Consider a real kind/apiVersion resolver; clone() subclass survival; YAML cleanup; add `toManifest()`                                                                                               |
+| `js/resources/WorkloadResources.js`  | S+F   | Add DC/RC (or new file), fix broken `addReplicaSet`/`addPod` helpers, apiVersion via super metadata, describe/YAML for OpenShift fields                                                             |
+| `js/resources/NetworkResources.js`   | S+F   | Route kind (new file or here), Ingress→Route semantics, TLS/termination, describe                                                                                                                   |
+| `js/resources/ConfigResources.js`    | S     | Add env/volume consumption tracking if objectives use it                                                                                                                                            |
+| `js/resources/StorageResources.js`   | S+F   | PV/PVC binding fields, StorageClass default annotations, CSI-friendly describes                                                                                                                     |
+| `js/resources/ClusterResources.js`   | S+F   | Project/LimitRange/SCC-related; fix HPA describe shape drift; ResourceQuota usage                                                                                                                   |
+| `js/resources/RBACResources.js`      | S     | Add OpenShift default roles awareness, subject kind `User/Group/ServiceAccount`, `system:*` groups                                                                                                  |
+| `js/resources/OpenShiftResources.js` | **N** | New classes: Project, Route, BuildConfig, Build, ImageStream, DeploymentConfig, ReplicationController, Template, SCC, LimitRange, OperatorGroup, Subscription, CSV, InstallPlan                     |
+| `js/data/kindRegistry.js`            | **N** | Single source of truth for all kinds (apiVersion, namespaced, class, mesh, aliases, explain, palette, minimap, columns, owner chains, stats key)                                                    |
+| `js/data/CampaignLevels.js`          | C+S   | All 20 levels + chapters + hints + tutorials + starCriteria, new objective types                                                                                                                    |
+| `js/data/IncidentDefs.js`            | C+S   | All 34 incidents re-worded to `oc`; ~10 new OpenShift incidents; add state-driven fields                                                                                                            |
+| `js/data/Achievements.js`            | C+S   | 45 achievements rebuilt for OpenShift actions/counters                                                                                                                                              |
+| `js/engine/ClusterState.js`          | S+F   | Kinds/chains/default namespaces, real quota model, registry-backed `addResource`, `isClusterScopedKind` from registry                                                                               |
+| `js/engine/GameEngine.js`            | S+F   | Command types for new verbs, apiVersion resolver, make create/apply reachable, save/load wiring optional, objective v2 integration                                                                  |
+| `js/engine/SimulationTick.js`        | S+F   | PVC binding, BuildConfig/Build/ImageStream, Route admission, DeploymentConfig, SCC gate, OLM lifecycle, registry-backed pod/RS/Job creation                                                         |
+| `js/engine/IncidentEngine.js`        | S+F   | State-driven incidents, cascade rules for new incidents, fix double-tick, resolution effects that mutate resources                                                                                  |
+| `js/engine/ScoringEngine.js`         | S+C+F | EX280 XP titles, kind→stat map, advisor categories (fix container data paths), progress schema/migration, palette creation counting                                                                 |
+| `js/ui/CommandBar.js`                | S+C   | `oc` prompt/echo/usage, prefix normalization, new commands, real `apply -f`, get/rollout grammar, EXPLAIN_DATA for OpenShift kinds, aliases, headers/rows, create defaults                          |
+| `js/ui/InspectorPanel.js`            | S+C   | Tabs for Builds/Routes/SCC, `API Version` from resource, per-kind renderers, describe for new kinds                                                                                                 |
+| `js/ui/ContextMenu.js`               | S+C   | Per-kind OpenShift actions (Start Build, Expose, Set Trigger, Edit SCC, …), Investigate action                                                                                                      |
+| `js/ui/HUD.js`                       | S+C   | Counters Projects/Builds/Routes, mode labels, logo/title, XP display                                                                                                                                |
+| `js/ui/IncidentPanel.js`             | S+C+F | Severity fix, step matching for `oc`, state-driven resolve, remove dead localStorage                                                                                                                |
+| `js/ui/MetricsDashboard.js`          | S+C   | Optionally replace Network KB/s with builds/routes metrics; labels                                                                                                                                  |
+| `js/ui/Minimap.js`                   | S     | `KIND_SIZES`/colors for new kinds                                                                                                                                                                   |
+| `js/ui/SettingsPanel.js`             | S+F   | Merge settings schemas (G5), EX280 difficulty copy, localStorage keys                                                                                                                               |
+| `js/rendering/ResourceMeshes.js`     | S     | `CREATORS` for new kinds or generic OpenShift badge; `STATUS_COLORS` for build/route phases                                                                                                         |
+| `js/rendering/ClusterRenderer.js`    | S     | Namespace/project plane semantics, new connection types, clean dead `syncWithState`                                                                                                                 |
+| `js/rendering/ConnectionLines.js`    | S     | Relationship types for route→service, build→imagestream, dc→rc                                                                                                                                      |
+| `js/rendering/ParticleTraffic.js`    | R/F   | Wire routes or delete (dead subsystem)                                                                                                                                                              |
+| `js/modes/CampaignMode.js`           | S+C   | Objective v2 evaluator extraction, EX280 chapter flow, tutorial wiring or removal                                                                                                                   |
+| `js/modes/ChallengeMode.js`          | S+C   | New CHALLENGES data, evaluator alignment, fix route path bug                                                                                                                                        |
+| `js/modes/ChaosMode.js`              | S+C   | OpenShift initial cluster, incident roster, health/waves copy                                                                                                                                       |
+| `js/modes/SandboxMode.js`            | S+C+F | Kind list/version map, advisor integration, export via single serializer                                                                                                                            |
+| `tests/*.test.js`                    | **N** | Pure-Node tests: registry consistency, objective evaluator, simulation controllers, YAML serializer, incident lifecycle                                                                             |
+| `docs/*`                             | **N** | This map + research docs + conversion status/QA checklist                                                                                                                                           |
 
 ## Appendix B — How to verify claims in this document / run pure-model tests
 
@@ -1943,7 +1948,7 @@ Manual browser QA checklist for any conversion PR:
 2. Palette place → name prompt → resource appears, can be inspected (Overview/YAML/Events/Describe),
    edited, scaled, deleted; Auto-Align; YAML export downloads valid multi-doc YAML.
 3. Command bar: `/`, tab completion, history, `oc get/describe/create/apply -f/scale/delete/rollout/
-   logs/exec/expose/new-app/new-project/start-build/top`, error messages match real `oc` closely enough
+logs/exec/expose/new-app/new-project/start-build/top`, error messages match real `oc` closely enough
    for teaching.
 4. Campaign levels 1–20 completable in order (automated `evaluateObjective` simulation + one human run of
    each chapter milestone); stars compute; reload preserves progress.
@@ -1954,8 +1959,5 @@ Manual browser QA checklist for any conversion PR:
 
 ---
 
-*End of map. Keep this file updated when registries, objective types, incident schema, or workstream
-interfaces change — it is the shared contract for the conversion.*
-
-
-
+_End of map. Keep this file updated when registries, objective types, incident schema, or workstream
+interfaces change — it is the shared contract for the conversion._

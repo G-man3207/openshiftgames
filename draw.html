@@ -1,950 +1,1261 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>OpenShift Draw — 3D OpenShift Architecture Diagram</title>
-  <meta name="description" content="Design OpenShift architectures visually in 3D. Drag Projects, Routes, BuildConfigs and more, draw connections, export OpenShift YAML. Built for EX280.">
-  <meta property="og:title" content="OpenShift Draw — 3D OpenShift Architecture Diagram">
-  <meta property="og:description" content="Design OpenShift architectures visually in 3D. Drag Projects, Routes, BuildConfigs and more, draw connections, export OpenShift YAML. Built for EX280.">
-  <meta property="og:type" content="website">
-  <meta property="og:url" content="https://shifting.pro/draw">
-  <meta property="og:site_name" content="OpenShift Games">
-  <meta property="og:image" content="https://shifting.pro/og-image.png">
-  <meta property="og:image:width" content="1200">
-  <meta property="og:image:height" content="630">
-  <meta property="og:image:alt" content="OpenShift Draw — a 3D architecture diagram of OpenShift resources with YAML export">
-  <meta name="twitter:card" content="summary_large_image">
-  <meta name="twitter:title" content="OpenShift Draw — 3D OpenShift Architecture Diagram">
-  <meta name="twitter:description" content="Design OpenShift architectures visually in 3D. Drag Projects, Routes, BuildConfigs and more, draw connections, export OpenShift YAML. Built for EX280.">
-  <meta name="twitter:image" content="https://shifting.pro/og-image.png">
-  <meta name="theme-color" content="#EE0000">
-  <link rel="canonical" href="https://shifting.pro/draw">
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='14' fill='%23EE0000'/><text x='16' y='22' text-anchor='middle' fill='white' font-size='15' font-weight='bold'>O</text></svg>">
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Schibsted+Grotesk:wght@400;500;600;700;800&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
-  <script src="https://cdn.tailwindcss.com/3.4.1"></script>
-  <script>
-    tailwind.config = {
-      theme: {
-        extend: {
-          colors: {
-            'openshift': '#EE0000',
-            'openshift-orange': '#F97316',
-            'dark': '#0d1117',
-            'card': '#161b22',
-            'elevated': '#1c2333',
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>OpenShift Draw — 3D OpenShift Architecture Diagram</title>
+    <meta
+      name="description"
+      content="Design OpenShift architectures visually in 3D. Drag Projects, Routes, BuildConfigs and more, draw connections, export OpenShift YAML. Built for EX280."
+    />
+    <meta property="og:title" content="OpenShift Draw — 3D OpenShift Architecture Diagram" />
+    <meta
+      property="og:description"
+      content="Design OpenShift architectures visually in 3D. Drag Projects, Routes, BuildConfigs and more, draw connections, export OpenShift YAML. Built for EX280."
+    />
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content="https://shifting.pro/draw" />
+    <meta property="og:site_name" content="OpenShift Games" />
+    <meta property="og:image" content="https://shifting.pro/og-image.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta
+      property="og:image:alt"
+      content="OpenShift Draw — a 3D architecture diagram of OpenShift resources with YAML export"
+    />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="OpenShift Draw — 3D OpenShift Architecture Diagram" />
+    <meta
+      name="twitter:description"
+      content="Design OpenShift architectures visually in 3D. Drag Projects, Routes, BuildConfigs and more, draw connections, export OpenShift YAML. Built for EX280."
+    />
+    <meta name="twitter:image" content="https://shifting.pro/og-image.png" />
+    <meta name="theme-color" content="#EE0000" />
+    <link rel="canonical" href="https://shifting.pro/draw" />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='14' fill='%23EE0000'/><text x='16' y='22' text-anchor='middle' fill='white' font-size='15' font-weight='bold'>O</text></svg>"
+    />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Schibsted+Grotesk:wght@400;500;600;700;800&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap"
+      rel="stylesheet"
+    />
+    <script src="https://cdn.tailwindcss.com/3.4.1"></script>
+    <script>
+      tailwind.config = {
+        theme: {
+          extend: {
+            colors: {
+              openshift: '#EE0000',
+              'openshift-orange': '#F97316',
+              dark: '#0d1117',
+              card: '#161b22',
+              elevated: '#1c2333',
+            },
+            fontFamily: {
+              sans: ['Schibsted Grotesk', 'Inter', 'system-ui', 'sans-serif'],
+              mono: ['JetBrains Mono', 'SF Mono', 'monospace'],
+            },
           },
-          fontFamily: {
-            sans: ['Schibsted Grotesk', 'Inter', 'system-ui', 'sans-serif'],
-            mono: ['JetBrains Mono', 'SF Mono', 'monospace'],
-          }
+        },
+      };
+    </script>
+    <link rel="stylesheet" href="style.css?v=1.2.1" />
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "https://unpkg.com/three@0.152.0/build/three.module.js",
+          "three/addons/": "https://unpkg.com/three@0.152.0/examples/jsm/"
         }
       }
-    }
-  </script>
-  <link rel="stylesheet" href="style.css?v=1.2.1">
-  <script type="importmap">
-  {
-    "imports": {
-      "three": "https://unpkg.com/three@0.152.0/build/three.module.js",
-      "three/addons/": "https://unpkg.com/three@0.152.0/examples/jsm/"
-    }
-  }
-  </script>
-    </head>
-<body class="bg-dark text-white overflow-hidden select-none">
+    </script>
+  </head>
+  <body class="bg-dark text-white overflow-hidden select-none">
+    <canvas
+      id="draw-canvas"
+      style="
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        z-index: 0;
+        display: block;
+        touch-action: none;
+      "
+    ></canvas>
 
-  <canvas id="draw-canvas" style="position:fixed;top:0;left:0;width:100%;height:100%;z-index:0;display:block;touch-action:none;"></canvas>
-
-  <div id="draw-toolbar" class="fixed top-0 left-0 right-0 z-40 flex items-center justify-between px-4 py-2 backdrop-blur-xl bg-white/5 border-b border-white/10" style="height:48px;">
-    <div class="flex items-center gap-3 shrink-0">
-      <a href="/" class="flex items-center gap-2 text-white/60 hover:text-white/90 transition-colors" aria-label="Back to OpenShift Games">
-        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"/></svg>
-      </a>
-      <div class="h-5 w-px bg-white/10"></div>
-      <span class="text-white/90 text-sm font-semibold">OpenShift Draw</span>
-      <span class="px-1.5 py-0.5 text-[10px] font-mono text-openshift-orange bg-openshift/10 border border-openshift/25 rounded">4.22</span>
-      <span class="draw-subtitle text-white/30 text-xs">3D OpenShift Architecture Diagram</span>
+    <div
+      id="draw-toolbar"
+      class="fixed top-0 left-0 right-0 z-40 flex items-center justify-between px-4 py-2 backdrop-blur-xl bg-white/5 border-b border-white/10"
+      style="height: 48px"
+    >
+      <div class="flex items-center gap-3 shrink-0">
+        <a
+          href="/"
+          class="flex items-center gap-2 text-white/60 hover:text-white/90 transition-colors"
+          aria-label="Back to OpenShift Games"
+        >
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="2"
+              d="M10 19l-7-7m0 0l7-7m-7 7h18"
+            />
+          </svg>
+        </a>
+        <div class="h-5 w-px bg-white/10"></div>
+        <span class="text-white/90 text-sm font-semibold">OpenShift Draw</span>
+        <span
+          class="px-1.5 py-0.5 text-[10px] font-mono text-openshift-orange bg-openshift/10 border border-openshift/25 rounded"
+          >4.22</span
+        >
+        <span class="draw-subtitle text-white/30 text-xs">3D OpenShift Architecture Diagram</span>
+      </div>
+      <div class="flex items-center gap-2 overflow-x-auto scrollbar-none">
+        <span id="draw-status" class="text-xs text-openshift-orange mr-2 draw-status-text"></span>
+        <button
+          id="btn-connect"
+          class="draw-btn shrink-0 px-3 py-1.5 text-xs text-white/60 hover:text-white bg-white/5 hover:bg-white/10 border border-white/10 rounded-lg transition-all"
+          title="Draw a line between two resources: click source, then click target"
+        >
+          <svg class="w-4 h-4 inline mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="2"
+              d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"
+            /></svg
+          ><span class="draw-btn-label">Draw Line</span>
+        </button>
+        <button
+          id="btn-auto-layout"
+          class="draw-btn shrink-0 px-3 py-1.5 text-xs text-white/60 hover:text-white bg-white/5 hover:bg-white/10 border border-white/10 rounded-lg transition-all"
+          title="Arrange resources into OpenShift tiers"
+        >
+          <span class="draw-btn-label">Auto-Layout</span
+          ><span class="draw-btn-icon-only hidden"
+            ><svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="2"
+                d="M4 6h16M4 12h16m-7 6h7"
+              /></svg
+          ></span>
+        </button>
+        <div class="draw-divider h-5 w-px bg-white/10"></div>
+        <button
+          id="btn-export-yaml"
+          class="draw-btn shrink-0 px-3 py-1.5 text-xs text-white/60 hover:text-white bg-white/5 hover:bg-white/10 border border-white/10 rounded-lg transition-all"
+          title="Export the diagram as OpenShift YAML"
+        >
+          YAML
+        </button>
+        <button
+          id="btn-export-png"
+          class="draw-btn shrink-0 px-3 py-1.5 text-xs text-white/60 hover:text-white bg-white/5 hover:bg-white/10 border border-white/10 rounded-lg transition-all"
+          title="Export a PNG screenshot"
+        >
+          PNG
+        </button>
+        <button
+          id="btn-share"
+          class="draw-btn shrink-0 px-3 py-1.5 text-xs text-white/60 hover:text-white bg-openshift/10 hover:bg-openshift/20 border border-openshift/20 rounded-lg transition-all"
+          title="Copy a shareable link to this diagram"
+        >
+          <svg class="w-4 h-4 inline mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="2"
+              d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z"
+            /></svg
+          ><span class="draw-btn-label">Share</span>
+        </button>
+        <div class="draw-divider h-5 w-px bg-white/10"></div>
+        <button
+          id="btn-clear"
+          class="draw-btn shrink-0 px-3 py-1.5 text-xs text-red-400/60 hover:text-red-400 bg-white/5 hover:bg-red-500/10 border border-white/10 hover:border-red-500/20 rounded-lg transition-all"
+        >
+          Clear
+        </button>
+        <div class="draw-divider h-5 w-px bg-white/10"></div>
+        <a
+          class="draw-btn shrink-0 px-3 py-1.5 text-xs text-white/60 hover:text-white bg-white/5 hover:bg-white/10 border border-white/10 rounded-lg transition-all"
+          href="https://docs.redhat.com/en/documentation/openshift_container_platform/4.22"
+          target="_blank"
+          rel="noopener"
+          >Docs</a
+        >
+      </div>
     </div>
-    <div class="flex items-center gap-2 overflow-x-auto scrollbar-none">
-      <span id="draw-status" class="text-xs text-openshift-orange mr-2 draw-status-text"></span>
-      <button id="btn-connect" class="draw-btn shrink-0 px-3 py-1.5 text-xs text-white/60 hover:text-white bg-white/5 hover:bg-white/10 border border-white/10 rounded-lg transition-all" title="Draw a line between two resources: click source, then click target">
-        <svg class="w-4 h-4 inline mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"/></svg><span class="draw-btn-label">Draw Line</span>
-      </button>
-      <button id="btn-auto-layout" class="draw-btn shrink-0 px-3 py-1.5 text-xs text-white/60 hover:text-white bg-white/5 hover:bg-white/10 border border-white/10 rounded-lg transition-all" title="Arrange resources into OpenShift tiers"><span class="draw-btn-label">Auto-Layout</span><span class="draw-btn-icon-only hidden"><svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16m-7 6h7"/></svg></span></button>
-      <div class="draw-divider h-5 w-px bg-white/10"></div>
-      <button id="btn-export-yaml" class="draw-btn shrink-0 px-3 py-1.5 text-xs text-white/60 hover:text-white bg-white/5 hover:bg-white/10 border border-white/10 rounded-lg transition-all" title="Export the diagram as OpenShift YAML">YAML</button>
-      <button id="btn-export-png" class="draw-btn shrink-0 px-3 py-1.5 text-xs text-white/60 hover:text-white bg-white/5 hover:bg-white/10 border border-white/10 rounded-lg transition-all" title="Export a PNG screenshot">PNG</button>
-      <button id="btn-share" class="draw-btn shrink-0 px-3 py-1.5 text-xs text-white/60 hover:text-white bg-openshift/10 hover:bg-openshift/20 border border-openshift/20 rounded-lg transition-all" title="Copy a shareable link to this diagram">
-        <svg class="w-4 h-4 inline mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z"/></svg><span class="draw-btn-label">Share</span>
-      </button>
-      <div class="draw-divider h-5 w-px bg-white/10"></div>
-      <button id="btn-clear" class="draw-btn shrink-0 px-3 py-1.5 text-xs text-red-400/60 hover:text-red-400 bg-white/5 hover:bg-red-500/10 border border-white/10 hover:border-red-500/20 rounded-lg transition-all">Clear</button>
-      <div class="draw-divider h-5 w-px bg-white/10"></div>
-      <a class="draw-btn shrink-0 px-3 py-1.5 text-xs text-white/60 hover:text-white bg-white/5 hover:bg-white/10 border border-white/10 rounded-lg transition-all" href="https://docs.redhat.com/en/documentation/openshift_container_platform/4.22" target="_blank" rel="noopener">Docs</a>
-    </div>
-  </div>
 
-  <!-- Palette kinds are generated at runtime from js/data/kindRegistry.js PALETTE_SECTIONS.
+    <!-- Palette kinds are generated at runtime from js/data/kindRegistry.js PALETTE_SECTIONS.
        The static list below is the no-JS/no-network fallback and is kept in sync with the registry. -->
-  <div id="resource-palette" class="glass-dark">
-    <div class="palette-section-label">Projects &amp; Cluster</div>
-    <div class="palette-item" data-resource="Project" draggable="true"><div class="palette-label">Project</div></div>
-    <div class="palette-item" data-resource="Node" draggable="true"><div class="palette-label">Node</div></div>
-    <div class="palette-item" data-resource="ClusterResourceQuota" draggable="true"><div class="palette-label">ClusterQuota</div></div>
-    <div class="palette-separator"></div>
-    <div class="palette-section-label">Workloads</div>
-    <div class="palette-item" data-resource="Pod" draggable="true"><div class="palette-label">Pod</div></div>
-    <div class="palette-item" data-resource="Deployment" draggable="true"><div class="palette-label">Deploy</div></div>
-    <div class="palette-item" data-resource="ReplicaSet" draggable="true"><div class="palette-label">RS</div></div>
-    <div class="palette-item" data-resource="StatefulSet" draggable="true"><div class="palette-label">STS</div></div>
-    <div class="palette-item" data-resource="DaemonSet" draggable="true"><div class="palette-label">DS</div></div>
-    <div class="palette-item" data-resource="Job" draggable="true"><div class="palette-label">Job</div></div>
-    <div class="palette-item" data-resource="CronJob" draggable="true"><div class="palette-label">CronJob</div></div>
-    <div class="palette-separator"></div>
-    <div class="palette-section-label">Builds &amp; Images</div>
-    <div class="palette-item" data-resource="BuildConfig" draggable="true"><div class="palette-label">BuildConfig</div></div>
-    <div class="palette-item" data-resource="ImageStream" draggable="true"><div class="palette-label">ImageStream</div></div>
-    <div class="palette-separator"></div>
-    <div class="palette-section-label">Networking</div>
-    <div class="palette-item" data-resource="Service" draggable="true"><div class="palette-label">Service</div></div>
-    <div class="palette-item" data-resource="Route" draggable="true"><div class="palette-label">Route</div></div>
-    <div class="palette-item" data-resource="Ingress" draggable="true"><div class="palette-label">Ingress</div></div>
-    <div class="palette-item" data-resource="NetworkPolicy" draggable="true"><div class="palette-label">NetPol</div></div>
-    <div class="palette-item" data-resource="IPAddressPool" draggable="true"><div class="palette-label">IPAddressPool</div></div>
-    <div class="palette-item" data-resource="L2Advertisement" draggable="true"><div class="palette-label">L2Advert</div></div>
-    <div class="palette-separator"></div>
-    <div class="palette-section-label">Config</div>
-    <div class="palette-item" data-resource="ConfigMap" draggable="true"><div class="palette-label">CM</div></div>
-    <div class="palette-item" data-resource="Secret" draggable="true"><div class="palette-label">Secret</div></div>
-    <div class="palette-item" data-resource="LimitRange" draggable="true"><div class="palette-label">LimitRange</div></div>
-    <div class="palette-item" data-resource="ResourceQuota" draggable="true"><div class="palette-label">ResourceQuota</div></div>
-    <div class="palette-item" data-resource="Template" draggable="true"><div class="palette-label">Template</div></div>
-    <div class="palette-separator"></div>
-    <div class="palette-section-label">Storage</div>
-    <div class="palette-item" data-resource="PersistentVolume" draggable="true"><div class="palette-label">PV</div></div>
-    <div class="palette-item" data-resource="PersistentVolumeClaim" draggable="true"><div class="palette-label">PVC</div></div>
-    <div class="palette-item" data-resource="StorageClass" draggable="true"><div class="palette-label">StorageClass</div></div>
-    <div class="palette-separator"></div>
-    <div class="palette-section-label">Scaling &amp; Availability</div>
-    <div class="palette-item" data-resource="HorizontalPodAutoscaler" draggable="true"><div class="palette-label">HPA</div></div>
-    <div class="palette-item" data-resource="PodDisruptionBudget" draggable="true"><div class="palette-label">PDB</div></div>
-    <div class="palette-separator"></div>
-    <div class="palette-section-label">Security</div>
-    <div class="palette-item" data-resource="ServiceAccount" draggable="true"><div class="palette-label">SA</div></div>
-    <div class="palette-item" data-resource="Role" draggable="true"><div class="palette-label">Role</div></div>
-    <div class="palette-item" data-resource="ClusterRole" draggable="true"><div class="palette-label">ClusterRole</div></div>
-    <div class="palette-item" data-resource="RoleBinding" draggable="true"><div class="palette-label">RoleBinding</div></div>
-    <div class="palette-item" data-resource="ClusterRoleBinding" draggable="true"><div class="palette-label">ClusterRoleBinding</div></div>
-    <div class="palette-item" data-resource="SecurityContextConstraints" draggable="true"><div class="palette-label">SCC</div></div>
-    <div class="palette-separator"></div>
-    <div class="palette-section-label">Identity &amp; Operators</div>
-    <div class="palette-item" data-resource="User" draggable="true"><div class="palette-label">User</div></div>
-    <div class="palette-item" data-resource="Group" draggable="true"><div class="palette-label">Group</div></div>
-    <div class="palette-item" data-resource="Subscription" draggable="true"><div class="palette-label">Operator</div></div>
-  </div>
-
-  <div id="draw-props" class="fixed right-0 top-12 z-30 backdrop-blur-xl bg-black/70 border-l border-white/10 overflow-y-auto transition-transform duration-300 translate-x-full" style="bottom:0;width:18rem;" inert>
-    <div class="flex items-center justify-between px-4 py-3 border-b border-white/10">
-      <span class="text-sm font-semibold text-white/90">Properties</span>
-      <button id="btn-close-props" class="text-white/40 hover:text-white/80 text-xs transition-colors">&#10005;</button>
+    <div id="resource-palette" class="glass-dark">
+      <div class="palette-section-label">Projects &amp; Cluster</div>
+      <div class="palette-item" data-resource="Project" draggable="true">
+        <div class="palette-label">Project</div>
+      </div>
+      <div class="palette-item" data-resource="Node" draggable="true">
+        <div class="palette-label">Node</div>
+      </div>
+      <div class="palette-item" data-resource="ClusterResourceQuota" draggable="true">
+        <div class="palette-label">ClusterQuota</div>
+      </div>
+      <div class="palette-separator"></div>
+      <div class="palette-section-label">Workloads</div>
+      <div class="palette-item" data-resource="Pod" draggable="true">
+        <div class="palette-label">Pod</div>
+      </div>
+      <div class="palette-item" data-resource="Deployment" draggable="true">
+        <div class="palette-label">Deploy</div>
+      </div>
+      <div class="palette-item" data-resource="ReplicaSet" draggable="true">
+        <div class="palette-label">RS</div>
+      </div>
+      <div class="palette-item" data-resource="StatefulSet" draggable="true">
+        <div class="palette-label">STS</div>
+      </div>
+      <div class="palette-item" data-resource="DaemonSet" draggable="true">
+        <div class="palette-label">DS</div>
+      </div>
+      <div class="palette-item" data-resource="Job" draggable="true">
+        <div class="palette-label">Job</div>
+      </div>
+      <div class="palette-item" data-resource="CronJob" draggable="true">
+        <div class="palette-label">CronJob</div>
+      </div>
+      <div class="palette-separator"></div>
+      <div class="palette-section-label">Builds &amp; Images</div>
+      <div class="palette-item" data-resource="BuildConfig" draggable="true">
+        <div class="palette-label">BuildConfig</div>
+      </div>
+      <div class="palette-item" data-resource="ImageStream" draggable="true">
+        <div class="palette-label">ImageStream</div>
+      </div>
+      <div class="palette-separator"></div>
+      <div class="palette-section-label">Networking</div>
+      <div class="palette-item" data-resource="Service" draggable="true">
+        <div class="palette-label">Service</div>
+      </div>
+      <div class="palette-item" data-resource="Route" draggable="true">
+        <div class="palette-label">Route</div>
+      </div>
+      <div class="palette-item" data-resource="Ingress" draggable="true">
+        <div class="palette-label">Ingress</div>
+      </div>
+      <div class="palette-item" data-resource="NetworkPolicy" draggable="true">
+        <div class="palette-label">NetPol</div>
+      </div>
+      <div class="palette-item" data-resource="IPAddressPool" draggable="true">
+        <div class="palette-label">IPAddressPool</div>
+      </div>
+      <div class="palette-item" data-resource="L2Advertisement" draggable="true">
+        <div class="palette-label">L2Advert</div>
+      </div>
+      <div class="palette-separator"></div>
+      <div class="palette-section-label">Config</div>
+      <div class="palette-item" data-resource="ConfigMap" draggable="true">
+        <div class="palette-label">CM</div>
+      </div>
+      <div class="palette-item" data-resource="Secret" draggable="true">
+        <div class="palette-label">Secret</div>
+      </div>
+      <div class="palette-item" data-resource="LimitRange" draggable="true">
+        <div class="palette-label">LimitRange</div>
+      </div>
+      <div class="palette-item" data-resource="ResourceQuota" draggable="true">
+        <div class="palette-label">ResourceQuota</div>
+      </div>
+      <div class="palette-item" data-resource="Template" draggable="true">
+        <div class="palette-label">Template</div>
+      </div>
+      <div class="palette-separator"></div>
+      <div class="palette-section-label">Storage</div>
+      <div class="palette-item" data-resource="PersistentVolume" draggable="true">
+        <div class="palette-label">PV</div>
+      </div>
+      <div class="palette-item" data-resource="PersistentVolumeClaim" draggable="true">
+        <div class="palette-label">PVC</div>
+      </div>
+      <div class="palette-item" data-resource="StorageClass" draggable="true">
+        <div class="palette-label">StorageClass</div>
+      </div>
+      <div class="palette-separator"></div>
+      <div class="palette-section-label">Scaling &amp; Availability</div>
+      <div class="palette-item" data-resource="HorizontalPodAutoscaler" draggable="true">
+        <div class="palette-label">HPA</div>
+      </div>
+      <div class="palette-item" data-resource="PodDisruptionBudget" draggable="true">
+        <div class="palette-label">PDB</div>
+      </div>
+      <div class="palette-separator"></div>
+      <div class="palette-section-label">Security</div>
+      <div class="palette-item" data-resource="ServiceAccount" draggable="true">
+        <div class="palette-label">SA</div>
+      </div>
+      <div class="palette-item" data-resource="Role" draggable="true">
+        <div class="palette-label">Role</div>
+      </div>
+      <div class="palette-item" data-resource="ClusterRole" draggable="true">
+        <div class="palette-label">ClusterRole</div>
+      </div>
+      <div class="palette-item" data-resource="RoleBinding" draggable="true">
+        <div class="palette-label">RoleBinding</div>
+      </div>
+      <div class="palette-item" data-resource="ClusterRoleBinding" draggable="true">
+        <div class="palette-label">ClusterRoleBinding</div>
+      </div>
+      <div class="palette-item" data-resource="SecurityContextConstraints" draggable="true">
+        <div class="palette-label">SCC</div>
+      </div>
+      <div class="palette-separator"></div>
+      <div class="palette-section-label">Identity &amp; Operators</div>
+      <div class="palette-item" data-resource="User" draggable="true">
+        <div class="palette-label">User</div>
+      </div>
+      <div class="palette-item" data-resource="Group" draggable="true">
+        <div class="palette-label">Group</div>
+      </div>
+      <div class="palette-item" data-resource="Subscription" draggable="true">
+        <div class="palette-label">Operator</div>
+      </div>
     </div>
-    <div id="props-body" class="p-4 space-y-4 text-xs">
-      <div class="text-white/30 text-center py-8">Select a resource to edit properties</div>
+
+    <div
+      id="draw-props"
+      class="fixed right-0 top-12 z-30 backdrop-blur-xl bg-black/70 border-l border-white/10 overflow-y-auto transition-transform duration-300 translate-x-full"
+      style="bottom: 0; width: 18rem"
+      inert
+    >
+      <div class="flex items-center justify-between px-4 py-3 border-b border-white/10">
+        <span class="text-sm font-semibold text-white/90">Properties</span>
+        <button
+          id="btn-close-props"
+          class="text-white/40 hover:text-white/80 text-xs transition-colors"
+        >
+          &#10005;
+        </button>
+      </div>
+      <div id="props-body" class="p-4 space-y-4 text-xs">
+        <div class="text-white/30 text-center py-8">Select a resource to edit properties</div>
+      </div>
     </div>
-  </div>
 
-  <div id="draw-help" class="fixed bottom-4 left-20 z-30 px-3 py-2 text-[10px] text-white/20 space-y-0.5">
-    <div>Drag resources from the palette to the canvas</div>
-    <div>Double-click a resource to rename &middot; right-click to delete</div>
-    <div>Click <strong class="text-white/40">Draw Line</strong> then two resources to link them</div>
-    <div>Route &rarr; Service &rarr; Deployment &middot; BuildConfig &rarr; ImageStream &rarr; Deployment</div>
-    <div><kbd class="px-1 bg-white/5 rounded">Esc</kbd> cancel &middot; <kbd class="px-1 bg-white/5 rounded">Del</kbd> delete selected &middot; <kbd class="px-1 bg-white/5 rounded">1-9</kbd> quick place</div>
-  </div>
+    <div
+      id="draw-help"
+      class="fixed bottom-4 left-20 z-30 px-3 py-2 text-[10px] text-white/20 space-y-0.5"
+    >
+      <div>Drag resources from the palette to the canvas</div>
+      <div>Double-click a resource to rename &middot; right-click to delete</div>
+      <div>
+        Click <strong class="text-white/40">Draw Line</strong> then two resources to link them
+      </div>
+      <div>
+        Route &rarr; Service &rarr; Deployment &middot; BuildConfig &rarr; ImageStream &rarr;
+        Deployment
+      </div>
+      <div>
+        <kbd class="px-1 bg-white/5 rounded">Esc</kbd> cancel &middot;
+        <kbd class="px-1 bg-white/5 rounded">Del</kbd> delete selected &middot;
+        <kbd class="px-1 bg-white/5 rounded">1-9</kbd> quick place
+      </div>
+    </div>
 
-  <div id="draw-watermark" class="fixed bottom-4 left-1/2 -translate-x-1/2 z-30 flex items-center gap-2 text-[10px] text-white/15">
-    <span>OpenShift Games &middot; /draw</span>
-  </div>
+    <div
+      id="draw-watermark"
+      class="fixed bottom-4 left-1/2 -translate-x-1/2 z-30 flex items-center gap-2 text-[10px] text-white/15"
+    >
+      <span>OpenShift Games &middot; /draw</span>
+    </div>
 
-  <script type="module">
-    import { ClusterRenderer } from './js/rendering/ClusterRenderer.js';
-    import { GameEngine } from './js/engine/GameEngine.js';
-    import { computeConnections } from './js/rendering/RelationGraph.js';
-    import {
-      PALETTE_SECTIONS,
-      PLACEABLE_KINDS,
-      RESOURCE_KINDS,
-      apiVersionForKind,
-      defaultSpecForKind,
-      createResource,
-      isClusterScopedKind,
-      normalizeKind,
-      paletteMeta,
-      toManifestObject,
-    } from './js/data/kindRegistry.js';
+    <script type="module">
+      import { ClusterRenderer } from './js/rendering/ClusterRenderer.js';
+      import { GameEngine } from './js/engine/GameEngine.js';
+      import { computeConnections } from './js/rendering/RelationGraph.js';
+      import {
+        PALETTE_SECTIONS,
+        PLACEABLE_KINDS,
+        RESOURCE_KINDS,
+        apiVersionForKind,
+        defaultSpecForKind,
+        createResource,
+        isClusterScopedKind,
+        normalizeKind,
+        paletteMeta,
+        toManifestObject,
+      } from './js/data/kindRegistry.js';
 
-    /** Mark resources created on the draw page so cluster:added can distinguish them
-     *  from controller/seed resources (default Projects, SCCs, ClusterOperators...). */
-    const DRAW_ANNOTATION = 'openshiftgames.io/draw';
-    const DEFAULT_PROJECT = 'default';
+      /** Mark resources created on the draw page so cluster:added can distinguish them
+       *  from controller/seed resources (default Projects, SCCs, ClusterOperators...). */
+      const DRAW_ANNOTATION = 'openshiftgames.io/draw';
+      const DEFAULT_PROJECT = 'default';
 
-    // ── Palette icons (pure inline SVG, no external assets) ────────────────
-    const ICONS = {
-      Project: '<path d="M3 7h6l2 2h10v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V7z" stroke="#EE0000" stroke-width="1.5" fill="#EE0000" fill-opacity="0.15"/><path d="M3 10h18" stroke="#EE0000" stroke-width="1"/>',
-      Node: '<rect x="3" y="8" width="18" height="10" rx="2" stroke="#8B949E" stroke-width="1.5" fill="#8B949E" fill-opacity="0.15"/><rect x="6" y="11" width="3" height="3" rx="0.5" fill="#8B949E" fill-opacity="0.5"/><rect x="11" y="11" width="3" height="3" rx="0.5" fill="#8B949E" fill-opacity="0.5"/>',
-      ClusterResourceQuota: '<rect x="3" y="17" width="18" height="2" rx="0.5" fill="#F97316" fill-opacity="0.4"/><rect x="5" y="12" width="3" height="5" fill="#F97316"/><rect x="10" y="8" width="3" height="9" fill="#F97316"/><rect x="15" y="4" width="3" height="13" fill="#EE0000"/>',
-      Pod: '<polygon points="12,2 22,8 22,16 12,22 2,16 2,8" stroke="#326CE5" stroke-width="1.5" fill="#326CE5" fill-opacity="0.2"/>',
-      Deployment: '<rect x="3" y="6" width="18" height="12" rx="3" stroke="#f97316" stroke-width="1.5" fill="#f97316" fill-opacity="0.2"/>',
-      ReplicaSet: '<rect x="4" y="5" width="16" height="4" rx="1" stroke="#388bfd" stroke-width="1" fill="#388bfd" fill-opacity="0.15"/><rect x="4" y="10" width="16" height="4" rx="1" stroke="#388bfd" stroke-width="1" fill="#388bfd" fill-opacity="0.2"/><rect x="4" y="15" width="16" height="4" rx="1" stroke="#388bfd" stroke-width="1" fill="#388bfd" fill-opacity="0.25"/>',
-      StatefulSet: '<polygon points="12,3 20,8 20,16 12,21 4,16 4,8" stroke="#8957e5" stroke-width="1.5" fill="#8957e5" fill-opacity="0.2"/><text x="12" y="15" text-anchor="middle" fill="#8957e5" font-size="8" font-weight="bold">0</text>',
-      DaemonSet: '<polygon points="12,2 15,9 22,9 16,14 18,22 12,17 6,22 8,14 2,9 9,9" stroke="#d29922" stroke-width="1.5" fill="#d29922" fill-opacity="0.2"/>',
-      Job: '<path d="M12,3 L16,10 L12,17 L8,10 Z" stroke="#7ee787" stroke-width="1.5" fill="#7ee787" fill-opacity="0.2"/><line x1="8" y1="17" x2="16" y2="17" stroke="#7ee787" stroke-width="1.5"/>',
-      CronJob: '<circle cx="12" cy="12" r="9" stroke="#bc8cff" stroke-width="1.5" fill="#bc8cff" fill-opacity="0.15"/><line x1="12" y1="12" x2="12" y2="6" stroke="#bc8cff" stroke-width="1.5"/><line x1="12" y1="12" x2="17" y2="12" stroke="#bc8cff" stroke-width="1.5"/>',
-      BuildConfig: '<circle cx="12" cy="12" r="4" stroke="#F97316" stroke-width="1.5" fill="#F97316" fill-opacity="0.2"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1" stroke="#F97316" stroke-width="1.5"/>',
-      ImageStream: '<ellipse cx="12" cy="6" rx="7" ry="2.6" stroke="#A371F7" stroke-width="1.5" fill="#A371F7" fill-opacity="0.2"/><ellipse cx="12" cy="12" rx="7" ry="2.6" stroke="#A371F7" stroke-width="1.5" fill="#A371F7" fill-opacity="0.15"/><ellipse cx="12" cy="18" rx="7" ry="2.6" stroke="#A371F7" stroke-width="1.5" fill="#A371F7" fill-opacity="0.1"/>',
-      Service: '<circle cx="12" cy="12" r="8" stroke="#58a6ff" stroke-width="1.5" fill="#58a6ff" fill-opacity="0.2"/><circle cx="12" cy="12" r="3" fill="#58a6ff" fill-opacity="0.4"/>',
-      Route: '<path d="M4 20V6" stroke="#8B949E" stroke-width="1.5"/><path d="M5 5h10l4 3-4 3H5z" stroke="#EE0000" stroke-width="1.5" fill="#EE0000" fill-opacity="0.25"/>',
-      Ingress: '<polygon points="12,3 21,12 12,21 3,12" stroke="#79c0ff" stroke-width="1.5" fill="#79c0ff" fill-opacity="0.2"/>',
-      NetworkPolicy: '<path d="M12,3 L20,8 L20,16 L12,21 L4,16 L4,8 Z" stroke="#f0883e" stroke-width="1.5" fill="#f0883e" fill-opacity="0.15"/><path d="M8,12 L16,12" stroke="#f0883e" stroke-width="1.5"/>',
-      IPAddressPool: '<circle cx="6" cy="17" r="2.2" stroke="#F97316" stroke-width="1.5" fill="#F97316" fill-opacity="0.25"/><circle cx="18" cy="17" r="2.2" stroke="#F97316" stroke-width="1.5" fill="#F97316" fill-opacity="0.25"/><circle cx="12" cy="6" r="2.2" stroke="#F97316" stroke-width="1.5" fill="#F97316" fill-opacity="0.25"/><path d="M7.5 15.4 10.6 8M16.5 15.4 13.4 8M8 17h8" stroke="#F97316" stroke-width="1"/>',
-      L2Advertisement: '<circle cx="5" cy="19" r="1.8" fill="#EE0000"/><circle cx="19" cy="19" r="1.8" fill="#EE0000"/><path d="M8 15a6 6 0 0 1 8 0M5.5 11.5a10 10 0 0 1 13 0M3 8a14 14 0 0 1 18 0" stroke="#EE0000" stroke-width="1.5" fill="none"/>',
-      ConfigMap: '<rect x="5" y="3" width="14" height="18" rx="2" stroke="#e3b341" stroke-width="1.5" fill="#e3b341" fill-opacity="0.15"/><line x1="8" y1="8" x2="16" y2="8" stroke="#e3b341" stroke-width="1"/><line x1="8" y1="12" x2="14" y2="12" stroke="#e3b341" stroke-width="1"/>',
-      Secret: '<rect x="6" y="10" width="12" height="10" rx="2" stroke="#8B949E" stroke-width="1.5" fill="#8B949E" fill-opacity="0.15"/><path d="M9,10 L9,7 a3,3 0 0 1 6,0 L15,10" stroke="#8B949E" stroke-width="1.5" fill="none"/><circle cx="12" cy="15" r="1.5" fill="#8B949E"/>',
-      LimitRange: '<rect x="2" y="9" width="20" height="6" rx="1" stroke="#d29922" stroke-width="1.5" fill="#d29922" fill-opacity="0.15"/><path d="M6 9v3M10 9v2M14 9v3M18 9v2" stroke="#d29922" stroke-width="1"/>',
-      ResourceQuota: '<rect x="3" y="8" width="18" height="8" rx="1" stroke="#db6d28" stroke-width="1.5" fill="#db6d28" fill-opacity="0.15"/><line x1="3" y1="12" x2="21" y2="12" stroke="#db6d28" stroke-width="1.5" stroke-dasharray="3 2"/>',
-      Template: '<path d="M6 3h9l3 3v15H6z" stroke="#E6EDF3" stroke-width="1.5" fill="#E6EDF3" fill-opacity="0.1"/><path d="M15 3v3h3" stroke="#E6EDF3" stroke-width="1.5"/><path d="M9 11h6M9 14h6M9 17h4" stroke="#F97316" stroke-width="1.5"/>',
-      PersistentVolume: '<ellipse cx="12" cy="6" rx="7" ry="2.6" stroke="#3fb950" stroke-width="1.5" fill="#3fb950" fill-opacity="0.2"/><path d="M5 6v6c0 1.4 3.1 2.6 7 2.6s7-1.2 7-2.6V6" stroke="#3fb950" stroke-width="1.5" fill="none"/><path d="M5 12v6c0 1.4 3.1 2.6 7 2.6s7-1.2 7-2.6v-6" stroke="#3fb950" stroke-width="1.5" fill="none"/>',
-      PersistentVolumeClaim: '<ellipse cx="12" cy="6" rx="8" ry="3" stroke="#56d364" stroke-width="1.5" fill="#56d364" fill-opacity="0.15"/><path d="M4,6 L4,18 a8,3 0 0 0 16,0 L20,6" stroke="#56d364" stroke-width="1.5" fill="none"/>',
-      StorageClass: '<path d="M4 8l8-4 8 4-8 4z" stroke="#A371F7" stroke-width="1.5" fill="#A371F7" fill-opacity="0.2"/><path d="M4 12l8 4 8-4M4 16l8 4 8-4" stroke="#A371F7" stroke-width="1.5" fill="none"/>',
-      HorizontalPodAutoscaler: '<circle cx="12" cy="12" r="9" stroke="#d2a8ff" stroke-width="1.5" fill="#d2a8ff" fill-opacity="0.1"/><path d="M12,5 L12,12 L18,12" stroke="#d2a8ff" stroke-width="2" stroke-linecap="round"/><path d="M6,17 L9,14 L12,16 L18,10" stroke="#d2a8ff" stroke-width="1.5" fill="none"/>',
-      PodDisruptionBudget: '<path d="M9 3v18M15 3v18" stroke="#39c5cf" stroke-width="1.2" stroke-dasharray="3 2"/><path d="M8 4c-3 2-3 8 0 11v-11z" stroke="#39c5cf" stroke-width="1.5" fill="#39c5cf" fill-opacity="0.2"/><path d="M16 4c3 2 3 8 0 11v-11z" stroke="#39c5cf" stroke-width="1.5" fill="#39c5cf" fill-opacity="0.2"/>',
-      ServiceAccount: '<rect x="3" y="7" width="18" height="11" rx="2" stroke="#F97316" stroke-width="1.5" fill="#F97316" fill-opacity="0.12"/><circle cx="9" cy="12" r="2.2" stroke="#F97316" stroke-width="1.2" fill="#F97316" fill-opacity="0.25"/><path d="M13 11h5M13 14h5" stroke="#F97316" stroke-width="1.2"/>',
-      Role: '<polygon points="12,3 19,6 19,13 12,21 5,13 5,6" stroke="#e3b341" stroke-width="1.5" fill="#e3b341" fill-opacity="0.18"/><path d="M12 8l1.2 2.4 2.6.4-1.9 1.8.4 2.6-2.3-1.2-2.3 1.2.4-2.6-1.9-1.8 2.6-.4z" fill="#e3b341"/>',
-      ClusterRole: '<polygon points="12,3 19,6 19,13 12,21 5,13 5,6" stroke="#F97316" stroke-width="1.5" fill="#F97316" fill-opacity="0.18"/><circle cx="12" cy="11.5" r="7.5" stroke="#EE0000" stroke-width="1" stroke-dasharray="2 2" fill="none"/>',
-      RoleBinding: '<circle cx="8" cy="9" r="3.4" stroke="#e3b341" stroke-width="1.5" fill="none"/><circle cx="16" cy="15" r="3.4" stroke="#e3b341" stroke-width="1.5" fill="none"/>',
-      ClusterRoleBinding: '<circle cx="7" cy="8" r="3" stroke="#F97316" stroke-width="1.5" fill="none"/><circle cx="17" cy="8" r="3" stroke="#F97316" stroke-width="1.5" fill="none"/><circle cx="12" cy="17" r="3" stroke="#F97316" stroke-width="1.5" fill="none"/>',
-      SecurityContextConstraints: '<path d="M12,3 L20,8 L20,16 L12,21 L4,16 L4,8 Z" stroke="#EE0000" stroke-width="1.5" fill="#EE0000" fill-opacity="0.18"/><circle cx="12" cy="11" r="1.6" fill="#EE0000"/><path d="M12 12.5V16" stroke="#EE0000" stroke-width="1.5"/>',
-      User: '<circle cx="12" cy="8" r="4" stroke="#39c5cf" stroke-width="1.5" fill="#39c5cf" fill-opacity="0.2"/><path d="M6,20 C6,16 9,14 12,14 C15,14 18,16 18,20" stroke="#39c5cf" stroke-width="1.5" fill="none"/>',
-      Group: '<circle cx="8" cy="9" r="2.8" stroke="#39c5cf" stroke-width="1.3" fill="#39c5cf" fill-opacity="0.15"/><circle cx="16" cy="9" r="2.8" stroke="#39c5cf" stroke-width="1.3" fill="#39c5cf" fill-opacity="0.15"/><path d="M3,20c0-3 2.2-4.6 5-4.6s5 1.6 5 4.6M11,20c0-3 2.2-4.6 5-4.6s5 1.6 5 4.6" stroke="#39c5cf" stroke-width="1.3" fill="none"/>',
-      Subscription: '<path d="M6 5h5v3a2.5 2.5 0 0 0 5 0V5h2v6h-3a2.5 2.5 0 0 0 0 5h3v3H6v-5H3a2.5 2.5 0 0 1 0-5h3z" transform="translate(1.5 0) scale(0.88)" stroke="#F97316" stroke-width="1.5" fill="#F97316" fill-opacity="0.2"/>',
-    };
+      // ── Palette icons (pure inline SVG, no external assets) ────────────────
+      const ICONS = {
+        Project:
+          '<path d="M3 7h6l2 2h10v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V7z" stroke="#EE0000" stroke-width="1.5" fill="#EE0000" fill-opacity="0.15"/><path d="M3 10h18" stroke="#EE0000" stroke-width="1"/>',
+        Node: '<rect x="3" y="8" width="18" height="10" rx="2" stroke="#8B949E" stroke-width="1.5" fill="#8B949E" fill-opacity="0.15"/><rect x="6" y="11" width="3" height="3" rx="0.5" fill="#8B949E" fill-opacity="0.5"/><rect x="11" y="11" width="3" height="3" rx="0.5" fill="#8B949E" fill-opacity="0.5"/>',
+        ClusterResourceQuota:
+          '<rect x="3" y="17" width="18" height="2" rx="0.5" fill="#F97316" fill-opacity="0.4"/><rect x="5" y="12" width="3" height="5" fill="#F97316"/><rect x="10" y="8" width="3" height="9" fill="#F97316"/><rect x="15" y="4" width="3" height="13" fill="#EE0000"/>',
+        Pod: '<polygon points="12,2 22,8 22,16 12,22 2,16 2,8" stroke="#326CE5" stroke-width="1.5" fill="#326CE5" fill-opacity="0.2"/>',
+        Deployment:
+          '<rect x="3" y="6" width="18" height="12" rx="3" stroke="#f97316" stroke-width="1.5" fill="#f97316" fill-opacity="0.2"/>',
+        ReplicaSet:
+          '<rect x="4" y="5" width="16" height="4" rx="1" stroke="#388bfd" stroke-width="1" fill="#388bfd" fill-opacity="0.15"/><rect x="4" y="10" width="16" height="4" rx="1" stroke="#388bfd" stroke-width="1" fill="#388bfd" fill-opacity="0.2"/><rect x="4" y="15" width="16" height="4" rx="1" stroke="#388bfd" stroke-width="1" fill="#388bfd" fill-opacity="0.25"/>',
+        StatefulSet:
+          '<polygon points="12,3 20,8 20,16 12,21 4,16 4,8" stroke="#8957e5" stroke-width="1.5" fill="#8957e5" fill-opacity="0.2"/><text x="12" y="15" text-anchor="middle" fill="#8957e5" font-size="8" font-weight="bold">0</text>',
+        DaemonSet:
+          '<polygon points="12,2 15,9 22,9 16,14 18,22 12,17 6,22 8,14 2,9 9,9" stroke="#d29922" stroke-width="1.5" fill="#d29922" fill-opacity="0.2"/>',
+        Job: '<path d="M12,3 L16,10 L12,17 L8,10 Z" stroke="#7ee787" stroke-width="1.5" fill="#7ee787" fill-opacity="0.2"/><line x1="8" y1="17" x2="16" y2="17" stroke="#7ee787" stroke-width="1.5"/>',
+        CronJob:
+          '<circle cx="12" cy="12" r="9" stroke="#bc8cff" stroke-width="1.5" fill="#bc8cff" fill-opacity="0.15"/><line x1="12" y1="12" x2="12" y2="6" stroke="#bc8cff" stroke-width="1.5"/><line x1="12" y1="12" x2="17" y2="12" stroke="#bc8cff" stroke-width="1.5"/>',
+        BuildConfig:
+          '<circle cx="12" cy="12" r="4" stroke="#F97316" stroke-width="1.5" fill="#F97316" fill-opacity="0.2"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1" stroke="#F97316" stroke-width="1.5"/>',
+        ImageStream:
+          '<ellipse cx="12" cy="6" rx="7" ry="2.6" stroke="#A371F7" stroke-width="1.5" fill="#A371F7" fill-opacity="0.2"/><ellipse cx="12" cy="12" rx="7" ry="2.6" stroke="#A371F7" stroke-width="1.5" fill="#A371F7" fill-opacity="0.15"/><ellipse cx="12" cy="18" rx="7" ry="2.6" stroke="#A371F7" stroke-width="1.5" fill="#A371F7" fill-opacity="0.1"/>',
+        Service:
+          '<circle cx="12" cy="12" r="8" stroke="#58a6ff" stroke-width="1.5" fill="#58a6ff" fill-opacity="0.2"/><circle cx="12" cy="12" r="3" fill="#58a6ff" fill-opacity="0.4"/>',
+        Route:
+          '<path d="M4 20V6" stroke="#8B949E" stroke-width="1.5"/><path d="M5 5h10l4 3-4 3H5z" stroke="#EE0000" stroke-width="1.5" fill="#EE0000" fill-opacity="0.25"/>',
+        Ingress:
+          '<polygon points="12,3 21,12 12,21 3,12" stroke="#79c0ff" stroke-width="1.5" fill="#79c0ff" fill-opacity="0.2"/>',
+        NetworkPolicy:
+          '<path d="M12,3 L20,8 L20,16 L12,21 L4,16 L4,8 Z" stroke="#f0883e" stroke-width="1.5" fill="#f0883e" fill-opacity="0.15"/><path d="M8,12 L16,12" stroke="#f0883e" stroke-width="1.5"/>',
+        IPAddressPool:
+          '<circle cx="6" cy="17" r="2.2" stroke="#F97316" stroke-width="1.5" fill="#F97316" fill-opacity="0.25"/><circle cx="18" cy="17" r="2.2" stroke="#F97316" stroke-width="1.5" fill="#F97316" fill-opacity="0.25"/><circle cx="12" cy="6" r="2.2" stroke="#F97316" stroke-width="1.5" fill="#F97316" fill-opacity="0.25"/><path d="M7.5 15.4 10.6 8M16.5 15.4 13.4 8M8 17h8" stroke="#F97316" stroke-width="1"/>',
+        L2Advertisement:
+          '<circle cx="5" cy="19" r="1.8" fill="#EE0000"/><circle cx="19" cy="19" r="1.8" fill="#EE0000"/><path d="M8 15a6 6 0 0 1 8 0M5.5 11.5a10 10 0 0 1 13 0M3 8a14 14 0 0 1 18 0" stroke="#EE0000" stroke-width="1.5" fill="none"/>',
+        ConfigMap:
+          '<rect x="5" y="3" width="14" height="18" rx="2" stroke="#e3b341" stroke-width="1.5" fill="#e3b341" fill-opacity="0.15"/><line x1="8" y1="8" x2="16" y2="8" stroke="#e3b341" stroke-width="1"/><line x1="8" y1="12" x2="14" y2="12" stroke="#e3b341" stroke-width="1"/>',
+        Secret:
+          '<rect x="6" y="10" width="12" height="10" rx="2" stroke="#8B949E" stroke-width="1.5" fill="#8B949E" fill-opacity="0.15"/><path d="M9,10 L9,7 a3,3 0 0 1 6,0 L15,10" stroke="#8B949E" stroke-width="1.5" fill="none"/><circle cx="12" cy="15" r="1.5" fill="#8B949E"/>',
+        LimitRange:
+          '<rect x="2" y="9" width="20" height="6" rx="1" stroke="#d29922" stroke-width="1.5" fill="#d29922" fill-opacity="0.15"/><path d="M6 9v3M10 9v2M14 9v3M18 9v2" stroke="#d29922" stroke-width="1"/>',
+        ResourceQuota:
+          '<rect x="3" y="8" width="18" height="8" rx="1" stroke="#db6d28" stroke-width="1.5" fill="#db6d28" fill-opacity="0.15"/><line x1="3" y1="12" x2="21" y2="12" stroke="#db6d28" stroke-width="1.5" stroke-dasharray="3 2"/>',
+        Template:
+          '<path d="M6 3h9l3 3v15H6z" stroke="#E6EDF3" stroke-width="1.5" fill="#E6EDF3" fill-opacity="0.1"/><path d="M15 3v3h3" stroke="#E6EDF3" stroke-width="1.5"/><path d="M9 11h6M9 14h6M9 17h4" stroke="#F97316" stroke-width="1.5"/>',
+        PersistentVolume:
+          '<ellipse cx="12" cy="6" rx="7" ry="2.6" stroke="#3fb950" stroke-width="1.5" fill="#3fb950" fill-opacity="0.2"/><path d="M5 6v6c0 1.4 3.1 2.6 7 2.6s7-1.2 7-2.6V6" stroke="#3fb950" stroke-width="1.5" fill="none"/><path d="M5 12v6c0 1.4 3.1 2.6 7 2.6s7-1.2 7-2.6v-6" stroke="#3fb950" stroke-width="1.5" fill="none"/>',
+        PersistentVolumeClaim:
+          '<ellipse cx="12" cy="6" rx="8" ry="3" stroke="#56d364" stroke-width="1.5" fill="#56d364" fill-opacity="0.15"/><path d="M4,6 L4,18 a8,3 0 0 0 16,0 L20,6" stroke="#56d364" stroke-width="1.5" fill="none"/>',
+        StorageClass:
+          '<path d="M4 8l8-4 8 4-8 4z" stroke="#A371F7" stroke-width="1.5" fill="#A371F7" fill-opacity="0.2"/><path d="M4 12l8 4 8-4M4 16l8 4 8-4" stroke="#A371F7" stroke-width="1.5" fill="none"/>',
+        HorizontalPodAutoscaler:
+          '<circle cx="12" cy="12" r="9" stroke="#d2a8ff" stroke-width="1.5" fill="#d2a8ff" fill-opacity="0.1"/><path d="M12,5 L12,12 L18,12" stroke="#d2a8ff" stroke-width="2" stroke-linecap="round"/><path d="M6,17 L9,14 L12,16 L18,10" stroke="#d2a8ff" stroke-width="1.5" fill="none"/>',
+        PodDisruptionBudget:
+          '<path d="M9 3v18M15 3v18" stroke="#39c5cf" stroke-width="1.2" stroke-dasharray="3 2"/><path d="M8 4c-3 2-3 8 0 11v-11z" stroke="#39c5cf" stroke-width="1.5" fill="#39c5cf" fill-opacity="0.2"/><path d="M16 4c3 2 3 8 0 11v-11z" stroke="#39c5cf" stroke-width="1.5" fill="#39c5cf" fill-opacity="0.2"/>',
+        ServiceAccount:
+          '<rect x="3" y="7" width="18" height="11" rx="2" stroke="#F97316" stroke-width="1.5" fill="#F97316" fill-opacity="0.12"/><circle cx="9" cy="12" r="2.2" stroke="#F97316" stroke-width="1.2" fill="#F97316" fill-opacity="0.25"/><path d="M13 11h5M13 14h5" stroke="#F97316" stroke-width="1.2"/>',
+        Role: '<polygon points="12,3 19,6 19,13 12,21 5,13 5,6" stroke="#e3b341" stroke-width="1.5" fill="#e3b341" fill-opacity="0.18"/><path d="M12 8l1.2 2.4 2.6.4-1.9 1.8.4 2.6-2.3-1.2-2.3 1.2.4-2.6-1.9-1.8 2.6-.4z" fill="#e3b341"/>',
+        ClusterRole:
+          '<polygon points="12,3 19,6 19,13 12,21 5,13 5,6" stroke="#F97316" stroke-width="1.5" fill="#F97316" fill-opacity="0.18"/><circle cx="12" cy="11.5" r="7.5" stroke="#EE0000" stroke-width="1" stroke-dasharray="2 2" fill="none"/>',
+        RoleBinding:
+          '<circle cx="8" cy="9" r="3.4" stroke="#e3b341" stroke-width="1.5" fill="none"/><circle cx="16" cy="15" r="3.4" stroke="#e3b341" stroke-width="1.5" fill="none"/>',
+        ClusterRoleBinding:
+          '<circle cx="7" cy="8" r="3" stroke="#F97316" stroke-width="1.5" fill="none"/><circle cx="17" cy="8" r="3" stroke="#F97316" stroke-width="1.5" fill="none"/><circle cx="12" cy="17" r="3" stroke="#F97316" stroke-width="1.5" fill="none"/>',
+        SecurityContextConstraints:
+          '<path d="M12,3 L20,8 L20,16 L12,21 L4,16 L4,8 Z" stroke="#EE0000" stroke-width="1.5" fill="#EE0000" fill-opacity="0.18"/><circle cx="12" cy="11" r="1.6" fill="#EE0000"/><path d="M12 12.5V16" stroke="#EE0000" stroke-width="1.5"/>',
+        User: '<circle cx="12" cy="8" r="4" stroke="#39c5cf" stroke-width="1.5" fill="#39c5cf" fill-opacity="0.2"/><path d="M6,20 C6,16 9,14 12,14 C15,14 18,16 18,20" stroke="#39c5cf" stroke-width="1.5" fill="none"/>',
+        Group:
+          '<circle cx="8" cy="9" r="2.8" stroke="#39c5cf" stroke-width="1.3" fill="#39c5cf" fill-opacity="0.15"/><circle cx="16" cy="9" r="2.8" stroke="#39c5cf" stroke-width="1.3" fill="#39c5cf" fill-opacity="0.15"/><path d="M3,20c0-3 2.2-4.6 5-4.6s5 1.6 5 4.6M11,20c0-3 2.2-4.6 5-4.6s5 1.6 5 4.6" stroke="#39c5cf" stroke-width="1.3" fill="none"/>',
+        Subscription:
+          '<path d="M6 5h5v3a2.5 2.5 0 0 0 5 0V5h2v6h-3a2.5 2.5 0 0 0 0 5h3v3H6v-5H3a2.5 2.5 0 0 1 0-5h3z" transform="translate(1.5 0) scale(0.88)" stroke="#F97316" stroke-width="1.5" fill="#F97316" fill-opacity="0.2"/>',
+      };
 
-    const FALLBACK_ICON = '<polygon points="12,3 20,8 20,16 12,21 4,16 4,8" stroke="#8B949E" stroke-width="1.5" fill="#8B949E" fill-opacity="0.15"/>';
+      const FALLBACK_ICON =
+        '<polygon points="12,3 20,8 20,16 12,21 4,16 4,8" stroke="#8B949E" stroke-width="1.5" fill="#8B949E" fill-opacity="0.15"/>';
 
-    const PHASE_BY_KIND = {
-      Node: 'Ready',
-      Project: 'Active',
-      Route: 'Admitted',
-      Subscription: 'Succeeded',
-      ClusterOperator: 'Available',
-      ClusterVersion: 'Available',
-      ImageStream: 'Ready',
-    };
+      const PHASE_BY_KIND = {
+        Node: 'Ready',
+        Project: 'Active',
+        Route: 'Admitted',
+        Subscription: 'Succeeded',
+        ClusterOperator: 'Available',
+        ClusterVersion: 'Available',
+        ImageStream: 'Ready',
+      };
 
-    function initialPhase(kind) {
-      return PHASE_BY_KIND[kind] || 'Running';
-    }
-
-    function uidOf(resource) {
-      return resource?.uid || resource?.metadata?.uid || null;
-    }
-
-    function escapeHtml(value) {
-      const div = document.createElement('div');
-      div.textContent = String(value ?? '');
-      return div.innerHTML;
-    }
-
-    function isPlainObject(value) {
-      return value !== null && typeof value === 'object' && !Array.isArray(value);
-    }
-
-    function formatScalar(value) {
-      if (value === null) return 'null';
-      if (typeof value === 'boolean' || typeof value === 'number') return String(value);
-      const str = String(value);
-      const needsQuote = str === ''
-        || /^\s/.test(str) || /\s$/.test(str)
-        || /[:#{}[\]&*!|>'"%@`,]/.test(str)
-        || /^(true|false|null|yes|no|on|off|~)$/i.test(str)
-        || /^-?\d/.test(str)
-        || str.includes('\n');
-      return needsQuote ? JSON.stringify(str) : str;
-    }
-
-    function emitYaml(value, indent) {
-      const pad = ' '.repeat(indent);
-      if (Array.isArray(value)) {
-        if (value.length === 0) return `${pad}[]`;
-        return value.map((item) => {
-          if (isPlainObject(item) || Array.isArray(item)) {
-            const inner = emitYaml(item, indent + 2).split('\n');
-            inner[0] = `${pad}- ${inner[0].slice(indent + 2)}`;
-            return inner.join('\n');
-          }
-          return `${pad}- ${formatScalar(item)}`;
-        }).join('\n');
+      function initialPhase(kind) {
+        return PHASE_BY_KIND[kind] || 'Running';
       }
-      if (isPlainObject(value)) {
-        const keys = Object.keys(value).filter((key) => value[key] !== undefined);
-        if (keys.length === 0) return `${pad}{}`;
-        return keys.map((key) => {
-          const item = value[key];
-          if (isPlainObject(item)) {
-            if (Object.keys(item).length === 0) return `${pad}${key}: {}`;
-            return `${pad}${key}:\n${emitYaml(item, indent + 2)}`;
-          }
-          if (Array.isArray(item)) {
-            if (item.length === 0) return `${pad}${key}: []`;
-            return `${pad}${key}:\n${emitYaml(item, indent + 2)}`;
-          }
-          if (item === null) return `${pad}${key}: null`;
-          return `${pad}${key}: ${formatScalar(item)}`;
-        }).join('\n');
+
+      function uidOf(resource) {
+        return resource?.uid || resource?.metadata?.uid || null;
       }
-      return `${pad}${formatScalar(value)}`;
-    }
 
-    function stringifyYaml(object) {
-      return `${emitYaml(object, 0)}\n`;
-    }
+      function escapeHtml(value) {
+        const div = document.createElement('div');
+        div.textContent = String(value ?? '');
+        return div.innerHTML;
+      }
 
-    /** Clean a registry manifest object for `oc apply` output (drop empty metadata). */
-    function cleanManifest(manifest) {
-      const obj = JSON.parse(JSON.stringify(manifest));
-      if (obj.metadata) {
-        if (obj.metadata.labels && Object.keys(obj.metadata.labels).length === 0) delete obj.metadata.labels;
-        if (obj.metadata.annotations) {
-          // The draw marker is app-internal: never leak it into exported YAML.
-          delete obj.metadata.annotations[DRAW_ANNOTATION];
-          if (Object.keys(obj.metadata.annotations).length === 0) delete obj.metadata.annotations;
+      function isPlainObject(value) {
+        return value !== null && typeof value === 'object' && !Array.isArray(value);
+      }
+
+      function formatScalar(value) {
+        if (value === null) return 'null';
+        if (typeof value === 'boolean' || typeof value === 'number') return String(value);
+        const str = String(value);
+        const needsQuote =
+          str === '' ||
+          /^\s/.test(str) ||
+          /\s$/.test(str) ||
+          /[:#{}[\]&*!|>'"%@`,]/.test(str) ||
+          /^(true|false|null|yes|no|on|off|~)$/i.test(str) ||
+          /^-?\d/.test(str) ||
+          str.includes('\n');
+        return needsQuote ? JSON.stringify(str) : str;
+      }
+
+      function emitYaml(value, indent) {
+        const pad = ' '.repeat(indent);
+        if (Array.isArray(value)) {
+          if (value.length === 0) return `${pad}[]`;
+          return value
+            .map((item) => {
+              if (isPlainObject(item) || Array.isArray(item)) {
+                const inner = emitYaml(item, indent + 2).split('\n');
+                inner[0] = `${pad}- ${inner[0].slice(indent + 2)}`;
+                return inner.join('\n');
+              }
+              return `${pad}- ${formatScalar(item)}`;
+            })
+            .join('\n');
         }
-      }
-      if (obj.kind === 'Project') delete obj.metadata?.namespace;
-      return obj;
-    }
-
-    class OpenShiftDraw {
-      constructor() {
-        this.engine = new GameEngine({ mode: 'sandbox' });
-        this.renderer = null;
-        this.connectionMode = false;
-        this.connectionSource = null;
-        this.placedPositions = new Map();
-        this.resourceCounter = {};
-        this.customConnections = [];
-        this.selectedUid = null;
-        this._pendingPlacements = new Map();
-        this._numMap = this._buildNumberMap();
-      }
-
-      async init() {
-        const canvas = document.getElementById('draw-canvas');
-        this.renderer = new ClusterRenderer(canvas);
-
-        window.game = {
-          engine: this.engine.eventBus,
-          cluster: this.engine.cluster,
-          renderer: this.renderer,
-          gameEngine: this.engine,
-        };
-
-        this.renderPalette();
-        this.bindPalette();
-        this.bindToolbar();
-        this.bindCanvas();
-        this.bindKeyboard();
-        this.bindProps();
-
-        this.renderer.start();
-
-        // Static diagram: keep the controller simulation from mutating the design.
-        if (this.engine.simulation && typeof this.engine.simulation.tick === 'function') {
-          this.engine.simulation.tick = () => {};
+        if (isPlainObject(value)) {
+          const keys = Object.keys(value).filter((key) => value[key] !== undefined);
+          if (keys.length === 0) return `${pad}{}`;
+          return keys
+            .map((key) => {
+              const item = value[key];
+              if (isPlainObject(item)) {
+                if (Object.keys(item).length === 0) return `${pad}${key}: {}`;
+                return `${pad}${key}:\n${emitYaml(item, indent + 2)}`;
+              }
+              if (Array.isArray(item)) {
+                if (item.length === 0) return `${pad}${key}: []`;
+                return `${pad}${key}:\n${emitYaml(item, indent + 2)}`;
+              }
+              if (item === null) return `${pad}${key}: null`;
+              return `${pad}${key}: ${formatScalar(item)}`;
+            })
+            .join('\n');
         }
-        this.engine.start();
-
-        this.engine.eventBus.on('cluster:added', (data) => this._onClusterAdded(data));
-        this.engine.eventBus.on('cluster:deleted', (data) => this._onClusterDeleted(data));
-
-        this.renderer.onSelect = (resourceId) => {
-          if (this.connectionMode) return;
-          this.selectedUid = resourceId;
-          if (resourceId) this.showProps(resourceId);
-          else this.hideProps();
-        };
-
-        this.renderer.onResourceMoved = (uid, pos) => {
-          this.placedPositions.set(uid, { x: pos.x, z: pos.z });
-          this.syncConnections();
-        };
-
-        this.loadFromHash();
+        return `${pad}${formatScalar(value)}`;
       }
 
-      // ── Palette ────────────────────────────────────────────────────────────
-      renderPalette() {
-        const palette = document.getElementById('resource-palette');
-        const sectionsHtml = [];
+      function stringifyYaml(object) {
+        return `${emitYaml(object, 0)}\n`;
+      }
 
-        PALETTE_SECTIONS.forEach((section, sectionIndex) => {
-          if (!section.kinds || section.kinds.length === 0) return;
-          if (sectionIndex > 0) sectionsHtml.push('<div class="palette-separator"></div>');
-          sectionsHtml.push(`<div class="palette-section-label">${escapeHtml(section.label)}</div>`);
-          for (const kind of section.kinds) {
-            const meta = paletteMeta(kind);
-            const label = meta.label || kind;
-            const shortcut = meta.shortcut ? ` <span class="keyboard-hint">${escapeHtml(meta.shortcut)}</span>` : '';
-            const icon = ICONS[kind] || FALLBACK_ICON;
-            sectionsHtml.push(`
+      /** Clean a registry manifest object for `oc apply` output (drop empty metadata). */
+      function cleanManifest(manifest) {
+        const obj = JSON.parse(JSON.stringify(manifest));
+        if (obj.metadata) {
+          if (obj.metadata.labels && Object.keys(obj.metadata.labels).length === 0)
+            delete obj.metadata.labels;
+          if (obj.metadata.annotations) {
+            // The draw marker is app-internal: never leak it into exported YAML.
+            delete obj.metadata.annotations[DRAW_ANNOTATION];
+            if (Object.keys(obj.metadata.annotations).length === 0) delete obj.metadata.annotations;
+          }
+        }
+        if (obj.kind === 'Project') delete obj.metadata?.namespace;
+        return obj;
+      }
+
+      class OpenShiftDraw {
+        constructor() {
+          this.engine = new GameEngine({ mode: 'sandbox' });
+          this.renderer = null;
+          this.connectionMode = false;
+          this.connectionSource = null;
+          this.placedPositions = new Map();
+          this.resourceCounter = {};
+          this.customConnections = [];
+          this.selectedUid = null;
+          this._pendingPlacements = new Map();
+          this._numMap = this._buildNumberMap();
+        }
+
+        async init() {
+          const canvas = document.getElementById('draw-canvas');
+          this.renderer = new ClusterRenderer(canvas);
+
+          window.game = {
+            engine: this.engine.eventBus,
+            cluster: this.engine.cluster,
+            renderer: this.renderer,
+            gameEngine: this.engine,
+          };
+
+          this.renderPalette();
+          this.bindPalette();
+          this.bindToolbar();
+          this.bindCanvas();
+          this.bindKeyboard();
+          this.bindProps();
+
+          this.renderer.start();
+
+          // Static diagram: keep the controller simulation from mutating the design.
+          if (this.engine.simulation && typeof this.engine.simulation.tick === 'function') {
+            this.engine.simulation.tick = () => {};
+          }
+          this.engine.start();
+
+          this.engine.eventBus.on('cluster:added', (data) => this._onClusterAdded(data));
+          this.engine.eventBus.on('cluster:deleted', (data) => this._onClusterDeleted(data));
+
+          this.renderer.onSelect = (resourceId) => {
+            if (this.connectionMode) return;
+            this.selectedUid = resourceId;
+            if (resourceId) this.showProps(resourceId);
+            else this.hideProps();
+          };
+
+          this.renderer.onResourceMoved = (uid, pos) => {
+            this.placedPositions.set(uid, { x: pos.x, z: pos.z });
+            this.syncConnections();
+          };
+
+          this.loadFromHash();
+        }
+
+        // ── Palette ────────────────────────────────────────────────────────────
+        renderPalette() {
+          const palette = document.getElementById('resource-palette');
+          const sectionsHtml = [];
+
+          PALETTE_SECTIONS.forEach((section, sectionIndex) => {
+            if (!section.kinds || section.kinds.length === 0) return;
+            if (sectionIndex > 0) sectionsHtml.push('<div class="palette-separator"></div>');
+            sectionsHtml.push(
+              `<div class="palette-section-label">${escapeHtml(section.label)}</div>`
+            );
+            for (const kind of section.kinds) {
+              const meta = paletteMeta(kind);
+              const label = meta.label || kind;
+              const shortcut = meta.shortcut
+                ? ` <span class="keyboard-hint">${escapeHtml(meta.shortcut)}</span>`
+                : '';
+              const icon = ICONS[kind] || FALLBACK_ICON;
+              sectionsHtml.push(`
               <div class="palette-item" data-resource="${escapeHtml(kind)}" draggable="true" title="${escapeHtml(kind)} — ${escapeHtml(apiVersionForKind(kind))}">
                 <div class="palette-icon"><svg viewBox="0 0 24 24" fill="none">${icon}</svg></div>
                 <div class="palette-label">${escapeHtml(label)}</div>
                 <div class="palette-tooltip">${escapeHtml(kind)} · ${escapeHtml(apiVersionForKind(kind))}${shortcut}</div>
               </div>
             `);
-          }
-        });
-
-        palette.innerHTML = sectionsHtml.join('');
-      }
-
-      _buildNumberMap() {
-        const map = {};
-        for (const section of PALETTE_SECTIONS) {
-          for (const kind of section.kinds) {
-            const shortcut = paletteMeta(kind).shortcut;
-            if (shortcut && !map[shortcut]) map[shortcut] = kind;
-          }
-        }
-        // Fill remaining digit shortcuts (8, 9) with the most-used cluster kinds.
-        let digit = 8;
-        for (const kind of ['Node', 'Project']) {
-          while (map[String(digit)]) digit += 1;
-          map[String(digit)] = kind;
-          digit += 1;
-        }
-        return map;
-      }
-
-      bindPalette() {
-        const palette = document.getElementById('resource-palette');
-        palette.addEventListener('dragstart', (e) => {
-          const item = e.target.closest('.palette-item');
-          if (!item) return;
-          e.dataTransfer.setData('text/plain', item.dataset.resource);
-          e.dataTransfer.effectAllowed = 'copy';
-        });
-
-        const canvas = document.getElementById('draw-canvas');
-        canvas.addEventListener('dragover', (e) => {
-          e.preventDefault();
-          e.dataTransfer.dropEffect = 'copy';
-        });
-        canvas.addEventListener('drop', (e) => {
-          e.preventDefault();
-          const kind = e.dataTransfer.getData('text/plain');
-          if (kind && this._isKnownKind(kind)) {
-            this.placeResource(kind, e.clientX, e.clientY);
-          }
-        });
-
-        palette.addEventListener('click', (e) => {
-          const item = e.target.closest('.palette-item');
-          if (!item) return;
-          const kind = item.dataset.resource;
-          if (kind && this._isKnownKind(kind)) {
-            this.placeResource(kind, window.innerWidth / 2, window.innerHeight / 2);
-          }
-        });
-
-        let touchDragKind = null;
-        palette.addEventListener('touchstart', (e) => {
-          const item = e.target.closest('.palette-item');
-          if (!item) return;
-          touchDragKind = item.dataset.resource;
-        }, { passive: true });
-        document.addEventListener('touchend', (e) => {
-          if (!touchDragKind) return;
-          const touch = e.changedTouches[0];
-          const kind = touchDragKind;
-          touchDragKind = null;
-          if (!touch) return;
-          const el = document.elementFromPoint(touch.clientX, touch.clientY);
-          if (el === canvas || canvas.contains(el)) {
-            this.placeResource(kind, touch.clientX, touch.clientY);
-          }
-        }, { passive: true });
-      }
-
-      _isKnownKind(kind) {
-        return Boolean(kind) && (PLACEABLE_KINDS.includes(kind) || RESOURCE_KINDS.includes(kind));
-      }
-
-      // ── Resource placement / rendering ─────────────────────────────────────
-      _canonicalKind(token) {
-        if (!token) return null;
-        if (RESOURCE_KINDS.includes(token)) return token;
-        return normalizeKind(token) || null;
-      }
-
-      _pendingKey(kind, name) {
-        return `${kind}/${name}`;
-      }
-
-      placeResource(kindToken, screenX, screenY, restored) {
-        const kind = this._canonicalKind(kindToken);
-        if (!kind || !PLACEABLE_KINDS.includes(kind)) return null;
-
-        const pos = restored?.pos || this.renderer.screenToGround(screenX, screenY);
-        if (!pos) return null;
-
-        this.resourceCounter[kind] = (this.resourceCounter[kind] || 0) + 1;
-        const name = restored?.name || `${kind.toLowerCase()}-${this.resourceCounter[kind]}`;
-        const uid = `draw-${kind.toLowerCase()}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-        const namespace = restored?.namespace ?? (isClusterScopedKind(kind) ? '' : DEFAULT_PROJECT);
-
-        const resource = createResource(kind, {
-          name,
-          namespace,
-          labels: restored?.labels || { app: name },
-        });
-        resource.metadata.uid = uid;
-        resource.metadata.annotations = {
-          ...(resource.metadata.annotations || {}),
-          [DRAW_ANNOTATION]: 'true',
-        };
-        if (restored?.spec) resource.spec = restored.spec;
-        this._adaptSpecForDraw(kind, name, namespace, resource.spec);
-        if (typeof resource.setPhase === 'function') resource.setPhase(initialPhase(kind));
-        else resource.status.phase = initialPhase(kind);
-
-        this._pendingPlacements.set(this._pendingKey(kind, name), { x: pos.x, z: pos.z });
-        const added = this.engine.cluster.addResource(resource) || resource;
-        this._pendingPlacements.delete(this._pendingKey(kind, name));
-
-        const actualUid = uidOf(added) || uid;
-        const actual = this.engine.cluster.resources?.get(actualUid) || added;
-        this._autoWirePlacement(kind, actual, Boolean(restored));
-        if (!this.placedPositions.has(actualUid)) {
-          this.placedPositions.set(actualUid, { x: pos.x, z: pos.z });
-          this._renderResource(actual, { x: pos.x, z: pos.z });
-        }
-        this.syncConnections();
-        return actual;
-      }
-
-      /**
-       * Best-effort spec wiring so freshly placed OpenShift resources form the real
-       * relationship model drawn by ConnectionLines:
-       *   Route → Service → Deployment, BuildConfig → ImageStream → Deployment.
-       * Restored share-link diagrams are left untouched.
-       */
-      _autoWirePlacement(kind, resource, isRestored) {
-        if (isRestored || !resource || !this.engine.cluster) return;
-        const cluster = this.engine.cluster;
-        const namespace = resource.metadata?.namespace || '';
-        const sameProject = (other) => (other.metadata?.namespace || '') === namespace && uidOf(other) !== uidOf(resource);
-        const latest = (items) => (items.length > 0 ? items[items.length - 1] : null);
-        const byKind = (k) => (cluster.getByKind ? cluster.getByKind(k) : []);
-
-        try {
-          switch (kind) {
-            case 'Service': {
-              const deployment = latest(byKind('Deployment').filter(sameProject));
-              const selector = deployment?.spec?.template?.metadata?.labels || deployment?.metadata?.labels;
-              if (selector && Object.keys(selector).length > 0) {
-                resource.spec.selector = { ...selector };
-                cluster.update(uidOf(resource), { spec: { selector: { ...selector } } });
-              }
-              break;
             }
-            case 'Route': {
-              const service = latest(byKind('Service').filter(sameProject));
-              if (service) {
-                const to = { ...(resource.spec.to || {}), kind: 'Service', name: service.metadata.name, weight: 100 };
-                resource.spec.to = to;
-                cluster.update(uidOf(resource), { spec: { to } });
-              }
-              break;
+          });
+
+          palette.innerHTML = sectionsHtml.join('');
+        }
+
+        _buildNumberMap() {
+          const map = {};
+          for (const section of PALETTE_SECTIONS) {
+            for (const kind of section.kinds) {
+              const shortcut = paletteMeta(kind).shortcut;
+              if (shortcut && !map[shortcut]) map[shortcut] = kind;
             }
-            case 'BuildConfig': {
-              const stream = latest(byKind('ImageStream').filter(sameProject));
-              if (stream) {
-                const output = { to: { kind: 'ImageStreamTag', name: `${stream.metadata.name}:latest` } };
-                resource.spec.output = output;
-                cluster.update(uidOf(resource), { spec: { output } });
-              }
-              break;
-            }
-            case 'ImageStream': {
-              const link = `${resource.metadata.name}:latest`;
-              for (const buildConfig of byKind('BuildConfig').filter(sameProject)) {
-                const current = buildConfig.spec?.output?.to;
-                if (!current || String(current.kind || '').startsWith('ImageStream')) {
-                  const output = { to: { kind: 'ImageStreamTag', name: link } };
-                  buildConfig.spec.output = output;
-                  cluster.update(uidOf(buildConfig), { spec: { output } });
-                }
-              }
-              for (const deployment of byKind('Deployment').filter(sameProject)) {
-                this._addImageTrigger(deployment, link);
-              }
-              break;
-            }
-            case 'Deployment': {
-              const stream = latest(byKind('ImageStream').filter(sameProject));
-              if (stream) this._addImageTrigger(resource, `${stream.metadata.name}:latest`);
-              // Point an unwired Service at this Deployment (Service → Deployment edge).
-              const deploymentLabels = resource.spec?.template?.metadata?.labels || resource.metadata?.labels;
-              const deployments = byKind('Deployment').filter((dep) => (dep.metadata?.namespace || '') === namespace);
-              for (const service of byKind('Service').filter(sameProject)) {
-                const selector = service.spec?.selector;
-                if (!selector || Object.keys(selector).length === 0) continue;
-                const matches = deployments.some((dep) => Object.entries(selector)
-                  .every(([key, value]) => (dep.spec?.template?.metadata?.labels || {})[key] === value));
-                if (!matches && deploymentLabels && Object.keys(deploymentLabels).length > 0) {
-                  const newSelector = { ...deploymentLabels };
-                  service.spec.selector = newSelector;
-                  cluster.update(uidOf(service), { spec: { selector: newSelector } });
-                }
-              }
-              break;
-            }
-            default:
-              break;
           }
-        } catch (error) {
-          console.warn('OpenShift Draw: auto-wire skipped for', kind, error);
-        }
-      }
-
-      _addImageTrigger(deployment, imageStreamTag) {
-        const triggers = Array.isArray(deployment.spec?.triggers) ? deployment.spec.triggers : [];
-        const alreadyLinked = triggers.some((trigger) => {
-          const from = trigger?.imageChangeParams?.from || trigger?.from;
-          return from?.name === imageStreamTag;
-        });
-        if (alreadyLinked) return;
-        triggers.push({
-          type: 'ImageChange',
-          imageChangeParams: {
-            automatic: true,
-            containerNames: ['main'],
-            from: { kind: 'ImageStreamTag', name: imageStreamTag },
-          },
-        });
-        deployment.spec.triggers = triggers;
-        this.engine.cluster.update(uidOf(deployment), { spec: { triggers } });
-      }
-
-      /** Draw-page friendly defaults: hostnames that make exported Routes/Ingresses useful. */
-      _adaptSpecForDraw(kind, name, namespace, spec) {
-        if (!spec || typeof spec !== 'object') return;
-        if (kind === 'Route' && !spec.host) {
-          spec.host = `${name}-${namespace || DEFAULT_PROJECT}.apps.cluster.example.com`;
-        }
-        if (kind === 'Ingress') {
-          const rule = (spec.rules || [])[0];
-          if (rule && (!rule.host || rule.host === 'app.example.com')) {
-            rule.host = `${name}.apps.cluster.example.com`;
+          // Fill remaining digit shortcuts (8, 9) with the most-used cluster kinds.
+          let digit = 8;
+          for (const kind of ['Node', 'Project']) {
+            while (map[String(digit)]) digit += 1;
+            map[String(digit)] = kind;
+            digit += 1;
           }
+          return map;
         }
-        if (kind === 'Project') {
-          if (!spec.displayName) spec.displayName = name;
+
+        bindPalette() {
+          const palette = document.getElementById('resource-palette');
+          palette.addEventListener('dragstart', (e) => {
+            const item = e.target.closest('.palette-item');
+            if (!item) return;
+            e.dataTransfer.setData('text/plain', item.dataset.resource);
+            e.dataTransfer.effectAllowed = 'copy';
+          });
+
+          const canvas = document.getElementById('draw-canvas');
+          canvas.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            e.dataTransfer.dropEffect = 'copy';
+          });
+          canvas.addEventListener('drop', (e) => {
+            e.preventDefault();
+            const kind = e.dataTransfer.getData('text/plain');
+            if (kind && this._isKnownKind(kind)) {
+              this.placeResource(kind, e.clientX, e.clientY);
+            }
+          });
+
+          palette.addEventListener('click', (e) => {
+            const item = e.target.closest('.palette-item');
+            if (!item) return;
+            const kind = item.dataset.resource;
+            if (kind && this._isKnownKind(kind)) {
+              this.placeResource(kind, window.innerWidth / 2, window.innerHeight / 2);
+            }
+          });
+
+          let touchDragKind = null;
+          palette.addEventListener(
+            'touchstart',
+            (e) => {
+              const item = e.target.closest('.palette-item');
+              if (!item) return;
+              touchDragKind = item.dataset.resource;
+            },
+            { passive: true }
+          );
+          document.addEventListener(
+            'touchend',
+            (e) => {
+              if (!touchDragKind) return;
+              const touch = e.changedTouches[0];
+              const kind = touchDragKind;
+              touchDragKind = null;
+              if (!touch) return;
+              const el = document.elementFromPoint(touch.clientX, touch.clientY);
+              if (el === canvas || canvas.contains(el)) {
+                this.placeResource(kind, touch.clientX, touch.clientY);
+              }
+            },
+            { passive: true }
+          );
         }
-      }
 
-      _renderResource(resource, pos) {
-        const uid = uidOf(resource);
-        if (!uid) return;
-        const kind = resource.kind || 'Unknown';
-        this.renderer.addResource({
-          id: uid,
-          kind,
-          type: kind,
-          name: resource.metadata?.name || resource.name || uid,
-          namespace: resource.metadata?.namespace || '',
-          status: resource.status?.phase || initialPhase(kind),
-          x: pos.x ?? 0,
-          y: 0,
-          z: pos.z ?? 0,
-          _ref: resource,
-        });
-      }
-
-      _shouldRender(resource) {
-        return resource?.metadata?.annotations?.[DRAW_ANNOTATION] === 'true';
-      }
-
-      _onClusterAdded(data) {
-        const resource = data?.resource;
-        if (!resource || !this._shouldRender(resource)) return;
-        const uid = uidOf(resource);
-        if (!uid) return;
-        const kind = resource.kind;
-        const name = resource.metadata?.name;
-        const pending = this._pendingPlacements.get(this._pendingKey(kind, name));
-        const pos = this.placedPositions.get(uid) || pending || { x: 0, z: 0 };
-        this.placedPositions.set(uid, { x: pos.x, z: pos.z });
-        this._renderResource(resource, pos);
-      }
-
-      _onClusterDeleted(data) {
-        const uid = data?.uid || uidOf(data?.resource);
-        if (!uid) return;
-        this.renderer.removeResource(uid);
-        this.placedPositions.delete(uid);
-        this.customConnections = this.customConnections.filter((c) => c.from !== uid && c.to !== uid);
-        if (this.selectedUid === uid) {
-          this.selectedUid = null;
-          this.hideProps();
+        _isKnownKind(kind) {
+          return Boolean(kind) && (PLACEABLE_KINDS.includes(kind) || RESOURCE_KINDS.includes(kind));
         }
-        this.syncConnections();
-      }
 
-      _placedResources() {
-        const all = this.engine.cluster.getAllResources?.() || [];
-        return all.filter((r) => this.placedPositions.has(uidOf(r)));
-      }
+        // ── Resource placement / rendering ─────────────────────────────────────
+        _canonicalKind(token) {
+          if (!token) return null;
+          if (RESOURCE_KINDS.includes(token)) return token;
+          return normalizeKind(token) || null;
+        }
 
-      // ── Connections ────────────────────────────────────────────────────────
-      syncConnections() {
-        const extraConnections = this.customConnections.map((conn) => ({
-          id: `custom:${conn.from}:${conn.to}`,
-          sourceId: conn.from,
-          targetId: conn.to,
-          type: 'custom',
-          trafficVolume: 2,
-        }));
-        const connections = computeConnections(this.engine.cluster, { extraConnections });
-        this.renderer.connectionLines.sync(connections, this.renderer.resourceMeshes);
-      }
+        _pendingKey(kind, name) {
+          return `${kind}/${name}`;
+        }
 
-      // ── Canvas interactions ────────────────────────────────────────────────
-      bindCanvas() {
-        const canvas = document.getElementById('draw-canvas');
+        placeResource(kindToken, screenX, screenY, restored) {
+          const kind = this._canonicalKind(kindToken);
+          if (!kind || !PLACEABLE_KINDS.includes(kind)) return null;
 
-        canvas.addEventListener('click', (e) => {
-          if (!this.connectionMode) return;
+          const pos = restored?.pos || this.renderer.screenToGround(screenX, screenY);
+          if (!pos) return null;
 
-          const rect = canvas.getBoundingClientRect();
-          const mouse = {
-            x: ((e.clientX - rect.left) / rect.width) * 2 - 1,
-            y: -((e.clientY - rect.top) / rect.height) * 2 + 1,
+          this.resourceCounter[kind] = (this.resourceCounter[kind] || 0) + 1;
+          const name = restored?.name || `${kind.toLowerCase()}-${this.resourceCounter[kind]}`;
+          const uid = `draw-${kind.toLowerCase()}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+          const namespace =
+            restored?.namespace ?? (isClusterScopedKind(kind) ? '' : DEFAULT_PROJECT);
+
+          const resource = createResource(kind, {
+            name,
+            namespace,
+            labels: restored?.labels || { app: name },
+          });
+          resource.metadata.uid = uid;
+          resource.metadata.annotations = {
+            ...(resource.metadata.annotations || {}),
+            [DRAW_ANNOTATION]: 'true',
           };
+          if (restored?.spec) resource.spec = restored.spec;
+          this._adaptSpecForDraw(kind, name, namespace, resource.spec);
+          if (typeof resource.setPhase === 'function') resource.setPhase(initialPhase(kind));
+          else resource.status.phase = initialPhase(kind);
 
-          this.renderer.raycaster.setFromCamera(mouse, this.renderer.camera);
-          const intersects = this.renderer.raycaster.intersectObjects(this.renderer.pickableObjects, true);
-          if (intersects.length === 0) return;
+          this._pendingPlacements.set(this._pendingKey(kind, name), { x: pos.x, z: pos.z });
+          const added = this.engine.cluster.addResource(resource) || resource;
+          this._pendingPlacements.delete(this._pendingKey(kind, name));
 
-          let target = intersects[0].object;
-          while (target.parent && !target.userData.resourceId) target = target.parent;
-          if (!target.userData.resourceId) return;
-          const pickedId = target.userData.resourceId;
-
-          if (!this.connectionSource) {
-            this.connectionSource = pickedId;
-            this.renderer._applyMeshEffect(this.renderer.resourceMeshes.get(pickedId), 'selected');
-            this._setStatus('Click target resource to connect...');
-          } else {
-            if (pickedId !== this.connectionSource) {
-              this.customConnections.push({ from: this.connectionSource, to: pickedId });
-              this.syncConnections();
-            }
-            this.renderer._applyMeshEffect(this.renderer.resourceMeshes.get(this.connectionSource), 'default');
-            this.connectionSource = null;
-            this._setStatus('Connection mode — click source resource');
+          const actualUid = uidOf(added) || uid;
+          const actual = this.engine.cluster.resources?.get(actualUid) || added;
+          this._autoWirePlacement(kind, actual, Boolean(restored));
+          if (!this.placedPositions.has(actualUid)) {
+            this.placedPositions.set(actualUid, { x: pos.x, z: pos.z });
+            this._renderResource(actual, { x: pos.x, z: pos.z });
           }
-        });
+          this.syncConnections();
+          return actual;
+        }
 
-        this.engine.eventBus.on('resource:contextmenu', (data) => {
-          const uid = data.uid;
+        /**
+         * Best-effort spec wiring so freshly placed OpenShift resources form the real
+         * relationship model drawn by ConnectionLines:
+         *   Route → Service → Deployment, BuildConfig → ImageStream → Deployment.
+         * Restored share-link diagrams are left untouched.
+         */
+        _autoWirePlacement(kind, resource, isRestored) {
+          if (isRestored || !resource || !this.engine.cluster) return;
+          const cluster = this.engine.cluster;
+          const namespace = resource.metadata?.namespace || '';
+          const sameProject = (other) =>
+            (other.metadata?.namespace || '') === namespace && uidOf(other) !== uidOf(resource);
+          const latest = (items) => (items.length > 0 ? items[items.length - 1] : null);
+          const byKind = (k) => (cluster.getByKind ? cluster.getByKind(k) : []);
+
+          try {
+            switch (kind) {
+              case 'Service': {
+                const deployment = latest(byKind('Deployment').filter(sameProject));
+                const selector =
+                  deployment?.spec?.template?.metadata?.labels || deployment?.metadata?.labels;
+                if (selector && Object.keys(selector).length > 0) {
+                  resource.spec.selector = { ...selector };
+                  cluster.update(uidOf(resource), { spec: { selector: { ...selector } } });
+                }
+                break;
+              }
+              case 'Route': {
+                const service = latest(byKind('Service').filter(sameProject));
+                if (service) {
+                  const to = {
+                    ...(resource.spec.to || {}),
+                    kind: 'Service',
+                    name: service.metadata.name,
+                    weight: 100,
+                  };
+                  resource.spec.to = to;
+                  cluster.update(uidOf(resource), { spec: { to } });
+                }
+                break;
+              }
+              case 'BuildConfig': {
+                const stream = latest(byKind('ImageStream').filter(sameProject));
+                if (stream) {
+                  const output = {
+                    to: { kind: 'ImageStreamTag', name: `${stream.metadata.name}:latest` },
+                  };
+                  resource.spec.output = output;
+                  cluster.update(uidOf(resource), { spec: { output } });
+                }
+                break;
+              }
+              case 'ImageStream': {
+                const link = `${resource.metadata.name}:latest`;
+                for (const buildConfig of byKind('BuildConfig').filter(sameProject)) {
+                  const current = buildConfig.spec?.output?.to;
+                  if (!current || String(current.kind || '').startsWith('ImageStream')) {
+                    const output = { to: { kind: 'ImageStreamTag', name: link } };
+                    buildConfig.spec.output = output;
+                    cluster.update(uidOf(buildConfig), { spec: { output } });
+                  }
+                }
+                for (const deployment of byKind('Deployment').filter(sameProject)) {
+                  this._addImageTrigger(deployment, link);
+                }
+                break;
+              }
+              case 'Deployment': {
+                const stream = latest(byKind('ImageStream').filter(sameProject));
+                if (stream) this._addImageTrigger(resource, `${stream.metadata.name}:latest`);
+                // Point an unwired Service at this Deployment (Service → Deployment edge).
+                const deploymentLabels =
+                  resource.spec?.template?.metadata?.labels || resource.metadata?.labels;
+                const deployments = byKind('Deployment').filter(
+                  (dep) => (dep.metadata?.namespace || '') === namespace
+                );
+                for (const service of byKind('Service').filter(sameProject)) {
+                  const selector = service.spec?.selector;
+                  if (!selector || Object.keys(selector).length === 0) continue;
+                  const matches = deployments.some((dep) =>
+                    Object.entries(selector).every(
+                      ([key, value]) => (dep.spec?.template?.metadata?.labels || {})[key] === value
+                    )
+                  );
+                  if (!matches && deploymentLabels && Object.keys(deploymentLabels).length > 0) {
+                    const newSelector = { ...deploymentLabels };
+                    service.spec.selector = newSelector;
+                    cluster.update(uidOf(service), { spec: { selector: newSelector } });
+                  }
+                }
+                break;
+              }
+              default:
+                break;
+            }
+          } catch (error) {
+            console.warn('OpenShift Draw: auto-wire skipped for', kind, error);
+          }
+        }
+
+        _addImageTrigger(deployment, imageStreamTag) {
+          const triggers = Array.isArray(deployment.spec?.triggers) ? deployment.spec.triggers : [];
+          const alreadyLinked = triggers.some((trigger) => {
+            const from = trigger?.imageChangeParams?.from || trigger?.from;
+            return from?.name === imageStreamTag;
+          });
+          if (alreadyLinked) return;
+          triggers.push({
+            type: 'ImageChange',
+            imageChangeParams: {
+              automatic: true,
+              containerNames: ['main'],
+              from: { kind: 'ImageStreamTag', name: imageStreamTag },
+            },
+          });
+          deployment.spec.triggers = triggers;
+          this.engine.cluster.update(uidOf(deployment), { spec: { triggers } });
+        }
+
+        /** Draw-page friendly defaults: hostnames that make exported Routes/Ingresses useful. */
+        _adaptSpecForDraw(kind, name, namespace, spec) {
+          if (!spec || typeof spec !== 'object') return;
+          if (kind === 'Route' && !spec.host) {
+            spec.host = `${name}-${namespace || DEFAULT_PROJECT}.apps.cluster.example.com`;
+          }
+          if (kind === 'Ingress') {
+            const rule = (spec.rules || [])[0];
+            if (rule && (!rule.host || rule.host === 'app.example.com')) {
+              rule.host = `${name}.apps.cluster.example.com`;
+            }
+          }
+          if (kind === 'Project') {
+            if (!spec.displayName) spec.displayName = name;
+          }
+        }
+
+        _renderResource(resource, pos) {
+          const uid = uidOf(resource);
           if (!uid) return;
-          this.engine.cluster.remove(uid);
-        });
+          const kind = resource.kind || 'Unknown';
+          this.renderer.addResource({
+            id: uid,
+            kind,
+            type: kind,
+            name: resource.metadata?.name || resource.name || uid,
+            namespace: resource.metadata?.namespace || '',
+            status: resource.status?.phase || initialPhase(kind),
+            x: pos.x ?? 0,
+            y: 0,
+            z: pos.z ?? 0,
+            _ref: resource,
+          });
+        }
 
-        canvas.addEventListener('dblclick', (e) => {
-          const rect = canvas.getBoundingClientRect();
-          const mouse = {
-            x: ((e.clientX - rect.left) / rect.width) * 2 - 1,
-            y: -((e.clientY - rect.top) / rect.height) * 2 + 1,
-          };
-          this.renderer.raycaster.setFromCamera(mouse, this.renderer.camera);
-          const intersects = this.renderer.raycaster.intersectObjects(this.renderer.pickableObjects, true);
-          if (intersects.length === 0) return;
-          let target = intersects[0].object;
-          while (target.parent && !target.userData.resourceId) target = target.parent;
-          if (!target.userData.resourceId) return;
+        _shouldRender(resource) {
+          return resource?.metadata?.annotations?.[DRAW_ANNOTATION] === 'true';
+        }
 
-          const uid = target.userData.resourceId;
+        _onClusterAdded(data) {
+          const resource = data?.resource;
+          if (!resource || !this._shouldRender(resource)) return;
+          const uid = uidOf(resource);
+          if (!uid) return;
+          const kind = resource.kind;
+          const name = resource.metadata?.name;
+          const pending = this._pendingPlacements.get(this._pendingKey(kind, name));
+          const pos = this.placedPositions.get(uid) || pending || { x: 0, z: 0 };
+          this.placedPositions.set(uid, { x: pos.x, z: pos.z });
+          this._renderResource(resource, pos);
+        }
+
+        _onClusterDeleted(data) {
+          const uid = data?.uid || uidOf(data?.resource);
+          if (!uid) return;
+          this.renderer.removeResource(uid);
+          this.placedPositions.delete(uid);
+          this.customConnections = this.customConnections.filter(
+            (c) => c.from !== uid && c.to !== uid
+          );
+          if (this.selectedUid === uid) {
+            this.selectedUid = null;
+            this.hideProps();
+          }
+          this.syncConnections();
+        }
+
+        _placedResources() {
+          const all = this.engine.cluster.getAllResources?.() || [];
+          return all.filter((r) => this.placedPositions.has(uidOf(r)));
+        }
+
+        // ── Connections ────────────────────────────────────────────────────────
+        syncConnections() {
+          const extraConnections = this.customConnections.map((conn) => ({
+            id: `custom:${conn.from}:${conn.to}`,
+            sourceId: conn.from,
+            targetId: conn.to,
+            type: 'custom',
+            trafficVolume: 2,
+          }));
+          const connections = computeConnections(this.engine.cluster, { extraConnections });
+          this.renderer.connectionLines.sync(connections, this.renderer.resourceMeshes);
+        }
+
+        // ── Canvas interactions ────────────────────────────────────────────────
+        bindCanvas() {
+          const canvas = document.getElementById('draw-canvas');
+
+          canvas.addEventListener('click', (e) => {
+            if (!this.connectionMode) return;
+
+            const rect = canvas.getBoundingClientRect();
+            const mouse = {
+              x: ((e.clientX - rect.left) / rect.width) * 2 - 1,
+              y: -((e.clientY - rect.top) / rect.height) * 2 + 1,
+            };
+
+            this.renderer.raycaster.setFromCamera(mouse, this.renderer.camera);
+            const intersects = this.renderer.raycaster.intersectObjects(
+              this.renderer.pickableObjects,
+              true
+            );
+            if (intersects.length === 0) return;
+
+            let target = intersects[0].object;
+            while (target.parent && !target.userData.resourceId) target = target.parent;
+            if (!target.userData.resourceId) return;
+            const pickedId = target.userData.resourceId;
+
+            if (!this.connectionSource) {
+              this.connectionSource = pickedId;
+              this.renderer._applyMeshEffect(
+                this.renderer.resourceMeshes.get(pickedId),
+                'selected'
+              );
+              this._setStatus('Click target resource to connect...');
+            } else {
+              if (pickedId !== this.connectionSource) {
+                this.customConnections.push({ from: this.connectionSource, to: pickedId });
+                this.syncConnections();
+              }
+              this.renderer._applyMeshEffect(
+                this.renderer.resourceMeshes.get(this.connectionSource),
+                'default'
+              );
+              this.connectionSource = null;
+              this._setStatus('Connection mode — click source resource');
+            }
+          });
+
+          this.engine.eventBus.on('resource:contextmenu', (data) => {
+            const uid = data.uid;
+            if (!uid) return;
+            this.engine.cluster.remove(uid);
+          });
+
+          canvas.addEventListener('dblclick', (e) => {
+            const rect = canvas.getBoundingClientRect();
+            const mouse = {
+              x: ((e.clientX - rect.left) / rect.width) * 2 - 1,
+              y: -((e.clientY - rect.top) / rect.height) * 2 + 1,
+            };
+            this.renderer.raycaster.setFromCamera(mouse, this.renderer.camera);
+            const intersects = this.renderer.raycaster.intersectObjects(
+              this.renderer.pickableObjects,
+              true
+            );
+            if (intersects.length === 0) return;
+            let target = intersects[0].object;
+            while (target.parent && !target.userData.resourceId) target = target.parent;
+            if (!target.userData.resourceId) return;
+
+            const uid = target.userData.resourceId;
+            const resource = this.engine.cluster.resources.get(uid);
+            if (!resource) return;
+
+            const input = document.createElement('input');
+            input.type = 'text';
+            input.value = resource.metadata.name;
+            input.className =
+              'fixed z-50 px-2 py-1 text-sm font-mono bg-gray-900 border border-openshift/50 rounded text-white outline-none';
+            input.style.left = `${e.clientX}px`;
+            input.style.top = `${e.clientY}px`;
+            input.style.minWidth = '150px';
+            document.body.appendChild(input);
+            input.focus();
+            input.select();
+
+            const finish = () => {
+              const newName = input.value.trim();
+              if (newName && newName !== resource.metadata.name) {
+                resource.metadata.name = newName;
+                this._rerenderResource(resource);
+                this.syncConnections();
+              }
+              input.remove();
+            };
+
+            input.addEventListener('keydown', (ke) => {
+              if (ke.key === 'Enter') finish();
+              if (ke.key === 'Escape') input.remove();
+            });
+            input.addEventListener('blur', finish);
+          });
+        }
+
+        _rerenderResource(resource) {
+          const uid = uidOf(resource);
+          const pos = this.placedPositions.get(uid) || { x: 0, z: 0 };
+          this.renderer.removeResource(uid);
+          this.placedPositions.set(uid, pos);
+          this._renderResource(resource, pos);
+        }
+
+        // ── Toolbar ────────────────────────────────────────────────────────────
+        bindToolbar() {
+          document.getElementById('btn-connect').addEventListener('click', () => {
+            if (this.connectionSource) {
+              this.renderer._applyMeshEffect(
+                this.renderer.resourceMeshes.get(this.connectionSource),
+                'default'
+              );
+            }
+            this.connectionMode = !this.connectionMode;
+            this.connectionSource = null;
+            const btn = document.getElementById('btn-connect');
+            btn.classList.toggle('bg-openshift/20', this.connectionMode);
+            btn.classList.toggle('border-openshift/40', this.connectionMode);
+            btn.classList.toggle('text-openshift-orange', this.connectionMode);
+            this._setStatus(this.connectionMode ? 'Connection mode — click source resource' : '');
+          });
+
+          document.getElementById('btn-clear').addEventListener('click', () => {
+            if (!confirm('Clear the whole diagram?')) return;
+            for (const resource of [...this._placedResources()]) {
+              this.engine.cluster.remove(uidOf(resource));
+            }
+            this.placedPositions.clear();
+            this.customConnections = [];
+            this.resourceCounter = {};
+            this.selectedUid = null;
+            this.hideProps();
+            this.syncConnections();
+          });
+
+          document.getElementById('btn-export-yaml').addEventListener('click', () => {
+            this.exportYAML();
+          });
+
+          document.getElementById('btn-export-png').addEventListener('click', () => {
+            this.exportPNG();
+          });
+
+          document.getElementById('btn-share').addEventListener('click', () => {
+            this.shareLink();
+          });
+
+          document.getElementById('btn-auto-layout').addEventListener('click', () => {
+            this.autoLayout();
+          });
+        }
+
+        _setStatus(text, timeoutMs = 0) {
+          const status = document.getElementById('draw-status');
+          if (!status) return;
+          status.textContent = text || '';
+          if (timeoutMs > 0) {
+            clearTimeout(this._statusTimer);
+            this._statusTimer = setTimeout(() => {
+              status.textContent = '';
+            }, timeoutMs);
+          }
+        }
+
+        bindKeyboard() {
+          document.addEventListener('keydown', (e) => {
+            const typing =
+              document.activeElement?.tagName === 'INPUT' ||
+              document.activeElement?.tagName === 'TEXTAREA';
+
+            if (e.key === 'Escape') {
+              if (this.connectionSource) {
+                this.renderer._applyMeshEffect(
+                  this.renderer.resourceMeshes.get(this.connectionSource),
+                  'default'
+                );
+              }
+              this.connectionMode = false;
+              this.connectionSource = null;
+              document
+                .getElementById('btn-connect')
+                .classList.remove(
+                  'bg-openshift/20',
+                  'border-openshift/40',
+                  'text-openshift-orange'
+                );
+              this._setStatus('');
+            }
+
+            if ((e.key === 'Delete' || e.key === 'Backspace') && !typing) {
+              const selected = this.renderer.selectedResource;
+              if (selected) this.engine.cluster.remove(selected);
+            }
+
+            if (!typing && this._numMap[e.key]) {
+              this.placeResource(
+                this._numMap[e.key],
+                window.innerWidth / 2,
+                window.innerHeight / 2
+              );
+            }
+          });
+        }
+
+        bindProps() {
+          document.getElementById('btn-close-props').addEventListener('click', () => {
+            this.hideProps();
+          });
+        }
+
+        // ── Properties drawer ──────────────────────────────────────────────────
+        showProps(uid) {
           const resource = this.engine.cluster.resources.get(uid);
           if (!resource) return;
 
-          const input = document.createElement('input');
-          input.type = 'text';
-          input.value = resource.metadata.name;
-          input.className = 'fixed z-50 px-2 py-1 text-sm font-mono bg-gray-900 border border-openshift/50 rounded text-white outline-none';
-          input.style.left = `${e.clientX}px`;
-          input.style.top = `${e.clientY}px`;
-          input.style.minWidth = '150px';
-          document.body.appendChild(input);
-          input.focus();
-          input.select();
+          const panel = document.getElementById('draw-props');
+          const body = document.getElementById('props-body');
 
-          const finish = () => {
-            const newName = input.value.trim();
-            if (newName && newName !== resource.metadata.name) {
-              resource.metadata.name = newName;
-              this._rerenderResource(resource);
-              this.syncConnections();
-            }
-            input.remove();
-          };
+          const kind = resource.kind;
+          const labels = resource.metadata.labels || {};
+          const labelStr = Object.entries(labels)
+            .map(([key, value]) => `${key}=${value}`)
+            .join('\n');
+          const namespace = resource.metadata.namespace || '';
+          const apiVersion = resource.apiVersion || apiVersionForKind(kind);
+          const spec = resource.spec || {};
 
-          input.addEventListener('keydown', (ke) => {
-            if (ke.key === 'Enter') finish();
-            if (ke.key === 'Escape') input.remove();
-          });
-          input.addEventListener('blur', finish);
-        });
-      }
-
-      _rerenderResource(resource) {
-        const uid = uidOf(resource);
-        const pos = this.placedPositions.get(uid) || { x: 0, z: 0 };
-        this.renderer.removeResource(uid);
-        this.placedPositions.set(uid, pos);
-        this._renderResource(resource, pos);
-      }
-
-      // ── Toolbar ────────────────────────────────────────────────────────────
-      bindToolbar() {
-        document.getElementById('btn-connect').addEventListener('click', () => {
-          if (this.connectionSource) {
-            this.renderer._applyMeshEffect(this.renderer.resourceMeshes.get(this.connectionSource), 'default');
-          }
-          this.connectionMode = !this.connectionMode;
-          this.connectionSource = null;
-          const btn = document.getElementById('btn-connect');
-          btn.classList.toggle('bg-openshift/20', this.connectionMode);
-          btn.classList.toggle('border-openshift/40', this.connectionMode);
-          btn.classList.toggle('text-openshift-orange', this.connectionMode);
-          this._setStatus(this.connectionMode ? 'Connection mode — click source resource' : '');
-        });
-
-        document.getElementById('btn-clear').addEventListener('click', () => {
-          if (!confirm('Clear the whole diagram?')) return;
-          for (const resource of [...this._placedResources()]) {
-            this.engine.cluster.remove(uidOf(resource));
-          }
-          this.placedPositions.clear();
-          this.customConnections = [];
-          this.resourceCounter = {};
-          this.selectedUid = null;
-          this.hideProps();
-          this.syncConnections();
-        });
-
-        document.getElementById('btn-export-yaml').addEventListener('click', () => {
-          this.exportYAML();
-        });
-
-        document.getElementById('btn-export-png').addEventListener('click', () => {
-          this.exportPNG();
-        });
-
-        document.getElementById('btn-share').addEventListener('click', () => {
-          this.shareLink();
-        });
-
-        document.getElementById('btn-auto-layout').addEventListener('click', () => {
-          this.autoLayout();
-        });
-      }
-
-      _setStatus(text, timeoutMs = 0) {
-        const status = document.getElementById('draw-status');
-        if (!status) return;
-        status.textContent = text || '';
-        if (timeoutMs > 0) {
-          clearTimeout(this._statusTimer);
-          this._statusTimer = setTimeout(() => { status.textContent = ''; }, timeoutMs);
-        }
-      }
-
-      bindKeyboard() {
-        document.addEventListener('keydown', (e) => {
-          const typing = document.activeElement?.tagName === 'INPUT' || document.activeElement?.tagName === 'TEXTAREA';
-
-          if (e.key === 'Escape') {
-            if (this.connectionSource) {
-              this.renderer._applyMeshEffect(this.renderer.resourceMeshes.get(this.connectionSource), 'default');
-            }
-            this.connectionMode = false;
-            this.connectionSource = null;
-            document.getElementById('btn-connect').classList.remove('bg-openshift/20', 'border-openshift/40', 'text-openshift-orange');
-            this._setStatus('');
-          }
-
-          if ((e.key === 'Delete' || e.key === 'Backspace') && !typing) {
-            const selected = this.renderer.selectedResource;
-            if (selected) this.engine.cluster.remove(selected);
-          }
-
-          if (!typing && this._numMap[e.key]) {
-            this.placeResource(this._numMap[e.key], window.innerWidth / 2, window.innerHeight / 2);
-          }
-        });
-      }
-
-      bindProps() {
-        document.getElementById('btn-close-props').addEventListener('click', () => {
-          this.hideProps();
-        });
-      }
-
-      // ── Properties drawer ──────────────────────────────────────────────────
-      showProps(uid) {
-        const resource = this.engine.cluster.resources.get(uid);
-        if (!resource) return;
-
-        const panel = document.getElementById('draw-props');
-        const body = document.getElementById('props-body');
-
-        const kind = resource.kind;
-        const labels = resource.metadata.labels || {};
-        const labelStr = Object.entries(labels).map(([key, value]) => `${key}=${value}`).join('\n');
-        const namespace = resource.metadata.namespace || '';
-        const apiVersion = resource.apiVersion || apiVersionForKind(kind);
-        const spec = resource.spec || {};
-
-        const specSpecific = [];
-        if (spec.replicas !== undefined) {
-          specSpecific.push(`
+          const specSpecific = [];
+          if (spec.replicas !== undefined) {
+            specSpecific.push(`
             <div>
               <label class="block text-white/40 mb-1">Replicas</label>
               <input id="prop-replicas" type="number" min="0" max="100" class="w-full px-2 py-1.5 bg-white/5 border border-white/10 rounded text-white/90 outline-none focus:border-openshift/40 transition-colors" value="${Number(spec.replicas) || 0}" />
             </div>`);
-        }
-        if (kind === 'Route') {
-          specSpecific.push(`
+          }
+          if (kind === 'Route') {
+            specSpecific.push(`
             <div>
               <label class="block text-white/40 mb-1">Host</label>
               <input id="prop-host" type="text" class="w-full px-2 py-1.5 bg-white/5 border border-white/10 rounded text-white/90 outline-none focus:border-openshift/40 transition-colors" value="${escapeHtml(spec.host || '')}" />
             </div>`);
-        }
-        if (kind === 'Project') {
-          specSpecific.push(`
+          }
+          if (kind === 'Project') {
+            specSpecific.push(`
             <div>
               <label class="block text-white/40 mb-1">Display name</label>
               <input id="prop-display-name" type="text" class="w-full px-2 py-1.5 bg-white/5 border border-white/10 rounded text-white/90 outline-none focus:border-openshift/40 transition-colors" value="${escapeHtml(spec.displayName || '')}" />
             </div>`);
-        }
+          }
 
-        body.innerHTML = `
+          body.innerHTML = `
           <div class="space-y-3">
             <div>
               <label class="block text-white/40 mb-1">Kind</label>
@@ -976,213 +1287,239 @@
           </div>
         `;
 
-        const errorEl = document.getElementById('prop-error');
-        const showError = (message) => {
-          errorEl.textContent = message;
-          errorEl.classList.remove('hidden');
-        };
+          const errorEl = document.getElementById('prop-error');
+          const showError = (message) => {
+            errorEl.textContent = message;
+            errorEl.classList.remove('hidden');
+          };
 
-        document.getElementById('prop-apply').addEventListener('click', () => {
-          const newName = document.getElementById('prop-name').value.trim();
-          const newNamespace = document.getElementById('prop-namespace').value.trim();
+          document.getElementById('prop-apply').addEventListener('click', () => {
+            const newName = document.getElementById('prop-name').value.trim();
+            const newNamespace = document.getElementById('prop-namespace').value.trim();
 
-          const newLabels = {};
-          for (const line of document.getElementById('prop-labels').value.split('\n').filter(Boolean)) {
-            const [key, ...rest] = line.split('=');
-            if (key) newLabels[key.trim()] = (rest.join('=') || '').trim();
-          }
+            const newLabels = {};
+            for (const line of document
+              .getElementById('prop-labels')
+              .value.split('\n')
+              .filter(Boolean)) {
+              const [key, ...rest] = line.split('=');
+              if (key) newLabels[key.trim()] = (rest.join('=') || '').trim();
+            }
 
-          let newSpec;
+            let newSpec;
+            try {
+              newSpec = JSON.parse(document.getElementById('prop-spec').value || '{}');
+            } catch (error) {
+              showError(`Spec is not valid JSON: ${error.message}`);
+              return;
+            }
+            errorEl.classList.add('hidden');
+
+            const replicasInput = document.getElementById('prop-replicas');
+            if (replicasInput) {
+              const parsed = parseInt(replicasInput.value, 10);
+              newSpec.replicas = Number.isNaN(parsed) ? 1 : parsed;
+            }
+            const hostInput = document.getElementById('prop-host');
+            if (hostInput) newSpec.host = hostInput.value.trim();
+            const displayNameInput = document.getElementById('prop-display-name');
+            if (displayNameInput) newSpec.displayName = displayNameInput.value.trim();
+
+            this.engine.cluster.update(uid, { metadata: { labels: newLabels }, spec: newSpec });
+
+            if (newName && newName !== resource.metadata.name) {
+              resource.metadata.name = newName;
+            }
+            if (
+              newNamespace &&
+              newNamespace !== resource.metadata.namespace &&
+              !isClusterScopedKind(kind)
+            ) {
+              resource.metadata.namespace = newNamespace;
+              this.renderer._ensureProjectPlane(newNamespace);
+            }
+
+            this._rerenderResource(resource);
+            this.syncConnections();
+            this.showProps(uid);
+          });
+
+          document.getElementById('prop-delete').addEventListener('click', () => {
+            this.engine.cluster.remove(uid);
+            this.hideProps();
+          });
+
+          panel.classList.remove('translate-x-full');
+          panel.classList.add('translate-x-0');
           try {
-            newSpec = JSON.parse(document.getElementById('prop-spec').value || '{}');
-          } catch (error) {
-            showError(`Spec is not valid JSON: ${error.message}`);
-            return;
+            panel.inert = false;
+          } catch {
+            /* inert unsupported */
           }
-          errorEl.classList.add('hidden');
-
-          const replicasInput = document.getElementById('prop-replicas');
-          if (replicasInput) {
-            const parsed = parseInt(replicasInput.value, 10);
-            newSpec.replicas = Number.isNaN(parsed) ? 1 : parsed;
-          }
-          const hostInput = document.getElementById('prop-host');
-          if (hostInput) newSpec.host = hostInput.value.trim();
-          const displayNameInput = document.getElementById('prop-display-name');
-          if (displayNameInput) newSpec.displayName = displayNameInput.value.trim();
-
-          this.engine.cluster.update(uid, { metadata: { labels: newLabels }, spec: newSpec });
-
-          if (newName && newName !== resource.metadata.name) {
-            resource.metadata.name = newName;
-          }
-          if (newNamespace && newNamespace !== resource.metadata.namespace && !isClusterScopedKind(kind)) {
-            resource.metadata.namespace = newNamespace;
-            this.renderer._ensureProjectPlane(newNamespace);
-          }
-
-          this._rerenderResource(resource);
-          this.syncConnections();
-          this.showProps(uid);
-        });
-
-        document.getElementById('prop-delete').addEventListener('click', () => {
-          this.engine.cluster.remove(uid);
-          this.hideProps();
-        });
-
-        panel.classList.remove('translate-x-full');
-        panel.classList.add('translate-x-0');
-        try { panel.inert = false; } catch { /* inert unsupported */ }
-      }
-
-      hideProps() {
-        const panel = document.getElementById('draw-props');
-        panel.classList.add('translate-x-full');
-        panel.classList.remove('translate-x-0');
-        try { panel.inert = true; } catch { /* inert unsupported */ }
-      }
-
-      // ── YAML export ────────────────────────────────────────────────────────
-      exportYAML() {
-        const resources = this._placedResources();
-        if (resources.length === 0) {
-          this._setStatus('Nothing to export — drag a resource from the palette first', 3000);
-          return;
         }
 
-        const docs = resources.map((resource) => stringifyYaml(cleanManifest(toManifestObject(resource))));
-        const yaml = docs.join('---\n');
+        hideProps() {
+          const panel = document.getElementById('draw-props');
+          panel.classList.add('translate-x-full');
+          panel.classList.remove('translate-x-0');
+          try {
+            panel.inert = true;
+          } catch {
+            /* inert unsupported */
+          }
+        }
 
-        const blob = new Blob([yaml], { type: 'text/yaml' });
-        const url = URL.createObjectURL(blob);
-        const link = document.createElement('a');
-        link.href = url;
-        link.download = 'openshiftgames-draw.yaml';
-        link.click();
-        URL.revokeObjectURL(url);
-        this._setStatus(`Exported ${resources.length} resources as OpenShift YAML`, 2500);
-      }
+        // ── YAML export ────────────────────────────────────────────────────────
+        exportYAML() {
+          const resources = this._placedResources();
+          if (resources.length === 0) {
+            this._setStatus('Nothing to export — drag a resource from the palette first', 3000);
+            return;
+          }
 
-      exportPNG() {
-        const domElement = this.renderer.renderer.domElement;
-        this.renderer.renderer.render(this.renderer.scene, this.renderer.camera);
-        domElement.toBlob((blob) => {
-          if (!blob) return;
+          const docs = resources.map((resource) =>
+            stringifyYaml(cleanManifest(toManifestObject(resource)))
+          );
+          const yaml = docs.join('---\n');
+
+          const blob = new Blob([yaml], { type: 'text/yaml' });
           const url = URL.createObjectURL(blob);
           const link = document.createElement('a');
           link.href = url;
-          link.download = 'openshiftgames-draw.png';
+          link.download = 'openshiftgames-draw.yaml';
           link.click();
           URL.revokeObjectURL(url);
-        });
-      }
-
-      // ── Share links ────────────────────────────────────────────────────────
-      shareLink() {
-        const resources = this._placedResources();
-        if (resources.length === 0) {
-          this._setStatus('Nothing to share yet — add a resource first', 2500);
-          return;
+          this._setStatus(`Exported ${resources.length} resources as OpenShift YAML`, 2500);
         }
 
-        const uidToIndex = new Map();
-        resources.forEach((resource, index) => uidToIndex.set(uidOf(resource), index));
+        exportPNG() {
+          const domElement = this.renderer.renderer.domElement;
+          this.renderer.renderer.render(this.renderer.scene, this.renderer.camera);
+          domElement.toBlob((blob) => {
+            if (!blob) return;
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            link.href = url;
+            link.download = 'openshiftgames-draw.png';
+            link.click();
+            URL.revokeObjectURL(url);
+          });
+        }
 
-        const state = {
-          v: 2,
-          product: 'openshift-draw',
-          resources: resources.map((resource, index) => ({
-            idx: index,
-            kind: resource.kind,
-            name: resource.metadata?.name || resource.name,
-            namespace: resource.metadata?.namespace || '',
-            labels: resource.metadata?.labels || {},
-            spec: resource.spec || {},
-            pos: this.placedPositions.get(uidOf(resource)) || { x: 0, z: 0 },
-          })),
-          connections: this.customConnections.map((conn) => ({
-            from: uidToIndex.get(conn.from) ?? -1,
-            to: uidToIndex.get(conn.to) ?? -1,
-          })).filter((conn) => conn.from >= 0 && conn.to >= 0),
-        };
+        // ── Share links ────────────────────────────────────────────────────────
+        shareLink() {
+          const resources = this._placedResources();
+          if (resources.length === 0) {
+            this._setStatus('Nothing to share yet — add a resource first', 2500);
+            return;
+          }
 
-        try {
-          const json = JSON.stringify(state);
-          const encoded = btoa(new TextEncoder().encode(json).reduce((acc, byte) => acc + String.fromCharCode(byte), ''));
-          const url = `${window.location.origin}/draw#${encoded}`;
-          const done = () => this._setStatus('Share link copied to clipboard', 2500);
-          if (navigator.clipboard?.writeText) {
-            navigator.clipboard.writeText(url).then(done).catch(() => {
+          const uidToIndex = new Map();
+          resources.forEach((resource, index) => uidToIndex.set(uidOf(resource), index));
+
+          const state = {
+            v: 2,
+            product: 'openshift-draw',
+            resources: resources.map((resource, index) => ({
+              idx: index,
+              kind: resource.kind,
+              name: resource.metadata?.name || resource.name,
+              namespace: resource.metadata?.namespace || '',
+              labels: resource.metadata?.labels || {},
+              spec: resource.spec || {},
+              pos: this.placedPositions.get(uidOf(resource)) || { x: 0, z: 0 },
+            })),
+            connections: this.customConnections
+              .map((conn) => ({
+                from: uidToIndex.get(conn.from) ?? -1,
+                to: uidToIndex.get(conn.to) ?? -1,
+              }))
+              .filter((conn) => conn.from >= 0 && conn.to >= 0),
+          };
+
+          try {
+            const json = JSON.stringify(state);
+            const encoded = btoa(
+              new TextEncoder()
+                .encode(json)
+                .reduce((acc, byte) => acc + String.fromCharCode(byte), '')
+            );
+            const url = `${window.location.origin}/draw#${encoded}`;
+            const done = () => this._setStatus('Share link copied to clipboard', 2500);
+            if (navigator.clipboard?.writeText) {
+              navigator.clipboard
+                .writeText(url)
+                .then(done)
+                .catch(() => {
+                  window.prompt('Copy this share link:', url);
+                });
+            } else {
               window.prompt('Copy this share link:', url);
-            });
-          } else {
-            window.prompt('Copy this share link:', url);
+            }
+          } catch (error) {
+            this._setStatus('Diagram too large for a share link — use YAML export', 3000);
           }
-        } catch (error) {
-          this._setStatus('Diagram too large for a share link — use YAML export', 3000);
         }
-      }
 
-      loadFromHash() {
-        const hash = window.location.hash.slice(1);
-        if (!hash) return;
-        try {
-          const bytes = Uint8Array.from(atob(hash), (char) => char.charCodeAt(0));
-          const state = JSON.parse(new TextDecoder().decode(bytes));
-          if (!state || !Array.isArray(state.resources)) return;
+        loadFromHash() {
+          const hash = window.location.hash.slice(1);
+          if (!hash) return;
+          try {
+            const bytes = Uint8Array.from(atob(hash), (char) => char.charCodeAt(0));
+            const state = JSON.parse(new TextDecoder().decode(bytes));
+            if (!state || !Array.isArray(state.resources)) return;
 
-          const indexToUid = new Map();
-          for (const entry of state.resources) {
-            const kind = this._canonicalKind(entry?.kind);
-            if (!kind || !PLACEABLE_KINDS.includes(kind)) continue;
-            const restored = this.placeResource(kind, 0, 0, {
-              name: entry.name,
-              namespace: entry.namespace,
-              labels: entry.labels,
-              spec: entry.spec,
-              pos: entry.pos || { x: 0, z: 0 },
-            });
-            if (restored) indexToUid.set(entry.idx, uidOf(restored));
+            const indexToUid = new Map();
+            for (const entry of state.resources) {
+              const kind = this._canonicalKind(entry?.kind);
+              if (!kind || !PLACEABLE_KINDS.includes(kind)) continue;
+              const restored = this.placeResource(kind, 0, 0, {
+                name: entry.name,
+                namespace: entry.namespace,
+                labels: entry.labels,
+                spec: entry.spec,
+                pos: entry.pos || { x: 0, z: 0 },
+              });
+              if (restored) indexToUid.set(entry.idx, uidOf(restored));
+            }
+
+            this.customConnections = (state.connections || [])
+              .map((conn) => ({ from: indexToUid.get(conn.from), to: indexToUid.get(conn.to) }))
+              .filter((conn) => conn.from && conn.to);
+
+            setTimeout(() => this.syncConnections(), 100);
+          } catch (error) {
+            console.warn('Failed to load diagram from URL:', error);
+            this._setStatus('Could not load diagram from share link', 3000);
+          }
+        }
+
+        // ── Auto layout ────────────────────────────────────────────────────────
+        autoLayout() {
+          const placed = this._placedResources();
+          if (placed.length === 0) {
+            this._setStatus('Nothing to arrange yet', 2000);
+            return;
           }
 
-          this.customConnections = (state.connections || [])
-            .map((conn) => ({ from: indexToUid.get(conn.from), to: indexToUid.get(conn.to) }))
-            .filter((conn) => conn.from && conn.to);
+          const targets = this.renderer.autoAlign(this.engine.cluster, {
+            filter: (resource) => this.placedPositions.has(uidOf(resource)),
+          });
 
-          setTimeout(() => this.syncConnections(), 100);
-        } catch (error) {
-          console.warn('Failed to load diagram from URL:', error);
-          this._setStatus('Could not load diagram from share link', 3000);
+          for (const [uid, pos] of targets) {
+            this.placedPositions.set(uid, { x: pos.x, z: pos.z });
+          }
+
+          setTimeout(() => {
+            this.syncConnections();
+            this.renderer.resetCamera();
+          }, 850);
         }
       }
 
-      // ── Auto layout ────────────────────────────────────────────────────────
-      autoLayout() {
-        const placed = this._placedResources();
-        if (placed.length === 0) {
-          this._setStatus('Nothing to arrange yet', 2000);
-          return;
-        }
-
-        const targets = this.renderer.autoAlign(this.engine.cluster, {
-          filter: (resource) => this.placedPositions.has(uidOf(resource)),
-        });
-
-        for (const [uid, pos] of targets) {
-          this.placedPositions.set(uid, { x: pos.x, z: pos.z });
-        }
-
-        setTimeout(() => {
-          this.syncConnections();
-          this.renderer.resetCamera();
-        }, 850);
-      }
-    }
-
-    const app = new OpenShiftDraw();
-    window.openshiftDraw = app;
-    app.init().catch((error) => console.error('OpenShift Draw failed to start:', error));
-  </script>
-</body>
+      const app = new OpenShiftDraw();
+      window.openshiftDraw = app;
+      app.init().catch((error) => console.error('OpenShift Draw failed to start:', error));
+    </script>
+  </body>
 </html>

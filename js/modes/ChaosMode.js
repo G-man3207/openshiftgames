@@ -27,8 +27,16 @@ const CHAOS_STATE = {
 
 const INITIAL_CLUSTER = {
   projects: [
-    { kind: 'Project', name: 'storefront', spec: { displayName: 'Storefront', description: 'Customer-facing web tier' } },
-    { kind: 'Project', name: 'platform', spec: { displayName: 'Platform services', description: 'Workers, jobs and batch processing' } },
+    {
+      kind: 'Project',
+      name: 'storefront',
+      spec: { displayName: 'Storefront', description: 'Customer-facing web tier' },
+    },
+    {
+      kind: 'Project',
+      name: 'platform',
+      spec: { displayName: 'Platform services', description: 'Workers, jobs and batch processing' },
+    },
   ],
   nodes: [
     { kind: 'Node', name: 'chaos-node-1', spec: { cpu: '8', memory: '16Gi' } },
@@ -44,7 +52,15 @@ const INITIAL_CLUSTER = {
         replicas: 2,
         template: {
           metadata: { labels: { app: 'web-frontend' } },
-          spec: { containers: [{ name: 'main', image: 'quay.io/openshift/origin-hello-openshift:latest', ports: [{ name: 'http', containerPort: 8080 }] }] },
+          spec: {
+            containers: [
+              {
+                name: 'main',
+                image: 'quay.io/openshift/origin-hello-openshift:latest',
+                ports: [{ name: 'http', containerPort: 8080 }],
+              },
+            ],
+          },
         },
       },
     },
@@ -56,7 +72,15 @@ const INITIAL_CLUSTER = {
         replicas: 2,
         template: {
           metadata: { labels: { app: 'api-backend' } },
-          spec: { containers: [{ name: 'main', image: 'quay.io/openshift/origin-hello-openshift:latest', ports: [{ name: 'http', containerPort: 8080 }] }] },
+          spec: {
+            containers: [
+              {
+                name: 'main',
+                image: 'quay.io/openshift/origin-hello-openshift:latest',
+                ports: [{ name: 'http', containerPort: 8080 }],
+              },
+            ],
+          },
         },
       },
     },
@@ -68,7 +92,11 @@ const INITIAL_CLUSTER = {
         replicas: 1,
         template: {
           metadata: { labels: { app: 'catalog-worker' } },
-          spec: { containers: [{ name: 'main', image: 'quay.io/openshift/origin-hello-openshift:latest' }] },
+          spec: {
+            containers: [
+              { name: 'main', image: 'quay.io/openshift/origin-hello-openshift:latest' },
+            ],
+          },
         },
       },
     },
@@ -76,13 +104,21 @@ const INITIAL_CLUSTER = {
       kind: 'Service',
       name: 'web-frontend',
       namespace: 'storefront',
-      spec: { type: 'ClusterIP', selector: { app: 'web-frontend' }, ports: [{ name: 'http', port: 8080, targetPort: 8080 }] },
+      spec: {
+        type: 'ClusterIP',
+        selector: { app: 'web-frontend' },
+        ports: [{ name: 'http', port: 8080, targetPort: 8080 }],
+      },
     },
     {
       kind: 'Service',
       name: 'api-backend',
       namespace: 'storefront',
-      spec: { type: 'ClusterIP', selector: { app: 'api-backend' }, ports: [{ name: 'http', port: 8080, targetPort: 8080 }] },
+      spec: {
+        type: 'ClusterIP',
+        selector: { app: 'api-backend' },
+        ports: [{ name: 'http', port: 8080, targetPort: 8080 }],
+      },
     },
     {
       kind: 'Route',
@@ -100,8 +136,16 @@ const INITIAL_CLUSTER = {
       name: 'web-frontend',
       namespace: 'storefront',
       spec: {
-        source: { type: 'Git', git: { uri: 'https://github.com/openshift/nodejs-ex', ref: 'main' } },
-        strategy: { type: 'Source', sourceStrategy: { from: { kind: 'ImageStreamTag', name: 'nodejs:20', namespace: 'openshift' } } },
+        source: {
+          type: 'Git',
+          git: { uri: 'https://github.com/openshift/nodejs-ex', ref: 'main' },
+        },
+        strategy: {
+          type: 'Source',
+          sourceStrategy: {
+            from: { kind: 'ImageStreamTag', name: 'nodejs:20', namespace: 'openshift' },
+          },
+        },
         output: { to: { kind: 'ImageStreamTag', name: 'web-frontend:latest' } },
         triggers: [{ type: 'ConfigChange' }, { type: 'ImageChange' }],
         runPolicy: 'Serial',
@@ -179,7 +223,8 @@ class ChaosMode {
       difficultyLevel: this.difficultyLevel,
       openshiftVersion: OPENSHIFT_VERSION,
       incidentCategories: Object.keys(INCIDENT_CATEGORIES || {}),
-      description: 'Keep the OpenShift platform healthy while incidents cascade across Projects, Routes, Builds and Operators.',
+      description:
+        'Keep the OpenShift platform healthy while incidents cascade across Projects, Routes, Builds and Operators.',
     });
   }
 
@@ -207,7 +252,10 @@ class ChaosMode {
   addStartingResource(clusterState, descriptor) {
     if (!descriptor || !descriptor.kind) return null;
     const name = descriptor.name;
-    const namespace = descriptor.namespace || descriptor.metadata?.namespace || (descriptor.kind === 'Project' ? '' : 'default');
+    const namespace =
+      descriptor.namespace ||
+      descriptor.metadata?.namespace ||
+      (descriptor.kind === 'Project' ? '' : 'default');
     const labels = { app: name, ...(descriptor.labels || {}) };
 
     const added = clusterState.addResource({
@@ -239,7 +287,9 @@ class ChaosMode {
       spec.template.metadata = spec.template.metadata || {};
       spec.template.metadata.labels = { app: name, ...(spec.template.metadata.labels || {}) };
       spec.template.spec = spec.template.spec || {};
-      spec.template.spec.containers = spec.template.spec.containers || [{ name: 'main', image: 'quay.io/openshift/origin-hello-openshift:latest' }];
+      spec.template.spec.containers = spec.template.spec.containers || [
+        { name: 'main', image: 'quay.io/openshift/origin-hello-openshift:latest' },
+      ];
     }
 
     if (descriptor.kind === 'Service') {
@@ -286,7 +336,7 @@ class ChaosMode {
   updateDifficulty() {
     const minutesElapsed = this.survivalTime / 60;
     this.difficultyLevel = Math.min(10, 1 + Math.floor(minutesElapsed / 2));
-    this.chaosBudget = 1 + (minutesElapsed * 0.5);
+    this.chaosBudget = 1 + minutesElapsed * 0.5;
     this.healthDecayRate = this.difficultyLevel * 0.1;
   }
 
@@ -303,7 +353,10 @@ class ChaosMode {
     penalty += this.healthDecayRate;
 
     const regenRate = this.incidentsResolved > 0 ? 0.5 : 0;
-    this.clusterHealth = Math.max(0, Math.min(100, this.clusterHealth - (penalty / 60) + regenRate / 60));
+    this.clusterHealth = Math.max(
+      0,
+      Math.min(100, this.clusterHealth - penalty / 60 + regenRate / 60)
+    );
   }
 
   updateWaves() {
@@ -317,7 +370,7 @@ class ChaosMode {
     }
 
     const minutesElapsed = this.survivalTime / 60;
-    const waveInterval = Math.max(1, 3 - (this.difficultyLevel * 0.2));
+    const waveInterval = Math.max(1, 3 - this.difficultyLevel * 0.2);
     const expectedWave = Math.floor(minutesElapsed / waveInterval) + 1;
 
     if (expectedWave > this.waveNumber) {

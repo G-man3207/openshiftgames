@@ -67,7 +67,7 @@ export const VIRTUAL_RESOURCE_API_GROUPS = {
   groups: 'user.openshift.io',
   identities: 'user.openshift.io',
   oauths: 'config.openshift.io',
-  'securitycontextconstraints': 'security.openshift.io',
+  securitycontextconstraints: 'security.openshift.io',
   sccs: 'security.openshift.io',
   scc: 'security.openshift.io',
 };
@@ -85,12 +85,14 @@ function sccClusterRoleRules(roleName) {
   if (!String(roleName || '').startsWith(SCC_CLUSTER_ROLE_PREFIX)) return null;
   const sccName = String(roleName).slice(SCC_CLUSTER_ROLE_PREFIX.length);
   if (!sccName) return null;
-  return [{
-    apiGroups: ['security.openshift.io'],
-    resources: ['securitycontextconstraints'],
-    resourceNames: [sccName],
-    verbs: ['use'],
-  }];
+  return [
+    {
+      apiGroups: ['security.openshift.io'],
+      resources: ['securitycontextconstraints'],
+      resourceNames: [sccName],
+      verbs: ['use'],
+    },
+  ];
 }
 
 /**
@@ -106,39 +108,114 @@ export const BUILTIN_CLUSTER_ROLE_RULES = {
   edit: [
     {
       apiGroups: [''],
-      resources: ['pods', 'pods/attach', 'pods/exec', 'pods/log', 'pods/portforward', 'pods/proxy', 'services', 'services/proxy', 'configmaps', 'secrets', 'persistentvolumeclaims', 'serviceaccounts', 'endpoints', 'events', 'limitranges'],
+      resources: [
+        'pods',
+        'pods/attach',
+        'pods/exec',
+        'pods/log',
+        'pods/portforward',
+        'pods/proxy',
+        'services',
+        'services/proxy',
+        'configmaps',
+        'secrets',
+        'persistentvolumeclaims',
+        'serviceaccounts',
+        'endpoints',
+        'events',
+        'limitranges',
+      ],
       verbs: EDIT_VERBS,
     },
     {
       apiGroups: ['apps'],
-      resources: ['deployments', 'deployments/scale', 'replicasets', 'replicasets/scale', 'statefulsets', 'statefulsets/scale', 'daemonsets'],
+      resources: [
+        'deployments',
+        'deployments/scale',
+        'replicasets',
+        'replicasets/scale',
+        'statefulsets',
+        'statefulsets/scale',
+        'daemonsets',
+      ],
       verbs: EDIT_VERBS,
     },
     { apiGroups: ['batch'], resources: ['jobs', 'cronjobs'], verbs: EDIT_VERBS },
-    { apiGroups: ['route.openshift.io'], resources: ['routes', 'routes/custom-host', 'routes/status'], verbs: EDIT_VERBS },
-    { apiGroups: ['build.openshift.io'], resources: ['builds', 'buildconfigs', 'buildlogs'], verbs: EDIT_VERBS },
-    { apiGroups: ['image.openshift.io'], resources: ['imagestreams', 'imagestreamtags', 'imagestreamimages'], verbs: EDIT_VERBS },
-    { apiGroups: ['networking.k8s.io'], resources: ['ingresses', 'networkpolicies'], verbs: EDIT_VERBS },
+    {
+      apiGroups: ['route.openshift.io'],
+      resources: ['routes', 'routes/custom-host', 'routes/status'],
+      verbs: EDIT_VERBS,
+    },
+    {
+      apiGroups: ['build.openshift.io'],
+      resources: ['builds', 'buildconfigs', 'buildlogs'],
+      verbs: EDIT_VERBS,
+    },
+    {
+      apiGroups: ['image.openshift.io'],
+      resources: ['imagestreams', 'imagestreamtags', 'imagestreamimages'],
+      verbs: EDIT_VERBS,
+    },
+    {
+      apiGroups: ['networking.k8s.io'],
+      resources: ['ingresses', 'networkpolicies'],
+      verbs: EDIT_VERBS,
+    },
     { apiGroups: ['autoscaling'], resources: ['horizontalpodautoscalers'], verbs: EDIT_VERBS },
     { apiGroups: ['policy'], resources: ['poddisruptionbudgets'], verbs: EDIT_VERBS },
-    { apiGroups: ['metallb.io'], resources: ['ipaddresspools', 'l2advertisements'], verbs: EDIT_VERBS },
-    { apiGroups: ['security.openshift.io'], resources: ['securitycontextconstraints'], verbs: ['get', 'list'] },
+    {
+      apiGroups: ['metallb.io'],
+      resources: ['ipaddresspools', 'l2advertisements'],
+      verbs: EDIT_VERBS,
+    },
+    {
+      apiGroups: ['security.openshift.io'],
+      resources: ['securitycontextconstraints'],
+      verbs: ['get', 'list'],
+    },
   ],
   view: [
     {
       apiGroups: [''],
-      resources: ['pods', 'pods/log', 'services', 'configmaps', 'secrets', 'persistentvolumeclaims', 'serviceaccounts', 'endpoints', 'events', 'limitranges'],
+      resources: [
+        'pods',
+        'pods/log',
+        'services',
+        'configmaps',
+        'secrets',
+        'persistentvolumeclaims',
+        'serviceaccounts',
+        'endpoints',
+        'events',
+        'limitranges',
+      ],
       verbs: READ_VERBS,
     },
-    { apiGroups: ['apps'], resources: ['deployments', 'replicasets', 'statefulsets', 'daemonsets'], verbs: READ_VERBS },
+    {
+      apiGroups: ['apps'],
+      resources: ['deployments', 'replicasets', 'statefulsets', 'daemonsets'],
+      verbs: READ_VERBS,
+    },
     { apiGroups: ['batch'], resources: ['jobs', 'cronjobs'], verbs: READ_VERBS },
     { apiGroups: ['route.openshift.io'], resources: ['routes'], verbs: READ_VERBS },
     { apiGroups: ['build.openshift.io'], resources: ['builds', 'buildconfigs'], verbs: READ_VERBS },
-    { apiGroups: ['image.openshift.io'], resources: ['imagestreams', 'imagestreamtags'], verbs: READ_VERBS },
-    { apiGroups: ['networking.k8s.io'], resources: ['ingresses', 'networkpolicies'], verbs: READ_VERBS },
+    {
+      apiGroups: ['image.openshift.io'],
+      resources: ['imagestreams', 'imagestreamtags'],
+      verbs: READ_VERBS,
+    },
+    {
+      apiGroups: ['networking.k8s.io'],
+      resources: ['ingresses', 'networkpolicies'],
+      verbs: READ_VERBS,
+    },
     { apiGroups: ['autoscaling'], resources: ['horizontalpodautoscalers'], verbs: READ_VERBS },
     { apiGroups: ['policy'], resources: ['poddisruptionbudgets'], verbs: READ_VERBS },
-    { apiGroups: ['metallb.io'], resources: ['ipaddresspools', 'l2advertisements'], verbs: READ_VERBS },
+    {
+      apiGroups: ['metallb.io'],
+      resources: ['ipaddresspools', 'l2advertisements'],
+      verbs: READ_VERBS,
+    },
   ],
   'self-provisioner': [
     // Real OCP 4.x ClusterRole: `oc new-project` is a ProjectRequest create.
@@ -181,7 +258,8 @@ export function parseResourceToken(resource) {
   const raw = String(resource || '').trim();
   const [basePart, second] = raw.split('/');
   const canonical = normalizeKind(basePart) || null;
-  const kind = canonical || (basePart ? basePart.charAt(0).toUpperCase() + basePart.slice(1) : null);
+  const kind =
+    canonical || (basePart ? basePart.charAt(0).toUpperCase() + basePart.slice(1) : null);
   const tokens = new Set();
   if (basePart) {
     tokens.add(basePart.toLowerCase());
@@ -194,7 +272,17 @@ export function parseResourceToken(resource) {
     }
   }
   // The second segment of `scc/privileged` may be a name or a subresource.
-  const isSubresource = ['exec', 'log', 'logs', 'proxy', 'portforward', 'attach', 'scale', 'status', 'layers'].includes(second);
+  const isSubresource = [
+    'exec',
+    'log',
+    'logs',
+    'proxy',
+    'portforward',
+    'attach',
+    'scale',
+    'status',
+    'layers',
+  ].includes(second);
   return {
     kind,
     name: second && !isSubresource ? second : null,
@@ -288,7 +376,9 @@ export function getUserIdentity(cluster, userName) {
   if (!userName) return { userName: '', user: null, names, groups };
 
   names.add(userName);
-  const user = cluster?.getUser ? cluster.getUser(userName) : cluster?.getByName?.('User', userName, '');
+  const user = cluster?.getUser
+    ? cluster.getUser(userName)
+    : cluster?.getByName?.('User', userName, '');
   const spec = user?.spec || {};
   for (const group of spec.groups || []) groups.add(group);
 
@@ -326,8 +416,10 @@ export function subjectMatches(subject, identity, bindingNamespace = '') {
   if (subject.kind === 'Group') return identity.groups.has(subject.name);
   if (subject.kind === 'ServiceAccount') {
     const candidates = [];
-    if (subject.namespace) candidates.push(`system:serviceaccount:${subject.namespace}:${subject.name}`);
-    if (bindingNamespace) candidates.push(`system:serviceaccount:${bindingNamespace}:${subject.name}`);
+    if (subject.namespace)
+      candidates.push(`system:serviceaccount:${subject.namespace}:${subject.name}`);
+    if (bindingNamespace)
+      candidates.push(`system:serviceaccount:${bindingNamespace}:${subject.name}`);
     return candidates.some((identityName) => identity.names.has(identityName));
   }
   return false;
@@ -376,12 +468,15 @@ export function canI(cluster, userName, verb, resource, namespace) {
   if (!verb || !resource) return makeDenied('invalid authorization request');
   if (!userName) return makeDenied('You must be logged in to the server (Unauthorized)');
   if (SYSTEM_ADMIN_USERS.has(userName)) {
-    return makeAllowed('kubeadmin is cluster-admin (system:masters)', { role: 'cluster-admin', binding: 'system:masters' });
+    return makeAllowed('kubeadmin is cluster-admin (system:masters)', {
+      role: 'cluster-admin',
+      binding: 'system:masters',
+    });
   }
 
   const parsed = parseResourceToken(resource);
   const namespaced = parsed.kind ? !isClusterScopedKind(parsed.kind) : !!namespace;
-  const effectiveNamespace = namespaced ? (namespace || 'default') : '';
+  const effectiveNamespace = namespaced ? namespace || 'default' : '';
   const identity = getUserIdentity(cluster, userName);
 
   /** @param {{kind?: string, name?: string}} roleRef */
@@ -389,7 +484,9 @@ export function canI(cluster, userName, verb, resource, namespace) {
     const rules = getRoleRules(cluster, roleRef, effectiveNamespace);
     const rule = evaluateRules(rules, verb, parsed);
     if (!rule) return null;
-    const bindingKind = binding?.kind || (binding?.apiVersion === 'rbac.authorization.k8s.io/v1' ? 'RoleBinding' : 'Binding');
+    const bindingKind =
+      binding?.kind ||
+      (binding?.apiVersion === 'rbac.authorization.k8s.io/v1' ? 'RoleBinding' : 'Binding');
     return makeAllowed(
       `${bindingKind} "${binding?.metadata?.name || binding?.name}" grants ${roleRef.kind || 'ClusterRole'} "${roleRef.name}"`,
       { role: roleRef.name, binding: binding?.metadata?.name || binding?.name }
@@ -408,7 +505,9 @@ export function canI(cluster, userName, verb, resource, namespace) {
 
   // RoleBindings only apply inside their project.
   if (effectiveNamespace) {
-    const rbs = cluster?.getByKindAndNamespace ? cluster.getByKindAndNamespace('RoleBinding', effectiveNamespace) : [];
+    const rbs = cluster?.getByKindAndNamespace
+      ? cluster.getByKindAndNamespace('RoleBinding', effectiveNamespace)
+      : [];
     for (const rb of rbs) {
       const subjects = rb.spec?.subjects || [];
       if (subjects.some((s) => subjectMatches(s, identity, effectiveNamespace))) {
@@ -432,7 +531,9 @@ export function canI(cluster, userName, verb, resource, namespace) {
   }
 
   const scope = effectiveNamespace ? ` in project "${effectiveNamespace}"` : '';
-  return makeDenied(`User "${userName}" cannot ${verb} ${resource}${scope}`, { namespace: effectiveNamespace });
+  return makeDenied(`User "${userName}" cannot ${verb} ${resource}${scope}`, {
+    namespace: effectiveNamespace,
+  });
 }
 
 /**
@@ -460,12 +561,16 @@ export function listPermissions(cluster, userName, namespace = 'default') {
 
   for (const crb of cluster?.getByKind ? cluster.getByKind('ClusterRoleBinding') : []) {
     const subjects = crb.spec?.subjects || [];
-    if (subjects.some((s) => subjectMatches(s, identity, ''))) push('ClusterRoleBinding', crb.metadata.name, crb.spec?.roleRef || {});
+    if (subjects.some((s) => subjectMatches(s, identity, '')))
+      push('ClusterRoleBinding', crb.metadata.name, crb.spec?.roleRef || {});
   }
   if (namespace) {
-    for (const rb of cluster?.getByKindAndNamespace ? cluster.getByKindAndNamespace('RoleBinding', namespace) : []) {
+    for (const rb of cluster?.getByKindAndNamespace
+      ? cluster.getByKindAndNamespace('RoleBinding', namespace)
+      : []) {
       const subjects = rb.spec?.subjects || [];
-      if (subjects.some((s) => subjectMatches(s, identity, namespace))) push('RoleBinding', rb.metadata.name, rb.spec?.roleRef || {});
+      if (subjects.some((s) => subjectMatches(s, identity, namespace)))
+        push('RoleBinding', rb.metadata.name, rb.spec?.roleRef || {});
     }
   }
   return Array.from(results.values());
@@ -501,9 +606,12 @@ export function whoCan(cluster, verb, resource, namespace = 'default') {
     }
   };
 
-  for (const crb of cluster?.getByKind ? cluster.getByKind('ClusterRoleBinding') : []) collect(crb, '');
+  for (const crb of cluster?.getByKind ? cluster.getByKind('ClusterRoleBinding') : [])
+    collect(crb, '');
   if (effectiveNamespace) {
-    for (const rb of cluster?.getByKindAndNamespace ? cluster.getByKindAndNamespace('RoleBinding', effectiveNamespace) : []) {
+    for (const rb of cluster?.getByKindAndNamespace
+      ? cluster.getByKindAndNamespace('RoleBinding', effectiveNamespace)
+      : []) {
       collect(rb, effectiveNamespace);
     }
   }
@@ -577,7 +685,8 @@ export function identityCanUseSCC(cluster, identity, sccName, namespace = '') {
   const parsed = parseResourceToken(`scc/${sccName}`);
   const allows = (binding, bindingNamespace) => {
     const subjects = binding?.spec?.subjects || [];
-    if (!subjects.some((subject) => subjectMatches(subject, identity, bindingNamespace))) return false;
+    if (!subjects.some((subject) => subjectMatches(subject, identity, bindingNamespace)))
+      return false;
     const rules = getRoleRules(cluster, binding.spec?.roleRef || {}, bindingNamespace);
     return Boolean(evaluateRules(rules, 'use', parsed));
   };
@@ -587,7 +696,9 @@ export function identityCanUseSCC(cluster, identity, sccName, namespace = '') {
   }
   const namespaces = namespace ? [namespace] : [namespace].filter(Boolean);
   for (const ns of namespaces) {
-    const rbs = cluster?.getByKindAndNamespace ? cluster.getByKindAndNamespace('RoleBinding', ns) : [];
+    const rbs = cluster?.getByKindAndNamespace
+      ? cluster.getByKindAndNamespace('RoleBinding', ns)
+      : [];
     for (const rb of rbs) {
       if (allows(rb, ns)) return true;
     }
@@ -628,7 +739,10 @@ function extractServiceAccountNamespace(userName) {
  * @returns {Array<object>}
  */
 export function getSCCsForServiceAccount(cluster, namespace, serviceAccount) {
-  const identity = getUserIdentity(cluster, `system:serviceaccount:${namespace}:${serviceAccount || 'default'}`);
+  const identity = getUserIdentity(
+    cluster,
+    `system:serviceaccount:${namespace}:${serviceAccount || 'default'}`
+  );
   return getSCCs(cluster).filter((scc) => {
     if (legacySCCListAllows(scc, identity)) return true;
     return identityCanUseSCC(cluster, identity, scc.metadata.name, namespace);
@@ -660,9 +774,10 @@ export function sccForServiceAccount(cluster, namespace, serviceAccount) {
  */
 export function getSCCGrantsForSubject(cluster, subject, namespace = '') {
   const parsed = normalizeSCCSubject(subject, { namespace });
-  const identityName = parsed.kind === 'ServiceAccount'
-    ? `system:serviceaccount:${parsed.namespace || namespace || 'default'}:${parsed.name}`
-    : parsed.name;
+  const identityName =
+    parsed.kind === 'ServiceAccount'
+      ? `system:serviceaccount:${parsed.namespace || namespace || 'default'}:${parsed.name}`
+      : parsed.name;
   const identity = getUserIdentity(cluster, identityName);
   const names = new Set();
 
@@ -675,10 +790,14 @@ export function getSCCGrantsForSubject(cluster, subject, namespace = '') {
     if (subjects.some((s) => subjectMatches(s, identity, bindingNamespace))) names.add(sccName);
   };
 
-  for (const crb of cluster?.getByKind ? cluster.getByKind('ClusterRoleBinding') : []) collectFromBinding(crb, '');
-  const roleBindings = namespace && cluster?.getByKindAndNamespace
-    ? cluster.getByKindAndNamespace('RoleBinding', namespace)
-    : (cluster?.getByKind ? cluster.getByKind('RoleBinding') : []);
+  for (const crb of cluster?.getByKind ? cluster.getByKind('ClusterRoleBinding') : [])
+    collectFromBinding(crb, '');
+  const roleBindings =
+    namespace && cluster?.getByKindAndNamespace
+      ? cluster.getByKindAndNamespace('RoleBinding', namespace)
+      : cluster?.getByKind
+        ? cluster.getByKind('RoleBinding')
+        : [];
   for (const rb of roleBindings) collectFromBinding(rb, rb.metadata?.namespace || '');
 
   // Legacy lists on the SCC objects (seeded 4.22 defaults, e.g. privileged
@@ -713,15 +832,20 @@ export function getVisibleProjects(cluster, userName) {
     const subjects = crb.spec?.subjects || [];
     if (!subjects.some((s) => subjectMatches(s, identity, ''))) continue;
     const rules = getRoleRules(cluster, crb.spec?.roleRef || {}, '');
-    if (evaluateRules(rules, 'list', projectToken) || evaluateRules(rules, 'get', projectToken)) return projects;
+    if (evaluateRules(rules, 'list', projectToken) || evaluateRules(rules, 'get', projectToken))
+      return projects;
   }
 
   // Otherwise a project is visible when the user has a RoleBinding in it (the
   // project-request flow grants the requester `admin` there).
   const visible = projects.filter((project) => {
     const namespace = project.metadata?.name || '';
-    const rbs = cluster?.getByKindAndNamespace ? cluster.getByKindAndNamespace('RoleBinding', namespace) : [];
-    return rbs.some((rb) => (rb.spec?.subjects || []).some((subject) => subjectMatches(subject, identity, namespace)));
+    const rbs = cluster?.getByKindAndNamespace
+      ? cluster.getByKindAndNamespace('RoleBinding', namespace)
+      : [];
+    return rbs.some((rb) =>
+      (rb.spec?.subjects || []).some((subject) => subjectMatches(subject, identity, namespace))
+    );
   });
   return visible;
 }
@@ -755,7 +879,8 @@ export function podSecurityRequest(podSpec) {
   // must stay admissible under restricted-v2.
   const collectCapabilities = (sc) => {
     for (const capability of sc?.capabilities?.add || []) {
-      if (capability && !result.addedCapabilities.includes(capability)) result.addedCapabilities.push(capability);
+      if (capability && !result.addedCapabilities.includes(capability))
+        result.addedCapabilities.push(capability);
     }
   };
   collectCapabilities(podSc);
@@ -883,27 +1008,53 @@ export function normalizeSCCSubject(subject, options = {}) {
         subject: `system:serviceaccount:${namespace || 'default'}:${name}`,
       };
     }
-    if (kind === 'Group') return { kind, name, namespace: '', entry: 'groups', subject: `group:${name}` };
+    if (kind === 'Group')
+      return { kind, name, namespace: '', entry: 'groups', subject: `group:${name}` };
     return { kind, name, namespace: '', entry: 'users', subject: name };
   }
 
   const raw = String(subject || '').trim();
   if (raw.startsWith('system:serviceaccount:')) {
     const parts = raw.split(':');
-    return { kind: 'ServiceAccount', name: parts[3] || '', namespace: parts[2] || 'default', entry: 'users', subject: raw };
+    return {
+      kind: 'ServiceAccount',
+      name: parts[3] || '',
+      namespace: parts[2] || 'default',
+      entry: 'users',
+      subject: raw,
+    };
   }
   if (raw.startsWith('group:')) {
-    return { kind: 'Group', name: raw.slice(6), namespace: '', entry: 'groups', subject: `group:${raw.slice(6)}` };
+    return {
+      kind: 'Group',
+      name: raw.slice(6),
+      namespace: '',
+      entry: 'groups',
+      subject: `group:${raw.slice(6)}`,
+    };
   }
   if (raw.startsWith('user:')) {
-    return { kind: 'User', name: raw.slice(5), namespace: '', entry: 'users', subject: raw.slice(5) };
+    return {
+      kind: 'User',
+      name: raw.slice(5),
+      namespace: '',
+      entry: 'users',
+      subject: raw.slice(5),
+    };
   }
   const kind = options.kind || 'User';
   if (kind === 'ServiceAccount') {
     const namespace = options.namespace || 'default';
-    return { kind, name: raw, namespace, entry: 'users', subject: `system:serviceaccount:${namespace}:${raw}` };
+    return {
+      kind,
+      name: raw,
+      namespace,
+      entry: 'users',
+      subject: `system:serviceaccount:${namespace}:${raw}`,
+    };
   }
-  if (kind === 'Group') return { kind, name: raw, namespace: '', entry: 'groups', subject: `group:${raw}` };
+  if (kind === 'Group')
+    return { kind, name: raw, namespace: '', entry: 'groups', subject: `group:${raw}` };
   return { kind, name: raw, namespace: '', entry: 'users', subject: raw };
 }
 

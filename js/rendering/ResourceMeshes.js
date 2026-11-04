@@ -98,9 +98,21 @@ const STATUS_COLORS = {
 
 /** Statuses whose ring should breathe slowly. */
 const PULSING_STATUSES = new Set([
-  'Pending', 'New', 'Progressing', 'Updating', 'Installing', 'Suspended', 'Paused',
-  'Failed', 'CrashLoop', 'CrashLoopBackOff', 'Degraded', 'Unavailable',
-  'Rejected', 'NotReady', 'NotAdmitted',
+  'Pending',
+  'New',
+  'Progressing',
+  'Updating',
+  'Installing',
+  'Suspended',
+  'Paused',
+  'Failed',
+  'CrashLoop',
+  'CrashLoopBackOff',
+  'Degraded',
+  'Unavailable',
+  'Rejected',
+  'NotReady',
+  'NotAdmitted',
 ]);
 
 export function getStatusColor(status) {
@@ -150,13 +162,14 @@ const TOKEN_RING_GEO = ringGeometry(0.9, 1.0, 40);
 // ── Material helpers ─────────────────────────────────────────────────────────
 /** Matte micro-metal body material. Never tinted by status. */
 function mat(color, opts = {}) {
-  const {
-    metalness = 0.34,
-    roughness = 0.52,
-    emissive = 0x000000,
-    emissiveIntensity = 0,
-  } = opts;
-  return new THREE.MeshStandardMaterial({ color, metalness, roughness, emissive, emissiveIntensity });
+  const { metalness = 0.34, roughness = 0.52, emissive = 0x000000, emissiveIntensity = 0 } = opts;
+  return new THREE.MeshStandardMaterial({
+    color,
+    metalness,
+    roughness,
+    emissive,
+    emissiveIntensity,
+  });
 }
 
 /** Unlit edge/accent material — reads as a machined emissive inlay. */
@@ -184,11 +197,19 @@ function statusRingMaterial(color) {
 // ── Mesh / geometry helpers ──────────────────────────────────────────────────
 function addMesh(group, geometry, material, opts = {}) {
   const {
-    x = 0, y = 0, z = 0,
-    rx = 0, ry = 0, rz = 0,
-    sx = 1, sy = 1, sz = 1,
-    castShadow = true, receiveShadow = true,
-    renderOrder = 0, userData,
+    x = 0,
+    y = 0,
+    z = 0,
+    rx = 0,
+    ry = 0,
+    rz = 0,
+    sx = 1,
+    sy = 1,
+    sz = 1,
+    castShadow = true,
+    receiveShadow = true,
+    renderOrder = 0,
+    userData,
   } = opts;
   const mesh = new THREE.Mesh(geometry, material);
   mesh.position.set(x, y, z);
@@ -231,7 +252,10 @@ function strap(group, w, h, d, color, opts = {}) {
 
 function extruded(group, shape, depth, color, opts = {}) {
   const {
-    bevel = true, bevelSize = 0.035, bevelThickness = 0.035, bevelSegments = 2,
+    bevel = true,
+    bevelSize = 0.035,
+    bevelThickness = 0.035,
+    bevelSegments = 2,
     ...meshOpts
   } = opts;
   const geo = new THREE.ExtrudeGeometry(shape, {
@@ -370,16 +394,22 @@ function triangleShape(radius) {
 
 // ── Pedestal / stage ─────────────────────────────────────────────────────────
 function buildPedestal(group, radius, status) {
-  const plinth = addMesh(group, pedestalGeometry(radius), mat(MAT.pedestal, { metalness: 0.55, roughness: 0.42 }), {
-    y: 0,
-  });
+  const plinth = addMesh(
+    group,
+    pedestalGeometry(radius),
+    mat(MAT.pedestal, { metalness: 0.55, roughness: 0.42 }),
+    {
+      y: 0,
+    }
+  );
   plinth.name = 'pedestal';
 
   // Machined top inlay ring.
   addMesh(group, INLAY_RING_GEO, glow(MAT.metal, 0.5), {
     y: PEDESTAL_HEIGHT + 0.001,
     rx: -Math.PI / 2,
-    sx: radius, sy: radius,
+    sx: radius,
+    sy: radius,
     castShadow: false,
     receiveShadow: false,
   });
@@ -389,7 +419,8 @@ function buildPedestal(group, radius, status) {
   const statusMesh = addMesh(group, STATUS_RING_GEO, statusMaterial, {
     y: PEDESTAL_HEIGHT + 0.003,
     rx: -Math.PI / 2,
-    sx: radius, sy: radius,
+    sx: radius,
+    sy: radius,
     castShadow: false,
     receiveShadow: false,
     renderOrder: 2,
@@ -428,7 +459,10 @@ function finish(group) {
 }
 
 // ── Composite props ──────────────────────────────────────────────────────────
-function addBust(group, { x = 0, y = 0, z = 0, scale = 1, color = HUE.teal, accent = HUE.ice } = {}) {
+function addBust(
+  group,
+  { x = 0, y = 0, z = 0, scale = 1, color = HUE.teal, accent = HUE.ice } = {}
+) {
   const bust = new THREE.Group();
   bust.position.set(x, y, z);
   bust.scale.setScalar(scale);
@@ -436,26 +470,43 @@ function addBust(group, { x = 0, y = 0, z = 0, scale = 1, color = HUE.teal, acce
 
   // Shoulders: a halved, bevelled disc.
   addMesh(bust, new THREE.SphereGeometry(0.4, 20, 12, 0, TAU, 0, Math.PI / 2), mat(color), {
-    y: 0.02, rx: Math.PI, sy: 0.9,
+    y: 0.02,
+    rx: Math.PI,
+    sy: 0.9,
   });
   // Neck.
   addMesh(bust, new THREE.CylinderGeometry(0.11, 0.13, 0.14, 14), mat(MAT.bodyDark), { y: 0.2 });
   // Head.
-  addMesh(bust, new THREE.SphereGeometry(0.23, 20, 16), mat(color, { roughness: 0.42 }), { y: 0.44 });
+  addMesh(bust, new THREE.SphereGeometry(0.23, 20, 16), mat(color, { roughness: 0.42 }), {
+    y: 0.44,
+  });
   // Face accent line.
   strap(bust, 0.16, 0.03, 0.02, accent, { y: 0.44, z: 0.205, opacity: 0.8 });
   return bust;
 }
 
-function addGear(group, { x = 0, y = 0, z = 0, radius = 0.5, teeth = 10, color = HUE.warm, tilt = 0 } = {}) {
+function addGear(
+  group,
+  { x = 0, y = 0, z = 0, radius = 0.5, teeth = 10, color = HUE.warm, tilt = 0 } = {}
+) {
   const gear = new THREE.Group();
   gear.position.set(x, y, z);
   gear.rotation.x = tilt;
   group.add(gear);
 
   const thickness = 0.16;
-  addMesh(gear, new THREE.CylinderGeometry(radius * 0.78, radius * 0.78, thickness, 24), mat(color), { rx: Math.PI / 2 });
-  addMesh(gear, new THREE.CylinderGeometry(radius * 0.22, radius * 0.22, thickness * 1.5, 16), mat(MAT.bodyDark), { rx: Math.PI / 2 });
+  addMesh(
+    gear,
+    new THREE.CylinderGeometry(radius * 0.78, radius * 0.78, thickness, 24),
+    mat(color),
+    { rx: Math.PI / 2 }
+  );
+  addMesh(
+    gear,
+    new THREE.CylinderGeometry(radius * 0.22, radius * 0.22, thickness * 1.5, 16),
+    mat(MAT.bodyDark),
+    { rx: Math.PI / 2 }
+  );
   for (let i = 0; i < teeth; i++) {
     const angle = (TAU * i) / teeth;
     const tooth = new THREE.BoxGeometry(radius * 0.22, radius * 0.2, thickness);
@@ -468,16 +519,23 @@ function addGear(group, { x = 0, y = 0, z = 0, radius = 0.5, teeth = 10, color =
   return gear;
 }
 
-function addChainLinks(group, count, color, { x = 0, y = 0, z = 0, step = 0.34, radius = 0.26 } = {}) {
+function addChainLinks(
+  group,
+  count,
+  color,
+  { x = 0, y = 0, z = 0, step = 0.34, radius = 0.26 } = {}
+) {
   const links = [];
   for (let i = 0; i < count; i++) {
-    links.push(torus(group, radius, 0.06, color, {
-      x,
-      y: y + i * step,
-      z,
-      rz: i % 2 === 0 ? 0 : Math.PI / 2,
-      tubularSegments: 20,
-    }));
+    links.push(
+      torus(group, radius, 0.06, color, {
+        x,
+        y: y + i * step,
+        z,
+        rz: i % 2 === 0 ? 0 : Math.PI / 2,
+        tubularSegments: 20,
+      })
+    );
   }
   return links;
 }
@@ -486,7 +544,9 @@ function addSignalArcs(group, color, { x = 0, y = 0, z = 0 } = {}) {
   const arcs = [];
   for (let i = 0; i < 3; i++) {
     const arc = torus(group, 0.26 + i * 0.16, 0.018, color, {
-      x, y: y + i * 0.16, z,
+      x,
+      y: y + i * 0.16,
+      z,
       arc: Math.PI * 0.8,
       rz: Math.PI * 0.1,
       tubularSegments: 22,
@@ -544,17 +604,32 @@ const CREATORS = {
   Project(resource) {
     const { group, top, status } = stage(resource, { radius: 1.02 });
     // Folder standing on a slight backward tilt.
-    const folder = extruded(group, folderShape(), 0.24, MAT.bodyLight, { y: top + 0.62, rx: -0.32, bevelSize: 0.04 });
+    const folder = extruded(group, folderShape(), 0.24, MAT.bodyLight, {
+      y: top + 0.62,
+      rx: -0.32,
+      bevelSize: 0.04,
+    });
     folder.rotation.y = 0.06;
     // Folder tab accent.
     strap(group, 0.5, 0.05, 0.02, HUE.open, { y: top + 1.02, z: 0.24, opacity: 0.9 });
     // Project "scope" token under the folder.
     addMesh(group, TOKEN_RING_GEO, glow(HUE.open, 0.22), {
-      y: top + 0.012, rx: -Math.PI / 2, sx: 0.9, sy: 0.9, castShadow: false,
+      y: top + 0.012,
+      rx: -Math.PI / 2,
+      sx: 0.9,
+      sy: 0.9,
+      castShadow: false,
     });
-    addMesh(group, new THREE.BoxGeometry(1.5, 0.026, 1.5), mat(MAT.bodyDark, { metalness: 0.2, roughness: 0.8 }), {
-      y: top + 0.006, castShadow: false, receiveShadow: true,
-    });
+    addMesh(
+      group,
+      new THREE.BoxGeometry(1.5, 0.026, 1.5),
+      mat(MAT.bodyDark, { metalness: 0.2, roughness: 0.8 }),
+      {
+        y: top + 0.006,
+        castShadow: false,
+        receiveShadow: true,
+      }
+    );
     void status;
     return finish(group);
   },
@@ -566,11 +641,23 @@ const CREATORS = {
     slab(group, 1.55, 0.1, 0.95, MAT.bodyDark, { y: top + 0.4, round: 0.15 });
     for (let i = 0; i < 4; i++) {
       slab(group, 1.5, 0.1, 0.11, MAT.bodyLight, { y: top + 0.5, z: -0.32 + i * 0.22, round: 0.3 });
-      strap(group, 0.9, 0.016, 0.012, HUE.sky, { y: top + 0.56, z: -0.32 + i * 0.22, opacity: 0.55 });
+      strap(group, 0.9, 0.016, 0.012, HUE.sky, {
+        y: top + 0.56,
+        z: -0.32 + i * 0.22,
+        opacity: 0.55,
+      });
     }
     // Control-plane antennae.
-    addMesh(group, new THREE.CylinderGeometry(0.03, 0.05, 0.5, 8), mat(MAT.metal), { x: -0.7, y: top + 0.62, z: 0.42 });
-    addMesh(group, new THREE.SphereGeometry(0.07, 12, 12), glow(HUE.ice), { x: -0.7, y: top + 0.9, z: 0.42 });
+    addMesh(group, new THREE.CylinderGeometry(0.03, 0.05, 0.5, 8), mat(MAT.metal), {
+      x: -0.7,
+      y: top + 0.62,
+      z: 0.42,
+    });
+    addMesh(group, new THREE.SphereGeometry(0.07, 12, 12), glow(HUE.ice), {
+      x: -0.7,
+      y: top + 0.9,
+      z: 0.42,
+    });
     strap(group, 1.5, 0.03, 0.02, HUE.sky, { y: top + 0.075, z: 0.65, opacity: 0.75 });
     return finish(group);
   },
@@ -597,14 +684,18 @@ const CREATORS = {
   ClusterOperator(resource) {
     const { group, top } = stage(resource, { radius: 0.95 });
     disc(group, 0.34, 0.1, MAT.body, { y: top + 0.05 });
-    addMesh(group, new THREE.CylinderGeometry(0.045, 0.07, 0.62, 10), mat(MAT.metal), { y: top + 0.42 });
+    addMesh(group, new THREE.CylinderGeometry(0.045, 0.07, 0.62, 10), mat(MAT.metal), {
+      y: top + 0.42,
+    });
     const beaconMaterial = mat(HUE.warm, {
       metalness: 0.2,
       roughness: 0.3,
       emissive: new THREE.Color(HUE.warm),
       emissiveIntensity: 0.9,
     });
-    const beacon = addMesh(group, new THREE.SphereGeometry(0.2, 20, 16), beaconMaterial, { y: top + 0.84 });
+    const beacon = addMesh(group, new THREE.SphereGeometry(0.2, 20, 16), beaconMaterial, {
+      y: top + 0.84,
+    });
     const halo = torus(group, 0.33, 0.02, HUE.amber, { y: top + 0.84, rx: Math.PI / 2 });
     group.userData.animate = (time) => {
       const pulse = 0.9 + Math.sin(time * 1.6) * 0.1;
@@ -617,7 +708,9 @@ const CREATORS = {
 
   ClusterVersion(resource) {
     const { group, top } = stage(resource, { radius: 0.95 });
-    addMesh(group, new THREE.CylinderGeometry(0.035, 0.055, 1.05, 10), mat(MAT.metal), { y: top + 0.55 });
+    addMesh(group, new THREE.CylinderGeometry(0.035, 0.055, 1.05, 10), mat(MAT.metal), {
+      y: top + 0.55,
+    });
     const rings = [];
     [HUE.open, HUE.warm, HUE.amber].forEach((color, index) => {
       const ring = torus(group, 0.5 - index * 0.1, 0.028, color, {
@@ -644,7 +737,9 @@ const CREATORS = {
     slab(group, 0.2, 0.1, 0.1, HUE.warm, { x: 0.2, y: top + 0.2, round: 0.4 });
     slab(group, 0.16, 0.1, 0.1, HUE.warm, { x: 0.18, y: top + 0.4, round: 0.4 });
     addMesh(group, new THREE.CylinderGeometry(0.09, 0.09, 0.05, 14), mat(MAT.bodyDark), {
-      x: -0.2, y: top + 0.95, rz: Math.PI / 2,
+      x: -0.2,
+      y: top + 0.95,
+      rz: Math.PI / 2,
     });
     return finish(group);
   },
@@ -653,14 +748,25 @@ const CREATORS = {
   Pod(resource) {
     const { group, top } = stage(resource, { radius: 0.86 });
     // Hexagonal capsule — the canonical workload token.
-    const body = addMesh(group, new THREE.CylinderGeometry(0.5, 0.5, 1.0, 6), mat(HUE.blue, { roughness: 0.44 }), {
-      y: top + 0.54,
-      ry: Math.PI / 6,
-    });
+    const body = addMesh(
+      group,
+      new THREE.CylinderGeometry(0.5, 0.5, 1.0, 6),
+      mat(HUE.blue, { roughness: 0.44 }),
+      {
+        y: top + 0.54,
+        ry: Math.PI / 6,
+      }
+    );
     addMesh(group, new THREE.CylinderGeometry(0.5, 0.5, 0.08, 6), glow(HUE.ice, 0.75), {
-      y: top + 1.1, ry: Math.PI / 6, castShadow: false,
+      y: top + 1.1,
+      ry: Math.PI / 6,
+      castShadow: false,
     });
-    const collar = torus(group, 0.53, 0.028, HUE.sky, { y: top + 0.62, rx: Math.PI / 2, tubularSegments: 6 });
+    const collar = torus(group, 0.53, 0.028, HUE.sky, {
+      y: top + 0.62,
+      rx: Math.PI / 2,
+      tubularSegments: 6,
+    });
     collar.rotation.z = Math.PI / 6;
     addMesh(group, new THREE.SphereGeometry(0.07, 12, 12), glow(HUE.ice), { y: top + 1.16 });
     void body;
@@ -691,12 +797,14 @@ const CREATORS = {
     const marks = [];
     const maxMarks = 5;
     for (let i = 0; i < maxMarks; i++) {
-      marks.push(strap(group, 0.04, 0.02, 0.04, HUE.sky, {
-        x: (i - (replicas - 1) / 2) * 0.16,
-        y: top + 0.1,
-        z: 0.46,
-        opacity: 0.85,
-      }));
+      marks.push(
+        strap(group, 0.04, 0.02, 0.04, HUE.sky, {
+          x: (i - (replicas - 1) / 2) * 0.16,
+          y: top + 0.1,
+          z: 0.46,
+          opacity: 0.85,
+        })
+      );
     }
     group.userData.replicaMarks = marks;
     group.userData.replicaCount = replicas;
@@ -748,7 +856,9 @@ const CREATORS = {
   DaemonSet(resource) {
     const { group, top } = stage(resource, { radius: 0.95 });
     disc(group, 0.32, 0.12, MAT.body, { y: top + 0.06 });
-    addMesh(group, new THREE.CylinderGeometry(0.05, 0.08, 0.34, 10), mat(MAT.metal), { y: top + 0.28 });
+    addMesh(group, new THREE.CylinderGeometry(0.05, 0.08, 0.34, 10), mat(MAT.metal), {
+      y: top + 0.28,
+    });
     // Hub + one agent cube per node in a tilted ring.
     const ring = new THREE.Group();
     ring.position.y = top + 0.6;
@@ -788,15 +898,19 @@ const CREATORS = {
     const { group, top } = stage(resource, { radius: 0.9 });
     // Upright clock face.
     const face = disc(group, 0.52, 0.14, MAT.bodyLight, {
-      y: top + 0.62, rx: Math.PI / 2, z: 0.06,
+      y: top + 0.62,
+      rx: Math.PI / 2,
+      z: 0.06,
     });
     torus(group, 0.53, 0.045, HUE.violet, { y: top + 0.62, z: 0.06 });
     const handMaterial = glow(HUE.ice);
     const hour = addMesh(group, new THREE.BoxGeometry(0.035, 0.24, 0.03), handMaterial, {
-      y: top + 0.72, z: 0.16,
+      y: top + 0.72,
+      z: 0.16,
     });
     const minute = addMesh(group, new THREE.BoxGeometry(0.025, 0.34, 0.03), handMaterial.clone(), {
-      y: top + 0.77, z: 0.17,
+      y: top + 0.77,
+      z: 0.17,
     });
     for (let i = 0; i < 12; i++) {
       const angle = (TAU / 12) * i;
@@ -819,10 +933,28 @@ const CREATORS = {
   // ── Builds & images ──────────────────────────────────────────────────────
   BuildConfig(resource) {
     const { group, top } = stage(resource, { radius: 0.9 });
-    const gear = addGear(group, { y: top + 0.72, z: 0.02, radius: 0.44, color: HUE.warm, tilt: Math.PI / 2 });
+    const gear = addGear(group, {
+      y: top + 0.72,
+      z: 0.02,
+      radius: 0.44,
+      color: HUE.warm,
+      tilt: Math.PI / 2,
+    });
     // Config wrench crossing the gear.
-    slab(group, 0.07, 0.52, 0.07, MAT.metal, { x: 0.34, y: top + 0.62, z: 0.12, rz: -0.5, round: 0.4 });
-    slab(group, 0.16, 0.1, 0.09, MAT.metal, { x: 0.5, y: top + 0.82, z: 0.12, rz: -0.5, round: 0.3 });
+    slab(group, 0.07, 0.52, 0.07, MAT.metal, {
+      x: 0.34,
+      y: top + 0.62,
+      z: 0.12,
+      rz: -0.5,
+      round: 0.4,
+    });
+    slab(group, 0.16, 0.1, 0.09, MAT.metal, {
+      x: 0.5,
+      y: top + 0.82,
+      z: 0.12,
+      rz: -0.5,
+      round: 0.3,
+    });
     group.userData.animate = (time) => {
       gear.rotation.z = time * 0.22;
     };
@@ -831,7 +963,14 @@ const CREATORS = {
 
   Build(resource) {
     const { group, top } = stage(resource, { radius: 0.92 });
-    const gear = addGear(group, { y: top + 0.72, z: 0.02, radius: 0.52, teeth: 12, color: HUE.warm, tilt: Math.PI / 2 });
+    const gear = addGear(group, {
+      y: top + 0.72,
+      z: 0.02,
+      radius: 0.52,
+      teeth: 12,
+      color: HUE.warm,
+      tilt: Math.PI / 2,
+    });
     // Progress arc above the gear.
     const arc = torus(group, 0.62, 0.022, HUE.amber, {
       y: top + 0.72,
@@ -848,15 +987,23 @@ const CREATORS = {
 
   ImageStream(resource) {
     const { group, top } = stage(resource, { radius: 0.9 });
-    addMesh(group, new THREE.CylinderGeometry(0.04, 0.05, 1.15, 10), mat(MAT.metal), { y: top + 0.6 });
+    addMesh(group, new THREE.CylinderGeometry(0.04, 0.05, 1.15, 10), mat(MAT.metal), {
+      y: top + 0.6,
+    });
     const spec = resourceSpec(resource);
     const tagCount = Math.max(2, Math.min((spec.tags || []).length || 3, 4));
     const layers = [];
     for (let i = 0; i < tagCount; i++) {
-      const layer = disc(group, 0.46 - i * 0.05, 0.1, i === tagCount - 1 ? HUE.amber : MAT.bodyLight, {
-        y: top + 0.28 + i * 0.2,
-        ry: i * 0.18,
-      });
+      const layer = disc(
+        group,
+        0.46 - i * 0.05,
+        0.1,
+        i === tagCount - 1 ? HUE.amber : MAT.bodyLight,
+        {
+          y: top + 0.28 + i * 0.2,
+          ry: i * 0.18,
+        }
+      );
       layers.push(layer);
       strap(group, 0.5 - i * 0.05, 0.02, 0.02, HUE.amber, {
         y: top + 0.34 + i * 0.2,
@@ -879,7 +1026,9 @@ const CREATORS = {
     addMesh(group, new THREE.SphereGeometry(0.4, 26, 20), sphereMaterial, { y: top + 0.58 });
     const ringA = torus(group, 0.62, 0.026, HUE.sky, { y: top + 0.58, rx: Math.PI / 2 + 0.34 });
     const ringB = torus(group, 0.74, 0.018, HUE.ice, {
-      y: top + 0.58, rx: Math.PI / 2 - 0.2, opacity: 0.6,
+      y: top + 0.58,
+      rx: Math.PI / 2 - 0.2,
+      opacity: 0.6,
     });
     for (let i = 0; i < 3; i++) {
       const angle = (TAU / 3) * i;
@@ -904,7 +1053,9 @@ const CREATORS = {
     // Sign post + routed arrow.
     slab(group, 0.1, 1.3, 0.1, MAT.bodyLight, { y: top + 0.7, round: 0.4 });
     const sign = extruded(group, arrowSignShape(), 0.14, MAT.bodyLight, {
-      y: top + 1.16, x: 0.14, bevelSize: 0.03,
+      y: top + 1.16,
+      x: 0.14,
+      bevelSize: 0.03,
     });
     strap(group, 0.62, 0.035, 0.02, HUE.open, { y: top + 1.16, x: 0.14, z: 0.09, opacity: 0.9 });
     if (spec.tls) {
@@ -924,7 +1075,7 @@ const CREATORS = {
     const gem = addMesh(group, geometry, material, { y: top + 0.68 });
     const edges = new THREE.LineSegments(
       new THREE.EdgesGeometry(geometry),
-      new THREE.LineBasicMaterial({ color: HUE.ice, transparent: true, opacity: 0.45 }),
+      new THREE.LineBasicMaterial({ color: HUE.ice, transparent: true, opacity: 0.45 })
     );
     edges.position.copy(gem.position);
     group.add(edges);
@@ -939,12 +1090,15 @@ const CREATORS = {
   NetworkPolicy(resource) {
     const { group, top } = stage(resource, { radius: 0.9 });
     const shield = extruded(group, shieldShape(0.95, 1.12), 0.22, MAT.bodyLight, {
-      y: top + 0.7, bevelSize: 0.04,
+      y: top + 0.7,
+      bevelSize: 0.04,
     });
     void shield;
     for (let i = 0; i < 3; i++) {
       strap(group, 0.56, 0.05, 0.03, HUE.warm, {
-        y: top + 0.48 + i * 0.18, z: 0.14, opacity: 0.8,
+        y: top + 0.48 + i * 0.18,
+        z: 0.14,
+        opacity: 0.8,
       });
     }
     return finish(group);
@@ -960,23 +1114,43 @@ const CREATORS = {
     ];
     for (const point of points) {
       addMesh(group, new THREE.SphereGeometry(0.13, 16, 12), mat(HUE.warm, { roughness: 0.4 }), {
-        x: point.x, y: point.y, z: point.z,
+        x: point.x,
+        y: point.y,
+        z: point.z,
       });
     }
     const lineGeometry = new THREE.BufferGeometry().setFromPoints([
-      points[0], points[1], points[1], points[2], points[2], points[0],
+      points[0],
+      points[1],
+      points[1],
+      points[2],
+      points[2],
+      points[0],
     ]);
-    group.add(new THREE.LineSegments(lineGeometry, new THREE.LineBasicMaterial({
-      color: HUE.amber, transparent: true, opacity: 0.5,
-    })));
+    group.add(
+      new THREE.LineSegments(
+        lineGeometry,
+        new THREE.LineBasicMaterial({
+          color: HUE.amber,
+          transparent: true,
+          opacity: 0.5,
+        })
+      )
+    );
     return finish(group);
   },
 
   L2Advertisement(resource) {
     const { group, top } = stage(resource, { radius: 0.9 });
     disc(group, 0.55, 0.08, MAT.bodyDark, { y: top + 0.04 });
-    addMesh(group, new THREE.SphereGeometry(0.14, 16, 12), mat(HUE.open), { x: -0.32, y: top + 0.2 });
-    addMesh(group, new THREE.SphereGeometry(0.14, 16, 12), mat(HUE.open), { x: 0.32, y: top + 0.2 });
+    addMesh(group, new THREE.SphereGeometry(0.14, 16, 12), mat(HUE.open), {
+      x: -0.32,
+      y: top + 0.2,
+    });
+    addMesh(group, new THREE.SphereGeometry(0.14, 16, 12), mat(HUE.open), {
+      x: 0.32,
+      y: top + 0.2,
+    });
     addSignalArcs(group, HUE.warm, { x: 0, y: top + 0.55 });
     return finish(group);
   },
@@ -986,12 +1160,16 @@ const CREATORS = {
     const { group, top } = stage(resource, { radius: 0.9 });
     // Binder of key/value entries.
     const binder = slab(group, 1.1, 0.78, 0.3, MAT.bodyLight, {
-      y: top + 0.56, rx: -0.16, round: 0.16,
+      y: top + 0.56,
+      rx: -0.16,
+      round: 0.16,
     });
     binder.rotation.y = 0.08;
     for (let i = 0; i < 3; i++) {
       strap(group, 0.7 - i * 0.1, 0.035, 0.02, HUE.amber, {
-        y: top + 0.78 - i * 0.16, z: 0.18, opacity: 0.75,
+        y: top + 0.78 - i * 0.16,
+        z: 0.18,
+        opacity: 0.75,
       });
     }
     slab(group, 0.24, 0.08, 0.36, MAT.bodyDark, { y: top + 0.12, round: 0.3 });
@@ -1003,11 +1181,17 @@ const CREATORS = {
     // Padlock.
     const body = slab(group, 0.8, 0.58, 0.36, MAT.bodyLight, { y: top + 0.42, round: 0.2 });
     void body;
-    const shackle = torus(group, 0.26, 0.06, MAT.metal, { y: top + 0.86, arc: Math.PI, tubularSegments: 22 });
+    const shackle = torus(group, 0.26, 0.06, MAT.metal, {
+      y: top + 0.86,
+      arc: Math.PI,
+      tubularSegments: 22,
+    });
     shackle.rotation.z = Math.PI;
     strap(group, 0.34, 0.05, 0.03, HUE.amber, { y: top + 0.5, z: 0.2, opacity: 0.85 });
     addMesh(group, new THREE.CylinderGeometry(0.07, 0.07, 0.04, 14), mat(MAT.bodyDark), {
-      y: top + 0.42, z: 0.2, rx: Math.PI / 2,
+      y: top + 0.42,
+      z: 0.2,
+      rx: Math.PI / 2,
     });
     return finish(group);
   },
@@ -1033,7 +1217,9 @@ const CREATORS = {
     slab(group, 0.95, 0.72, 0.66, MAT.bodyLight, { y: top + 0.44, round: 0.18 });
     for (let i = 0; i < 3; i++) {
       strap(group, 0.72, 0.05, 0.02, HUE.warm, {
-        y: top + 0.28 + i * 0.18, z: 0.34, opacity: 0.7,
+        y: top + 0.28 + i * 0.18,
+        z: 0.34,
+        opacity: 0.7,
       });
     }
     slab(group, 0.98, 0.06, 0.69, MAT.bodyDark, { y: top + 0.82, round: 0.3 });
@@ -1043,12 +1229,15 @@ const CREATORS = {
   Template(resource) {
     const { group, top } = stage(resource, { radius: 0.88 });
     const page = extruded(group, pageShape(), 0.08, MAT.bodyLight, {
-      y: top + 0.68, bevelSize: 0.02,
+      y: top + 0.68,
+      bevelSize: 0.02,
     });
     page.rotation.y = 0.14;
     for (let i = 0; i < 3; i++) {
       strap(group, i === 0 ? 0.5 : 0.62, 0.04, 0.02, i === 0 ? HUE.warm : HUE.slate, {
-        y: top + 0.88 - i * 0.16, z: 0.06, opacity: i === 0 ? 0.9 : 0.6,
+        y: top + 0.88 - i * 0.16,
+        z: 0.06,
+        opacity: i === 0 ? 0.9 : 0.6,
       });
     }
     group.userData.animate = (time) => {
@@ -1059,7 +1248,9 @@ const CREATORS = {
 
   PersistentVolume(resource) {
     const { group, top } = stage(resource, { radius: 1.0 });
-    addMesh(group, new THREE.CylinderGeometry(0.04, 0.06, 1.0, 10), mat(MAT.metal), { y: top + 0.52 });
+    addMesh(group, new THREE.CylinderGeometry(0.04, 0.06, 1.0, 10), mat(MAT.metal), {
+      y: top + 0.52,
+    });
     for (let i = 0; i < 3; i++) {
       disc(group, 0.54 - i * 0.02, 0.16, i === 0 ? HUE.green : MAT.bodyLight, {
         y: top + 0.24 + i * 0.26,
@@ -1075,7 +1266,9 @@ const CREATORS = {
     const puck = disc(group, 0.48, 0.5, HUE.green, { y: top + 0.32 });
     void puck;
     torus(group, 0.5, 0.04, MAT.metal, { y: top + 0.32, rx: Math.PI / 2 });
-    addMesh(group, new THREE.CylinderGeometry(0.12, 0.16, 0.16, 12), mat(MAT.bodyDark), { y: top + 0.66 });
+    addMesh(group, new THREE.CylinderGeometry(0.12, 0.16, 0.16, 12), mat(MAT.bodyDark), {
+      y: top + 0.66,
+    });
     strap(group, 0.6, 0.04, 0.02, HUE.green, { y: top + 0.2, z: 0.34, opacity: 0.7 });
     return finish(group);
   },
@@ -1099,14 +1292,19 @@ const CREATORS = {
   HorizontalPodAutoscaler(resource) {
     const { group, top } = stage(resource, { radius: 0.9 });
     const gauge = torus(group, 0.52, 0.06, HUE.violet, {
-      y: top + 0.62, z: 0.02, arc: Math.PI * 1.5, tubularSegments: 36,
+      y: top + 0.62,
+      z: 0.02,
+      arc: Math.PI * 1.5,
+      tubularSegments: 36,
     });
     gauge.rotation.z = Math.PI * 0.75;
     const needleMaterial = mat(HUE.ice, {
-      emissive: new THREE.Color(HUE.ice), emissiveIntensity: 0.35,
+      emissive: new THREE.Color(HUE.ice),
+      emissiveIntensity: 0.35,
     });
     const needle = addMesh(group, new THREE.ConeGeometry(0.035, 0.44, 6), needleMaterial, {
-      y: top + 0.74, z: 0.1,
+      y: top + 0.74,
+      z: 0.1,
     });
     disc(group, 0.09, 0.08, MAT.bodyDark, { y: top + 0.62, z: 0.1, rx: Math.PI / 2 });
     // Gauge scale ticks along the same arc the needle sweeps.
@@ -1124,7 +1322,8 @@ const CREATORS = {
     }
     // Target marker: the configured CPU target for this autoscaler.
     const targetMarker = addMesh(group, new THREE.SphereGeometry(0.045, 10, 8), glow(HUE.amber), {
-      y: top + 0.62, z: 0.04,
+      y: top + 0.62,
+      z: 0.04,
     });
     // The renderer passes a snapshot (`resource._ref` is the live simulation
     // object). Read the live status metrics through the ref so the gauge tracks
@@ -1135,19 +1334,21 @@ const CREATORS = {
       const fromMetrics = Array.isArray(metrics)
         ? metrics.find((entry) => entry?.resource?.current?.averageUtilization !== undefined)
         : null;
-      const raw = fromMetrics?.resource?.current?.averageUtilization
-        ?? liveRef?.status?.currentCPUUtilizationPercentage
-        ?? liveRef?.currentUtilization
-        ?? liveRef?.status?.currentUtilization
-        ?? 0;
+      const raw =
+        fromMetrics?.resource?.current?.averageUtilization ??
+        liveRef?.status?.currentCPUUtilizationPercentage ??
+        liveRef?.currentUtilization ??
+        liveRef?.status?.currentUtilization ??
+        0;
       const value = Number(raw);
       return Number.isFinite(value) ? Math.max(0, Math.min(100, value)) : 0;
     };
     const targetUtilizationOf = () => {
       const metric = (liveRef?.spec?.metrics || [])[0];
-      const raw = metric?.resource?.target?.averageUtilization
-        ?? metric?.resource?.targetAverageUtilization
-        ?? 50;
+      const raw =
+        metric?.resource?.target?.averageUtilization ??
+        metric?.resource?.targetAverageUtilization ??
+        50;
       const value = Number(raw);
       return Number.isFinite(value) ? Math.max(0, Math.min(100, value)) : 50;
     };
@@ -1165,10 +1366,14 @@ const CREATORS = {
   PodDisruptionBudget(resource) {
     const { group, top } = stage(resource, { radius: 0.92 });
     const left = extruded(group, shieldShape(0.48, 1.0), 0.2, MAT.bodyLight, {
-      x: -0.28, y: top + 0.66, bevelSize: 0.03,
+      x: -0.28,
+      y: top + 0.66,
+      bevelSize: 0.03,
     });
     const right = extruded(group, shieldShape(0.48, 1.0), 0.2, MAT.bodyLight, {
-      x: 0.28, y: top + 0.66, bevelSize: 0.03,
+      x: 0.28,
+      y: top + 0.66,
+      bevelSize: 0.03,
     });
     left.rotation.z = 0.07;
     right.rotation.z = -0.07;
@@ -1181,11 +1386,15 @@ const CREATORS = {
     const { group, top } = stage(resource, { radius: 0.88 });
     // ID badge on a stand.
     const badge = slab(group, 0.78, 0.56, 0.1, MAT.bodyLight, {
-      y: top + 0.56, rx: -0.22, round: 0.16,
+      y: top + 0.56,
+      rx: -0.22,
+      round: 0.16,
     });
     badge.rotation.y = 0.04;
     addMesh(group, new THREE.CylinderGeometry(0.11, 0.11, 0.03, 18), mat(HUE.warm), {
-      y: top + 0.67, z: 0.1, rx: Math.PI / 2 - 0.22,
+      y: top + 0.67,
+      z: 0.1,
+      rx: Math.PI / 2 - 0.22,
     });
     strap(group, 0.34, 0.04, 0.02, HUE.warm, { y: top + 0.5, z: 0.1, opacity: 0.8 });
     strap(group, 0.26, 0.04, 0.02, HUE.slate, { y: top + 0.4, z: 0.1, opacity: 0.7 });
@@ -1197,11 +1406,16 @@ const CREATORS = {
     const { group, top } = stage(resource, { radius: 0.88 });
     // Octagonal permission medal + star.
     const medal = extruded(group, octagonShape(0.5), 0.16, MAT.bodyLight, {
-      y: top + 0.66, rx: -0.12, bevelSize: 0.03,
+      y: top + 0.66,
+      rx: -0.12,
+      bevelSize: 0.03,
     });
     void medal;
     extruded(group, starShape(0.24, 0.1, 5), 0.06, HUE.amber, {
-      y: top + 0.66, z: 0.12, rx: -0.12, bevelSize: 0.02,
+      y: top + 0.66,
+      z: 0.12,
+      rx: -0.12,
+      bevelSize: 0.02,
     });
     strap(group, 0.42, 0.035, 0.02, HUE.amber, { y: top + 0.2, z: 0.24, opacity: 0.65 });
     return finish(group);
@@ -1210,10 +1424,15 @@ const CREATORS = {
   ClusterRole(resource) {
     const { group, top } = stage(resource, { radius: 0.92 });
     extruded(group, octagonShape(0.54), 0.18, MAT.bodyLight, {
-      y: top + 0.68, rx: -0.12, bevelSize: 0.03,
+      y: top + 0.68,
+      rx: -0.12,
+      bevelSize: 0.03,
     });
     extruded(group, starShape(0.26, 0.11, 5), 0.06, HUE.warm, {
-      y: top + 0.68, z: 0.13, rx: -0.12, bevelSize: 0.02,
+      y: top + 0.68,
+      z: 0.13,
+      rx: -0.12,
+      bevelSize: 0.02,
     });
     const orbit = torus(group, 0.76, 0.02, HUE.warm, { y: top + 0.68, rx: Math.PI / 2 + 0.22 });
     group.userData.animate = (time) => {
@@ -1242,12 +1461,15 @@ const CREATORS = {
   SecurityContextConstraints(resource) {
     const { group, top } = stage(resource, { radius: 0.92 });
     const shield = extruded(group, shieldShape(1.0, 1.18), 0.26, MAT.bodyLight, {
-      y: top + 0.72, bevelSize: 0.04,
+      y: top + 0.72,
+      bevelSize: 0.04,
     });
     void shield;
     // Keyhole = pod security.
     addMesh(group, new THREE.CylinderGeometry(0.1, 0.1, 0.05, 16), mat(MAT.bodyDark), {
-      y: top + 0.8, z: 0.16, rx: Math.PI / 2,
+      y: top + 0.8,
+      z: 0.16,
+      rx: Math.PI / 2,
     });
     strap(group, 0.07, 0.24, 0.04, MAT.bodyDark, { y: top + 0.62, z: 0.16, opacity: 0.9 });
     strap(group, 0.62, 0.035, 0.02, HUE.open, { y: top + 0.3, z: 0.18, opacity: 0.75 });
@@ -1271,7 +1493,10 @@ const CREATORS = {
   Identity(resource) {
     const { group, top } = stage(resource, { radius: 0.84 });
     slab(group, 0.7, 0.5, 0.12, MAT.bodyLight, { y: top + 0.52, rx: -0.2, round: 0.2 });
-    addMesh(group, new THREE.SphereGeometry(0.1, 16, 12), mat(HUE.slate), { y: top + 0.66, z: 0.08 });
+    addMesh(group, new THREE.SphereGeometry(0.1, 16, 12), mat(HUE.slate), {
+      y: top + 0.66,
+      z: 0.08,
+    });
     strap(group, 0.34, 0.04, 0.02, HUE.sky, { y: top + 0.48, z: 0.08, opacity: 0.8 });
     return finish(group);
   },
@@ -1279,7 +1504,8 @@ const CREATORS = {
   Subscription(resource) {
     const { group, top } = stage(resource, { radius: 0.9 });
     const piece = extruded(group, puzzleShape(), 0.24, MAT.bodyLight, {
-      y: top + 0.66, bevelSize: 0.035,
+      y: top + 0.66,
+      bevelSize: 0.035,
     });
     piece.rotation.y = 0.42;
     strap(group, 0.4, 0.05, 0.03, HUE.warm, { y: top + 0.66, z: 0.2, opacity: 0.85 });
@@ -1297,10 +1523,13 @@ const CREATORS = {
     slab(group, 1.35, 0.14, 1.15, MAT.body, { y: top + 0.09, round: 0.16 });
     for (let index = 0; index < 3; index += 1) {
       slab(group, 0.92, 0.07, 0.17, MAT.bodyLight, {
-        y: top + 0.24 + index * 0.14, round: 0.3,
+        y: top + 0.24 + index * 0.14,
+        round: 0.3,
       });
       strap(group, 0.72, 0.014, 0.012, HUE.open, {
-        y: top + 0.27 + index * 0.14, z: 0.05, opacity: 0.6,
+        y: top + 0.27 + index * 0.14,
+        z: 0.05,
+        opacity: 0.6,
       });
     }
     torus(group, 0.5, 0.02, HUE.open, { y: top + 0.66, rx: Math.PI / 2 });
@@ -1312,10 +1541,13 @@ const CREATORS = {
     slab(group, 1.2, 0.1, 1.2, MAT.bodyDark, { y: top + 0.07, round: 0.14 });
     for (let index = 0; index < 3; index += 1) {
       slab(group, 1.0 - index * 0.16, 0.05, 0.18, MAT.bodyLight, {
-        y: top + 0.2 + index * 0.12, round: 0.3,
+        y: top + 0.2 + index * 0.12,
+        round: 0.3,
       });
       strap(group, 0.18, 0.03, 0.02, HUE.warm, {
-        x: 0.44 - index * 0.08, y: top + 0.23 + index * 0.12, opacity: 0.8,
+        x: 0.44 - index * 0.08,
+        y: top + 0.23 + index * 0.12,
+        opacity: 0.8,
       });
     }
     return finish(group);
@@ -1324,7 +1556,9 @@ const CREATORS = {
   ClusterServiceVersion(resource) {
     const { group, top } = stage(resource, { radius: 0.95 });
     disc(group, 0.36, 0.12, MAT.body, { y: top + 0.06 });
-    addMesh(group, new THREE.CylinderGeometry(0.05, 0.08, 0.5, 10), mat(MAT.metal), { y: top + 0.4 });
+    addMesh(group, new THREE.CylinderGeometry(0.05, 0.08, 0.5, 10), mat(MAT.metal), {
+      y: top + 0.4,
+    });
     const badge = addMesh(group, new THREE.IcosahedronGeometry(0.26, 0), glow(HUE.ice, 0.55), {
       y: top + 0.8,
     });
@@ -1354,9 +1588,14 @@ const CREATORS = {
   MetalLB(resource) {
     const { group, top } = stage(resource, { radius: 0.95 });
     disc(group, 0.4, 0.1, MAT.body, { y: top + 0.05 });
-    addMesh(group, new THREE.CylinderGeometry(0.04, 0.06, 0.6, 10), mat(MAT.metal), { y: top + 0.4 });
+    addMesh(group, new THREE.CylinderGeometry(0.04, 0.06, 0.6, 10), mat(MAT.metal), {
+      y: top + 0.4,
+    });
     addMesh(group, new THREE.CylinderGeometry(0.02, 0.02, 1.0, 8), mat(MAT.metal), {
-      y: top + 0.8, rx: Math.PI / 2, rz: Math.PI / 2, z: 0,
+      y: top + 0.8,
+      rx: Math.PI / 2,
+      rz: Math.PI / 2,
+      z: 0,
     });
     const beaconMaterial = mat(HUE.sky, {
       metalness: 0.2,
@@ -1364,7 +1603,9 @@ const CREATORS = {
       emissive: new THREE.Color(HUE.sky),
       emissiveIntensity: 0.9,
     });
-    const beacon = addMesh(group, new THREE.SphereGeometry(0.16, 16, 12), beaconMaterial, { y: top + 0.78 });
+    const beacon = addMesh(group, new THREE.SphereGeometry(0.16, 16, 12), beaconMaterial, {
+      y: top + 0.78,
+    });
     group.userData.animate = (time) => {
       beacon.position.y = top + 0.78 + Math.sin(time * 2.2) * 0.05;
       beaconMaterial.emissiveIntensity = 0.7 + Math.sin(time * 2.2) * 0.25;
@@ -1413,7 +1654,9 @@ export function meshKindFor(resource) {
   const normalized = normalizeKind(raw);
   if (normalized && CREATORS[normalized]) return normalized;
   // Case-insensitive match (e.g. "pod" from a saved share link).
-  const found = Object.keys(CREATORS).find((kind) => kind.toLowerCase() === String(raw).toLowerCase());
+  const found = Object.keys(CREATORS).find(
+    (kind) => kind.toLowerCase() === String(raw).toLowerCase()
+  );
   return found || null;
 }
 
@@ -1475,7 +1718,9 @@ export class ResourceMeshFactory {
       if (child.geometry && !child.geometry.userData?.shared) child.geometry.dispose();
       const materials = Array.isArray(child.material)
         ? child.material
-        : (child.material ? [child.material] : []);
+        : child.material
+          ? [child.material]
+          : [];
       for (const material of materials) {
         if (!material) continue;
         if (material.map && !material.map.userData?.shared) material.map.dispose();
@@ -1486,4 +1731,10 @@ export class ResourceMeshFactory {
 }
 
 export { getStatusColor as getStatusColorFor };
-export default { ResourceMeshFactory, MESH_CREATOR_KINDS, MISSING_MESH_KINDS, hasMeshCreator, meshKindFor };
+export default {
+  ResourceMeshFactory,
+  MESH_CREATOR_KINDS,
+  MISSING_MESH_KINDS,
+  hasMeshCreator,
+  meshKindFor,
+};

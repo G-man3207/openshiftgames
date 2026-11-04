@@ -419,7 +419,7 @@ spec:
 `,
 
   // ─── HTPasswd identity provider database (empty until htpasswd -b ...) ────
-  'htpasswd': '',
+  htpasswd: '',
 
   // ─── Examples referenced by levels, labs and the docs ─────────────────────
   'examples/quota.yaml': `apiVersion: v1

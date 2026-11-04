@@ -6,7 +6,6 @@
 > This spec, the architecture map, the declarative-engine guide, the research notes and the
 > verification report remain in `docs/` as engineering records.
 
-
 Status: **implemented (v1.0.0, 2026-11-03)** — authoritative build contract for the Kubernetes→OpenShift conversion. Final verification results: see `docs/verification-report.md`.
 Owner: Team Lead. All conversion work MUST conform to this document. If something here is
 wrong or impossible, message the Lead before changing course.
@@ -17,6 +16,7 @@ OpenShift Container Platform **4.22** and is useful preparation for **EX280 (Red
 Certified Specialist in OpenShift Administration, exam version EX280V422)**.
 
 Authoritative external sources (see `docs/research/` for the details and citations):
+
 - Exam objectives: https://www.redhat.com/en/services/training/red-hat-certified-openshift-administrator-exam
   and the "Exam Objectives by Version" PDF (EX280V422).
 - Product docs: https://docs.redhat.com/en/documentation/openshift_container_platform/4.22
@@ -49,21 +49,22 @@ Authoritative external sources (see `docs/research/` for the details and citatio
 
 ## 1. Branding, URLs, storage keys, copy
 
-| Item | Value |
-|---|---|
-| Product name | **OpenShift Games** |
-| Tagline | Learn OpenShift by playing. Built for EX280. |
-| Menu subtitle | OpenShift 4.22 Cluster Simulation · Built for EX280 |
-| Repo | https://github.com/G-man3207/openshiftgames |
-| Canonical demo URL | https://shifting.pro (used for og:url / og:image; README notes how to change) |
-| License | Apache-2.0 (keep `LICENSE`), add `NOTICE` |
-| Command prompt | `$ oc` (accepted input: optional leading `oc` or `kubectl`; both stripped; help says `oc`) |
-| localStorage prefix | `openshiftgames_` (settings key `openshiftgames_settings`, progress key `openshiftgames_progress`) |
-| YAML export filename | `openshiftgames-cluster.yaml` |
-| Draw page | `/draw` → `draw.html`, title "OpenShift Draw — 3D OpenShift Architecture Diagram", watermark "OpenShift Games · /draw" |
-| Theme accent | OpenShift red `#EE0000` for brand accents / OpenShift-specific meshes; existing status colors stay |
+| Item                 | Value                                                                                                                  |
+| -------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| Product name         | **OpenShift Games**                                                                                                    |
+| Tagline              | Learn OpenShift by playing. Built for EX280.                                                                           |
+| Menu subtitle        | OpenShift 4.22 Cluster Simulation · Built for EX280                                                                    |
+| Repo                 | https://github.com/G-man3207/openshiftgames                                                                            |
+| Canonical demo URL   | https://shifting.pro (used for og:url / og:image; README notes how to change)                                          |
+| License              | Apache-2.0 (keep `LICENSE`), add `NOTICE`                                                                              |
+| Command prompt       | `$ oc` (accepted input: optional leading `oc` or `kubectl`; both stripped; help says `oc`)                             |
+| localStorage prefix  | `openshiftgames_` (settings key `openshiftgames_settings`, progress key `openshiftgames_progress`)                     |
+| YAML export filename | `openshiftgames-cluster.yaml`                                                                                          |
+| Draw page            | `/draw` → `draw.html`, title "OpenShift Draw — 3D OpenShift Architecture Diagram", watermark "OpenShift Games · /draw" |
+| Theme accent         | OpenShift red `#EE0000` for brand accents / OpenShift-specific meshes; existing status colors stay                     |
 
 Required copy:
+
 - `<title>OpenShift Games — Learn OpenShift by Playing (EX280)</title>`
 - meta description: `Learn Red Hat OpenShift by playing. Deploy apps with oc, fix CrashLoopBackOff, expose Routes, build with S2I, configure SCC/quota/RBAC — a 3D cluster simulator built for the EX280 exam.`
 - og/twitter titles/descriptions mirror the above; og:url `https://shifting.pro`; og:image `https://shifting.pro/og-image.png`; twitter card summary_large_image.
@@ -71,6 +72,7 @@ Required copy:
 - README disclaimer: unofficial fan/education project, not affiliated with or endorsed by Red Hat; OpenShift and Red Hat are trademarks of Red Hat, Inc.
 
 Attribution requirements (Apache-2.0):
+
 - `NOTICE` file at repo root: derivative-work statement, original project name/URL/copyright line "K8s Games, Copyright (c) Rohit G / rohitg00", Apache-2.0.
 - README "Credits & license" section with the same attribution and a link to the original repo.
 - Footer credit link to https://github.com/rohitg00/k8sgames is allowed (only attribution links may reference upstream).
@@ -127,47 +129,47 @@ keep `metadata.namespace` (a Project name). Commands may still accept `namespace
 
 ### 3.1 API versions (single source of truth)
 
-| Kind | apiVersion | Scope | Status model |
-|---|---|---|---|
-| Pod | v1 | ns | phase Pending/Running/Succeeded/Failed, containerStatuses |
-| Deployment | apps/v1 | ns | replicas, readyReplicas, updatedReplicas, conditions Available/Progressing |
-| ReplicaSet | apps/v1 | ns | replicas, readyReplicas |
-| StatefulSet | apps/v1 | ns | replicas, readyReplicas, currentRevision |
-| DaemonSet | apps/v1 | ns | desiredNumberScheduled, numberReady |
-| Job | batch/v1 | ns | phase Pending/Running/Complete/Failed, succeeded/failed |
-| CronJob | batch/v1 | ns | suspend, lastScheduleTime, active[] |
-| Service | v1 | ns | type, clusterIP, ports, selector, loadBalancer.ingress |
-| Route | route.openshift.io/v1 | ns | spec.host/path/to/tls/port, status.ingress[].conditions Admitted |
-| Ingress | networking.k8s.io/v1 | ns | rules, tls |
-| NetworkPolicy | networking.k8s.io/v1 | ns | podSelector, ingress[], egress[], policyTypes |
-| ConfigMap | v1 | ns | data, binaryData |
-| Secret | v1 | ns | type, data (displayed decoded in simulator), stringData |
-| PersistentVolumeClaim | v1 | ns | phase Pending/Bound/Lost, capacity |
-| PersistentVolume | v1 | cluster | phase Available/Bound/Released, capacity, accessModes, storageClassName |
-| StorageClass | storage.k8s.io/v1 | cluster | provisioner, reclaimPolicy, volumeBindingMode |
-| HorizontalPodAutoscaler | autoscaling/v2 | ns | currentReplicas, desiredReplicas, conditions |
-| PodDisruptionBudget | policy/v1 | ns | minAvailable/maxUnavailable, disruptionsAllowed |
-| ResourceQuota | v1 | ns | hard, used, status |
-| LimitRange | v1 | ns | limits[] {type: Container/Pod, default, defaultRequest, min, max} |
-| Role / RoleBinding | rbac.authorization.k8s.io/v1 | ns | rules / roleRef, subjects |
-| ClusterRole / ClusterRoleBinding | rbac.authorization.k8s.io/v1 | cluster | rules / roleRef, subjects |
-| ServiceAccount | v1 | ns | secrets[] |
-| Project | project.openshift.io/v1 | cluster | phase Active/Terminating, displayName |
-| BuildConfig | build.openshift.io/v1 | ns | source, strategy, output, triggers, status.lastVersion |
-| Build | build.openshift.io/v1 | ns | phase New/Pending/Running/Complete/Failed/Cancelled, output |
-| ImageStream | image.openshift.io/v1 | ns | status.tags[{tag,items[{dockerImageReference}]}], lookupPolicy |
-| Template | template.openshift.io/v1 | ns | parameters[], objects[], message |
-| Subscription | operators.coreos.com/v1alpha1 | ns (openshift-operators) | phase Installing/Succeeded/Failed, installedCSV, channel, source |
-| SecurityContextConstraints | security.openshift.io/v1 | cluster | priority, allowPrivilegedContainer, runAsUser, fsGroup, users[], groups[] |
-| ClusterResourceQuota | quota.openshift.io/v1 | cluster | selector.labels.matchLabels, quota.hard, status.total.used |
-| User | user.openshift.io/v1 | cluster | fullName, groups[], identities[] |
-| Group | user.openshift.io/v1 | cluster | users[] (stored as spec.users in the game) |
-| Identity | user.openshift.io/v1 | cluster | providerName, providerUserName, user.name — auto-created only, not in palette |
-| OAuth | config.openshift.io/v1 | cluster | singleton name `cluster`; spec.identityProviders[] |
-| ClusterOperator | config.openshift.io/v1 | cluster | status.conditions Available/Progressing/Degraded, versions |
-| ClusterVersion | config.openshift.io/v1 | cluster | singleton name `version`; status.desired.version/channel |
-| IPAddressPool | metallb.io/v1beta1 | ns (metallb-system) | addresses[] |
-| L2Advertisement | metallb.io/v1beta1 | ns (metallb-system) | ipAddressPools[] |
+| Kind                             | apiVersion                    | Scope                    | Status model                                                                  |
+| -------------------------------- | ----------------------------- | ------------------------ | ----------------------------------------------------------------------------- |
+| Pod                              | v1                            | ns                       | phase Pending/Running/Succeeded/Failed, containerStatuses                     |
+| Deployment                       | apps/v1                       | ns                       | replicas, readyReplicas, updatedReplicas, conditions Available/Progressing    |
+| ReplicaSet                       | apps/v1                       | ns                       | replicas, readyReplicas                                                       |
+| StatefulSet                      | apps/v1                       | ns                       | replicas, readyReplicas, currentRevision                                      |
+| DaemonSet                        | apps/v1                       | ns                       | desiredNumberScheduled, numberReady                                           |
+| Job                              | batch/v1                      | ns                       | phase Pending/Running/Complete/Failed, succeeded/failed                       |
+| CronJob                          | batch/v1                      | ns                       | suspend, lastScheduleTime, active[]                                           |
+| Service                          | v1                            | ns                       | type, clusterIP, ports, selector, loadBalancer.ingress                        |
+| Route                            | route.openshift.io/v1         | ns                       | spec.host/path/to/tls/port, status.ingress[].conditions Admitted              |
+| Ingress                          | networking.k8s.io/v1          | ns                       | rules, tls                                                                    |
+| NetworkPolicy                    | networking.k8s.io/v1          | ns                       | podSelector, ingress[], egress[], policyTypes                                 |
+| ConfigMap                        | v1                            | ns                       | data, binaryData                                                              |
+| Secret                           | v1                            | ns                       | type, data (displayed decoded in simulator), stringData                       |
+| PersistentVolumeClaim            | v1                            | ns                       | phase Pending/Bound/Lost, capacity                                            |
+| PersistentVolume                 | v1                            | cluster                  | phase Available/Bound/Released, capacity, accessModes, storageClassName       |
+| StorageClass                     | storage.k8s.io/v1             | cluster                  | provisioner, reclaimPolicy, volumeBindingMode                                 |
+| HorizontalPodAutoscaler          | autoscaling/v2                | ns                       | currentReplicas, desiredReplicas, conditions                                  |
+| PodDisruptionBudget              | policy/v1                     | ns                       | minAvailable/maxUnavailable, disruptionsAllowed                               |
+| ResourceQuota                    | v1                            | ns                       | hard, used, status                                                            |
+| LimitRange                       | v1                            | ns                       | limits[] {type: Container/Pod, default, defaultRequest, min, max}             |
+| Role / RoleBinding               | rbac.authorization.k8s.io/v1  | ns                       | rules / roleRef, subjects                                                     |
+| ClusterRole / ClusterRoleBinding | rbac.authorization.k8s.io/v1  | cluster                  | rules / roleRef, subjects                                                     |
+| ServiceAccount                   | v1                            | ns                       | secrets[]                                                                     |
+| Project                          | project.openshift.io/v1       | cluster                  | phase Active/Terminating, displayName                                         |
+| BuildConfig                      | build.openshift.io/v1         | ns                       | source, strategy, output, triggers, status.lastVersion                        |
+| Build                            | build.openshift.io/v1         | ns                       | phase New/Pending/Running/Complete/Failed/Cancelled, output                   |
+| ImageStream                      | image.openshift.io/v1         | ns                       | status.tags[{tag,items[{dockerImageReference}]}], lookupPolicy                |
+| Template                         | template.openshift.io/v1      | ns                       | parameters[], objects[], message                                              |
+| Subscription                     | operators.coreos.com/v1alpha1 | ns (openshift-operators) | phase Installing/Succeeded/Failed, installedCSV, channel, source              |
+| SecurityContextConstraints       | security.openshift.io/v1      | cluster                  | priority, allowPrivilegedContainer, runAsUser, fsGroup, users[], groups[]     |
+| ClusterResourceQuota             | quota.openshift.io/v1         | cluster                  | selector.labels.matchLabels, quota.hard, status.total.used                    |
+| User                             | user.openshift.io/v1          | cluster                  | fullName, groups[], identities[]                                              |
+| Group                            | user.openshift.io/v1          | cluster                  | users[] (stored as spec.users in the game)                                    |
+| Identity                         | user.openshift.io/v1          | cluster                  | providerName, providerUserName, user.name — auto-created only, not in palette |
+| OAuth                            | config.openshift.io/v1        | cluster                  | singleton name `cluster`; spec.identityProviders[]                            |
+| ClusterOperator                  | config.openshift.io/v1        | cluster                  | status.conditions Available/Progressing/Degraded, versions                    |
+| ClusterVersion                   | config.openshift.io/v1        | cluster                  | singleton name `version`; status.desired.version/channel                      |
+| IPAddressPool                    | metallb.io/v1beta1            | ns (metallb-system)      | addresses[]                                                                   |
+| L2Advertisement                  | metallb.io/v1beta1            | ns (metallb-system)      | ipAddressPools[]                                                              |
 
 Existing gateway/controller kinds keep their current behaviour and apiVersion (Node v1, etc.).
 
@@ -238,6 +240,7 @@ the virtual file system. Track every executed raw command in `gameEngine` comman
 
 Required base commands and behaviour (implement in CommandBar.js; complex mutations may call
 GameEngine helpers):
+
 - Lifecycle: `oc login [-u user] [-p pass]`, `oc logout`, `oc whoami`, `oc project [name]`,
   `oc projects`, `oc new-project <name> [--description=] [--display-name=]`, `oc delete project <name>`.
 - Querying: `oc get <resource> [name] [-n project] [-A] [-o wide|yaml|json|name|jsonpath=...|custom-columns=...] [-l selector] [--field-selector=...] [--sort-by=...] [--show-labels]`;
@@ -307,6 +310,7 @@ mutating command emits an authorization check event for objectives/achievements.
 ## 5. Controllers / simulation (SimulationTick.js)
 
 Extend the existing fixed-step simulation with OpenShift controllers:
+
 - `_tickProjects`: Projects become Active immediately; deletion marks Terminating.
 - `_tickRoutes`: resolve Service + Endpoints; if the Service has ≥1 ready endpoint, set
   `status.ingress=[{host, routerName:"default", conditions:[{type:"Admitted",status:"True",reason:"Accepted",message:"..."}], wildcardPolicy:"None"}]`;
@@ -350,6 +354,7 @@ Extend the existing fixed-step simulation with OpenShift controllers:
 State lives on `GameEngine`: `currentUser` (default `kubeadmin`), `currentProject` (default
 `default`), `authProvider` (`null` or `{type:'HTPasswd', secretName:'htpasswd-secret', namespace:'openshift-config', ready:boolean}`).
 Also expose `gameEngine.cluster` methods:
+
 - `getUser(name)`, `getGroup(name)`, `getUserGroups(user)` → includes groups whose spec.users contains user and user.spec.groups.
 - `canI(userName, verb, resource, namespace)` → `{allowed, reason, role?}`. Evaluation order: cluster-admin
   (kubeadmin, system:admin) allow; ClusterRoleBindings; RoleBindings in namespace; built-in roles
@@ -359,19 +364,19 @@ Also expose `gameEngine.cluster` methods:
 - SCC resolution: `sccForServiceAccount(ns, sa)` considering SCC spec.users/groups
   (`system:serviceaccount:<ns>:<sa>`, `system:authenticated`, group names).
 - Helpers for commands: `grantSCC(scc, subject)`, `revokeSCC`, `addUserToGroup`, etc.
-Default state: kubeadmin has cluster-admin ClusterRoleBinding; `system:authenticated` group gets
-`restricted-v2` SCC in the game's admission model (the 4.22 docs also describe `restricted-v3` as
-the default for authenticated users on new installs — verify on a live cluster); `default`
-ServiceAccount exists in each project. Password store: virtual
-`htpasswd` file in ManifestEngine (section 7) is the source of truth for HTPasswd logins; login
-succeeds only when `authProvider.ready` and the user/password match the file, creating/updating the
-User + Identity objects and setting `currentUser`. `oc delete user` removes bindings/identity too.
-`oc login` failures follow real `oc` wording (updated 2026-11-04): unknown user with no identity
-provider configured → `Login failed (401 Unauthorized)` plus "The user \"<user>\" is not known to the
-configured identity provider: no identity provider is configured on this cluster."; bad credentials
-with an identity provider configured → `Login failed (401 Unauthorized)` plus "Verify you have provided
-the correct credentials."; provider configured but OAuth rollout not ready → a dedicated wait message.
-Failed logins never change the current session. Built-in seeded `kubeadmin`/`admin` accounts still log in.
+  Default state: kubeadmin has cluster-admin ClusterRoleBinding; `system:authenticated` group gets
+  `restricted-v2` SCC in the game's admission model (the 4.22 docs also describe `restricted-v3` as
+  the default for authenticated users on new installs — verify on a live cluster); `default`
+  ServiceAccount exists in each project. Password store: virtual
+  `htpasswd` file in ManifestEngine (section 7) is the source of truth for HTPasswd logins; login
+  succeeds only when `authProvider.ready` and the user/password match the file, creating/updating the
+  User + Identity objects and setting `currentUser`. `oc delete user` removes bindings/identity too.
+  `oc login` failures follow real `oc` wording (updated 2026-11-04): unknown user with no identity
+  provider configured → `Login failed (401 Unauthorized)` plus "The user \"<user>\" is not known to the
+  configured identity provider: no identity provider is configured on this cluster."; bad credentials
+  with an identity provider configured → `Login failed (401 Unauthorized)` plus "Verify you have provided
+  the correct credentials."; provider configured but OAuth rollout not ready → a dedicated wait message.
+  Failed logins never change the current session. Built-in seeded `kubeadmin`/`admin` accounts still log in.
 
 ---
 
@@ -380,6 +385,7 @@ Failed logins never change the current session. Built-in seeded `kubeadmin`/`adm
 New module family owned by manifests-dev; must be dependency-free vanilla JS.
 
 Files:
+
 - `js/engine/YamlParser.js` — parse a practical YAML subset into plain JS objects: mappings,
   sequences, scalars (quoted/unquoted, booleans, numbers, null, `|`/`>` block scalars optional),
   comments, multiple documents separated by `---`. Export `parseYaml(text)` → `Array<object>` and
@@ -442,6 +448,7 @@ Cluster/quota: `ResourceQuotaExceeded`, `LimitRangeViolation`, `ClusterResourceQ
 `NodeNotReady`, `NodeDiskPressure`, `NodeMemoryPressure`, `OperatorInstallFailed`.
 
 Schema:
+
 ```js
 {
   id: 'crash-loop-backoff', name: 'CrashLoopBackOff',
@@ -455,6 +462,7 @@ Schema:
   resolution: { kind: 'pod'|'deployment'|'node'|'route'|'build'|'operator'|'cluster', effect: 'heal'|'restore'|'clear'|'recreate', ... }
 }
 ```
+
 `IncidentEngine.applyResolutionEffects` implements the `resolution.effect` generically (heal target,
 restore node Ready, admit route, mark build Complete, restore operator CSV, clear quota violation,
 etc.) plus keep per-name special cases where needed. Incident targets can be Deployment/Pod/Node/
@@ -465,6 +473,7 @@ Route/Build/Subscription names.
 ## 9. Campaign curriculum — 20 levels, 5 chapters (js/data/CampaignLevels.js + CampaignMode.js)
 
 Schema per level:
+
 ```js
 { id, title, chapter, chapterName, description,
   examObjectives: ['Manage OpenShift Container Platform > Create and delete projects', ...],
@@ -480,61 +489,46 @@ Schema per level:
 ```
 
 Chapters and levels (titles fixed; content authors flesh out descriptions/hints/tutorials):
+
 1. **Manage OpenShift** (Projects, CLI, querying, declarative basics)
-   1. *Your First Project* — oc whoami/status, create Project, deploy first Pod/Deployment; objectives:
+   1. _Your First Project_ — oc whoami/status, create Project, deploy first Pod/Deployment; objectives:
       `project`, `login`, `deploy Pod`, `deploy Deployment`. Tutorial steps.
-   2. *Query, Format, Filter* — labels/selectors, `-o wide/yaml/jsonpath/custom-columns`,
+   2. _Query, Format, Filter_ — labels/selectors, `-o wide/yaml/jsonpath/custom-columns`,
       `--field-selector`, `--sort-by`, `oc explain`; objectives: `command` patterns, `label`,
       `deploy`.
-   3. *Logs, Events & Health* — deploy app, investigate CrashLoop incident with oc describe/logs/events,
+   3. _Logs, Events & Health_ — deploy app, investigate CrashLoop incident with oc describe/logs/events,
       read ClusterOperators/clusterversion, `oc adm top`; objectives: `resolve CrashLoopBackOff`,
       `command oc logs`, `clusterHealth`, `investigate`.
-   4. *Declarative Manifests* — edit manifests/deployment.yaml + service.yaml, `oc apply -f`,
+   4. _Declarative Manifests_ — edit manifests/deployment.yaml + service.yaml, `oc apply -f`,
       update + re-apply, export with `oc get ... -o yaml >`; objectives: `manifest` files, `deploy`
       kinds, `command`.
-2. **Declarative & Kustomize** (V422 Declarative Resource Management)
-   5. *Kustomize Base* — apply base overlay; objectives: `kustomize` base path, `deploy`.
-   6. *Kustomize Overlays* — prod overlay patches image/replicas/namespace; objectives:
-      `kustomize` prod path, `image` contains, `replicas`/scale, `command`.
-   7. *Secrets & ConfigMaps* — create secret/configmap via oc create -f and oc create secret,
-      mount/env into Deployment; objectives: `deploy Secret`, `deploy ConfigMap`, `mount`, `envFrom`,
-      `noConfigMap`.
-   8. *Templates & Helm* — process OpenShift template with parameters (`oc process -f | oc apply -f -`),
-      install Helm chart (`helm install`), verify resources; objectives: `template`, `helm`, `deploy`.
-3. **Deploy & Expose** (V422 Deploy applications / Network security / Non-HTTP)
-   9. *Images, Builds & Image Streams* — `oc new-app`, BuildConfig→Build→ImageStream complete,
-      tag/digest, `oc start-build`, verify istag; objectives: `build`, `imageStream`, `deploy`,
-      `command`.
-   10. *Rolling Updates & Rollbacks* — update image, watch rollout, ImagePullBackOff incident,
-       `oc rollout undo/status/history`; objectives: `update`, `rollback`, `resolve ImagePullBackOff`.
-   11. *Services & Routes* — service selector, `oc expose svc`, edge TLS route with cert secret,
-       verify Admitted; objectives: `connect`, `route`, `tls`, `deploy Secret`.
-   12. *Non-HTTP & Load Balancer* — install MetalLB operator (Subscription), IPAddressPool +
-       L2Advertisement, Service type LoadBalancer with EXTERNAL-IP; passthrough/reencrypt route for
-       TLS app; objectives: `operator`, `serviceType LoadBalancer`, `tls passthrough`, `route`.
-4. **Identity, RBAC & Self-service** (V422 Authn/authz + developer self-service)
-   13. *HTPasswd & Users* — create htpasswd users, secret in openshift-config, configure OAuth,
-       login as user, change password; objectives: `user`, `login`, `command htpasswd/oauth`.
-   14. *Groups & RBAC* — groups, rolebindings, `oc auth can-i`, least privilege, UnauthorizedAccess
-       incident; objectives: `group`, `canI`, `leastPrivilege`, `deploy RoleBinding`.
-   15. *Quotas, LimitRanges & Templates* — ClusterResourceQuota, ResourceQuota, LimitRange, project
-       template from `openshift` project; objectives: `quota`, `limitRange`, `template`,
-       `resolve ResourceQuotaExceeded`.
-   16. *Service Accounts & API Access* — SA, `oc set serviceaccount`, grant role to SA,
-       token/API access + `oc auth can-i --as=system:serviceaccount:...`; objectives:
-       `deploy ServiceAccount`, `canI --as`, `deploy RoleBinding`.
-5. **Security & Operations** (V422 application security, operators, jobs)
-   17. *SCC & Privileged Apps* — SCCForbidden incident, `oc adm policy add-scc-to-user anyuid -z default`,
-       run privileged app, verify; objectives: `scc`, `privileged`, `resolve SCCForbidden`.
-   18. *Operators* — install Subscription (operator group/CSV), verify Succeeded, uninstall/delete;
-       objectives: `operator installed`, `operator removed`, `command`.
-   19. *Jobs & CronJobs* — one-time job and cron job, verify completion/schedule, fix failed job;
-       objectives: `complete Job`, `cronJob`, `resolve JobDeadlineExceeded`.
-   20. *EX280 Final: Production Platform* — build a complete platform: Project, ResourceQuota,
-       LimitRange, template deploy, BuildConfig→ImageStream→Deployment, Route with TLS,
-       NetworkPolicy, User+Group+RBAC, SCC for SA, Operator install, Job/CronJob; objectives combine
-       ~10 `deploy`/`route`/`build`/`scc`/`canI`/`operator`/`complete` objectives with
-       `architectureScore` and `examScore >= 75`; time limit via starCriteria.
+2. **Declarative & Kustomize** (V422 Declarative Resource Management) 5. _Kustomize Base_ — apply base overlay; objectives: `kustomize` base path, `deploy`. 6. _Kustomize Overlays_ — prod overlay patches image/replicas/namespace; objectives:
+   `kustomize` prod path, `image` contains, `replicas`/scale, `command`. 7. _Secrets & ConfigMaps_ — create secret/configmap via oc create -f and oc create secret,
+   mount/env into Deployment; objectives: `deploy Secret`, `deploy ConfigMap`, `mount`, `envFrom`,
+   `noConfigMap`. 8. _Templates & Helm_ — process OpenShift template with parameters (`oc process -f | oc apply -f -`),
+   install Helm chart (`helm install`), verify resources; objectives: `template`, `helm`, `deploy`.
+3. **Deploy & Expose** (V422 Deploy applications / Network security / Non-HTTP) 9. _Images, Builds & Image Streams_ — `oc new-app`, BuildConfig→Build→ImageStream complete,
+   tag/digest, `oc start-build`, verify istag; objectives: `build`, `imageStream`, `deploy`,
+   `command`. 10. _Rolling Updates & Rollbacks_ — update image, watch rollout, ImagePullBackOff incident,
+   `oc rollout undo/status/history`; objectives: `update`, `rollback`, `resolve ImagePullBackOff`. 11. _Services & Routes_ — service selector, `oc expose svc`, edge TLS route with cert secret,
+   verify Admitted; objectives: `connect`, `route`, `tls`, `deploy Secret`. 12. _Non-HTTP & Load Balancer_ — install MetalLB operator (Subscription), IPAddressPool +
+   L2Advertisement, Service type LoadBalancer with EXTERNAL-IP; passthrough/reencrypt route for
+   TLS app; objectives: `operator`, `serviceType LoadBalancer`, `tls passthrough`, `route`.
+4. **Identity, RBAC & Self-service** (V422 Authn/authz + developer self-service) 13. _HTPasswd & Users_ — create htpasswd users, secret in openshift-config, configure OAuth,
+   login as user, change password; objectives: `user`, `login`, `command htpasswd/oauth`. 14. _Groups & RBAC_ — groups, rolebindings, `oc auth can-i`, least privilege, UnauthorizedAccess
+   incident; objectives: `group`, `canI`, `leastPrivilege`, `deploy RoleBinding`. 15. _Quotas, LimitRanges & Templates_ — ClusterResourceQuota, ResourceQuota, LimitRange, project
+   template from `openshift` project; objectives: `quota`, `limitRange`, `template`,
+   `resolve ResourceQuotaExceeded`. 16. _Service Accounts & API Access_ — SA, `oc set serviceaccount`, grant role to SA,
+   token/API access + `oc auth can-i --as=system:serviceaccount:...`; objectives:
+   `deploy ServiceAccount`, `canI --as`, `deploy RoleBinding`.
+5. **Security & Operations** (V422 application security, operators, jobs) 17. _SCC & Privileged Apps_ — SCCForbidden incident, `oc adm policy add-scc-to-user anyuid -z default`,
+   run privileged app, verify; objectives: `scc`, `privileged`, `resolve SCCForbidden`. 18. _Operators_ — install Subscription (operator group/CSV), verify Succeeded, uninstall/delete;
+   objectives: `operator installed`, `operator removed`, `command`. 19. _Jobs & CronJobs_ — one-time job and cron job, verify completion/schedule, fix failed job;
+   objectives: `complete Job`, `cronJob`, `resolve JobDeadlineExceeded`. 20. _EX280 Final: Production Platform_ — build a complete platform: Project, ResourceQuota,
+   LimitRange, template deploy, BuildConfig→ImageStream→Deployment, Route with TLS,
+   NetworkPolicy, User+Group+RBAC, SCC for SA, Operator install, Job/CronJob; objectives combine
+   ~10 `deploy`/`route`/`build`/`scc`/`canI`/`operator`/`complete` objectives with
+   `architectureScore` and `examScore >= 75`; time limit via starCriteria.
 
 Objective schema (CampaignMode owns `ObjectiveEvaluator` — extract to
 `js/engine/ObjectiveEvaluator.js`, exported class/function so ChallengeMode reuses it):
@@ -608,18 +602,18 @@ Keep the challenge runner architecture (`CHALLENGES`, `startChallenge`, `getStat
 Replace scenarios with these (id/title fixed; each 180-420s, objectives use section 9 schema,
 `startingResources` + `preloadIncidents` + `availableResources` + `hints`):
 
-1. *Three-Tier App* — two Projects (frontend/backend), deployments, services, route to frontend.
-2. *Fix CrashLoopBackOff* — investigate + resolve CrashLoopBackOff, health ≥90%.
-3. *Route with Edge TLS* — service + `oc create route edge` with TLS secret, Admitted.
-4. *Kustomize Prod Overlay* — apply prod overlay, verify image tag + replicas via objective + command.
-5. *Build & Deploy from Source* — `oc new-app`/BuildConfig build completes, ImageStreamTag, Deployment running, Route.
-6. *Quota Guardrail* — ResourceQuota + LimitRange + project requests; deploy within limits; resolve quota incident.
-7. *RBAC for a New Teammate* — create user/group, rolebinding edit in project, `oc auth can-i` true, least privilege.
-8. *SCC for a Privileged Workload* — grant anyuid to SA, run privileged/uid-0 pod, resolve SCCForbidden.
-9. *Network Isolation* — default-deny NetworkPolicy + allow only frontend→backend, fix DNS egress.
-10. *Install an Operator* — Subscription Succeeded (+ uninstall/delete objective), MetalLB LoadBalancer service with EXTERNAL-IP.
-11. *HTPasswd Onboarding* — htpasswd users, OAuth config, login as user, group membership, permissions.
-12. *EX280 Speed Run* — mixed: project, apply manifests, build, route TLS, quota, job, RBAC; under time.
+1. _Three-Tier App_ — two Projects (frontend/backend), deployments, services, route to frontend.
+2. _Fix CrashLoopBackOff_ — investigate + resolve CrashLoopBackOff, health ≥90%.
+3. _Route with Edge TLS_ — service + `oc create route edge` with TLS secret, Admitted.
+4. _Kustomize Prod Overlay_ — apply prod overlay, verify image tag + replicas via objective + command.
+5. _Build & Deploy from Source_ — `oc new-app`/BuildConfig build completes, ImageStreamTag, Deployment running, Route.
+6. _Quota Guardrail_ — ResourceQuota + LimitRange + project requests; deploy within limits; resolve quota incident.
+7. _RBAC for a New Teammate_ — create user/group, rolebinding edit in project, `oc auth can-i` true, least privilege.
+8. _SCC for a Privileged Workload_ — grant anyuid to SA, run privileged/uid-0 pod, resolve SCCForbidden.
+9. _Network Isolation_ — default-deny NetworkPolicy + allow only frontend→backend, fix DNS egress.
+10. _Install an Operator_ — Subscription Succeeded (+ uninstall/delete objective), MetalLB LoadBalancer service with EXTERNAL-IP.
+11. _HTPasswd Onboarding_ — htpasswd users, OAuth config, login as user, group membership, permissions.
+12. _EX280 Speed Run_ — mixed: project, apply manifests, build, route TLS, quota, job, RBAC; under time.
 
 ---
 
@@ -630,13 +624,14 @@ A non-3D overlay opened from a new main-menu button **EX280 Prep** (id `#menu-ex
 ManifestEngine state via `window.game`.
 
 Contents:
+
 1. **Objective tracker** — all V422 objective groups/bullets from `docs/research/exam-facts.json`
    (copy into JS data with `id`, `title`, `bullets`, `docsUrl`). For each bullet: status
    (Not started / In progress / Mastered), linked levels/challenges (click → start that level/challenge),
    key `oc` commands (copy-to-clipboard), command bar shortcut (`oc <cmd>` prefilled), "Open Red Hat docs" link.
    Mastered = linked campaign level completed OR linked challenge completed OR quick-lab passed.
    Overall progress bar (X / 55 bullets) and a study-coverage verdict (≥90% of bullets have a linked
-drill completed — coverage of the game's drills, not a Red Hat pass prediction).
+   drill completed — coverage of the game's drills, not a Red Hat pass prediction).
 2. **Quick labs** — 8-10 short "do it now" command drills with expected result, mapped to objectives:
    projects/users/route/build/kustomize/quota/scc/operator; each opens Sandbox with a seeded state and
    checks via `command`/state objectives; record pass in progress.examPrep.
@@ -718,18 +713,18 @@ All 55 official bullets must be present and mapped (Lead verifies; authored from
 
 ## 13. File ownership & integration contracts
 
-| Owner | Files (exclusive write scope) |
-|---|---|
-| Lead | `docs/CONVERSION-SPEC.md`, root `NOTICE`, git/github operations, final integration fixes |
-| engine-dev | `js/ui/CommandBar.js`, `js/engine/GameEngine.js`, `js/engine/ClusterState.js`, `js/engine/SimulationTick.js`, `js/engine/RBACEngine.js` (new, optional) |
+| Owner         | Files (exclusive write scope)                                                                                                                                                                                                                                                                                                               |
+| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Lead          | `docs/CONVERSION-SPEC.md`, root `NOTICE`, git/github operations, final integration fixes                                                                                                                                                                                                                                                    |
+| engine-dev    | `js/ui/CommandBar.js`, `js/engine/GameEngine.js`, `js/engine/ClusterState.js`, `js/engine/SimulationTick.js`, `js/engine/RBACEngine.js` (new, optional)                                                                                                                                                                                     |
 | resources-dev | `js/resources/*.js` (incl. `ResourceBase.js` serializer helpers), new `js/resources/OpenShiftResources.js`, `js/resources/IdentityResources.js`, new `js/resources/KindClasses.js`, `js/data/kindRegistry.js` (finalise `createResource` class wiring), `js/resources/ManifestSerializer.js` (shared YAML/describe formatting if split out) |
-| render-dev | `js/rendering/*.js` (all), `js/ui/Minimap.js`, `draw.html` |
-| campaign-dev | `js/data/CampaignLevels.js`, `js/modes/CampaignMode.js`, `js/data/Achievements.js`, `js/engine/ObjectiveEvaluator.js` (new) |
-| incidents-dev | `js/data/IncidentDefs.js`, `js/engine/IncidentEngine.js`, `js/ui/IncidentPanel.js` |
-| modes-dev | `js/modes/ChallengeMode.js`, `js/modes/SandboxMode.js`, `js/modes/ChaosMode.js`, `js/engine/ScoringEngine.js`, `js/ui/HUD.js`, `js/ui/InspectorPanel.js`, `js/ui/ContextMenu.js`, `js/ui/MetricsDashboard.js`, `js/ui/SettingsPanel.js` |
-| brand-dev | `index.html`, `README.md`, `LICENSE` (no change), `NOTICE` (Lead), `robots.txt`, `vercel.json`, `style.css`, `og-image.html`, `js/data/EX280Objectives.js`, `js/modes/ExamPrepMode.js`, `docs/EX280-STUDY-GUIDE.md` (from research), `docs/EXAM-PREP.md` |
-| manifests-dev | `js/engine/YamlParser.js`, `js/engine/ManifestEngine.js`, `js/ui/ManifestPanel.js`, `js/data/ManifestFiles.js`, `js/data/HelmCharts.js` (new), `docs/declarative-engine.md` |
-| verifier | `scripts/verify.mjs`, `scripts/browser-test.mjs`, `scripts/lib/*`, `docs/verification-report.md`, screenshot generation (`screenshot.png`, `og-image.png` via Chrome) |
+| render-dev    | `js/rendering/*.js` (all), `js/ui/Minimap.js`, `draw.html`                                                                                                                                                                                                                                                                                  |
+| campaign-dev  | `js/data/CampaignLevels.js`, `js/modes/CampaignMode.js`, `js/data/Achievements.js`, `js/engine/ObjectiveEvaluator.js` (new)                                                                                                                                                                                                                 |
+| incidents-dev | `js/data/IncidentDefs.js`, `js/engine/IncidentEngine.js`, `js/ui/IncidentPanel.js`                                                                                                                                                                                                                                                          |
+| modes-dev     | `js/modes/ChallengeMode.js`, `js/modes/SandboxMode.js`, `js/modes/ChaosMode.js`, `js/engine/ScoringEngine.js`, `js/ui/HUD.js`, `js/ui/InspectorPanel.js`, `js/ui/ContextMenu.js`, `js/ui/MetricsDashboard.js`, `js/ui/SettingsPanel.js`                                                                                                     |
+| brand-dev     | `index.html`, `README.md`, `LICENSE` (no change), `NOTICE` (Lead), `robots.txt`, `vercel.json`, `style.css`, `og-image.html`, `js/data/EX280Objectives.js`, `js/modes/ExamPrepMode.js`, `docs/EX280-STUDY-GUIDE.md` (from research), `docs/EXAM-PREP.md`                                                                                    |
+| manifests-dev | `js/engine/YamlParser.js`, `js/engine/ManifestEngine.js`, `js/ui/ManifestPanel.js`, `js/data/ManifestFiles.js`, `js/data/HelmCharts.js` (new), `docs/declarative-engine.md`                                                                                                                                                                 |
+| verifier      | `scripts/verify.mjs`, `scripts/browser-test.mjs`, `scripts/lib/*`, `docs/verification-report.md`, screenshot generation (`screenshot.png`, `og-image.png` via Chrome)                                                                                                                                                                       |
 
 Rules: never edit a file outside your scope. If a change is needed elsewhere, message the Lead with
 the exact file/line and desired change. New files are allowed only in your scope or as listed.
@@ -738,6 +733,7 @@ Lead. All owners: run `node --check` equivalent on edited files, keep existing f
 exports stable unless the spec says otherwise, no dependencies/build step, no reformatting unrelated code.
 
 Integration points provided by engine-dev (must be implemented early, by end of first phase):
+
 - `GameEngine.currentUser`, `.currentProject`, `.switchProject(name)`, `.login(user)`, `.logout()`,
   `.canI(verb, resource, namespace?, user?)`, `.applyManifestObject(obj)`, `.getCommandHistory()`,
   `.recordCommand(raw, success)`; `ClusterState.getProjects()`, `.canI(...)`, `.sccForServiceAccount(...)`,
@@ -759,6 +755,7 @@ must read `docs/research/*.md` before finalizing copy; researchers will fact-che
 ## 14. Verification & acceptance (verifier)
 
 `scripts/verify.mjs` (Node, no deps) checks:
+
 - Syntax: every `*.js` parses as ESM (`node --input-type=module --check < file`).
 - Import graph: every relative import path exists; every named import exists in the target module
   (static export scan; tolerate dynamic/`window` access).
@@ -772,7 +769,7 @@ must read `docs/research/*.md` before finalizing copy; researchers will fact-che
   attribution, play instructions, EX280 coverage table.
 - YAML parser self-tests: parse/stringify round-trip for default manifest files; kustomize merge test;
   helm template substitution test.
-`scripts/browser-test.mjs` (installs puppeteer-core in `/tmp/verify-tools` only; repo stays clean):
+  `scripts/browser-test.mjs` (installs puppeteer-core in `/tmp/verify-tools` only; repo stays clean):
 - Load index.html from a local static server; wait for menu; assert no console errors/page errors.
 - Start Sandbox; assert palette has all kinds; create one of each kind via `app.placeResource(kind)`/engine;
   assert renderer meshes exist for each; assert inspector/describe/YAML render without errors.
@@ -787,8 +784,8 @@ must read `docs/research/*.md` before finalizing copy; researchers will fact-che
 - Screenshots (1600x900, dark): main menu, sandbox with resources, a campaign level, EX280 Prep
   overlay → save `screenshot.png` (README hero) and `docs/screenshots/*.png`; regenerate
   `og-image.png` via `og-image.html` (or composited from menu screenshot, 1200x630).
-Report failures to Lead with file/line and reproduction; Lead dispatches fixes and re-runs.
-Definition of done: both scripts pass, screenshots committed, README/study guide accurate, game playable.
+  Report failures to Lead with file/line and reproduction; Lead dispatches fixes and re-runs.
+  Definition of done: both scripts pass, screenshots committed, README/study guide accurate, game playable.
 
 ---
 

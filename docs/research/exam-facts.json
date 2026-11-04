@@ -130,10 +130,7 @@
       "additional_docs": [
         "https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/network_security/network-policy"
       ],
-      "bullets": [
-        "Configure a load balancer service",
-        "Configure external application access"
-      ]
+      "bullets": ["Configure a load balancer service", "Configure external application access"]
     },
     {
       "title": "Enable developer self-service",
@@ -154,11 +151,7 @@
       "title": "Manage OpenShift operators",
       "docs_url": "https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/operators/index",
       "additional_docs": [],
-      "bullets": [
-        "Install an operator",
-        "Uninstall an operator",
-        "Delete an operator"
-      ]
+      "bullets": ["Install an operator", "Uninstall an operator", "Delete an operator"]
     },
     {
       "title": "Configure application security",

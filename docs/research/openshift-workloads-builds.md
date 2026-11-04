@@ -3,18 +3,19 @@
 **Research reference for the k8sgames → OpenShift/EX280 conversion.**
 Feeds campaign levels, incident definitions, and command-bar verbs. RESEARCH ONLY — no game code was modified.
 
-| Field | Value |
-|---|---|
-| Document | `docs/research/openshift-workloads-builds.md` |
-| Research / access date | **2026-11-03** |
-| Primary doc set | **OpenShift Container Platform 4.22** on docs.redhat.com — latest 4.x (`/4.22/` is live; `/4.23/` returns 404). The docs root/version selector also lists **5.0**; the exam is 4.22-based, so every link below is pinned to `/4.22/`. |
-| Exam targeted | **EX280V422** — Red Hat Certified Specialist in OpenShift Administration (per the LMS objectives PDF; redhat.com page still titles it "Red Hat Certified System Administrator in OpenShift exam") |
-| Exam/objectives sources | Exam page <https://www.redhat.com/en/services/training/red-hat-certified-openshift-administrator-exam>; LMS *Exam Objectives by Version* PDF <https://training-lms.redhat.com/public_content/redhat/training/Red%20Hat%20Certification%20Exam%20Objectives%20by%20Version.pdf> (EX280V422 section; both fetched 2026-11-03) |
-| Verification method | Downloaded the official OCP 4.22 PDF bundles for **CLI tools, Building applications, Builds using BuildConfig, Images, Operators, Nodes, Authentication and authorization, Release notes** and extracted them locally; every command/YAML/API version below was cross-checked against that text. Every cited docs.redhat.com chapter URL was fetched and returned HTTP 200 on 2026-11-03. Upstream Kubernetes/Helm docs are used only for the two documented gaps (Kustomize prose, StatefulSet prose) and are marked. |
-| Confidence | **High** for commands, flags, YAML shapes and API versions that appear verbatim in the 4.22 docs. **Medium** for items flagged ⚠️ (doc inconsistency, CLI help-only flag, or lab-dependent behaviour — verify on the exam-like 4.22 cluster). |
-| Deliberate exclusions | Services/Routes/Ingress/NetworkPolicy/PVC/Storage/SCC detail → sibling task `docs/research/openshift-networking-security-storage.md`; exam-objective narrative → `docs/research/ex280-objectives.md` and `docs/research/ex280-study-guide.md`. |
+| Field                   | Value                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Document                | `docs/research/openshift-workloads-builds.md`                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| Research / access date  | **2026-11-03**                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| Primary doc set         | **OpenShift Container Platform 4.22** on docs.redhat.com — latest 4.x (`/4.22/` is live; `/4.23/` returns 404). The docs root/version selector also lists **5.0**; the exam is 4.22-based, so every link below is pinned to `/4.22/`.                                                                                                                                                                                                                                                                                  |
+| Exam targeted           | **EX280V422** — Red Hat Certified Specialist in OpenShift Administration (per the LMS objectives PDF; redhat.com page still titles it "Red Hat Certified System Administrator in OpenShift exam")                                                                                                                                                                                                                                                                                                                      |
+| Exam/objectives sources | Exam page <https://www.redhat.com/en/services/training/red-hat-certified-openshift-administrator-exam>; LMS _Exam Objectives by Version_ PDF <https://training-lms.redhat.com/public_content/redhat/training/Red%20Hat%20Certification%20Exam%20Objectives%20by%20Version.pdf> (EX280V422 section; both fetched 2026-11-03)                                                                                                                                                                                            |
+| Verification method     | Downloaded the official OCP 4.22 PDF bundles for **CLI tools, Building applications, Builds using BuildConfig, Images, Operators, Nodes, Authentication and authorization, Release notes** and extracted them locally; every command/YAML/API version below was cross-checked against that text. Every cited docs.redhat.com chapter URL was fetched and returned HTTP 200 on 2026-11-03. Upstream Kubernetes/Helm docs are used only for the two documented gaps (Kustomize prose, StatefulSet prose) and are marked. |
+| Confidence              | **High** for commands, flags, YAML shapes and API versions that appear verbatim in the 4.22 docs. **Medium** for items flagged ⚠️ (doc inconsistency, CLI help-only flag, or lab-dependent behaviour — verify on the exam-like 4.22 cluster).                                                                                                                                                                                                                                                                          |
+| Deliberate exclusions   | Services/Routes/Ingress/NetworkPolicy/PVC/Storage/SCC detail → sibling task `docs/research/openshift-networking-security-storage.md`; exam-objective narrative → `docs/research/ex280-objectives.md` and `docs/research/ex280-study-guide.md`.                                                                                                                                                                                                                                                                         |
 
 > **Version caveat up front**
+>
 > 1. **DeploymentConfig is deprecated** (since OCP 4.14; still listed Deprecated in the 4.22 release-notes tracker). New content should teach `Deployment` (`apps/v1`). `DeploymentConfig` stays in the game only for legacy/realism/trap content.
 > 2. **The Cluster Samples Operator is deprecated** in 4.22: no new templates, samples or non-S2I image streams are added; existing **S2I builder image streams and templates keep receiving updates "until the Cluster Samples Operator is removed in a future release."** So `oc get templates -n openshift`, `oc new-app --template=...`, and `openshift/<lang>` builder images are real in 4.22 but on a deprecation path.
 > 3. **Pipeline build strategy is deprecated**; Red Hat points to OpenShift Pipelines (Tekton).
@@ -27,37 +28,37 @@ Feeds campaign levels, incident definitions, and command-bar verbs. RESEARCH ONL
 
 Objective bullets below are quoted/normalised from the EX280V422 section of the official exam-objectives PDF. The companion exam docs own the exhaustive objectives list; this doc owns **how the workloads/builds half is actually done**.
 
-| # | EX280V422 objective | Covered in | Exam-style lab |
-|---|---|---|---|
-| 1 | Manage OCP → **Use the command-line interface**; **create/delete projects**; **locate/examine container images**; **identify images by tags and digests** | §1, §2, §5.5 | L1, L2 |
-| 2 | Manage OCP → **Query, format, and filter attributes of Kubernetes resources**; **import, export, and configure Kubernetes resources**; **examine resources and cluster status** | §1.4, §1.5, §3 | L1, L5 |
-| 3 | Manage OCP → **View logs**; **monitor events/alerts**; **troubleshoot common container/pod/cluster events** | §1.7, §4.8, §5.4 (build-specific) | L1, L2 |
-| 4 | Declarative resource management → **work with resource manifests**; **deploy from YAML**; **update application deployments** | §3, §4 | L1, L5 |
-| 5 | Declarative resource management → **deploy with Kustomize**; **work with Kustomize overlays** | §3.3 | L5 |
-| 6 | Deploy applications → **deploy from templates and Helm charts** | §6, §8 | L3, L6 |
-| 7 | Deploy applications → **manage application deployments**; **work with replica sets**; **labels and selectors** | §4.3–§4.6 | L1 |
-| 8 | Enable developer self-service → **cluster resource quotas**; **project quotas**; **project resource requirements**; **project limit ranges**; **project templates** | §2.3, §9 | L4 |
-| 9 | Manage OpenShift operators → **install an operator**; **uninstall an operator**; **delete an operator** | §7 | L6 |
-| 10 | Manage authentication and authorization → **HTPasswd identity provider**; **create/delete users**; **modify user passwords**; **create/manage groups**; **modify user/group permissions** | §11 (practical flow; SCC/RBAC depth in sibling doc) | L7 |
-| 11 | Configure application security → **service accounts**; **Kubernetes API access**; **Jobs**; **CronJobs** (SCC/privileged/Secrets → sibling doc) | §10, §11.4 | L7 |
+| #   | EX280V422 objective                                                                                                                                                                       | Covered in                                          | Exam-style lab |
+| --- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------- | -------------- |
+| 1   | Manage OCP → **Use the command-line interface**; **create/delete projects**; **locate/examine container images**; **identify images by tags and digests**                                 | §1, §2, §5.5                                        | L1, L2         |
+| 2   | Manage OCP → **Query, format, and filter attributes of Kubernetes resources**; **import, export, and configure Kubernetes resources**; **examine resources and cluster status**           | §1.4, §1.5, §3                                      | L1, L5         |
+| 3   | Manage OCP → **View logs**; **monitor events/alerts**; **troubleshoot common container/pod/cluster events**                                                                               | §1.7, §4.8, §5.4 (build-specific)                   | L1, L2         |
+| 4   | Declarative resource management → **work with resource manifests**; **deploy from YAML**; **update application deployments**                                                              | §3, §4                                              | L1, L5         |
+| 5   | Declarative resource management → **deploy with Kustomize**; **work with Kustomize overlays**                                                                                             | §3.3                                                | L5             |
+| 6   | Deploy applications → **deploy from templates and Helm charts**                                                                                                                           | §6, §8                                              | L3, L6         |
+| 7   | Deploy applications → **manage application deployments**; **work with replica sets**; **labels and selectors**                                                                            | §4.3–§4.6                                           | L1             |
+| 8   | Enable developer self-service → **cluster resource quotas**; **project quotas**; **project resource requirements**; **project limit ranges**; **project templates**                       | §2.3, §9                                            | L4             |
+| 9   | Manage OpenShift operators → **install an operator**; **uninstall an operator**; **delete an operator**                                                                                   | §7                                                  | L6             |
+| 10  | Manage authentication and authorization → **HTPasswd identity provider**; **create/delete users**; **modify user passwords**; **create/manage groups**; **modify user/group permissions** | §11 (practical flow; SCC/RBAC depth in sibling doc) | L7             |
+| 11  | Configure application security → **service accounts**; **Kubernetes API access**; **Jobs**; **CronJobs** (SCC/privileged/Secrets → sibling doc)                                           | §10, §11.4                                          | L7             |
 
 **V422-explicit vs. background in this doc**
 
-| Topic | Status for EX280V422 |
-|---|---|
-| `oc` CLI, projects, manifests, `oc apply/create/replace/patch/edit/delete`, query/format/filter, events/logs | **Explicit** ("Manage OpenShift Container Platform", "Declarative Resource Management") |
-| Kustomize (kustomization.yaml, overlays, `oc apply -k`) | **Explicit** ("Deploy applications using Kustomize / Work with Kustomize overlays") |
-| Deployment / replica sets / labels / selectors / scaling / rollouts | **Explicit** ("Manage application deployments / Work with replica sets") |
-| Templates (`oc process`, `oc new-app --template`, `oc get templates -n openshift`) and project templates | **Explicit** ("Deploy applications from templates", "Configure project templates") |
-| Helm charts | **Explicit** ("Deploy applications from templates and Helm charts") |
-| Operator install/uninstall/delete (classic OLM) | **Explicit** ("Manage OpenShift operators") |
-| ResourceQuota / ClusterResourceQuota / LimitRange / QoS / resource requirements | **Explicit** ("Enable developer self-service", "Configure project resource requirements") |
-| Jobs, CronJobs | **Explicit** ("Deploy jobs to perform one-time tasks", "Configure Kubernetes cron jobs") |
-| HTPasswd, users, groups, role bindings | **Explicit** ("Manage authentication and authorization") |
-| BuildConfig / S2I / `oc new-app` / `oc start-build` / image-change triggers | **Background but required context**: the objectives say "locate and examine container images", "identify images using tags and digests", and templates that contain `BuildConfig` objects are still the canonical OpenShift build workflow. The game should teach it for realism and because the in-exam 4.22 cluster still ships it. |
-| DeploymentConfig (DC) | **Legacy/background only** — deprecated; useful as a trap/incident ("why is `oc rollout undo` different on a DC?"). |
-| DaemonSets, StatefulSets | **Background/supporting** — implied by broad "manage and configure an OpenShift cluster" but not a named V422 bullet. Keep one screen each. |
-| Shipwright "Builds" framework | **Out of scope** — separate product docs; note it exists so game copy never presents `BuildConfig` as the only build system in 4.22. |
+| Topic                                                                                                        | Status for EX280V422                                                                                                                                                                                                                                                                                                                  |
+| ------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `oc` CLI, projects, manifests, `oc apply/create/replace/patch/edit/delete`, query/format/filter, events/logs | **Explicit** ("Manage OpenShift Container Platform", "Declarative Resource Management")                                                                                                                                                                                                                                               |
+| Kustomize (kustomization.yaml, overlays, `oc apply -k`)                                                      | **Explicit** ("Deploy applications using Kustomize / Work with Kustomize overlays")                                                                                                                                                                                                                                                   |
+| Deployment / replica sets / labels / selectors / scaling / rollouts                                          | **Explicit** ("Manage application deployments / Work with replica sets")                                                                                                                                                                                                                                                              |
+| Templates (`oc process`, `oc new-app --template`, `oc get templates -n openshift`) and project templates     | **Explicit** ("Deploy applications from templates", "Configure project templates")                                                                                                                                                                                                                                                    |
+| Helm charts                                                                                                  | **Explicit** ("Deploy applications from templates and Helm charts")                                                                                                                                                                                                                                                                   |
+| Operator install/uninstall/delete (classic OLM)                                                              | **Explicit** ("Manage OpenShift operators")                                                                                                                                                                                                                                                                                           |
+| ResourceQuota / ClusterResourceQuota / LimitRange / QoS / resource requirements                              | **Explicit** ("Enable developer self-service", "Configure project resource requirements")                                                                                                                                                                                                                                             |
+| Jobs, CronJobs                                                                                               | **Explicit** ("Deploy jobs to perform one-time tasks", "Configure Kubernetes cron jobs")                                                                                                                                                                                                                                              |
+| HTPasswd, users, groups, role bindings                                                                       | **Explicit** ("Manage authentication and authorization")                                                                                                                                                                                                                                                                              |
+| BuildConfig / S2I / `oc new-app` / `oc start-build` / image-change triggers                                  | **Background but required context**: the objectives say "locate and examine container images", "identify images using tags and digests", and templates that contain `BuildConfig` objects are still the canonical OpenShift build workflow. The game should teach it for realism and because the in-exam 4.22 cluster still ships it. |
+| DeploymentConfig (DC)                                                                                        | **Legacy/background only** — deprecated; useful as a trap/incident ("why is `oc rollout undo` different on a DC?").                                                                                                                                                                                                                   |
+| DaemonSets, StatefulSets                                                                                     | **Background/supporting** — implied by broad "manage and configure an OpenShift cluster" but not a named V422 bullet. Keep one screen each.                                                                                                                                                                                           |
+| Shipwright "Builds" framework                                                                                | **Out of scope** — separate product docs; note it exists so game copy never presents `BuildConfig` as the only build system in 4.22.                                                                                                                                                                                                  |
 
 ---
 
@@ -67,78 +68,78 @@ OpenShift CLI (`oc`) is a superset of `kubectl`: same verbs/API access, plus nat
 
 ### 1.1 Quick reference — the commands the game must support
 
-| Task | Exact command (OCP 4.22 docs) | Source |
-|---|---|---|
-| Interactive/browser login | `oc login <cluster_url> --web` (optional `--callback-port 8280`) | [R4] |
-| Password login | `oc login <api_server_url> -u <username> -p <password>` | [R4] |
-| Token login | `oc login https://openshift1.example.com --token=<token>` | [R4] |
-| Logout | `oc logout` | [R4] |
-| Who am I / which context | `oc whoami` · `oc whoami -c` | [R4] |
-| Current project | `oc project` (prints `Using project "..." on server "..."`) | [R4] |
-| List accessible projects | `oc projects` · `oc get projects` | [R4][R6] |
-| Switch project | `oc project <project_name>` | [R4][R6] |
-| Create project | `oc new-project <project_name> --description="<description>" --display-name="<display_name>"` | [R4][R6] |
-| Delete project | `oc delete project <project_name>` | [R6] |
-| Project/cluster overview | `oc status` · `oc status --suggest` | [R4][R6] |
-| Health-oriented view | `oc cluster-info`; `oc get clusteroperators` (see sibling networking doc) | [R4] |
-| Resource help | `oc explain pods` · `oc explain pods.spec.containers` · `oc explain pods --recursive` · `oc explain deployments --api-version=apps/v1` | [R4] |
-| Command help | `oc help` · `oc <command> --help` | [R4] |
-| Supported APIs | `oc api-resources` · `-o wide` · `--namespaced=true\|false` · `--api-group=rbac.authorization.k8s.io` · `oc api-versions` | [R4] |
-| Apply manifests | `oc apply -f ./pod.json` · `oc apply -k dir/` · `cat pod.json \| oc apply -f -` · `oc diff -f pod.json` | [R4] |
-| Create from manifest | `oc create -f <file>` · `oc create -f -` (stdin) | [R4] |
-| Replace | `oc replace -f ./pod.json` · `oc replace --force -f ./pod.json` (delete + recreate) | [R4] |
-| Patch | `oc patch deployment nginx-deployment --subresource='scale' --type='merge' -p '{"spec":{"replicas":2}}'` · `oc patch node k8s-node-1 -p '{"spec":{"unschedulable":true}}'` | [R4] |
-| Edit live object | `oc edit deployment/mydeployment` · `KUBE_EDITOR="nano" oc edit svc/registry` | [R4] |
-| Delete | `oc delete -f ./pod.json` · `oc delete pod,service baz foo` · `oc delete pods,services -l name=myLabel` · `oc delete pods --all` · `oc delete -k dir` | [R4] |
-| Get | `oc get pods -o wide` · `oc get deployments.v1.apps -o json` · `oc get -o json pod web-pod-13je7` · `oc get pods --all-namespaces` · `oc get rc,services` | [R4] |
-| Describe | `oc describe pods/nginx` · `oc describe pods -l name=myLabel` · `oc describe -f pod.json` | [R4] |
-| Events | `oc events` · `oc events --all-namespaces` · `oc events --for pod/web-pod-13je7 --watch` · `oc events --types=Warning,Normal` | [R4] |
-| Logs | `oc logs -f pod/backend -c ruby-container` · `oc logs deployment/ruby` · `oc logs -f bc/<bc>` · `oc logs -f dc/<dc>` | [R4][R32] |
-| Get all classic app objects | `oc get all` · `oc get -o yaml all > <yaml_filename>` | [R4][R7] |
-| Export one resource as YAML | `oc get deployment/myapp -o yaml > myapp.yaml` | [R4] |
-| Set context project without `oc project` | `oc config set-context \`oc config current-context\` --namespace=<project_name>` | [R4] |
-| Kubeconfig operations | `oc config view --raw > kubeconfig`; `export KUBECONFIG=./kubeconfig`; `oc config get-contexts`; `oc config use-context <name>`; `oc config current-context` | [R4] |
+| Task                                     | Exact command (OCP 4.22 docs)                                                                                                                                              | Source    |
+| ---------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------- |
+| Interactive/browser login                | `oc login <cluster_url> --web` (optional `--callback-port 8280`)                                                                                                           | [R4]      |
+| Password login                           | `oc login <api_server_url> -u <username> -p <password>`                                                                                                                    | [R4]      |
+| Token login                              | `oc login https://openshift1.example.com --token=<token>`                                                                                                                  | [R4]      |
+| Logout                                   | `oc logout`                                                                                                                                                                | [R4]      |
+| Who am I / which context                 | `oc whoami` · `oc whoami -c`                                                                                                                                               | [R4]      |
+| Current project                          | `oc project` (prints `Using project "..." on server "..."`)                                                                                                                | [R4]      |
+| List accessible projects                 | `oc projects` · `oc get projects`                                                                                                                                          | [R4][R6]  |
+| Switch project                           | `oc project <project_name>`                                                                                                                                                | [R4][R6]  |
+| Create project                           | `oc new-project <project_name> --description="<description>" --display-name="<display_name>"`                                                                              | [R4][R6]  |
+| Delete project                           | `oc delete project <project_name>`                                                                                                                                         | [R6]      |
+| Project/cluster overview                 | `oc status` · `oc status --suggest`                                                                                                                                        | [R4][R6]  |
+| Health-oriented view                     | `oc cluster-info`; `oc get clusteroperators` (see sibling networking doc)                                                                                                  | [R4]      |
+| Resource help                            | `oc explain pods` · `oc explain pods.spec.containers` · `oc explain pods --recursive` · `oc explain deployments --api-version=apps/v1`                                     | [R4]      |
+| Command help                             | `oc help` · `oc <command> --help`                                                                                                                                          | [R4]      |
+| Supported APIs                           | `oc api-resources` · `-o wide` · `--namespaced=true\|false` · `--api-group=rbac.authorization.k8s.io` · `oc api-versions`                                                  | [R4]      |
+| Apply manifests                          | `oc apply -f ./pod.json` · `oc apply -k dir/` · `cat pod.json \| oc apply -f -` · `oc diff -f pod.json`                                                                    | [R4]      |
+| Create from manifest                     | `oc create -f <file>` · `oc create -f -` (stdin)                                                                                                                           | [R4]      |
+| Replace                                  | `oc replace -f ./pod.json` · `oc replace --force -f ./pod.json` (delete + recreate)                                                                                        | [R4]      |
+| Patch                                    | `oc patch deployment nginx-deployment --subresource='scale' --type='merge' -p '{"spec":{"replicas":2}}'` · `oc patch node k8s-node-1 -p '{"spec":{"unschedulable":true}}'` | [R4]      |
+| Edit live object                         | `oc edit deployment/mydeployment` · `KUBE_EDITOR="nano" oc edit svc/registry`                                                                                              | [R4]      |
+| Delete                                   | `oc delete -f ./pod.json` · `oc delete pod,service baz foo` · `oc delete pods,services -l name=myLabel` · `oc delete pods --all` · `oc delete -k dir`                      | [R4]      |
+| Get                                      | `oc get pods -o wide` · `oc get deployments.v1.apps -o json` · `oc get -o json pod web-pod-13je7` · `oc get pods --all-namespaces` · `oc get rc,services`                  | [R4]      |
+| Describe                                 | `oc describe pods/nginx` · `oc describe pods -l name=myLabel` · `oc describe -f pod.json`                                                                                  | [R4]      |
+| Events                                   | `oc events` · `oc events --all-namespaces` · `oc events --for pod/web-pod-13je7 --watch` · `oc events --types=Warning,Normal`                                              | [R4]      |
+| Logs                                     | `oc logs -f pod/backend -c ruby-container` · `oc logs deployment/ruby` · `oc logs -f bc/<bc>` · `oc logs -f dc/<dc>`                                                       | [R4][R32] |
+| Get all classic app objects              | `oc get all` · `oc get -o yaml all > <yaml_filename>`                                                                                                                      | [R4][R7]  |
+| Export one resource as YAML              | `oc get deployment/myapp -o yaml > myapp.yaml`                                                                                                                             | [R4]      |
+| Set context project without `oc project` | `oc config set-context \`oc config current-context\` --namespace=<project_name>`                                                                                           | [R4]      |
+| Kubeconfig operations                    | `oc config view --raw > kubeconfig`; `export KUBECONFIG=./kubeconfig`; `oc config get-contexts`; `oc config use-context <name>`; `oc config current-context`               | [R4]      |
 
 **Auth/session facts:** first interactive login writes/updates `~/.kube/config` (contexts/clusters/users + `current-context`); multiple kubeconfig files merge at runtime and CLI flags override; `KUBECONFIG` selects a file. `oc login` supports `--certificate-authority`, `--insecure-skip-tls-verify`, `--token`, `--username/--password`, `--web`. `oc logout` deletes the token server-side and from the config. [R4]
 
 ### 1.2 `oc` vs `kubectl` — what to put in game copy
 
-| Capability | `oc` | `kubectl` |
-|---|---|---|
-| Kubernetes API objects (Deployment, Pod, Job, …) | yes | yes |
-| OpenShift resources: `DeploymentConfig`, `BuildConfig`, `Route`, `ImageStream`, `ImageStreamTag` | yes (full support) | not natively modelled (you can fetch via API if CRDs exist, but no First-Class UX/help/`new-app`) |
-| `oc login` / OAuth token flow | yes | no (needs kubeconfig/token setup) |
-| Projects / project requests | yes (`oc project`, `oc new-project`, project abstraction) | namespaces only |
-| App scaffolding | `oc new-app`, `oc new-build`, `oc new-project` | no equivalent |
-| Client/server compatibility | must be ≤ server-ish; **older `oc` cannot use all commands/features of a newer server** — OCP docs: "If you installed an earlier version of the oc binary, you cannot use it to complete all of the commands in OpenShift Container Platform 4.22" | standard k8s skew rules |
+| Capability                                                                                       | `oc`                                                                                                                                                                                                                                               | `kubectl`                                                                                         |
+| ------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| Kubernetes API objects (Deployment, Pod, Job, …)                                                 | yes                                                                                                                                                                                                                                                | yes                                                                                               |
+| OpenShift resources: `DeploymentConfig`, `BuildConfig`, `Route`, `ImageStream`, `ImageStreamTag` | yes (full support)                                                                                                                                                                                                                                 | not natively modelled (you can fetch via API if CRDs exist, but no First-Class UX/help/`new-app`) |
+| `oc login` / OAuth token flow                                                                    | yes                                                                                                                                                                                                                                                | no (needs kubeconfig/token setup)                                                                 |
+| Projects / project requests                                                                      | yes (`oc project`, `oc new-project`, project abstraction)                                                                                                                                                                                          | namespaces only                                                                                   |
+| App scaffolding                                                                                  | `oc new-app`, `oc new-build`, `oc new-project`                                                                                                                                                                                                     | no equivalent                                                                                     |
+| Client/server compatibility                                                                      | must be ≤ server-ish; **older `oc` cannot use all commands/features of a newer server** — OCP docs: "If you installed an earlier version of the oc binary, you cannot use it to complete all of the commands in OpenShift Container Platform 4.22" | standard k8s skew rules                                                                           |
 
 Game rule of thumb: **`oc` is the in-game verb; `kubectl` is an alias/trap** — acceptable for pure-Kubernetes objects, but a "wrong tool" incident for `oc new-app`/`oc login`/`oc project` tasks and for OpenShift objects. [R4]
 
 ### 1.3 Kubeconfig / contexts / projects — exact model
 
 - `~/.kube/config` holds `clusters[]`, `contexts[]` (cluster + user + namespace), `users[]`, `current-context`. A context nickname in OCP docs is typically `<namespace>/<cluster>/<user>`. [R4]
-- `oc config set-context \`oc config current-context\` --namespace=<project>` changes the namespace of the active context; `oc config use-context <nickname>` switches context. [R4]
+- `oc config set-context \`oc config current-context\` --namespace=<project>`changes the namespace of the active context;`oc config use-context <nickname>` switches context. [R4]
 - The **project** is the CLI-facing representation of a namespace. `oc project <name>` changes the active context's namespace for the session/context (same effect as `oc config set-context ... --namespace`). [R4][R6][R37]
 
 ### 1.4 Query, format, filter (V422-explicit)
 
 Documented output/filter options the game should model:
 
-| Need | Command pattern | Source |
-|---|---|---|
-| Human table | `oc get pods` | [R4] |
-| More columns (node, IP…) | `oc get pods -o wide` (`oc get nodes -o wide` is also documented) | [R4][R31] |
-| Full objects | `oc get deployment/myapp -o yaml` / `-o json` | [R4] |
-| Names only | `oc get pods -o name` (same `-o` machinery; docs show `-o name` on `oc adm groups new`) | [R4] |
-| Custom columns | `oc get pod test-pod -o custom-columns=CONTAINER:.spec.containers[0].name,IMAGE:.spec.containers[0].image` | [R4] |
-| JSONPath / go-template | `oc get istag busybox:latest -ojsonpath="{...}"` · `oc get is -o go-template='{{range ...}}'` · `oc get -o template pod/x --template={{.status.phase}}` | [R4][R21] |
-| Label selector | `oc get pods -l name=myLabel` · `oc delete pods -l app=foo` · `oc describe pods -l name=myLabel` | [R4] |
-| Show labels | `oc get pods --show-labels` (documented for `machineconfigpool`) | [R31] |
-| Field selector | `oc get pod --all-namespaces --field-selector=spec.nodeName=<nodename>` · `oc delete pods --field-selector status.phase=Failed -n <ns>` | [R31] |
-| Sort | `oc api-resources --sort-by=name`; `oc get ... --sort-by=...` is the same kubectl flag | [R4] |
-| All namespaces | `oc get pods --all-namespaces` / `-A` | [R4] |
-| Watch | `oc get pods -w` (standard kubectl flag; docs use `oc events --watch`) | [R4] |
-| API discovery | `oc api-resources`, `oc explain`, `oc api-versions` | [R4] |
+| Need                     | Command pattern                                                                                                                                         | Source    |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------- | --------- |
+| Human table              | `oc get pods`                                                                                                                                           | [R4]      |
+| More columns (node, IP…) | `oc get pods -o wide` (`oc get nodes -o wide` is also documented)                                                                                       | [R4][R31] |
+| Full objects             | `oc get deployment/myapp -o yaml` / `-o json`                                                                                                           | [R4]      |
+| Names only               | `oc get pods -o name` (same `-o` machinery; docs show `-o name` on `oc adm groups new`)                                                                 | [R4]      |
+| Custom columns           | `oc get pod test-pod -o custom-columns=CONTAINER:.spec.containers[0].name,IMAGE:.spec.containers[0].image`                                              | [R4]      |
+| JSONPath / go-template   | `oc get istag busybox:latest -ojsonpath="{...}"` · `oc get is -o go-template='{{range ...}}'` · `oc get -o template pod/x --template={{.status.phase}}` | [R4][R21] |
+| Label selector           | `oc get pods -l name=myLabel` · `oc delete pods -l app=foo` · `oc describe pods -l name=myLabel`                                                        | [R4]      |
+| Show labels              | `oc get pods --show-labels` (documented for `machineconfigpool`)                                                                                        | [R31]     |
+| Field selector           | `oc get pod --all-namespaces --field-selector=spec.nodeName=<nodename>` · `oc delete pods --field-selector status.phase=Failed -n <ns>`                 | [R31]     |
+| Sort                     | `oc api-resources --sort-by=name`; `oc get ... --sort-by=...` is the same kubectl flag                                                                  | [R4]      |
+| All namespaces           | `oc get pods --all-namespaces` / `-A`                                                                                                                   | [R4]      |
+| Watch                    | `oc get pods -w` (standard kubectl flag; docs use `oc events --watch`)                                                                                  | [R4]      |
+| API discovery            | `oc api-resources`, `oc explain`, `oc api-versions`                                                                                                     | [R4]      |
 
 > ⚠️ `-o jsonpath`, `-o custom-columns`, `-o go-template`, `--show-labels`, `--field-selector`, `--sort-by` are standard `oc get` flags (same as kubectl) and appear in 4.22 docs in specific examples, but the 4.22 `oc get` reference itself only lists a subset of examples. Treat the table above as doc-verified by example.
 
@@ -152,7 +153,7 @@ oc get -o yaml all > all.yaml          # docs recommend NOT using `all` long-ter
 oc get -o yaml all | oc apply -f -     # round-trip (only after editing)
 ```
 
-Docs for `oc get -o yaml all` list included kinds as `BuildConfig, Build, DeploymentConfig, ImageStream, Pod, ReplicationController, Route, Service` and explicitly warn: *"Using the all alias is not recommended because the contents might vary across different clusters and versions. Instead, specify all required resources."* [R7]
+Docs for `oc get -o yaml all` list included kinds as `BuildConfig, Build, DeploymentConfig, ImageStream, Pod, ReplicationController, Route, Service` and explicitly warn: _"Using the all alias is not recommended because the contents might vary across different clusters and versions. Instead, specify all required resources."_ [R7]
 
 **Import/apply (file → cluster):**
 
@@ -221,22 +222,22 @@ oc get clusteroperators              # cluster health; see networking/security d
 
 ## 2. Projects vs namespaces
 
-**Doc-anchored definition (quote):** *"An OpenShift project is an alternative representation of a Kubernetes namespace. Projects are exposed as editable to end users while namespaces are not. Direct creation of a project is typically restricted to administrators, while end users should use the requestproject resource."* — Project API, `project.openshift.io/v1`. [R37]
+**Doc-anchored definition (quote):** _"An OpenShift project is an alternative representation of a Kubernetes namespace. Projects are exposed as editable to end users while namespaces are not. Direct creation of a project is typically restricted to administrators, while end users should use the requestproject resource."_ — Project API, `project.openshift.io/v1`. [R37]
 
 ### 2.1 Objects and commands
 
-| Concept | Fact | Source |
-|---|---|---|
-| Project | cluster-scoped `project.openshift.io/v1` representation of a namespace; users see only projects they can read | [R37] |
-| Namespace | `v1` Namespace; `oc create namespace` works for admins | [R4] |
-| Creation by users | `oc new-project <name>` submits a **ProjectRequest**; API provisions project from the **project template** and grants requester `admin` in that project | [R6] |
-| Creation by admin | `oc adm new-project <name>` (bypasses self-provisioning/project-request) | [R6] |
-| Reserved names | cannot create `openshift-*` / `kube-*` via `oc new-project`; admins can via `oc adm new-project` | [R6] |
-| List | `oc get projects`, `oc projects` | [R4][R6] |
-| Switch | `oc project <name>` | [R6] |
-| Status | `oc project`, `oc status` | [R6] |
-| Delete | `oc delete project <name>`; project goes `Active` → `Terminating`, content cleared, then removed | [R6] |
-| Impersonated project request | `oc new-project <p> --as=<user> --as-group=system:authenticated --as-group=system:authenticated:oauth` | [R6] |
+| Concept                      | Fact                                                                                                                                                    | Source   |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- |
+| Project                      | cluster-scoped `project.openshift.io/v1` representation of a namespace; users see only projects they can read                                           | [R37]    |
+| Namespace                    | `v1` Namespace; `oc create namespace` works for admins                                                                                                  | [R4]     |
+| Creation by users            | `oc new-project <name>` submits a **ProjectRequest**; API provisions project from the **project template** and grants requester `admin` in that project | [R6]     |
+| Creation by admin            | `oc adm new-project <name>` (bypasses self-provisioning/project-request)                                                                                | [R6]     |
+| Reserved names               | cannot create `openshift-*` / `kube-*` via `oc new-project`; admins can via `oc adm new-project`                                                        | [R6]     |
+| List                         | `oc get projects`, `oc projects`                                                                                                                        | [R4][R6] |
+| Switch                       | `oc project <name>`                                                                                                                                     | [R6]     |
+| Status                       | `oc project`, `oc status`                                                                                                                               | [R6]     |
+| Delete                       | `oc delete project <name>`; project goes `Active` → `Terminating`, content cleared, then removed                                                        | [R6]     |
+| Impersonated project request | `oc new-project <p> --as=<user> --as-group=system:authenticated --as-group=system:authenticated:oauth`                                                  | [R6]     |
 
 ### 2.2 Self-provisioning (developer self-service prerequisite)
 
@@ -274,7 +275,7 @@ metadata:
   name: cluster
 spec:
   projectRequestTemplate:
-    name: project-request    # name of the Template in openshift-config
+    name: project-request # name of the Template in openshift-config
   # projectRequestMessage: "To request a project, contact ..."   # optional custom message
 ```
 
@@ -282,13 +283,13 @@ spec:
 
 ### 2.4 Namespace-scoped `Project` vs cluster-scoped `Namespace` — game traps
 
-| Trap | Correct behaviour |
-|---|---|
-| `oc create namespace foo` by a developer | usually Forbidden — developers use `oc new-project` (project request) |
-| `oc get projects` as non-admin | only readable projects are listed |
-| `oc project` with no arg | prints current project + server |
-| `kubectl create namespace` | bypasses project template/quota/RBAC defaults; should be flagged as wrong way in game content |
-| deleting a project | `Terminating` state is slow — game incidents can show "namespace stuck terminating" (see §7.3 uninstall caveat too) |
+| Trap                                     | Correct behaviour                                                                                                   |
+| ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `oc create namespace foo` by a developer | usually Forbidden — developers use `oc new-project` (project request)                                               |
+| `oc get projects` as non-admin           | only readable projects are listed                                                                                   |
+| `oc project` with no arg                 | prints current project + server                                                                                     |
+| `kubectl create namespace`               | bypasses project template/quota/RBAC defaults; should be flagged as wrong way in game content                       |
+| deleting a project                       | `Terminating` state is slow — game incidents can show "namespace stuck terminating" (see §7.3 uninstall caveat too) |
 
 ---
 
@@ -296,12 +297,12 @@ spec:
 
 ### 3.1 The four write paths (teach the difference!)
 
-| Verb | Behaviour | When used |
-|---|---|---|
-| `oc create -f` | POST; fails if object already exists | first deployment, exam "create from manifest" |
-| `oc apply -f` | create **or** update; stores `kubectl.kubernetes.io/last-applied-configuration`; warning if resource wasn't created by `create --save-config`/`apply` | idempotent/declarative workflow, exam "deploy from YAML" |
-| `oc replace -f` | PUT/full replace; `--force` deletes then re-creates (drops status/uid) | fix immutable-field errors, recover broken objects |
-| `oc patch` / `oc edit` | partial update / in-editor update | quick field changes (`replicas`, `image`, `resources`) |
+| Verb                   | Behaviour                                                                                                                                             | When used                                                |
+| ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------- |
+| `oc create -f`         | POST; fails if object already exists                                                                                                                  | first deployment, exam "create from manifest"            |
+| `oc apply -f`          | create **or** update; stores `kubectl.kubernetes.io/last-applied-configuration`; warning if resource wasn't created by `create --save-config`/`apply` | idempotent/declarative workflow, exam "deploy from YAML" |
+| `oc replace -f`        | PUT/full replace; `--force` deletes then re-creates (drops status/uid)                                                                                | fix immutable-field errors, recover broken objects       |
+| `oc patch` / `oc edit` | partial update / in-editor update                                                                                                                     | quick field changes (`replicas`, `image`, `resources`)   |
 
 Documented examples: [R4] (all four), [R7] (pipe `oc new-app ... -o yaml` → edit → `oc create -f`), [R33] (export/apply pattern: `oc create ... --dry-run=client -o yaml | oc replace -f -`).
 
@@ -322,12 +323,12 @@ oc rollout status deployment/myapp
 
 **Docs gap:** OCP 4.22 has **no dedicated Kustomize chapter**. The verified documentation is the CLI reference entries for `oc apply -k`, `oc kustomize`, `oc get -k`, `oc delete -k`, plus the CLI help text. The game should therefore teach the standard Kubernetes Kustomize workflow (upstream docs are the canonical reference) with OCP commands as the wrapper. [R4][R41]
 
-| Command | Meaning | Source |
-|---|---|---|
-| `oc apply -k dir/` | build `dir/kustomization.yaml` and apply output | [R4] |
-| `oc kustomize [dir\|URL]` | render kustomization to stdout (client-side) | [R4] |
-| `oc get -k dir/` | get resources declared by the kustomization | [R4] |
-| `oc delete -k dir` | delete resources declared by the kustomization | [R4] |
+| Command                   | Meaning                                         | Source |
+| ------------------------- | ----------------------------------------------- | ------ |
+| `oc apply -k dir/`        | build `dir/kustomization.yaml` and apply output | [R4]   |
+| `oc kustomize [dir\|URL]` | render kustomization to stdout (client-side)    | [R4]   |
+| `oc get -k dir/`          | get resources declared by the kustomization     | [R4]   |
+| `oc delete -k dir`        | delete resources declared by the kustomization  | [R4]   |
 
 Canonical layout the game should support (upstream-verified):
 
@@ -361,11 +362,11 @@ apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 namespace: myapp-prod
 namePrefix: prod-
-bases:                    # newer kustomize prefers `resources:` for both
+bases: # newer kustomize prefers `resources:` for both
   - ../../base
 images:
   - name: quay.io/example/myapp
-    newTag: "1.2.3"
+    newTag: '1.2.3'
 patchesStrategicMerge:
   - replicas-patch.yaml
 ```
@@ -417,6 +418,7 @@ spec:
 Source: 4.22 Building applications §7.1.2 (verbatim structure). [R8]
 
 Key validation rules for game content:
+
 - `spec.selector.matchLabels` **must match** `spec.template.metadata.labels`, else API rejects the Deployment.
 - `image` pull: `openshift/hello-openshift` resolves through the internal registry/image streams; in game define image availability explicitly.
 - `containerPort` is informational for networking; Services select pods by labels (sibling doc).
@@ -428,27 +430,28 @@ Key validation rules for game content:
 
 ### 4.1 Which to use in OCP 4.22 (and in the exam)
 
-**Verbatim guidance:** *"Use Deployment objects unless you need a feature that only DeploymentConfig objects provide."* [R8]
-**Deprecation:** *"As of OpenShift Container Platform 4.14, DeploymentConfig objects are deprecated. DeploymentConfig objects are still supported, but are not recommended for new installations. Only security-related and critical issues will be fixed."* [R8] The 4.22 release-notes tracker lists `DeploymentConfig objects` = Deprecated for 4.20/4.21/4.22. [R36]
+**Verbatim guidance:** _"Use Deployment objects unless you need a feature that only DeploymentConfig objects provide."_ [R8]
+**Deprecation:** _"As of OpenShift Container Platform 4.14, DeploymentConfig objects are deprecated. DeploymentConfig objects are still supported, but are not recommended for new installations. Only security-related and critical issues will be fixed."_ [R8] The 4.22 release-notes tracker lists `DeploymentConfig objects` = Deprecated for 4.20/4.21/4.22. [R36]
 
-| Aspect | Deployment (`apps/v1`) | DeploymentConfig (`apps.openshift.io/v1`) |
-|---|---|---|
-| Controller / child objects | DeploymentController → **ReplicaSets** | deployer pod → **ReplicationControllers** |
-| Rollout engine | controller loop (fast, many RS alive at once) | one deployer pod per rollout; max 2 RCs active |
-| Scale during rollout | supported (proportional scaling) | not supported while a rollout is in progress |
-| Pause mid-rollout | yes (`oc rollout pause deployment/...`) | deployer pods cannot be paused |
-| Triggers | implicit config change (pod-template change triggers rollout) | explicit `ConfigChange` + `ImageChange` triggers |
-| Automatic rollback on failure | **no** | **yes** (automatic rollback to last successful revision) |
-| Lifecycle hooks | **no** | yes (`pre`/`mid`/`post`, `failurePolicy` Abort/Retry/Ignore) |
-| Custom deployment strategy | **no** | yes (`Custom` strategy + `customParams`) |
-| Route-based strategies | supported (blue-green/A/B via route weights) | supported |
-| Status for exam | **recommended/default** | **deprecated; legacy/trap content only** |
+| Aspect                        | Deployment (`apps/v1`)                                        | DeploymentConfig (`apps.openshift.io/v1`)                    |
+| ----------------------------- | ------------------------------------------------------------- | ------------------------------------------------------------ |
+| Controller / child objects    | DeploymentController → **ReplicaSets**                        | deployer pod → **ReplicationControllers**                    |
+| Rollout engine                | controller loop (fast, many RS alive at once)                 | one deployer pod per rollout; max 2 RCs active               |
+| Scale during rollout          | supported (proportional scaling)                              | not supported while a rollout is in progress                 |
+| Pause mid-rollout             | yes (`oc rollout pause deployment/...`)                       | deployer pods cannot be paused                               |
+| Triggers                      | implicit config change (pod-template change triggers rollout) | explicit `ConfigChange` + `ImageChange` triggers             |
+| Automatic rollback on failure | **no**                                                        | **yes** (automatic rollback to last successful revision)     |
+| Lifecycle hooks               | **no**                                                        | yes (`pre`/`mid`/`post`, `failurePolicy` Abort/Retry/Ignore) |
+| Custom deployment strategy    | **no**                                                        | yes (`Custom` strategy + `customParams`)                     |
+| Route-based strategies        | supported (blue-green/A/B via route weights)                  | supported                                                    |
+| Status for exam               | **recommended/default**                                       | **deprecated; legacy/trap content only**                     |
 
 Sources: [R8] (comparison section 7.1.4), [R12] (triggers/hooks concept), [R4] (`oc rollout` vs `oc rollback` command split).
 
 **Game modelling guidance**
+
 - Default workload kind for "deploy an app" tasks: `deployment.apps` (Deployment).
-- `oc new-app` in current OCP produces a **Deployment by default**; `--as-deployment-config=true` opts into a DC. ⚠️ The 4.22 "new-app output objects" table still says "DeploymentConfig" (legacy text) and several doc examples use DC; the 4.22 CLI includes `--as-deployment-config` *"If true create this application as a deployment config, which allows for hooks and custom strategies."* The flag existing (and doc examples needing it to get DC behaviour) is the evidence that Deployment is the default. Verify with `oc new-app --help` on the exam-like cluster before hard-coding the rule in game copy. [R7][R4]
+- `oc new-app` in current OCP produces a **Deployment by default**; `--as-deployment-config=true` opts into a DC. ⚠️ The 4.22 "new-app output objects" table still says "DeploymentConfig" (legacy text) and several doc examples use DC; the 4.22 CLI includes `--as-deployment-config` _"If true create this application as a deployment config, which allows for hooks and custom strategies."_ The flag existing (and doc examples needing it to get DC behaviour) is the evidence that Deployment is the default. Verify with `oc new-app --help` on the exam-like cluster before hard-coding the rule in game copy. [R7][R4]
 - Rollback verbs: `oc rollout undo deployment/...` for Deployments; `oc rollback` / `oc rollout undo dc/...` / `oc rollout latest dc/...` / `oc rollout retry dc/...` for DCs. [R4]
 
 ### 4.2 Deployment creation paths
@@ -513,6 +516,7 @@ oc set triggers dc/myapp --auto            # re-enable image triggers after a DC
 Source: [R4] (`oc rollout` reference; `oc rollback` reference), [R8] (DC walkthrough: retry/rollback/trigger-disable semantics), [R36] (DC deprecated).
 
 Exam-critical behaviours to simulate:
+
 - `oc rollout status` blocks/streams until the rollout completes or fails; failure path leaves old RS serving (rolling) or new RS degraded.
 - `oc rollout undo` uses revision history; `--to-revision` selects a specific revision (default: previous).
 - For a DC, `oc rollout undo` re-disables image change triggers; re-enable with `oc set triggers dc/<name> --auto`. [R8]
@@ -521,14 +525,14 @@ Exam-critical behaviours to simulate:
 
 ### 4.5 Deployment strategies
 
-| Strategy | Applies to | YAML | Docs |
-|---|---|---|---|
-| RollingUpdate (default for Deployment) | Deployment | `spec.strategy.type: RollingUpdate`, `rollingUpdate.maxSurge`, `maxUnavailable` | [R8][R39] |
-| Recreate | Deployment | `spec.strategy.type: Recreate` | [R8] |
-| Rolling (default for DC) | DeploymentConfig | `spec.strategy.type: Rolling`, `rollingParams.maxSurge/maxUnavailable/timeoutSeconds/updatePeriodSeconds/intervalSeconds` (+ `pre`/`post` hooks) | [R8] |
-| Recreate | DC | `spec.strategy.type: Recreate`, optional `recreateParams.pre/mid/post` | [R8] |
-| Custom (privileged) | DC only | `spec.strategy.type: Custom`, `customParams.image/command/environment` | [R8] |
-| Route-based blue-green / A-B | any | two Deployments + one Service/Route; `oc set route-backends web a=2 b=1` / `--adjust b=+10%` | [R8][R4] |
+| Strategy                               | Applies to       | YAML                                                                                                                                             | Docs      |
+| -------------------------------------- | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ | --------- |
+| RollingUpdate (default for Deployment) | Deployment       | `spec.strategy.type: RollingUpdate`, `rollingUpdate.maxSurge`, `maxUnavailable`                                                                  | [R8][R39] |
+| Recreate                               | Deployment       | `spec.strategy.type: Recreate`                                                                                                                   | [R8]      |
+| Rolling (default for DC)               | DeploymentConfig | `spec.strategy.type: Rolling`, `rollingParams.maxSurge/maxUnavailable/timeoutSeconds/updatePeriodSeconds/intervalSeconds` (+ `pre`/`post` hooks) | [R8]      |
+| Recreate                               | DC               | `spec.strategy.type: Recreate`, optional `recreateParams.pre/mid/post`                                                                           | [R8]      |
+| Custom (privileged)                    | DC only          | `spec.strategy.type: Custom`, `customParams.image/command/environment`                                                                           | [R8]      |
+| Route-based blue-green / A-B           | any              | two Deployments + one Service/Route; `oc set route-backends web a=2 b=1` / `--adjust b=+10%`                                                     | [R8][R4]  |
 
 Deployment defaults: Kubernetes `rollingUpdate.maxUnavailable` and `maxSurge` default to **25%**; readiness checks gate progress; `Recreate` involves downtime. [R39] OCP's DC rolling strategy defaults `maxSurge`/`maxUnavailable` to 25%, `timeoutSeconds` 600, and automatically rolls back on failure. [R8]
 
@@ -589,7 +593,7 @@ containers:
       periodSeconds: 5
     livenessProbe:
       exec:
-        command: ["cat", "/tmp/healthy"]
+        command: ['cat', '/tmp/healthy']
     startupProbe:
       httpGet:
         path: /healthz
@@ -659,12 +663,12 @@ DC semantics to model if the game includes DCs: `ConfigChange` trigger creates a
 
 A **BuildConfig** describes one build definition + triggers. It is characterised by a **strategy** and one or more **sources**. Builds run in a build pod, produce an image, and push it to an output (`ImageStreamTag` in the integrated registry or an external `DockerImage`). [R12][R17]
 
-| Strategy | BuildConfig field | Notes |
-|---|---|---|
-| Source-to-image (S2I) | `spec.strategy.sourceStrategy.from` (ImageStreamTag of builder) | assembles source into a builder image; supports incremental builds; most OpenShift app builds |
-| Docker | `spec.strategy.dockerStrategy` | Buildah builds from `Dockerfile`; supports `dockerfilePath`, `from` override, build args, env |
-| Custom | `spec.strategy.customStrategy` | builder image drives entire build; **runs with high privilege — not available to users by default** |
-| Pipeline | `spec.strategy.jenkinsPipelineStrategy` | **deprecated** in OCP 4; use OpenShift Pipelines (Tekton) |
+| Strategy              | BuildConfig field                                               | Notes                                                                                               |
+| --------------------- | --------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| Source-to-image (S2I) | `spec.strategy.sourceStrategy.from` (ImageStreamTag of builder) | assembles source into a builder image; supports incremental builds; most OpenShift app builds       |
+| Docker                | `spec.strategy.dockerStrategy`                                  | Buildah builds from `Dockerfile`; supports `dockerfilePath`, `from` override, build args, env       |
+| Custom                | `spec.strategy.customStrategy`                                  | builder image drives entire build; **runs with high privilege — not available to users by default** |
+| Pipeline              | `spec.strategy.jenkinsPipelineStrategy`                         | **deprecated** in OCP 4; use OpenShift Pipelines (Tekton)                                           |
 
 Sources: [R12] (BC definition + runPolicy/triggers/source/strategy/output/postCommit), [R13] (strategy chapters), [R16] (inputs).
 
@@ -754,15 +758,15 @@ oc delete bc/hello-world [--cascade=false]       # keep builds with --cascade=fa
 
 Sources: [R4] (`oc new-build`, `oc start-build`, `oc cancel-build`, `oc logs`, `oc describe`, `oc delete` references), [R14] (basic build ops) — note `oc start-build` options table: `--from-dir`, `--from-file`, `--from-repo`, `--commit`, `--from-archive`. [R16]
 
-**Binary (local) source builds** — BuildConfig `spec.source.type: Binary`; content is streamed from the client at `oc start-build` time and is *not* stored server-side; therefore image-change triggers cannot rebuild them and the web console cannot launch them. Dockerfile/contextDir semantics still apply. [R16]
+**Binary (local) source builds** — BuildConfig `spec.source.type: Binary`; content is streamed from the client at `oc start-build` time and is _not_ stored server-side; therefore image-change triggers cannot rebuild them and the web console cannot launch them. Dockerfile/contextDir semantics still apply. [R16]
 
 ### 5.3 Build triggers
 
-| Trigger | Type | Behaviour | Source |
-|---|---|---|---|
-| Webhook (GitHub / GitLab / Bitbucket / Generic) | `GitHub`, `GitLab`, `Bitbucket`, `Generic` | External SCM/CI POST triggers a build; URL is generated from BC; secret makes URL unique | [R15] |
-| Image change | `ImageChange` | New build when builder image tag changes; with `imageChange: {}` it follows the strategy's `from`; with `from:` it monitors an arbitrary ImageStreamTag; supports `paused: true` | [R15] |
-| Config change | `ConfigChange` | Builds once **when the BuildConfig is created** (docs note it currently only works at creation time) | [R15] |
+| Trigger                                         | Type                                       | Behaviour                                                                                                                                                                        | Source |
+| ----------------------------------------------- | ------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------ |
+| Webhook (GitHub / GitLab / Bitbucket / Generic) | `GitHub`, `GitLab`, `Bitbucket`, `Generic` | External SCM/CI POST triggers a build; URL is generated from BC; secret makes URL unique                                                                                         | [R15]  |
+| Image change                                    | `ImageChange`                              | New build when builder image tag changes; with `imageChange: {}` it follows the strategy's `from`; with `from:` it monitors an arbitrary ImageStreamTag; supports `paused: true` | [R15]  |
+| Config change                                   | `ConfigChange`                             | Builds once **when the BuildConfig is created** (docs note it currently only works at creation time)                                                                             | [R15]  |
 
 **Webhook URL format** (GitHub example): `https://<openshift_api_host:port>/apis/build.openshift.io/v1/namespaces/<namespace>/buildconfigs/<name>/webhooks/<secret>/github` — `oc describe bc/<name>` prints the URLs. [R15]
 
@@ -784,13 +788,13 @@ Adding an existing webhook trigger again **regenerates the secret**. [R15]
 
 ### 5.4 Build troubleshooting (V422 "troubleshoot")
 
-| Symptom | First commands | Likely cause |
-|---|---|---|
-| Build stuck `New`/`Pending` | `oc get builds`, `oc describe bc/<name>`, `oc get events` | no build pod schedulable; quota on builds; node selectors |
-| Build `Failed` | `oc logs build/<name>`, `oc describe build/<name>` | git clone failed, S2I assemble failure, missing source secret, postCommit test failed |
-| No new build after push | `oc get bc/<name> -o yaml` (triggers/secrets), `oc describe bc/<name>` (webhook URLs) | webhook secret/URL wrong; `system:webhook` RBAC; git ref mismatch |
-| Image not updated | `oc get is`, `oc describe istag/<is>:<tag>` | output to DockerImage not ImageStreamTag; tag not pushed; build failed pre-push |
-| Build quota denied | `oc describe quota` | build pods count toward compute quota (`NotTerminating`/`Terminating` scopes) |
+| Symptom                     | First commands                                                                        | Likely cause                                                                          |
+| --------------------------- | ------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
+| Build stuck `New`/`Pending` | `oc get builds`, `oc describe bc/<name>`, `oc get events`                             | no build pod schedulable; quota on builds; node selectors                             |
+| Build `Failed`              | `oc logs build/<name>`, `oc describe build/<name>`                                    | git clone failed, S2I assemble failure, missing source secret, postCommit test failed |
+| No new build after push     | `oc get bc/<name> -o yaml` (triggers/secrets), `oc describe bc/<name>` (webhook URLs) | webhook secret/URL wrong; `system:webhook` RBAC; git ref mismatch                     |
+| Image not updated           | `oc get is`, `oc describe istag/<is>:<tag>`                                           | output to DockerImage not ImageStreamTag; tag not pushed; build failed pre-push       |
+| Build quota denied          | `oc describe quota`                                                                   | build pods count toward compute quota (`NotTerminating`/`Terminating` scopes)         |
 
 Sources: [R14] (logs/details), [R15] (webhooks/triggers), [R19] (troubleshooting chapter), [R4] (events/logs), [R9] (quota scopes).
 
@@ -798,20 +802,20 @@ Sources: [R14] (logs/details), [R15] (webhooks/triggers), [R19] (troubleshooting
 
 **Model:** an ImageStream is an abstraction over image repositories: it stores metadata (tags → image digests), not image data. A tag is a **mutable pointer** to an immutable digest; when a new image is imported/tagged, the tag moves to the new digest; history is kept (enables rollback). Tags may be **permanent** (version-specific) or **tracking** (follow another tag, e.g. `latest`). An ImageStreamTag is `is:tag`; an ImageStreamImage is `is@sha256:...`. [R20][R21]
 
-| Job | Command | Source |
-|---|---|---|
-| List streams | `oc get is` / `oc get imagestreams` | [R4] |
-| Inspect stream + tags + pull spec | `oc describe is/<image-name>` (prints `Docker Pull Spec:` and tag→digest) | [R21] |
-| Inspect one tag (digest, size, entrypoint, arch) | `oc describe istag/<image-stream>:<tag>` | [R21] |
-| Tag an existing image / other stream | `oc tag openshift/ruby:2.0 yourproject/ruby:tip` | [R4][R21] |
-| Tag external image | `oc tag --source=docker openshift/origin-control-plane:latest yourproject/ruby:tip` | [R4] |
-| Periodic re-import (tracking) | `oc tag docker.io/python:3.6.0 python:3.6 --scheduled` | [R21] |
-| Remove a tag | `oc tag -d python:3.6` / `oc delete istag/ruby:latest` | [R21] |
-| Import all/single tags | `oc import-image mystream --from=registry.io/repo/image:latest --confirm`; `oc import-image mystream --all`; `oc import-image mystream:stable` | [R4] |
-| Multi-arch import mode | `oc import-image ... --import-mode=PreserveOriginal` | [R4][R21] |
-| Discover arch/OS of a tag | `oc get istag <istag> -ojsonpath="{range .image.dockerImageManifests[*]}{.os}/{.architecture}{'\n'}{end}"` | [R21] |
-| External image inspection | `oc image info quay.io/openshift/cli:latest` (also `oc image mirror`, `oc image extract`) | [R4] |
-| Registry login | `oc registry login` | [R4] |
+| Job                                              | Command                                                                                                                                        | Source    |
+| ------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------- | --------- |
+| List streams                                     | `oc get is` / `oc get imagestreams`                                                                                                            | [R4]      |
+| Inspect stream + tags + pull spec                | `oc describe is/<image-name>` (prints `Docker Pull Spec:` and tag→digest)                                                                      | [R21]     |
+| Inspect one tag (digest, size, entrypoint, arch) | `oc describe istag/<image-stream>:<tag>`                                                                                                       | [R21]     |
+| Tag an existing image / other stream             | `oc tag openshift/ruby:2.0 yourproject/ruby:tip`                                                                                               | [R4][R21] |
+| Tag external image                               | `oc tag --source=docker openshift/origin-control-plane:latest yourproject/ruby:tip`                                                            | [R4]      |
+| Periodic re-import (tracking)                    | `oc tag docker.io/python:3.6.0 python:3.6 --scheduled`                                                                                         | [R21]     |
+| Remove a tag                                     | `oc tag -d python:3.6` / `oc delete istag/ruby:latest`                                                                                         | [R21]     |
+| Import all/single tags                           | `oc import-image mystream --from=registry.io/repo/image:latest --confirm`; `oc import-image mystream --all`; `oc import-image mystream:stable` | [R4]      |
+| Multi-arch import mode                           | `oc import-image ... --import-mode=PreserveOriginal`                                                                                           | [R4][R21] |
+| Discover arch/OS of a tag                        | `oc get istag <istag> -ojsonpath="{range .image.dockerImageManifests[*]}{.os}/{.architecture}{'\n'}{end}"`                                     | [R21]     |
+| External image inspection                        | `oc image info quay.io/openshift/cli:latest` (also `oc image mirror`, `oc image extract`)                                                      | [R4]      |
+| Registry login                                   | `oc registry login`                                                                                                                            | [R4]      |
 
 **Image identity (game model):** tag = human pointer; digest = immutable identity. Any `image:` string can be a registry reference (`registry/repo/image:tag` or `...@sha256:...`) or an ImageStreamTag (`name:tag`) when lookup policy/resolution is enabled. Internal registry pull spec form: `image-registry.openshift-image-registry.svc:5000/<namespace>/<imagestream>:<tag>` (docs show this host in image-registry config; older examples show `docker-registry.default.svc:5000`). [R21][R25]
 
@@ -834,6 +838,7 @@ Optionally `spec.tags[].from` (ImageStreamTag / DockerImage / ImageStreamImage).
 **Image-change triggers on Kubernetes workloads (Deployment/StatefulSet/DaemonSet/Job/CronJob/RC/Pod):** Kubernetes objects have no trigger fields; OCP uses the `image.openshift.io/triggers` annotation. `oc set triggers deployment/example --from-image=example:latest -c web` writes it. JSONPath is limited to a precise container by name/index. [R24]
 
 **S2I builder images and the Samples Operator:**
+
 - S2I builder image streams and quick-start templates are created in the `openshift` namespace by the **Cluster Samples Operator**; the operator config lives in `openshift-cluster-samples-operator` and is cluster-scoped. [R21]
 - 4.22 caveat: **Cluster Samples Operator is deprecated** — no new templates/samples/non-S2I streams; existing S2I image streams/templates continue to receive updates until removal in a future release. S2I image streams include: Ruby, Python, Node.js, Perl, PHP, HTTPD, Nginx, EAP, Java, Webserver, .NET, Go. [R21][R36]
 - List available samples/builders: `oc get templates -n openshift`, `oc get is -n openshift`, `oc new-app --list`, `oc new-app --search php`. [R7]
@@ -850,7 +855,7 @@ Optionally `spec.tags[].from` (ImageStreamTag / DockerImage / ImageStreamImage).
 
 A **Template** (`template.openshift.io/v1`, kind `Template`) is a parameterised list of objects. Processing it (`oc process`) substitutes `${PARAM}` / `${{PARAM}}` values and yields an object list (usually a `List`), which is then created with `oc create -f -`. Templates can contain anything the user may create, plus `parameters`, `message`, `labels`, and object-list metadata. [R7][R38]
 
-> 4.22 docs still describe templates as processing into *"resources such as Service and DeploymentConfig objects"* [R7] — that sentence is legacy; templates can contain any kinds, and current sample templates are being deprecated alongside the Samples Operator (§5.5). For game content: accept arbitrary kinds; prefer `Deployment` in new template objects.
+> 4.22 docs still describe templates as processing into _"resources such as Service and DeploymentConfig objects"_ [R7] — that sentence is legacy; templates can contain any kinds, and current sample templates are being deprecated alongside the Samples Operator (§5.5). For game content: accept arbitrary kinds; prefer `Deployment` in new template objects.
 
 ### 6.2 Process / instantiate (documented verbatim)
 
@@ -911,15 +916,15 @@ objects:
       source:
         type: Git
         git:
-          uri: "${SOURCE_REPOSITORY_URL}"
-          ref: "${SOURCE_REPOSITORY_REF}"
-        contextDir: "${CONTEXT_DIR}"
+          uri: '${SOURCE_REPOSITORY_URL}'
+          ref: '${SOURCE_REPOSITORY_REF}'
+        contextDir: '${CONTEXT_DIR}'
   - kind: Deployment
     apiVersion: apps/v1
     metadata:
       name: frontend
     spec:
-      replicas: "${{REPLICA_COUNT}}"
+      replicas: '${{REPLICA_COUNT}}'
 parameters:
   - name: SOURCE_REPOSITORY_URL
     displayName: Source Repository URL
@@ -929,26 +934,26 @@ parameters:
   - name: GITHUB_WEBHOOK_SECRET
     description: A secret string used to configure the GitHub webhook
     generate: expression
-    from: "[a-zA-Z0-9]{40}"
+    from: '[a-zA-Z0-9]{40}'
   - name: REPLICA_COUNT
     description: Number of replicas to run
-    value: "2"
+    value: '2'
     required: true
-message: "... The GitHub webhook secret is ${GITHUB_WEBHOOK_SECRET} ..."
+message: '... The GitHub webhook secret is ${GITHUB_WEBHOOK_SECRET} ...'
 ```
 
 Source: 4.22 Building applications §3.1.7.3 (verbatim shape; the original uses a `DeploymentConfig`; `Deployment` substituted here deliberately). [R7]
 
 **Parameter substitution facts (game validation rules):**
 
-| Syntax | Meaning | Example |
-|---|---|---|
-| `${PARAM}` | string substitution anywhere in a string field; multiple refs + fixed text allowed | `"http://${PARAMETER_1}${PARAMETER_2}"` |
-| `${{PARAM}}` | single parameter reference replacing a whole field value; unquoted unless result isn't valid JSON | `replicas: "${{REPLICA_COUNT}}"` |
-| `parameters[].value` | default value | `value: joe` |
-| `parameters[].required: true` | cannot be overridden with empty; must have value/generator otherwise supply at process time | |
-| `parameters[].generate: expression` + `from:` | generate value: `[a-zA-Z0-9]{12}`, plus `\w`/`\d`/`\a`/`\A` classes | random webhook secret |
-| `message` | text shown to user; may reference parameters | |
+| Syntax                                        | Meaning                                                                                           | Example                                 |
+| --------------------------------------------- | ------------------------------------------------------------------------------------------------- | --------------------------------------- |
+| `${PARAM}`                                    | string substitution anywhere in a string field; multiple refs + fixed text allowed                | `"http://${PARAMETER_1}${PARAMETER_2}"` |
+| `${{PARAM}}`                                  | single parameter reference replacing a whole field value; unquoted unless result isn't valid JSON | `replicas: "${{REPLICA_COUNT}}"`        |
+| `parameters[].value`                          | default value                                                                                     | `value: joe`                            |
+| `parameters[].required: true`                 | cannot be overridden with empty; must have value/generator otherwise supply at process time       |                                         |
+| `parameters[].generate: expression` + `from:` | generate value: `[a-zA-Z0-9]{12}`, plus `\w`/`\d`/`\a`/`\A` classes                               | random webhook secret                   |
+| `message`                                     | text shown to user; may reference parameters                                                      |                                         |
 
 Also documented: a fixed `metadata.namespace` on template objects is stripped at instantiation; if it contains a parameter reference, substitution happens and the object is created in that namespace (requires permission). [R7]
 
@@ -965,10 +970,10 @@ Docs list the kinds returned by `oc get -o yaml all` as `BuildConfig, Build, Dep
 
 ### 6.5 Project templates vs application templates (do not conflate)
 
-| Concept | What it is | Command / object | Source |
-|---|---|---|---|
-| Application template | Parameterised object list a user instantiates with `oc process`/`oc new-app --template` | `template.openshift.io/v1` Template | [R7][R38] |
-| Project template (a.k.a. project request template) | Template in `openshift-config` used by the API server to provision **new projects** (quota/limitrange/rolebindings defaults) | `project.config.openshift.io/cluster` → `spec.projectRequestTemplate.name`; params `PROJECT_NAME`, `PROJECT_DISPLAYNAME`, `PROJECT_DESCRIPTION`, `PROJECT_ADMIN_USER`, `PROJECT_REQUESTING_USER` | [R6] |
+| Concept                                            | What it is                                                                                                                   | Command / object                                                                                                                                                                                 | Source    |
+| -------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------- |
+| Application template                               | Parameterised object list a user instantiates with `oc process`/`oc new-app --template`                                      | `template.openshift.io/v1` Template                                                                                                                                                              | [R7][R38] |
+| Project template (a.k.a. project request template) | Template in `openshift-config` used by the API server to provision **new projects** (quota/limitrange/rolebindings defaults) | `project.config.openshift.io/cluster` → `spec.projectRequestTemplate.name`; params `PROJECT_NAME`, `PROJECT_DISPLAYNAME`, `PROJECT_DESCRIPTION`, `PROJECT_ADMIN_USER`, `PROJECT_REQUESTING_USER` | [R6]      |
 
 Game rule: the "configure project templates" V422 objective is the **project request template**; "deploy applications from templates" is the application Template. Both should be separate levels/incidents.
 
@@ -978,13 +983,13 @@ Game rule: the "configure project templates" V422 objective is the **project req
 
 ### 7.1 Classic OLM object model (what EX280 tests)
 
-| Object | API | Short name | Role | Source |
-|---|---|---|---|---|
-| `ClusterServiceVersion` (CSV) | `operators.coreos.com/v1alpha1` | `csv` | versioned metadata + install strategy for one Operator version; the installed "operator instance" record | [R26] |
-| `CatalogSource` | `operators.coreos.com/v1alpha1` | `catsrc` | repository of CSVs/CRDs/packages (OperatorHub catalog) | [R26] |
-| `Subscription` | `operators.coreos.com/v1alpha1` | `sub` | keeps CSVs up to date by tracking a channel in a package | [R26] |
-| `InstallPlan` | `operators.coreos.com/v1alpha1` | `ip` | calculated set of resources to install/upgrade a CSV; auto- or manually-approved | [R26] |
-| `OperatorGroup` | `operators.coreos.com/v1` | `og` | configures which namespaces Operators in that namespace watch; one per namespace | [R26][R28] |
+| Object                        | API                             | Short name | Role                                                                                                     | Source     |
+| ----------------------------- | ------------------------------- | ---------- | -------------------------------------------------------------------------------------------------------- | ---------- |
+| `ClusterServiceVersion` (CSV) | `operators.coreos.com/v1alpha1` | `csv`      | versioned metadata + install strategy for one Operator version; the installed "operator instance" record | [R26]      |
+| `CatalogSource`               | `operators.coreos.com/v1alpha1` | `catsrc`   | repository of CSVs/CRDs/packages (OperatorHub catalog)                                                   | [R26]      |
+| `Subscription`                | `operators.coreos.com/v1alpha1` | `sub`      | keeps CSVs up to date by tracking a channel in a package                                                 | [R26]      |
+| `InstallPlan`                 | `operators.coreos.com/v1alpha1` | `ip`       | calculated set of resources to install/upgrade a CSV; auto- or manually-approved                         | [R26]      |
+| `OperatorGroup`               | `operators.coreos.com/v1`       | `og`       | configures which namespaces Operators in that namespace watch; one per namespace                         | [R26][R28] |
 
 Docs describe OLM ("OLM classic") as the component that installs/updates Operators from catalogs; the default software catalog is served by `openshift-marketplace`-namespace CatalogSources. Install modes: `OwnNamespace`, `SingleNamespace`, `MultiNamespace`, `AllNamespaces`. **AllNamespaces** installs into `openshift-operators` (which already has an OperatorGroup named `global-operators`); `SingleNamespace` requires you to create an OperatorGroup in the target namespace. [R27][R28]
 
@@ -1090,6 +1095,7 @@ helm status <release>
 [All Helm CLI examples above: `helm version`, repo add/update, install, list, lint are quoted from 4.22 Building applications §6.3/6.4; `upgrade`/`rollback`/`uninstall` from upstream Helm docs because the OCP chapter documents those operations through the console only.]
 
 Verified OCP Helm facts for game content:
+
 - Install from **chart URL**: chart URL may use `oci://` for OCI registries (e.g. `oci://quay.io/org/repo/chart-name`); direct-URL install bypasses Developer Catalog validation (warning in docs). [R10]
 - Console path: **Ecosystem → Helm**; Helm releases appear with status `Deployed`; actions include Upgrade, Rollback (revision picker), Delete. [R10]
 - Helm charts on OpenShift can create `DaemonSet, CronJob, Pod, Deployment, DeploymentConfig` workloads; resources are then visible in Topology/Workloads. [R10]
@@ -1117,11 +1123,11 @@ resources:
 
 QoS classes (priority order), documented verbatim: [R31]
 
-| Priority | Class | Condition | Eviction behaviour |
-|---|---|---|---|
+| Priority    | Class          | Condition                                                            | Eviction behaviour                                                                |
+| ----------- | -------------- | -------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
 | 1 (highest) | **Guaranteed** | limits (and optionally requests) set for all resources and **equal** | terminated only if exceeding limits / system pressure with no lower-priority pods |
-| 2 | **Burstable** | requests (and optionally limits) set, and requests ≠ limits | terminated under memory pressure when exceeding requests if no BestEffort pods |
-| 3 (lowest) | **BestEffort** | no requests/limits at all | first to be terminated |
+| 2           | **Burstable**  | requests (and optionally limits) set, and requests ≠ limits          | terminated under memory pressure when exceeding requests if no BestEffort pods    |
+| 3 (lowest)  | **BestEffort** | no requests/limits at all                                            | first to be terminated                                                            |
 
 Why the game should teach QoS: quotas interact with it (`scopes: BestEffort`), and incident scenarios ("BestEffort pod keeps getting OOM-killed under node pressure") are exam-adjacent.
 
@@ -1136,10 +1142,10 @@ metadata:
   name: compute-resources
 spec:
   hard:
-    pods: "4"
-    requests.cpu: "1"
+    pods: '4'
+    requests.cpu: '1'
     requests.memory: 1Gi
-    limits.cpu: "2"
+    limits.cpu: '2'
     limits.memory: 2Gi
 ```
 
@@ -1152,12 +1158,12 @@ metadata:
   name: core-object-counts
 spec:
   hard:
-    configmaps: "10"
-    persistentvolumeclaims: "4"
-    replicationcontrollers: "20"
-    secrets: "10"
-    services: "10"
-    services.loadbalancers: "2"
+    configmaps: '10'
+    persistentvolumeclaims: '4'
+    replicationcontrollers: '20'
+    secrets: '10'
+    services: '10'
+    services.loadbalancers: '2'
 ```
 
 Other documented quota keys: `openshift.io/imagestreams` (ImageStream count); `requests.storage`, `<storageclass>.storageclass.storage.k8s.io/requests.storage`, `<storageclass>.storageclass.storage.k8s.io/persistentvolumeclaims`, `requests.ephemeral-storage`, `limits.ephemeral-storage`; extended resources via `requests.<ext-resource>` (e.g. `requests.nvidia.com/gpu: 1`). [R9]
@@ -1195,8 +1201,8 @@ metadata:
 spec:
   quota:
     hard:
-      pods: "10"
-      secrets: "20"
+      pods: '10'
+      secrets: '20'
   selector:
     annotations:
       openshift.io/requester: <user_name>
@@ -1233,22 +1239,22 @@ spec:
   limits:
     - type: Container
       max:
-        cpu: "2"
+        cpu: '2'
         memory: 1Gi
       min:
         cpu: 100m
         memory: 4Mi
-      default:              # injected as resources.limits
+      default: # injected as resources.limits
         cpu: 300m
         memory: 200Mi
-      defaultRequest:       # injected as resources.requests
+      defaultRequest: # injected as resources.requests
         cpu: 200m
         memory: 100Mi
       maxLimitRequestRatio:
-        cpu: "10"
+        cpu: '10'
     - type: Pod
       max:
-        cpu: "2"
+        cpu: '2'
         memory: 1Gi
       min:
         cpu: 200m
@@ -1280,24 +1286,24 @@ Source: 4.22 Nodes §8.3 (LimitRange create/view/delete; sample object). [R31]
 
 ### 9.5 "Project resource requirements" — how the objectives usually manifest
 
-| Wording | What is actually tested | Commands/objects |
-|---|---|---|
-| "Configure project resource requirements" | set requests/limits on workloads; rely on LimitRange defaults; understand QoS | `oc set resources`, `resources:` in Deployment YAML, LimitRange `default`/`defaultRequest` | 
-| "Configure project limit ranges" | create/edit/verify LimitRange; reject out-of-range pods | `oc create -f limits.yaml`, `oc describe limits` |
-| "Configure project quotas" | ResourceQuota for compute/object counts; denial messages | `oc create -f quota.yaml`, `oc describe quota` |
-| "Configure cluster resource quotas" | ClusterResourceQuota selecting projects (annotation/label) | `oc create clusterquota ...`, `oc describe AppliedClusterResourceQuota` |
-| "Configure project templates" | project request template + quota/limits inside it | §2.3 |
+| Wording                                   | What is actually tested                                                       | Commands/objects                                                                           |
+| ----------------------------------------- | ----------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| "Configure project resource requirements" | set requests/limits on workloads; rely on LimitRange defaults; understand QoS | `oc set resources`, `resources:` in Deployment YAML, LimitRange `default`/`defaultRequest` |
+| "Configure project limit ranges"          | create/edit/verify LimitRange; reject out-of-range pods                       | `oc create -f limits.yaml`, `oc describe limits`                                           |
+| "Configure project quotas"                | ResourceQuota for compute/object counts; denial messages                      | `oc create -f quota.yaml`, `oc describe quota`                                             |
+| "Configure cluster resource quotas"       | ClusterResourceQuota selecting projects (annotation/label)                    | `oc create clusterquota ...`, `oc describe AppliedClusterResourceQuota`                    |
+| "Configure project templates"             | project request template + quota/limits inside it                             | §2.3                                                                                       |
 
 **Explicit defaults via project template** (documented pattern): generate the bootstrap project template, insert a ResourceQuota (including `namespace: ${PROJECT_NAME}`) before `parameters:`, upload to `openshift-config`, set `project.config.openshift.io/cluster` `spec.projectRequestTemplate.name`. [R9]
 
 ### 9.6 Quota/LimitRange failure states for incidents (very exam-like)
 
-| Game state | Diagnostic | Cause |
-|---|---|---|
-| Pod `Pending` / Forbidden | `oc describe pod`, `oc get events`, `oc describe quota` | quota exhausted; or quota requires requests/limits the pod lacks |
-| Pod rejected at admission | `oc get events --types=Warning`, `oc describe limitrange` | violates LimitRange min/max/maxLimitRequestRatio |
-| New project cannot create anything | `oc describe quota -n <new>` / `oc describe clusterresourcequota` | project template applies quota but workload doesn't set resources; or ClusterResourceQuota aggregate exhausted |
-| Deployment stuck Progressing | `oc rollout status`, `oc describe deployment`, `oc get rs`, `oc get events` | `FailedCreate` due to quota/limitrange |
+| Game state                         | Diagnostic                                                                  | Cause                                                                                                          |
+| ---------------------------------- | --------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| Pod `Pending` / Forbidden          | `oc describe pod`, `oc get events`, `oc describe quota`                     | quota exhausted; or quota requires requests/limits the pod lacks                                               |
+| Pod rejected at admission          | `oc get events --types=Warning`, `oc describe limitrange`                   | violates LimitRange min/max/maxLimitRequestRatio                                                               |
+| New project cannot create anything | `oc describe quota -n <new>` / `oc describe clusterresourcequota`           | project template applies quota but workload doesn't set resources; or ClusterResourceQuota aggregate exhausted |
+| Deployment stuck Progressing       | `oc rollout status`, `oc describe deployment`, `oc get rs`, `oc get events` | `FailedCreate` due to quota/limitrange                                                                         |
 
 Sources: [R9], [R31], [R4] (events/describe), [R8] (rollout status).
 
@@ -1325,11 +1331,11 @@ spec:
       containers:
         - name: pi
           image: perl
-          command: ["perl", "-Mbignum=bpi", "-wle", "print bpi(2000)"]
+          command: ['perl', '-Mbignum=bpi', '-wle', 'print bpi(2000)']
       restartPolicy: OnFailure
 ```
 
-Documented field semantics: `parallelism` (default 1), `completions` (default 1; fixed-count parallel = set), `activeDeadlineSeconds` (max duration, from first scheduled pod), `backoffLimit` (default 6; exponential backoff capped at 6m), `ttlSecondsAfterFinished` (auto-delete after completion; 0 = immediately). `restartPolicy` ∈ Never / OnFailure / Always per docs list; docs also state the *known limitation* that the job spec restart policy applies to pods only — the job controller is hard-coded to keep retrying to completion, so `Never` and `OnFailure` behave the same for the job controller, with `Never` creating a new pod per failure while `OnFailure` restarts in place. [R30]
+Documented field semantics: `parallelism` (default 1), `completions` (default 1; fixed-count parallel = set), `activeDeadlineSeconds` (max duration, from first scheduled pod), `backoffLimit` (default 6; exponential backoff capped at 6m), `ttlSecondsAfterFinished` (auto-delete after completion; 0 = immediately). `restartPolicy` ∈ Never / OnFailure / Always per docs list; docs also state the _known limitation_ that the job spec restart policy applies to pods only — the job controller is hard-coded to keep retrying to completion, so `Never` and `OnFailure` behave the same for the job controller, with `Never` creating a new pod per failure while `OnFailure` restarts in place. [R30]
 
 ```bash
 oc create job pi --image=perl -- perl -Mbignum=bpi -wle 'print bpi(2000)'
@@ -1351,9 +1357,9 @@ kind: CronJob
 metadata:
   name: pi
 spec:
-  schedule: "*/1 * * * *"
+  schedule: '*/1 * * * *'
   timeZone: Etc/UTC
-  concurrencyPolicy: "Replace"      # Allow | Forbid | Replace
+  concurrencyPolicy: 'Replace' # Allow | Forbid | Replace
   startingDeadlineSeconds: 200
   suspend: true
   successfulJobsHistoryLimit: 3
@@ -1363,12 +1369,12 @@ spec:
       template:
         metadata:
           labels:
-            parent: "cronjobpi"
+            parent: 'cronjobpi'
         spec:
           containers:
             - name: pi
               image: perl
-              command: ["perl", "-Mbignum=bpi", "-wle", "print bpi(2000)"]
+              command: ['perl', '-Mbignum=bpi', '-wle', 'print bpi(2000)']
           restartPolicy: OnFailure
 ```
 
@@ -1432,7 +1438,7 @@ kind: StatefulSet
 metadata:
   name: web
 spec:
-  serviceName: web          # headless Service (clusterIP: None)
+  serviceName: web # headless Service (clusterIP: None)
   replicas: 3
   selector:
     matchLabels:
@@ -1452,7 +1458,7 @@ spec:
     - metadata:
         name: data
       spec:
-        accessModes: ["ReadWriteOnce"]
+        accessModes: ['ReadWriteOnce']
         resources:
           requests:
             storage: 1Gi
@@ -1522,17 +1528,17 @@ Source for all HTPasswd material: 4.22 Authentication and authorization §7.1 (c
 
 ### 11.2 Users and groups
 
-| Task | Command | Source |
-|---|---|---|
-| Users are created automatically on first login from an IdP | — | [R35] |
-| Manually create a user (only when automatic creation disabled) | `oc create user ajones --full-name="Adam Jones"` | [R4] |
-| List users / describe | `oc get users` · `oc get user <name> -o yaml` | [R4][R35] |
-| Create a group with users | `oc adm groups new my-group user1 user2` · `oc adm groups new my-group` (empty) | [R4] |
-| Add users to a group | `oc adm groups add-users my-group user1 user2` | [R4] |
-| Remove users from group / prune | `oc adm groups remove-users`, `oc adm groups prune` | [R4] |
-| Delete a group | `oc delete group <name>` (standard delete; Group is `user.openshift.io/v1`) | [R35][R4] |
-| Group YAML | `apiVersion: user.openshift.io/v1`, `kind: Group`, `users: [ ... ]` | [R35] |
-| Identity object (for HTPasswd) | `oc delete identity my_htpasswd_provider:<user>` | [R33] |
+| Task                                                           | Command                                                                         | Source    |
+| -------------------------------------------------------------- | ------------------------------------------------------------------------------- | --------- |
+| Users are created automatically on first login from an IdP     | —                                                                               | [R35]     |
+| Manually create a user (only when automatic creation disabled) | `oc create user ajones --full-name="Adam Jones"`                                | [R4]      |
+| List users / describe                                          | `oc get users` · `oc get user <name> -o yaml`                                   | [R4][R35] |
+| Create a group with users                                      | `oc adm groups new my-group user1 user2` · `oc adm groups new my-group` (empty) | [R4]      |
+| Add users to a group                                           | `oc adm groups add-users my-group user1 user2`                                  | [R4]      |
+| Remove users from group / prune                                | `oc adm groups remove-users`, `oc adm groups prune`                             | [R4]      |
+| Delete a group                                                 | `oc delete group <name>` (standard delete; Group is `user.openshift.io/v1`)     | [R35][R4] |
+| Group YAML                                                     | `apiVersion: user.openshift.io/v1`, `kind: Group`, `users: [ ... ]`             | [R35]     |
+| Identity object (for HTPasswd)                                 | `oc delete identity my_htpasswd_provider:<user>`                                | [R33]     |
 
 Virtual groups that matter: `system:authenticated` (all authenticated users), `system:authenticated:oauth` (OAuth-token users; self-provisioning bootstrap group), `system:unauthenticated`. [R35][R6]
 
@@ -1778,32 +1784,32 @@ oc create secret generic htpass-secret --from-file=htpasswd=users.htpasswd \
 
 ### 13.1 Command-bar verbs this document legitimises
 
-| Command family | Minimum grammar the game should accept | First implementation priority |
-|---|---|---|
-| Session/project | `oc login`, `oc logout`, `oc whoami`, `oc project [name]`, `oc projects`, `oc new-project <name> [--description --display-name]`, `oc delete project <name>`, `oc status [--suggest]` | P0 (onboarding/tutorial) |
-| Read/format/filter | `oc get <type> [name] [-n ns] [-A] [-o wide\|yaml\|json\|name\|jsonpath=...] [-l sel] [--show-labels] [--field-selector ...]`, `oc describe <type>/<name>`, `oc explain ...`, `oc api-resources`, `oc events [--all-namespaces --for ... --types=Warning]` | P0 (inspector panel + incidents) |
-| Declarative | `oc apply -f <file\|->`, `oc apply -k <dir>`, `oc create -f <file\|->`, `oc replace -f <file> [--force]`, `oc patch <type>/<name> -p '<json>' [--type merge\|json]`, `oc edit <type>/<name>`, `oc delete <type>/<name> [-l sel] [-f file] [-k dir]`, `oc diff -f`, `oc get ... -o yaml > file` (export affordance) | P1 (manifest editor + kustomize level) |
-| Workloads | `oc scale <deploy\|rs\|sts>/<name> --replicas=N`, `oc autoscale deployment <name> --min --max [--cpu]`, `oc rollout status\|history\|undo\|restart\|pause\|resume`, `oc set image\|env\|resources\|probe\|volumes\|serviceaccount\|triggers`, `oc debug <resource\|node>` | P1 (rollout/incident engine) |
-| Builds/images | `oc new-app ...`, `oc new-build ...`, `oc start-build <bc> [--follow --wait --from-dir/--from-file/--from-repo/--from-build]`, `oc cancel-build`, `oc logs -f bc/<name>`, `oc describe bc/<name>`, `oc get is`, `oc describe is/istag`, `oc tag`, `oc tag -d`, `oc import-image`, `oc image info`, `oc set image-lookup`, `oc set triggers bc/... --from-github\|--from-image\|--remove` | P2 (build pipeline visualisation) |
-| Templates | `oc process [-f file \| <template>] [-p K=V ...] [--param-file=...] [-l ...] [--parameters] [--local]`, pipe to `oc create -f -`, `oc new-app --template=<t> -p K=V`, `oc new-app -f <file>`, `oc get templates -n openshift`, `oc create -f <template>` | P2 (templates level + project-template objective) |
-| Operators/OLM | `oc get packagemanifests -n openshift-marketplace`, `oc get sub,csv,installplan,og`, `oc describe subscription\|csv\|operatorgroup`, `oc apply -f subscription.yaml\|operatorgroup.yaml`, `oc delete subscription <n> -n <ns>`, `oc delete csv <csv> -n <ns>`, `oc get csvs -n openshift` | P2 (operator install/uninstall level) |
-| Quotas/limits | `oc create -f quota\|limitrange.yaml`, `oc create quota <name> --hard=...`, `oc create clusterquota <name> --project-annotation-selector=... --hard ...`, `oc get/describe quota`, `oc get/describe limits`, `oc describe AppliedClusterResourceQuota` | P1 (self-service + incident engine: quota denial) |
-| Jobs | `oc create job <name> --image=... [-- <cmd>]`, `oc create job <n> --from=cronjob/<cj>`, `oc create cronjob <n> --image=... --schedule='...' -- <cmd>`, `oc get/describe jobs,cronjobs`, `oc delete job\|cronjob` | P2 (one-time task levels) |
-| Helm | separate `helm` surface: `helm version`, `helm repo add`, `helm repo update`, `helm install`, `helm list`, `helm upgrade\|rollback\|uninstall` (label as "Helm CLI; OCP docs demonstrate upgrade/rollback/delete in console") | P3 (advanced level) |
+| Command family     | Minimum grammar the game should accept                                                                                                                                                                                                                                                                                                                                                   | First implementation priority                     |
+| ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------- |
+| Session/project    | `oc login`, `oc logout`, `oc whoami`, `oc project [name]`, `oc projects`, `oc new-project <name> [--description --display-name]`, `oc delete project <name>`, `oc status [--suggest]`                                                                                                                                                                                                    | P0 (onboarding/tutorial)                          |
+| Read/format/filter | `oc get <type> [name] [-n ns] [-A] [-o wide\|yaml\|json\|name\|jsonpath=...] [-l sel] [--show-labels] [--field-selector ...]`, `oc describe <type>/<name>`, `oc explain ...`, `oc api-resources`, `oc events [--all-namespaces --for ... --types=Warning]`                                                                                                                               | P0 (inspector panel + incidents)                  |
+| Declarative        | `oc apply -f <file\|->`, `oc apply -k <dir>`, `oc create -f <file\|->`, `oc replace -f <file> [--force]`, `oc patch <type>/<name> -p '<json>' [--type merge\|json]`, `oc edit <type>/<name>`, `oc delete <type>/<name> [-l sel] [-f file] [-k dir]`, `oc diff -f`, `oc get ... -o yaml > file` (export affordance)                                                                       | P1 (manifest editor + kustomize level)            |
+| Workloads          | `oc scale <deploy\|rs\|sts>/<name> --replicas=N`, `oc autoscale deployment <name> --min --max [--cpu]`, `oc rollout status\|history\|undo\|restart\|pause\|resume`, `oc set image\|env\|resources\|probe\|volumes\|serviceaccount\|triggers`, `oc debug <resource\|node>`                                                                                                                | P1 (rollout/incident engine)                      |
+| Builds/images      | `oc new-app ...`, `oc new-build ...`, `oc start-build <bc> [--follow --wait --from-dir/--from-file/--from-repo/--from-build]`, `oc cancel-build`, `oc logs -f bc/<name>`, `oc describe bc/<name>`, `oc get is`, `oc describe is/istag`, `oc tag`, `oc tag -d`, `oc import-image`, `oc image info`, `oc set image-lookup`, `oc set triggers bc/... --from-github\|--from-image\|--remove` | P2 (build pipeline visualisation)                 |
+| Templates          | `oc process [-f file \| <template>] [-p K=V ...] [--param-file=...] [-l ...] [--parameters] [--local]`, pipe to `oc create -f -`, `oc new-app --template=<t> -p K=V`, `oc new-app -f <file>`, `oc get templates -n openshift`, `oc create -f <template>`                                                                                                                                 | P2 (templates level + project-template objective) |
+| Operators/OLM      | `oc get packagemanifests -n openshift-marketplace`, `oc get sub,csv,installplan,og`, `oc describe subscription\|csv\|operatorgroup`, `oc apply -f subscription.yaml\|operatorgroup.yaml`, `oc delete subscription <n> -n <ns>`, `oc delete csv <csv> -n <ns>`, `oc get csvs -n openshift`                                                                                                | P2 (operator install/uninstall level)             |
+| Quotas/limits      | `oc create -f quota\|limitrange.yaml`, `oc create quota <name> --hard=...`, `oc create clusterquota <name> --project-annotation-selector=... --hard ...`, `oc get/describe quota`, `oc get/describe limits`, `oc describe AppliedClusterResourceQuota`                                                                                                                                   | P1 (self-service + incident engine: quota denial) |
+| Jobs               | `oc create job <name> --image=... [-- <cmd>]`, `oc create job <n> --from=cronjob/<cj>`, `oc create cronjob <n> --image=... --schedule='...' -- <cmd>`, `oc get/describe jobs,cronjobs`, `oc delete job\|cronjob`                                                                                                                                                                         | P2 (one-time task levels)                         |
+| Helm               | separate `helm` surface: `helm version`, `helm repo add`, `helm repo update`, `helm install`, `helm list`, `helm upgrade\|rollback\|uninstall` (label as "Helm CLI; OCP docs demonstrate upgrade/rollback/delete in console")                                                                                                                                                            | P3 (advanced level)                               |
 
 ### 13.1b Web console paths (V422: "use the web console")
 
 The exam includes web-console tasks, so game levels/flags that claim "console path" should use the 4.22 navigation names. Verified paths from the 4.22 docs:
 
-| Task | Console path | Source |
-|---|---|---|
-| Projects / project overview, details, YAML, workloads, rolebindings | **Home → Projects** → select project (tabs: Overview, Details, YAML, Workloads, RoleBindings) | [R6] |
-| Project template / project config / OAuth config | **Administration → Cluster Settings → Configuration** → Project / OAuth → Edit YAML | [R6][R33] |
-| Installed Operators / operator install | **Ecosystem → Installed Operators** (OperatorHub/software catalog for new installs) | [R27][R28] |
-| Helm releases | **Ecosystem → Helm** (install from Developer Catalog or chart URL; upgrade/rollback/delete) | [R10] |
-| Builds | **Builds** page (Form/YAML edit of BuildConfig) | [R14] |
-| Developer add/import | **+Add** (Git import, container image, Helm chart, templates, etc.) | [R5][R7] |
-| General console reference | web console book | [R44] |
+| Task                                                                | Console path                                                                                  | Source     |
+| ------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- | ---------- |
+| Projects / project overview, details, YAML, workloads, rolebindings | **Home → Projects** → select project (tabs: Overview, Details, YAML, Workloads, RoleBindings) | [R6]       |
+| Project template / project config / OAuth config                    | **Administration → Cluster Settings → Configuration** → Project / OAuth → Edit YAML           | [R6][R33]  |
+| Installed Operators / operator install                              | **Ecosystem → Installed Operators** (OperatorHub/software catalog for new installs)           | [R27][R28] |
+| Helm releases                                                       | **Ecosystem → Helm** (install from Developer Catalog or chart URL; upgrade/rollback/delete)   | [R10]      |
+| Builds                                                              | **Builds** page (Form/YAML edit of BuildConfig)                                               | [R14]      |
+| Developer add/import                                                | **+Add** (Git import, container image, Helm chart, templates, etc.)                           | [R5][R7]   |
+| General console reference                                           | web console book                                                                              | [R44]      |
 
 ### 13.2 Simulation-state requirements (what the engine/controllers must model)
 
@@ -1822,24 +1828,24 @@ The exam includes web-console tasks, so game levels/flags that claim "console pa
 
 ### 13.3 Incident seeds (each maps to a real documented failure mode)
 
-| Incident seed | Repro command | Root cause / fix |
-|---|---|---|
-| `ImagePullBackOff` on Deployment | `oc describe pod`, `oc events` | wrong image/tag or missing pull secret/internal registry auth |
-| Rollout stuck / `Progressing=False` | `oc rollout status`, `oc describe deploy`, `oc get rs`, `oc get events` | readiness probe failing, quota `FailedCreate`, unschedulable, bad selector |
-| Liveness loop → CrashLoopBackOff | `oc logs -p`, `oc describe pod` | liveness probe too aggressive / wrong path/port; fix probe |
-| Service has no endpoints | `oc get endpoints`, `oc get pods --show-labels` | selector mismatch label |
-| Build failed | `oc logs build/<n>`, `oc describe build` | git/source secret, assemble script, test failure, quota for build pod |
-| Webhook doesn't trigger | `oc describe bc` (URLs), `oc get rolebinding system:webhook -n ns` | system:unauthenticated not bound to system:webhook since 4.16 |
-| Image-change trigger never fires | `oc get bc/<n> -o yaml` / `oc get deployment/<n> -o yaml` (triggers+annotations), `oc describe is` | tag not updated; binary build; wrong istag name/namespace |
-| Quota denial on scale-out | `oc describe quota`, events | requests/limits missing or aggregate quota exhausted |
-| LimitRange rejection | `oc describe limits`, events | pod below `min`/above `max` or missing request |
-| Project cannot create anything | `oc describe quota`, `oc describe clusterresourcequota` | quota inherited via project template but workloads don't set resources |
-| Operator CSV `Failed`/`Pending` | `oc get sub,csv,installplan`, `oc describe csv` | missing OperatorGroup, catalog image pull failure, manual approval pending |
-| Operator uninstall leaves namespace terminating | `oc get csvs -n openshift`, `oc get ns <ns> -o yaml` | failed uninstall; audit/remove leftover permissions/resources |
-| HTPasswd login broken | `oc get clusteroperators authentication`, `oc get oauth cluster -o yaml` | OAuth rollout in progress; wrong secret key/name; secret in wrong namespace |
-| Removed user still works | `oc get users`, `oc get identity` | forgot `oc delete user`/`oc delete identity` |
-| CronJob storm | `oc get jobs`, `oc get cronjobs` | missing history limits / bad schedule / concurrencyPolicy not set |
-| BestEffort pod evicted | `oc get pod -o yaml` (qosClass), `oc describe node` | no requests/limits → BestEffort; add resources or LimitRange defaults |
+| Incident seed                                   | Repro command                                                                                      | Root cause / fix                                                            |
+| ----------------------------------------------- | -------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| `ImagePullBackOff` on Deployment                | `oc describe pod`, `oc events`                                                                     | wrong image/tag or missing pull secret/internal registry auth               |
+| Rollout stuck / `Progressing=False`             | `oc rollout status`, `oc describe deploy`, `oc get rs`, `oc get events`                            | readiness probe failing, quota `FailedCreate`, unschedulable, bad selector  |
+| Liveness loop → CrashLoopBackOff                | `oc logs -p`, `oc describe pod`                                                                    | liveness probe too aggressive / wrong path/port; fix probe                  |
+| Service has no endpoints                        | `oc get endpoints`, `oc get pods --show-labels`                                                    | selector mismatch label                                                     |
+| Build failed                                    | `oc logs build/<n>`, `oc describe build`                                                           | git/source secret, assemble script, test failure, quota for build pod       |
+| Webhook doesn't trigger                         | `oc describe bc` (URLs), `oc get rolebinding system:webhook -n ns`                                 | system:unauthenticated not bound to system:webhook since 4.16               |
+| Image-change trigger never fires                | `oc get bc/<n> -o yaml` / `oc get deployment/<n> -o yaml` (triggers+annotations), `oc describe is` | tag not updated; binary build; wrong istag name/namespace                   |
+| Quota denial on scale-out                       | `oc describe quota`, events                                                                        | requests/limits missing or aggregate quota exhausted                        |
+| LimitRange rejection                            | `oc describe limits`, events                                                                       | pod below `min`/above `max` or missing request                              |
+| Project cannot create anything                  | `oc describe quota`, `oc describe clusterresourcequota`                                            | quota inherited via project template but workloads don't set resources      |
+| Operator CSV `Failed`/`Pending`                 | `oc get sub,csv,installplan`, `oc describe csv`                                                    | missing OperatorGroup, catalog image pull failure, manual approval pending  |
+| Operator uninstall leaves namespace terminating | `oc get csvs -n openshift`, `oc get ns <ns> -o yaml`                                               | failed uninstall; audit/remove leftover permissions/resources               |
+| HTPasswd login broken                           | `oc get clusteroperators authentication`, `oc get oauth cluster -o yaml`                           | OAuth rollout in progress; wrong secret key/name; secret in wrong namespace |
+| Removed user still works                        | `oc get users`, `oc get identity`                                                                  | forgot `oc delete user`/`oc delete identity`                                |
+| CronJob storm                                   | `oc get jobs`, `oc get cronjobs`                                                                   | missing history limits / bad schedule / concurrencyPolicy not set           |
+| BestEffort pod evicted                          | `oc get pod -o yaml` (qosClass), `oc describe node`                                                | no requests/limits → BestEffort; add resources or LimitRange defaults       |
 
 ### 13.4 Content accuracy rules (do not violate when writing levels)
 
@@ -1856,53 +1862,53 @@ The exam includes web-console tasks, so game levels/flags that claim "console pa
 
 ### 14.1 Version facts (all verified 2026-11-03)
 
-| Fact | Evidence |
-|---|---|
-| Latest OCP **4.x** doc set = **4.22**; `/4.23/` = HTTP 404 | `docs.redhat.com/.../4.22` HTTP 200, `/4.23` 404; docs root/version selector lists 4.22 and **5.0** |
-| A **5.0** docs set is published and is what the docs root defaults to | fetched `docs.redhat.com/.../5.0` HTTP 200; version selector on every 4.22 page shows "5.0 4.22 4.21 …" |
-| EX280 is **based on 4.22** in the current exam version | exam page: "This exam is based on Red Hat® OpenShift® Container Platform 4.22." [R1]; LMS PDF section `EX280V422` [R2] |
-| OCP 4.22 uses **Kubernetes 1.35** with CRI-O | 4.22 release notes [R36] |
-| DeploymentConfig: Deprecated (4.20/4.21/4.22 tracker); deprecation text since 4.14 | [R8][R36] |
-| Cluster Samples Operator: Deprecated; S2I builder streams/templates keep updating until removal | [R21][R36] |
-| Pipeline build strategy: deprecated | [R12] |
-| OLM v1 GA (since 4.18) alongside classic OLM; separate docs guide | [R29] |
-| Shipwright "Builds" documented as separate product doc set | [R43] |
+| Fact                                                                                            | Evidence                                                                                                               |
+| ----------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| Latest OCP **4.x** doc set = **4.22**; `/4.23/` = HTTP 404                                      | `docs.redhat.com/.../4.22` HTTP 200, `/4.23` 404; docs root/version selector lists 4.22 and **5.0**                    |
+| A **5.0** docs set is published and is what the docs root defaults to                           | fetched `docs.redhat.com/.../5.0` HTTP 200; version selector on every 4.22 page shows "5.0 4.22 4.21 …"                |
+| EX280 is **based on 4.22** in the current exam version                                          | exam page: "This exam is based on Red Hat® OpenShift® Container Platform 4.22." [R1]; LMS PDF section `EX280V422` [R2] |
+| OCP 4.22 uses **Kubernetes 1.35** with CRI-O                                                    | 4.22 release notes [R36]                                                                                               |
+| DeploymentConfig: Deprecated (4.20/4.21/4.22 tracker); deprecation text since 4.14              | [R8][R36]                                                                                                              |
+| Cluster Samples Operator: Deprecated; S2I builder streams/templates keep updating until removal | [R21][R36]                                                                                                             |
+| Pipeline build strategy: deprecated                                                             | [R12]                                                                                                                  |
+| OLM v1 GA (since 4.18) alongside classic OLM; separate docs guide                               | [R29]                                                                                                                  |
+| Shipwright "Builds" documented as separate product doc set                                      | [R43]                                                                                                                  |
 
 ### 14.2 Where the 4.22 docs are internally inconsistent (do not copy blindly)
 
-| Inconsistency | Resolution chosen in this doc | Confidence |
-|---|---|---|
-| `oc new-app` output table says it creates **DeploymentConfig**, while the CLI has `--as-deployment-config` and the 4.22 docs' own examples must pass `--as-deployment-config=true` to get DC behaviour | Treat **Deployment as default**, DC as opt-in legacy; verify with `oc new-app --help` on the exam-like cluster before hard-coding game validation | Medium-High |
-| `oc status` sample output shows `dc/cakephp-ex` for a modern `oc new-app` | Legacy sample text; game renders `deploy/...` | Medium |
-| `oc get -o yaml all` documented kind list includes DeploymentConfig/RC and not Deployments/Jobs | Legacy list; docs themselves call `all` unreliable; game should support explicit resource lists and only loosely model `all` | High (that it's legacy) |
-| `oc describe is` sample shows old registry host `docker-registry.default.svc:5000`; other 4.22 pages show `image-registry.openshift-image-registry.svc:5000` | Use `image-registry.openshift-image-registry.svc:5000` as the internal registry host for 4.22 content; note old host appears in stale samples | Medium |
-| Template API examples sometimes use `apiVersion: v1` for `kind: Template` | Prefer `template.openshift.io/v1` (API reference + newer examples) | High |
-| Example blue-green section titled "Deployment" uses `--as-deployment-config=true` / `dc/...` | Treat as legacy sample; teach route-based blue-green with Deployments | Medium |
-| `oc logs -f bc/<name>` (documented), `oc logs deployment/<name>` (documented), `oc logs -f deploy/<name>` (abbrev, common) | Use documented long forms in game copy | High |
+| Inconsistency                                                                                                                                                                                          | Resolution chosen in this doc                                                                                                                     | Confidence              |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------- |
+| `oc new-app` output table says it creates **DeploymentConfig**, while the CLI has `--as-deployment-config` and the 4.22 docs' own examples must pass `--as-deployment-config=true` to get DC behaviour | Treat **Deployment as default**, DC as opt-in legacy; verify with `oc new-app --help` on the exam-like cluster before hard-coding game validation | Medium-High             |
+| `oc status` sample output shows `dc/cakephp-ex` for a modern `oc new-app`                                                                                                                              | Legacy sample text; game renders `deploy/...`                                                                                                     | Medium                  |
+| `oc get -o yaml all` documented kind list includes DeploymentConfig/RC and not Deployments/Jobs                                                                                                        | Legacy list; docs themselves call `all` unreliable; game should support explicit resource lists and only loosely model `all`                      | High (that it's legacy) |
+| `oc describe is` sample shows old registry host `docker-registry.default.svc:5000`; other 4.22 pages show `image-registry.openshift-image-registry.svc:5000`                                           | Use `image-registry.openshift-image-registry.svc:5000` as the internal registry host for 4.22 content; note old host appears in stale samples     | Medium                  |
+| Template API examples sometimes use `apiVersion: v1` for `kind: Template`                                                                                                                              | Prefer `template.openshift.io/v1` (API reference + newer examples)                                                                                | High                    |
+| Example blue-green section titled "Deployment" uses `--as-deployment-config=true` / `dc/...`                                                                                                           | Treat as legacy sample; teach route-based blue-green with Deployments                                                                             | Medium                  |
+| `oc logs -f bc/<name>` (documented), `oc logs deployment/<name>` (documented), `oc logs -f deploy/<name>` (abbrev, common)                                                                             | Use documented long forms in game copy                                                                                                            | High                    |
 
 ### 14.3 Documented gaps where other sources were needed
 
-| Gap | Workaround | Confidence |
-|---|---|---|
-| No Kustomize prose chapter in 4.22 OCP docs (only CLI commands) | `oc apply -k`/`oc kustomize`/`oc get -k`/`oc delete -k` from CLI reference + upstream Kubernetes Kustomize task docs | High for OCP commands; Medium for exact kustomize schema strictness |
-| No StatefulSet prose chapter in 4.22 OCP docs | Upstream Kubernetes StatefulSet docs + OCP-documented `oc scale statefulset/web` / image triggers | High for commands; Medium for OCP-specific STS operational nuance |
-| Helm upgrade/rollback/uninstall documented only via web console in OCP chapter | Upstream Helm CLI docs for `helm upgrade`/`rollback`/`uninstall` | High for Helm CLI; Medium for "what EX280 expects" (console path is the OCP-documented one) |
-| No documented CLI command to approve an InstallPlan with `installPlanApproval: Manual` | Console path documented; API-level `.spec.approved` is raw-object knowledge (⚠️ verify on cluster) | Medium |
-| `oc whoami` flags (`--show-token`, `--show-context`, `--show-server`) | Only `oc whoami`/`-c` appear in 4.22 prose; flag list from CLI help (not quoted here as exam-critical) | Medium |
+| Gap                                                                                    | Workaround                                                                                                           | Confidence                                                                                  |
+| -------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| No Kustomize prose chapter in 4.22 OCP docs (only CLI commands)                        | `oc apply -k`/`oc kustomize`/`oc get -k`/`oc delete -k` from CLI reference + upstream Kubernetes Kustomize task docs | High for OCP commands; Medium for exact kustomize schema strictness                         |
+| No StatefulSet prose chapter in 4.22 OCP docs                                          | Upstream Kubernetes StatefulSet docs + OCP-documented `oc scale statefulset/web` / image triggers                    | High for commands; Medium for OCP-specific STS operational nuance                           |
+| Helm upgrade/rollback/uninstall documented only via web console in OCP chapter         | Upstream Helm CLI docs for `helm upgrade`/`rollback`/`uninstall`                                                     | High for Helm CLI; Medium for "what EX280 expects" (console path is the OCP-documented one) |
+| No documented CLI command to approve an InstallPlan with `installPlanApproval: Manual` | Console path documented; API-level `.spec.approved` is raw-object knowledge (⚠️ verify on cluster)                   | Medium                                                                                      |
+| `oc whoami` flags (`--show-token`, `--show-context`, `--show-server`)                  | Only `oc whoami`/`-c` appear in 4.22 prose; flag list from CLI help (not quoted here as exam-critical)               | Medium                                                                                      |
 
 ### 14.4 Confidence summary
 
-| Area | Confidence | Notes |
-|---|---|---|
-| `oc` CLI command syntax/flags used in §1, §4, §5, §9, §10, §11 | **High** | Every command quoted from the 4.22 CLI reference PDF/chapter; chapter URLs 200 |
-| Objects/YAML apiVersions for BuildConfig, ImageStream, Deployment, Template, OperatorGroup/Subscription/CSV, ResourceQuota/ClusterResourceQuota/LimitRange, Job/CronJob, Project, Group | **High** | From 4.22 docs prose/API references (Template/Project from API pages; others from chapter examples) |
-| Deprecation statuses (DC, Samples Operator, Pipeline strategy) | **High** | 4.22 docs + release notes tracker tables |
-| Build trigger semantics, webhook RBAC gotcha | **High** (doc-verified) | builds_using_buildconfig §8 |
-| Quota/LimitRange admission semantics | **High** | 4.22 Building applications §8 + Nodes §8.3 |
-| OLM install/uninstall flows | **High** for console/CLI install + CLI uninstall; **Medium** for manual-approval CLI and OLM v1 boundaries | see §7 caveats |
-| Kustomize overlays | **Medium-High** | OCP commands High, kustomize schema strictness Medium (version-dependent) |
-| Helm | **High** for documented commands; **Medium** for upgrade/rollback/uninstall CLI parity with console | |
-| "What EX280 expects" beyond the objective bullet names | **Medium** — inferred from objective wording + current 4.22 docs; no leaked exam items exist | Do not over-fit game scoring to this |
+| Area                                                                                                                                                                                    | Confidence                                                                                                 | Notes                                                                                               |
+| --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| `oc` CLI command syntax/flags used in §1, §4, §5, §9, §10, §11                                                                                                                          | **High**                                                                                                   | Every command quoted from the 4.22 CLI reference PDF/chapter; chapter URLs 200                      |
+| Objects/YAML apiVersions for BuildConfig, ImageStream, Deployment, Template, OperatorGroup/Subscription/CSV, ResourceQuota/ClusterResourceQuota/LimitRange, Job/CronJob, Project, Group | **High**                                                                                                   | From 4.22 docs prose/API references (Template/Project from API pages; others from chapter examples) |
+| Deprecation statuses (DC, Samples Operator, Pipeline strategy)                                                                                                                          | **High**                                                                                                   | 4.22 docs + release notes tracker tables                                                            |
+| Build trigger semantics, webhook RBAC gotcha                                                                                                                                            | **High** (doc-verified)                                                                                    | builds_using_buildconfig §8                                                                         |
+| Quota/LimitRange admission semantics                                                                                                                                                    | **High**                                                                                                   | 4.22 Building applications §8 + Nodes §8.3                                                          |
+| OLM install/uninstall flows                                                                                                                                                             | **High** for console/CLI install + CLI uninstall; **Medium** for manual-approval CLI and OLM v1 boundaries | see §7 caveats                                                                                      |
+| Kustomize overlays                                                                                                                                                                      | **Medium-High**                                                                                            | OCP commands High, kustomize schema strictness Medium (version-dependent)                           |
+| Helm                                                                                                                                                                                    | **High** for documented commands; **Medium** for upgrade/rollback/uninstall CLI parity with console        |                                                                                                     |
+| "What EX280 expects" beyond the objective bullet names                                                                                                                                  | **Medium** — inferred from objective wording + current 4.22 docs; no leaked exam items exist               | Do not over-fit game scoring to this                                                                |
 
 ### 14.5 Things deliberately NOT claimed
 
@@ -1918,8 +1924,8 @@ The exam includes web-console tasks, so game levels/flags that claim "console pa
 
 **Exam / objectives**
 
-- **[R1]** Red Hat exam page — *Red Hat Certified System Administrator in OpenShift exam (EX280)*: <https://www.redhat.com/en/services/training/red-hat-certified-openshift-administrator-exam>
-- **[R2]** Red Hat *Exam Objectives by Version* PDF (EX280V422 section): <https://training-lms.redhat.com/public_content/redhat/training/Red%20Hat%20Certification%20Exam%20Objectives%20by%20Version.pdf>
+- **[R1]** Red Hat exam page — _Red Hat Certified System Administrator in OpenShift exam (EX280)_: <https://www.redhat.com/en/services/training/red-hat-certified-openshift-administrator-exam>
+- **[R2]** Red Hat _Exam Objectives by Version_ PDF (EX280V422 section): <https://training-lms.redhat.com/public_content/redhat/training/Red%20Hat%20Certification%20Exam%20Objectives%20by%20Version.pdf>
 
 **OCP 4.22 documentation (docs.redhat.com; PDF bundles downloaded and used for exact text)**
 
@@ -2068,28 +2074,28 @@ oc create serviceaccount <sa> ; oc create token <sa> ; oc set serviceaccount dep
 
 ## Appendix B — API group/version quick table
 
-| Kind | apiVersion | Notes |
-|---|---|---|
-| Deployment, ReplicaSet, DaemonSet, StatefulSet | `apps/v1` | workloads |
-| ReplicationController, Pod, Service, ConfigMap, Secret, ResourceQuota, LimitRange, PersistentVolumeClaim, ServiceAccount | `v1` | core |
-| Job, CronJob | `batch/v1` | one-time/scheduled |
-| BuildConfig | `build.openshift.io/v1` | builds |
-| Build | `build.openshift.io/v1` | runtime build object |
-| ImageStream, ImageStreamTag, ImageStreamImage | `image.openshift.io/v1` | image metadata |
-| DeploymentConfig | `apps.openshift.io/v1` | **deprecated** |
-| Route | `route.openshift.io/v1` | exposure — sibling doc |
-| Template | `template.openshift.io/v1` | parameterised objects |
-| Project | `project.openshift.io/v1` | cluster-scoped |
-| User, Group, Identity | `user.openshift.io/v1` | authn |
-| ClusterResourceQuota | `quota.openshift.io/v1` | multi-project quota |
-| OAuth, Project (config), Image (config) | `config.openshift.io/v1` | cluster config: `cluster` |
-| Subscription, CSV, InstallPlan, CatalogSource | `operators.coreos.com/v1alpha1` | OLM classic |
-| OperatorGroup, OLMConfig | `operators.coreos.com/v1` | OLM classic |
-| Role, RoleBinding, ClusterRole, ClusterRoleBinding | `rbac.authorization.k8s.io/v1` | RBAC |
-| SecurityContextConstraints | `security.openshift.io/v1` | see sibling doc |
-| Ingress | `networking.k8s.io/v1` | see sibling doc |
-| NetworkPolicy | `networking.k8s.io/v1` | see sibling doc |
+| Kind                                                                                                                     | apiVersion                      | Notes                     |
+| ------------------------------------------------------------------------------------------------------------------------ | ------------------------------- | ------------------------- |
+| Deployment, ReplicaSet, DaemonSet, StatefulSet                                                                           | `apps/v1`                       | workloads                 |
+| ReplicationController, Pod, Service, ConfigMap, Secret, ResourceQuota, LimitRange, PersistentVolumeClaim, ServiceAccount | `v1`                            | core                      |
+| Job, CronJob                                                                                                             | `batch/v1`                      | one-time/scheduled        |
+| BuildConfig                                                                                                              | `build.openshift.io/v1`         | builds                    |
+| Build                                                                                                                    | `build.openshift.io/v1`         | runtime build object      |
+| ImageStream, ImageStreamTag, ImageStreamImage                                                                            | `image.openshift.io/v1`         | image metadata            |
+| DeploymentConfig                                                                                                         | `apps.openshift.io/v1`          | **deprecated**            |
+| Route                                                                                                                    | `route.openshift.io/v1`         | exposure — sibling doc    |
+| Template                                                                                                                 | `template.openshift.io/v1`      | parameterised objects     |
+| Project                                                                                                                  | `project.openshift.io/v1`       | cluster-scoped            |
+| User, Group, Identity                                                                                                    | `user.openshift.io/v1`          | authn                     |
+| ClusterResourceQuota                                                                                                     | `quota.openshift.io/v1`         | multi-project quota       |
+| OAuth, Project (config), Image (config)                                                                                  | `config.openshift.io/v1`        | cluster config: `cluster` |
+| Subscription, CSV, InstallPlan, CatalogSource                                                                            | `operators.coreos.com/v1alpha1` | OLM classic               |
+| OperatorGroup, OLMConfig                                                                                                 | `operators.coreos.com/v1`       | OLM classic               |
+| Role, RoleBinding, ClusterRole, ClusterRoleBinding                                                                       | `rbac.authorization.k8s.io/v1`  | RBAC                      |
+| SecurityContextConstraints                                                                                               | `security.openshift.io/v1`      | see sibling doc           |
+| Ingress                                                                                                                  | `networking.k8s.io/v1`          | see sibling doc           |
+| NetworkPolicy                                                                                                            | `networking.k8s.io/v1`          | see sibling doc           |
 
 ---
 
-*End of document. Research only; no game code was modified. Document written 2026-11-03 by teammate `researcher-workloads` for task-2.*
+_End of document. Research only; no game code was modified. Document written 2026-11-03 by teammate `researcher-workloads` for task-2._

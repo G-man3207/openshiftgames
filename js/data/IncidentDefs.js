@@ -60,7 +60,8 @@ const DOCS = {
   pod: 'https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/nodes/index',
   troubleshoot:
     'https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/support/troubleshooting',
-  route: 'https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/ingress_and_load_balancing/routes',
+  route:
+    'https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/ingress_and_load_balancing/routes',
   ingress:
     'https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/ingress_and_load_balancing/configuring-ingress-cluster-traffic',
   network:
@@ -68,11 +69,16 @@ const DOCS = {
   scc: 'https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html-single/authentication_and_authorization/index',
   identity:
     'https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/authentication_and_authorization/configuring-identity-providers',
-  build: 'https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/building_applications/index',
-  quota: 'https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/building_applications/index',
-  nodes: 'https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/nodes/index',
-  storage: 'https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/storage/index',
-  operator: 'https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/operators/index',
+  build:
+    'https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/building_applications/index',
+  quota:
+    'https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/building_applications/index',
+  nodes:
+    'https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/nodes/index',
+  storage:
+    'https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/storage/index',
+  operator:
+    'https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/operators/index',
   metallb:
     'https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/ingress_and_load_balancing/load-balancing-with-metallb',
 };
@@ -115,10 +121,22 @@ const INCIDENT_DEFS = [
     visualEffect: 'pulse-red',
     affectedResourceTypes: ['Pod', 'Deployment'],
     investigationSteps: [
-      S('oc logs <pod> --previous', 'Read the previous container instance — the actual crash reason is in the last run.'),
-      S('oc describe pod <pod>', 'Check Last State / Restart Count and the Events section (Back-off restarting failed container).'),
-      S('oc get pods -l app=<deployment> -o wide', 'List every replica of the owning workload; <pod> is one of these Pods.'),
-      S('oc get events --field-selector involvedObject.name=<pod>', 'Correlate the failure with recent cluster events.'),
+      S(
+        'oc logs <pod> --previous',
+        'Read the previous container instance — the actual crash reason is in the last run.'
+      ),
+      S(
+        'oc describe pod <pod>',
+        'Check Last State / Restart Count and the Events section (Back-off restarting failed container).'
+      ),
+      S(
+        'oc get pods -l app=<deployment> -o wide',
+        'List every replica of the owning workload; <pod> is one of these Pods.'
+      ),
+      S(
+        'oc get events --field-selector involvedObject.name=<pod>',
+        'Correlate the failure with recent cluster events.'
+      ),
     ],
     resolutionActions: [
       A('fix-image', 'Correct the image tag / command', 1),
@@ -163,10 +181,22 @@ const INCIDENT_DEFS = [
     visualEffect: 'pulse-yellow',
     affectedResourceTypes: ['Pod', 'Deployment'],
     investigationSteps: [
-      S('oc describe pod <pod>', 'Events show ErrImagePull/ImagePullBackOff with the exact registry error.'),
-      S('oc get pod <pod> -o jsonpath={.spec.containers[*].image}', 'Verify the image reference and tag.'),
-      S('oc get pods -l app=<deployment> -o wide', 'Check whether every replica of the workload is failing to pull the same image.'),
-      S('oc get sa <serviceaccount> -o yaml', 'Check imagePullSecrets on the ServiceAccount (internal registry auth).'),
+      S(
+        'oc describe pod <pod>',
+        'Events show ErrImagePull/ImagePullBackOff with the exact registry error.'
+      ),
+      S(
+        'oc get pod <pod> -o jsonpath={.spec.containers[*].image}',
+        'Verify the image reference and tag.'
+      ),
+      S(
+        'oc get pods -l app=<deployment> -o wide',
+        'Check whether every replica of the workload is failing to pull the same image.'
+      ),
+      S(
+        'oc get sa <serviceaccount> -o yaml',
+        'Check imagePullSecrets on the ServiceAccount (internal registry auth).'
+      ),
     ],
     resolutionActions: [
       A('fix-image-ref', 'Correct image name/tag', 1),
@@ -180,9 +210,7 @@ const INCIDENT_DEFS = [
     ],
     logs: {
       container: 'main',
-      current: [
-        'Error from server: image <image> is not available',
-      ],
+      current: ['Error from server: image <image> is not available'],
       previous: [
         'Error from server: image <image> is not available',
         'manifest unknown: manifest tagged by "latest" is not found',
@@ -202,9 +230,15 @@ const INCIDENT_DEFS = [
     visualEffect: 'flash-red',
     affectedResourceTypes: ['Pod', 'Deployment'],
     investigationSteps: [
-      S('oc describe pod <pod>', 'Look for "Last State: Terminated, Reason: OOMKilled" and the memory limit.'),
+      S(
+        'oc describe pod <pod>',
+        'Look for "Last State: Terminated, Reason: OOMKilled" and the memory limit.'
+      ),
       S('oc adm top pod <pod>', 'Compare live memory usage with the configured limit.'),
-      S('oc get pod <pod> -o jsonpath={.spec.containers[*].resources}', 'Review requests/limits to right-size the container.'),
+      S(
+        'oc get pod <pod> -o jsonpath={.spec.containers[*].resources}',
+        'Review requests/limits to right-size the container.'
+      ),
     ],
     resolutionActions: [
       A('increase-memory', 'Increase the memory limit', 1),
@@ -230,10 +264,22 @@ const INCIDENT_DEFS = [
     visualEffect: 'pulse-red',
     affectedResourceTypes: ['Pod', 'Deployment', 'ServiceAccount'],
     investigationSteps: [
-      S('oc describe pod <pod>', 'The Events section shows "unable to validate against any security context constraint" and which SCCs rejected the Pod.'),
-      S('oc get sa -n <namespace> -o name', 'List the project ServiceAccounts — a dedicated SA is a better identity than default for privileged workloads.'),
-      S('oc adm policy who-can use scc privileged', 'Check which subjects may use the SCC; on 4.x the grant is an RBAC binding, not an SCC users entry.'),
-      S('oc get rolebinding -n <namespace>', 'The 4.x grant is a RoleBinding in the project to ClusterRole system:openshift:scc:privileged.'),
+      S(
+        'oc describe pod <pod>',
+        'The Events section shows "unable to validate against any security context constraint" and which SCCs rejected the Pod.'
+      ),
+      S(
+        'oc get sa -n <namespace> -o name',
+        'List the project ServiceAccounts — a dedicated SA is a better identity than default for privileged workloads.'
+      ),
+      S(
+        'oc adm policy who-can use scc privileged',
+        'Check which subjects may use the SCC; on 4.x the grant is an RBAC binding, not an SCC users entry.'
+      ),
+      S(
+        'oc get rolebinding -n <namespace>',
+        'The 4.x grant is a RoleBinding in the project to ClusterRole system:openshift:scc:privileged.'
+      ),
     ],
     resolutionActions: [
       A('grant-scc', 'Grant a permissive SCC to the ServiceAccount', 1),
@@ -260,7 +306,10 @@ const INCIDENT_DEFS = [
     visualEffect: 'pulse-yellow',
     affectedResourceTypes: ['Pod', 'Deployment'],
     investigationSteps: [
-      S('oc describe pod <pod>', 'The Events/Scheduler section explains why no node fits (FailedScheduling).'),
+      S(
+        'oc describe pod <pod>',
+        'The Events/Scheduler section explains why no node fits (FailedScheduling).'
+      ),
       S('oc get nodes', 'Check Ready state and labels of candidate nodes.'),
       S('oc describe node <node>', 'Inspect taints, conditions and allocatable resources.'),
       S('oc get resourcequota -n <namespace>', 'A quota can also prevent pod creation/admission.'),
@@ -291,9 +340,18 @@ const INCIDENT_DEFS = [
     affectedResourceTypes: ['Pod', 'Deployment'],
     investigationSteps: [
       S('oc describe pod <pod>', 'Events name the missing ConfigMap/Secret or key.'),
-      S('oc get configmap <configmap> -n <namespace>', 'Confirm the ConfigMap referenced by the workload exists.'),
-      S('oc get secret <secret> -n <namespace>', 'Confirm the Secret exists and has the expected keys.'),
-      S('oc get deployment <deployment> -o yaml', 'Check envFrom/volumes references in the pod template.'),
+      S(
+        'oc get configmap <configmap> -n <namespace>',
+        'Confirm the ConfigMap referenced by the workload exists.'
+      ),
+      S(
+        'oc get secret <secret> -n <namespace>',
+        'Confirm the Secret exists and has the expected keys.'
+      ),
+      S(
+        'oc get deployment <deployment> -o yaml',
+        'Check envFrom/volumes references in the pod template.'
+      ),
     ],
     resolutionActions: [
       A('create-configmap', 'Create the missing ConfigMap', 1),
@@ -322,7 +380,10 @@ const INCIDENT_DEFS = [
     investigationSteps: [
       S('oc describe pod <pod>', 'Events show "Readiness probe failed" plus the probe URL/port.'),
       S('oc logs <pod>', 'Application logs usually explain why /readyz is failing.'),
-      S('oc get endpoints <service> -n <namespace>', 'A NotReady Pod no longer appears in the Service endpoints.'),
+      S(
+        'oc get endpoints <service> -n <namespace>',
+        'A NotReady Pod no longer appears in the Service endpoints.'
+      ),
     ],
     resolutionActions: [
       A('fix-probe-path', 'Correct the readiness probe path', 1),
@@ -349,8 +410,14 @@ const INCIDENT_DEFS = [
     affectedResourceTypes: ['Pod', 'Deployment'],
     investigationSteps: [
       S('oc describe pod <pod>', 'Events show "Liveness probe failed" and the restart count.'),
-      S('oc logs <pod> --previous', 'Check the logs from the previous (restarted) container instance.'),
-      S('oc get deployment <deployment> -o yaml', 'Review livenessProbe initialDelaySeconds/timeoutSeconds/periodSeconds.'),
+      S(
+        'oc logs <pod> --previous',
+        'Check the logs from the previous (restarted) container instance.'
+      ),
+      S(
+        'oc get deployment <deployment> -o yaml',
+        'Review livenessProbe initialDelaySeconds/timeoutSeconds/periodSeconds.'
+      ),
     ],
     resolutionActions: [
       A('fix-probe-config', 'Fix the liveness probe configuration', 1),
@@ -403,10 +470,22 @@ const INCIDENT_DEFS = [
     visualEffect: 'pulse-yellow',
     affectedResourceTypes: ['Deployment', 'ReplicaSet'],
     investigationSteps: [
-      S('oc rollout status deployment/<deployment>', 'Confirms the rollout is stuck ("waiting for rollout to finish").'),
-      S('oc describe deployment <deployment>', 'Condition Progressing=False reason ProgressDeadlineExceeded.'),
-      S('oc get rs -n <namespace>', 'Old and new ReplicaSets both present — new one has no Ready pods.'),
-      S('oc get pods -n <namespace>', 'Inspect the new pods: image pull, crash loop, probes or quota.'),
+      S(
+        'oc rollout status deployment/<deployment>',
+        'Confirms the rollout is stuck ("waiting for rollout to finish").'
+      ),
+      S(
+        'oc describe deployment <deployment>',
+        'Condition Progressing=False reason ProgressDeadlineExceeded.'
+      ),
+      S(
+        'oc get rs -n <namespace>',
+        'Old and new ReplicaSets both present — new one has no Ready pods.'
+      ),
+      S(
+        'oc get pods -n <namespace>',
+        'Inspect the new pods: image pull, crash loop, probes or quota.'
+      ),
     ],
     resolutionActions: [
       A('fix-template', 'Fix the new pod template', 2),
@@ -434,8 +513,14 @@ const INCIDENT_DEFS = [
     affectedResourceTypes: ['ImageStream', 'Deployment'],
     investigationSteps: [
       S('oc get istag -n <namespace>', 'List ImageStreamTags in the project.'),
-      S('oc describe imagestream <imagestream> -n <namespace>', 'Check which tags the ImageStream actually tracks.'),
-      S('oc get events -n <namespace>', 'Look for FailedCreate/ErrImagePull referencing the missing tag.'),
+      S(
+        'oc describe imagestream <imagestream> -n <namespace>',
+        'Check which tags the ImageStream actually tracks.'
+      ),
+      S(
+        'oc get events -n <namespace>',
+        'Look for FailedCreate/ErrImagePull referencing the missing tag.'
+      ),
     ],
     resolutionActions: [
       A('import-tag', 'Import the tag with oc import-image', 1),
@@ -450,7 +535,12 @@ const INCIDENT_DEFS = [
     ],
     autoResolveTime: null,
     docsUrl: DOCS.build,
-    resolution: { kind: 'imagestreamtag', effect: 'restore', targetKind: 'ImageStream', tag: 'latest' },
+    resolution: {
+      kind: 'imagestreamtag',
+      effect: 'restore',
+      targetKind: 'ImageStream',
+      tag: 'latest',
+    },
   },
   {
     id: 'build-failed',
@@ -463,9 +553,15 @@ const INCIDENT_DEFS = [
     affectedResourceTypes: ['Build', 'BuildConfig'],
     investigationSteps: [
       S('oc get builds -n <namespace>', 'Find the failed Build and its STATUS.'),
-      S('oc logs -f build/<build> -n <namespace>', 'Read the build log: source clone, builder image or Dockerfile error.'),
+      S(
+        'oc logs -f build/<build> -n <namespace>',
+        'Read the build log: source clone, builder image or Dockerfile error.'
+      ),
       S('oc describe build <build>', 'Status.Reason/Message and the output ImageStreamTag.'),
-      S('oc describe buildconfig <buildconfig>', 'Check source, strategy and output configuration.'),
+      S(
+        'oc describe buildconfig <buildconfig>',
+        'Check source, strategy and output configuration.'
+      ),
     ],
     resolutionActions: [
       A('fix-source', 'Fix the source repo/context', 2),
@@ -480,7 +576,12 @@ const INCIDENT_DEFS = [
     ],
     autoResolveTime: null,
     docsUrl: DOCS.build,
-    resolution: { kind: 'build', effect: 'complete', targetKind: 'Build', imageStream: '<buildconfig>' },
+    resolution: {
+      kind: 'build',
+      effect: 'complete',
+      targetKind: 'Build',
+      imageStream: '<buildconfig>',
+    },
   },
   {
     id: 'hpa-unable-to-scale',
@@ -495,18 +596,17 @@ const INCIDENT_DEFS = [
       S('oc describe hpa <hpa>', 'Conditions show AbleToScale=False / FailedGetResourceMetric.'),
       S('oc get hpa <hpa>', 'TARGETS may show <unknown>/70%.'),
       S('oc adm top pods -n <namespace>', 'Check whether pod metrics are available at all.'),
-      S('oc get deployment <deployment>', 'Confirm the scaleTargetRef points at an existing Deployment.'),
+      S(
+        'oc get deployment <deployment>',
+        'Confirm the scaleTargetRef points at an existing Deployment.'
+      ),
     ],
     resolutionActions: [
       A('fix-metrics', 'Restore metrics availability', 2),
       A('fix-target', 'Fix HPA scaleTargetRef', 1),
       A('set-resources', 'Set requests so utilization can be computed', 1),
     ],
-    ocCommands: [
-      'oc describe hpa <hpa>',
-      'oc adm top pods',
-      'oc get hpa <hpa> -o yaml',
-    ],
+    ocCommands: ['oc describe hpa <hpa>', 'oc adm top pods', 'oc get hpa <hpa> -o yaml'],
     autoResolveTime: 120,
     docsUrl: DOCS.pod,
     resolution: { kind: 'hpa', effect: 'heal', targetKind: 'HorizontalPodAutoscaler' },
@@ -524,7 +624,10 @@ const INCIDENT_DEFS = [
       S('oc get job <job> -n <namespace>', 'STATUS shows Failed with reason DeadlineExceeded.'),
       S('oc describe job <job>', 'Read the Job conditions and the activeDeadlineSeconds value.'),
       S('oc logs job/<job> -n <namespace>', 'Why the job did not finish in time.'),
-      S('oc get pods -n <namespace> -l job-name=<job>', 'The Pods were terminated; a Failed Job object cannot be resumed.'),
+      S(
+        'oc get pods -n <namespace> -l job-name=<job>',
+        'The Pods were terminated; a Failed Job object cannot be resumed.'
+      ),
     ],
     resolutionActions: [
       A('raise-deadline', 'Create a replacement Job with a longer activeDeadlineSeconds', 1),
@@ -589,12 +692,7 @@ const INCIDENT_DEFS = [
       A('fix-storageclass', 'Use a StorageClass that can provision', 1),
       A('resize-claim', 'Request a size a PV can satisfy', 1),
     ],
-    ocCommands: [
-      'oc get pvc',
-      'oc describe pvc <pvc>',
-      'oc get pv',
-      'oc get storageclass',
-    ],
+    ocCommands: ['oc get pvc', 'oc describe pvc <pvc>', 'oc get pv', 'oc get storageclass'],
     autoResolveTime: null,
     docsUrl: DOCS.storage,
     resolution: { kind: 'pvc', effect: 'bound', targetKind: 'PersistentVolumeClaim' },
@@ -611,7 +709,10 @@ const INCIDENT_DEFS = [
     investigationSteps: [
       S('oc describe pod <pod>', 'Events say configmap "<name>" not found.'),
       S('oc get configmap <configmap> -n <namespace>', 'Confirm whether the object exists.'),
-      S('oc get deployment <deployment> -o yaml', 'Find the envFrom/volume reference to the missing ConfigMap.'),
+      S(
+        'oc get deployment <deployment> -o yaml',
+        'Find the envFrom/volume reference to the missing ConfigMap.'
+      ),
     ],
     resolutionActions: [
       A('create-configmap', 'Create the missing ConfigMap', 1),
@@ -638,7 +739,10 @@ const INCIDENT_DEFS = [
     affectedResourceTypes: ['Secret', 'Pod', 'Deployment'],
     investigationSteps: [
       S('oc describe pod <pod>', 'Events name the missing Secret or key.'),
-      S('oc get secret <secret> -n <namespace>', 'Confirm the Secret exists and has the expected keys.'),
+      S(
+        'oc get secret <secret> -n <namespace>',
+        'Confirm the Secret exists and has the expected keys.'
+      ),
       S('oc get deployment <deployment> -o yaml', 'Check secretRef / volume references.'),
     ],
     resolutionActions: [
@@ -665,8 +769,14 @@ const INCIDENT_DEFS = [
     visualEffect: 'flash-red',
     affectedResourceTypes: ['Secret', 'ConfigMap'],
     investigationSteps: [
-      S('oc get secret <secret> -n <namespace> -o yaml', 'Inspect where the credential is stored and its type.'),
-      S('oc get configmap <configmap> -n <namespace> -o yaml', 'Sensitive values must not live in ConfigMaps.'),
+      S(
+        'oc get secret <secret> -n <namespace> -o yaml',
+        'Inspect where the credential is stored and its type.'
+      ),
+      S(
+        'oc get configmap <configmap> -n <namespace> -o yaml',
+        'Sensitive values must not live in ConfigMaps.'
+      ),
       S('oc get rolebindings -n <namespace>', 'Review who can read the Secret.'),
     ],
     resolutionActions: [
@@ -695,7 +805,10 @@ const INCIDENT_DEFS = [
     visualEffect: 'pulse-yellow',
     affectedResourceTypes: ['Service', 'Deployment'],
     investigationSteps: [
-      S('oc get endpoints <service> -n <namespace>', 'ENDPOINTS is <none> when no Pod matches/is Ready.'),
+      S(
+        'oc get endpoints <service> -n <namespace>',
+        'ENDPOINTS is <none> when no Pod matches/is Ready.'
+      ),
       S('oc describe service <service>', 'Compare spec.selector with the pods labels.'),
       S('oc get pods --show-labels -n <namespace>', 'Find Pods and their labels/readiness.'),
     ],
@@ -724,9 +837,18 @@ const INCIDENT_DEFS = [
     affectedResourceTypes: ['Route', 'Service'],
     investigationSteps: [
       S('oc get route <route> -n <namespace>', 'Check HOST/PORT, SERVICE and TERMINATION columns.'),
-      S('oc describe route <route>', 'Status/conditions show whether an Ingress Controller admitted it.'),
-      S('oc get route <route> -o jsonpath={.status.ingress[*].conditions}', 'Inspect Admitted reason/message.'),
-      S('oc get endpoints <service> -n <namespace>', 'No endpoints means the admitted Route has no backend to serve traffic (a traffic failure, not an admission failure).'),
+      S(
+        'oc describe route <route>',
+        'Status/conditions show whether an Ingress Controller admitted it.'
+      ),
+      S(
+        'oc get route <route> -o jsonpath={.status.ingress[*].conditions}',
+        'Inspect Admitted reason/message.'
+      ),
+      S(
+        'oc get endpoints <service> -n <namespace>',
+        'No endpoints means the admitted Route has no backend to serve traffic (a traffic failure, not an admission failure).'
+      ),
     ],
     resolutionActions: [
       A('fix-endpoints', 'Restore Service endpoints', 2),
@@ -753,10 +875,22 @@ const INCIDENT_DEFS = [
     visualEffect: 'flash-red',
     affectedResourceTypes: ['Route', 'Secret'],
     investigationSteps: [
-      S('oc describe route <route>', 'Check the TLS termination and certificate/key fields or secret reference.'),
-      S('oc get route <route> -o jsonpath={.spec.tls}', 'Inspect termination, certificate, key, caCertificate.'),
-      S('oc get secret <secret> -n <namespace> -o yaml', 'Verify the tls.crt/tls.key pair and its SANs.'),
-      S('oc get secret <secret> -n <namespace> -o jsonpath={.data.tls\\.crt} | base64 -d | openssl x509 -noout -subject -ext subjectAltName', 'Decode the TLS secret and inspect the certificate SANs the router serves.'),
+      S(
+        'oc describe route <route>',
+        'Check the TLS termination and certificate/key fields or secret reference.'
+      ),
+      S(
+        'oc get route <route> -o jsonpath={.spec.tls}',
+        'Inspect termination, certificate, key, caCertificate.'
+      ),
+      S(
+        'oc get secret <secret> -n <namespace> -o yaml',
+        'Verify the tls.crt/tls.key pair and its SANs.'
+      ),
+      S(
+        'oc get secret <secret> -n <namespace> -o jsonpath={.data.tls\\.crt} | base64 -d | openssl x509 -noout -subject -ext subjectAltName',
+        'Decode the TLS secret and inspect the certificate SANs the router serves.'
+      ),
     ],
     resolutionActions: [
       A('renew-cert', 'Create a correct certificate and update the Route', 2),
@@ -784,7 +918,10 @@ const INCIDENT_DEFS = [
     investigationSteps: [
       S('oc get routes -A', 'Find another Route advertising the same HOST/PORT.'),
       S('oc describe route <route>', 'The status shows the conflicting host claim.'),
-      S('oc get ingresscontroller -n openshift-ingress-operator -o yaml', 'Check spec.routeAdmission.namespaceOwnership (Strict vs InterNamespaceAllowed).'),
+      S(
+        'oc get ingresscontroller -n openshift-ingress-operator -o yaml',
+        'Check spec.routeAdmission.namespaceOwnership (Strict vs InterNamespaceAllowed).'
+      ),
     ],
     resolutionActions: [
       A('change-host', 'Give the Route a unique hostname', 1),
@@ -810,10 +947,16 @@ const INCIDENT_DEFS = [
     visualEffect: 'pulse-yellow',
     affectedResourceTypes: ['NetworkPolicy', 'Service', 'Pod'],
     investigationSteps: [
-      S('oc get networkpolicy -n <namespace>', 'List policies and the pod selector each one applies to.'),
+      S(
+        'oc get networkpolicy -n <namespace>',
+        'List policies and the pod selector each one applies to.'
+      ),
       S('oc describe networkpolicy <networkpolicy>', 'Check ingress/egress rules and ports.'),
       S('oc exec <pod> -- curl -sv <service>:8080', 'Reproduce the timeout from inside a Pod.'),
-      S('oc get events -n <namespace>', 'Denied connections are usually not events — verify by policy inspection.'),
+      S(
+        'oc get events -n <namespace>',
+        'Denied connections are usually not events — verify by policy inspection.'
+      ),
     ],
     resolutionActions: [
       A('allow-traffic', 'Add an allow rule to the policy', 1),
@@ -840,9 +983,18 @@ const INCIDENT_DEFS = [
     visualEffect: 'flash-red',
     affectedResourceTypes: ['Service', 'Pod'],
     investigationSteps: [
-      S('oc exec <pod> -- nslookup <service>.<namespace>.svc.cluster.local', 'Reproduce the resolution failure from a Pod using the full service DNS name.'),
-      S('oc get pods -n openshift-dns', 'Check that the DNS Pods (dns-default) are Running and Ready.'),
-      S('oc get networkpolicy -n <namespace>', 'On OpenShift the dns-default Pods listen on 5353; an egress rule that only allows port 53 still blocks them.'),
+      S(
+        'oc exec <pod> -- nslookup <service>.<namespace>.svc.cluster.local',
+        'Reproduce the resolution failure from a Pod using the full service DNS name.'
+      ),
+      S(
+        'oc get pods -n openshift-dns',
+        'Check that the DNS Pods (dns-default) are Running and Ready.'
+      ),
+      S(
+        'oc get networkpolicy -n <namespace>',
+        'On OpenShift the dns-default Pods listen on 5353; an egress rule that only allows port 53 still blocks them.'
+      ),
       S('oc get endpoints <service> -n <namespace>', 'Confirm the Service itself has endpoints.'),
     ],
     resolutionActions: [
@@ -857,7 +1009,12 @@ const INCIDENT_DEFS = [
     ],
     autoResolveTime: null,
     docsUrl: DOCS.network,
-    resolution: { kind: 'cluster', effect: 'dns', targetKind: 'Service', namespace: 'openshift-dns' },
+    resolution: {
+      kind: 'cluster',
+      effect: 'dns',
+      targetKind: 'Service',
+      namespace: 'openshift-dns',
+    },
   },
   {
     id: 'ingress-degraded',
@@ -870,9 +1027,15 @@ const INCIDENT_DEFS = [
     affectedResourceTypes: ['Ingress', 'ClusterOperator'],
     investigationSteps: [
       S('oc get clusteroperators ingress', 'Check AVAILABLE/PROGRESSING/DEGRADED columns.'),
-      S('oc describe clusteroperator ingress', 'Conditions and the reason/message for the degradation.'),
+      S(
+        'oc describe clusteroperator ingress',
+        'Conditions and the reason/message for the degradation.'
+      ),
       S('oc get pods -n openshift-ingress', 'Look for Pending/CrashLooping router Pods.'),
-      S('oc get ingresscontroller -n openshift-ingress-operator', 'Verify replicas and nodePlacement.'),
+      S(
+        'oc get ingresscontroller -n openshift-ingress-operator',
+        'Verify replicas and nodePlacement.'
+      ),
     ],
     resolutionActions: [
       A('restart-router', 'Restart / reschedule router Pods', 2),
@@ -902,7 +1065,10 @@ const INCIDENT_DEFS = [
       S('oc get service <service> -n <namespace>', 'EXTERNAL-IP stays <pending>.'),
       S('oc describe service <service>', 'Events show LoadBalancer provisioning failures.'),
       S('oc get ipaddresspool -n metallb-system', 'Check that an address pool exists for MetalLB.'),
-      S('oc get subscription -n metallb-system', 'Verify the MetalLB operator is installed and Succeeded.'),
+      S(
+        'oc get subscription -n metallb-system',
+        'Verify the MetalLB operator is installed and Succeeded.'
+      ),
     ],
     resolutionActions: [
       A('configure-pool', 'Create IPAddressPool + L2Advertisement', 2),
@@ -931,9 +1097,18 @@ const INCIDENT_DEFS = [
     visualEffect: 'flash-red',
     affectedResourceTypes: ['Deployment', 'Pod', 'ServiceAccount', 'RoleBinding'],
     investigationSteps: [
-      S('oc auth can-i get pods --as=system:serviceaccount:<namespace>:default', 'Prove whether the workload ServiceAccount (usually default) is allowed.'),
-      S('oc get rolebindings -n <namespace>', 'Check which RoleBindings exist in the project; the required binding is missing.'),
-      S('oc get sa -n <namespace>', 'Confirm the ServiceAccount identity the workload Pods run as.'),
+      S(
+        'oc auth can-i get pods --as=system:serviceaccount:<namespace>:default',
+        'Prove whether the workload ServiceAccount (usually default) is allowed.'
+      ),
+      S(
+        'oc get rolebindings -n <namespace>',
+        'Check which RoleBindings exist in the project; the required binding is missing.'
+      ),
+      S(
+        'oc get sa -n <namespace>',
+        'Confirm the ServiceAccount identity the workload Pods run as.'
+      ),
       S('oc get events -n <namespace>', 'Look for 403 Forbidden responses from the API.'),
     ],
     resolutionActions: [
@@ -948,7 +1123,12 @@ const INCIDENT_DEFS = [
     ],
     autoResolveTime: null,
     docsUrl: DOCS.scc,
-    resolution: { kind: 'rbac', effect: 'restore', targetKind: 'RoleBinding', scc: 'restricted-v2' },
+    resolution: {
+      kind: 'rbac',
+      effect: 'restore',
+      targetKind: 'RoleBinding',
+      scc: 'restricted-v2',
+    },
   },
   {
     id: 'htpasswd-auth-failure',
@@ -960,8 +1140,14 @@ const INCIDENT_DEFS = [
     visualEffect: 'flash-red',
     affectedResourceTypes: ['OAuth', 'User', 'Identity'],
     investigationSteps: [
-      S('oc get oauth cluster -o yaml', 'Verify the identityProviders entry type HTPasswd and fileData.name.'),
-      S('oc get secret htpass-secret -n openshift-config -o jsonpath={.data.htpasswd}', 'The secret must exist and contain the htpasswd key.'),
+      S(
+        'oc get oauth cluster -o yaml',
+        'Verify the identityProviders entry type HTPasswd and fileData.name.'
+      ),
+      S(
+        'oc get secret htpass-secret -n openshift-config -o jsonpath={.data.htpasswd}',
+        'The secret must exist and contain the htpasswd key.'
+      ),
       S('oc get pods -n openshift-authentication', 'Check that the OAuth server Pods are Running.'),
       S('oc get users', 'Check that User/Identity objects exist for the account.'),
     ],
@@ -993,7 +1179,10 @@ const INCIDENT_DEFS = [
       S('oc describe quota <quota> -n <namespace>', 'Compare Used vs Hard for cpu/memory/pods.'),
       S('oc get quota <quota> -o yaml', 'Check hard limits and scopes.'),
       S('oc describe deployment <deployment>', 'FailedCreate events name the exceeded quota.'),
-      S('oc events -n <namespace> --types=Warning', 'Recent admission/quota failures (the events subcommand accepts --types; oc get events does not).'),
+      S(
+        'oc events -n <namespace> --types=Warning',
+        'Recent admission/quota failures (the events subcommand accepts --types; oc get events does not).'
+      ),
     ],
     resolutionActions: [
       A('raise-quota', 'Increase the quota hard limits', 1),
@@ -1020,10 +1209,19 @@ const INCIDENT_DEFS = [
     visualEffect: 'pulse-yellow',
     affectedResourceTypes: ['LimitRange', 'Pod', 'Deployment'],
     investigationSteps: [
-      S('oc describe limitrange <limitrange> -n <namespace>', 'Read min/max/default/defaultRequest/ratio.'),
+      S(
+        'oc describe limitrange <limitrange> -n <namespace>',
+        'Read min/max/default/defaultRequest/ratio.'
+      ),
       S('oc get limitrange <limitrange> -o yaml', 'Exact LimitRange spec.'),
-      S('oc describe pod <pod>', 'Events show "minimum cpu usage per Container is ..." or max violation.'),
-      S('oc get deployment <deployment> -o yaml', 'Compare the pod template resources with the LimitRange.'),
+      S(
+        'oc describe pod <pod>',
+        'Events show "minimum cpu usage per Container is ..." or max violation.'
+      ),
+      S(
+        'oc get deployment <deployment> -o yaml',
+        'Compare the pod template resources with the LimitRange.'
+      ),
     ],
     resolutionActions: [
       A('adjust-resources', 'Set requests/limits inside the allowed range', 1),
@@ -1051,8 +1249,14 @@ const INCIDENT_DEFS = [
     investigationSteps: [
       S('oc get clusterresourcequota', 'Find the CRQ and its selector.'),
       S('oc describe clusterresourcequota <clusterquota>', 'Per-namespace and total Used vs Hard.'),
-      S('oc get appliedclusterresourcequota -n <namespace>', 'The quota view from the project perspective.'),
-      S('oc describe quota -n <namespace>', 'Check whether a project ResourceQuota is also involved.'),
+      S(
+        'oc get appliedclusterresourcequota -n <namespace>',
+        'The quota view from the project perspective.'
+      ),
+      S(
+        'oc describe quota -n <namespace>',
+        'Check whether a project ResourceQuota is also involved.'
+      ),
     ],
     resolutionActions: [
       A('raise-crq', 'Raise the ClusterResourceQuota limits', 1),
@@ -1109,9 +1313,15 @@ const INCIDENT_DEFS = [
     visualEffect: 'pulse-red',
     affectedResourceTypes: ['Node'],
     investigationSteps: [
-      S('oc describe node <node>', 'Conditions show DiskPressure=True with the eviction threshold.'),
+      S(
+        'oc describe node <node>',
+        'Conditions show DiskPressure=True with the eviction threshold.'
+      ),
       S('oc adm top node <node>', 'Node resource usage overview.'),
-      S('oc get events -A --field-selector involvedObject.name=<node>', 'Eviction events on the node.'),
+      S(
+        'oc get events -A --field-selector involvedObject.name=<node>',
+        'Eviction events on the node.'
+      ),
     ],
     resolutionActions: [
       A('free-disk', 'Free node disk space', 2),
@@ -1165,7 +1375,10 @@ const INCIDENT_DEFS = [
     visualEffect: 'flash-red',
     affectedResourceTypes: ['Subscription', 'ClusterOperator'],
     investigationSteps: [
-      S('oc get subscription <subscription> -n <namespace> -o yaml', 'Check status.installedCSV/currentCSV and conditions.'),
+      S(
+        'oc get subscription <subscription> -n <namespace> -o yaml',
+        'Check status.installedCSV/currentCSV and conditions.'
+      ),
       S('oc get csv -n <namespace>', 'Find a CSV stuck in Failed/Pending/Installing.'),
       S('oc describe subscription <subscription>', 'Conditions show resolution/install failures.'),
       S('oc get installplan -n <namespace>', 'Look for failed install plans / missing CRDs.'),

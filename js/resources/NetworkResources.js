@@ -120,15 +120,29 @@ export class Service extends ResourceBase {
   }
 
   toDescribe() {
-    const externalIP = this.spec.type === 'LoadBalancer' ? this.externalIP || '<pending>' : '<none>';
+    const externalIP =
+      this.spec.type === 'LoadBalancer' ? this.externalIP || '<pending>' : '<none>';
     const endpointText =
-      this.endpoints.map((e) => `${e.ip}:${this.spec.ports?.[0]?.targetPort ?? ''}`).join(', ') || '<none>';
+      this.endpoints.map((e) => `${e.ip}:${this.spec.ports?.[0]?.targetPort ?? ''}`).join(', ') ||
+      '<none>';
     const lines = [
       `Name:              ${this.metadata.name}`,
       `Namespace:         ${this.metadata.namespace}`,
-      `Labels:            ${Object.entries(this.metadata.labels).map(([k, v]) => `${k}=${v}`).join(', ') || '<none>'}`,
-      `Annotations:       ${Object.entries(this.metadata.annotations).map(([k, v]) => `${k}=${v}`).join(', ') || '<none>'}`,
-      `Selector:          ${Object.entries(this.spec.selector || {}).map(([k, v]) => `${k}=${v}`).join(',') || '<none>'}`,
+      `Labels:            ${
+        Object.entries(this.metadata.labels)
+          .map(([k, v]) => `${k}=${v}`)
+          .join(', ') || '<none>'
+      }`,
+      `Annotations:       ${
+        Object.entries(this.metadata.annotations)
+          .map(([k, v]) => `${k}=${v}`)
+          .join(', ') || '<none>'
+      }`,
+      `Selector:          ${
+        Object.entries(this.spec.selector || {})
+          .map(([k, v]) => `${k}=${v}`)
+          .join(',') || '<none>'
+      }`,
       `Type:              ${this.spec.type}`,
       `IP:                ${this.spec.clusterIP || '<none>'}`,
       `External IP:       ${externalIP}`,
@@ -136,7 +150,9 @@ export class Service extends ResourceBase {
       `TargetPort:        ${(this.spec.ports || []).map((p) => `${p.targetPort}/${p.protocol}`).join(', ')}`,
     ];
     if (this.spec.ports?.[0]?.nodePort) {
-      lines.push(`NodePort:          ${this.spec.ports.map((p) => `${p.name} ${p.nodePort}/${p.protocol}`).join(', ')}`);
+      lines.push(
+        `NodePort:          ${this.spec.ports.map((p) => `${p.name} ${p.nodePort}/${p.protocol}`).join(', ')}`
+      );
     }
     lines.push(
       `Endpoints:         ${endpointText}`,
@@ -223,7 +239,11 @@ export class Ingress extends ResourceBase {
     }
     this.metadata.generation++;
     this._bumpResourceVersion();
-    this.addEvent('Normal', 'UpdatedIngress', `Added rule: ${host}${path} -> ${serviceName}:${servicePort}`);
+    this.addEvent(
+      'Normal',
+      'UpdatedIngress',
+      `Added rule: ${host}${path} -> ${serviceName}:${servicePort}`
+    );
     return this;
   }
 
@@ -266,20 +286,32 @@ Rules:
 ${(this.spec.rules || [])
   .map((r) =>
     (r.http?.paths || [])
-      .map((p) => `  ${r.host}  ${p.path}  ${p.backend.service.name}:${p.backend.service.port.number}`)
+      .map(
+        (p) => `  ${r.host}  ${p.path}  ${p.backend.service.name}:${p.backend.service.port.number}`
+      )
       .join('\n')
   )
   .join('\n')}
 Events:
-${this.events.slice(-10).map((e) => `  ${e.type}\t${e.reason}\t${e.message}`).join('\n')}`;
+${this.events
+  .slice(-10)
+  .map((e) => `  ${e.type}\t${e.reason}\t${e.message}`)
+  .join('\n')}`;
   }
 }
 
 export class NetworkPolicy extends ResourceBase {
   constructor(metadata = {}) {
-    super('NetworkPolicy', { ...metadata, apiVersion: metadata.apiVersion || 'networking.k8s.io/v1' });
+    super('NetworkPolicy', {
+      ...metadata,
+      apiVersion: metadata.apiVersion || 'networking.k8s.io/v1',
+    });
     const defaults = {
-      podSelector: { matchLabels: deepClone(metadata.podSelector || (metadata.name ? { app: metadata.name } : {})) },
+      podSelector: {
+        matchLabels: deepClone(
+          metadata.podSelector || (metadata.name ? { app: metadata.name } : {})
+        ),
+      },
       policyTypes: metadata.policyTypes || ['Ingress', 'Egress'],
       ingress: deepClone(
         metadata.ingress || [
@@ -314,13 +346,19 @@ export class NetworkPolicy extends ResourceBase {
       const portMatch = !rule.ports || rule.ports.some((p) => String(p.port) === String(port));
       if (!portMatch) continue;
       for (const from of rule.from || []) {
-        if (from.podSelector && this._labelsMatch(sourcePod.metadata.labels, from.podSelector.matchLabels)) {
+        if (
+          from.podSelector &&
+          this._labelsMatch(sourcePod.metadata.labels, from.podSelector.matchLabels)
+        ) {
           this.allowedConnections++;
           return true;
         }
         if (
           from.namespaceSelector &&
-          this._labelsMatch({ name: sourcePod.metadata.namespace }, from.namespaceSelector.matchLabels)
+          this._labelsMatch(
+            { name: sourcePod.metadata.namespace },
+            from.namespaceSelector.matchLabels
+          )
         ) {
           this.allowedConnections++;
           return true;
@@ -337,7 +375,10 @@ export class NetworkPolicy extends ResourceBase {
       const portMatch = !rule.ports || rule.ports.some((p) => String(p.port) === String(port));
       if (!portMatch) continue;
       for (const to of rule.to || []) {
-        if (to.podSelector && this._labelsMatch(destPod.metadata.labels, to.podSelector.matchLabels)) {
+        if (
+          to.podSelector &&
+          this._labelsMatch(destPod.metadata.labels, to.podSelector.matchLabels)
+        ) {
           this.allowedConnections++;
           return true;
         }
@@ -368,7 +409,8 @@ export class NetworkPolicy extends ResourceBase {
   }
 
   getColor() {
-    const hasBoth = this.spec.policyTypes?.includes('Ingress') && this.spec.policyTypes?.includes('Egress');
+    const hasBoth =
+      this.spec.policyTypes?.includes('Ingress') && this.spec.policyTypes?.includes('Egress');
     return hasBoth ? '#ef4444' : '#22c55e';
   }
 
@@ -376,16 +418,28 @@ export class NetworkPolicy extends ResourceBase {
     return `Name:         ${this.metadata.name}
 Namespace:    ${this.metadata.namespace}
 Spec:
-  PodSelector:     ${Object.entries(this.spec.podSelector?.matchLabels || {}).map(([k, v]) => `${k}=${v}`).join(',') || '<all pods>'}
+  PodSelector:     ${
+    Object.entries(this.spec.podSelector?.matchLabels || {})
+      .map(([k, v]) => `${k}=${v}`)
+      .join(',') || '<all pods>'
+  }
   Allowing ingress traffic:
 ${(this.spec.ingress || [])
   .map(
-    (rule) => `    To Port: ${(rule.ports || []).map((p) => `${p.port}/${p.protocol}`).join(', ') || '<all>'}
+    (
+      rule
+    ) => `    To Port: ${(rule.ports || []).map((p) => `${p.port}/${p.protocol}`).join(', ') || '<all>'}
     From:
 ${(rule.from || [])
   .map((f) => {
-    if (f.podSelector) return `      PodSelector: ${Object.entries(f.podSelector.matchLabels || {}).map(([k, v]) => `${k}=${v}`).join(',')}`;
-    if (f.namespaceSelector) return `      NamespaceSelector: ${Object.entries(f.namespaceSelector.matchLabels || {}).map(([k, v]) => `${k}=${v}`).join(',')}`;
+    if (f.podSelector)
+      return `      PodSelector: ${Object.entries(f.podSelector.matchLabels || {})
+        .map(([k, v]) => `${k}=${v}`)
+        .join(',')}`;
+    if (f.namespaceSelector)
+      return `      NamespaceSelector: ${Object.entries(f.namespaceSelector.matchLabels || {})
+        .map(([k, v]) => `${k}=${v}`)
+        .join(',')}`;
     return '      <all sources>';
   })
   .join('\n')}`
@@ -394,12 +448,20 @@ ${(rule.from || [])
   Allowing egress traffic:
 ${(this.spec.egress || [])
   .map(
-    (rule) => `    To Port: ${(rule.ports || []).map((p) => `${p.port}/${p.protocol}`).join(', ') || '<all>'}
+    (
+      rule
+    ) => `    To Port: ${(rule.ports || []).map((p) => `${p.port}/${p.protocol}`).join(', ') || '<all>'}
     To:
 ${(rule.to || [])
   .map((t) => {
-    if (t.podSelector) return `      PodSelector: ${Object.entries(t.podSelector.matchLabels || {}).map(([k, v]) => `${k}=${v}`).join(',')}`;
-    if (t.namespaceSelector) return `      NamespaceSelector: ${Object.entries(t.namespaceSelector.matchLabels || {}).map(([k, v]) => `${k}=${v}`).join(',')}`;
+    if (t.podSelector)
+      return `      PodSelector: ${Object.entries(t.podSelector.matchLabels || {})
+        .map(([k, v]) => `${k}=${v}`)
+        .join(',')}`;
+    if (t.namespaceSelector)
+      return `      NamespaceSelector: ${Object.entries(t.namespaceSelector.matchLabels || {})
+        .map(([k, v]) => `${k}=${v}`)
+        .join(',')}`;
     return '      <all destinations>';
   })
   .join('\n')}`
@@ -408,7 +470,10 @@ ${(rule.to || [])
   Policy Types: ${(this.spec.policyTypes || []).join(', ')}
 Affected Pods: ${this.affectedPods.length}
 Events:
-${this.events.slice(-10).map((e) => `  ${e.type}\t${e.reason}\t${e.message}`).join('\n')}`;
+${this.events
+  .slice(-10)
+  .map((e) => `  ${e.type}\t${e.reason}\t${e.message}`)
+  .join('\n')}`;
   }
 }
 

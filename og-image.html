@@ -1,114 +1,186 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
-<head>
-<meta charset="UTF-8">
-<title>OpenShift Games — OpenGraph card (1200×630)</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Schibsted+Grotesk:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
-<style>
-  *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
-  html, body { width: 1200px; height: 630px; overflow: hidden; }
-  body {
-    background: #08090b;
-    color: #f2f4f6;
-    font-family: 'Schibsted Grotesk', system-ui, sans-serif;
-    -webkit-font-smoothing: antialiased;
-  }
-  .card {
-    position: relative;
-    width: 1200px;
-    height: 630px;
-    padding: 52px 64px 40px;
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) 486px;
-    grid-template-rows: auto 1fr auto;
-    column-gap: 56px;
-  }
-  .top {
-    grid-column: 1 / -1;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-  }
-  .brand { display: inline-flex; align-items: center; gap: 12px; }
-  .mark { width: 30px; height: 30px; color: #ee0000; }
-  .mark svg { display: block; width: 30px; height: 30px; }
-  .brand-name { font-size: 21px; font-weight: 600; letter-spacing: -0.015em; }
-  .top-right { font-size: 15px; color: #6a7280; font-variant-numeric: tabular-nums; }
+  <head>
+    <meta charset="UTF-8" />
+    <title>OpenShift Games — OpenGraph card (1200×630)</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Schibsted+Grotesk:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      *,
+      *::before,
+      *::after {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        width: 1200px;
+        height: 630px;
+        overflow: hidden;
+      }
+      body {
+        background: #08090b;
+        color: #f2f4f6;
+        font-family: 'Schibsted Grotesk', system-ui, sans-serif;
+        -webkit-font-smoothing: antialiased;
+      }
+      .card {
+        position: relative;
+        width: 1200px;
+        height: 630px;
+        padding: 52px 64px 40px;
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 486px;
+        grid-template-rows: auto 1fr auto;
+        column-gap: 56px;
+      }
+      .top {
+        grid-column: 1 / -1;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+      }
+      .brand {
+        display: inline-flex;
+        align-items: center;
+        gap: 12px;
+      }
+      .mark {
+        width: 30px;
+        height: 30px;
+        color: #ee0000;
+      }
+      .mark svg {
+        display: block;
+        width: 30px;
+        height: 30px;
+      }
+      .brand-name {
+        font-size: 21px;
+        font-weight: 600;
+        letter-spacing: -0.015em;
+      }
+      .top-right {
+        font-size: 15px;
+        color: #6a7280;
+        font-variant-numeric: tabular-nums;
+      }
 
-  .copy { align-self: center; min-width: 0; padding-bottom: 6px; }
-  h1 {
-    font-size: 64px;
-    font-weight: 800;
-    line-height: 0.95;
-    letter-spacing: -0.045em;
-    margin-bottom: 22px;
-  }
-  .lede {
-    max-width: 470px;
-    font-size: 19px;
-    line-height: 1.5;
-    color: #9aa1a9;
-  }
-  .lede code {
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 0.85em;
-    padding: 1px 5px;
-    border-radius: 4px;
-    background: #14181d;
-    color: #f2f4f6;
-  }
+      .copy {
+        align-self: center;
+        min-width: 0;
+        padding-bottom: 6px;
+      }
+      h1 {
+        font-size: 64px;
+        font-weight: 800;
+        line-height: 0.95;
+        letter-spacing: -0.045em;
+        margin-bottom: 22px;
+      }
+      .lede {
+        max-width: 470px;
+        font-size: 19px;
+        line-height: 1.5;
+        color: #9aa1a9;
+      }
+      .lede code {
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 0.85em;
+        padding: 1px 5px;
+        border-radius: 4px;
+        background: #14181d;
+        color: #f2f4f6;
+      }
 
-  .shot {
-    align-self: center;
-    width: 486px;
-    height: 274px;
-    border-radius: 8px;
-    overflow: hidden;
-    background: #0b0e12;
-  }
-  .shot img { display: block; width: 100%; height: 100%; object-fit: cover; object-position: 34% 46%; }
+      .shot {
+        align-self: center;
+        width: 486px;
+        height: 274px;
+        border-radius: 8px;
+        overflow: hidden;
+        background: #0b0e12;
+      }
+      .shot img {
+        display: block;
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+        object-position: 34% 46%;
+      }
 
-  .bottom {
-    grid-column: 1 / -1;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 24px;
-    font-size: 15px;
-    color: #6a7280;
-  }
-  .bottom strong { color: #f2f4f6; font-weight: 600; font-variant-numeric: tabular-nums; }
-  .url { display: inline-flex; align-items: center; gap: 8px; color: #9aa1a9; font-weight: 500; }
-  .url .dot { width: 6px; height: 6px; border-radius: 50%; background: #ee0000; }
-</style>
-</head>
-<body>
-  <div class="card">
-    <div class="top">
-      <div class="brand">
-        <span class="mark" aria-hidden="true">
-          <svg viewBox="0 0 24 24" fill="none"><path d="M12 2.6 20.5 7.3v9.4L12 21.4 3.5 16.7V7.3L12 2.6Z" stroke="currentColor" stroke-width="1.6"/><circle cx="12" cy="12" r="2.6" fill="currentColor"/></svg>
-        </span>
-        <span class="brand-name">OpenShift Games</span>
+      .bottom {
+        grid-column: 1 / -1;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 24px;
+        font-size: 15px;
+        color: #6a7280;
+      }
+      .bottom strong {
+        color: #f2f4f6;
+        font-weight: 600;
+        font-variant-numeric: tabular-nums;
+      }
+      .url {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        color: #9aa1a9;
+        font-weight: 500;
+      }
+      .url .dot {
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background: #ee0000;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="card">
+      <div class="top">
+        <div class="brand">
+          <span class="mark" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none">
+              <path
+                d="M12 2.6 20.5 7.3v9.4L12 21.4 3.5 16.7V7.3L12 2.6Z"
+                stroke="currentColor"
+                stroke-width="1.6"
+              />
+              <circle cx="12" cy="12" r="2.6" fill="currentColor" />
+            </svg>
+          </span>
+          <span class="brand-name">OpenShift Games</span>
+        </div>
+        <span class="top-right">EX280V422 · OCP 4.22</span>
       </div>
-      <span class="top-right">EX280V422 · OCP 4.22</span>
-    </div>
 
-    <div class="copy">
-      <h1>Learn OpenShift<br>by breaking it.</h1>
-      <p class="lede">A 3D OpenShift 4.22 cluster in your browser. Type real <code>oc</code> commands, break the platform, then fix it. Built for the EX280 exam.</p>
-    </div>
+      <div class="copy">
+        <h1>Learn OpenShift<br />by breaking it.</h1>
+        <p class="lede">
+          A 3D OpenShift 4.22 cluster in your browser. Type real <code>oc</code> commands, break the
+          platform, then fix it. Built for the EX280 exam.
+        </p>
+      </div>
 
-    <figure class="shot">
-      <img src="screenshot.png" alt="">
-    </figure>
+      <figure class="shot">
+        <img src="screenshot.png" alt="" />
+      </figure>
 
-    <div class="bottom">
-      <span class="url"><span class="dot"></span>shifting.pro</span>
-      <span><strong>20</strong> levels &nbsp;·&nbsp; <strong>12</strong> timed labs &nbsp;·&nbsp; <strong>55</strong> exam objectives &nbsp;·&nbsp; no install</span>
+      <div class="bottom">
+        <span class="url"><span class="dot"></span>shifting.pro</span>
+        <span
+          ><strong>20</strong> levels &nbsp;·&nbsp; <strong>12</strong> timed labs &nbsp;·&nbsp;
+          <strong>55</strong> exam objectives &nbsp;·&nbsp; no install</span
+        >
+      </div>
     </div>
-  </div>
-</body>
+  </body>
 </html>

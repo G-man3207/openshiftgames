@@ -463,7 +463,8 @@ export class ResourceSpotlight {
       if (!Array.isArray(owners) || owners.length === 0) return 'root';
       const owner = owners[0];
       let ownerUid = owner?.uid || null;
-      if (!ownerUid) ownerUid = uidOf(this._findResource(owner?.kind, owner?.name, owner?.namespace));
+      if (!ownerUid)
+        ownerUid = uidOf(this._findResource(owner?.kind, owner?.name, owner?.namespace));
       if (!ownerUid) return 'unknown';
       if (this.mine.has(ownerUid)) return 'mine';
       if (this.baseline.has(ownerUid) || this.platform.has(ownerUid)) return 'baseline';
@@ -506,11 +507,12 @@ export class ResourceSpotlight {
       /* fall through to a linear scan */
     }
     try {
-      const match = (cluster.getAllResources?.() || []).find((candidate) => (
-        candidate.kind === kind
-        && nameOf(candidate) === name
-        && (namespace === undefined || namespaceOf(candidate) === namespace)
-      ));
+      const match = (cluster.getAllResources?.() || []).find(
+        (candidate) =>
+          candidate.kind === kind &&
+          nameOf(candidate) === name &&
+          (namespace === undefined || namespaceOf(candidate) === namespace)
+      );
       if (match) return uidOf(match);
     } catch {
       /* no cluster */
@@ -568,10 +570,11 @@ export class ResourceSpotlight {
         }
         const target = incident?.target;
         if (!target) continue;
-        const match = (cluster?.getAllResources?.() || []).find((candidate) => (
-          nameOf(candidate) === target
-          && (!incident.namespace || namespaceOf(candidate) === incident.namespace)
-        ));
+        const match = (cluster?.getAllResources?.() || []).find(
+          (candidate) =>
+            nameOf(candidate) === target &&
+            (!incident.namespace || namespaceOf(candidate) === incident.namespace)
+        );
         if (match) referenced.add(uidOf(match));
       }
     } catch {
@@ -627,8 +630,10 @@ export class ResourceSpotlight {
     if (type === 'clusterHealth') add('ClusterVersion', 'version');
     if (type === 'user') add('User', objective.user || objective.name);
     if (type === 'group') add('Group', objective.group || objective.name);
-    if (type === 'imageStream') add('ImageStream', objective.imageStream || objective.name, objective.namespace);
-    if (type === 'image' && !objective.kind) add('ImageStream', objective.imageStream || objective.name);
+    if (type === 'imageStream')
+      add('ImageStream', objective.imageStream || objective.name, objective.namespace);
+    if (type === 'image' && !objective.kind)
+      add('ImageStream', objective.imageStream || objective.name);
     // e.g. scc objective subject "system:serviceaccount:secure:default"
     if (typeof objective.subject === 'string') {
       const match = /^system:serviceaccount:([^:]+):(.+)$/.exec(objective.subject);
@@ -637,12 +642,15 @@ export class ResourceSpotlight {
   }
 
   _applyPlatformPresentation({ fit = false } = {}) {
-    this._renderer()?.setPlatformPresentation?.({
-      uids: this.platform,
-      revealed: this.platformRevealed,
-      dim: this.platformDim,
-      autoReveal: this.autoReveal,
-    }, { fit: fit === true });
+    this._renderer()?.setPlatformPresentation?.(
+      {
+        uids: this.platform,
+        revealed: this.platformRevealed,
+        dim: this.platformDim,
+        autoReveal: this.autoReveal,
+      },
+      { fit: fit === true }
+    );
     this._syncHud();
   }
 
@@ -658,11 +666,14 @@ export class ResourceSpotlight {
       /* fall through */
     }
     try {
-      return (cluster.getAllResources?.() || []).find((candidate) => (
-        candidate.kind === kind
-        && nameOf(candidate) === name
-        && (namespace === undefined || namespaceOf(candidate) === namespace)
-      )) || null;
+      return (
+        (cluster.getAllResources?.() || []).find(
+          (candidate) =>
+            candidate.kind === kind &&
+            nameOf(candidate) === name &&
+            (namespace === undefined || namespaceOf(candidate) === namespace)
+        ) || null
+      );
     } catch {
       return null;
     }
@@ -886,10 +897,12 @@ export class ResourceSpotlight {
   }
 
   _cluster() {
-    return window.game?.cluster
-      || window.game?.app?.engine?.cluster
-      || window.game?.gameEngine?.cluster
-      || null;
+    return (
+      window.game?.cluster ||
+      window.game?.app?.engine?.cluster ||
+      window.game?.gameEngine?.cluster ||
+      null
+    );
   }
 
   _safe(fn) {

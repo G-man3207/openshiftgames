@@ -13,7 +13,11 @@ function parseStorageBytes(storage) {
 
 export class PersistentVolume extends ResourceBase {
   constructor(metadata = {}) {
-    super('PersistentVolume', { ...metadata, namespace: '', apiVersion: metadata.apiVersion || 'v1' });
+    super('PersistentVolume', {
+      ...metadata,
+      namespace: '',
+      apiVersion: metadata.apiVersion || 'v1',
+    });
     const defaults = {
       capacity: { storage: metadata.capacity || '10Gi' },
       accessModes: deepClone(metadata.accessModes || ['ReadWriteOnce']),
@@ -72,8 +76,16 @@ export class PersistentVolume extends ResourceBase {
   toDescribe() {
     const claim = this.spec.claimRef;
     return `Name:            ${this.metadata.name}
-Labels:          ${Object.entries(this.metadata.labels).map(([k, v]) => `${k}=${v}`).join(', ') || '<none>'}
-Annotations:     ${Object.entries(this.metadata.annotations).map(([k, v]) => `${k}=${v}`).join(', ') || '<none>'}
+Labels:          ${
+      Object.entries(this.metadata.labels)
+        .map(([k, v]) => `${k}=${v}`)
+        .join(', ') || '<none>'
+    }
+Annotations:     ${
+      Object.entries(this.metadata.annotations)
+        .map(([k, v]) => `${k}=${v}`)
+        .join(', ') || '<none>'
+    }
 Finalizers:      [kubernetes.io/pv-protection]
 StorageClass:    ${this.spec.storageClassName}
 Status:          ${this.status.phase}
@@ -83,13 +95,20 @@ Access Modes:    ${(this.spec.accessModes || []).join(', ')}
 VolumeMode:      ${this.spec.volumeMode}
 Capacity:        ${this.spec.capacity?.storage}
 Events:
-${this.events.slice(-10).map((e) => `  ${e.type}\t${e.reason}\t${e.message}`).join('\n')}`;
+${this.events
+  .slice(-10)
+  .map((e) => `  ${e.type}\t${e.reason}\t${e.message}`)
+  .join('\n')}`;
   }
 }
 
 export class StorageClass extends ResourceBase {
   constructor(metadata = {}) {
-    super('StorageClass', { ...metadata, namespace: '', apiVersion: metadata.apiVersion || 'storage.k8s.io/v1' });
+    super('StorageClass', {
+      ...metadata,
+      namespace: '',
+      apiVersion: metadata.apiVersion || 'storage.k8s.io/v1',
+    });
     const isDefault = metadata.isDefault || metadata.default === true;
     if (isDefault) {
       this.metadata.annotations['storageclass.kubernetes.io/is-default-class'] = 'true';
@@ -115,15 +134,26 @@ export class StorageClass extends ResourceBase {
   toDescribe() {
     return `Name:                  ${this.metadata.name}
 IsDefaultClass:        ${this.isDefault ? 'Yes' : 'No'}
-Annotations:           ${Object.entries(this.metadata.annotations).map(([k, v]) => `${k}=${v}`).join(', ') || '<none>'}
+Annotations:           ${
+      Object.entries(this.metadata.annotations)
+        .map(([k, v]) => `${k}=${v}`)
+        .join(', ') || '<none>'
+    }
 Provisioner:           ${this.spec.provisioner}
-Parameters:            ${Object.entries(this.spec.parameters || {}).map(([k, v]) => `${k}=${v}`).join(', ') || '<none>'}
+Parameters:            ${
+      Object.entries(this.spec.parameters || {})
+        .map(([k, v]) => `${k}=${v}`)
+        .join(', ') || '<none>'
+    }
 AllowVolumeExpansion:  ${this.spec.allowVolumeExpansion}
 MountOptions:          ${(this.spec.mountOptions || []).join(', ') || '<none>'}
 ReclaimPolicy:         ${this.spec.reclaimPolicy}
 VolumeBindingMode:     ${this.spec.volumeBindingMode}
 Events:
-${this.events.slice(-10).map((e) => `  ${e.type}\t${e.reason}\t${e.message}`).join('\n')}`;
+${this.events
+  .slice(-10)
+  .map((e) => `  ${e.type}\t${e.reason}\t${e.message}`)
+  .join('\n')}`;
   }
 }
 
@@ -191,7 +221,11 @@ export class PersistentVolumeClaim extends ResourceBase {
       },
     ];
     this.setPhase('Bound');
-    this.addEvent('Normal', 'ProvisioningSucceeded', `Successfully provisioned volume ${volumeName}`);
+    this.addEvent(
+      'Normal',
+      'ProvisioningSucceeded',
+      `Successfully provisioned volume ${volumeName}`
+    );
     return this;
   }
 
@@ -226,8 +260,16 @@ Namespace:     ${this.metadata.namespace}
 StorageClass:  ${this.spec.storageClassName}
 Status:        ${this.status.phase}
 Volume:        ${this.spec.volumeName || '<none>'}
-Labels:        ${Object.entries(this.metadata.labels).map(([k, v]) => `${k}=${v}`).join(', ') || '<none>'}
-Annotations:   ${Object.entries(this.metadata.annotations).map(([k, v]) => `${k}=${v}`).join(', ') || '<none>'}
+Labels:        ${
+      Object.entries(this.metadata.labels)
+        .map(([k, v]) => `${k}=${v}`)
+        .join(', ') || '<none>'
+    }
+Annotations:   ${
+      Object.entries(this.metadata.annotations)
+        .map(([k, v]) => `${k}=${v}`)
+        .join(', ') || '<none>'
+    }
 Finalizers:    [kubernetes.io/pvc-protection]
 Capacity:      ${this.status.capacity?.storage || '<pending>'}
 Access Modes:  ${(this.spec.accessModes || []).join(', ')}
@@ -236,7 +278,10 @@ Used By:       ${this.mountedBy.join(', ') || '<none>'}
 Conditions:
 ${(this.status.conditions || []).map((c) => `  Type: ${c.type}  Status: ${c.status}  Reason: ${c.reason}`).join('\n') || '  <none>'}
 Events:
-${this.events.slice(-10).map((e) => `  ${e.type}\t${e.reason}\t${e.message}`).join('\n')}`;
+${this.events
+  .slice(-10)
+  .map((e) => `  ${e.type}\t${e.reason}\t${e.message}`)
+  .join('\n')}`;
   }
 }
 

@@ -101,7 +101,11 @@ export class ManifestPanel {
     if (typeof document === 'undefined') return this;
 
     // Reuse an engine that another module already installed on window.game.
-    if (typeof window !== 'undefined' && window.game?.manifestEngine && typeof window.game.manifestEngine.applyFile === 'function') {
+    if (
+      typeof window !== 'undefined' &&
+      window.game?.manifestEngine &&
+      typeof window.game.manifestEngine.applyFile === 'function'
+    ) {
       this.manifestEngine = window.game.manifestEngine;
       this.engine = this.manifestEngine;
     }
@@ -361,17 +365,25 @@ export class ManifestPanel {
   }
 
   _buildDom() {
-    this.pathLabel = el('span', { class: 'ogmf-path', 'data-testid': 'manifest-current-file', text: 'no file selected' });
+    this.pathLabel = el('span', {
+      class: 'ogmf-path',
+      'data-testid': 'manifest-current-file',
+      text: 'no file selected',
+    });
     this.dirtyBadge = el('span', { class: 'ogmf-dirty', text: 'unsaved' });
 
     const makeButton = (id, label, extraClass, onClick, title) => {
-      const button = el('button', {
-        type: 'button',
-        class: `ogmf-btn ${extraClass || ''}`.trim(),
-        'data-testid': id,
-        title: title || label,
-        onclick: onClick,
-      }, label);
+      const button = el(
+        'button',
+        {
+          type: 'button',
+          class: `ogmf-btn ${extraClass || ''}`.trim(),
+          'data-testid': id,
+          title: title || label,
+          onclick: onClick,
+        },
+        label
+      );
       this.buttons[id] = button;
       return button;
     };
@@ -388,13 +400,55 @@ export class ManifestPanel {
       this.pathLabel,
       this.dirtyBadge,
       el('span', { class: 'ogmf-spacer' }),
-      makeButton('manifest-new', 'New file', '', () => this._createNewFile(), 'Create a new virtual manifest file'),
-      makeButton('manifest-import', 'Import', '', () => this.importInput?.click(), 'Import a local YAML/JSON file into the virtual filesystem'),
-      makeButton('manifest-delete', 'Delete', '', () => this._deleteCurrentFile(), 'Delete the current virtual file (does not delete cluster objects)'),
-      makeButton('manifest-save', 'Save', '', () => this._saveCurrent(), 'Write the editor content to the virtual file'),
-      makeButton('manifest-reset', 'Reset', '', () => this._resetCurrent(), 'Discard unsaved edits and reload the file'),
-      makeButton('manifest-apply', 'Apply -f', 'ogmf-btn-primary', () => this._applyCurrent(), 'oc apply -f <current file>'),
-      makeButton('manifest-apply-kustomize', 'Apply -k', 'ogmf-btn-kustomize', () => this._applyKustomize(), 'oc apply -k <nearest kustomization directory>'),
+      makeButton(
+        'manifest-new',
+        'New file',
+        '',
+        () => this._createNewFile(),
+        'Create a new virtual manifest file'
+      ),
+      makeButton(
+        'manifest-import',
+        'Import',
+        '',
+        () => this.importInput?.click(),
+        'Import a local YAML/JSON file into the virtual filesystem'
+      ),
+      makeButton(
+        'manifest-delete',
+        'Delete',
+        '',
+        () => this._deleteCurrentFile(),
+        'Delete the current virtual file (does not delete cluster objects)'
+      ),
+      makeButton(
+        'manifest-save',
+        'Save',
+        '',
+        () => this._saveCurrent(),
+        'Write the editor content to the virtual file'
+      ),
+      makeButton(
+        'manifest-reset',
+        'Reset',
+        '',
+        () => this._resetCurrent(),
+        'Discard unsaved edits and reload the file'
+      ),
+      makeButton(
+        'manifest-apply',
+        'Apply -f',
+        'ogmf-btn-primary',
+        () => this._applyCurrent(),
+        'oc apply -f <current file>'
+      ),
+      makeButton(
+        'manifest-apply-kustomize',
+        'Apply -k',
+        'ogmf-btn-kustomize',
+        () => this._applyKustomize(),
+        'oc apply -k <nearest kustomization directory>'
+      ),
       this.importInput,
     ]);
 
@@ -412,14 +466,21 @@ export class ManifestPanel {
     const output = el('div', { class: 'ogmf-output' }, [this.resultEl, this.errorEl]);
     this.outputEl = output;
 
-    const docs = el('div', { class: 'ogmf-docs' },
-      DOCS_LINKS.map((link) => el('a', { href: link.href, target: '_blank', rel: 'noopener noreferrer', text: link.label }))
+    const docs = el(
+      'div',
+      { class: 'ogmf-docs' },
+      DOCS_LINKS.map((link) =>
+        el('a', { href: link.href, target: '_blank', rel: 'noopener noreferrer', text: link.label })
+      )
     );
 
     const header = el('div', { class: 'ogmf-header' }, [
       el('div', {}, [
         el('h2', { class: 'ogmf-title', id: 'ogmf-title', text: 'Files & Manifests' }),
-        el('p', { class: 'ogmf-subtitle', text: 'Virtual filesystem · oc apply -f · oc apply -k · oc process · helm · htpasswd' }),
+        el('p', {
+          class: 'ogmf-subtitle',
+          text: 'Virtual filesystem · oc apply -f · oc apply -k · oc process · helm · htpasswd',
+        }),
       ]),
       el('div', { class: 'ogmf-header-actions' }, [
         docs,
@@ -446,26 +507,38 @@ export class ManifestPanel {
       this.editor,
       output,
       el('div', { class: 'ogmf-hint' }, [
-        el('span', {}, ['Esc closes · ', el('code', { text: 'Apply -f' }), ' runs against the current project']),
+        el('span', {}, [
+          'Esc closes · ',
+          el('code', { text: 'Apply -f' }),
+          ' runs against the current project',
+        ]),
         el('span', { text: 'oc apply -f / oc apply -k / oc process / helm' }),
       ]),
     ]);
 
-    this.dialog = el('div', {
-      class: 'ogmf-dialog',
-      role: 'dialog',
-      'aria-modal': 'true',
-      'aria-labelledby': 'ogmf-title',
-    }, [header, el('div', { class: 'ogmf-body' }, [sidebar, main])]);
-
-    this.root = el('div', {
-      class: 'ogmf-overlay',
-      id: PANEL_ID,
-      'data-testid': 'manifest-panel',
-      onclick: (event) => {
-        if (event.target === this.root) this.hide();
+    this.dialog = el(
+      'div',
+      {
+        class: 'ogmf-dialog',
+        role: 'dialog',
+        'aria-modal': 'true',
+        'aria-labelledby': 'ogmf-title',
       },
-    }, [this.dialog]);
+      [header, el('div', { class: 'ogmf-body' }, [sidebar, main])]
+    );
+
+    this.root = el(
+      'div',
+      {
+        class: 'ogmf-overlay',
+        id: PANEL_ID,
+        'data-testid': 'manifest-panel',
+        onclick: (event) => {
+          if (event.target === this.root) this.hide();
+        },
+      },
+      [this.dialog]
+    );
   }
 
   _registerGlobals() {
@@ -478,8 +551,9 @@ export class ManifestPanel {
   /** Emit a shell event (best effort: the panel also runs in Node harnesses). */
   _emit(event, data) {
     try {
-      const bus = this.game?.eventBus
-        || (typeof window !== 'undefined' ? window.game?.gameEngine?.eventBus : null);
+      const bus =
+        this.game?.eventBus ||
+        (typeof window !== 'undefined' ? window.game?.gameEngine?.eventBus : null);
       bus?.emit?.(event, data);
     } catch {
       /* ignore event wiring failures */
@@ -505,7 +579,10 @@ export class ManifestPanel {
   _renderTree() {
     if (!this.treeEl) return;
     this.treeEl.textContent = '';
-    const entries = this.manifestEngine.getFileTree().slice().sort((a, b) => this._compareTreeEntries(a, b));
+    const entries = this.manifestEngine
+      .getFileTree()
+      .slice()
+      .sort((a, b) => this._compareTreeEntries(a, b));
     for (const entry of entries) {
       const indentPx = 6 + entry.depth * 14;
       if (entry.kind === 'directory') {
@@ -558,14 +635,20 @@ export class ManifestPanel {
       .find(Boolean);
     if (preferred) return preferred;
     const files = this.manifestEngine.listFiles();
-    return files.includes('manifests/deployment.yaml') ? 'manifests/deployment.yaml' : files[0] || null;
+    return files.includes('manifests/deployment.yaml')
+      ? 'manifests/deployment.yaml'
+      : files[0] || null;
   }
 
   _applyFocusSelection() {
     // Explicit `focusFiles` wins over the wider `manifestFiles` highlight list.
     const focusPath = this._focusFiles.map((entry) => this._resolveFocus(entry)).find(Boolean);
     if (!focusPath) return;
-    if (this.currentPath && this._focusFiles.some((entry) => this._resolveFocus(entry) === this.currentPath)) return;
+    if (
+      this.currentPath &&
+      this._focusFiles.some((entry) => this._resolveFocus(entry) === this.currentPath)
+    )
+      return;
     this._selectFile(focusPath);
   }
 
@@ -588,14 +671,17 @@ export class ManifestPanel {
   _loadEditor(path) {
     if (!this.editor) return;
     const draft = this._drafts.get(path);
-    this.editor.value = draft !== undefined ? draft : this.manifestEngine.readFile(path) ?? '';
+    this.editor.value = draft !== undefined ? draft : (this.manifestEngine.readFile(path) ?? '');
     this.editor.scrollTop = 0;
     this._updateToolbar();
   }
 
   _dirty() {
     if (!this.currentPath || !this.editor) return false;
-    return this._drafts.has(this.currentPath) || this.editor.value !== (this.manifestEngine.readFile(this.currentPath) ?? '');
+    return (
+      this._drafts.has(this.currentPath) ||
+      this.editor.value !== (this.manifestEngine.readFile(this.currentPath) ?? '')
+    );
   }
 
   _onEditorInput() {
@@ -609,7 +695,13 @@ export class ManifestPanel {
     this.pathLabel.textContent = this.currentPath || 'no file selected';
     const dirty = this._dirty();
     this.dirtyBadge.style.display = dirty ? 'inline' : 'none';
-    for (const key of ['manifest-save', 'manifest-reset', 'manifest-apply', 'manifest-apply-kustomize', 'manifest-delete']) {
+    for (const key of [
+      'manifest-save',
+      'manifest-reset',
+      'manifest-apply',
+      'manifest-apply-kustomize',
+      'manifest-delete',
+    ]) {
       const button = this.buttons[key];
       if (button) button.disabled = !this.currentPath;
     }
@@ -653,11 +745,15 @@ export class ManifestPanel {
   /** Create a new file in the virtual filesystem (manifest authoring in-game). */
   _createNewFile() {
     if (typeof window === 'undefined' || typeof window.prompt !== 'function') return false;
-    const baseDir = this.currentPath && this.currentPath.includes('/')
-      ? this.currentPath.slice(0, this.currentPath.lastIndexOf('/') + 1)
-      : 'manifests/';
+    const baseDir =
+      this.currentPath && this.currentPath.includes('/')
+        ? this.currentPath.slice(0, this.currentPath.lastIndexOf('/') + 1)
+        : 'manifests/';
     const suggested = `${baseDir}new-app.yaml`;
-    const input = window.prompt('New virtual file path (created in-memory; not on the host)', suggested);
+    const input = window.prompt(
+      'New virtual file path (created in-memory; not on the host)',
+      suggested
+    );
     if (input === null || input === undefined) return false;
     const path = String(input).trim();
     if (!path) return false;
@@ -690,9 +786,10 @@ data:
     reader.onload = () => {
       const text = String(reader.result ?? '');
       const suggested = `imports/${file.name || 'imported.yaml'}`;
-      const target = typeof window.prompt === 'function'
-        ? window.prompt(`Import "${file.name}" as virtual path`, suggested)
-        : suggested;
+      const target =
+        typeof window.prompt === 'function'
+          ? window.prompt(`Import "${file.name}" as virtual path`, suggested)
+          : suggested;
       if (target === null || target === undefined) return;
       const path = String(target).trim();
       if (!path) return;
@@ -700,7 +797,9 @@ data:
       this._drafts.delete(path);
       this.currentPath = path;
       this.refresh();
-      this._showSuccess(`Imported ${path} (${text.split('\n').length} lines) — apply with Apply -f`);
+      this._showSuccess(
+        `Imported ${path} (${text.split('\n').length} lines) — apply with Apply -f`
+      );
     };
     reader.readAsText(file);
     if (input) input.value = '';
@@ -711,9 +810,12 @@ data:
   _deleteCurrentFile() {
     if (!this.currentPath) return false;
     const path = this.currentPath;
-    const confirmed = typeof window.confirm === 'function'
-      ? window.confirm(`Delete virtual file "${path}"?\n\nCluster resources created from it are not deleted.`)
-      : true;
+    const confirmed =
+      typeof window.confirm === 'function'
+        ? window.confirm(
+            `Delete virtual file "${path}"?\n\nCluster resources created from it are not deleted.`
+          )
+        : true;
     if (!confirmed) return false;
     this.manifestEngine.deleteFile(path);
     this._drafts.delete(path);
@@ -822,7 +924,12 @@ data:
     for (const ref of updated) lines.push(`${this._refLabel(ref)} configured`);
     // Some apply paths (the config.openshift.io Project singleton) report via a
     // real-oc message instead of created/updated refs.
-    if (result?.ok && lines.length === 0 && typeof result?.message === 'string' && result.message.trim()) {
+    if (
+      result?.ok &&
+      lines.length === 0 &&
+      typeof result?.message === 'string' &&
+      result.message.trim()
+    ) {
       lines.push(result.message.trim());
     }
     if (result?.ok && lines.length === 0) lines.push('apply complete: no changes');

@@ -136,10 +136,15 @@ class SandboxMode {
     const clusterState = this.gameEngine?.cluster;
     try {
       if (typeof clusterState?.getProjects === 'function') {
-        return clusterState.getProjects().map((project) => project.metadata?.name || project.name).filter(Boolean);
+        return clusterState
+          .getProjects()
+          .map((project) => project.metadata?.name || project.name)
+          .filter(Boolean);
       }
       if (typeof clusterState?.getByKind === 'function') {
-        return (clusterState.getByKind('Project') || []).map((project) => project.metadata?.name).filter(Boolean);
+        return (clusterState.getByKind('Project') || [])
+          .map((project) => project.metadata?.name)
+          .filter(Boolean);
       }
     } catch {
       /* defensive */
@@ -154,7 +159,8 @@ class SandboxMode {
 
     const state = this.gameEngine?.cluster;
     if (state) {
-      const allResources = typeof state.getAllResources === 'function' ? state.getAllResources() : [];
+      const allResources =
+        typeof state.getAllResources === 'function' ? state.getAllResources() : [];
       this.resourceCount = allResources.length;
     }
 
@@ -166,7 +172,12 @@ class SandboxMode {
       nodeCount: this.nodeCount,
       architectureScore: this.architectureScore ? this.architectureScore.total : null,
       quickLab: this.quickLab
-        ? { id: this.quickLab.id, title: this.quickLab.title, completed: this.quickLab.completed, summary: getObjectiveSummary(this.quickLab.progress) }
+        ? {
+            id: this.quickLab.id,
+            title: this.quickLab.title,
+            completed: this.quickLab.completed,
+            summary: getObjectiveSummary(this.quickLab.progress),
+          }
         : null,
     });
   }
@@ -196,7 +207,10 @@ class SandboxMode {
       : spec?.namespace || this.gameEngine?.currentProject || 'default';
     const cleanSpec = this.cleanSpec(spec);
     const labels = cleanSpec.labels && typeof cleanSpec.labels === 'object' ? cleanSpec.labels : {};
-    const annotations = cleanSpec.annotations && typeof cleanSpec.annotations === 'object' ? cleanSpec.annotations : {};
+    const annotations =
+      cleanSpec.annotations && typeof cleanSpec.annotations === 'object'
+        ? cleanSpec.annotations
+        : {};
     delete cleanSpec.labels;
     delete cleanSpec.annotations;
     delete cleanSpec.namespace;
@@ -222,7 +236,10 @@ class SandboxMode {
     const added = state.addResource(resource);
     if (!added) return false;
 
-    this.resourceCount = (typeof state.getAllResources === 'function' ? state.getAllResources().length : this.resourceCount + 1);
+    this.resourceCount =
+      typeof state.getAllResources === 'function'
+        ? state.getAllResources().length
+        : this.resourceCount + 1;
 
     this.gameEngine?.emit?.('resource:created', {
       kind,
@@ -240,9 +257,8 @@ class SandboxMode {
     const state = this.gameEngine?.cluster;
     if (!state) return false;
 
-    let removed = typeof state.removeResource === 'function'
-      ? state.removeResource(kind, name)
-      : null;
+    let removed =
+      typeof state.removeResource === 'function' ? state.removeResource(kind, name) : null;
     if (!removed && typeof state.getByKind === 'function') {
       const match = (state.getByKind(kind) || []).find(
         (resource) => (resource.metadata?.name || resource.name) === name
@@ -281,19 +297,23 @@ class SandboxMode {
     };
 
     // Seed starting resources (Projects first so namespaced objects resolve).
-    const resources = Array.isArray(lab.setup?.startingResources) ? lab.setup.startingResources : [];
+    const resources = Array.isArray(lab.setup?.startingResources)
+      ? lab.setup.startingResources
+      : [];
     const ordered = [
       ...resources.filter((resource) => resource && resource.kind === 'Project'),
       ...resources.filter((resource) => resource && resource.kind !== 'Project'),
     ];
-    const defaultProject = ordered.find((resource) => resource.kind === 'Project')?.name
-      || this.gameEngine?.currentProject
-      || 'default';
+    const defaultProject =
+      ordered.find((resource) => resource.kind === 'Project')?.name ||
+      this.gameEngine?.currentProject ||
+      'default';
     for (const descriptor of ordered) {
       try {
-        const namespace = descriptor.namespace
-          || descriptor.metadata?.namespace
-          || (descriptor.kind === 'Project' ? '' : defaultProject);
+        const namespace =
+          descriptor.namespace ||
+          descriptor.metadata?.namespace ||
+          (descriptor.kind === 'Project' ? '' : defaultProject);
         const added = clusterState?.addResource({
           kind: descriptor.kind,
           name: descriptor.name,
@@ -301,23 +321,38 @@ class SandboxMode {
           labels: { app: descriptor.name, ...(descriptor.labels || {}) },
           annotations: descriptor.annotations || {},
           spec: descriptor.spec || {},
-          status: descriptor.kind === 'Project' ? { phase: 'Active', ...(descriptor.status || {}) } : (descriptor.status || {}),
+          status:
+            descriptor.kind === 'Project'
+              ? { phase: 'Active', ...(descriptor.status || {}) }
+              : descriptor.status || {},
         });
-        if (added && descriptor.kind === 'Project' && typeof clusterState.ensureProjectDefaults === 'function') {
+        if (
+          added &&
+          descriptor.kind === 'Project' &&
+          typeof clusterState.ensureProjectDefaults === 'function'
+        ) {
           clusterState.ensureProjectDefaults(added);
         }
       } catch (error) {
-        console.warn(`SandboxMode: quick lab could not seed ${descriptor?.kind}/${descriptor?.name}`, error);
+        console.warn(
+          `SandboxMode: quick lab could not seed ${descriptor?.kind}/${descriptor?.name}`,
+          error
+        );
       }
     }
 
     // Make sure the lab's referenced manifest files exist in the virtual FS.
-    const manifestEngine = this.gameEngine?.manifestEngine
-      || (typeof window !== 'undefined' ? window.game?.manifestEngine : null);
+    const manifestEngine =
+      this.gameEngine?.manifestEngine ||
+      (typeof window !== 'undefined' ? window.game?.manifestEngine : null);
     for (const path of Array.isArray(lab.setup?.manifestFiles) ? lab.setup.manifestFiles : []) {
       try {
         if (!manifestEngine || typeof manifestEngine.writeFile !== 'function') break;
-        if (typeof manifestEngine.readFile === 'function' && typeof manifestEngine.readFile(path) === 'string') continue;
+        if (
+          typeof manifestEngine.readFile === 'function' &&
+          typeof manifestEngine.readFile(path) === 'string'
+        )
+          continue;
         const content = MANIFEST_FILES?.[path];
         if (typeof content === 'string') manifestEngine.writeFile(path, content);
       } catch {
@@ -330,7 +365,11 @@ class SandboxMode {
       title: this.quickLab.title,
       objectiveId: this.quickLab.objectiveId,
       check: this.quickLab.check,
-      startingResources: (lab.setup?.startingResources || []).map((resource) => ({ kind: resource.kind, name: resource.name, namespace: resource.namespace })),
+      startingResources: (lab.setup?.startingResources || []).map((resource) => ({
+        kind: resource.kind,
+        name: resource.name,
+        namespace: resource.namespace,
+      })),
       manifestFiles: lab.setup?.manifestFiles || [],
       steps: lab.steps || [],
     });
@@ -440,12 +479,16 @@ class SandboxMode {
     for (const resource of sorted) {
       if (!resource || !resource.kind) continue;
       try {
-        const yaml = typeof resource.toYAML === 'function'
-          ? resource.toYAML()
-          : toManifestYAML(toManifestObject(resource));
+        const yaml =
+          typeof resource.toYAML === 'function'
+            ? resource.toYAML()
+            : toManifestYAML(toManifestObject(resource));
         if (yaml && String(yaml).trim()) documents.push(String(yaml).trimEnd());
       } catch (error) {
-        console.warn(`SandboxMode: could not serialise ${resource.kind}/${resource.metadata?.name || resource.name}`, error);
+        console.warn(
+          `SandboxMode: could not serialise ${resource.kind}/${resource.metadata?.name || resource.name}`,
+          error
+        );
       }
     }
 

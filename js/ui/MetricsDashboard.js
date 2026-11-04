@@ -350,7 +350,14 @@ export class MetricsDashboard {
     if (event.defaultPrevented || event.ctrlKey || event.metaKey || event.altKey) return;
     if (event.key !== 'm' && event.key !== 'M') return;
     const target = event.target;
-    if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT' || target.isContentEditable)) return;
+    if (
+      target &&
+      (target.tagName === 'INPUT' ||
+        target.tagName === 'TEXTAREA' ||
+        target.tagName === 'SELECT' ||
+        target.isContentEditable)
+    )
+      return;
     this.toggle();
   }
 
@@ -375,7 +382,10 @@ export class MetricsDashboard {
       }
     }
     this.selectedResource = resource;
-    this._setText('metrics-scope', resource ? `Resource: ${resource.metadata?.name || 'Unknown'}` : 'Cluster-wide');
+    this._setText(
+      'metrics-scope',
+      resource ? `Resource: ${resource.metadata?.name || 'Unknown'}` : 'Cluster-wide'
+    );
   }
 
   // ─── Tick / data ───────────────────────────────────────────────────────
@@ -401,8 +411,20 @@ export class MetricsDashboard {
 
     if (this.selectedResource) {
       const resource = this.selectedResource;
-      this.data.cpu.push(this._clampPercent(resource.status?.usage?.cpuPercent ?? resource.cpuUsage ?? cpu * (0.3 + Math.random() * 0.4)));
-      this.data.memory.push(this._clampPercent(resource.status?.usage?.memoryPercent ?? resource.memoryUsage ?? memory * (0.3 + Math.random() * 0.4)));
+      this.data.cpu.push(
+        this._clampPercent(
+          resource.status?.usage?.cpuPercent ??
+            resource.cpuUsage ??
+            cpu * (0.3 + Math.random() * 0.4)
+        )
+      );
+      this.data.memory.push(
+        this._clampPercent(
+          resource.status?.usage?.memoryPercent ??
+            resource.memoryUsage ??
+            memory * (0.3 + Math.random() * 0.4)
+        )
+      );
       this.data.network.push(Math.max(0, network * (0.1 + Math.random() * 0.3)));
       this.data.pods.push(podCount);
     } else {
@@ -443,9 +465,14 @@ export class MetricsDashboard {
 
   _updateSummary(stats, pods) {
     const cpu = Number(stats?.cpu?.percent ?? this.data.cpu[this.data.cpu.length - 1] ?? 0) || 0;
-    const memory = Number(stats?.memory?.percent ?? this.data.memory[this.data.memory.length - 1] ?? 0) || 0;
+    const memory =
+      Number(stats?.memory?.percent ?? this.data.memory[this.data.memory.length - 1] ?? 0) || 0;
     const routes = stats?.routes || { total: this._list('Route').length, admitted: 0 };
-    const builds = stats?.builds || { running: this._list('Build').filter((build) => ['New', 'Pending', 'Running'].includes(build.status?.phase)).length };
+    const builds = stats?.builds || {
+      running: this._list('Build').filter((build) =>
+        ['New', 'Pending', 'Running'].includes(build.status?.phase)
+      ).length,
+    };
     const operators = stats?.clusterOperators || this._operatorHealth();
 
     this._setText('metrics-cluster-cpu', `${Math.round(cpu)}%`);
@@ -470,12 +497,18 @@ export class MetricsDashboard {
     let degraded = 0;
     for (const operator of operators) {
       const conditions = operator.status?.conditions || [];
-      const isAvailable = typeof operator.isConditionTrue === 'function'
-        ? operator.isConditionTrue('Available')
-        : conditions.some((condition) => condition.type === 'Available' && condition.status === 'True');
-      const isDegraded = typeof operator.isConditionTrue === 'function'
-        ? operator.isConditionTrue('Degraded')
-        : conditions.some((condition) => condition.type === 'Degraded' && condition.status === 'True');
+      const isAvailable =
+        typeof operator.isConditionTrue === 'function'
+          ? operator.isConditionTrue('Available')
+          : conditions.some(
+              (condition) => condition.type === 'Available' && condition.status === 'True'
+            );
+      const isDegraded =
+        typeof operator.isConditionTrue === 'function'
+          ? operator.isConditionTrue('Degraded')
+          : conditions.some(
+              (condition) => condition.type === 'Degraded' && condition.status === 'True'
+            );
       if (isAvailable) available += 1;
       if (isDegraded) degraded += 1;
     }
@@ -493,14 +526,18 @@ export class MetricsDashboard {
       this._renderTables(stats, pods);
       this._draw();
     } catch {
-      this._setHTML('metrics-pods', '<div class="text-white/25 text-[10px] p-2">Metrics unavailable.</div>');
+      this._setHTML(
+        'metrics-pods',
+        '<div class="text-white/25 text-[10px] p-2">Metrics unavailable.</div>'
+      );
     }
   }
 
   _renderTables(stats, podsInput) {
     const cluster = this._cluster();
     if (!cluster) {
-      const empty = '<div class="text-white/25 text-[10px] p-2">Start a game mode to see OpenShift metrics.</div>';
+      const empty =
+        '<div class="text-white/25 text-[10px] p-2">Start a game mode to see OpenShift metrics.</div>';
       this._setHTML('metrics-pods', empty);
       this._setHTML('metrics-nodes', empty);
       this._setHTML('metrics-quota', empty);
@@ -516,11 +553,15 @@ export class MetricsDashboard {
   }
 
   _podsTable(pods) {
-    if (!pods.length) return '<div class="text-white/25 text-[10px] p-2">No Pods in the cluster.</div>';
-    const rows = pods.map((pod) => {
-      const usage = this._podUsage(pod);
-      return { pod, ...usage };
-    }).sort((left, right) => right.cpu - left.cpu || right.memory - left.memory).slice(0, 20);
+    if (!pods.length)
+      return '<div class="text-white/25 text-[10px] p-2">No Pods in the cluster.</div>';
+    const rows = pods
+      .map((pod) => {
+        const usage = this._podUsage(pod);
+        return { pod, ...usage };
+      })
+      .sort((left, right) => right.cpu - left.cpu || right.memory - left.memory)
+      .slice(0, 20);
 
     return `<table class="w-full text-[10px] font-mono" data-testid="metrics-pods-table">
       <thead class="text-white/25"><tr>
@@ -529,12 +570,16 @@ export class MetricsDashboard {
         <th class="text-right px-1 py-0.5 font-normal">CPU</th>
         <th class="text-right px-1 py-0.5 font-normal">MEMORY</th>
       </tr></thead>
-      <tbody>${rows.map(({ pod, cpu, memory }) => `<tr class="border-t border-white/5">
+      <tbody>${rows
+        .map(
+          ({ pod, cpu, memory }) => `<tr class="border-t border-white/5">
         <td class="px-1 py-0.5 text-white/70 truncate max-w-[110px]" title="${this._escapeHTML(pod.metadata?.name)}">${this._escapeHTML(pod.metadata?.name)}</td>
         <td class="px-1 py-0.5 text-white/35 truncate max-w-[80px]" title="${this._escapeHTML(pod.metadata?.namespace)}">${this._escapeHTML(pod.metadata?.namespace || '—')}</td>
         <td class="px-1 py-0.5 text-right text-blue-300">${this._escapeHTML(formatCpu(cpu))}</td>
         <td class="px-1 py-0.5 text-right text-purple-300">${this._escapeHTML(formatMemory(memory))}</td>
-      </tr>`).join('')}</tbody>
+      </tr>`
+        )
+        .join('')}</tbody>
     </table>`;
   }
 
@@ -543,8 +588,12 @@ export class MetricsDashboard {
     let cpu = 0;
     let memory = 0;
     for (const container of pod.spec?.containers || []) {
-      cpu += parseCpuMillis(container.resources?.requests?.cpu ?? container.resources?.limits?.cpu ?? 0);
-      memory += parseMemoryMi(container.resources?.requests?.memory ?? container.resources?.limits?.memory ?? 0);
+      cpu += parseCpuMillis(
+        container.resources?.requests?.cpu ?? container.resources?.limits?.cpu ?? 0
+      );
+      memory += parseMemoryMi(
+        container.resources?.requests?.memory ?? container.resources?.limits?.memory ?? 0
+      );
     }
     cpu += parseCpuMillis(pod.status?.usage?.cpu ?? 0);
     memory += parseMemoryMi(pod.status?.usage?.memory ?? 0);
@@ -553,7 +602,8 @@ export class MetricsDashboard {
     // simulated usage number so `oc adm top pods` is still informative.
     if (running && cpu === 0) cpu = 5 + (hashText(pod.metadata?.uid || pod.metadata?.name) % 45);
     if (running && memory === 0) memory = 32 + (hashText(pod.metadata?.name || '') % 128);
-    if (!running) return { cpu: Math.max(0, Math.round(cpu)), memory: Math.max(0, Math.round(memory)) };
+    if (!running)
+      return { cpu: Math.max(0, Math.round(cpu)), memory: Math.max(0, Math.round(memory)) };
     return { cpu: Math.round(cpu), memory: Math.round(memory) };
   }
 
@@ -567,20 +617,36 @@ export class MetricsDashboard {
 
   _nodesTable() {
     const nodes = this._list('Node');
-    if (!nodes.length) return '<div class="text-white/25 text-[10px] p-2">No Nodes registered.</div>';
-    const rows = nodes.map((node) => {
-      const alloc = this._nodeAllocatable(node);
-      const cpuUsed = Number(alloc?.cpu?.used ?? node.status?.usage?.cpu ?? 0) || 0;
-      const cpuCapacity = Number(alloc?.cpu?.capacity ?? parseCpuMillis(node.spec?.cpu || node.status?.capacity?.cpu || '4')) || 0;
-      const memUsed = Number(alloc?.memory?.used ?? node.status?.usage?.memory ?? 0) || 0;
-      const memCapacity = Number(alloc?.memory?.capacity ?? parseMemoryMi(node.spec?.memory || node.status?.capacity?.memory || '8Gi')) || 0;
-      const cpuPercent = cpuCapacity > 0 ? Math.round((cpuUsed / cpuCapacity) * 100) : 0;
-      const memPercent = memCapacity > 0 ? Math.round((memUsed / memCapacity) * 100) : 0;
-      const ready = typeof node.isConditionTrue === 'function'
-        ? node.isConditionTrue('Ready')
-        : (node.status?.conditions || []).some((condition) => condition.type === 'Ready' && condition.status === 'True');
-      return { node, cpuUsed, cpuPercent, memUsed, memPercent, ready };
-    }).sort((left, right) => String(left.node.metadata?.name).localeCompare(String(right.node.metadata?.name)));
+    if (!nodes.length)
+      return '<div class="text-white/25 text-[10px] p-2">No Nodes registered.</div>';
+    const rows = nodes
+      .map((node) => {
+        const alloc = this._nodeAllocatable(node);
+        const cpuUsed = Number(alloc?.cpu?.used ?? node.status?.usage?.cpu ?? 0) || 0;
+        const cpuCapacity =
+          Number(
+            alloc?.cpu?.capacity ??
+              parseCpuMillis(node.spec?.cpu || node.status?.capacity?.cpu || '4')
+          ) || 0;
+        const memUsed = Number(alloc?.memory?.used ?? node.status?.usage?.memory ?? 0) || 0;
+        const memCapacity =
+          Number(
+            alloc?.memory?.capacity ??
+              parseMemoryMi(node.spec?.memory || node.status?.capacity?.memory || '8Gi')
+          ) || 0;
+        const cpuPercent = cpuCapacity > 0 ? Math.round((cpuUsed / cpuCapacity) * 100) : 0;
+        const memPercent = memCapacity > 0 ? Math.round((memUsed / memCapacity) * 100) : 0;
+        const ready =
+          typeof node.isConditionTrue === 'function'
+            ? node.isConditionTrue('Ready')
+            : (node.status?.conditions || []).some(
+                (condition) => condition.type === 'Ready' && condition.status === 'True'
+              );
+        return { node, cpuUsed, cpuPercent, memUsed, memPercent, ready };
+      })
+      .sort((left, right) =>
+        String(left.node.metadata?.name).localeCompare(String(right.node.metadata?.name))
+      );
 
     return `<table class="w-full text-[10px] font-mono" data-testid="metrics-nodes-table">
       <thead class="text-white/25"><tr>
@@ -590,7 +656,16 @@ export class MetricsDashboard {
         <th class="text-right px-1 py-0.5 font-normal">MEM</th>
         <th class="text-right px-1 py-0.5 font-normal">MEM%</th>
       </tr></thead>
-      <tbody>${rows.map(({ node, cpuUsed, cpuPercent, memUsed, memPercent, ready }) => `<tr class="border-t border-white/5">
+      <tbody>${rows
+        .map(
+          ({
+            node,
+            cpuUsed,
+            cpuPercent,
+            memUsed,
+            memPercent,
+            ready,
+          }) => `<tr class="border-t border-white/5">
         <td class="px-1 py-0.5 text-white/70 truncate max-w-[110px]" title="${this._escapeHTML(node.metadata?.name)}">
           <span class="inline-block w-1.5 h-1.5 rounded-full ${ready ? 'bg-green-400' : 'bg-red-400'} mr-1"></span>${this._escapeHTML(node.metadata?.name)}
         </td>
@@ -598,7 +673,9 @@ export class MetricsDashboard {
         <td class="px-1 py-0.5 text-right ${cpuPercent > 80 ? 'text-red-400' : 'text-white/50'}">${cpuPercent}%</td>
         <td class="px-1 py-0.5 text-right text-purple-300">${this._escapeHTML(formatMemory(memUsed))}</td>
         <td class="px-1 py-0.5 text-right ${memPercent > 80 ? 'text-red-400' : 'text-white/50'}">${memPercent}%</td>
-      </tr>`).join('')}</tbody>
+      </tr>`
+        )
+        .join('')}</tbody>
     </table>`;
   }
 
@@ -613,7 +690,8 @@ export class MetricsDashboard {
       const hard = quota.spec?.hard || {};
       const used = quota.status?.used || {};
       const keys = Object.keys(hard).slice(0, 2);
-      const detail = keys.map((key) => `${key} ${used[key] ?? 0}/${hard[key]}`).join(' · ') || 'no hard limits';
+      const detail =
+        keys.map((key) => `${key} ${used[key] ?? 0}/${hard[key]}`).join(' · ') || 'no hard limits';
       const percent = this._quotaPercent(hard, used);
       rows.push(`<div class="px-1 py-0.5 border-b border-white/5 last:border-0">
         <div class="flex items-center justify-between gap-1">
@@ -652,7 +730,10 @@ export class MetricsDashboard {
         ratio = hardMemory > 0 ? (parseMemoryMi(usedValue) / hardMemory) * 100 : 0;
       } else {
         const hardNumber = Number.parseFloat(hardValue);
-        ratio = Number.isFinite(hardNumber) && hardNumber > 0 ? ((Number.parseFloat(usedValue) || 0) / hardNumber) * 100 : 0;
+        ratio =
+          Number.isFinite(hardNumber) && hardNumber > 0
+            ? ((Number.parseFloat(usedValue) || 0) / hardNumber) * 100
+            : 0;
       }
       if (Number.isFinite(ratio)) worst = Math.max(worst, ratio);
     }
@@ -661,18 +742,32 @@ export class MetricsDashboard {
 
   _operatorsTable(stats) {
     const operators = this._list('ClusterOperator');
-    if (!operators.length) return '<div class="text-white/25 text-[10px] p-2">No ClusterOperators reported.</div>';
+    if (!operators.length)
+      return '<div class="text-white/25 text-[10px] p-2">No ClusterOperators reported.</div>';
     const health = stats?.clusterOperators || this._operatorHealth();
     const degraded = operators.filter((operator) => {
       const conditions = operator.status?.conditions || [];
-      return conditions.some((condition) => condition.type === 'Degraded' && condition.status === 'True')
-        || conditions.some((condition) => condition.type === 'Available' && condition.status === 'False');
+      return (
+        conditions.some(
+          (condition) => condition.type === 'Degraded' && condition.status === 'True'
+        ) ||
+        conditions.some(
+          (condition) => condition.type === 'Available' && condition.status === 'False'
+        )
+      );
     });
-    const lines = degraded.slice(0, 4).map((operator) => `<div class="px-1 py-0.5 flex items-center gap-1 border-b border-white/5 last:border-0">
+    const lines = degraded
+      .slice(0, 4)
+      .map(
+        (
+          operator
+        ) => `<div class="px-1 py-0.5 flex items-center gap-1 border-b border-white/5 last:border-0">
       <span class="w-1.5 h-1.5 rounded-full bg-red-400"></span>
       <span class="text-white/60 truncate">${this._escapeHTML(operator.metadata?.name)}</span>
       <span class="text-red-400/80 ml-auto text-[9px]">degraded</span>
-    </div>`).join('');
+    </div>`
+      )
+      .join('');
     return `<div class="px-1 py-0.5 text-[10px] ${health.degraded > 0 ? 'text-yellow-400' : 'text-green-400'}">
         ${health.available ?? 0}/${health.total ?? operators.length} Available${health.degraded ? ` · ${health.degraded} degraded` : ' · all healthy'}
       </div>
@@ -730,7 +825,10 @@ export class MetricsDashboard {
       const safe = Number.isFinite(numeric) ? numeric : 0;
       return {
         x: padding.left + (index / (WINDOW_SIZE - 1)) * chartWidth,
-        y: padding.top + chartHeight - (Math.max(0, Math.min(maxValue, safe)) / maxValue) * chartHeight,
+        y:
+          padding.top +
+          chartHeight -
+          (Math.max(0, Math.min(maxValue, safe)) / maxValue) * chartHeight,
       };
     });
 

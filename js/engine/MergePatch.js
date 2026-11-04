@@ -122,12 +122,17 @@ export function defaultPatchType(kind, normalize) {
  */
 export function resolvePatchType(options = {}, kind, normalize) {
   const requested = options.type || options.patchType || '';
-  const raw = String(requested || '').trim().toLowerCase();
+  const raw = String(requested || '')
+    .trim()
+    .toLowerCase();
   if (raw) {
     if (raw === 'strategic') return { type: 'strategic' };
     if (raw === 'merge' || raw === 'json-merge') return { type: 'merge' };
     if (raw === 'json' || raw === 'json-patch') return { type: 'json' };
-    return { type: 'strategic', error: `error: --type must be one of: strategic, merge, json (got "${requested}")` };
+    return {
+      type: 'strategic',
+      error: `error: --type must be one of: strategic, merge, json (got "${requested}")`,
+    };
   }
   return { type: defaultPatchType(kind, normalize) };
 }
@@ -224,7 +229,10 @@ function mergeList(targetList, patchList, fieldName) {
       continue;
     }
     const keyValue = patchItem[key];
-    const index = keyValue === undefined ? -1 : out.findIndex((item) => isPlainObject(item) && item[key] === keyValue);
+    const index =
+      keyValue === undefined
+        ? -1
+        : out.findIndex((item) => isPlainObject(item) && item[key] === keyValue);
     if (patchItem.$patch === 'delete') {
       if (index >= 0) out.splice(index, 1);
       continue;
@@ -323,7 +331,10 @@ export function applyJsonPatch(document, operations) {
         result = clone(operation.value);
         continue;
       }
-      return { ok: false, error: `invalid json patch operation "${operation.op}" on the document root` };
+      return {
+        ok: false,
+        error: `invalid json patch operation "${operation.op}" on the document root`,
+      };
     }
     const parentPath = path.slice(0, -1);
     const last = path[path.length - 1];
