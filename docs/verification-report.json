@@ -1,19 +1,19 @@
 {
-  "timestamp": "2026-11-04T21:31:58.189Z",
+  "timestamp": "2026-11-04T23:22:16.176Z",
   "environment": {
     "node": "v26.10.0",
     "chrome": "Chrome/156.0.8078.79",
-    "baseUrl": "http://127.0.0.1:46319",
+    "baseUrl": "http://127.0.0.1:35731",
     "viewport": {
       "width": 1600,
       "height": 900
     },
     "puppeteerCore": "/tmp/verify-tools",
-    "startedAt": "2026-11-04T21:21:44.155Z",
-    "durationSeconds": 614
+    "startedAt": "2026-11-04T23:10:53.971Z",
+    "durationSeconds": 682
   },
   "summary": {
-    "passes": 1220,
+    "passes": 1399,
     "failures": 0,
     "warnings": 0,
     "consoleErrors": 0,
@@ -52,7 +52,7 @@
       "warnings": 0
     },
     "cli": {
-      "passes": 217,
+      "passes": 218,
       "failures": 0,
       "warnings": 0
     },
@@ -102,7 +102,7 @@
       "warnings": 0
     },
     "incidents: L20 NodeNotReady recovered via oc debug/systemctl": {
-      "passes": 24,
+      "passes": 25,
       "failures": 0,
       "warnings": 0
     },
@@ -132,7 +132,7 @@
       "warnings": 0
     },
     "qa-openshift": {
-      "passes": 50,
+      "passes": 51,
       "failures": 0,
       "warnings": 0
     },
@@ -143,6 +143,36 @@
     },
     "qa-coverage": {
       "passes": 91,
+      "failures": 0,
+      "warnings": 0
+    },
+    "qa-issue37": {
+      "passes": 20,
+      "failures": 0,
+      "warnings": 0
+    },
+    "qa-issue38-41": {
+      "passes": 23,
+      "failures": 0,
+      "warnings": 0
+    },
+    "qa-issue39-40": {
+      "passes": 28,
+      "failures": 0,
+      "warnings": 0
+    },
+    "qa-issue42": {
+      "passes": 44,
+      "failures": 0,
+      "warnings": 0
+    },
+    "qa-issue42-evidence": {
+      "passes": 7,
+      "failures": 0,
+      "warnings": 0
+    },
+    "qa-issue43": {
+      "passes": 54,
       "failures": 0,
       "warnings": 0
     },
@@ -166,74 +196,74 @@
       "path": "screenshot.png",
       "width": 1600,
       "height": 900,
-      "bytes": 890107
+      "bytes": 934363
     },
     "ogImage": {
       "path": "og-image.png",
       "width": 1200,
       "height": 630,
-      "bytes": 196357
+      "bytes": 201742
     },
     "screenshots": [
       {
         "path": "docs/screenshots/menu.png",
         "width": 1600,
         "height": 900,
-        "bytes": 331570
+        "bytes": 331369
       },
       {
         "path": "docs/screenshots/exam-prep.png",
         "width": 1600,
         "height": 900,
-        "bytes": 200152
+        "bytes": 203329
       },
       {
         "path": "docs/screenshots/sandbox.png",
         "width": 1600,
         "height": 900,
-        "bytes": 889955
+        "bytes": 933384
       },
       {
         "path": "screenshot.png",
         "width": 1600,
         "height": 900,
-        "bytes": 890107
+        "bytes": 934363
       },
       {
         "path": "docs/screenshots/files-panel.png",
         "width": 1600,
         "height": 900,
-        "bytes": 233103
+        "bytes": 243565
       },
       {
         "path": "docs/screenshots/campaign-level-1.png",
         "width": 1600,
         "height": 900,
-        "bytes": 470510
+        "bytes": 474533
       },
       {
         "path": "docs/screenshots/regressions-minimap-collapsed.png",
         "width": 1600,
         "height": 900,
-        "bytes": 865423
+        "bytes": 909694
       },
       {
         "path": "docs/screenshots/regressions-campaign-restart.png",
         "width": 1600,
         "height": 900,
-        "bytes": 472309
+        "bytes": 483155
       },
       {
         "path": "docs/screenshots/draw.png",
         "width": 1600,
         "height": 900,
-        "bytes": 488628
+        "bytes": 488798
       },
       {
         "path": "og-image.png",
         "width": 1200,
         "height": 630,
-        "bytes": 196357
+        "bytes": 201742
       }
     ]
   },
@@ -1196,7 +1226,11 @@
     },
     {
       "section": "cli",
-      "name": "cli: oc create limitrange"
+      "name": "cli: oc create limitrange is rejected like real oc (#38)"
+    },
+    {
+      "section": "cli",
+      "name": "cli: oc apply a LimitRange from YAML"
     },
     {
       "section": "cli",
@@ -1556,7 +1590,7 @@
     },
     {
       "section": "cli",
-      "name": "cli: LimitRange demo-limit exists"
+      "name": "cli: LimitRange resource-limits exists (#38 YAML flow)"
     },
     {
       "section": "cli",
@@ -3096,7 +3130,7 @@
     },
     {
       "section": "incidents: lab 6 quota incident heals from state",
-      "name": "qa-incidents: lab 6 create LimitRange"
+      "name": "qa-incidents: lab 6 apply the LimitRange YAML (#38)"
     },
     {
       "section": "incidents: lab 6 quota incident heals from state",
@@ -3160,7 +3194,11 @@
     },
     {
       "section": "incidents: L20 NodeNotReady recovered via oc debug/systemctl",
-      "name": "qa-incidents: cordoned NotReady node shows NotReady,SchedulingDisabled"
+      "name": "qa-incidents: NotReady node STATUS is NotReady without SchedulingDisabled (#43)"
+    },
+    {
+      "section": "incidents: L20 NodeNotReady recovered via oc debug/systemctl",
+      "name": "qa-incidents: NotReady node carries the real unreachable + not-ready taints (#43)"
     },
     {
       "section": "incidents: L20 NodeNotReady recovered via oc debug/systemctl",
@@ -3292,7 +3330,7 @@
     },
     {
       "section": "qa-scenarios",
-      "name": "scenarios: L3 broken Deployment uses its own bad image (not the healthy origin-hello image)"
+      "name": "scenarios: L3 broken Deployment keeps a neutral image (#42-3)"
     },
     {
       "section": "qa-scenarios",
@@ -3536,7 +3574,7 @@
     },
     {
       "section": "qa-scenarios",
-      "name": "scenarios: L20 broken Deployment image is seeded and is not L1s healthy origin-hello image"
+      "name": "scenarios: L20 broken Deployment keeps the neutral image (#42-3)"
     },
     {
       "section": "qa-scenarios",
@@ -4396,7 +4434,11 @@
     },
     {
       "section": "qa-openshift",
-      "name": "openshift: passwordless kubeadmin login still works"
+      "name": "openshift: oc login -u kubeadmin prompts for the password (#42-4)"
+    },
+    {
+      "section": "qa-openshift",
+      "name": "openshift: typing the kubeadmin password at the prompt logs in (#42-4)"
     },
     {
       "section": "qa-openshift",
@@ -5037,6 +5079,710 @@
     {
       "section": "qa-coverage",
       "name": "coverage: lab 10 AllNamespaces operator objective completes"
+    },
+    {
+      "section": "qa-issue37",
+      "name": "#37: campaign L20 capstone starts"
+    },
+    {
+      "section": "qa-issue37",
+      "name": "#37: L20 quota objective grades prod-platform state (no hidden name)"
+    },
+    {
+      "section": "qa-issue37",
+      "name": "#37: L20 LimitRange objective grades prod-platform state (no hidden name)"
+    },
+    {
+      "section": "qa-issue37",
+      "name": "#37: L20 default-deny objective probes ingress isolation in prod-platform"
+    },
+    {
+      "section": "qa-issue37",
+      "name": "#37: L20 routeAccess objective requires isolation before it can tick"
+    },
+    {
+      "section": "qa-issue37",
+      "name": "#37: default-deny and routeAccess objectives start pending"
+    },
+    {
+      "section": "qa-issue37",
+      "name": "#37: webapp deployment applies"
+    },
+    {
+      "section": "qa-issue37",
+      "name": "#37: webapp Route is admitted before the isolation work"
+    },
+    {
+      "section": "qa-issue37",
+      "name": "#37: custom-named quota prod-quota is created"
+    },
+    {
+      "section": "qa-issue37",
+      "name": "#37: custom-named LimitRange prod-limits is created"
+    },
+    {
+      "section": "qa-issue37",
+      "name": "#37: routeAccess does not tick before any NetworkPolicy exists"
+    },
+    {
+      "section": "qa-issue37",
+      "name": "#37: custom-named deny-all NetworkPolicy is created"
+    },
+    {
+      "section": "qa-issue37",
+      "name": "#37: quota objective completes for prod-quota (state, not name)"
+    },
+    {
+      "section": "qa-issue37",
+      "name": "#37: LimitRange objective completes for prod-limits (state, not name)"
+    },
+    {
+      "section": "qa-issue37",
+      "name": "#37: default-deny objective completes for deny-all"
+    },
+    {
+      "section": "qa-issue37",
+      "name": "#37: routeAccess stays pending while the router is policy-blocked"
+    },
+    {
+      "section": "qa-issue37",
+      "name": "#37: custom-named router-allow policy is created"
+    },
+    {
+      "section": "qa-issue37",
+      "name": "#37: routeAccess completes after isolation + router allow exist"
+    },
+    {
+      "section": "qa-issue37",
+      "name": "#37: objectives complete without the hidden compute-quota/resource-limits names"
+    },
+    {
+      "section": "qa-issue37",
+      "name": "#37: legacy routeAccess probes without requireIsolation keep their old semantics"
+    },
+    {
+      "section": "qa-issue38-41",
+      "name": "#38: sandbox boots for LimitRange subcommand checks"
+    },
+    {
+      "section": "qa-issue38-41",
+      "name": "#38: oc create limitrange is rejected like real oc"
+    },
+    {
+      "section": "qa-issue38-41",
+      "name": "#38: the rejection lists the real oc create subcommands"
+    },
+    {
+      "section": "qa-issue38-41",
+      "name": "#38: the rejected command created no LimitRange"
+    },
+    {
+      "section": "qa-issue38-41",
+      "name": "#38: YAML-based LimitRange creation still works (oc apply -f)"
+    },
+    {
+      "section": "qa-issue38-41",
+      "name": "#38: examples/limitrange.yaml creates the shipped resource-limits LimitRange"
+    },
+    {
+      "section": "qa-issue38-41",
+      "name": "#38: no shipped level/challenge hint instructs the nonexistent oc create limitrange"
+    },
+    {
+      "section": "qa-issue38-41",
+      "name": "#38: lab 6 hint uses `oc apply -f examples/limitrange.yaml`"
+    },
+    {
+      "section": "qa-issue38-41",
+      "name": "#38: lab 6 command objective matches the YAML apply and not oc create limitrange"
+    },
+    {
+      "section": "qa-issue38-41",
+      "name": "#38: lab 6 starts for the YAML LimitRange flow"
+    },
+    {
+      "section": "qa-issue38-41",
+      "name": "#38: lab 6 quota is created with the real oc create quota"
+    },
+    {
+      "section": "qa-issue38-41",
+      "name": "#38: lab 6 LimitRange is created from shipped YAML"
+    },
+    {
+      "section": "qa-issue38-41",
+      "name": "#38: lab 6 quota + LimitRange objectives complete from the YAML flow"
+    },
+    {
+      "section": "qa-issue38-41",
+      "name": "#41: key-only label selector returns only openshift-ingress"
+    },
+    {
+      "section": "qa-issue38-41",
+      "name": "#41: --show-labels renders the policy-group label value"
+    },
+    {
+      "section": "qa-issue38-41",
+      "name": "#41: negated key-only selector excludes openshift-ingress"
+    },
+    {
+      "section": "qa-issue38-41",
+      "name": "#41: set-based in(...) selector filters namespaces correctly"
+    },
+    {
+      "section": "qa-issue38-41",
+      "name": "#41: notin(...) selector excludes openshift-ingress"
+    },
+    {
+      "section": "qa-issue38-41",
+      "name": "#41: legacy equality selector matches only openshift-ingress"
+    },
+    {
+      "section": "qa-issue38-41",
+      "name": "#41: key-only matchLabels matches only the empty label value"
+    },
+    {
+      "section": "qa-issue38-41",
+      "name": "#41: matchExpressions In/NotIn implement real set semantics"
+    },
+    {
+      "section": "qa-issue38-41",
+      "name": "#41: matchExpressions Exists/DoesNotExist implement real key semantics"
+    },
+    {
+      "section": "qa-issue38-41",
+      "name": "#41: namespace labels come from real Project data, not fabricated router labels"
+    },
+    {
+      "section": "qa-issue39-40",
+      "name": "#39: sandbox boots for Route externalCertificate admission"
+    },
+    {
+      "section": "qa-issue39-40",
+      "name": "#39: the externalCertificate Route manifest applies"
+    },
+    {
+      "section": "qa-issue39-40",
+      "name": "#39: externalCertificate Route is NOT admitted while the TLS Secret is missing"
+    },
+    {
+      "section": "qa-issue39-40",
+      "name": "#39: Admitted=False reason is ExternalCertificateValidationFailed"
+    },
+    {
+      "section": "qa-issue39-40",
+      "name": "#39: rejection message names the missing webapp-tls Secret"
+    },
+    {
+      "section": "qa-issue39-40",
+      "name": "#39: describe route shows the rejected admission condition"
+    },
+    {
+      "section": "qa-issue39-40",
+      "name": "#39: openssl generates the Route TLS certificate"
+    },
+    {
+      "section": "qa-issue39-40",
+      "name": "#39: webapp-tls kubernetes.io/tls Secret is created"
+    },
+    {
+      "section": "qa-issue39-40",
+      "name": "#39: Route stays rejected after the Secret exists but router RBAC is missing"
+    },
+    {
+      "section": "qa-issue39-40",
+      "name": "#39: rejection now reports the router ServiceAccount permission errors"
+    },
+    {
+      "section": "qa-issue39-40",
+      "name": "#39: shipped router RBAC example applies"
+    },
+    {
+      "section": "qa-issue39-40",
+      "name": "#39: Route becomes Admitted after the Secret + router Role/RoleBinding exist"
+    },
+    {
+      "section": "qa-issue39-40",
+      "name": "#39: describe route reports the admitted Route once the prerequisites exist"
+    },
+    {
+      "section": "qa-issue39-40",
+      "name": "#40: campaign boots for the handover copy check"
+    },
+    {
+      "section": "qa-issue39-40",
+      "name": "#40: campaign L20 starts for the handover screen"
+    },
+    {
+      "section": "qa-issue39-40",
+      "name": "#40: finishing the capstone opens the handover screen"
+    },
+    {
+      "section": "qa-issue39-40",
+      "name": "#40: full-cluster checklist item points to OpenShift Local (crc)"
+    },
+    {
+      "section": "qa-issue39-40",
+      "name": "#40: full-cluster item explains crc console --credentials for the kubeadmin password"
+    },
+    {
+      "section": "qa-issue39-40",
+      "name": "#40: full-cluster item links to the OpenShift Local page"
+    },
+    {
+      "section": "qa-issue39-40",
+      "name": "#40: Developer Sandbox item is marked project-scoped only"
+    },
+    {
+      "section": "qa-issue39-40",
+      "name": "#40: Developer Sandbox is not offered as the whole-cluster setup path"
+    },
+    {
+      "section": "qa-issue39-40",
+      "name": "#40: L13 redo item says cluster-admin on a real cluster, not the Sandbox"
+    },
+    {
+      "section": "qa-issue39-40",
+      "name": "#40: L14 redo item says cluster-admin on a real cluster, not the Sandbox"
+    },
+    {
+      "section": "qa-issue39-40",
+      "name": "#40: L17 redo item says cluster-admin on a real cluster, not the Sandbox"
+    },
+    {
+      "section": "qa-issue39-40",
+      "name": "#40: the static handover section sub no longer offers the Sandbox as cluster setup"
+    },
+    {
+      "section": "qa-issue39-40",
+      "name": "#40: the old \"or open the free Developer Sandbox\" cluster-setup copy is gone"
+    },
+    {
+      "section": "qa-issue39-40",
+      "name": "#40: the handover checklist still lists every redo level L5/L9/L13/L14/L17"
+    },
+    {
+      "section": "qa-issue39-40",
+      "name": "#40: handover checklist has the full-cluster + Sandbox-scope + 5 redo items"
+    },
+    {
+      "section": "qa-issue42",
+      "name": "#42: sandbox boots for builds/auth/exec checks"
+    },
+    {
+      "section": "qa-issue42",
+      "name": "#42: new-build creates and prints the output ImageStream up front"
+    },
+    {
+      "section": "qa-issue42",
+      "name": "#42: the new-build ImageStream exists before the first build"
+    },
+    {
+      "section": "qa-issue42",
+      "name": "#42: the first start-build starts"
+    },
+    {
+      "section": "qa-issue42",
+      "name": "#42: start-build while a build runs queues the next serial build instead of erroring"
+    },
+    {
+      "section": "qa-issue42",
+      "name": "#42: the queued serial build waits in phase New without a start timestamp"
+    },
+    {
+      "section": "qa-issue42",
+      "name": "#42: Serial runPolicy never runs two builds at once"
+    },
+    {
+      "section": "qa-issue42",
+      "name": "#42: the running build completes before the queued build starts"
+    },
+    {
+      "section": "qa-issue42",
+      "name": "#42: the queued build runs to completion after the predecessor"
+    },
+    {
+      "section": "qa-issue42",
+      "name": "#42: serial build timestamps prove the queue ordering"
+    },
+    {
+      "section": "qa-issue42",
+      "name": "#42: start-build --follow starts the build"
+    },
+    {
+      "section": "qa-issue42",
+      "name": "#42: start-build --follow streams build log lines after \"started\""
+    },
+    {
+      "section": "qa-issue42",
+      "name": "#42: start-build --follow reports --> Success at completion"
+    },
+    {
+      "section": "qa-issue42",
+      "name": "#42: new-app --image creates and prints the deployment ImageStream"
+    },
+    {
+      "section": "qa-issue42",
+      "name": "#42: the new-app ImageStream is queryable before any build"
+    },
+    {
+      "section": "qa-issue42",
+      "name": "#42: oc exec lists token/ca.crt/namespace/service-ca.crt in the Pod"
+    },
+    {
+      "section": "qa-issue42",
+      "name": "#42: the Pod service-account namespace file contains the project name"
+    },
+    {
+      "section": "qa-issue42",
+      "name": "#42: the Pod service-account token is a JWT-shaped bound token"
+    },
+    {
+      "section": "qa-issue42",
+      "name": "#42: the Pod service-account ca.crt is a PEM bundle"
+    },
+    {
+      "section": "qa-issue42",
+      "name": "#42: rsh sees the same service-account files as exec"
+    },
+    {
+      "section": "qa-issue42",
+      "name": "#42: cat ~/auth/kubeadmin-password reveals the installer password"
+    },
+    {
+      "section": "qa-issue42",
+      "name": "#42: ls ~/auth lists kubeadmin-password like the installer auth/ directory"
+    },
+    {
+      "section": "qa-issue42",
+      "name": "#42: oc extract secret/kubeadmin remains the documented discovery path"
+    },
+    {
+      "section": "qa-issue42",
+      "name": "#42: oc login -u kubeadmin prompts for the password instead of logging in silently"
+    },
+    {
+      "section": "qa-issue42",
+      "name": "#42: the login prompt waits for the next terminal line"
+    },
+    {
+      "section": "qa-issue42",
+      "name": "#42: a wrong prompted password keeps the real 401 wording"
+    },
+    {
+      "section": "qa-issue42",
+      "name": "#42: a failed prompted login leaves the session unchanged"
+    },
+    {
+      "section": "qa-issue42",
+      "name": "#42: an empty line cancels the password prompt"
+    },
+    {
+      "section": "qa-issue42",
+      "name": "#42: normal command parsing resumes after the prompt is cancelled"
+    },
+    {
+      "section": "qa-issue42",
+      "name": "#42: typing the discovered kubeadmin password logs in"
+    },
+    {
+      "section": "qa-issue42",
+      "name": "#42: the explicit -p login flow is unchanged"
+    },
+    {
+      "section": "qa-issue42",
+      "name": "#42: campaign boots for the CrashLoop log check"
+    },
+    {
+      "section": "qa-issue42",
+      "name": "#42: campaign L3 starts for the CrashLoop log check"
+    },
+    {
+      "section": "qa-issue42",
+      "name": "#42: the L3 crash seed keeps a neutral image (no v2-bad-config)"
+    },
+    {
+      "section": "qa-issue42",
+      "name": "#42: the L3 crash seed only injects the invalid APP_MODE env var"
+    },
+    {
+      "section": "qa-issue42",
+      "name": "#42: a CrashLoopBackOff pod exists in L3"
+    },
+    {
+      "section": "qa-issue42",
+      "name": "#42: oc logs blames APP_MODE and never the image"
+    },
+    {
+      "section": "qa-issue42",
+      "name": "#42: oc logs --previous blames APP_MODE and never the image"
+    },
+    {
+      "section": "qa-issue42",
+      "name": "#42: the CrashLoop log has the real application FATAL validation line"
+    },
+    {
+      "section": "qa-issue42",
+      "name": "#42: correcting APP_MODE applies"
+    },
+    {
+      "section": "qa-issue42",
+      "name": "#42: fixing APP_MODE alone resolves the CrashLoopBackOff incident"
+    },
+    {
+      "section": "qa-issue42",
+      "name": "#42: L17 description no longer asks to create the shipped priv-sa ServiceAccount"
+    },
+    {
+      "section": "qa-issue42",
+      "name": "#42: L17 ships priv-sa in startingResources, matching the description"
+    },
+    {
+      "section": "qa-issue42",
+      "name": "#42: L17 objectives describe granting the SCC, not creating a ServiceAccount"
+    },
+    {
+      "section": "qa-issue42-evidence",
+      "name": "#42: start page boots for the readiness-evidence check"
+    },
+    {
+      "section": "qa-issue42-evidence",
+      "name": "#42: a completed L20 on a gated-bypass run evidences the Job readiness bullet"
+    },
+    {
+      "section": "qa-issue42-evidence",
+      "name": "#42: a completed L20 on a gated-bypass run evidences the CronJob readiness bullet"
+    },
+    {
+      "section": "qa-issue42-evidence",
+      "name": "#42: a completed L17 evidences the SCC readiness bullets from objective evidence"
+    },
+    {
+      "section": "qa-issue42-evidence",
+      "name": "#42: live objective evidence alone (no matching command text) evidences the jobs bullets"
+    },
+    {
+      "section": "qa-issue42-evidence",
+      "name": "#42: an incomplete L20 does not evidence the jobs bullets (evidence not weakened)"
+    },
+    {
+      "section": "qa-issue42-evidence",
+      "name": "#42: L1 and L13 hints document ~/auth/kubeadmin-password password discovery"
+    },
+    {
+      "section": "qa-issue43",
+      "name": "#43: sandbox boots for CLI fidelity checks"
+    },
+    {
+      "section": "qa-issue43",
+      "name": "#43: multi-type get prefixes NAME with deployment.apps/ and service/"
+    },
+    {
+      "section": "qa-issue43",
+      "name": "#43: multi-type get omits empty types instead of printing \"No resources found\" among rows"
+    },
+    {
+      "section": "qa-issue43",
+      "name": "#43: an empty requested type is omitted when another requested type has rows"
+    },
+    {
+      "section": "qa-issue43",
+      "name": "#43: an all-empty multi-type get prints exactly one \"No resources found\""
+    },
+    {
+      "section": "qa-issue43",
+      "name": "#43: get deploy,pods prefixes both the deployment and pod rows"
+    },
+    {
+      "section": "qa-issue43",
+      "name": "#43: oc get secrets is sorted by name like the API server"
+    },
+    {
+      "section": "qa-issue43",
+      "name": "#43: aggregated events never show the bogus \"over 0s\" duration"
+    },
+    {
+      "section": "qa-issue43",
+      "name": "#43: get events keeps the real LAST SEEN TYPE REASON OBJECT MESSAGE header"
+    },
+    {
+      "section": "qa-issue43",
+      "name": "#43: rollout restart prints \"deployment.apps/web restarted\" without quotes"
+    },
+    {
+      "section": "qa-issue43",
+      "name": "#43: set env <type> --all --list lists env for every deployment"
+    },
+    {
+      "section": "qa-issue43",
+      "name": "#43: describe deployment shows the quota FailedCreate exactly once with real wording"
+    },
+    {
+      "section": "qa-issue43",
+      "name": "#43: quota admission failure uses the keyed limited: pods=1 wording"
+    },
+    {
+      "section": "qa-issue43",
+      "name": "#43: describe quota has no Events section like real OpenShift 4.22"
+    },
+    {
+      "section": "qa-issue43",
+      "name": "#43: describe quota keeps the Resource/Used/Hard table"
+    },
+    {
+      "section": "qa-issue43",
+      "name": "#43: get events shows the FailedCreate once with the real Error creating: wording"
+    },
+    {
+      "section": "qa-issue43",
+      "name": "#43: seeded projects get the kube-root-ca.crt and openshift-service-ca.crt ConfigMaps"
+    },
+    {
+      "section": "qa-issue43",
+      "name": "#43: oc new-project bootstraps both CA ConfigMaps"
+    },
+    {
+      "section": "qa-issue43",
+      "name": "#43: kube-root-ca.crt carries ca.crt plus the real description annotation"
+    },
+    {
+      "section": "qa-issue43",
+      "name": "#43: openshift-service-ca.crt carries service-ca.crt and the inject annotation"
+    },
+    {
+      "section": "qa-issue43",
+      "name": "#43: describe sa default no longer shows the requester annotation"
+    },
+    {
+      "section": "qa-issue43",
+      "name": "#43: the project Namespace carries openshift.io/requester=kubeadmin"
+    },
+    {
+      "section": "qa-issue43",
+      "name": "#43: ReplicaSet names use the real 10-character pod-template-hash"
+    },
+    {
+      "section": "qa-issue43",
+      "name": "#43: pod names use the 10-char template hash + 5-char suffix shape"
+    },
+    {
+      "section": "qa-issue43",
+      "name": "#43: oc new-app pods carry the deployment=<name> label"
+    },
+    {
+      "section": "qa-issue43",
+      "name": "#43: describe node conditions table has the real five columns"
+    },
+    {
+      "section": "qa-issue43",
+      "name": "#43: NetworkUnavailable renders the NoNetworkPlugin reason/message"
+    },
+    {
+      "section": "qa-issue43",
+      "name": "#43: oc debug node opens a node session"
+    },
+    {
+      "section": "qa-issue43",
+      "name": "#43: chroot /host renders the real host prompt sh-5.1#"
+    },
+    {
+      "section": "qa-issue43",
+      "name": "#43: the node debug session hostname is the actual node name"
+    },
+    {
+      "section": "qa-issue43",
+      "name": "#43: journalctl preamble weekday matches the simulated clock (not hard-coded Mon)"
+    },
+    {
+      "section": "qa-issue43",
+      "name": "#43: journalctl lines use the real node hostname, not \"worker\""
+    },
+    {
+      "section": "qa-issue43",
+      "name": "#43: journalctl short lines use the real syslog format"
+    },
+    {
+      "section": "qa-issue43",
+      "name": "#43: the curl fixture Route has a host"
+    },
+    {
+      "section": "qa-issue43",
+      "name": "#43: curl -s -o /dev/null -w %{http_code} prints the HTTP status code"
+    },
+    {
+      "section": "qa-issue43",
+      "name": "#43: curl https:// without an explicit port connects on 443, not 80"
+    },
+    {
+      "section": "qa-issue43",
+      "name": "#43: genuine refused connections keep curl (7) Connection refused"
+    },
+    {
+      "section": "qa-issue43",
+      "name": "#43: exec curl to an https URL uses the scheme-default port 443"
+    },
+    {
+      "section": "qa-issue43",
+      "name": "#43: NetworkPolicy-dropped exec curl reports the real (28) connection timeout"
+    },
+    {
+      "section": "qa-issue43",
+      "name": "#43: openssl req -x509 generates a leaf certificate"
+    },
+    {
+      "section": "qa-issue43",
+      "name": "#43: openssl x509 subject keeps only the requested -subj (no invented O)"
+    },
+    {
+      "section": "qa-issue43",
+      "name": "#43: openssl x509 -noout -enddate prints notAfter=<date> GMT"
+    },
+    {
+      "section": "qa-issue43",
+      "name": "#43: the HTPasswd OAuth provider applies for the rollout hint check"
+    },
+    {
+      "section": "qa-issue43",
+      "name": "#43: a login during the OAuth rollout keeps real oc 401 wording"
+    },
+    {
+      "section": "qa-issue43",
+      "name": "#43: the extra OAuth-rollout detail is marked \"Simulator hint:\""
+    },
+    {
+      "section": "qa-issue43",
+      "name": "#43: the rollout hint is not a bare second line of the 401"
+    },
+    {
+      "section": "qa-issue43",
+      "name": "#43: the NodeNotReady incident spawns for the taint regression check"
+    },
+    {
+      "section": "qa-issue43",
+      "name": "#43: a NotReady node is not cordoned (no spec.unschedulable/SchedulingDisabled)"
+    },
+    {
+      "section": "qa-issue43",
+      "name": "#43: NotReady node carries the lifecycle taint node.kubernetes.io/unreachable:NoSchedule"
+    },
+    {
+      "section": "qa-issue43",
+      "name": "#43: NotReady node carries the lifecycle taint node.kubernetes.io/unreachable:NoExecute"
+    },
+    {
+      "section": "qa-issue43",
+      "name": "#43: NotReady node carries the lifecycle taint node.kubernetes.io/not-ready:NoSchedule"
+    },
+    {
+      "section": "qa-issue43",
+      "name": "#43: NotReady node carries the lifecycle taint node.kubernetes.io/not-ready:NoExecute"
+    },
+    {
+      "section": "qa-issue43",
+      "name": "#43: oc get nodes STATUS is NotReady without SchedulingDisabled"
+    },
+    {
+      "section": "qa-issue43",
+      "name": "#43: describe node renders the NotReady lifecycle taints"
     },
     {
       "section": "draw",
