@@ -4,6 +4,95 @@ All notable changes to OpenShift Games are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 aims to follow [Semantic Versioning](https://semver.org/).
 
+## [1.1.6] — 2026-11-04
+
+QA-retest follow-up on 1.1.5: closes the seven new report items (#15–#21) — image-pull
+versus crash-looping states, container naming, rollout-status races and `--timeout`,
+OLM package fidelity, the remaining CLI gaps/output differences, the restricted-v2
+`nginx:latest` trap, a capstone gate that requires resolution, stricter readiness
+evidence, and a visible “paused” indicator while an overlay freezes the run.
+
+### Added
+
+- **A visible paused indicator.** Overlays that freeze the simulation (Files & Manifests —
+  including when opened with `vim`, the level guide, EX280 Prep, the pause card) now show a
+  `Paused · Files open` chip in the HUD, mirror the pause glyph/tooltip on the pause button and
+  announce the state with `aria-live`. OLM installs and rollouts no longer look stuck when the
+  run is paused (issue #20).
+- `oc rollout status --timeout=<duration>` with the real
+  `error: timed out waiting for the condition` failure (issue #17).
+- `helm search repo [--versions]`, `oc set serviceaccount cronjob/...`, and `grep -A/-B/-C`
+  context flags (attached and spaced) in the simulated shell (issue #19).
+- The HUD/CLI now expose real Events: `oc get events --field-selector reason=FailedCreate`
+  (and `type=Warning,reason=FailedCreate`) lists SCC-rejection events (issue #21).
+
+### Changed
+
+- **`oc create deployment` names containers like real `oc`** — after the image basename
+  (`quay.io/openshift/origin-hello-openshift:latest` → `origin-hello-openshift`, `nginx:1.26` →
+  `nginx`); `oc run` keeps the run name. `oc set image` now hard-fails on an unknown container
+  (`error: unable to find container named "…"`) and never adds a container (issue #16).
+- **`oc rollout status` waits for the controller** to observe the new generation: an immediate
+  status after `oc set image` prints
+  `Waiting for deployment "…" spec update to be observed by the deployment controller...` instead
+  of a false “successfully rolled out” (issue #17).
+- **OLM catalog now matches OCP 4.x docs:** the package is `metallb-operator`
+  (CSV `metallb-operator.v0.14.9`); a Subscription for a package that is not in the catalog fails
+  with `ResolutionFailed` / “no operators found in package …” and creates no InstallPlan/CSV/
+  operator Deployment; the seeded Subscription no longer shows phantom
+  `InstallPlanPending/RequiresApproval` conditions before the controller runs (issue #18).
+- **`nginx:latest` is a real restricted-v2 trap:** the default restricted-v2 SCC rejects it
+  (binds port 80 / runs as root) — a Deployment gets `ReplicaFailure/FailedCreate` and no Pod is
+  ever created; a bare `oc run --image=nginx:latest` is Forbidden. Explicit non-root `runAsUser`,
+  an `anyuid`/`privileged` grant, and the supported image
+  `quay.io/openshift/origin-hello-openshift:latest` (now the palette/default workload image) are
+  the escape hatches. L1 teaches the trap; a Failed pod can no longer satisfy the “run a
+  Pod/Deployment” objectives (issue #20).
+- **Readiness requires in-run evidence:** command evidence only counts inside the linked
+  level/challenge run (`progress.drillCommandEvidence` scoped per drill); sandbox/chaos probing no
+  longer inflates the verdict (all-levels-complete + sandbox probing stays 0/55 instead of 50/55);
+  a completed level without its own commands is “Practiced”; the console bullet stays
+  “Practiced · docs only” (issue #20).
+- **Capstone completion requires resolving the incidents:** L20 now uses `resolve` objectives for
+  the scheduled CrashLoopBackOff (60 s) and NodeNotReady (120 s) incidents, so finishing while
+  either is still active is impossible (issue #20).
+- **CLI output fidelity** (issue #21): `oc project -q` prints only the name; Routes from
+  `oc expose svc` have an empty `spec.path`/PATH cell; login with no projects prints the real
+  “You don't have any projects…” message; `--dry-run=client -o yaml` omits `metadata.namespace`
+  unless `-n` was given; `oc describe rs -l` supports label selectors; `oc get ns` uses
+  `NAME STATUS AGE` while `oc get projects` keeps its project layout; a fresh HPA shows
+  `TARGETS <unknown>/50%`; `oc exec … -- whoami` under restricted-v2 reports the missing user
+  ID; `oc describe istag` NotFound for unknown streams; and
+  `oc adm policy add-role-to-user view -z default` prints
+  `clusterrole.rbac.authorization.k8s.io/view added: "default"`.
+- **`htpasswd -B` writes bcrypt hashes** (`$2y$10$…`, fresh salt per call) and login verifies
+  bcrypt, real `{SHA}` and legacy simulator entries; the extract → htpasswd → `oc set data` →
+  login rotation flow works with `-B` (issue #21).
+- CronJob hints/commands are container-agnostic where the deployment wasn’t created by
+  `oc create deployment`; CrashLoopBackOff log annotations use the Pod’s actual container name.
+
+### Fixed
+
+- **Timed lab 02 no longer starts in ImagePullBackOff** (issue #15): the image is
+  `quay.io/example/payments:v2-bad-config` (pulls, then crashes with exit code 1); the
+  CrashLoopBackOff incident fires at `triggerTime: 0` and the crash log names the real image and
+  exit code. `:broken` tags are still treated as unpullable — which is the point of the trap.
+- **DNS policy auto-repair uses port 5353** (`dns-default`) instead of 53 (issue #20); the
+  remaining port-53 mention in the NetworkPolicy explain text was corrected too.
+
+### Tests
+
+- `node scripts/verify.mjs` — 816 static checks, 0 failures (54 JS modules).
+- `node scripts/browser-test.mjs` — 566 headless-browser checks, 0 failures, 0 console/page
+  errors. New regression coverage: file-panel pause indicator (also for `vim`-opened panels),
+  nginx:latest restricted-v2 rejection (no Pod, RS FailedCreate, Events field-selector), L1
+  supported-image flow.
+- Re-run of every round-1 and round-2 per-issue repro suite (nginx/OLM/rollout race/HPA-events,
+  bcrypt/mixed-file identity, container naming/rollout timeout/grep/helm/output fidelity,
+  lab-02/capstone/readiness, incident drawer/overlap) — all green.
+
+---
+
 ## [1.1.5] — 2026-11-04
 
 Exam-fidelity release: the open GitHub QA report (issues #1–#14), the terminal, RBAC/identity,

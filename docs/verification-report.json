@@ -1,19 +1,19 @@
 {
-  "timestamp": "2026-11-04T14:28:44.981Z",
+  "timestamp": "2026-11-04T16:19:20.435Z",
   "environment": {
     "node": "v26.10.0",
     "chrome": "Chrome/156.0.8078.79",
-    "baseUrl": "http://127.0.0.1:32841",
+    "baseUrl": "http://127.0.0.1:37433",
     "viewport": {
       "width": 1600,
       "height": 900
     },
     "puppeteerCore": "/tmp/verify-tools",
-    "startedAt": "2026-11-04T14:24:57.828Z",
-    "durationSeconds": 227
+    "startedAt": "2026-11-04T16:15:08.065Z",
+    "durationSeconds": 252
   },
   "summary": {
-    "passes": 552,
+    "passes": 566,
     "failures": 0,
     "warnings": 0,
     "consoleErrors": 0,
@@ -47,12 +47,12 @@
       "warnings": 0
     },
     "files": {
-      "passes": 18,
+      "passes": 26,
       "failures": 0,
       "warnings": 0
     },
     "cli": {
-      "passes": 137,
+      "passes": 142,
       "failures": 0,
       "warnings": 0
     },
@@ -77,7 +77,7 @@
       "warnings": 0
     },
     "regressions": {
-      "passes": 21,
+      "passes": 22,
       "failures": 0,
       "warnings": 0
     },
@@ -101,74 +101,74 @@
       "path": "screenshot.png",
       "width": 1600,
       "height": 900,
-      "bytes": 828357
+      "bytes": 829470
     },
     "ogImage": {
       "path": "og-image.png",
       "width": 1200,
       "height": 630,
-      "bytes": 190662
+      "bytes": 190647
     },
     "screenshots": [
       {
         "path": "docs/screenshots/menu.png",
         "width": 1600,
         "height": 900,
-        "bytes": 323737
+        "bytes": 323620
       },
       {
         "path": "docs/screenshots/exam-prep.png",
         "width": 1600,
         "height": 900,
-        "bytes": 204208
+        "bytes": 205843
       },
       {
         "path": "docs/screenshots/sandbox.png",
         "width": 1600,
         "height": 900,
-        "bytes": 828861
+        "bytes": 828645
       },
       {
         "path": "screenshot.png",
         "width": 1600,
         "height": 900,
-        "bytes": 828357
+        "bytes": 829470
       },
       {
         "path": "docs/screenshots/files-panel.png",
         "width": 1600,
         "height": 900,
-        "bytes": 228850
+        "bytes": 230168
       },
       {
         "path": "docs/screenshots/campaign-level-1.png",
         "width": 1600,
         "height": 900,
-        "bytes": 469790
+        "bytes": 481274
       },
       {
         "path": "docs/screenshots/regressions-minimap-collapsed.png",
         "width": 1600,
         "height": 900,
-        "bytes": 809427
+        "bytes": 810704
       },
       {
         "path": "docs/screenshots/regressions-campaign-restart.png",
         "width": 1600,
         "height": 900,
-        "bytes": 470063
+        "bytes": 481284
       },
       {
         "path": "docs/screenshots/draw.png",
         "width": 1600,
         "height": 900,
-        "bytes": 488216
+        "bytes": 488617
       },
       {
         "path": "og-image.png",
         "width": 1200,
         "height": 630,
-        "bytes": 190662
+        "bytes": 190647
       }
     ]
   },
@@ -595,6 +595,22 @@
     },
     {
       "section": "files",
+      "name": "files: HUD shows a visible paused indicator"
+    },
+    {
+      "section": "files",
+      "name": "files: paused indicator names the Files reason"
+    },
+    {
+      "section": "files",
+      "name": "files: paused indicator is announced accessibly"
+    },
+    {
+      "section": "files",
+      "name": "files: paused indicator stays inside the HUD bar"
+    },
+    {
+      "section": "files",
       "name": "files: Esc closes the panel"
     },
     {
@@ -604,6 +620,22 @@
     {
       "section": "files",
       "name": "files: closing the panel resumes the simulation"
+    },
+    {
+      "section": "files",
+      "name": "files: paused indicator clears when the run resumes"
+    },
+    {
+      "section": "files",
+      "name": "files: vim opens the Files panel"
+    },
+    {
+      "section": "files",
+      "name": "files: vim-triggered Files open shows the paused indicator"
+    },
+    {
+      "section": "files",
+      "name": "files: paused indicator clears after the vim-triggered panel closes"
     },
     {
       "section": "cli",
@@ -780,6 +812,26 @@
     {
       "section": "cli",
       "name": "cli: oc rollout status"
+    },
+    {
+      "section": "cli",
+      "name": "cli: nginx restricted-v2 trap deployment created"
+    },
+    {
+      "section": "cli",
+      "name": "cli: nginx:latest is rejected by restricted-v2 (RS FailedCreate)"
+    },
+    {
+      "section": "cli",
+      "name": "cli: restricted-v2 rejection creates no Pod"
+    },
+    {
+      "section": "cli",
+      "name": "cli: restricted-v2 rejection records a FailedCreate event"
+    },
+    {
+      "section": "cli",
+      "name": "cli: events --field-selector reason=FailedCreate"
     },
     {
       "section": "cli",
@@ -2259,7 +2311,7 @@
     },
     {
       "section": "regressions",
-      "name": "regressions: incidents drawer no longer covers mission card or view toolbar"
+      "name": "regressions: incidents drawer no longer covers the view toolbar"
     },
     {
       "section": "regressions",
@@ -2268,6 +2320,10 @@
     {
       "section": "regressions",
       "name": "regressions: fresh campaign level starts auto-aligned"
+    },
+    {
+      "section": "regressions",
+      "name": "regressions: incidents drawer leaves the campaign mission card and toolbar visible"
     },
     {
       "section": "regressions",

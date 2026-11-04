@@ -29,18 +29,21 @@ names are shown in EX280 Prep).
 
 - **`oc` terminal** — a simulated OpenShift CLI with `get`, `describe`, `apply -f`, `create`,
   `new-app`, `new-project`, `expose`, `create route`, `start-build`, `set env|image|resources|volume`,
-  `rollout` (`status|history|undo`), `logs` (Pods, Deployments, Jobs), `exec`, `rsh`, `cp`, `wait`,
+  `rollout` (`status --timeout|history|undo`), `logs` (Pods, Deployments, Jobs), `exec`, `rsh`, `cp`, `wait`,
   `diff -f`, `patch --type=strategic|merge|json`, `adm policy` (RBAC + SCC), `auth can-i`,
   `adm top`, `adm cordon|drain`, `create quota|limitrange|clusterquota`, `create token`,
   `image info`, `process`, `helm` (repo/search/install/upgrade/history/rollback), `htpasswd`,
-  `--dry-run=client|server`, `<resource>.<group>` tokens, `jsonpath`/`custom-columns`, pipes,
-  redirects and `-f -` stdin. RBAC is genuinely enforced: a plain user gets the real
+  `--dry-run=client|server`, `<resource>.<group>` tokens, `jsonpath`/`custom-columns`,
+  `events --field-selector`, pipes, redirects and `-f -` stdin. Container names follow real `oc`
+  (`oc create deployment --image=…` names the container after the image; `oc set image` never adds
+  one). RBAC is genuinely enforced: a plain user gets the real
   `Error from server (Forbidden): …` for reads and writes they are not allowed to perform.
   `oc` is the taught command; a leading `kubectl` is accepted as an alias with an educational hint.
 - **A real shell around `oc`** — `vim`/`vi` (opens the manifest editor), `cat`, `echo` with
   `>`/`>>` redirects, heredocs, command substitution, and pipes through `grep`, `tail`, `head`,
-  `wc`, `sort`, `openssl`, `htpasswd`, `skopeo` — so exam workflows like writing YAML in the
-  terminal and `oc apply -f -` work exactly as on a real workstation.
+  `wc`, `sort`, `openssl`, `htpasswd`, `skopeo` (including `grep -A/-B/-C` context) — so exam
+  workflows like writing YAML in the terminal and `oc apply -f -` work exactly as on a real
+  workstation.
 - **First-class OpenShift resources** — Project, Pod, Deployment, ReplicaSet, StatefulSet, DaemonSet,
   Job, CronJob, Service, Route, Ingress, NetworkPolicy, ConfigMap, Secret, PVC, PV, StorageClass,
   HPA, PDB, ResourceQuota, LimitRange, ClusterResourceQuota, ServiceAccount, Role, RoleBinding,
@@ -62,6 +65,10 @@ names are shown in EX280 Prep).
   (`oc auth can-i`, `oc adm policy …`, `oc policy …`) enforced on every command, OCP 4.x SCC grants
   (RBAC bindings to `system:openshift:scc:<name>`, with the SCC users/groups lists left untouched
   like 4.x), and privileged-pod rejection as a ReplicaSet `FailedCreate` — the Pod is never created.
+  This includes the classic exam trap: `nginx:latest` runs as root and binds port 80, so it is
+  rejected by `restricted-v2` (anyuid/privileged or an explicit non-root `runAsUser` are the escape
+  hatches). `htpasswd -B` writes real-shaped bcrypt hashes and login validates bcrypt and legacy
+  `{SHA}` entries.
 - **Quotas & self-service** — Namespace/Project quotas, LimitRanges, ClusterResourceQuota, project
   templates (`oc adm create-bootstrap-project-template` + `project.config.openshift.io/cluster`) and
   the real `self-provisioners` ClusterRoleBinding (remove it and `oc new-project` returns Forbidden).
@@ -70,14 +77,17 @@ names are shown in EX280 Prep).
   operator effects (e.g. the MetalLB operator creates its controller/speaker pods and serves
   LoadBalancer IPs only once the MetalLB CR, IPAddressPool and L2Advertisement exist), and a correct
   two-step uninstall: deleting the Subscription keeps the CSV; deleting the CSV removes the operands.
+  The catalog package names follow OCP 4.x (`metallb-operator`), and a Subscription for a package
+  that is not in the catalog fails with `ResolutionFailed` instead of installing a fake CSV.
 - **20-level EX280 campaign (5 chapters)** — Manage OpenShift → Declarative & Kustomize →
   Deploy & Expose → Identity, RBAC & Self-service → Security & Operations, ending in a production
-  platform build.
+  platform build whose capstone only completes once its scheduled incidents are resolved.
 - **12 timed EX280 labs** — speed drills: three-tier app, CrashLoopBackOff, edge TLS Routes,
   Kustomize prod overlay, source-to-image, quota guardrail, RBAC onboarding, SCC, network isolation,
   operator install, HTPasswd onboarding and an EX280 speed run.
 - **EX280 Prep mode** — objective tracker for the official EX280V422 objective groups (with Red Hat
-  docs links), quick command labs, a searchable `oc` cheat sheet, exam facts and a study-coverage verdict.
+  docs links), quick command labs, a searchable `oc` cheat sheet, exam facts and an evidence-based
+  study-coverage verdict (mastery requires the bullet’s own commands inside the linked drill run).
 - **Chaos mode** — endless incident survival; **Sandbox** — free build scored 0–100 by the
   Architecture Advisor (HA, security, networking, storage, scaling, RBAC, quotas, probes, config, cost).
 - **A start page worth opening** — a dark, premium landing screen with the live 3D cluster in the
@@ -88,8 +98,9 @@ names are shown in EX280 Prep).
 - **3D cluster view** — Three.js r152 diorama with redesigned models for all 47 kinds, studio
   lighting, floor tier zones, camera fit-to-view, a screen-space label layer with collision culling,
   ownership/network/traffic connections, project floor planes, minimap, inspector, live metrics and
-  an importable/exportable YAML view. The renderer boots as the start-page hero and expands to full
-  screen when a mode launches.
+  an importable/exportable YAML view, and a visible paused state (HUD chip + pause glyph) whenever
+  an overlay freezes the run. The renderer boots as the start-page hero and expands to full screen
+  when a mode launches.
 - **OpenShift Draw** (`/draw`) — a 3D architecture whiteboard: drag OpenShift resources, draw
   connections, edit properties, auto-layout, export YAML/PNG and share via URL.
 

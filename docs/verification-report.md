@@ -1,18 +1,22 @@
 # Verification report — OpenShift Games (OCP 4.22 / EX280V422)
 
 **Date:** 2026-11-04 (UTC)
-**Verified tree:** `main` @ the 1.1.5 release commit (this report is committed with it) in
+**Verified tree:** `main` @ the 1.1.6 release commit (this report is committed with it) in
 https://github.com/G-man3207/openshiftgames
 **Target:** Red Hat OpenShift Container Platform **4.22** · **EX280V422**
 **Canonical URL:** `https://shifting.pro` (current spec/README/index; `og:url`/`og:image` + `/draw`)
 **Verdict:** **GO for release** — 0 failures in static verification and 0 failures in the full
-browser suite, plus per-issue headless repro scripts for every GitHub issue #1–#14 and the
+browser suite, plus per-issue headless repro scripts for every GitHub issue #1–#21 and the
 incidents-drawer overlap UX bug.
 
-Release 1.1.5 closes the open QA report: RBAC is enforced, identity/SCC use the OCP 4.x models,
-`oc`/`helm` command fidelity was reworked against the real CLI, the OLM flow is playable, timed labs
-and the capstone can no longer soft-lock or be skipped, and the incidents drawer no longer covers
-the level brief or the view toolbar.
+Release 1.1.5 closed the original QA report (#1–#14): RBAC enforcement, 4.x identity/SCC models,
+real `oc`/`helm` fidelity, the OLM flow, timed-lab/capstone fixes and the incidents-drawer layout.
+Release 1.1.6 closes the QA **retest** report (#15–#21): image-pull vs. crash-looping lab state,
+real container naming, rollout-status race/`--timeout`, OLM catalog fidelity (package
+`metallb-operator` + unknown-package resolution), the remaining CLI gaps/output differences, the
+restricted-v2 `nginx:latest` trap, a capstone gate that requires resolving its incidents, stricter
+in-run readiness evidence, a visible paused indicator while an overlay freezes the run, and bcrypt
+`htpasswd -B` support.
 
 ---
 
@@ -42,16 +46,17 @@ The browser script writes `docs/verification-report.json` on every run.
 Per-issue headless repro scripts used during the 1.1.5 work (kept outside the repo, listed for
 reproduction): `/tmp/rbac-engine/{harness,repro-browser,repro-cli-gate}.mjs`,
 `/tmp/cli/repro-{5,8,10,11a,11b,7,shell,hints,groupref}.mjs`,
-`/tmp/runtime/{repro-runtime,repro-l10,repro-campaign-olm-scc,repro-exec}.mjs` and
-`/tmp/verify-lead/issue1.mjs` (incident panel + drawer overlap).
+`/tmp/runtime/{repro-runtime,repro-l10,repro-campaign-olm-scc,repro-exec}.mjs`,
+`/tmp/runtime/r2-*.mjs` (round-2), `/tmp/cli/repro-r2-a.mjs` + `repro-r2-b.mjs` and
+`/tmp/verify-lead/issue1.mjs` (incident panel + drawer overlap) + `pause-chip.mjs` (paused indicator).
 
 ---
 
 ## 2. Static verification — `node scripts/verify.mjs`
 
 ```
-Files checked: 53 JS modules, 92 total files
-Checks passed: 808 · failures: 0 · warnings: 0
+Files checked: 54 JS modules, 94 total files
+Checks passed: 816 · failures: 0 · warnings: 0
 ```
 
 | Area | What was checked | Result |
@@ -81,7 +86,7 @@ required attribution link to the original project is explicitly allowed by CONVE
 ## 3. Browser E2E — `node scripts/browser-test.mjs`
 
 ```
-Browser tests: 552 passed, 0 failed, 0 warnings
+Browser tests: 566 passed, 0 failed, 0 warnings
 Console/page errors: 0 / 0
 Verdict: GO
 ```
@@ -93,13 +98,13 @@ Verdict: GO
 | Tutorial | 17 | 0 | level-start help modal, coach-card sequencing, viewport bounds and stable x-position across Next, H re-opens help, clock pause/resume arbitration, skip clears coach marks |
 | EX280 Prep | 19 | 0 | overlay; 9 groups / 55 bullets; 4 tabs; 9 quick labs; 10 cheat groups; 55 copy buttons; search filtering; copy command; readiness bar `0/55`; exam facts EX280V422/3 h; quick-lab launch → Sandbox + overlay close |
 | Sandbox | 25 | 0 | Sandbox deep link; seeded resources ↔ meshes (incl. OLM catalog); 37 palette kinds; 10 Projects, 13 ClusterOperators, 3 Nodes, 14 SCCs, 3 ImageStreams; HUD logo/version; toolbar; WebGL ok |
-| Files panel | 18 | 0 | `#btn-manifests`; 19 files/tree; editor + Save/Apply -f/Apply -k; `manifests/deployment.yaml` → Deployment/webapp; prod overlay → Deployment/prod-webapp; recorded apply |
-| CLI / `oc` | 137 | 0 | session, nodes/co/clusterversion, projects, deployment+Route, `set env/image/resources`, cm/secret, logs/describe/rollout, apply `-f`/`-k`, process, Helm, `new-app`, users/groups, `adm policy add-role-to-user`/`add-scc-to-user`, `auth can-i` (incl. `--as`/serviceaccount), quota/limitrange/clusterquota, route edge/TLS/YAML, get all/status/explain/api-resources/events/top/must-gather, `oc edit` editor, BuildConfig→Build→ImageStream Complete, OLM Subscription→CSV Succeeded and uninstall, jobs/cronjobs, cordon/uncordon, HTPasswd+OAuth login/rotation, RBAC Forbidden paths, dry-run, set volume, expose Service-vs-Route, strategic merge, rollout deadline/history/undo, shell commands; semantic assertions on every mutation |
+| Files panel | 26 | 0 | `#btn-manifests`; 19 files/tree; editor + Save/Apply -f/Apply -k; `manifests/deployment.yaml` → Deployment/webapp; prod overlay → Deployment/prod-webapp; recorded apply |
+| CLI / `oc` | 142 | 0 | session, nodes/co/clusterversion, projects, deployment+Route, `set env/image/resources`, cm/secret, logs/describe/rollout, apply `-f`/`-k`, process, Helm, `new-app`, users/groups, `adm policy add-role-to-user`/`add-scc-to-user`, `auth can-i` (incl. `--as`/serviceaccount), quota/limitrange/clusterquota, route edge/TLS/YAML, get all/status/explain/api-resources/events/top/must-gather, `oc edit` editor, BuildConfig→Build→ImageStream Complete, OLM Subscription→CSV Succeeded and uninstall, jobs/cronjobs, cordon/uncordon, HTPasswd+OAuth login/rotation, RBAC Forbidden paths, dry-run, set volume, expose Service-vs-Route, strategic merge, rollout deadline/history/undo, shell commands; semantic assertions on every mutation |
 | UI surfaces | 28 | 0 | inspector select/4 tabs/YAML/describe; context menu Expose Service → Route + Start Build + Edit/Delete; metrics 4 charts; in-game settings; keyboard `/`, `M`, `Space` pause/resume, `Esc`; EX280 Prep open/close pause/resume |
 | Campaign | 135 | 0 | levels 1–20 start with exact titles, objective progress/panel, `getStatus()`; level 1 objective completion via `oc login`, `new-project`, `oc run`, `create deployment` all flip completed (100%) |
 | Challenges | 77 | 0 | timed labs 1–12 start with exact titles, objective panel and `getStatus()`; countdown freezes while Files is open and resumes after it closes |
 | Follow-up | 26 | 0 | real project-template flow (bootstrap template + project.config patch + custom template), HTPasswd password rotation via extract→htpasswd→set data, role `--verb/--resource` flags feeding `oc auth can-i`, dry-run YAML pipelines |
-| Regressions | 21 | 0 | minimap first-click collapse + toggle state/anchoring; restart/next-level layout fidelity vs fresh launch; OLM catalog laid out with the platform; single incident panel after relaunch, engine-truth header count, drawer clears the mission card and view toolbar, Esc cleans state |
+| Regressions | 22 | 0 | minimap first-click collapse + toggle state/anchoring; restart/next-level layout fidelity vs fresh launch; OLM catalog laid out with the platform; single incident panel after relaunch, engine-truth header count, drawer clears the mission card and view toolbar, Esc cleans state |
 | Draw | 10 | 0 | `/draw` title/palette 37 unique kinds; watermark; YAML export has `route.openshift.io/v1`, `build.openshift.io/v1`, `project.openshift.io/v1` |
 | Screenshots | 10 | 0 | all required captures + final hero/OG dimensions verified |
 
@@ -168,6 +173,27 @@ Verdict: GO
 
 ---
 
+## 3b. QA-retest verification (#15–#21)
+
+The 1.1.6 work was driven by a second QA pass against the live 1.1.5 build. Every reported item was
+reproduced, fixed and re-tested headless:
+
+| Issue | Fix | Evidence |
+|---|---|---|
+| #15 Timed lab 02 showed ImagePullBackOff before start | Lab image is now `quay.io/example/payments:v2-bad-config` (pulls, then crashes with exit code 1); CrashLoopBackOff incident fires at `triggerTime: 0`; crash log names the real image/exit | Observed pod phases over 3.5 s after Start level: `CreateContainerConfigError → CrashLoopBackOff`, never ImagePullBackOff; FATAL log matches image/exit code |
+| #16 `oc set image` added a container; `oc create deployment` named it `main` | Container naming follows real oc (image basename, e.g. `origin-hello-openshift`); `oc set image` hard-fails on unknown container and never adds one; `*`/multiple assignments supported | `/tmp/cli/repro-r2-a.mjs` 38/38; docs-style command from the issue now errors as expected |
+| #17 `oc rollout status` raced the controller; `--timeout` never failed | Controllers only raise `status.observedGeneration` after observing the new generation; `getRolloutStatus` reports `specUpdatePending`; CLI waits and `--timeout=<d>` fails with the real `error: timed out waiting for the condition` | `/tmp/runtime/r2-repro.mjs` #17 + `/tmp/cli/repro-r2-b.mjs` 22/22: immediate status after `oc set image :does-not-exist` prints the spec-update waiting line, timeout then errors, normal rollouts/undo still succeed |
+| #18 OLM package name and unknown packages | Catalog package/CSV renamed to `metallb-operator` / `metallb-operator.v0.14.9`; unknown packages get `ResolutionFailed=True ConstraintsNotSatisfiable` with no InstallPlan/CSV/Deployment; seeded Subscription no longer shows phantom `InstallPlanPending/RequiresApproval` | `/tmp/runtime/r2-olm.mjs`; L12/L18/C10 integration 32/32; negative `spec.name: metallb` → ResolutionFailed, no CSV |
+| #19 Remaining CLI gaps | `grep -A/-B/-C` (attached + spaced, through pipes), `oc set serviceaccount cronjob/<name>`, `helm search repo [--versions]`, single `helm history` revision | `/tmp/cli/repro-r2-a.mjs` 38/38 |
+| #20 Remaining content gaps | `nginx:latest` rejected by restricted-v2 at admission (RS FailedCreate, no Pod; bare `oc run` Forbidden; anyuid/runAsUser escape hatches); capstone uses `resolve` objectives so active incidents block completion; readiness command evidence scoped to the linked drill run (sandbox probing counts 0/55); DNS auto-repair port 5353; visible HUD paused indicator while Files/guide/EXPrep freeze the run | `/tmp/runtime/r2-nginx.mjs`; campaign checks: 126 s with both incidents active stays `playing`, resolving both completes; sandbox probing produces empty drill evidence and 0/55; browser-test files section asserts the pause chip incl. `vim`-opened panels |
+| #21 Minor CLI output differences + `htpasswd -B` | `project -q`, empty Route path, no-projects login message, client dry-run namespace omission, `describe rs -l`, events field-selector + real FailedCreate events, `get ns` columns, HPA `<unknown>` metrics, restricted-v2 `whoami`, `describe istag` NotFound, real `add-role-to-user` line; bcrypt `$2y$` hashes with `{SHA}` compatibility | `/tmp/rbac-engine/harness.mjs` 92/92 + `repro-browser.mjs` 76/76; `/tmp/cli/repro-r2-a.mjs` 38/38; L13/rotation flows green |
+
+Shared gates for this pass: `node scripts/verify.mjs` **816/0**; full browser suite **566/0**
+(0 console/page errors); `node scripts/visual-qa.mjs --strict` **PASS** (96 checks, 0 failures,
+28 informational heuristics); every round-1 and round-2 issue repro suite re-run green.
+
+---
+
 ## 4. Screenshots and artifacts
 
 Generated/validated in the final run (all 1600×900 unless noted):
@@ -215,6 +241,15 @@ Checked against `docs/research/exam-facts.json`, `docs/research/ex280-objectives
   L12/L18/C10 teach the OLM OperatorGroup → Subscription → InstallPlan → CSV flow (uninstall =
   delete Subscription **then** CSV); L17/C8 teach a dedicated ServiceAccount SCC grant and verify it
   through RBAC, not through the SCC users list; DNS egress uses `dns-default` port 5353.
+- **Content corrections in 1.1.6:** timed lab 02 uses a pullable-but-crashing
+  `quay.io/example/payments:v2-bad-config` image with a matching FATAL/exit-code log; the OLM
+  catalog package is `metallb-operator` with CSV `metallb-operator.v0.14.9` and unknown-package
+  ResolutionFailed handling; L20 requires the scheduled incidents to be resolved (not merely
+  fired); readiness mastery requires the bullet's own commands **inside the linked drill run**
+  (sandbox probing no longer counts); L1 teaches the real `restricted-v2` `nginx:latest` trap with
+  a supported-image happy path; the generic CrashLoopBackOff hint is container-agnostic
+  (`oc edit deployment/...`) and crash-log annotations use the Pod's actual container name;
+  NetworkPolicy port-53 references were corrected to 5353.
 - **Unverified/unpublished claims:** passing score, score scale and certification validity are not
   published by Red Hat and are not stated in game copy (research flags them UNVERIFIED).
 
@@ -224,8 +259,11 @@ Checked against `docs/research/exam-facts.json`, `docs/research/ex280-objectives
 
 | Severity | Issue | Impact / disposition |
 |---|---|---|
-| Low | `oc rollout status` in the terminal prints the blocking “Waiting …” line immediately and appends the final/deadline line asynchronously via a poll + event watch; the blocking semantics of real `oc` are approximated for a browser shell | Documented simulator mapping; the exact deadline error is shown and L10 verifies it |
-| Low | Image pullability is a simulator heuristic: internal registry references resolve real ImageStreamTags, external tags are assumed pullable unless the tag/repo looks missing (`does-not-exist`, `not-found`, …). An arbitrary unknown external tag will not fail | Deliberate (no external registry knowledge); L10 uses an obviously-missing tag |
+| Low | `oc rollout status` in the terminal prints the blocking waiting/“Waiting …” line immediately and appends the final/deadline/timeout line asynchronously via a poll + event watch; the blocking semantics of real `oc` are approximated for a browser shell | Documented simulator mapping; exact progress-deadline and `--timeout` errors are shown, L10 and the round-2 race repros verify them |
+| Low | Image pullability is a simulator heuristic: internal registry references resolve real ImageStreamTags, external tags are assumed pullable unless the tag/repo looks missing (`does-not-exist`, `not-found`, …). An arbitrary unknown external tag will not fail | Deliberate (no external registry knowledge); L10 uses an obviously-missing tag and timed lab 02 uses a pullable-but-crashing tag |
+| Low | The known-image security profile models the classic `nginx` root/port-80 trap only; other root images remain admitted unless they set an explicit violating `runAsUser`/privileged flag. `anyuid`/`privileged` grants and explicit non-root `runAsUser` are real escape hatches | Deliberate teaching scope (nginx is the canonical exam trap) |
+| Low | A Subscription for an unknown package latches `ResolutionFailed` per `spec.name`; editing it to a valid package retries resolution (only the failure path is browser-tested) | Documented behaviour; install path verified end-to-end |
+| Low | `sim.getEvents()` returns both Normal and Warning resource events; the CLI de-duplicates them for `oc get events` | Harness-verified; no visible duplication |
 | Low | Deployments keep the real default `progressDeadlineSeconds: 600` except where a lab seeds a shorter value (L10 = 45 s) | Realistic; a stalled rollout in another level can take 10 simulated minutes to report the deadline |
 | Low | The PackageManifest catalog is a 4-package simulation (3D resource budget) and is re-seeded if deleted | Deliberate; deployment/CSV/InstallPlan behaviour is modelled in full |
 | Low | MetalLB speaker is a normal Pod (no hostNetwork/privileged) because the default SA has no SCC grant there; the operator/CR/pool/advertisement + EXTERNAL-IP wiring is what is exercised | Deliberate teaching simplification |
@@ -242,9 +280,9 @@ Checked against `docs/research/exam-facts.json`, `docs/research/ex280-objectives
 
 **GO.** The definition-of-done verification gates pass on the release tree:
 
-- static verifier: **808 checks, 0 failures, 0 warnings** (53 JS modules, 92 files);
-- full browser suite: **552 checks, 0 failures, 0 warnings**, 0 console/page errors;
-- every open GitHub issue (#1–#14) and the incidents-drawer overlap UX bug has a targeted headless
+- static verifier: **816 checks, 0 failures, 0 warnings** (54 JS modules, 94 files);
+- full browser suite: **566 checks, 0 failures, 0 warnings**, 0 console/page errors;
+- every GitHub issue (#1–#21) and the incidents-drawer overlap UX bug has a targeted headless
   repro that passes, in addition to the full-suite coverage;
 - all required screenshots and both hero/OG artifacts regenerated at the required dimensions;
 - content accuracy and EX280V422 coverage validated against the research ground truth;
