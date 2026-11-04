@@ -8982,6 +8982,1725 @@ spec:
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
+// QA ROUND 1.3.0 — issue #37: L20 grades the capstone on cluster STATE, not
+// on object names the level never states, and routeAccess only ticks once an
+// ingress-isolation policy exists (hidden-name regression + premature tick).
+// ═══════════════════════════════════════════════════════════════════════════
+await runSection('qa-issue37', async () => {
+  /** Advance only the controller clock (deterministic, no wall-clock waits). */
+  const advanceController = (seconds) =>
+    evaluate((secs) => {
+      const sim = window.game?.gameEngine?.simulation;
+      if (!sim || typeof sim.tick !== 'function') return false;
+      for (let index = 0; index < Math.ceil(secs / 0.05); index += 1) sim.tick(0.05);
+      return true;
+    }, seconds);
+  /** L20 objective definitions plus their live completion flags. */
+  const objectiveSnapshot = () =>
+    evaluate(() => {
+      const mode = window.game?.app?.modeInstance;
+      const defs = mode?.currentLevelDef?.objectives || [];
+      const progress = mode?.objectiveProgress || [];
+      return defs.map((definition, index) => ({
+        type: definition.type,
+        namespace: definition.namespace || null,
+        probe: definition.probe || null,
+        requireIsolation: definition.requireIsolation === true,
+        requiresName: Boolean(definition.name),
+        completed: progress[index]?.completed === true,
+      }));
+    });
+  const recheckObjectives = () =>
+    evaluate(() => {
+      window.game?.app?.modeInstance?.updateObjectives?.();
+      return true;
+    });
+  const applyManifest = (text, namespace) =>
+    runCmd(`oc apply -f - -n ${namespace} <<'EOF'\n${text}\nEOF`, 250);
+
+  await bootCampaign(1);
+  assert(await launch('campaign', 20), '#37: campaign L20 capstone starts');
+  await closeOverlays();
+  await evaluate(() => {
+    const app = window.game?.app;
+    app?._clearClockPauseReasons?.();
+    app?.hidePause?.({ resume: true });
+    app?.modeInstance?.resume?.();
+  });
+
+  // ── Objective definitions must be state-based, not hidden-name-based ─────
+  let snap = await objectiveSnapshot();
+  const quotaDef = snap.find((objective) => objective.type === 'quota');
+  const limitDef = snap.find((objective) => objective.type === 'limitRange');
+  const denyDef = snap.find((objective) => objective.type === 'networkPolicy');
+  const accessDef = snap.find((objective) => objective.type === 'routeAccess');
+  assert(
+    Boolean(quotaDef) && quotaDef.namespace === 'prod-platform' && quotaDef.requiresName === false,
+    '#37: L20 quota objective grades prod-platform state (no hidden name)',
+    JSON.stringify(quotaDef)
+  );
+  assert(
+    Boolean(limitDef) && limitDef.namespace === 'prod-platform' && limitDef.requiresName === false,
+    '#37: L20 LimitRange objective grades prod-platform state (no hidden name)',
+    JSON.stringify(limitDef)
+  );
+  assert(
+    Boolean(denyDef) &&
+      denyDef.probe === 'ingress-isolation' &&
+      denyDef.namespace === 'prod-platform',
+    '#37: L20 default-deny objective probes ingress isolation in prod-platform',
+    JSON.stringify(denyDef)
+  );
+  assert(
+    Boolean(accessDef) && accessDef.requireIsolation === true,
+    '#37: L20 routeAccess objective requires isolation before it can tick',
+    JSON.stringify(accessDef)
+  );
+  assert(
+    denyDef?.completed === false && accessDef?.completed === false,
+    '#37: default-deny and routeAccess objectives start pending',
+    JSON.stringify({ deny: denyDef, access: accessDef })
+  );
+
+  // ── Build the capstone platform with CUSTOM object names (the #37 repro) ─
+  await runCmd('oc new-project prod-platform');
+  const deploymentApply = await runCmd('oc apply -f manifests/deployment.yaml -n prod-platform');
+  assert(!deploymentApply.error, '#37: webapp deployment applies', deploymentApply.message);
+  await runCmd('oc apply -f manifests/service.yaml -n prod-platform');
+  await runCmd('oc create route edge webapp --service=webapp -n prod-platform');
+  await advanceController(30);
+  const routeAdmitted = await evaluate(() => {
+    const route = window.game.cluster.getByName('Route', 'webapp', 'prod-platform');
+    return route ? window.game.cluster.isRouteAdmitted(route) : false;
+  });
+  assert(routeAdmitted, '#37: webapp Route is admitted before the isolation work');
+
+  const quotaCreate = await runCmd(
+    'oc create quota prod-quota --hard=pods=10,requests.cpu=2,requests.memory=4Gi -n prod-platform'
+  );
+  assert(!quotaCreate.error, '#37: custom-named quota prod-quota is created', quotaCreate.message);
+  const limitCreate = await applyManifest(
+    [
+      `apiVersion: v1`,
+      `kind: LimitRange`,
+      `metadata:`,
+      `  name: prod-limits`,
+      `spec:`,
+      `  limits:`,
+      `    - type: Container`,
+      `      default:`,
+      `        cpu: 500m`,
+      `        memory: 512Mi`,
+    ].join('\n'),
+    'prod-platform'
+  );
+  assert(
+    !limitCreate.error,
+    '#37: custom-named LimitRange prod-limits is created',
+    limitCreate.message
+  );
+
+  // routeAccess must NOT tick yet: there is no isolation policy.
+  await recheckObjectives();
+  snap = await objectiveSnapshot();
+  assert(
+    snap.find((objective) => objective.type === 'routeAccess')?.completed === false,
+    '#37: routeAccess does not tick before any NetworkPolicy exists',
+    JSON.stringify(snap.find((objective) => objective.type === 'routeAccess'))
+  );
+
+  // ── The issue's custom deny-all shape: all pods, Ingress-only, no rules ──
+  const denyCreate = await applyManifest(
+    [
+      `apiVersion: networking.k8s.io/v1`,
+      `kind: NetworkPolicy`,
+      `metadata:`,
+      `  name: deny-all`,
+      `spec:`,
+      `  podSelector: {}`,
+      `  policyTypes:`,
+      `    - Ingress`,
+    ].join('\n'),
+    'prod-platform'
+  );
+  assert(
+    !denyCreate.error,
+    '#37: custom-named deny-all NetworkPolicy is created',
+    denyCreate.message
+  );
+  await recheckObjectives();
+  snap = await objectiveSnapshot();
+  assert(
+    snap.find((objective) => objective.type === 'quota')?.completed === true,
+    '#37: quota objective completes for prod-quota (state, not name)',
+    JSON.stringify(snap.find((objective) => objective.type === 'quota'))
+  );
+  assert(
+    snap.find((objective) => objective.type === 'limitRange')?.completed === true,
+    '#37: LimitRange objective completes for prod-limits (state, not name)',
+    JSON.stringify(snap.find((objective) => objective.type === 'limitRange'))
+  );
+  assert(
+    snap.find((objective) => objective.type === 'networkPolicy')?.completed === true,
+    '#37: default-deny objective completes for deny-all',
+    JSON.stringify(snap.find((objective) => objective.type === 'networkPolicy'))
+  );
+  assert(
+    snap.find((objective) => objective.type === 'routeAccess')?.completed === false,
+    '#37: routeAccess stays pending while the router is policy-blocked',
+    JSON.stringify(snap.find((objective) => objective.type === 'routeAccess'))
+  );
+
+  // ── A custom router-allow policy satisfies the isolation gate ───────────
+  const routerAllow = await applyManifest(
+    [
+      `apiVersion: networking.k8s.io/v1`,
+      `kind: NetworkPolicy`,
+      `metadata:`,
+      `  name: let-router-in`,
+      `spec:`,
+      `  podSelector: {}`,
+      `  policyTypes:`,
+      `    - Ingress`,
+      `  ingress:`,
+      `    - from:`,
+      `        - namespaceSelector:`,
+      `            matchLabels:`,
+      `              policy-group.network.openshift.io/ingress: ""`,
+    ].join('\n'),
+    'prod-platform'
+  );
+  assert(
+    !routerAllow.error,
+    '#37: custom-named router-allow policy is created',
+    routerAllow.message
+  );
+  await advanceController(6);
+  await recheckObjectives();
+  snap = await objectiveSnapshot();
+  assert(
+    snap.find((objective) => objective.type === 'routeAccess')?.completed === true,
+    '#37: routeAccess completes after isolation + router allow exist',
+    JSON.stringify(snap.find((objective) => objective.type === 'routeAccess'))
+  );
+  const hiddenNamesAbsent = await evaluate(() => {
+    const cluster = window.game.cluster;
+    return (
+      !cluster.getByName('ResourceQuota', 'compute-quota', 'prod-platform') &&
+      !cluster.getByName('LimitRange', 'resource-limits', 'prod-platform')
+    );
+  });
+  assert(
+    hiddenNamesAbsent,
+    '#37: objectives complete without the hidden compute-quota/resource-limits names'
+  );
+
+  // Legacy routeAccess probes (no requireIsolation) keep their old semantics
+  // so existing levels/challenges that rely on the plain probe do not regress.
+  const legacyProbe = await evaluate(() => {
+    const mode = window.game.app.modeInstance;
+    const definition = mode.currentLevelDef;
+    const index = definition.objectives.length;
+    const probe = { type: 'routeAccess', name: 'webapp', label: 'legacy probe' };
+    definition.objectives.push(probe);
+    mode.objectiveProgress.push({ ...probe, current: 0, target: 1, completed: false });
+    try {
+      mode.updateObjectives();
+      return mode.objectiveProgress[index]?.completed === true;
+    } finally {
+      definition.objectives.pop();
+      mode.objectiveProgress.pop();
+    }
+  });
+  assert(
+    legacyProbe === true,
+    '#37: legacy routeAccess probes without requireIsolation keep their old semantics',
+    String(legacyProbe)
+  );
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// QA ROUND 1.3.0 — issues #38/#41: no fake `oc create limitrange`, real
+// label-selector semantics, and honest openshift-ingress namespace labels.
+// ═══════════════════════════════════════════════════════════════════════════
+await runSection('qa-issue38-41', async () => {
+  assert(await bootSandbox(), '#38: sandbox boots for LimitRange subcommand checks');
+
+  // ── #38 CLI: oc create limitrange does not exist and is rejected ────────
+  let result = await runCmd(
+    'oc create limitrange team-limits --default=cpu=500m,memory=512Mi --default-request=cpu=100m,memory=128Mi --max=cpu=2,memory=4Gi'
+  );
+  assert(
+    result.error && /error: unknown command "limitrange" for "oc create"/.test(result.message),
+    '#38: oc create limitrange is rejected like real oc',
+    result.message.slice(0, 300)
+  );
+  assert(
+    /Valid subcommands:[\s\S]*quota[\s\S]*serviceaccount/.test(result.message),
+    '#38: the rejection lists the real oc create subcommands',
+    result.message.slice(0, 400)
+  );
+  result = await runCmd('oc get limitrange -n default');
+  assert(
+    /No resources found/.test(result.message),
+    '#38: the rejected command created no LimitRange',
+    result.message
+  );
+  result = await runCmd('oc apply -f examples/limitrange.yaml -n default');
+  assert(
+    !result.error,
+    '#38: YAML-based LimitRange creation still works (oc apply -f)',
+    result.message.slice(0, 300)
+  );
+  result = await runCmd('oc get limitrange -n default');
+  assert(
+    /resource-limits/.test(result.message),
+    '#38: examples/limitrange.yaml creates the shipped resource-limits LimitRange',
+    result.message
+  );
+
+  // ── #38 content: lab 6 teaches the real YAML flow, not the fake command ──
+  const lab6 = await evaluate(async () => {
+    const levels = await import('/js/data/CampaignLevels.js');
+    const challenges = await import('/js/modes/ChallengeMode.js');
+    const challenge = challenges.CHALLENGES.find((entry) => entry.id === 6);
+    const allHints = [
+      ...levels.CAMPAIGN_LEVELS.flatMap((level) => level.hints || []),
+      ...challenges.CHALLENGES.flatMap((entry) => entry.hints || []),
+    ];
+    const instructing = allHints.filter((hint) => {
+      let index = hint.indexOf('oc create limitrange');
+      while (index >= 0) {
+        const before = hint.slice(Math.max(0, index - 60), index);
+        if (!/(?:no|not|reject|does not exist|doesn't exist)\b[\s`'"]*$/i.test(before)) return true;
+        index = hint.indexOf('oc create limitrange', index + 1);
+      }
+      return false;
+    });
+    const patterns = (challenge.objectives || [])
+      .filter((objective) => objective.type === 'command')
+      .map((objective) => objective.pattern);
+    return {
+      hints: challenge.hints || [],
+      hintsWithYaml: (challenge.hints || []).filter((hint) =>
+        /oc apply -f examples\/limitrange\.yaml/.test(hint)
+      ),
+      instructing,
+      patterns,
+      patternMatchesFake: patterns.some((pattern) =>
+        new RegExp(pattern, 'i').test('oc create limitrange team-limits')
+      ),
+      patternMatchesYaml: patterns.some((pattern) =>
+        new RegExp(pattern, 'i').test('oc apply -f examples/limitrange.yaml')
+      ),
+      patternMatchesQuota: patterns.some((pattern) =>
+        new RegExp(pattern, 'i').test(
+          'oc create quota team-quota --hard=pods=10,requests.cpu=4,requests.memory=8Gi'
+        )
+      ),
+    };
+  });
+  assert(
+    lab6.instructing.length === 0,
+    '#38: no shipped level/challenge hint instructs the nonexistent oc create limitrange',
+    JSON.stringify(lab6.instructing.slice(0, 2))
+  );
+  assert(
+    lab6.hintsWithYaml.length === 1,
+    '#38: lab 6 hint uses `oc apply -f examples/limitrange.yaml`',
+    JSON.stringify(lab6.hints)
+  );
+  assert(
+    lab6.patterns.length > 0 && !lab6.patternMatchesFake && lab6.patternMatchesYaml,
+    '#38: lab 6 command objective matches the YAML apply and not oc create limitrange',
+    JSON.stringify(lab6.patterns)
+  );
+
+  // ── #38 end-to-end: the lab is completable CLI-only through YAML ────────
+  assert(await launch('challenge', 6), '#38: lab 6 starts for the YAML LimitRange flow');
+  await closeOverlays();
+  await evaluate(() => {
+    const app = window.game?.app;
+    app?._clearClockPauseReasons?.();
+    app?.hidePause?.({ resume: true });
+    app?.modeInstance?.resume?.();
+  });
+  await runCmd('oc project quota-lab');
+  result = await runCmd(
+    'oc create quota team-quota --hard=pods=10,requests.cpu=4,requests.memory=8Gi'
+  );
+  assert(
+    !result.error,
+    '#38: lab 6 quota is created with the real oc create quota',
+    result.message
+  );
+  result = await runCmd('oc apply -f examples/limitrange.yaml');
+  assert(!result.error, '#38: lab 6 LimitRange is created from shipped YAML', result.message);
+  const lab6Objectives = await evaluate(() => {
+    const mode = window.game?.app?.modeInstance;
+    mode?.updateObjectives?.();
+    return (mode?.objectiveProgress || []).map((objective) => ({
+      type: objective.type,
+      completed: objective.completed === true,
+    }));
+  });
+  assert(
+    lab6Objectives.find((objective) => objective.type === 'quota')?.completed === true &&
+      lab6Objectives.find((objective) => objective.type === 'limitRange')?.completed === true,
+    '#38: lab 6 quota + LimitRange objectives complete from the YAML flow',
+    JSON.stringify(lab6Objectives)
+  );
+
+  // ── #41 CLI: real label-selector engine over oc get ─────────────────────
+  result = await runCmd('oc get ns -l policy-group.network.openshift.io/ingress --show-labels');
+  const namespaceRows = result.message
+    .split('\n')
+    .slice(1)
+    .filter((line) => line.trim() && !/No resources found/.test(line));
+  assert(
+    namespaceRows.length === 1 && /^openshift-ingress\b/.test(namespaceRows[0]),
+    '#41: key-only label selector returns only openshift-ingress',
+    result.message
+  );
+  assert(
+    /policy-group\.network\.openshift\.io\/ingress=/.test(result.message),
+    '#41: --show-labels renders the policy-group label value',
+    result.message
+  );
+  result = await runCmd("oc get ns -l '!policy-group.network.openshift.io/ingress' -o name");
+  assert(
+    !/namespace\/openshift-ingress/.test(result.message) &&
+      /namespace\/default/.test(result.message),
+    '#41: negated key-only selector excludes openshift-ingress',
+    result.message.slice(0, 300)
+  );
+  result = await runCmd(
+    'oc get ns -l "kubernetes.io/metadata.name in (default,openshift-ingress)" -o name'
+  );
+  assert(
+    result.message.trim() === 'namespace/default\nnamespace/openshift-ingress',
+    '#41: set-based in(...) selector filters namespaces correctly',
+    JSON.stringify(result.message)
+  );
+  result = await runCmd('oc get ns -l "network.openshift.io/policy-group notin (ingress)" -o name');
+  assert(
+    !/namespace\/openshift-ingress/.test(result.message) &&
+      /namespace\/default/.test(result.message),
+    '#41: notin(...) selector excludes openshift-ingress',
+    result.message.slice(0, 300)
+  );
+  result = await runCmd('oc get ns -l network.openshift.io/policy-group=ingress -o name');
+  assert(
+    result.message.trim() === 'namespace/openshift-ingress',
+    '#41: legacy equality selector matches only openshift-ingress',
+    JSON.stringify(result.message)
+  );
+
+  // ── #41 engine: Kubernetes LabelSelector operator semantics ─────────────
+  const selectors = await evaluate(() => {
+    const sim = window.game.gameEngine.simulation;
+    const matches = (selector, labels) => sim._labelSelectorMatches(selector, labels);
+    const routerLabels = { 'policy-group.network.openshift.io/ingress': '' };
+    const appLabels = { 'app.kubernetes.io/name': 'web' };
+    return {
+      keyOnlyMatch: matches({ matchLabels: routerLabels }, routerLabels),
+      keyOnlyOtherValue: matches(
+        { matchLabels: routerLabels },
+        {
+          'policy-group.network.openshift.io/ingress': 'ingress',
+        }
+      ),
+      inMatch: matches(
+        { matchExpressions: [{ key: 'app.kubernetes.io/name', operator: 'In', values: ['web'] }] },
+        appLabels
+      ),
+      inNoMatch: matches(
+        { matchExpressions: [{ key: 'app.kubernetes.io/name', operator: 'In', values: ['api'] }] },
+        appLabels
+      ),
+      notInMatch: matches(
+        {
+          matchExpressions: [{ key: 'app.kubernetes.io/name', operator: 'NotIn', values: ['api'] }],
+        },
+        appLabels
+      ),
+      existsMatch: matches(
+        {
+          matchExpressions: [
+            { key: 'policy-group.network.openshift.io/ingress', operator: 'Exists' },
+          ],
+        },
+        routerLabels
+      ),
+      doesNotExistMatch: matches(
+        { matchExpressions: [{ key: 'missing', operator: 'DoesNotExist' }] },
+        appLabels
+      ),
+      doesNotExistNoMatch: matches(
+        {
+          matchExpressions: [
+            { key: 'policy-group.network.openshift.io/ingress', operator: 'DoesNotExist' },
+          ],
+        },
+        routerLabels
+      ),
+      emptySelectorMatchesAll: matches({}, appLabels),
+      fabricatedLabels: sim._namespaceLabels('openshift-ingress-operator')[
+        'policy-group.network.openshift.io/ingress'
+      ],
+      realLabels:
+        sim._namespaceLabels('openshift-ingress')['policy-group.network.openshift.io/ingress'],
+    };
+  });
+  assert(
+    selectors.keyOnlyMatch === true &&
+      selectors.keyOnlyOtherValue === false &&
+      selectors.emptySelectorMatchesAll === true,
+    '#41: key-only matchLabels matches only the empty label value',
+    JSON.stringify(selectors)
+  );
+  assert(
+    selectors.inMatch && !selectors.inNoMatch && selectors.notInMatch,
+    '#41: matchExpressions In/NotIn implement real set semantics',
+    JSON.stringify(selectors)
+  );
+  assert(
+    selectors.existsMatch && selectors.doesNotExistMatch && !selectors.doesNotExistNoMatch,
+    '#41: matchExpressions Exists/DoesNotExist implement real key semantics',
+    JSON.stringify(selectors)
+  );
+  assert(
+    selectors.realLabels === '' && selectors.fabricatedLabels === undefined,
+    '#41: namespace labels come from real Project data, not fabricated router labels',
+    JSON.stringify(selectors)
+  );
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// QA ROUND 1.3.0 — issues #39/#40: externalCertificate Route admission needs
+// the TLS Secret AND router RBAC; handover copy is honest about cluster-admin.
+// ═══════════════════════════════════════════════════════════════════════════
+await runSection('qa-issue39-40', async () => {
+  // ── #39: route with spec.tls.externalCertificate ────────────────────────
+  assert(await bootSandbox(), '#39: sandbox boots for Route externalCertificate admission');
+  await runCmd('oc new-project ext-cert-lab');
+  await runCmd('oc apply -f manifests/deployment.yaml -n ext-cert-lab');
+  await runCmd('oc apply -f manifests/service.yaml -n ext-cert-lab');
+  await advanceSimulation(8);
+  const routeApplied = await runCmd('oc apply -f manifests/route.yaml -n ext-cert-lab');
+  assert(
+    !routeApplied.error && /created|configured/.test(routeApplied.message),
+    '#39: the externalCertificate Route manifest applies',
+    routeApplied.message.slice(0, 300)
+  );
+  await advanceSimulation(2);
+  const routeState = () =>
+    evaluate(() => {
+      const route = window.game.cluster.getByName('Route', 'webapp', 'ext-cert-lab');
+      if (!route) return null;
+      const condition =
+        (route.status?.ingress?.[0]?.conditions || []).find((entry) => entry.type === 'Admitted') ||
+        null;
+      return {
+        admitted: window.game.cluster.isRouteAdmitted(route),
+        reason: condition?.reason || null,
+        message: condition?.message || null,
+        externalCertificate: route.spec?.tls?.externalCertificate?.name || null,
+      };
+    });
+  let admission = await routeState();
+  assert(
+    admission?.externalCertificate === 'webapp-tls' && admission?.admitted === false,
+    '#39: externalCertificate Route is NOT admitted while the TLS Secret is missing',
+    JSON.stringify(admission)
+  );
+  assert(
+    admission?.reason === 'ExternalCertificateValidationFailed',
+    '#39: Admitted=False reason is ExternalCertificateValidationFailed',
+    admission?.reason
+  );
+  assert(
+    /spec\.tls\.externalCertificate: Not found: secrets "webapp-tls" not found/.test(
+      admission?.message || ''
+    ),
+    '#39: rejection message names the missing webapp-tls Secret',
+    admission?.message
+  );
+  let described = await runCmd('oc describe route webapp -n ext-cert-lab');
+  assert(
+    /rejected by router default[\s\S]*ExternalCertificateValidationFailed/.test(described.message),
+    '#39: describe route shows the rejected admission condition',
+    described.message.slice(-500)
+  );
+
+  // Secret only: still rejected because the router RBAC is missing.
+  const cert = await runCmd(
+    'openssl req -x509 -newkey rsa:2048 -nodes -keyout webapp.key -out webapp.crt -days 365 -subj "/CN=webapp.apps.cluster.example.com"'
+  );
+  assert(!cert.error, '#39: openssl generates the Route TLS certificate', cert.message);
+  const tlsSecret = await runCmd(
+    'oc create secret tls webapp-tls --cert=webapp.crt --key=webapp.key -n ext-cert-lab'
+  );
+  assert(
+    !tlsSecret.error && /secret\/webapp-tls created/.test(tlsSecret.message),
+    '#39: webapp-tls kubernetes.io/tls Secret is created',
+    tlsSecret.message
+  );
+  await advanceSimulation(2);
+  admission = await routeState();
+  assert(
+    admission?.admitted === false,
+    '#39: Route stays rejected after the Secret exists but router RBAC is missing',
+    JSON.stringify(admission)
+  );
+  assert(
+    !/Not found: secrets "webapp-tls" not found/.test(admission?.message || '') &&
+      /Forbidden: router serviceaccount does not have permission to get this secret/.test(
+        admission?.message || ''
+      ),
+    '#39: rejection now reports the router ServiceAccount permission errors',
+    admission?.message
+  );
+
+  // Grant the router read RBAC with the shipped example.
+  const rbac = await runCmd('oc apply -f examples/route-external-cert-rbac.yaml -n ext-cert-lab');
+  assert(!rbac.error, '#39: shipped router RBAC example applies', rbac.message);
+  await advanceSimulation(2);
+  admission = await routeState();
+  assert(
+    admission?.admitted === true && admission?.reason === 'Accepted',
+    '#39: Route becomes Admitted after the Secret + router Role/RoleBinding exist',
+    JSON.stringify(admission)
+  );
+  described = await runCmd('oc describe route webapp -n ext-cert-lab');
+  assert(
+    /exposed on router default/.test(described.message) &&
+      !/rejected by router/.test(described.message),
+    '#39: describe route reports the admitted Route once the prerequisites exist',
+    described.message.slice(-400)
+  );
+
+  // ── #40: handover copy points cluster-admin work at crc/SNO, not Sandbox ─
+  assert(await bootCampaign(1), '#40: campaign boots for the handover copy check');
+  // Earlier sections tick a handover item and persist it in localStorage; clear
+  // it so the progress-label assertion below is deterministic.
+  await evaluate(() => localStorage.removeItem('openshiftgames_handover_checklist'));
+  assert(await launch('campaign', 20), '#40: campaign L20 starts for the handover screen');
+  await closeOverlays();
+  await evaluate(() => {
+    const app = window.game.app;
+    app.scoringEngine.progress.campaignProgress[20] = { completed: true, stars: 3 };
+    window.game.engine.emit('mode:level-complete', {
+      levelId: 20,
+      title: 'EX280 Final: Production Platform',
+      stars: 3,
+      nextLevel: null,
+      isLastLevel: true,
+      totalLevels: 20,
+      message: 'Campaign complete',
+    });
+  });
+  await sleep(600);
+  await evaluate(() => document.getElementById('level-complete-next')?.click());
+  const handoverOpened = await waitFor(
+    () =>
+      evaluate(
+        () =>
+          window.game?.app?.isCampaignHandoverOpen?.() === true &&
+          document.getElementById('campaign-handover')?.hidden === false
+      ),
+    8000
+  );
+  assert(handoverOpened, '#40: finishing the capstone opens the handover screen');
+  const handover = await evaluate(() => {
+    const checklist = document.getElementById('handover-checklist');
+    const items = [...(checklist?.querySelectorAll('li.handover-check') || [])].map((li) => ({
+      title: li.querySelector('.handover-check-title')?.innerText || '',
+      detail: li.querySelector('.handover-check-detail')?.innerText || '',
+      link: li.querySelector('a.handover-check-link')?.getAttribute('href') || '',
+    }));
+    return {
+      items,
+      checklistText: checklist?.innerText || '',
+      checkProgress: document.getElementById('handover-checklist-progress')?.innerText || '',
+      sectionSub:
+        checklist?.closest('.handover-section')?.querySelector('.handover-section-sub')
+          ?.innerText || '',
+    };
+  });
+  const byTitle = (needle) => handover.items.find((item) => item.title.includes(needle));
+  const clusterItem = byTitle('Set up a full cluster');
+  const sandboxItem = byTitle('Developer Sandbox');
+  assert(
+    Boolean(clusterItem) && /OpenShift Local/i.test(clusterItem.title),
+    '#40: full-cluster checklist item points to OpenShift Local (crc)',
+    JSON.stringify(clusterItem)
+  );
+  assert(
+    /crc console --credentials/.test(clusterItem?.detail || '') &&
+      /kubeadmin/.test(clusterItem?.detail || ''),
+    '#40: full-cluster item explains crc console --credentials for the kubeadmin password',
+    clusterItem?.detail
+  );
+  assert(
+    /developers\.redhat\.com\/products\/openshift-local/.test(clusterItem?.link || ''),
+    '#40: full-cluster item links to the OpenShift Local page',
+    clusterItem?.link
+  );
+  assert(
+    Boolean(sandboxItem) &&
+      /project-scoped/i.test(sandboxItem.title) &&
+      /not cluster-admin/i.test(sandboxItem.detail),
+    '#40: Developer Sandbox item is marked project-scoped only',
+    JSON.stringify(sandboxItem)
+  );
+  assert(
+    Boolean(sandboxItem) && !/Set up a real cluster/i.test(sandboxItem.title),
+    '#40: Developer Sandbox is not offered as the whole-cluster setup path',
+    sandboxItem?.title
+  );
+  for (const [label, prefix] of [
+    ['L13', 'L13'],
+    ['L14', 'L14'],
+    ['L17', 'L17'],
+  ]) {
+    const item = byTitle(prefix);
+    assert(
+      /cluster-admin/i.test(item?.detail || '') &&
+        /not the Developer Sandbox/i.test(item?.detail || ''),
+      `#40: ${label} redo item says cluster-admin on a real cluster, not the Sandbox`,
+      item?.detail
+    );
+  }
+  assert(
+    !/Set up OpenShift Local or the Developer Sandbox/.test(handover.sectionSub) &&
+      /project-scoped/i.test(handover.sectionSub),
+    '#40: the static handover section sub no longer offers the Sandbox as cluster setup',
+    handover.sectionSub
+  );
+  assert(
+    !/Install OpenShift Local \(crc\) on your workstation, or open the free Developer Sandbox/.test(
+      handover.checklistText
+    ),
+    '#40: the old "or open the free Developer Sandbox" cluster-setup copy is gone'
+  );
+  assert(
+    ['L5', 'L9', 'L13', 'L14', 'L17'].every((tag) => handover.checklistText.includes(tag)),
+    '#40: the handover checklist still lists every redo level L5/L9/L13/L14/L17',
+    handover.checklistText.slice(0, 240)
+  );
+  assert(
+    handover.items.length === 7 && /0\/7 done/.test(handover.checkProgress),
+    '#40: handover checklist has the full-cluster + Sandbox-scope + 5 redo items',
+    JSON.stringify({ items: handover.items.length, progress: handover.checkProgress })
+  );
+  await evaluate(() => document.getElementById('handover-menu')?.click());
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// QA ROUND 1.3.0 — issue #42: serial build queue/--follow, new-build/new-app
+// ImageStreams, ServiceAccount token files, kubeadmin discovery + prompt,
+// neutral CrashLoop cause, and the L17 description.
+// ═══════════════════════════════════════════════════════════════════════════
+await runSection('qa-issue42', async () => {
+  /** Advance only the controller clock (deterministic, no wall-clock waits). */
+  const advanceController = (seconds) =>
+    evaluate((secs) => {
+      const sim = window.game?.gameEngine?.simulation;
+      if (!sim || typeof sim.tick !== 'function') return false;
+      for (let index = 0; index < Math.ceil(secs / 0.05); index += 1) sim.tick(0.05);
+      return true;
+    }, seconds);
+  const buildStates = () =>
+    evaluate(() =>
+      (window.game.cluster.getByKind('Build') || [])
+        .filter((build) => /^qa-sample-/.test(build.metadata.name))
+        .map((build) => ({
+          name: build.metadata.name,
+          phase: build.status?.phase || null,
+          startTimestamp: build.status?.startTimestamp || null,
+          completionTimestamp: build.status?.completionTimestamp || null,
+        }))
+        .sort((left, right) => left.name.localeCompare(right.name))
+    );
+  const terminalText = () => evaluate(() => document.getElementById('cmd-output')?.innerText || '');
+  /** Advance the controller AND the full game loop (incidents, mode timers). */
+  const advanceGame = (seconds) =>
+    evaluate((secs) => {
+      const engine = window.game?.gameEngine;
+      const sim = engine?.simulation;
+      if (!sim || typeof sim.tick !== 'function') return false;
+      for (let index = 0; index < Math.ceil(secs / 0.05); index += 1) {
+        sim.tick(0.05);
+        engine._gameTime = (engine._gameTime || 0) + 50;
+        for (const callback of engine._updateCallbacks || []) {
+          try {
+            callback(0.05, engine._gameTime);
+          } catch {
+            /* a UI callback must not stop the deterministic pump */
+          }
+        }
+      }
+      return true;
+    }, seconds);
+
+  assert(await bootSandbox(), '#42: sandbox boots for builds/auth/exec checks');
+  // The build failure injection is chaos, not Serial-queue semantics: disable it
+  // so queued builds deterministically complete (same fixture other sections use).
+  await evaluate(() => window.game?.gameEngine?.simulation?.setBuildFailureRate?.(0));
+  await runCmd('oc project default');
+
+  // ── #42-1 new-build creates + prints the output ImageStream up front ────
+  let result = await runCmd('oc new-build nodejs:20-ubi9 --name=qa-sample');
+  assert(
+    /imagestream\.image\.openshift\.io "qa-sample" created/.test(result.message) &&
+      /buildconfig\.build\.openshift\.io "qa-sample" created/.test(result.message),
+    '#42: new-build creates and prints the output ImageStream up front',
+    result.message.slice(0, 400)
+  );
+  result = await runCmd('oc get is');
+  assert(
+    /qa-sample/.test(result.message),
+    '#42: the new-build ImageStream exists before the first build',
+    result.message.slice(0, 300)
+  );
+
+  // ── #42-1 start-build serial runPolicy queue ────────────────────────────
+  const firstStart = await runCmd('oc start-build qa-sample', 0);
+  const firstName = (firstStart.message.match(/(qa-sample-\d+) started/) || [])[1];
+  assert(
+    Boolean(firstName) && !firstStart.error,
+    '#42: the first start-build starts',
+    firstStart.message
+  );
+  const secondStart = await runCmd('oc start-build qa-sample', 0);
+  const secondName = (secondStart.message.match(/(qa-sample-\d+) started/) || [])[1];
+  assert(
+    Boolean(secondName) &&
+      !secondStart.error &&
+      !/cannot start build/i.test(secondStart.message) &&
+      Number(secondName.split('-').pop()) === Number(firstName.split('-').pop()) + 1,
+    '#42: start-build while a build runs queues the next serial build instead of erroring',
+    secondStart.message
+  );
+  let builds = await buildStates();
+  const queuedBuild = builds.find((build) => build.name === secondName);
+  assert(
+    queuedBuild?.phase === 'New' && !queuedBuild?.startTimestamp,
+    '#42: the queued serial build waits in phase New without a start timestamp',
+    JSON.stringify(queuedBuild)
+  );
+  let maxRunning = 0;
+  for (let elapsed = 0; elapsed < 60; elapsed += 2) {
+    builds = await buildStates();
+    maxRunning = Math.max(maxRunning, builds.filter((build) => build.phase === 'Running').length);
+    if (
+      builds.length >= 2 &&
+      builds.every((build) => ['Complete', 'Failed', 'Cancelled'].includes(build.phase))
+    ) {
+      break;
+    }
+    await advanceController(2);
+  }
+  assert(
+    maxRunning <= 1,
+    '#42: Serial runPolicy never runs two builds at once',
+    `max=${maxRunning}`
+  );
+  const completedFirst = builds.find((build) => build.name === firstName);
+  assert(
+    completedFirst?.phase === 'Complete',
+    '#42: the running build completes before the queued build starts',
+    JSON.stringify(completedFirst)
+  );
+  assert(
+    builds.some((build) => build.name === secondName && build.phase === 'Complete'),
+    '#42: the queued build runs to completion after the predecessor',
+    JSON.stringify(builds)
+  );
+  assert(
+    completedFirst?.completionTimestamp &&
+      builds.find((build) => build.name === secondName)?.startTimestamp,
+    '#42: serial build timestamps prove the queue ordering',
+    JSON.stringify(builds)
+  );
+
+  // ── #42-1 start-build --follow streams the build log ────────────────────
+  const followStart = await runCmd('oc start-build qa-sample --follow');
+  assert(
+    /qa-sample-\d+ started/.test(followStart.message),
+    '#42: start-build --follow starts the build',
+    followStart.message.slice(0, 200)
+  );
+  await advanceController(30);
+  await sleep(1200);
+  const followText = await terminalText();
+  const followStartIndex = followText.lastIndexOf('oc start-build qa-sample --follow');
+  const followedOutput = followStartIndex >= 0 ? followText.slice(followStartIndex) : followText;
+  assert(
+    /STEP \d\/5|Building your application|Cloning/.test(followedOutput),
+    '#42: start-build --follow streams build log lines after "started"',
+    followedOutput.slice(-600)
+  );
+  assert(
+    /--> Success/.test(followedOutput),
+    '#42: start-build --follow reports --> Success at completion',
+    followedOutput.slice(-500)
+  );
+
+  // ── #42-1 new-app --image creates the output ImageStream ────────────────
+  await runCmd('oc new-project is-app');
+  result = await runCmd(
+    'oc new-app --image=quay.io/example/webapp:latest --name=qa-web -n is-app',
+    400
+  );
+  assert(
+    /imagestream\.image\.openshift\.io "qa-web" created/.test(result.message),
+    '#42: new-app --image creates and prints the deployment ImageStream',
+    result.message.slice(0, 500)
+  );
+  result = await runCmd('oc get is -n is-app');
+  assert(
+    /qa-web/.test(result.message),
+    '#42: the new-app ImageStream is queryable before any build',
+    result.message.slice(0, 300)
+  );
+  await advanceController(10);
+
+  // ── #42-2 the exec/rsh view of the Pod ServiceAccount files ─────────────
+  result = await runCmd(
+    'oc exec deploy/qa-web -n is-app -- ls /var/run/secrets/kubernetes.io/serviceaccount'
+  );
+  assert(
+    ['token', 'ca.crt', 'namespace', 'service-ca.crt'].every((name) =>
+      result.message.includes(name)
+    ),
+    '#42: oc exec lists token/ca.crt/namespace/service-ca.crt in the Pod',
+    result.message
+  );
+  result = await runCmd(
+    'oc exec deploy/qa-web -n is-app -- cat /var/run/secrets/kubernetes.io/serviceaccount/namespace'
+  );
+  assert(
+    result.message.trim() === 'is-app',
+    '#42: the Pod service-account namespace file contains the project name',
+    JSON.stringify(result.message)
+  );
+  result = await runCmd(
+    'oc exec deploy/qa-web -n is-app -- cat /var/run/secrets/kubernetes.io/serviceaccount/token'
+  );
+  assert(
+    /^eyJ[\w-]+\.[\w-]+\.[\w-]+$/m.test(result.message.trim()),
+    '#42: the Pod service-account token is a JWT-shaped bound token',
+    result.message.slice(0, 120)
+  );
+  result = await runCmd(
+    'oc exec deploy/qa-web -n is-app -- cat /var/run/secrets/kubernetes.io/serviceaccount/ca.crt'
+  );
+  assert(
+    /-----BEGIN CERTIFICATE-----/.test(result.message),
+    '#42: the Pod service-account ca.crt is a PEM bundle',
+    result.message.slice(0, 120)
+  );
+  result = await runCmd(
+    'oc rsh deploy/qa-web -n is-app ls /var/run/secrets/kubernetes.io/serviceaccount'
+  );
+  assert(
+    /token/.test(result.message) && /service-ca\.crt/.test(result.message),
+    '#42: rsh sees the same service-account files as exec',
+    result.message
+  );
+
+  // ── #42-4 kubeadmin password discoverable like a real installer ─────────
+  const kubeadminPassword = await evaluate(() =>
+    import('/js/engine/ClusterState.js').then((module) => module.KUBEADMIN_PASSWORD)
+  );
+  result = await runCmd('cat ~/auth/kubeadmin-password');
+  assert(
+    !result.error && result.message.trim() === kubeadminPassword,
+    '#42: cat ~/auth/kubeadmin-password reveals the installer password',
+    JSON.stringify(result.message)
+  );
+  result = await runCmd('ls ~/auth');
+  assert(
+    result.message.split('\n').includes('kubeadmin-password'),
+    '#42: ls ~/auth lists kubeadmin-password like the installer auth/ directory',
+    result.message
+  );
+  result = await runCmd('oc extract secret/kubeadmin -n kube-system --to=-');
+  assert(
+    result.message.includes(kubeadminPassword),
+    '#42: oc extract secret/kubeadmin remains the documented discovery path',
+    result.message.slice(0, 200)
+  );
+
+  // ── #42-4 oc login prompts for the password; -p still works ─────────────
+  result = await runCmd('oc login -u kubeadmin');
+  assert(
+    /Authentication required for https:\/\/api\.cluster\.example\.com:6443 \(openshift\)/.test(
+      result.message
+    ) &&
+      /Password: $/.test(result.message) &&
+      !/Login successful/.test(result.message),
+    '#42: oc login -u kubeadmin prompts for the password instead of logging in silently',
+    result.message
+  );
+  assert(
+    await evaluate(() => Boolean(window.game.app.commandBar._pendingLogin)),
+    '#42: the login prompt waits for the next terminal line'
+  );
+  result = await runCmd('wrong-password');
+  assert(
+    result.error &&
+      /Login failed \(401 Unauthorized\)\nVerify you have provided the correct credentials\./.test(
+        result.message
+      ),
+    '#42: a wrong prompted password keeps the real 401 wording',
+    result.message
+  );
+  result = await runCmd('oc whoami');
+  assert(
+    /kubeadmin/.test(result.message),
+    '#42: a failed prompted login leaves the session unchanged',
+    result.message
+  );
+  await runCmd('oc login -u kubeadmin');
+  result = await runCmd('');
+  assert(
+    result.error && /interrupted/.test(result.message),
+    '#42: an empty line cancels the password prompt',
+    result.message
+  );
+  assert(
+    !(await evaluate(() => Boolean(window.game.app.commandBar._pendingLogin))),
+    '#42: normal command parsing resumes after the prompt is cancelled'
+  );
+  await runCmd('oc login -u kubeadmin');
+  result = await runCmd('kubeadmin');
+  assert(
+    !result.error && /Login successful\./.test(result.message),
+    '#42: typing the discovered kubeadmin password logs in',
+    result.message.slice(0, 200)
+  );
+  result = await runCmd('oc login -u kubeadmin -p kubeadmin');
+  assert(
+    !result.error && /Login successful\./.test(result.message),
+    '#42: the explicit -p login flow is unchanged',
+    result.message.slice(0, 200)
+  );
+
+  // ── #42-3 CrashLoop log blames APP_MODE only, on a neutral image ────────
+  assert(await bootCampaign(1), '#42: campaign boots for the CrashLoop log check');
+  assert(await launch('campaign', 3), '#42: campaign L3 starts for the CrashLoop log check');
+  await closeOverlays();
+  await evaluate(() => {
+    const app = window.game?.app;
+    app?._clearClockPauseReasons?.();
+    app?.hidePause?.({ resume: true });
+    app?.modeInstance?.resume?.();
+  });
+  const crashState = await evaluate(() => {
+    const deployment = window.game.cluster.getByName('Deployment', 'web-app', 'ops-lab');
+    const container = deployment?.spec?.template?.spec?.containers?.[0] || {};
+    return { image: container.image || '', env: container.env || [] };
+  });
+  assert(
+    !/v2-bad-config/.test(crashState.image),
+    '#42: the L3 crash seed keeps a neutral image (no v2-bad-config)',
+    crashState.image
+  );
+  assert(
+    crashState.env.some((entry) => entry.name === 'APP_MODE' && entry.value === 'debug-invalid'),
+    '#42: the L3 crash seed only injects the invalid APP_MODE env var',
+    JSON.stringify(crashState.env)
+  );
+  for (let elapsed = 0; elapsed < 30; elapsed += 2) {
+    await advanceGame(2);
+    if (
+      await evaluate(() =>
+        (window.game.cluster.getByKindAndNamespace('Pod', 'ops-lab') || []).some((pod) =>
+          /CrashLoopBackOff/.test(pod.status?.phase || '')
+        )
+      )
+    ) {
+      break;
+    }
+  }
+  const crashPod = await evaluate(
+    () =>
+      (window.game.cluster.getByKindAndNamespace('Pod', 'ops-lab') || []).find((pod) =>
+        /CrashLoopBackOff/.test(pod.status?.phase || '')
+      )?.metadata.name || null
+  );
+  assert(Boolean(crashPod), '#42: a CrashLoopBackOff pod exists in L3', String(crashPod));
+  const crashLog = await runCmd(`oc logs ${crashPod} -n ops-lab`);
+  const crashLogPrevious = await runCmd(`oc logs ${crashPod} -n ops-lab --previous`);
+  for (const [label, text] of [
+    ['oc logs', crashLog.message],
+    ['oc logs --previous', crashLogPrevious.message],
+  ]) {
+    assert(
+      /APP_MODE has an unsupported value/.test(text) && !/\bimage\b/i.test(text),
+      `#42: ${label} blames APP_MODE and never the image`,
+      text.slice(0, 300)
+    );
+  }
+  assert(
+    /FATAL: configuration validation failed \(exit code 1\)/.test(crashLog.message),
+    '#42: the CrashLoop log has the real application FATAL validation line',
+    crashLog.message.slice(0, 300)
+  );
+  result = await runCmd('oc set env deployment/web-app APP_MODE=production -n ops-lab');
+  assert(!result.error, '#42: correcting APP_MODE applies', result.message.slice(0, 200));
+  for (let elapsed = 0; elapsed < 20; elapsed += 2) await advanceGame(2);
+  const crashResolved = await evaluate(() => ({
+    active: window.game.app.incidentEngine.activeIncidents.size,
+    crashed: (window.game.cluster.getByKindAndNamespace('Pod', 'ops-lab') || []).filter((pod) =>
+      /CrashLoopBackOff/.test(pod.status?.phase || '')
+    ).length,
+  }));
+  assert(
+    crashResolved.active === 0 && crashResolved.crashed === 0,
+    '#42: fixing APP_MODE alone resolves the CrashLoopBackOff incident',
+    JSON.stringify(crashResolved)
+  );
+
+  // ── #42-6 L17 text matches the shipped priv-sa ServiceAccount ───────────
+  const l17 = await evaluate(() =>
+    import('/js/data/CampaignLevels.js').then((module) => {
+      const level = module.CAMPAIGN_LEVELS.find((entry) => entry.id === 17);
+      return {
+        description: level.description || '',
+        objectives: (level.objectives || []).map((objective) => objective.label),
+        startingServiceAccounts: (level.startingResources || [])
+          .filter((resource) => resource.kind === 'ServiceAccount')
+          .map((resource) => resource.name),
+      };
+    })
+  );
+  assert(
+    !/Create a dedicated ServiceAccount/i.test(l17.description) && /priv-sa/.test(l17.description),
+    '#42: L17 description no longer asks to create the shipped priv-sa ServiceAccount',
+    l17.description.slice(0, 300)
+  );
+  assert(
+    l17.startingServiceAccounts.includes('priv-sa'),
+    '#42: L17 ships priv-sa in startingResources, matching the description',
+    JSON.stringify(l17.startingServiceAccounts)
+  );
+  assert(
+    l17.objectives.every((label) => !/create.*serviceaccount/i.test(label)) &&
+      l17.objectives.some((label) => /privileged SCC/i.test(label)),
+    '#42: L17 objectives describe granting the SCC, not creating a ServiceAccount',
+    JSON.stringify(l17.objectives)
+  );
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// QA ROUND 1.3.0 — issue #42-5: readiness evidence must count a completed
+// level's live objectives even on a gated-bypass run (L20 jobs, L17 SCC).
+// ═══════════════════════════════════════════════════════════════════════════
+await runSection('qa-issue42-evidence', async () => {
+  await goto('/?tutorial=0');
+  assert(
+    await waitFor(() => evaluate(() => !!window.game?.app?.scoringEngine), 25000),
+    '#42: start page boots for the readiness-evidence check'
+  );
+  await sleep(500);
+  await closeOverlays();
+  await evaluate(() => {
+    const scoring = window.game.scoringEngine;
+    for (let levelId = 1; levelId < 20; levelId += 1) {
+      scoring.progress.campaignProgress[levelId] = { completed: true, stars: 3 };
+    }
+    scoring.progress.campaignProgress[20] = { completed: true, stars: 3 };
+    scoring.progress.objectiveEvidence = {
+      ...(scoring.progress.objectiveEvidence || {}),
+      'level:20': [
+        'quota',
+        'limitRange',
+        'deploy',
+        'route',
+        'build',
+        'imageStream',
+        'networkPolicy',
+        'routeAccess',
+        'user',
+        'group',
+        'operator',
+        'complete',
+        'cronJob',
+        'resolve',
+      ],
+      'level:17': ['scc', 'privileged', 'resolve'],
+    };
+    scoring.progress.drillCommandEvidence = {
+      ...(scoring.progress.drillCommandEvidence || {}),
+      'campaign:20': [
+        'oc create job report-job --image=perl -- perl -e "print 42"',
+        'oc create cronjob nightly --image=busybox --schedule="*/5 * * * *" -- sh -c date',
+      ],
+      'campaign:17': ['oc auth can-i get pods --as=alice -n rbac-lab'],
+    };
+  });
+  const readinessSnapshot = () =>
+    evaluate(async () => {
+      const app = window.game.app;
+      try {
+        await app.showExamPrep?.();
+      } catch {
+        /* panel already open */
+      }
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      const snapshot = app.examPrepUI?._computeSnapshot?.();
+      const statusOf = (id) => snapshot?.statuses?.get?.(id) || null;
+      return {
+        jobs: statusOf('security-jobs'),
+        cronjobs: statusOf('security-cronjobs'),
+        scc: statusOf('security-scc'),
+        privileged: statusOf('security-privileged'),
+      };
+    });
+  let readiness = await readinessSnapshot();
+  assert(
+    readiness.jobs === 'mastered',
+    '#42: a completed L20 on a gated-bypass run evidences the Job readiness bullet',
+    JSON.stringify(readiness)
+  );
+  assert(
+    readiness.cronjobs === 'mastered',
+    '#42: a completed L20 on a gated-bypass run evidences the CronJob readiness bullet',
+    JSON.stringify(readiness)
+  );
+  assert(
+    readiness.scc === 'mastered' && readiness.privileged === 'mastered',
+    '#42: a completed L17 evidences the SCC readiness bullets from objective evidence',
+    JSON.stringify(readiness)
+  );
+  await evaluate(() => {
+    window.game.scoringEngine.progress.drillCommandEvidence = {};
+  });
+  readiness = await readinessSnapshot();
+  assert(
+    readiness.jobs === 'mastered' && readiness.cronjobs === 'mastered',
+    '#42: live objective evidence alone (no matching command text) evidences the jobs bullets',
+    JSON.stringify(readiness)
+  );
+  await evaluate(() => {
+    const scoring = window.game.scoringEngine;
+    scoring.progress.campaignProgress[20] = { completed: false, stars: 0 };
+    scoring.progress.objectiveEvidence = { 'level:17': ['scc', 'privileged', 'resolve'] };
+  });
+  readiness = await readinessSnapshot();
+  assert(
+    readiness.jobs !== 'mastered' && readiness.cronjobs !== 'mastered',
+    '#42: an incomplete L20 does not evidence the jobs bullets (evidence not weakened)',
+    JSON.stringify(readiness)
+  );
+  const passwordCopy = await evaluate(() =>
+    import('/js/data/CampaignLevels.js').then((module) => {
+      const level1 = module.CAMPAIGN_LEVELS.find((entry) => entry.id === 1);
+      const level13 = module.CAMPAIGN_LEVELS.find((entry) => entry.id === 13);
+      return {
+        level1: (level1.hints || []).some((hint) => /auth\/kubeadmin-password/.test(hint)),
+        level13: (level13.hints || []).some((hint) => /auth\/kubeadmin-password/.test(hint)),
+      };
+    })
+  );
+  assert(
+    passwordCopy.level1 && passwordCopy.level13,
+    '#42: L1 and L13 hints document ~/auth/kubeadmin-password password discovery',
+    JSON.stringify(passwordCopy)
+  );
+  await evaluate(() => window.game.app.examPrepUI?.hide?.());
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// QA ROUND 1.3.0 — issue #43: collected CLI output differences (get/describe,
+// nodes/node-debug, curl/openssl, project bootstrap, events aggregation).
+// ═══════════════════════════════════════════════════════════════════════════
+await runSection('qa-issue43', async () => {
+  assert(await bootSandbox(), '#43: sandbox boots for CLI fidelity checks');
+
+  // ── get output: multi-type name prefixes + empty-type omission ──────────
+  await runCmd('oc new-project demo');
+  await runCmd('oc new-project empty-ns');
+  await runCmd('oc new-app --image=quay.io/example/webapp:latest --name=web -n demo', 400);
+  await runCmd('oc create deployment extra --image=quay.io/example/webapp:latest -n demo', 300);
+  let result = await runCmd('oc get deploy,svc -n demo');
+  assert(
+    /^deployment\.apps\/web\s/m.test(result.message) && /^service\/web\s/m.test(result.message),
+    '#43: multi-type get prefixes NAME with deployment.apps/ and service/',
+    result.message
+  );
+  assert(
+    !/No resources found/.test(result.message),
+    '#43: multi-type get omits empty types instead of printing "No resources found" among rows',
+    result.message
+  );
+  result = await runCmd('oc get deploy,secrets -n empty-ns');
+  assert(
+    !/No resources found/.test(result.message) &&
+      /^secret\/builder-dockercfg-/m.test(result.message),
+    '#43: an empty requested type is omitted when another requested type has rows',
+    result.message
+  );
+  result = await runCmd('oc get jobs,cronjobs -n empty-ns');
+  assert(
+    result.message.trim() === 'No resources found in empty-ns namespace.',
+    '#43: an all-empty multi-type get prints exactly one "No resources found"',
+    JSON.stringify(result.message)
+  );
+  await advanceSimulation(5);
+  result = await runCmd('oc get deploy,pods -n demo');
+  assert(
+    /deployment\.apps\/web/.test(result.message) &&
+      /pod\/web-[a-z0-9]+-[a-z0-9]+/.test(result.message),
+    '#43: get deploy,pods prefixes both the deployment and pod rows',
+    result.message
+  );
+
+  // ── get secrets is sorted by name ───────────────────────────────────────
+  await runCmd('oc create secret generic zzz-secret --from-literal=k=v -n demo');
+  await runCmd('oc create secret generic aaa-secret --from-literal=k=v -n demo');
+  result = await runCmd('oc get secrets -n demo -o name');
+  const secretNames = result.message
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean);
+  assert(
+    JSON.stringify(secretNames) === JSON.stringify([...secretNames].sort()),
+    '#43: oc get secrets is sorted by name like the API server',
+    JSON.stringify(secretNames)
+  );
+
+  // ── events aggregation + describe quota / rollout / set env wording ────
+  result = await runCmd('oc get events -n demo');
+  assert(
+    !/over 0s/.test(result.message),
+    '#43: aggregated events never show the bogus "over 0s" duration',
+    result.message
+  );
+  assert(
+    /^LAST SEEN\s+TYPE\s+REASON\s+OBJECT\s+MESSAGE$/m.test(result.message),
+    '#43: get events keeps the real LAST SEEN TYPE REASON OBJECT MESSAGE header',
+    result.message
+  );
+  result = await runCmd('oc rollout restart deploy/web -n demo');
+  assert(
+    result.message.trim() === 'deployment.apps/web restarted',
+    '#43: rollout restart prints "deployment.apps/web restarted" without quotes',
+    JSON.stringify(result.message)
+  );
+  await runCmd('oc set env deploy/web APP_MODE=production -n demo');
+  await runCmd('oc set env deploy/extra EXTRA=1 -n demo');
+  result = await runCmd('oc set env deploy --all --list -n demo');
+  assert(
+    /# deployment\.apps\/web, container \w+/.test(result.message) &&
+      /# deployment\.apps\/extra, container \w+/.test(result.message) &&
+      /APP_MODE=production/.test(result.message),
+    '#43: set env <type> --all --list lists env for every deployment',
+    result.message
+  );
+
+  // ── quota FailedCreate: real keyed wording, exactly once, no Events ────
+  await runCmd('oc new-project quota-lab');
+  await runCmd('oc create quota compute-quota --hard=pods=1 -n quota-lab');
+  await runCmd('oc new-app --image=quay.io/example/webapp:latest --name=limited -n quota-lab', 400);
+  await advanceSimulation(6);
+  await runCmd('oc scale deploy/limited --replicas=2 -n quota-lab', 400);
+  await advanceSimulation(6);
+  result = await runCmd('oc describe deploy/limited -n quota-lab');
+  const failedCreateRows = result.message
+    .split('\n')
+    .filter((line) => /Warning\s+FailedCreate/.test(line));
+  assert(
+    failedCreateRows.length === 1 && failedCreateRows.every((line) => /Error creating:/.test(line)),
+    '#43: describe deployment shows the quota FailedCreate exactly once with real wording',
+    JSON.stringify(failedCreateRows)
+  );
+  assert(
+    /exceeded quota: compute-quota, requested: pods=1, used: pods=1, limited: pods=1/.test(
+      result.message
+    ),
+    '#43: quota admission failure uses the keyed limited: pods=1 wording',
+    result.message.slice(0, 500)
+  );
+  result = await runCmd('oc describe quota compute-quota -n quota-lab');
+  assert(
+    !/^Events:/m.test(result.message),
+    '#43: describe quota has no Events section like real OpenShift 4.22',
+    result.message.slice(0, 400)
+  );
+  assert(
+    /Resource\s+Used\s+Hard/i.test(result.message),
+    '#43: describe quota keeps the Resource/Used/Hard table',
+    result.message.slice(0, 400)
+  );
+  result = await runCmd('oc get events -n quota-lab');
+  assert(
+    /Error creating: pods "[^"]+" is forbidden: exceeded quota: compute-quota, requested: pods=1, used: pods=1, limited: pods=1/.test(
+      result.message
+    ),
+    '#43: get events shows the FailedCreate once with the real Error creating: wording',
+    result.message
+  );
+
+  // ── project bootstrap: CA ConfigMaps + requester annotation placement ──
+  result = await runCmd('oc get cm -n default');
+  assert(
+    /kube-root-ca\.crt/.test(result.message) && /openshift-service-ca\.crt/.test(result.message),
+    '#43: seeded projects get the kube-root-ca.crt and openshift-service-ca.crt ConfigMaps',
+    result.message
+  );
+  await runCmd('oc new-project ca-lab');
+  result = await runCmd('oc get cm -n ca-lab');
+  assert(
+    /kube-root-ca\.crt/.test(result.message) && /openshift-service-ca\.crt/.test(result.message),
+    '#43: oc new-project bootstraps both CA ConfigMaps',
+    result.message
+  );
+  const caConfigMaps = await evaluate(() => {
+    const root = window.game.cluster.getByName('ConfigMap', 'kube-root-ca.crt', 'ca-lab');
+    const service = window.game.cluster.getByName(
+      'ConfigMap',
+      'openshift-service-ca.crt',
+      'ca-lab'
+    );
+    return {
+      rootKeys: Object.keys(root?.spec?.data || {}),
+      serviceKeys: Object.keys(service?.spec?.data || {}),
+      description: root?.metadata?.annotations?.['kubernetes.io/description'] || '',
+      injected:
+        service?.metadata?.annotations?.['service.beta.openshift.io/inject-cabundle-injected'],
+    };
+  });
+  assert(
+    caConfigMaps.rootKeys.join() === 'ca.crt' &&
+      /Contains a CA bundle that can be used to verify the kube-apiserver/.test(
+        caConfigMaps.description
+      ),
+    '#43: kube-root-ca.crt carries ca.crt plus the real description annotation',
+    JSON.stringify(caConfigMaps)
+  );
+  assert(
+    caConfigMaps.serviceKeys.join() === 'service-ca.crt' && caConfigMaps.injected === 'true',
+    '#43: openshift-service-ca.crt carries service-ca.crt and the inject annotation',
+    JSON.stringify(caConfigMaps)
+  );
+  result = await runCmd('oc describe sa default -n ca-lab');
+  assert(
+    !/openshift\.io\/requester/.test(result.message),
+    '#43: describe sa default no longer shows the requester annotation',
+    result.message
+  );
+  result = await runCmd('oc describe project ca-lab');
+  assert(
+    /openshift\.io\/requester=kubeadmin/.test(result.message),
+    '#43: the project Namespace carries openshift.io/requester=kubeadmin',
+    result.message
+  );
+
+  // ── controller names: 10-char pod-template-hash + 5-char pod suffix ────
+  await runCmd('oc apply -f manifests/deployment.yaml -n ca-lab');
+  await advanceSimulation(8);
+  const podNames = await evaluate(() => {
+    const set = (window.game.cluster.getByKindAndNamespace('ReplicaSet', 'ca-lab') || []).find(
+      (entry) => /^webapp-/.test(entry.metadata.name)
+    );
+    return {
+      replicaSet: set?.metadata?.name || null,
+      pods: (window.game.cluster.getByKindAndNamespace('Pod', 'ca-lab') || []).map(
+        (pod) => pod.metadata.name
+      ),
+    };
+  });
+  assert(
+    /^webapp-[a-z0-9]{10}$/.test(podNames.replicaSet || ''),
+    '#43: ReplicaSet names use the real 10-character pod-template-hash',
+    String(podNames.replicaSet)
+  );
+  assert(
+    podNames.pods.length > 0 &&
+      podNames.pods.every((name) => /^webapp-[a-z0-9]{10}-[a-z0-9]{5}$/.test(name)),
+    '#43: pod names use the 10-char template hash + 5-char suffix shape',
+    JSON.stringify(podNames.pods)
+  );
+
+  // ── oc new-app sets the deployment=<name> pod-template label ────────────
+  await runCmd('oc new-app --image=quay.io/example/webapp:latest --name=db -n ca-lab', 400);
+  await advanceSimulation(8);
+  result = await runCmd('oc get pods -n ca-lab -l deployment=db');
+  assert(
+    /^db-[a-z0-9]{10}-[a-z0-9]{5}/m.test(result.message),
+    '#43: oc new-app pods carry the deployment=<name> label',
+    result.message
+  );
+
+  // ── node model: condition columns; NotReady taints without cordon ──────
+  const nodes = await evaluate(() =>
+    (window.game.cluster.getByKind('Node') || []).map((node) => node.metadata.name)
+  );
+  result = await runCmd(`oc describe node ${nodes[0]}`);
+  assert(
+    /Type\s+Status\s+LastHeartbeatTime\s+LastTransitionTime\s+Reason\s+Message/.test(
+      result.message
+    ),
+    '#43: describe node conditions table has the real five columns',
+    result.message.slice(0, 700)
+  );
+  assert(
+    /NoNetworkPlugin/.test(result.message) && /network plugin is not ready/.test(result.message),
+    '#43: NetworkUnavailable renders the NoNetworkPlugin reason/message',
+    result.message.slice(0, 1200)
+  );
+  result = await runCmd(`oc debug node/${nodes[0]}`);
+  assert(/\(node\/[a-z0-9-]+\) \$/.test(result.message), '#43: oc debug node opens a node session');
+  await runCmd('chroot /host');
+  const hostPrompt = await evaluate(() => window.game.app.commandBar._debugPrompt());
+  assert(
+    hostPrompt === 'sh-5.1#',
+    '#43: chroot /host renders the real host prompt sh-5.1#',
+    hostPrompt
+  );
+  result = await runCmd('hostname');
+  assert(
+    result.message.trim() === nodes[0],
+    '#43: the node debug session hostname is the actual node name',
+    JSON.stringify(result.message)
+  );
+  result = await runCmd('journalctl -u kubelet');
+  const clock = await evaluate(() => ({
+    weekday: ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][new Date().getUTCDay()],
+    month: ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][
+      new Date().getUTCMonth()
+    ],
+  }));
+  assert(
+    new RegExp(`-- Logs begin at ${clock.weekday} \\d{4}-`).test(result.message) &&
+      !/Mon 2026-11-04/.test(result.message),
+    '#43: journalctl preamble weekday matches the simulated clock (not hard-coded Mon)',
+    result.message.split('\n')[0]
+  );
+  assert(
+    new RegExp(`\\d{2}:\\d{2}:\\d{2} ${nodes[0]} `).test(result.message) &&
+      !/\bworker\b/.test(result.message),
+    '#43: journalctl lines use the real node hostname, not "worker"',
+    result.message.split('\n').slice(0, 3).join(' | ')
+  );
+  assert(
+    new RegExp(`^${clock.month} \\d{2} \\d{2}:\\d{2}:\\d{2} ${nodes[0]} `, 'm').test(
+      result.message
+    ),
+    '#43: journalctl short lines use the real syslog format',
+    result.message.split('\n').slice(1, 3).join(' | ')
+  );
+  await runCmd('exit');
+  await runCmd('exit');
+
+  // ── workstation curl fidelity (#43): -w, 443, refused, 503 ─────────────
+  await runCmd('oc new-project qa-curl');
+  await runCmd(
+    'oc create deployment webapp --image=quay.io/openshift/origin-hello-openshift:latest -n qa-curl'
+  );
+  await runCmd('oc expose deployment/webapp -n qa-curl');
+  await runCmd('oc expose svc/webapp -n qa-curl');
+  await advanceSimulation(20);
+  const curlHost = await evaluate(() => {
+    const route = (window.game.cluster.getByKind('Route') || []).find(
+      (entry) => entry.metadata.namespace === 'qa-curl'
+    );
+    return route ? window.game.cluster.getRouteHost(route) : null;
+  });
+  assert(Boolean(curlHost), '#43: the curl fixture Route has a host', String(curlHost));
+  result = await runCmd(`curl -s -o /dev/null -w "%{http_code}" http://${curlHost}`);
+  assert(
+    !result.error && result.message === '200',
+    '#43: curl -s -o /dev/null -w %{http_code} prints the HTTP status code',
+    JSON.stringify(result.message)
+  );
+  result = await runCmd(`curl -v -k https://${curlHost}`);
+  assert(
+    /:443\.\.\./.test(result.message) &&
+      /port 443/.test(result.message) &&
+      !/ port 80/.test(result.message),
+    '#43: curl https:// without an explicit port connects on 443, not 80',
+    result.message.slice(0, 400)
+  );
+  result = await runCmd(`curl http://${curlHost}:9999`);
+  assert(
+    result.error &&
+      /curl: \(7\) Failed to connect to .* port 9999 after 0 ms: Connection refused/.test(
+        result.message
+      ),
+    '#43: genuine refused connections keep curl (7) Connection refused',
+    result.message
+  );
+
+  // ── oc exec curl: real scheme port + NetworkPolicy drop => (28) ────────
+  await runCmd('oc new-project qa-exec');
+  await runCmd(
+    'oc create deployment web --image=quay.io/openshift/origin-hello-openshift:latest -n qa-exec'
+  );
+  await advanceSimulation(10);
+  const dnsEgressPolicy = [
+    'apiVersion: networking.k8s.io/v1',
+    'kind: NetworkPolicy',
+    'metadata:',
+    '  name: allow-dns-egress',
+    '  namespace: qa-exec',
+    'spec:',
+    '  podSelector: {}',
+    '  policyTypes:',
+    '    - Egress',
+    '  egress:',
+    '    - to:',
+    '        - namespaceSelector:',
+    '            matchLabels:',
+    '              kubernetes.io/metadata.name: openshift-dns',
+  ].join('\n');
+  await evaluate(
+    (yaml) => window.game.manifestEngine.writeFile('qa-dns.yaml', yaml),
+    dnsEgressPolicy
+  );
+  await runCmd('oc apply -f examples/default-deny.yaml -n qa-exec');
+  await runCmd('oc apply -f qa-dns.yaml -n qa-exec');
+  result = await runCmd(
+    'oc exec deploy/web -n qa-exec -- curl -s -w "%{remote_port}" -o /dev/null https://example.com'
+  );
+  assert(
+    result.message.trim() === '443',
+    '#43: exec curl to an https URL uses the scheme-default port 443',
+    JSON.stringify(result.message)
+  );
+  result = await runCmd('oc exec deploy/web -n qa-exec -- curl https://example.com');
+  assert(
+    /^curl: \(28\) Connection timed out after 30000 milliseconds$/.test(result.message.trim()) &&
+      !/port 80/.test(result.message),
+    '#43: NetworkPolicy-dropped exec curl reports the real (28) connection timeout',
+    result.message
+  );
+
+  // ── openssl x509 fidelity (#43): enddate + non-invented subject O ──────
+  result = await runCmd(
+    'openssl req -x509 -newkey rsa:2048 -nodes -keyout qa-leaf.key -out qa-leaf.crt -days 365 -subj "/CN=web.apps.cluster.example.com"'
+  );
+  assert(!result.error, '#43: openssl req -x509 generates a leaf certificate', result.message);
+  result = await runCmd('openssl x509 -in qa-leaf.crt -noout -subject');
+  assert(
+    result.message.trim() === 'subject=CN = web.apps.cluster.example.com',
+    '#43: openssl x509 subject keeps only the requested -subj (no invented O)',
+    JSON.stringify(result.message)
+  );
+  result = await runCmd('openssl x509 -in qa-leaf.crt -noout -enddate');
+  assert(
+    /^notAfter=(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) +\d{1,2} \d{2}:\d{2}:\d{2} \d{4} GMT$/.test(
+      result.message.trim()
+    ),
+    '#43: openssl x509 -noout -enddate prints notAfter=<date> GMT',
+    JSON.stringify(result.message)
+  );
+
+  // ── OAuth-rollout 401 extra hint is visibly marked as a simulator hint ──
+  await runCmd('htpasswd -c -B -b htpasswd alice openshift');
+  await runCmd('oc create secret generic htpass-secret --from-file=htpasswd -n openshift-config');
+  result = await runCmd(
+    [
+      'oc apply -f - <<EOF',
+      'apiVersion: config.openshift.io/v1',
+      'kind: OAuth',
+      'metadata:',
+      '  name: cluster',
+      'spec:',
+      '  identityProviders:',
+      '  - name: htpasswd',
+      '    mappingMethod: claim',
+      '    type: HTPasswd',
+      '    htpasswd:',
+      '      fileData:',
+      '        name: htpass-secret',
+      'EOF',
+    ].join('\n'),
+    400
+  );
+  assert(
+    !result.error,
+    '#43: the HTPasswd OAuth provider applies for the rollout hint check',
+    result.message.slice(0, 200)
+  );
+  result = await runCmd('oc login -u alice -p openshift', 300);
+  assert(
+    result.error && /Verify you have provided the correct credentials\./.test(result.message),
+    '#43: a login during the OAuth rollout keeps real oc 401 wording',
+    result.message
+  );
+  assert(
+    /Simulator hint: .*not ready yet[\s\S]*OAuth rollout/.test(result.message),
+    '#43: the extra OAuth-rollout detail is marked "Simulator hint:"',
+    result.message
+  );
+  assert(
+    !/401 Unauthorized\)\nThe HTPasswd identity provider is not ready yet/.test(result.message),
+    '#43: the rollout hint is not a bare second line of the 401',
+    result.message
+  );
+
+  // ── NotReady node: lifecycle taints instead of a cordon ────────────────
+  const notReadyTarget = nodes[1] || nodes[0];
+  const sparked = await evaluate((nodeName) => {
+    const engine = window.game.app.incidentEngine;
+    const definition = engine._defsById.get('node-not-ready');
+    return engine.spawnIncident(definition, nodeName);
+  }, notReadyTarget);
+  assert(Boolean(sparked), '#43: the NodeNotReady incident spawns for the taint regression check');
+  await advanceSimulation(3);
+  const notReadyNode = await evaluate((nodeName) => {
+    const node = window.game.cluster
+      .getByKind('Node')
+      .find((entry) => entry.metadata.name === nodeName);
+    return {
+      phase: node?.status?.phase || null,
+      unschedulable: node?.spec?.unschedulable,
+      taints: (node?.spec?.taints || []).map((taint) => `${taint.key}:${taint.effect}`),
+    };
+  }, notReadyTarget);
+  assert(
+    notReadyNode.unschedulable !== true,
+    '#43: a NotReady node is not cordoned (no spec.unschedulable/SchedulingDisabled)',
+    JSON.stringify(notReadyNode)
+  );
+  for (const expectedTaint of [
+    'node.kubernetes.io/unreachable:NoSchedule',
+    'node.kubernetes.io/unreachable:NoExecute',
+    'node.kubernetes.io/not-ready:NoSchedule',
+    'node.kubernetes.io/not-ready:NoExecute',
+  ]) {
+    assert(
+      notReadyNode.taints.includes(expectedTaint),
+      `#43: NotReady node carries the lifecycle taint ${expectedTaint}`,
+      JSON.stringify(notReadyNode.taints)
+    );
+  }
+  result = await runCmd('oc get nodes');
+  const notReadyLine = result.message
+    .split('\n')
+    .find((line) => line.startsWith(`${notReadyTarget} `));
+  assert(
+    Boolean(notReadyLine) &&
+      /\bNotReady\b/.test(notReadyLine) &&
+      !/SchedulingDisabled/.test(notReadyLine),
+    '#43: oc get nodes STATUS is NotReady without SchedulingDisabled',
+    notReadyLine
+  );
+  result = await runCmd(`oc describe node ${notReadyTarget}`);
+  assert(
+    /node\.kubernetes\.io\/unreachable:NoSchedule/.test(result.message),
+    '#43: describe node renders the NotReady lifecycle taints',
+    result.message.slice(-800)
+  );
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
 // 11. DRAW PAGE
 // ═══════════════════════════════════════════════════════════════════════════
 await runSection('draw', async () => {

@@ -1153,6 +1153,183 @@ for (const challenge of challenges) {
   }
 }
 
+// ── Issue #37/#38/#39/#40/#42 regression invariants (QA round 1.3.0) ───────
+// Behaviour is covered by the browser suite; these static locks fail fast if a
+// future content/config edit reintroduces the regression the issue reported.
+{
+  const l20Def = levels.find((level) => level.id === 20);
+  const l20Objectives = l20Def?.objectives || [];
+  const stateQuota = l20Objectives.find((obj) => obj.type === 'quota');
+  const stateLimit = l20Objectives.find((obj) => obj.type === 'limitRange');
+  const stateDeny = l20Objectives.find((obj) => obj.type === 'networkPolicy');
+  const stateRouteAccess = l20Objectives.find((obj) => obj.type === 'routeAccess');
+  const gradesState =
+    stateQuota?.namespace === 'prod-platform' &&
+    !stateQuota?.name &&
+    stateLimit?.namespace === 'prod-platform' &&
+    !stateLimit?.name &&
+    stateDeny?.probe === 'ingress-isolation' &&
+    stateDeny?.namespace === 'prod-platform';
+  if (gradesState) passed();
+  else
+    fail(
+      'campaign',
+      '#37: L20 quota/limitRange objectives must grade prod-platform state without hidden object names, and default-deny must use the ingress-isolation probe'
+    );
+  if (stateRouteAccess?.requireIsolation === true) passed();
+  else fail('campaign', '#37: L20 routeAccess objective must set requireIsolation: true');
+
+  // #38: shipped hints must never teach the non-existent create subcommand.
+  const hintSets = [
+    ...levels.map((level) => level.hints || []),
+    ...challenges.map((challenge) => challenge.hints || []),
+  ];
+  let instructingLimitRange = 0;
+  for (const hints of hintSets) {
+    for (const hint of hints) {
+      let index = hint.indexOf('oc create limitrange');
+      while (index >= 0) {
+        const before = hint.slice(Math.max(0, index - 60), index);
+        if (!/(?:no|not|reject|does not exist|doesn't exist)\b[\s`'"]*$/i.test(before)) {
+          instructingLimitRange += 1;
+        }
+        index = hint.indexOf('oc create limitrange', index + 1);
+      }
+    }
+  }
+  if (instructingLimitRange === 0) passed();
+  else
+    fail(
+      'challenges',
+      `#38: ${instructingLimitRange} shipped hint(s) still instruct the non-existent "oc create limitrange"`
+    );
+  const lab6Def = challenges.find((challenge) => challenge.id === 6);
+  const lab6TeachesYaml = (lab6Def?.hints || []).some((hint) =>
+    /oc apply -f examples\/limitrange\.yaml/.test(hint)
+  );
+  const lab6MatchesFake = (lab6Def?.objectives || [])
+    .filter((obj) => obj.type === 'command')
+    .some((obj) => {
+      try {
+        return new RegExp(obj.pattern, 'i').test(
+          'oc create limitrange team-limits --default=cpu=500m'
+        );
+      } catch {
+        return false;
+      }
+    });
+  if (lab6TeachesYaml && !lab6MatchesFake) passed();
+  else
+    fail(
+      'challenges',
+      '#38: lab 6 must teach oc apply -f examples/limitrange.yaml and its command objective must not match oc create limitrange'
+    );
+  if (!/oc create limitrange --/.test(read('README.md'))) passed();
+  else fail('docs', '#38: README still shows an oc create limitrange example');
+
+  // #39: the externalCertificate flow ships and references the router RBAC.
+  const rbacExample = manifestFilesMod?.MANIFEST_FILES?.['examples/route-external-cert-rbac.yaml'];
+  const rbacExampleOk =
+    typeof rbacExample === 'string' &&
+    /kind: Role\b/.test(rbacExample) &&
+    /kind: RoleBinding\b/.test(rbacExample) &&
+    /resourceNames: \["webapp-tls"\]/.test(rbacExample) &&
+    /name: router\b/.test(rbacExample) &&
+    /namespace: openshift-ingress\b/.test(rbacExample) &&
+    (l20Def?.manifestFiles || []).includes('examples/route-external-cert-rbac.yaml');
+  if (rbacExampleOk) passed();
+  else
+    fail(
+      'manifests',
+      '#39: examples/route-external-cert-rbac.yaml must grant the router SA get/list/watch on webapp-tls and be listed in L20 manifestFiles'
+    );
+
+  // #40: handover copy must send cluster-admin work to crc/SNO and scope the
+  // Developer Sandbox to project work only.
+  const indexHtml = read('index.html');
+  if (
+    /crc console --credentials/.test(indexHtml) &&
+    /OpenShift Local/.test(indexHtml) &&
+    /project-scoped/i.test(indexHtml)
+  ) {
+    passed();
+  } else {
+    fail(
+      'handover',
+      '#40: handover must document OpenShift Local/crc (crc console --credentials) and mark the Developer Sandbox project-scoped'
+    );
+  }
+
+  // #42: L17 copy matches the shipped priv-sa, crash seeds inject only
+  // APP_MODE, and the kubeadmin password discovery + evidence contracts hold.
+  const l17Def = levels.find((level) => level.id === 17);
+  if (
+    l17Def &&
+    !/Create a dedicated ServiceAccount/i.test(l17Def.description || '') &&
+    /priv-sa/.test(l17Def.description || '') &&
+    (l17Def.startingResources || []).some(
+      (resource) => resource.kind === 'ServiceAccount' && resource.name === 'priv-sa'
+    )
+  ) {
+    passed();
+  } else {
+    fail(
+      'campaign',
+      '#42: L17 description must describe granting the SCC to the shipped priv-sa ServiceAccount'
+    );
+  }
+  const imageSeedLevels = [levels.find((level) => level.id === 3), l20Def];
+  const imageSeeds = imageSeedLevels.some((level) =>
+    (level?.incidents || []).some((incident) => incident.seed?.image)
+  );
+  if (!imageSeeds) passed();
+  else
+    fail(
+      'campaign',
+      '#42: the L3/L20 CrashLoop seeds must inject only APP_MODE, never an image override'
+    );
+  const manifestEngineSource = read('js/engine/ManifestEngine.js');
+  if (
+    /auth\/kubeadmin-password/.test(manifestEngineSource) &&
+    /import \{ KUBEADMIN_PASSWORD \} from '\.\/ClusterState\.js'/.test(manifestEngineSource) &&
+    /export const KUBEADMIN_PASSWORD/.test(read('js/engine/ClusterState.js'))
+  ) {
+    passed();
+  } else {
+    fail(
+      'files',
+      '#42: the installer auth/kubeadmin-password file must stay seeded from ClusterState.KUBEADMIN_PASSWORD'
+    );
+  }
+  const loginLevels = [
+    levels.find((level) => level.id === 1),
+    levels.find((level) => level.id === 13),
+  ];
+  const passwordHintsOk = loginLevels.every((level) =>
+    (level?.hints || []).some((hint) => /auth\/kubeadmin-password/.test(hint))
+  );
+  if (passwordHintsOk) passed();
+  else fail('campaign', '#42: L1 and L13 hints must document ~/auth/kubeadmin-password discovery');
+  const evidenceBullets = (ex280Mod?.EX280_OBJECTIVE_BULLETS || []).filter((bullet) =>
+    ['security-jobs', 'security-cronjobs', 'security-scc', 'security-privileged'].includes(
+      bullet.id
+    )
+  );
+  if (
+    evidenceBullets.length === 4 &&
+    evidenceBullets.every(
+      (bullet) => Array.isArray(bullet.objectiveTypes) && bullet.objectiveTypes.length > 0
+    )
+  ) {
+    passed();
+  } else {
+    fail(
+      'exam',
+      '#42: the Job/CronJob/SCC readiness bullets must declare objectiveTypes for the evidence fallback'
+    );
+  }
+}
+
 // ── EX280 Prep objective data (official ground truth) ──────────────────────
 let examFacts = null;
 if (has('docs/research/exam-facts.json')) {
