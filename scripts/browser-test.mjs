@@ -277,6 +277,11 @@ async function closeOverlays() {
   try {
     await evaluate(() => {
       const app = window.game?.app;
+      // Dismiss the "How to play" level-intro modal too. bootMenu() navigates to
+      // `/` (no ?tutorial=0), so launchGame() re-opens it for every level and it
+      // registers the `tutorial` clock-pause reason; leaving it up makes later
+      // pause/resume assertions read a run that is still legitimately paused.
+      app?.hideTutorial?.();
       app?.examPrepUI?.hide?.();
       app?.manifestPanel?.hide?.();
       app?.inspector?.hide?.();
@@ -745,8 +750,10 @@ await runSection('sandbox', async () => {
     };
   });
   // The seeded platform baseline grew when the real OCP 4.22 default SCC set
-  // (14 objects) replaced the old 4-object approximation.
-  assert(state.resourceCount >= 45 && state.resourceCount <= 65, 'sandbox: seeded platform resources', `got ${state.resourceCount}`);
+  // (14 objects) replaced the old 4-object approximation, and again when the
+  // OLM software catalog (PackageManifests + global-operators OperatorGroup)
+  // and the default self-provisioner RBAC objects were seeded.
+  assert(state.resourceCount >= 45 && state.resourceCount <= 75, 'sandbox: seeded platform resources', `got ${state.resourceCount}`);
   assert(state.meshCount >= 45 && Math.abs(state.meshCount - state.resourceCount) <= 2, 'sandbox: one mesh per seeded resource', `${state.meshCount} meshes / ${state.resourceCount} resources`);
   assert(state.palette.length === 37, 'sandbox: palette has 37 placeable kinds', `got ${state.palette.length}`);
   for (const kind of ['Project', 'Route', 'BuildConfig', 'ImageStream', 'Template', 'Subscription', 'SecurityContextConstraints', 'User', 'Group', 'IPAddressPool', 'L2Advertisement']) {
@@ -961,6 +968,19 @@ await runSection('cli', async () => {
   assert(routeAdmittedEarly, 'cli: Route/web is Admitted by the router', JSON.stringify(routeEarly?.status?.ingress?.[0]?.conditions || null));
 
   await expectCmd('cli: oc apply -f manifest', 'oc apply -f manifests/deployment.yaml', /created|configured|unchanged/i);
+  // The prod overlay targets the webapp-prod project (`namespace: webapp-prod`
+  // in the kustomization). A real API server rejects a namespaced apply into a
+  // non-existent project, so make sure it exists first — the files section may
+  // already have applied the same overlay when both sections run together.
+  const overlayProjectExists = await evaluate(
+    () => (window.game.cluster.getByKind?.('Project') || []).some((p) => p.metadata?.name === 'webapp-prod'),
+  );
+  if (overlayProjectExists) {
+    await expectCmd('cli: switch to the overlay project', 'oc project webapp-prod', /Now using project/i);
+  } else {
+    await expectCmd('cli: pre-create the overlay project', 'oc new-project webapp-prod', /Now using project|created/i);
+  }
+  await expectCmd('cli: switch back to the demo project', `oc project ${project}`, /Now using project/i);
   await expectCmd('cli: oc apply -k prod overlay', 'oc apply -k kustomize/overlays/prod', /created|configured|unchanged/i);
   await expectCmd('cli: oc process | oc apply', 'oc process -f templates/webapp-template.yaml -p APP_NAME=demo | oc apply -f -', /created|configured|unchanged/i);
   await expectCmd('cli: oc new-app image', `oc new-app --image=nginx:latest --name=api -n ${project}`, /created|Success|deployment/i);
@@ -1143,9 +1163,43 @@ await runSection('cli', async () => {
   const group = await findResource('Group', 'devs');
   assert(!!user, 'cli: User bob exists');
   assert(!!group, 'cli: Group devs exists');
-  const scc = await findResource('SecurityContextConstraints', 'anyuid');
-  const sccUsers = scc?.spec?.users || [];
-  assert(sccUsers.includes(`system:serviceaccount:${project}:default`), 'cli: add-scc-to-user grants anyuid', JSON.stringify(sccUsers));
+  // OCP 4.x grants `use securitycontextconstraints/<name>` through a
+  // (Cluster)RoleBinding to ClusterRole `system:openshift:scc:<name>`; the SCC
+  // object's own users/groups lists are legacy 3.x data and stay untouched.
+  // Accept the cluster helper when available, the binding form, or (for
+  // backwards compatibility) the legacy users list.
+  const sccGrant = await evaluate(({ project: ns }) => {
+    const cluster = window.game?.cluster;
+    const saUser = `system:serviceaccount:${ns}:default`;
+    try {
+      if (typeof cluster?.getSCCGrantSubjects === 'function') {
+        const subjects = cluster.getSCCGrantSubjects('anyuid') || [];
+        if (subjects.includes(saUser)) return { granted: true, via: 'helper', subjects };
+      }
+      const bindings = [
+        ...(cluster?.getByKind?.('ClusterRoleBinding') || []),
+        ...(cluster?.getByKind?.('RoleBinding') || []),
+      ];
+      for (const binding of bindings) {
+        const roleRef = binding.spec?.roleRef || {};
+        if (roleRef.name !== 'system:openshift:scc:anyuid') continue;
+        if (binding.kind === 'RoleBinding' && (binding.metadata?.namespace || '') !== ns) continue;
+        const subjectOk = (binding.spec?.subjects || []).some(
+          (subject) => subject.kind === 'ServiceAccount'
+            && subject.name === 'default'
+            && (subject.namespace || binding.metadata?.namespace || ns) === ns,
+        );
+        if (subjectOk) return { granted: true, via: 'binding', binding: binding.metadata?.name };
+      }
+      const scc = (cluster?.getByKind?.('SecurityContextConstraints') || [])
+        .find((entry) => entry.metadata?.name === 'anyuid');
+      const legacyUsers = scc?.spec?.users || [];
+      return { granted: legacyUsers.includes(saUser), via: 'legacy', subjects: legacyUsers };
+    } catch (err) {
+      return { granted: false, via: 'error', error: String(err?.message || err) };
+    }
+  }, { project });
+  assert(sccGrant.granted, 'cli: add-scc-to-user grants anyuid', JSON.stringify(sccGrant));
   const quota = await findResource('ResourceQuota', 'demo-quota', project);
   const limitRange = await findResource('LimitRange', 'demo-limit', project);
   assert(!!quota, 'cli: ResourceQuota demo-quota exists');

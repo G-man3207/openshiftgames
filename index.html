@@ -2455,6 +2455,13 @@
         // No live run / start-page diorama: the menu owns its own showcase layout.
         if (!cluster || !renderer || !this.modeInstance || renderer.menuMode) return;
         try {
+          // The OLM software catalog (PackageManifests + the global-operators
+          // OperatorGroup) is part of the seeded platform. Mode setup and level
+          // changes clear/re-seed the cluster, so create it synchronously BEFORE
+          // auto-align; otherwise the first simulation tick adds it afterwards
+          // and all five meshes spawn at the same fallback position (they used
+          // to break the alignment uniqueness guarantee).
+          this.engine?.simulation?.ensureOLMDefaultsSync?.();
           for (const resource of cluster.getAllResources?.() || []) {
             const uid = resource.uid;
             if (!uid || renderer.resourceMeshes.has(uid)) continue;

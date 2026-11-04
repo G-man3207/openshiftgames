@@ -8,7 +8,7 @@
  * Checks:
  *  1. JS syntax for every module and inline HTML module.
  *  2. Relative import graph: files exist and named imports resolve to exports.
- *  3. Kind registry integrity: 42 OpenShift kinds, API versions/scope, palette
+ *  3. Kind registry integrity: 47 OpenShift kinds, API versions/scope, palette
  *     coverage, mesh creators, factory behaviour, draw/index palette wiring.
  *  4. Default cluster state (Projects, ClusterOperators, ClusterVersion, SCCs,
  *     users/RBAC, ImageStreams) and the declarative engine self-tests.
@@ -240,6 +240,11 @@ const EXPECTED_API = {
   ImageStream: 'image.openshift.io/v1',
   Template: 'template.openshift.io/v1',
   Subscription: 'operators.coreos.com/v1alpha1',
+  OperatorGroup: 'operators.coreos.com/v1',
+  InstallPlan: 'operators.coreos.com/v1alpha1',
+  ClusterServiceVersion: 'operators.coreos.com/v1alpha1',
+  PackageManifest: 'packages.operators.coreos.com/v1',
+  MetalLB: 'metallb.io/v1beta1',
   SecurityContextConstraints: 'security.openshift.io/v1',
   ClusterResourceQuota: 'quota.openshift.io/v1',
   User: 'user.openshift.io/v1',
@@ -255,7 +260,7 @@ const EXPECTED_API = {
 const EXPECTED_CLUSTER_SCOPED = new Set([
   'Node', 'Project', 'PersistentVolume', 'StorageClass', 'ClusterRole', 'ClusterRoleBinding',
   'SecurityContextConstraints', 'ClusterResourceQuota', 'User', 'Group', 'Identity', 'OAuth',
-  'ClusterOperator', 'ClusterVersion',
+  'ClusterOperator', 'ClusterVersion', 'PackageManifest',
 ]);
 const EXPECTED_PLACEABLE = [
   'Project', 'Node', 'ClusterResourceQuota', 'Pod', 'Deployment', 'ReplicaSet', 'StatefulSet',
