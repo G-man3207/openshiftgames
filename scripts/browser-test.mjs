@@ -846,6 +846,25 @@ await runSection('files', async () => {
   const filesReopened = await waitFor(() => evaluate(() => window.game?.manifestPanel?.visible === true), 5000);
   assert(filesReopened, 'files: F reopens the panel for the pause check');
   assert(await evaluate(() => window.game.gameEngine.state === 'paused'), 'files: opening the panel pauses the simulation');
+  // #20 QA: the pause must be visible, not silent.
+  const pausedChip = await evaluate(() => {
+    const chip = document.getElementById('hud-paused');
+    const rect = chip?.getBoundingClientRect();
+    return {
+      hidden: chip?.hidden,
+      reason: document.getElementById('hud-paused-reason')?.textContent,
+      aria: chip?.getAttribute('aria-label'),
+      rect: rect ? { x: Math.round(rect.x), right: Math.round(rect.right), y: Math.round(rect.y) } : null,
+    };
+  });
+  assert(pausedChip.hidden === false, 'files: HUD shows a visible paused indicator', JSON.stringify(pausedChip));
+  assert(pausedChip.reason === 'Files open', 'files: paused indicator names the Files reason', JSON.stringify(pausedChip));
+  assert(/Simulation paused: Files open/.test(pausedChip.aria || ''), 'files: paused indicator is announced accessibly', pausedChip.aria);
+  assert(
+    pausedChip.rect && pausedChip.rect.x >= 0 && pausedChip.rect.right <= 1600 && pausedChip.rect.y < 60,
+    'files: paused indicator stays inside the HUD bar',
+    JSON.stringify(pausedChip.rect),
+  );
   await evaluate(() => document.activeElement?.blur?.());
   await page.keyboard.press('Escape');
   const filesClosedByEsc = await waitFor(() => evaluate(() => window.game?.manifestPanel?.visible === false), 5000);
@@ -856,6 +875,28 @@ await runSection('files', async () => {
   );
   await sleep(350);
   assert(await evaluate(() => window.game.gameEngine.state === 'running'), 'files: closing the panel resumes the simulation');
+  assert(
+    await evaluate(() => document.getElementById('hud-paused')?.hidden === true),
+    'files: paused indicator clears when the run resumes',
+  );
+
+  // #20 QA: `vim file` opens the Files panel too — the pause must be equally visible.
+  const vimResult = await evaluate(() => window.game.app.commandBar.executeCommand('vim manifests/deployment.yaml'));
+  await waitFor(() => evaluate(() => window.game?.manifestPanel?.visible === true), 5000);
+  await sleep(450);
+  const vimChip = await evaluate(() => ({
+    hidden: document.getElementById('hud-paused')?.hidden,
+    reason: document.getElementById('hud-paused-reason')?.textContent,
+    panel: window.game.manifestPanel?.visible === true,
+  }));
+  assert(vimChip.panel, 'files: vim opens the Files panel', JSON.stringify({ vimResult: vimResult?.message }));
+  assert(vimChip.hidden === false && vimChip.reason === 'Files open', 'files: vim-triggered Files open shows the paused indicator', JSON.stringify(vimChip));
+  await evaluate(() => window.game.manifestPanel?.hide?.());
+  await sleep(350);
+  assert(
+    await evaluate(() => document.getElementById('hud-paused')?.hidden === true),
+    'files: paused indicator clears after the vim-triggered panel closes',
+  );
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -880,11 +921,11 @@ await runSection('cli', async () => {
   await expectCmd('cli: oc get clusterversion', 'oc get clusterversion', /4\.22\.0/);
   await expectCmd('cli: oc new-project', `oc new-project ${project} --description="EX280 lab"`, /Now using project|created/i);
   await expectCmd('cli: oc project', `oc project ${project}`, /Now using project/i);
-  await expectCmd('cli: oc create deployment', `oc create deployment web --image=nginx:latest -n ${project}`, /deployment\.apps\/web created/i);
+  await expectCmd('cli: oc create deployment', `oc create deployment web --image=quay.io/openshift/origin-hello-openshift:latest -n ${project}`, /deployment\.apps\/web created/i);
   await expectCmd('cli: oc expose svc creates Route', `oc expose svc/web -n ${project}`, /route.*(exposed|created)/i);
   await expectCmd('cli: oc get routes', `oc get routes -n ${project}`, /web/);
   await expectCmd('cli: oc set env', `oc set env deployment/web APP_ENV=dev -n ${project}`, /updated|environment/i);
-  await expectCmd('cli: oc set image', `oc set image deployment/web web=nginx:1.26 -n ${project}`, /image updated|updated/i);
+  await expectCmd('cli: oc set image', `oc set image deployment/web origin-hello-openshift=quay.io/openshift/origin-hello-openshift:v1.1 -n ${project}`, /image updated|updated/i);
   await expectCmd('cli: oc set resources', `oc set resources deployment/web --limits=cpu=500m,memory=512Mi --requests=cpu=100m,memory=128Mi -n ${project}`, /resource requirements updated|updated/i);
   await expectCmd('cli: oc create configmap', `oc create configmap app-config --from-literal=APP_ENV=dev -n ${project}`, /configmap\/app-config created/i);
   await expectCmd('cli: oc create secret', `oc create secret generic app-secret --from-literal=password=s3cret -n ${project}`, /secret\/app-secret created/i);
@@ -899,7 +940,7 @@ await runSection('cli', async () => {
   await expectCmdError('cli: describe in missing namespace → NotFound', 'oc describe pod nope -n does-not-exist', /namespaces "does-not-exist" not found/);
   await expectCmdError('cli: delete in missing namespace → NotFound', 'oc delete pod nope -n does-not-exist', /namespaces "does-not-exist" not found/);
   await expectCmdError('cli: delete --all in missing namespace → NotFound', 'oc delete pods --all -n does-not-exist', /namespaces "does-not-exist" not found/);
-  await expectCmdError('cli: create in missing namespace → NotFound', 'oc create deployment nope --image=nginx:latest -n does-not-exist', /namespaces "does-not-exist" not found/);
+  await expectCmdError('cli: create in missing namespace → NotFound', 'oc create deployment nope --image=quay.io/openshift/origin-hello-openshift:latest -n does-not-exist', /namespaces "does-not-exist" not found/);
   await expectCmdError('cli: apply -f in missing namespace → NotFound', 'oc apply -f manifests/deployment.yaml -n does-not-exist', /namespaces "does-not-exist" not found/);
   await expectCmdError('cli: status in missing namespace → NotFound', 'oc status -n does-not-exist', /namespaces "does-not-exist" not found/);
   await expectCmd('cli: get -A ignores a missing -n namespace', 'oc get pods --all-namespaces -n does-not-exist', /No resources found|NAME/);
@@ -943,7 +984,7 @@ await runSection('cli', async () => {
   await expectCmd('cli: process | apply -f - -n retargets stdin objects', 'oc process -f templates/webapp-template.yaml -p APP_NAME=retarget-demo | oc apply -f - -n openshift', /created|configured|unchanged/i);
   const retargetedStdin = await findResource('Deployment', 'retarget-demo', 'openshift');
   assert(!!retargetedStdin, 'cli: apply -f - -n puts stdin objects in the -n project');
-  await expectCmdError('cli: new-app in missing namespace → NotFound', 'oc new-app --image=nginx:latest --name=missing-ns-app -n does-not-exist', /Error from server \(NotFound\): namespaces "does-not-exist" not found/);
+  await expectCmdError('cli: new-app in missing namespace → NotFound', 'oc new-app --image=quay.io/openshift/origin-hello-openshift:latest --name=missing-ns-app -n does-not-exist', /Error from server \(NotFound\): namespaces "does-not-exist" not found/);
   await expectCmdError('cli: expose in missing namespace → NotFound', 'oc expose svc/web -n does-not-exist', /Error from server \(NotFound\): namespaces "does-not-exist" not found/);
 
   const podReady = await waitFor(async () => {
@@ -960,6 +1001,51 @@ await runSection('cli', async () => {
   if (podName) await expectNonEmpty('cli: oc logs', `oc logs ${podName} -n ${project}`);
   await expectCmd('cli: oc describe deployment', `oc describe deployment/web -n ${project}`, /Name:|Deployment/i);
   await expectCmd('cli: oc rollout status', `oc rollout status deployment/web -n ${project}`, /deployment|rollout/i);
+
+  // #20 QA: nginx:latest is a real restricted-v2 violation (root + port 80):
+  // admission rejects it, the ReplicaSet reports FailedCreate and NO Pod exists.
+  await expectCmd(
+    'cli: nginx restricted-v2 trap deployment created',
+    `oc create deployment nginx-trap --image=nginx:latest -n ${project}`,
+    /deployment\.apps\/nginx-trap created/i,
+  );
+  const readNginxTrap = () => evaluate((ns) => {
+    const rs = (window.game.cluster.getByKind?.('ReplicaSet') || [])
+      .find((r) => (r.metadata?.namespace || '') === ns && /^nginx-trap-/.test(r.metadata?.name || ''));
+    if (!rs) return null;
+    const conditions = rs.status?.conditions || [];
+    const failedCreate = conditions.some(
+      (c) => c.type === 'ReplicaFailure'
+        || /security context constraint/i.test(String(c.message || '')),
+    );
+    const pods = (window.game.cluster.getByKind?.('Pod') || [])
+      .filter((p) => (p.metadata?.namespace || '') === ns && /^nginx-trap-/.test(p.metadata?.name || ''));
+    const events = typeof rs.getEvents === 'function' ? (rs.getEvents?.() || []) : (rs.events || []);
+    const failedCreateEvents = events.filter(
+      (e) => /FailedCreate/.test(String(e.reason || ''))
+        && /security context constraint|forbidden/i.test(String(e.message || '')),
+    );
+    return {
+      failedCreate,
+      conditions: conditions.map((c) => ({ type: c.type, reason: c.reason, message: String(c.message || '').slice(0, 160) })),
+      pods: pods.length,
+      eventCount: failedCreateEvents.length,
+    };
+  }, project);
+  await waitFor(async () => {
+    const state = await readNginxTrap();
+    return Boolean(state && state.failedCreate && state.eventCount > 0);
+  }, 30000);
+  const nginxTrap = await readNginxTrap();
+  assert(nginxTrap?.failedCreate, 'cli: nginx:latest is rejected by restricted-v2 (RS FailedCreate)', JSON.stringify(nginxTrap));
+  assert(nginxTrap?.pods === 0, 'cli: restricted-v2 rejection creates no Pod', JSON.stringify(nginxTrap));
+  assert(nginxTrap?.eventCount > 0, 'cli: restricted-v2 rejection records a FailedCreate event', JSON.stringify(nginxTrap));
+  // #21: events must be filterable like real oc.
+  await expectCmd(
+    'cli: events --field-selector reason=FailedCreate',
+    `oc get events --field-selector reason=FailedCreate -n ${project}`,
+    /FailedCreate/,
+  );
   const routeAdmittedEarly = await waitFor(() => evaluate((ns) => {
     const route = (window.game.cluster.getByKind?.('Route') || []).find((r) => r.metadata?.name === 'web' && r.metadata?.namespace === ns);
     return !!route?.status?.ingress?.[0]?.conditions?.some((c) => c.type === 'Admitted' && c.status === 'True');
@@ -983,7 +1069,7 @@ await runSection('cli', async () => {
   await expectCmd('cli: switch back to the demo project', `oc project ${project}`, /Now using project/i);
   await expectCmd('cli: oc apply -k prod overlay', 'oc apply -k kustomize/overlays/prod', /created|configured|unchanged/i);
   await expectCmd('cli: oc process | oc apply', 'oc process -f templates/webapp-template.yaml -p APP_NAME=demo | oc apply -f -', /created|configured|unchanged/i);
-  await expectCmd('cli: oc new-app image', `oc new-app --image=nginx:latest --name=api -n ${project}`, /created|Success|deployment/i);
+  await expectCmd('cli: oc new-app image', `oc new-app --image=quay.io/openshift/origin-hello-openshift:latest --name=api -n ${project}`, /created|Success|deployment/i);
   await expectCmd('cli: oc process --parameters', 'oc process -f templates/webapp-template.yaml --parameters', /APP_NAME|NAME/i);
   await expectCmd('cli: helm install', 'helm install webapp helm/webapp', /NAME:|deployed/i);
   await expectCmd('cli: helm list', 'helm list', /webapp/);
@@ -1150,7 +1236,7 @@ await runSection('cli', async () => {
 
   // Semantic assertions on the mutated model.
   const deployment = await findResource('Deployment', 'web', project);
-  assert(deployment && deployment.spec?.template?.spec?.containers?.[0]?.image === 'nginx:1.26', 'cli: oc set image persists in Deployment spec', JSON.stringify(deployment?.spec?.template?.spec?.containers?.[0]?.image));
+  assert(deployment && deployment.spec?.template?.spec?.containers?.[0]?.image === 'quay.io/openshift/origin-hello-openshift:v1.1', 'cli: oc set image persists in Deployment spec', JSON.stringify(deployment?.spec?.template?.spec?.containers?.[0]?.image));
   const env = deployment?.spec?.template?.spec?.containers?.[0]?.env || [];
   assert(env.some((e) => e.name === 'APP_ENV' && e.value === 'dev'), 'cli: oc set env persists in Deployment spec');
   const resources = deployment?.spec?.template?.spec?.containers?.[0]?.resources;
@@ -1227,7 +1313,7 @@ await runSection('ui', async () => {
   let route = await findResource('Route', 'web', 'ex280-demo');
   if (!service || !route) {
     await runCmd('oc new-project ex280-demo', 200);
-    await runCmd('oc create deployment web --image=nginx:latest -n ex280-demo', 200);
+    await runCmd('oc create deployment web --image=quay.io/openshift/origin-hello-openshift:latest -n ex280-demo', 200);
     await runCmd('oc expose svc/web -n ex280-demo', 200);
     await runCmd('oc apply -f examples/buildconfig.yaml', 200);
     await sleep(1500);
@@ -1457,8 +1543,10 @@ await runSection('campaign', async () => {
 
   await expectCmd('campaign L1: oc login', 'oc login -u kubeadmin', /logged in|Login successful|kubeadmin/i);
   await expectCmd('campaign L1: create project', 'oc new-project first-project', /Now using project/i);
-  await expectCmd('campaign L1: run Pod', 'oc run hello-pod --image=nginx:latest -n first-project', /pod.*created/i);
-  await expectCmd('campaign L1: create Deployment', 'oc create deployment hello-deploy --image=nginx:latest -n first-project', /deployment.*created/i);
+  // L1 uses the restricted-v2-safe image (nginx:latest is a real restricted-v2
+  // violation — see the nginx trap regression in the CLI section).
+  await expectCmd('campaign L1: run Pod', 'oc run hello-pod --image=quay.io/openshift/origin-hello-openshift:latest -n first-project', /pod.*created/i);
+  await expectCmd('campaign L1: create Deployment', 'oc create deployment hello-deploy --image=quay.io/openshift/origin-hello-openshift:latest -n first-project', /deployment.*created/i);
   const completed = await waitFor(() => evaluate(() => {
     const status = window.game?.app?.modeInstance?.getStatus?.();
     return status?.state === 'completed' || (status?.objectives?.length && status.objectives.every((o) => o.completed));
@@ -1663,7 +1751,7 @@ objects:
   assert(templateInheritance.adminBinding, 'followup: new project grants the requester admin', JSON.stringify(templateInheritance));
 
   // oc edit explains the real $EDITOR (vi/vim) difference.
-  await expectCmd('followup: create deployment for edit note', 'oc create deployment editnote --image=nginx:1.0 -n followup-check', /created/i);
+  await expectCmd('followup: create deployment for edit note', 'oc create deployment editnote --image=quay.io/openshift/origin-hello-openshift:latest -n followup-check', /created/i);
   await expectCmd('followup: oc edit mentions $EDITOR / vi', 'oc edit deployment/editnote -n followup-check', /(vi\b|vim|\$EDITOR)/i);
   await expectCmd('followup: oc edit project.config opens editor', 'oc edit project.config.openshift.io/cluster', /manifest editor/i);
 });
@@ -1759,7 +1847,21 @@ await runSection('regressions', async () => {
   assert(panelCount === 1, 'regressions: relaunch keeps a single incident panel', `got ${panelCount}`);
   await evaluate(() => document.activeElement?.blur?.());
   await evaluate(() => document.getElementById('hud-alerts')?.click());
-  await sleep(500);
+  // Wait until the drawer slide + mission-card/toolbar shift have settled
+  // (SwiftShader load can stretch the 240ms transitions).
+  await waitFor(() => evaluate(() => {
+    const panel = document.querySelector('#incident-panel');
+    const objectives = document.querySelector('#objectives-panel');
+    const toolbar = document.querySelector('#view-toolbar');
+    if (!panel || !panel.classList.contains('is-open')) return false;
+    const pr = panel.getBoundingClientRect();
+    if (pr.x < -1) return false;
+    if (innerWidth > 900) {
+      return objectives.getBoundingClientRect().x >= pr.right && toolbar.getBoundingClientRect().x >= pr.right;
+    }
+    return getComputedStyle(objectives).display === 'none';
+  }), 8000);
+  await sleep(150);
   const drawer = await evaluate(() => {
     const panel = document.querySelector('#incident-panel');
     const objectives = document.querySelector('#objectives-panel');
@@ -1793,10 +1895,19 @@ await runSection('regressions', async () => {
   );
   if (drawer.viewport > 900) {
     assert(
-      drawer.objectivesLeft >= drawer.panelRight && drawer.toolbarLeft >= drawer.panelRight,
-      'regressions: incidents drawer no longer covers mission card or view toolbar',
+      drawer.toolbarLeft >= drawer.panelRight,
+      'regressions: incidents drawer no longer covers the view toolbar',
       JSON.stringify(drawer),
     );
+    // Sandbox has no mission checklist (the panel is display:none there); the
+    // mission-card shift is asserted in campaign mode below.
+    if (drawer.objectivesDisplay !== 'none') {
+      assert(
+        drawer.objectivesLeft >= drawer.panelRight,
+        'regressions: incidents drawer no longer covers the mission card',
+        JSON.stringify(drawer),
+      );
+    }
   } else {
     assert(drawer.objectivesDisplay === 'none', 'regressions: narrow viewport stacks drawer over mission card', JSON.stringify(drawer));
   }
@@ -1858,6 +1969,45 @@ await runSection('regressions', async () => {
     'regressions: fresh campaign level starts auto-aligned',
     JSON.stringify({ count: launchScene?.count, unique: launchScene?.unique }),
   );
+
+  // The incidents drawer must not cover the campaign mission card or the view
+  // toolbar on wide viewports (GitHub QA screenshot + the follow-up toolbar bug).
+  await evaluate(() => window.game.app.incidentPanel?.show?.());
+  await waitFor(() => evaluate(() => {
+    const panel = document.querySelector('#incident-panel');
+    const objectives = document.querySelector('#objectives-panel');
+    const toolbar = document.querySelector('#view-toolbar');
+    if (!panel || !panel.classList.contains('is-open')) return false;
+    const pr = panel.getBoundingClientRect();
+    return pr.x >= -1
+      && objectives.getBoundingClientRect().x >= pr.right
+      && toolbar.getBoundingClientRect().x >= pr.right;
+  }), 8000);
+  await sleep(150);
+  const campaignDrawer = await evaluate(() => {
+    const panel = document.querySelector('#incident-panel').getBoundingClientRect();
+    const objectives = document.querySelector('#objectives-panel');
+    const or = objectives.getBoundingClientRect();
+    const toolbar = document.querySelector('#view-toolbar').getBoundingClientRect();
+    return {
+      panelRight: Math.round(panel.right),
+      objectivesLeft: Math.round(or.x),
+      objectivesDisplay: getComputedStyle(objectives).display,
+      toolbarLeft: Math.round(toolbar.x),
+      bodyClass: document.body.classList.contains('side-panel-left-open'),
+    };
+  });
+  assert(
+    campaignDrawer.objectivesDisplay !== 'none'
+      && campaignDrawer.objectivesLeft >= campaignDrawer.panelRight
+      && campaignDrawer.toolbarLeft >= campaignDrawer.panelRight
+      && campaignDrawer.bodyClass,
+    'regressions: incidents drawer leaves the campaign mission card and toolbar visible',
+    JSON.stringify(campaignDrawer),
+  );
+  await page.keyboard.press('Escape');
+  await waitFor(() => evaluate(() => document.body.classList.contains('side-panel-left-open') === false), 5000);
+  await sleep(200);
 
   // Drive the real pause-card button, not the internal method.
   await evaluate(() => window.game.app.showPause());
