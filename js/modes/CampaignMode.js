@@ -404,6 +404,11 @@ class CampaignMode {
     if (!this.currentLevelDef || !Array.isArray(this.currentLevelDef.objectives)) return;
     evaluateObjectives(this.currentLevelDef.objectives, this.buildEvaluationContext(), {
       progress: this.objectiveProgress,
+      // Objectives are end-state, not latched: removing a group member or
+      // deleting a resource must un-tick the objective while the level is live
+      // (`oc adm groups remove-users developers bob` → "Group … alice and bob"
+      // is false again).
+      recheckCompleted: true,
     });
   }
 
@@ -444,6 +449,11 @@ class CampaignMode {
     let result = { stars: 1, xpEarned: 100 };
     try {
       if (typeof this.scoringEngine?.completeCampaignLevel === 'function') {
+        // Hand the live objective types to ScoringEngine so the EX280 readiness
+        // verdict can record per-objective evidence for this level.
+        this.scoringEngine._lastObjectiveTypes = this.objectiveProgress
+          .map((objective) => String(objective?.type || '').toLowerCase())
+          .filter(Boolean);
         result = this.scoringEngine.completeCampaignLevel(
           this.currentLevel,
           completionTime,

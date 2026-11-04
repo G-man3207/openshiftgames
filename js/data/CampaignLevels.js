@@ -84,15 +84,18 @@ const deployment = (name, options = {}) => ({
   labels: { app: name, ...(options.labels || {}) },
   spec: {
     replicas: options.replicas ?? 2,
+    ...(options.progressDeadlineSeconds ? { progressDeadlineSeconds: options.progressDeadlineSeconds } : {}),
     selector: { matchLabels: { app: name } },
     template: {
       metadata: { labels: { app: name } },
       spec: {
+        ...(options.serviceAccountName ? { serviceAccountName: options.serviceAccountName } : {}),
         containers: [
           {
             name: options.containerName || 'main',
             image: options.image || 'quay.io/openshift/origin-hello-openshift:latest',
             ports: [{ containerPort: 8080, name: 'http' }],
+            ...(options.securityContext ? { securityContext: options.securityContext } : {}),
             ...(options.resources ? { resources: options.resources } : {}),
           },
         ],
@@ -140,8 +143,8 @@ const CAMPAIGN_LEVELS = [
     hints: [
       'Log in first: `oc login -u kubeadmin` (or `oc login --username=kubeadmin`), then check `oc whoami`.',
       'Create the project: `oc new-project first-project --display-name="First Project"`. `oc project` shows the current project.',
-      'Run a Pod: `oc run hello-pod --image=nginx:latest`. Watch it with `oc get pods -o wide`.',
-      'Create a Deployment: `oc create deployment hello-deploy --image=nginx:latest`, then verify `oc get deployments,pods`.',
+      'Run a Pod with an image that runs as a non-root user: `oc run hello-pod --image=quay.io/openshift/origin-hello-openshift:latest`. Watch it with `oc get pods -o wide`. A Pod that *requests* `runAsUser: 0`, a `privileged: true` container or a host port is rejected by the default `restricted-v2` SCC at admission — the Pod never appears in `oc get pods` (see Level 17).',
+      'Create a Deployment: `oc create deployment hello-deploy --image=quay.io/openshift/origin-hello-openshift:latest`, then verify `oc get deployments,pods`.',
     ],
     starCriteria: { time: 240, efficiency: 0.75, noFailures: true },
     nextLevel: 2,
@@ -157,7 +160,7 @@ const CAMPAIGN_LEVELS = [
         },
         {
           target: 'cluster-view',
-          text: 'Your Project is active. Deploy a pod with oc run hello-pod --image=nginx:latest and watch it become Running.',
+          text: 'Your Project is active. Deploy a pod with oc run hello-pod --image=quay.io/openshift/origin-hello-openshift:latest and watch it become Running.',
         },
         {
           target: 'inspector',
@@ -165,7 +168,7 @@ const CAMPAIGN_LEVELS = [
         },
         {
           target: 'palette',
-          text: 'You can also deploy with the palette and with `oc create deployment hello-deploy --image=nginx:latest`.',
+          text: 'You can also deploy with the palette and with `oc create deployment hello-deploy --image=quay.io/openshift/origin-hello-openshift:latest`.',
         },
       ],
     },
@@ -204,7 +207,7 @@ const CAMPAIGN_LEVELS = [
       'Labels are how OpenShift selects resources: `oc label deployment/web tier=frontend` and query with `oc get deploy -l tier=frontend --show-labels`.',
       'Reshape output: `oc get deployment/web -o yaml`, `oc get pods -o custom-columns=NAME:.metadata.name,IMAGE:.spec.containers[0].image`.',
       'Ask the API for docs: `oc explain deployment.spec.strategy --recursive`.',
-      'Create the second Deployment with `oc create deployment api --image=nginx:latest` (or deploy it from the palette).',
+      'Create the second Deployment with `oc create deployment api --image=quay.io/openshift/origin-hello-openshift:latest` (or deploy it from the palette).',
     ],
     starCriteria: { time: 300, efficiency: 0.75, noFailures: true },
     nextLevel: 3,
@@ -222,7 +225,7 @@ const CAMPAIGN_LEVELS = [
     chapter: 1,
     chapterName: 'Manage OpenShift',
     description:
-      'Production OpenShift is about reading symptoms: `oc logs`, `oc describe`, `oc get events`, `oc adm top`, ClusterOperators and ClusterVersion. A hidden CrashLoopBackOff is breaking the web-app Deployment — investigate it and bring cluster health back to 90%+.',
+      'Production OpenShift is about reading symptoms: `oc logs`, `oc describe`, `oc get events`, `oc adm top`, ClusterOperators and ClusterVersion. A hidden CrashLoopBackOff is breaking the web-app Deployment — read the crash reason, fix the workload configuration (not just the Pod), and bring cluster health back to 90%+.',
     examObjectives: [
       'Manage OpenShift Container Platform > Use the web console to manage and configure an OpenShift cluster',
       'Manage OpenShift Container Platform > Examine resources and cluster status',
@@ -253,7 +256,7 @@ const CAMPAIGN_LEVELS = [
       'Switch projects: `oc project ops-lab`. Then `oc get pods` and click the failing Pod for Inspector → Events.',
       'Read the crash output: `oc logs <pod> --previous`. Then `oc describe pod <pod>` — the Events section shows Back-off restarting failed container.',
       'Correlate events: `oc get events --sort-by=.lastTimestamp`, and check cluster operators with `oc get clusteroperators`.',
-      'Use the Incident panel to Investigate the CrashLoopBackOff (or run the commands it lists), then apply the resolution action to clear it.',
+      'A CrashLoopBackOff is a symptom, not the cause: `oc rollout restart deployment/web-app` and deleting the Pod only bring the same broken image/command back. Fix the Deployment (correct image, command or env) — or use the Incident panel resolution action — and the incident clears once the container spec really changes.',
     ],
     starCriteria: { time: 360, efficiency: 0.7, noFailures: false },
     nextLevel: 4,
@@ -355,7 +358,7 @@ const CAMPAIGN_LEVELS = [
       'On a real cluster, render before applying with `oc kustomize kustomize/overlays/prod` (note the `prod-` name prefix, namespace webapp-prod, image tag and replicas); the simulator renders on `oc apply -k kustomize/overlays/prod`.',
       'Apply the overlay: `oc apply -k kustomize/overlays/prod`.',
       'Verify the namespaced object: `oc get deployment -n webapp-prod` should show `prod-webapp` with 3 desired replicas.',
-      'The strategic-merge patch in `patch-deployment.yaml` adds the APP_ENV=runtime env var and resource requests. Try `oc get deploy prod-webapp -n webapp-prod -o yaml`.',
+      'The strategic-merge patch in `patch-deployment.yaml` adds the APP_ENV=production env var and resource requests. Try `oc get deploy prod-webapp -n webapp-prod -o yaml`.',
     ],
     starCriteria: { time: 360, efficiency: 0.75, noFailures: true },
     nextLevel: 7,
@@ -393,7 +396,7 @@ const CAMPAIGN_LEVELS = [
       'Switch projects: `oc project config-lab`. Create the config: `oc create configmap app-config --from-literal=APP_MODE=production`.',
       'Create the secret: `oc create secret generic db-secret --from-literal=password=s3cret`.',
       'Consume configuration as envFrom: run `oc set env deployment/app --from=configmap/app-config` and then `oc set env deployment/app --from=secret/db-secret`.',
-      'For the volume objective run `oc edit deployment/app` and add `volumes: [{name: cfg, configMap: {name: app-config}}]` plus a container `volumeMounts: [{name: cfg, mountPath: /etc/app}]`.',
+      'Mount the ConfigMap as a volume with real oc flags: `oc set volume deployment/app --add --name=cfg --type=configmap --configmap-name=app-config --mount-path=/etc/app`. List volumes with `oc set volumes deployment/app`; remove one with `oc set volume deployment/app --remove --name=cfg`.',
       'Verify with `oc get configmap,secret` and `oc get deployment/app -o yaml`.',
     ],
     starCriteria: { time: 360, efficiency: 0.75, noFailures: true },
@@ -406,11 +409,10 @@ const CAMPAIGN_LEVELS = [
     chapter: 2,
     chapterName: 'Declarative & Kustomize',
     description:
-      'OpenShift Templates are parameterised object lists; Helm charts package workloads. Process `templates/webapp-template.yaml` with `oc process`, apply the result, then install the `helm/webapp` chart and list the release.',
+      'Application Templates are parameterised object lists that ship with an app; Helm charts package workloads. Process `templates/webapp-template.yaml` with `oc process`, apply the result, then install the `helm/webapp` chart and list the release. (Project templates — the bootstrap `project-request` Template used by `oc new-project` — are covered in Level 15.)',
     examObjectives: [
       'Deploy applications > Deploy applications from templates and Helm charts',
       'Deploy applications > Manage application deployments',
-      'Enable developer self-service > Configure project templates',
     ],
     docsLinks: [DOCS.creating, DOCS.helm],
     startingResources: [node('node-1'), node('node-2'), project('template-lab')],
@@ -490,6 +492,7 @@ const CAMPAIGN_LEVELS = [
       deployment('api-server', {
         replicas: 3,
         image: 'quay.io/openshift/origin-hello-openshift:latest',
+        progressDeadlineSeconds: 45,
         resources: { requests: { cpu: '100m', memory: '128Mi' }, limits: { cpu: '500m', memory: '512Mi' } },
       }),
     ],
@@ -497,15 +500,17 @@ const CAMPAIGN_LEVELS = [
     objectives: [
       { type: 'update', kind: 'Deployment', name: 'api-server', label: 'Trigger a rolling update of api-server' },
       { type: 'rollback', count: 1, label: 'Roll the Deployment back with oc rollout undo' },
-      { type: 'resolve', incidentType: 'ImagePullBackOff', count: 1, label: 'Resolve the ImagePullBackOff caused by the bad image' },
       { type: 'uptime', percentage: 90, label: 'Keep availability at 90% or better during the rollout' },
     ],
-    incidents: [{ type: 'ImagePullBackOff', triggerTime: 20, target: 'api-server', severity: 3 }],
+    // The bad-image rollout is the incident: the new ReplicaSet Pods stay in
+    // ImagePullBackOff, `oc rollout status` fails with the progress deadline,
+    // and `oc rollout undo` is the remediation. No scripted incident needed.
+    incidents: [],
     hints: [
-      'Switch projects: `oc project rollout-lab`. Trigger an update: `oc set image deployment/api-server main=quay.io/openshift/origin-hello-openshift:does-not-exist`.',
-      'Watch the rollout and ReplicaSets: `oc rollout status deployment/api-server`, `oc get rs`, `oc rollout history deployment/api-server`.',
-      'The bad image causes ImagePullBackOff. Revert with `oc rollout undo deployment/api-server` (or the Inspector → Rollout Undo action).',
-      'Investigate/resolve the ImagePullBackOff in the Incident panel, then confirm `oc get pods` is healthy again.',
+      'Switch projects: `oc project rollout-lab`. Trigger the update: `oc set image deployment/api-server main=quay.io/openshift/origin-hello-openshift:does-not-exist`.',
+      'Watch the rollout block: `oc rollout status deployment/api-server` waits, then fails with `error: deployment "api-server" exceeded its progress deadline` (progressDeadlineSeconds is 45 on this Deployment). The new pods stay ImagePullBackOff; the old ReplicaSet keeps serving — check `oc get rs` and `oc rollout history deployment/api-server`.',
+      'The bad image never becomes available. Revert with `oc rollout undo deployment/api-server` and confirm `oc rollout status deployment/api-server` and `oc get pods` are healthy again.',
+      'The ImagePullBackOff incident clears once the Deployment template is rolled back to the good image; the Incident panel resolution action is the alternative path.',
     ],
     starCriteria: { time: 420, efficiency: 0.7, noFailures: false },
     nextLevel: 11,
@@ -546,8 +551,8 @@ const CAMPAIGN_LEVELS = [
     incidents: [],
     hints: [
       'Switch projects: `oc project route-lab`. Create the Service: `oc create service clusterip web --tcp=8080:8080` (it selects app=web).',
-      'Expose it: `oc create route edge web --service=web` — then `oc get route` shows the generated host and Admitted status.',
-      'Alternative: `oc expose service/web --name=web` creates an unencrypted Route; edit it (or re-create) to add TLS termination.',
+      'Expose it with TLS at the Route: `oc create route edge web --service=web` (omit the name to name the Route after the Service) — then `oc get route` shows the generated host and Admitted status.',
+      'Know the two expose forms: `oc expose svc/web --name=web-public --path=/api` creates a Route from an existing Service, while `oc expose deployment/<name>` creates ONLY a Service and never a Route (try it on another project/Deployment, not on web which already has a Service).',
       'Create the TLS Secret: `oc create secret tls web-tls --cert=tls.crt --key=tls.key` (the simulator accepts placeholder cert files; `oc create secret generic web-tls --from-literal=tls.crt=placeholder --from-literal=tls.key=placeholder` also satisfies the Secret objective — edge Routes can use the router default certificate).',
       'Verify: `oc describe route web` — look for TLS Termination: edge and the Admitted condition.',
     ],
@@ -577,10 +582,11 @@ const CAMPAIGN_LEVELS = [
       node('node-2'),
       project('lb-lab'),
       deployment('tls-app', { replicas: 2 }),
+      service('tls-app', { namespace: 'lb-lab', app: 'tls-app', port: 443, targetPort: 8080 }),
     ],
     availableResources: ['Project', 'Deployment', 'Pod', 'Service', 'Route', 'Subscription', 'IPAddressPool', 'L2Advertisement', 'Node'],
-    manifestFiles: ['examples/subscription.yaml'],
-    focusFiles: ['examples/subscription.yaml'],
+    manifestFiles: ['examples/subscription.yaml', 'examples/operatorgroup.yaml', 'examples/metallb.yaml'],
+    focusFiles: ['examples/operatorgroup.yaml', 'examples/subscription.yaml', 'examples/metallb.yaml'],
     objectives: [
       { type: 'operator', name: 'metallb', installed: true, label: 'Install the MetalLB operator (CSV Succeeded)' },
       { type: 'serviceType', kind: 'LoadBalancer', count: 1, label: 'Create a Service of type LoadBalancer' },
@@ -589,11 +595,12 @@ const CAMPAIGN_LEVELS = [
     ],
     incidents: [],
     hints: [
-      'Switch projects: `oc project lb-lab`. Install MetalLB by editing `examples/subscription.yaml` (name/package `metallb`) and running `oc apply -f examples/subscription.yaml`. The simulator installs it into `openshift-operators`; on a real cluster the MetalLB operator docs use the `metallb-system` project.',
-      'Verify the operator: `oc get sub,csv -n openshift-operators` — the ClusterServiceVersion (not the Subscription) moves Installing → Succeeded; `oc describe sub metallb` shows `installedCSV`.',
-      'Create the LoadBalancer Service: `oc create service loadbalancer lb --tcp=443:443` and check `oc get svc lb` for an EXTERNAL-IP.',
-      'For the passthrough Route: create an IPAddressPool + L2Advertisement if needed, then `oc create route passthrough tls-app --service=tls-app`.',
-      'Verify: `oc describe route tls-app` shows TLS termination passthrough and Admitted=True.',
+      'Install the operator the 4.x way: `oc new-project metallb-system`, then apply the shipped single-namespace OperatorGroup: `oc apply -f examples/operatorgroup.yaml`. A Subscription without a matching OperatorGroup never installs.',
+      'Edit `examples/subscription.yaml` so metadata.name and spec.name are `metallb` and metadata.namespace is `metallb-system`, then `oc apply -f examples/subscription.yaml`. OLM creates an InstallPlan and then the operator ClusterServiceVersion (shown by `oc get csv -n metallb-system`) in metallb-system.',
+      'Verify OLM: `oc get sub,csv,installplan -n metallb-system` — the ClusterServiceVersion (not the Subscription) moves Installing → Succeeded; `oc get subscription -n metallb-system -o yaml` shows `status.installedCSV`.',
+      'Create the operand: `oc apply -f examples/metallb.yaml` (MetalLB CR + IPAddressPool + L2Advertisement in metallb-system), then `oc get pods -n metallb-system` shows the controller/speaker Pods.',
+      'Create the LoadBalancer Service in lb-lab: `oc project lb-lab` then `oc create service loadbalancer lb --tcp=443:443`; `oc get svc lb` now gets an EXTERNAL-IP from the pool.',
+      'Expose the non-HTTP app with a passthrough Route: `oc create route passthrough tls-app --service=tls-app`, then confirm `oc describe route tls-app` shows passthrough TLS and Admitted=True (the Service tls-app is already seeded in lb-lab).',
     ],
     starCriteria: { time: 480, efficiency: 0.65, noFailures: false },
     nextLevel: 13,
@@ -663,9 +670,10 @@ const CAMPAIGN_LEVELS = [
     incidents: [{ type: 'UnauthorizedAccess', triggerTime: 25, target: 'web', severity: 3 }],
     hints: [
       'Create the group: `oc adm groups new developers alice bob` (or `oc adm groups add-users developers alice bob`).',
-      'Bind a role in the project: `oc adm policy add-role-to-group edit developers -n rbac-lab`. View it with `oc describe rolebinding -n rbac-lab`.',
+      'Bind a role in the project: `oc adm policy add-role-to-group edit developers -n rbac-lab`. View it with `oc get rolebinding -n rbac-lab -o yaml`.',
       'Prove the access: `oc auth can-i get pods --as=alice -n rbac-lab` (and `oc auth can-i delete deployments --as=alice -n rbac-lab`).',
-      'Avoid wildcards: create precise Roles or reuse built-in `view`/`edit`. Then investigate the UnauthorizedAccess incident and apply the fix.',
+      'Avoid wildcards: create precise Roles or reuse built-in `view`/`edit`. The UnauthorizedAccess incident is a missing binding for the web workload ServiceAccount — repair it with `oc adm policy add-role-to-user view -z default -n rbac-lab` (or the incident panel); the incident clears as soon as the RoleBinding exists.',
+      'End-state check: `oc adm groups remove-users developers bob` removes bob from the group on the spot — re-run `oc get groups` to confirm membership, because objectives are evaluated against the live cluster, not on a one-time tick.',
     ],
     starCriteria: { time: 420, efficiency: 0.7, noFailures: false },
     nextLevel: 15,
@@ -758,7 +766,7 @@ const CAMPAIGN_LEVELS = [
     chapter: 5,
     chapterName: 'Security & Operations',
     description:
-      'Security Context Constraints are OpenShift\'s pod admission gate. A workload is being rejected because no SCC allows its requested securityContext. Grant the privileged SCC to the project ServiceAccount (anyuid allows arbitrary UIDs but not privileged containers), run the privileged app, and clear the SCCForbidden incident.',
+      'Security Context Constraints are OpenShift\'s pod admission gate. A workload is being rejected because no SCC allows its requested securityContext. Create a dedicated ServiceAccount for the app, grant the privileged SCC to that ServiceAccount with an OCP 4.x RBAC binding (anyuid allows arbitrary UIDs but not privileged containers), run the privileged app, and clear the SCCForbidden incident. Do not grant privileged to the project default ServiceAccount.',
     examObjectives: [
       'Configure application security > Run privileged applications',
       'Configure application security > Manage and apply permissions using security context constraints',
@@ -769,20 +777,26 @@ const CAMPAIGN_LEVELS = [
       node('node-1'),
       node('node-2'),
       project('privileged-lab'),
-      deployment('privileged-app', { replicas: 1 }),
+      { kind: 'ServiceAccount', name: 'priv-sa' },
+      deployment('privileged-app', {
+        replicas: 1,
+        serviceAccountName: 'priv-sa',
+        securityContext: { privileged: true },
+      }),
     ],
-    availableResources: ['Project', 'Deployment', 'Pod', 'SecurityContextConstraints', 'ServiceAccount', 'RoleBinding'],
+    availableResources: ['Project', 'Deployment', 'Pod', 'SecurityContextConstraints', 'ServiceAccount', 'RoleBinding', 'ClusterRoleBinding'],
     objectives: [
-      { type: 'scc', scc: 'privileged', subject: 'system:serviceaccount:*:default', expected: true, label: 'Grant the privileged SCC to the project default ServiceAccount' },
-      { type: 'privileged', count: 1, label: 'Run a privileged workload container (or UID 0 app)' },
+      { type: 'scc', scc: 'privileged', subject: 'system:serviceaccount:privileged-lab:priv-sa', expected: true, label: 'Grant the privileged SCC to the dedicated ServiceAccount priv-sa' },
+      { type: 'privileged', count: 1, label: 'Run the privileged workload as priv-sa (Pod admitted by the privileged SCC)' },
       { type: 'resolve', incidentType: 'SCCForbidden', count: 1, label: 'Resolve the SCCForbidden incident' },
     ],
     incidents: [{ type: 'SCCForbidden', triggerTime: 15, target: 'privileged-app', severity: 4 }],
     hints: [
-      'Check which SCC applies: `oc get scc`, then `oc adm policy who-can use scc privileged`.',
-      'Grant the SCC to the ServiceAccount: `oc adm policy add-scc-to-user privileged -z default -n privileged-lab`.',
-      'Run privileged: `oc edit deployment/privileged-app`, then add `securityContext: {privileged: true}` to the container spec (or `oc patch deployment/privileged-app --type=merge -p \'{"spec":{"template":{"spec":{"containers":[{"name":"main","securityContext":{"privileged":true}}]}}}}\'`) — this only admits with the privileged SCC granted above.',
-      'Verify with `oc describe scc privileged | grep -A2 Users`, `oc get pods`, and resolve the SCCForbidden incident in the Incident panel.',
+      'See the denied workload: `oc get pods -n privileged-lab` stays empty and `oc describe deployment/privileged-app -n privileged-lab` shows a FailedCreate event — "unable to validate against any security context constraint". On 4.x the rejected Pod is never created.',
+      'Check the identity: `oc get sa -n privileged-lab` — the shipped dedicated ServiceAccount is `priv-sa` (the workload runs as it). Avoid granting elevated SCCs to the project default SA.',
+      'Grant the SCC the 4.x way (creates a RoleBinding in the project to ClusterRole system:openshift:scc:privileged): `oc adm policy add-scc-to-user privileged -z priv-sa -n privileged-lab`.',
+      'Verify the grant without the SCC users list (it stays unchanged on 4.x): `oc auth can-i use scc/privileged --as=system:serviceaccount:privileged-lab:priv-sa`, `oc get rolebinding -n privileged-lab`, then `oc get pods -n privileged-lab` — the privileged Pod is created and Running.',
+      'Prove admission: `oc get pod -n privileged-lab -o jsonpath=\'{.items[*].metadata.annotations.openshift\\.io/scc}\'` prints `privileged`. The SCCForbidden incident clears as soon as the binding exists; the panel resolution action is only for exploring the fault.',
     ],
     starCriteria: { time: 420, efficiency: 0.7, noFailures: false },
     nextLevel: 18,
@@ -794,7 +808,7 @@ const CAMPAIGN_LEVELS = [
     chapter: 5,
     chapterName: 'Security & Operations',
     description:
-      'Operators extend the cluster API. Install an operator from a Subscription, watch the CSV reach Succeeded, then uninstall it cleanly by deleting the Subscription and CSV. Both install and removal are EX280 objectives.',
+      'Operators extend the cluster API. Install an operator with OLM from an OperatorGroup + Subscription, watch the InstallPlan and CSV reach Succeeded, then uninstall it cleanly: deleting the Subscription leaves the ClusterServiceVersion, deleting the CSV is the actual uninstall. Both install and removal are EX280 objectives.',
     examObjectives: [
       'Manage OpenShift operators > Install an operator',
       'Manage OpenShift operators > Uninstall an operator',
@@ -803,8 +817,8 @@ const CAMPAIGN_LEVELS = [
     docsLinks: [DOCS.operators, DOCS.operatorAdmin, DOCS.operatorOlm],
     startingResources: [node('node-1'), node('node-2'), project('operator-lab')],
     availableResources: ['Project', 'Subscription', 'ClusterOperator'],
-    manifestFiles: ['examples/subscription.yaml'],
-    focusFiles: ['examples/subscription.yaml'],
+    manifestFiles: ['examples/subscription.yaml', 'examples/operatorgroup.yaml'],
+    focusFiles: ['examples/operatorgroup.yaml', 'examples/subscription.yaml'],
     objectives: [
       { type: 'operator', name: 'metallb', installed: true, label: 'Install operator "metallb" (CSV reaches Succeeded)' },
       { type: 'command', pattern: 'oc (get|describe) (sub|subscription|csv|installplan)', label: 'Verify the Subscription / CSV / InstallPlan' },
@@ -812,10 +826,11 @@ const CAMPAIGN_LEVELS = [
     ],
     incidents: [],
     hints: [
-      'Install: edit `examples/subscription.yaml` so metadata.name, spec.name and the package are `metallb`, then `oc apply -f examples/subscription.yaml`.',
-      'Watch OLM: `oc get sub,csv,installplan -n openshift-operators` — the CSV goes Installing → Succeeded, and `oc get sub metallb -o yaml` then reports `status.installedCSV`.',
-      'Uninstall (only after the install above reached Succeeded): `oc delete subscription metallb -n openshift-operators`, then delete the CSV shown by `oc get csv -n openshift-operators`.',
-      'Confirm removal with `oc get csv -n openshift-operators` and `oc get subscription -A`.',
+      'Create the operator namespace and its OperatorGroup: `oc new-project metallb-system`, then `oc apply -f examples/operatorgroup.yaml` (single-namespace OperatorGroup targeting metallb-system). A Subscription with no matching OperatorGroup never resolves.',
+      'Install: edit `examples/subscription.yaml` so metadata.name and spec.name are `metallb` and metadata.namespace is `metallb-system`, then `oc apply -f examples/subscription.yaml`.',
+      'Watch OLM: `oc get sub,csv,installplan -n metallb-system` — an InstallPlan appears, then the operator CSV (shown by `oc get csv -n metallb-system`) goes Installing → Succeeded; `oc get subscription -n metallb-system -o yaml` reports `status.installedCSV`.',
+      'Uninstall (only after the install above reached Succeeded): `oc delete subscription metallb -n metallb-system`, then confirm the CSV is STILL there with `oc get csv -n metallb-system` — deleting the Subscription does not remove the operator.',
+      'Finish the uninstall by deleting the CSV itself — read its name from `oc get csv -n metallb-system`, then e.g. `oc delete csv metallb-operator.v1.0.0 -n metallb-system` (typing `clusterserviceversion`/`csv` is the uninstall step), then confirm with `oc get csv -n metallb-system` and `oc get subscription -A`.',
     ],
     starCriteria: { time: 420, efficiency: 0.7, noFailures: true },
     nextLevel: 19,
@@ -845,8 +860,8 @@ const CAMPAIGN_LEVELS = [
     hints: [
       'Switch projects: `oc project batch-lab`. Run a one-off Job: `oc create job report-job --image=perl -- perl -e "print 42"`.',
       'Watch it complete: `oc get jobs,pods`, then `oc logs job/report-job`.',
-      'Schedule recurring work: `oc create cronjob cleanup --image=busybox --schedule="*/5 * * * *" -- sh -c date`.',
-      'Investigate the JobDeadlineExceeded incident in the Incident panel, fix the Job (raise `activeDeadlineSeconds` or `backoffLimit`), and resolve it.',
+      'Schedule recurring work (five-field cron only — `--schedule="every 5 min"` is rejected by the API server, and the first Job only appears at the next scheduled time): `oc create cronjob cleanup --image=busybox --schedule="*/5 * * * *" -- sh -c date`.',
+      'The JobDeadlineExceeded incident means the Job ran past activeDeadlineSeconds and is marked Failed. A Failed Job cannot be resumed: `oc delete job report-job`, then create a replacement with a longer deadline (`oc create job report-job --image=perl -- perl -e "print 42"`) — the incident clears once a replacement Job completes.',
     ],
     starCriteria: { time: 420, efficiency: 0.7, noFailures: false },
     nextLevel: 20,
@@ -877,7 +892,7 @@ const CAMPAIGN_LEVELS = [
       'Subscription', 'User', 'Group', 'RoleBinding', 'ServiceAccount', 'SecurityContextConstraints',
       'Job', 'CronJob', 'Node',
     ],
-    manifestFiles: ['manifests/deployment.yaml', 'manifests/service.yaml', 'manifests/route.yaml', 'examples/quota.yaml', 'examples/limitrange.yaml', 'examples/buildconfig.yaml', 'examples/subscription.yaml', 'examples/default-deny.yaml'],
+    manifestFiles: ['manifests/deployment.yaml', 'manifests/service.yaml', 'manifests/route.yaml', 'examples/quota.yaml', 'examples/limitrange.yaml', 'examples/buildconfig.yaml', 'examples/subscription.yaml', 'examples/operatorgroup.yaml', 'examples/metallb.yaml', 'examples/default-deny.yaml'],
     focusFiles: ['manifests/deployment.yaml', 'manifests/route.yaml', 'examples/quota.yaml', 'examples/default-deny.yaml'],
     objectives: [
       { type: 'project', name: 'prod-platform', label: 'Create the Project "prod-platform"' },
@@ -894,6 +909,11 @@ const CAMPAIGN_LEVELS = [
       { type: 'operator', name: 'metallb', installed: true, label: 'Install the MetalLB operator' },
       { type: 'complete', kind: 'Job', count: 1, label: 'Run a Job to phase Complete' },
       { type: 'cronJob', name: 'nightly', suspended: false, label: 'Create the CronJob "nightly"' },
+      // Capstone gating: the scheduled incidents must actually fire (60 s and
+      // 120 s into the run) before the level can complete — the level cannot be
+      // finished by following the hints in under a minute.
+      { type: 'incident', incidentType: 'CrashLoopBackOff', min: 1, label: 'Scheduled incident gate: CrashLoopBackOff fires 60 s into the capstone' },
+      { type: 'incident', incidentType: 'NodeNotReady', min: 1, label: 'Scheduled incident gate: NodeNotReady fires 120 s into the capstone' },
       // NOTE: threshold is deliberately modest versus the current ScoringEngine scale...
       // a solid capstone platform scores ~34 today; modes-dev's rewritten advisor may rescale.
       { type: 'architectureScore', minScore: 25, label: 'Architecture Advisor score >= 25' },
@@ -907,8 +927,9 @@ const CAMPAIGN_LEVELS = [
       'Create the platform project: `oc new-project prod-platform`, then apply the quota/limits with `oc apply -f examples/quota.yaml` and `oc apply -f examples/limitrange.yaml`.',
       'Deploy the app: `oc apply -f manifests/deployment.yaml`, `oc apply -f manifests/service.yaml`, then expose a Route: `oc create route edge webapp --service=webapp`. Enable ports/health probes in the YAML for a higher Architecture Advisor score.',
       'Build: `oc apply -f examples/buildconfig.yaml` (it already outputs ImageStreamTag `webapp:latest`), then `oc start-build webapp --follow` and watch the Build reach Complete.',
-      'Security/self-service: `oc create user developer`, `oc adm groups new developers developer`, apply the shipped `examples/default-deny.yaml` (a `networking.k8s.io/v1` NetworkPolicy that selects all pods) with `oc apply -f examples/default-deny.yaml -n prod-platform` — there is no `oc create networkpolicy` subcommand; use the Files panel New/Import buttons if you want to edit or add manifests. Install MetalLB from `examples/subscription.yaml` (edit its name/package to metallb first).',
-      'Finish with a Job (`oc create job report-job --image=perl -- perl -e "print 42"`), a CronJob (`oc create cronjob nightly --image=busybox --schedule="*/5 * * * *" -- sh -c date`), then check `oc status` and the Architecture Advisor in the HUD.',
+      'Security/self-service: `oc create user developer`, `oc adm groups new developers developer`, apply the shipped `examples/default-deny.yaml` (a `networking.k8s.io/v1` NetworkPolicy that selects all pods) with `oc apply -f examples/default-deny.yaml -n prod-platform` — there is no oc create networkpolicy subcommand; use the Files panel New/Import buttons if you want to edit or add manifests.',
+      'Install MetalLB the 4.x OLM way: `oc new-project metallb-system`, `oc apply -f examples/operatorgroup.yaml`, edit `examples/subscription.yaml` (name/package `metallb`, namespace `metallb-system`) and apply it, wait for the operator CSV (`oc get csv -n metallb-system`) to reach Succeeded, then `oc apply -f examples/metallb.yaml` (MetalLB CR + IP pool + L2 advertisement).',
+      'Finish with a Job (`oc create job report-job --image=perl -- perl -e "print 42"`), a CronJob (`oc create cronjob nightly --image=busybox --schedule="*/5 * * * *" -- sh -c date`), then check `oc status` and the Architecture Advisor in the HUD. The capstone is gated on the scheduled incidents: one fires 60 s in (CrashLoopBackOff on webapp) and the other 120 s in (NodeNotReady on node-2) — diagnose and resolve both; you cannot finish in under two minutes.',
     ],
     starCriteria: { time: 900, efficiency: 0.6, noFailures: false },
     nextLevel: null,

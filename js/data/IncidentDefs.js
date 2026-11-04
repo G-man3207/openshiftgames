@@ -45,7 +45,14 @@
  * <secret> <networkpolicy> <ingress> <pvc> <pv> <job> <cronjob> <hpa> <quota>
  * <limitrange> <clusterquota> <subscription> <user> <group> <serviceaccount>
  * <scc> <namespace>. The panel substitutes <namespace> with the current
- * project and every other token with the incident target name.
+ * project, <pod> with the concrete damaged Pod, and every other token with the
+ * incident target name.
+ *
+ * Optional `logs: { container, current: [line], previous: [line] }` supplies the
+ * per-Pod container output that IncidentEngine writes onto damaged Pods so
+ * `oc logs` / `oc logs --previous` show the real crash reason instead of a
+ * generic synthetic log. Tokens substituted from the live Pod:
+ * <pod> <deployment> <image> <namespace>.
  */
 
 // ─── Documentation links (OCP 4.22, verified 2026-11-03) ───────────────────
@@ -110,7 +117,7 @@ const INCIDENT_DEFS = [
     investigationSteps: [
       S('oc logs <pod> --previous', 'Read the previous container instance — the actual crash reason is in the last run.'),
       S('oc describe pod <pod>', 'Check Last State / Restart Count and the Events section (Back-off restarting failed container).'),
-      S('oc get pod <pod> -o jsonpath={.status.containerStatuses[*].state}', 'Inspect the container state (waiting reason / last terminated exit code).'),
+      S('oc get pods -l app=<deployment> -o wide', 'List every replica of the owning workload; <pod> is one of these Pods.'),
       S('oc get events --field-selector involvedObject.name=<pod>', 'Correlate the failure with recent cluster events.'),
     ],
     resolutionActions: [
@@ -121,9 +128,27 @@ const INCIDENT_DEFS = [
     ocCommands: [
       'oc logs <pod> --previous',
       'oc describe pod <pod>',
-      'oc edit deployment/<deployment>',
+      'oc get pods -l app=<deployment>',
+      'oc set image deployment/<deployment> main=<good-image>',
       'oc rollout status deployment/<deployment>',
     ],
+    // Per-Pod crash output rendered by `oc logs` (current) / `oc logs --previous`.
+    // Tokens: <pod> <deployment> <image> <namespace> — substituted from the live Pod.
+    logs: {
+      container: 'main',
+      current: [
+        'Starting application...',
+        'FATAL: <deployment> failed to start: configuration for image <image> is invalid',
+        'Error: required configuration key is missing or unreadable',
+        'Process exited with status 1',
+      ],
+      previous: [
+        'Starting application...',
+        'FATAL: <deployment> cannot start with image <image>',
+        'exec: "/opt/app-root/src/start": stat /opt/app-root/src/start: no such file or directory',
+        'Process exited with status 1',
+      ],
+    },
     autoResolveTime: null,
     docsUrl: DOCS.troubleshoot,
     resolution: { kind: 'pod', effect: 'heal', targetKind: 'Pod', restart: true },
@@ -140,8 +165,8 @@ const INCIDENT_DEFS = [
     investigationSteps: [
       S('oc describe pod <pod>', 'Events show ErrImagePull/ImagePullBackOff with the exact registry error.'),
       S('oc get pod <pod> -o jsonpath={.spec.containers[*].image}', 'Verify the image reference and tag.'),
+      S('oc get pods -l app=<deployment> -o wide', 'Check whether every replica of the workload is failing to pull the same image.'),
       S('oc get sa <serviceaccount> -o yaml', 'Check imagePullSecrets on the ServiceAccount (internal registry auth).'),
-      S('oc get imagestreamtag <imagestreamtag> -n <namespace>', 'For internal registry images confirm the ImageStreamTag exists.'),
     ],
     resolutionActions: [
       A('fix-image-ref', 'Correct image name/tag', 1),
@@ -149,10 +174,20 @@ const INCIDENT_DEFS = [
     ],
     ocCommands: [
       'oc describe pod <pod>',
+      'oc get pod <pod> -o yaml',
       'oc get secrets -n <namespace>',
-      'oc create secret docker-registry my-pull-secret --docker-server=...',
       'oc secrets link default my-pull-secret --for=pull',
     ],
+    logs: {
+      container: 'main',
+      current: [
+        'Error from server: image <image> is not available',
+      ],
+      previous: [
+        'Error from server: image <image> is not available',
+        'manifest unknown: manifest tagged by "latest" is not found',
+      ],
+    },
     autoResolveTime: null,
     docsUrl: DOCS.pod,
     resolution: { kind: 'pod', effect: 'heal', targetKind: 'Pod', pullSecret: true },
@@ -195,10 +230,10 @@ const INCIDENT_DEFS = [
     visualEffect: 'pulse-red',
     affectedResourceTypes: ['Pod', 'Deployment', 'ServiceAccount'],
     investigationSteps: [
-      S('oc describe pod <pod>', 'The Events section lists each SCC that rejected the pod and why.'),
-      S('oc get sa <serviceaccount> -o yaml', 'The ServiceAccount is the identity used by workload-created pods.'),
-      S('oc get scc', 'List SCCs and their USER/GROUPS columns.'),
-      S('oc adm policy who-can use scc <scc>', 'Check who may use a specific SCC (RBAC view).'),
+      S('oc describe pod <pod>', 'The Events section shows "unable to validate against any security context constraint" and which SCCs rejected the Pod.'),
+      S('oc get sa -n <namespace> -o name', 'List the project ServiceAccounts — a dedicated SA is a better identity than default for privileged workloads.'),
+      S('oc adm policy who-can use scc privileged', 'Check which subjects may use the SCC; on 4.x the grant is an RBAC binding, not an SCC users entry.'),
+      S('oc get rolebinding -n <namespace>', 'The 4.x grant is a RoleBinding in the project to ClusterRole system:openshift:scc:privileged.'),
     ],
     resolutionActions: [
       A('grant-scc', 'Grant a permissive SCC to the ServiceAccount', 1),
@@ -206,9 +241,10 @@ const INCIDENT_DEFS = [
     ],
     ocCommands: [
       'oc describe pod <pod>',
-      'oc get scc',
-      'oc adm policy add-scc-to-user privileged -z <serviceaccount>',
-      'oc auth can-i use scc/privileged',
+      'oc get sa -n <namespace>',
+      'oc adm policy add-scc-to-user privileged -z <serviceaccount> -n <namespace>',
+      'oc get rolebinding -n <namespace>',
+      'oc auth can-i use scc/privileged --as=system:serviceaccount:<namespace>:<serviceaccount>',
     ],
     autoResolveTime: null,
     docsUrl: DOCS.scc,
@@ -486,11 +522,12 @@ const INCIDENT_DEFS = [
     affectedResourceTypes: ['Job', 'Pod'],
     investigationSteps: [
       S('oc get job <job> -n <namespace>', 'STATUS shows Failed with reason DeadlineExceeded.'),
-      S('oc describe job <job>', 'Conditions and the activeDeadlineSeconds value.'),
+      S('oc describe job <job>', 'Read the Job conditions and the activeDeadlineSeconds value.'),
       S('oc logs job/<job> -n <namespace>', 'Why the job did not finish in time.'),
+      S('oc get pods -n <namespace> -l job-name=<job>', 'The Pods were terminated; a Failed Job object cannot be resumed.'),
     ],
     resolutionActions: [
-      A('raise-deadline', 'Increase activeDeadlineSeconds', 1),
+      A('raise-deadline', 'Create a replacement Job with a longer activeDeadlineSeconds', 1),
       A('fix-command', 'Fix the job command', 2),
       A('recreate', 'Delete and recreate the Job', 1),
     ],
@@ -499,6 +536,7 @@ const INCIDENT_DEFS = [
       'oc describe job <job>',
       'oc logs job/<job>',
       'oc delete job <job>',
+      'oc create job <job> --image=perl -- perl -e "print 42"',
     ],
     autoResolveTime: null,
     docsUrl: DOCS.pod,
@@ -798,17 +836,17 @@ const INCIDENT_DEFS = [
     category: 'Network',
     severity: 4,
     description:
-      'In-cluster DNS resolution is broken: a Pod cannot resolve Service names, usually because of DNS Pods being down or an egress policy blocking port 53.',
+      'In-cluster DNS resolution is broken: a Pod cannot resolve Service names, usually because of DNS Pods being down or an egress policy that does not allow the DNS Pod port 5353.',
     visualEffect: 'flash-red',
     affectedResourceTypes: ['Service', 'Pod'],
     investigationSteps: [
       S('oc exec <pod> -- nslookup <service>.<namespace>.svc.cluster.local', 'Reproduce the resolution failure from a Pod using the full service DNS name.'),
-      S('oc get pods -n openshift-dns', 'Check that the DNS Pods are Running and Ready.'),
-      S('oc get networkpolicy -n <namespace>', 'An egress default-deny that omits UDP/TCP 53 breaks DNS.'),
+      S('oc get pods -n openshift-dns', 'Check that the DNS Pods (dns-default) are Running and Ready.'),
+      S('oc get networkpolicy -n <namespace>', 'On OpenShift the dns-default Pods listen on 5353; an egress rule that only allows port 53 still blocks them.'),
       S('oc get endpoints <service> -n <namespace>', 'Confirm the Service itself has endpoints.'),
     ],
     resolutionActions: [
-      A('allow-dns-egress', 'Allow DNS egress on port 53', 1),
+      A('allow-dns-egress', 'Allow DNS egress on port 5353 (the dns-default Pod port)', 1),
       A('restore-dns', 'Restore openshift-dns Pods', 2),
     ],
     ocCommands: [
@@ -891,11 +929,11 @@ const INCIDENT_DEFS = [
     description:
       'An application/ServiceAccount is denied by RBAC when calling the Kubernetes API (403 Forbidden), or a user lost access to a project.',
     visualEffect: 'flash-red',
-    affectedResourceTypes: ['Pod', 'ServiceAccount', 'RoleBinding'],
+    affectedResourceTypes: ['Deployment', 'Pod', 'ServiceAccount', 'RoleBinding'],
     investigationSteps: [
-      S('oc auth can-i get pods --as=system:serviceaccount:<namespace>:<serviceaccount>', 'Prove whether the ServiceAccount is allowed.'),
-      S('oc get rolebindings -n <namespace>', 'Check which RoleBindings exist in the project.'),
-      S('oc get sa <serviceaccount> -o yaml', 'Confirm the identity used by the workload.'),
+      S('oc auth can-i get pods --as=system:serviceaccount:<namespace>:default', 'Prove whether the workload ServiceAccount (usually default) is allowed.'),
+      S('oc get rolebindings -n <namespace>', 'Check which RoleBindings exist in the project; the required binding is missing.'),
+      S('oc get sa -n <namespace>', 'Confirm the ServiceAccount identity the workload Pods run as.'),
       S('oc get events -n <namespace>', 'Look for 403 Forbidden responses from the API.'),
     ],
     resolutionActions: [
@@ -903,10 +941,10 @@ const INCIDENT_DEFS = [
       A('fix-sa', 'Point the workload at the right ServiceAccount', 1),
     ],
     ocCommands: [
-      'oc auth can-i get pods --as=system:serviceaccount:<namespace>:<serviceaccount>',
-      'oc adm policy add-role-to-user view -z <serviceaccount> -n <namespace>',
-      'oc get rolebindings',
-      'oc get sa',
+      'oc auth can-i get pods --as=system:serviceaccount:<namespace>:default',
+      'oc get rolebindings -n <namespace>',
+      'oc adm policy add-role-to-user view -z default -n <namespace>',
+      'oc get events -n <namespace>',
     ],
     autoResolveTime: null,
     docsUrl: DOCS.scc,

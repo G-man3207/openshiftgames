@@ -178,7 +178,7 @@ spec:
       labels:
         app: privileged-app
     spec:
-      serviceAccountName: default
+      serviceAccountName: priv-sa
       containers:
         - name: main
           image: quay.io/openshift/origin-hello-openshift:latest
@@ -218,9 +218,9 @@ spec:
               kubernetes.io/metadata.name: openshift-dns
       ports:
         - protocol: UDP
-          port: 53
+          port: 5353
         - protocol: TCP
-          port: 53
+          port: 5353
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -264,17 +264,35 @@ spec:
 `,
   },
   10: {
-    'challenges/metallb-operator.yaml': `apiVersion: operators.coreos.com/v1alpha1
+    'challenges/metallb-operator.yaml': `# MetalLB the 4.x OLM way: OperatorGroup + Subscription in metallb-system,
+# then the operator operand (MetalLB CR) + an address pool + L2 advertisement.
+apiVersion: operators.coreos.com/v1
+kind: OperatorGroup
+metadata:
+  name: metallb-operatorgroup
+  namespace: metallb-system
+spec:
+  targetNamespaces:
+    - metallb-system
+---
+apiVersion: operators.coreos.com/v1alpha1
 kind: Subscription
 metadata:
   name: metallb-operator
-  namespace: openshift-operators
+  namespace: metallb-system
 spec:
   channel: stable
   installPlanApproval: Automatic
   name: metallb-operator
   source: redhat-operators
   sourceNamespace: openshift-marketplace
+---
+apiVersion: metallb.io/v1beta1
+kind: MetalLB
+metadata:
+  name: metallb
+  namespace: metallb-system
+spec: {}
 ---
 apiVersion: metallb.io/v1beta1
 kind: IPAddressPool
@@ -348,18 +366,18 @@ const CHALLENGES = [
     id: 2,
     title: 'Fix CrashLoopBackOff',
     description:
-      'The payment-service Deployment is crash looping and the platform health is dropping. Investigate the Pod with oc logs/describe, apply a fix through the incident panel or a rollout, and restore health to at least 90%.',
+      'The payment-service Deployment is crash looping and the platform health is dropping. Read the container crash output with oc logs/describe on the real Pods, fix the workload (image/command/env — restarting does not help), and restore health to at least 90%.',
     timeLimit: 240,
     docsLinks: [DOCS.health, DOCS.cli],
     objectives: [
-      { type: 'investigate', incidentType: 'CrashLoopBackOff', label: 'Investigate the CrashLoopBackOff incident' },
+      { type: 'investigate', incidentType: 'CrashLoopBackOff', progress: 0.5, label: 'Investigate the CrashLoopBackOff incident' },
       { type: 'resolve', incidentType: 'CrashLoopBackOff', count: 1, label: 'Resolve CrashLoopBackOff' },
       { type: 'uptime', percentage: 90, label: 'Restore cluster health to at least 90%' },
       {
         type: 'command',
-        pattern: '(logs|describe).*(payment-service|pod/)|rollout\\s+restart',
+        pattern: 'oc\\s+(logs|describe)\\s+.*payment-service',
         count: 1,
-        label: 'Diagnose with oc logs/describe (or restart the rollout)',
+        label: 'Diagnose the failing workload with oc logs/describe',
       },
     ],
     startingResources: [
@@ -375,10 +393,11 @@ const CHALLENGES = [
     ],
     availableResources: ['Pod', 'Deployment', 'Service', 'ConfigMap', 'Secret'],
     hints: [
-      'Open the incident bell, then run the suggested investigation commands.',
-      'oc logs deployment/payment-service --previous shows the container crash output.',
-      'oc describe deployment/payment-service and oc get pods -l app=payment-service show the Pod state and restart count.',
-      'Resolve from the incident panel (or fix the image/command), then confirm: oc get pods',
+      'Open the incident bell (the suggested commands use the real Pod name), or list the replicas first: oc get pods -l app=payment-service',
+      'Read the crash output: oc logs deployment/payment-service --previous — the container exits with status 1 on the broken image.',
+      'Describe the workload: oc describe deployment/payment-service; the new Pods show CrashLoopBackOff and a growing restart count.',
+      'Fix the root cause, not the symptom: oc set image deployment/payment-service main=quay.io/openshift/origin-hello-openshift:latest (or use the incident panel). oc delete pod / oc rollout restart alone only brings the same broken image back.',
+      'Confirm recovery: oc get pods -l app=payment-service (all Running, 0 restarts) and check the health bar is back to 90%+.',
     ],
   },
   {
@@ -544,12 +563,13 @@ const CHALLENGES = [
     id: 8,
     title: 'SCC for a Privileged Workload',
     description:
-      'Admit a workload that requests elevated security with a SecurityContextConstraint: apply the privileged app manifest, grant the privileged SCC to the secure project ServiceAccount, and resolve the SCCForbidden incident. anyuid allows an arbitrary UID but NOT privileged containers — privileged: true needs the privileged SCC.',
+      'Admit a workload that requests elevated security with a SecurityContextConstraint: apply the privileged app manifest, create a dedicated ServiceAccount, grant the privileged SCC to that ServiceAccount with a 4.x RBAC binding, and resolve the SCCForbidden incident. anyuid allows an arbitrary UID but NOT privileged containers — privileged: true needs the privileged SCC. Never grant privileged to the project default SA.',
     timeLimit: 300,
     docsLinks: [DOCS.scc, DOCS.rbac],
     objectives: [
       { type: 'deploy', kind: 'Deployment', name: 'privileged-app', namespace: 'secure', label: 'Create privileged-app in project secure' },
-      { type: 'scc', scc: 'privileged', subject: 'system:serviceaccount:secure:default', label: 'Grant the privileged SCC to the secure default ServiceAccount' },
+      { type: 'deploy', kind: 'ServiceAccount', name: 'priv-sa', namespace: 'secure', label: 'Create the dedicated ServiceAccount priv-sa' },
+      { type: 'scc', scc: 'privileged', subject: 'system:serviceaccount:secure:priv-sa', label: 'Grant the privileged SCC to the dedicated ServiceAccount priv-sa' },
       { type: 'privileged', count: 1, label: 'Get a privileged: true Pod admitted and Running' },
       { type: 'resolve', incidentType: 'SCCForbidden', count: 1, label: 'Resolve SCCForbidden' },
       {
@@ -567,12 +587,12 @@ const CHALLENGES = [
     focusFiles: ['challenges/privileged-app.yaml'],
     availableResources: ['Project', 'Deployment', 'ServiceAccount', 'SecurityContextConstraints', 'Role', 'RoleBinding'],
     hints: [
-      'Apply the workload: oc apply -f challenges/privileged-app.yaml',
-      'Check the failed Pod events: oc get pods -n secure; oc describe pod -l app=privileged-app -n secure',
-      'A container that sets privileged: true needs the privileged SCC, not anyuid: oc adm policy add-scc-to-user privileged -z default -n secure',
-      'Confirm the SCC users list: oc get scc privileged -o yaml',
-      'Wait for the Pod to be admitted and Running: oc get pods -n secure -w',
-      'If the SCCForbidden incident is still open, resolve it from the incident panel once the Pod is admitted.',
+      'Apply the workload: oc apply -f challenges/privileged-app.yaml — it runs as the dedicated ServiceAccount priv-sa and requests privileged: true.',
+      'The rejected Pod is never created on 4.x: oc get pods -n secure stays empty and oc describe deployment/privileged-app -n secure shows FailedCreate / "unable to validate against any security context constraint".',
+      'Create the dedicated identity: oc create sa priv-sa -n secure (or keep the one from the manifest) — do NOT grant elevated SCCs to the default ServiceAccount.',
+      'Grant the SCC the 4.x way: oc adm policy add-scc-to-user privileged -z priv-sa -n secure (creates a RoleBinding to ClusterRole system:openshift:scc:privileged; the SCC users list stays unchanged).',
+      'Verify with RBAC, not the SCC users list: oc auth can-i use scc/privileged --as=system:serviceaccount:secure:priv-sa; oc get rolebinding -n secure; then oc get pods -n secure shows the admitted Pod Running.',
+      'The SCCForbidden incident clears as soon as the binding exists; the incident panel resolution action is only for exploring the fault.',
     ],
   },
   {
@@ -584,7 +604,7 @@ const CHALLENGES = [
     docsLinks: [DOCS.network, DOCS.routes],
     objectives: [
       { type: 'deploy', kind: 'NetworkPolicy', name: 'deny-by-default', namespace: 'shop', label: 'Create default-deny NetworkPolicy' },
-      { type: 'deploy', kind: 'NetworkPolicy', name: 'allow-dns-egress', namespace: 'shop', label: 'Allow DNS egress on port 53' },
+      { type: 'deploy', kind: 'NetworkPolicy', name: 'allow-dns-egress', namespace: 'shop', label: 'Allow DNS egress on port 5353 (dns-default Pod port)' },
       { type: 'deploy', kind: 'NetworkPolicy', name: 'allow-frontend-to-backend', namespace: 'shop', label: 'Allow frontend ingress to backend' },
       { type: 'deploy', kind: 'NetworkPolicy', name: 'allow-frontend-egress', namespace: 'shop', label: 'Allow frontend egress to backend' },
       { type: 'resolve', incidentType: 'DNSResolutionFailure', count: 1, label: 'Resolve DNSResolutionFailure' },
@@ -612,9 +632,9 @@ const CHALLENGES = [
     hints: [
       'Apply the policy set from the Files panel: oc apply -f challenges/shop-networkpolicy.yaml',
       'A NetworkPolicy is additive: the default-deny selects every Pod, then explicit allow rules re-open only the paths you name.',
-      'DNS is required: allow UDP and TCP port 53 to the openshift-dns namespace, otherwise Service name resolution fails.',
-      'Verify: oc get networkpolicy -n shop; oc describe networkpolicy deny-by-default -n shop',
-      'Resolve DNSResolutionFailure from the incident panel (allow-DNS-egress) after applying the rule.',
+      'DNS is required: on OpenShift the dns-default Pods listen on 5353, so the egress rule must allow UDP and TCP 5353 to the openshift-dns namespace — port 53 does NOT unblock name resolution.',
+      'Verify: oc get networkpolicy -n shop; oc describe networkpolicy deny-by-default -n shop; then test from a Pod with oc exec deploy/frontend -- curl -sv http://backend:8080',
+      'Resolve DNSResolutionFailure from the incident panel (allow-DNS-egress) after applying the rule — or just apply the corrected allow-dns-egress policy and the incident clears.',
     ],
   },
   {
@@ -660,11 +680,12 @@ const CHALLENGES = [
     focusFiles: ['challenges/metallb-operator.yaml'],
     availableResources: ['Project', 'Subscription', 'IPAddressPool', 'L2Advertisement', 'Service', 'Deployment'],
     hints: [
-      'Apply the MetalLB Subscription + pool + advertisement: oc apply -f challenges/metallb-operator.yaml',
-      'Watch OLM: oc get subscriptions -n openshift-operators; oc get csv -n openshift-operators (phase should become Succeeded).',
+      'Apply the whole OLM manifest set (OperatorGroup + Subscription + MetalLB CR + IPAddressPool + L2Advertisement, all in metallb-system): oc apply -f challenges/metallb-operator.yaml',
+      'Watch OLM: oc get sub,csv,installplan -n metallb-system — an InstallPlan appears, then the operator CSV (oc get csv -n metallb-system) reaches Succeeded; oc get subscription -n metallb-system -o yaml shows status.installedCSV.',
       'Create a LoadBalancer Service in the store project: oc create service loadbalancer web-lb --tcp=80:8080 -n store',
       'Check the EXTERNAL-IP column: oc get svc web-lb -n store (MetalLB assigns it from metallb-pool/L2Advertisement).',
-      'Uninstall the old AAP operator: oc delete subscription ansible-automation-platform-operator -n openshift-operators',
+      'Uninstall the old AAP operator properly: oc delete subscription ansible-automation-platform-operator -n openshift-operators, then delete its CSV with oc delete csv ansible-automation-platform-operator.v1.0.0 -n openshift-operators — deleting the Subscription alone leaves the operator installed.',
+      'Confirm: oc get csv,sub -n openshift-operators is empty (CSV gone = uninstalled).',
     ],
   },
   {
@@ -1094,6 +1115,9 @@ class ChallengeMode {
     if (!this.currentChallengeDef || !Array.isArray(this.currentChallengeDef.objectives)) return;
     evaluateObjectives(this.currentChallengeDef.objectives, this.buildEvaluationContext(), {
       progress: this.objectiveProgress,
+      // End-state evaluation: un-doing an action while the lab is live must
+      // un-tick the objective (no latched completion).
+      recheckCompleted: true,
     });
   }
 
@@ -1124,6 +1148,9 @@ class ChallengeMode {
     let result = { stars: 1, xpEarned: 0 };
     try {
       if (typeof this.scoringEngine?.completeChallenge === 'function') {
+        this.scoringEngine._lastObjectiveTypes = this.objectiveProgress
+          .map((objective) => String(objective?.type || '').toLowerCase())
+          .filter(Boolean);
         result = this.scoringEngine.completeChallenge(
           this.currentChallenge,
           completionTime,

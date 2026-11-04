@@ -179,6 +179,141 @@ const SENSITIVE_CONFIGMAP_KEY = /password|passwd|secret|token|key|credential/i;
 
 // ─── small helpers ─────────────────────────────────────────────────────────
 
+/** Resource-name aliases used when normalising learner command evidence. */
+const KIND_ALIASES = {
+  pod: 'pod', pods: 'pod',
+  deploy: 'deployment', deployment: 'deployment', deployments: 'deployment',
+  rs: 'replicaset', replicaset: 'replicaset', replicasets: 'replicaset',
+  sts: 'statefulset', statefulset: 'statefulset', statefulsets: 'statefulset',
+  ds: 'daemonset', daemonset: 'daemonset', daemonsets: 'daemonset',
+  svc: 'service', service: 'service', services: 'service',
+  is: 'imagestream', imagestream: 'imagestream', imagestreams: 'imagestream',
+  istag: 'istag', imagestreamtag: 'istag', imagestreamtags: 'istag',
+  bc: 'buildconfig', buildconfig: 'buildconfig', buildconfigs: 'buildconfig',
+  build: 'build', builds: 'build',
+  route: 'route', routes: 'route',
+  cm: 'configmap', configmap: 'configmap', configmaps: 'configmap',
+  secret: 'secret', secrets: 'secret',
+  sa: 'serviceaccount', serviceaccount: 'serviceaccount', serviceaccounts: 'serviceaccount',
+  user: 'user', users: 'user',
+  group: 'group', groups: 'group',
+  role: 'role', roles: 'role',
+  rolebinding: 'rolebinding', rolebindings: 'rolebinding',
+  clusterrole: 'clusterrole', clusterroles: 'clusterrole',
+  clusterrolebinding: 'clusterrolebinding', clusterrolebindings: 'clusterrolebinding',
+  netpol: 'networkpolicy', networkpolicy: 'networkpolicy', networkpolicies: 'networkpolicy',
+  quota: 'resourcequota', resourcequota: 'resourcequota', resourcequotas: 'resourcequota',
+  limitrange: 'limitrange', limitranges: 'limitrange',
+  clusterquota: 'clusterresourcequota', clusterresourcequota: 'clusterresourcequota',
+  scc: 'scc', securitycontextconstraint: 'scc', securitycontextconstraints: 'scc',
+  job: 'job', jobs: 'job',
+  cronjob: 'cronjob', cronjobs: 'cronjob',
+  node: 'node', nodes: 'node',
+  project: 'project', projects: 'project',
+  namespace: 'project', namespaces: 'project',
+  template: 'template', templates: 'template',
+  oauth: 'oauth', clusteroperator: 'clusteroperator', clusteroperators: 'clusteroperator',
+  subscription: 'subscription', sub: 'subscription', subscriptions: 'subscription',
+  csv: 'csv', clusterserviceversion: 'csv', clusterserviceversions: 'csv',
+  installplan: 'installplan', installplans: 'installplan',
+  packagemanifest: 'packagemanifest', packagemanifests: 'packagemanifest',
+  pvc: 'pvc', persistentvolumeclaim: 'pvc', persistentvolumeclaims: 'pvc',
+  pv: 'pv', persistentvolume: 'pv', persistentvolumes: 'pv',
+  hpa: 'hpa', horizontalpodautoscaler: 'hpa',
+  pdb: 'pdb', poddisruptionbudget: 'pdb',
+  ingress: 'ingress', ingresses: 'ingress',
+  operatorgroup: 'operatorgroup', operatorgroups: 'operatorgroup',
+  configmapkey: 'configmap',
+};
+
+/** Second-token verbs that are followed by a subcommand (oc set image ...). */
+const SUBCOMMAND_VERBS = new Set(['set', 'rollout', 'expose', 'adm', 'auth', 'policy', 'image']);
+
+/** First-level oc verbs that take a resource kind as the next argument. */
+const RESOURCE_VERBS = new Set([
+  'get', 'describe', 'delete', 'create', 'apply', 'replace', 'edit', 'patch',
+  'label', 'annotate', 'run', 'logs', 'exec', 'rsh', 'cp', 'debug', 'wait',
+  'scale', 'expose', 'tag', 'import-image', 'image', 'observe', 'idle', 'rsync',
+]);
+
+function normalizeKindWord(word) {
+  const key = String(word || '').toLowerCase().replace(/[^a-z-]/g, '');
+  return KIND_ALIASES[key] || '';
+}
+
+/**
+ * Normalise a learner command into a short, resource-kind-normalised evidence
+ * signature, e.g.:
+ *   `oc get pods -o wide`                    → 'oc get pod'
+ *   `oc label deployment/web tier=frontend`  → 'oc label deployment'
+ *   `oc adm policy add-role-to-group edit g` → 'oc adm policy add-role-to-group'
+ *   `helm install shop helm/webapp`          → 'helm install'
+ * Used by the EX280 readiness verdict as per-bullet evidence (a completed level
+ * alone must not claim mastery).
+ */
+export function commandSignature(raw) {
+  const text = String(raw || '').trim().replace(/\s+/g, ' ');
+  if (!text) return '';
+  const tokens = text.match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g) || [];
+  if (tokens.length === 0) return '';
+  const first = tokens[0].toLowerCase();
+  const words = [first];
+  const pushToken = (token) => {
+    const cleaned = String(token || '').replace(/^['"]|['"]$/g, '');
+    const kindPart = cleaned.includes('/') ? cleaned.split('/')[0] : cleaned;
+    const kind = normalizeKindWord(kindPart);
+    if (kind) return kind;
+    if (/^[a-z][a-z-]*$/.test(cleaned)) return cleaned.toLowerCase();
+    return '';
+  };
+  for (let i = 1; i < tokens.length && words.length < 4; i += 1) {
+    const token = tokens[i].replace(/^['"]|['"]$/g, '');
+    if (!token || token.startsWith('-')) continue;
+    if (words.length === 1) {
+      if (first !== 'oc') {
+        // Non-oc tool: helm keeps its verb (`helm install`), other tools are the
+        // signature themselves (`htpasswd`, `skopeo`, `vim` …).
+        if (first !== 'helm') return first;
+        const word = pushToken(token);
+        if (word) words.push(word);
+        return words.join(' ');
+      }
+      const word = pushToken(token);
+      if (!word) return words.join(' ');
+      words.push(word);
+      if (!SUBCOMMAND_VERBS.has(word) && !RESOURCE_VERBS.has(word) && word !== 'get') return words.join(' ');
+      continue;
+    }
+    if (words[1] === 'adm' || words[1] === 'auth') {
+      const word = pushToken(token);
+      if (!word) return words.join(' ');
+      words.push(word);
+      if (words[2] === 'policy' || words[2] === 'groups') continue; // include the action
+      return words.join(' ');
+    }
+    if (SUBCOMMAND_VERBS.has(words[1])) {
+      const word = pushToken(token);
+      if (!word) return words.join(' ');
+      // `oc set image`, `oc rollout status`, `oc expose service` … then stop or add kind.
+      if (words.length >= 3) {
+        if (RESOURCE_VERBS.has(words[1]) || ['set', 'rollout'].includes(words[1])) return words.join(' ');
+      }
+      words.push(word);
+      if (words[1] === 'adm' || words[1] === 'auth') return words.join(' ');
+      continue;
+    }
+    if (RESOURCE_VERBS.has(words[1])) {
+      const kind = normalizeKindWord(token.includes('/') ? token.split('/')[0] : token);
+      if (kind) words.push(kind);
+      return words.join(' ');
+    }
+    return words.join(' ');
+  }
+  return words.join(' ');
+}
+
+export { KIND_ALIASES, normalizeKindWord };
+
 function asArray(value) {
   return Array.isArray(value) ? value : [];
 }
@@ -331,6 +466,17 @@ class ScoringEngine {
     const campaignProgress = { ...(source.campaignProgress || {}) };
     const challengeProgress = { ...(source.challengeProgress || {}) };
     const examPrep = this._normalizeExamPrepStore(source.examPrep);
+    // Per-bullet evidence for the readiness verdict: successful commands the
+    // learner actually ran (normalised, capped). A completed level alone is NOT
+    // mastery — the bullet's own commands must have been exercised.
+    const commandEvidence = Array.isArray(source.commandEvidence)
+      ? source.commandEvidence.filter((entry) => typeof entry === 'string' && entry).slice(-400)
+      : [];
+    // Levels/challenges completed through live objective evaluation (not a
+    // console shortcut): their examObjectives bullets may count as evidence.
+    const objectiveEvidence = source.objectiveEvidence && typeof source.objectiveEvidence === 'object'
+      ? { ...source.objectiveEvidence }
+      : {};
 
     const progress = {
       xp: asNumber(source.xp, 0),
@@ -340,6 +486,8 @@ class ScoringEngine {
       campaignProgress,
       challengeProgress,
       examPrep,
+      commandEvidence,
+      objectiveEvidence,
     };
 
     // Derived counters from saved progress objects.
@@ -423,6 +571,7 @@ class ScoringEngine {
     this._on('incident:resolved', (data) => this.trackIncidentResolved(data));
     this._on('command:executed', (data = {}) => {
       this._bumpStat('commandsExecuted');
+      this._recordCommandEvidence(data);
       // Count explicit authorization checks once per command. (Objective
       // evaluation calls engine.canI() every tick, so auth:checked must not
       // be used for this counter or it would inflate by 1/second.)
@@ -647,6 +796,50 @@ class ScoringEngine {
     if (key === 'projectsCreated' && this.progress.stats.namespacesCreated === undefined) {
       this.progress.stats.namespacesCreated = this.progress.stats.projectsCreated;
     }
+  }
+
+  /**
+   * Record a successful learner command as EX280 readiness evidence.
+   * Stores the normalised command (deduped, capped) so `ExamPrepMode` can match
+   * it against each official bullet's own example commands.
+   */
+  _recordCommandEvidence(data = {}) {
+    const raw = String(data.raw || data.command || '').trim().replace(/\s+/g, ' ');
+    if (!raw || raw.length > 220) return;
+    if (!this.progress.commandEvidence) this.progress.commandEvidence = [];
+    const entry = raw.toLowerCase();
+    if (this.progress.commandEvidence.includes(entry)) return;
+    this.progress.commandEvidence.push(entry);
+    if (this.progress.commandEvidence.length > 400) {
+      this.progress.commandEvidence = this.progress.commandEvidence.slice(-400);
+    }
+  }
+
+  /**
+   * Record that a campaign level / challenge was completed through live
+   * objective evaluation (called from the modes on real completion). A console
+   * shortcut that writes progress directly never reaches this method, so the
+   * readiness verdict cannot be inflated by it.
+   */
+  recordObjectiveEvidence(scope, id, objectiveTypes = []) {
+    if (!scope || id === undefined || id === null) return;
+    if (!this.progress.objectiveEvidence) this.progress.objectiveEvidence = {};
+    const key = `${scope}:${id}`;
+    const seen = new Set(this.progress.objectiveEvidence[key] || []);
+    for (const type of objectiveTypes) {
+      if (typeof type === 'string' && type) seen.add(type.toLowerCase());
+    }
+    this.progress.objectiveEvidence[key] = [...seen].slice(-40);
+  }
+
+  getCommandEvidence() {
+    return Array.isArray(this.progress.commandEvidence) ? this.progress.commandEvidence.slice() : [];
+  }
+
+  getObjectiveEvidence() {
+    return this.progress.objectiveEvidence && typeof this.progress.objectiveEvidence === 'object'
+      ? { ...this.progress.objectiveEvidence }
+      : {};
   }
 
   _afterStatChange() {
@@ -961,6 +1154,9 @@ class ScoringEngine {
       chapter.every((level) => this.progress.campaignProgress[level]?.completed)
     ).length;
 
+    // Evidence that the level was completed through live objective evaluation.
+    this.recordObjectiveEvidence('level', levelId, this._lastObjectiveTypes || []);
+
     const baseXP = 100 + Number(levelId) * 25;
     const starBonus = stars * 50;
     this.addXP(baseXP + starBonus);
@@ -1018,6 +1214,8 @@ class ScoringEngine {
     this.progress.stats.threeStarChallenges = Object.values(this.progress.challengeProgress).filter(
       (entry) => entry.stars === 3
     ).length;
+
+    this.recordObjectiveEvidence('challenge', challengeId, this._lastObjectiveTypes || []);
 
     const xp = Math.floor(completionPercentage * 2) + stars * 75;
     this.addXP(xp);
@@ -1649,6 +1847,8 @@ class ScoringEngine {
       campaignProgress: { ...this.progress.campaignProgress },
       challengeProgress: { ...this.progress.challengeProgress },
       examPrep: this.getExamPrepProgress(),
+      commandEvidence: this.getCommandEvidence(),
+      objectiveEvidence: this.getObjectiveEvidence(),
       achievementsUnlocked: this.unlockedAchievements.size,
       achievementsTotal: ACHIEVEMENTS.length,
     };
@@ -1701,6 +1901,8 @@ class ScoringEngine {
         campaignProgress: this.progress.campaignProgress,
         challengeProgress: this.progress.challengeProgress,
         examPrep: this.progress.examPrep,
+        commandEvidence: this.progress.commandEvidence || [],
+        objectiveEvidence: this.progress.objectiveEvidence || {},
       }));
     } catch {
       /* storage unavailable/full — progress still lives in memory */

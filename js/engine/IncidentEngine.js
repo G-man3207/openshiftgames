@@ -128,6 +128,12 @@ class Incident {
     // Actual damaged Pod (for investigation command substitution, GAME-016).
     this.targetPod = null;
     this.targetPodUid = null;
+    // The ServiceAccount/identity damaged by an RBAC incident (the incident
+    // target is usually the workload, so the denied identity is tracked here).
+    this.rbacSubject = null;
+    // Damage parameters re-applied to replacement Pods so "restart until green"
+    // cannot fake a fix for CrashLoopBackOff-style incidents.
+    this.damageSpec = null;
     this.baseline = null;
     this.cascadeChildren = [];
     this.cascadeParent = null;
@@ -230,6 +236,14 @@ class IncidentEngine {
     this.comboWindow = 10000;
     this.maxCascadeDepth = 3;
     this.pendingCascadeTimers = [];
+    // Activation log (simulation-time) used by the L20 capstone gate: an
+    // incident that fired during the run is recorded here even after resolving.
+    this.incidentHistory = [];
+    // Deferred `incident:created` announcements (wait for the damaged Pod name
+    // so panel investigation commands carry a real Pod name, not the owner).
+    this._announceTimers = [];
+    // Incident definitions by id (log profiles + damage metadata).
+    this._defsById = new Map(INCIDENT_DEFS.map((def) => [def.id, def]));
 
     // Clock handling (G12): external fixed-step ticks vs internal fallback timer.
     this._clockInterval = null;
@@ -383,11 +397,13 @@ class IncidentEngine {
     this.activeIncidents.clear();
     this.resolvedIncidents = [];
     this.activationCount = 0;
+    this.incidentHistory = [];
     this.comboCount = 0;
     this.lastResolveGameSeconds = null;
     this.incidentCounter = 0;
     this._resolving = false;
     this._externalTickSeen = false;
+    this._clearAnnounceTimers();
 
     // Fallback clock only when nothing else pumps tick() (kept for modes that
     // call start() without an external fixed-step caller, e.g. headless tests).
@@ -413,8 +429,14 @@ class IncidentEngine {
     }
     for (const timer of this.pendingCascadeTimers) clearTimeout(timer);
     this.pendingCascadeTimers = [];
+    this._clearAnnounceTimers();
     this._unbindClusterEvents();
     this.paused = true;
+  }
+
+  _clearAnnounceTimers() {
+    for (const timer of this._announceTimers) clearInterval(timer);
+    this._announceTimers = [];
   }
 
   pause() {
@@ -489,9 +511,31 @@ class IncidentEngine {
         const gameSeconds = this.elapsedTime / 1000;
         incident.activate(gameSeconds);
         this.activationCount += 1;
+        this._recordIncidentHistory(incident, gameSeconds);
         this.emit('incident:activated', incident.getSummary());
       }
     }
+  }
+
+  /** Record every incident activation for this run (capstone gating, stats). */
+  _recordIncidentHistory(incident, gameSeconds) {
+    this.incidentHistory.push({
+      id: incident.id,
+      defId: incident.defId,
+      name: incident.name,
+      category: incident.category,
+      severity: incident.severity,
+      target: incident.target,
+      namespace: incident.namespace,
+      activatedAt: Number.isFinite(Number(gameSeconds))
+        ? Number(gameSeconds)
+        : Math.round(this.elapsedTime / 1000),
+    });
+  }
+
+  /** Incidents that activated during this run (survives resolution). */
+  getIncidentHistory() {
+    return this.incidentHistory.slice();
   }
 
   processChaosTick(elapsedSeconds) {
@@ -580,17 +624,68 @@ class IncidentEngine {
       this._safe(() => this._pickPodForIncident(incident));
     }
 
+    // Inject the damage BEFORE the announcement so onset damage can resolve the
+    // concrete Pod name used in the panel's `oc logs/describe <pod>` commands.
+    const damage = this._safe(() => this.applyIncidentEffects(incident));
+    incident.damageApplied = damage ? damage.applied !== false : false;
+
+    this._announceIncident(incident);
+    this.checkCascade(incident, 0);
+    return id;
+  }
+
+  /**
+   * Emit `incident:created` for the panel/HUD. Pod-style incidents whose Pod
+   * name is not resolvable yet are announced after a short poll (max ~2 s) so
+   * the investigation commands never show an owner name where a Pod name is
+   * required (`oc logs payment-service` is NotFound on a real cluster).
+   */
+  _announceIncident(incident) {
+    const needsPod =
+      incident.resolution?.targetKind === 'Pod'
+      || (incident.affectedResourceTypes || []).includes('Pod');
+    if (needsPod && !incident.targetPod && !incident.pendingTarget) {
+      let attempts = 0;
+      const timer = setInterval(() => {
+        attempts += 1;
+        if (!this.activeIncidents.has(incident.id)) {
+          clearInterval(timer);
+          this._announceTimers = this._announceTimers.filter((entry) => entry !== timer);
+          return;
+        }
+        // Pods may be created a tick or two after the scripted trigger time:
+        // retry the onset damage too, so the incident is real and the panel
+        // commands carry a concrete Pod name.
+        if (!incident.damageApplied) {
+          const damage = this._safe(() => this.applyIncidentEffects(incident));
+          if (damage && damage.applied !== false) {
+            incident.damageApplied = true;
+            incident.pendingTarget = false;
+          }
+        }
+        if (!incident.targetPod) this._safe(() => this._pickPodForIncident(incident));
+        if (incident.targetPod || attempts >= 12) {
+          clearInterval(timer);
+          this._announceTimers = this._announceTimers.filter((entry) => entry !== timer);
+          this._emitIncidentCreated(incident);
+        }
+      }, 150);
+      timer.unref?.();
+      this._announceTimers.push(timer);
+      return;
+    }
+    this._emitIncidentCreated(incident);
+  }
+
+  _emitIncidentCreated(incident) {
     this.emit('incident:created', {
       ...incident.getSummary(),
+      state: incident.state,
       investigationSteps: incident.investigationSteps.map((s) => ({ command: s.command, hint: s.hint })),
       resolutionActions: incident.resolutionActions,
       ocCommands: incident.ocCommands,
+      damagedSubject: incident.rbacSubject || incident.damagedSubject || null,
     });
-
-    const damage = this._safe(() => this.applyIncidentEffects(incident));
-    incident.damageApplied = damage ? damage.applied !== false : false;
-    this.checkCascade(incident, 0);
-    return id;
   }
 
   _defaultNamespaceFor(def) {
@@ -676,6 +771,17 @@ class IncidentEngine {
     return incident.investigationProgress;
   }
 
+  /**
+   * Mark every investigation step complete. Resolving an incident implies the
+   * learner diagnosed it, so the "investigate" objective must not stay blocked
+   * once the incident is gone (GAME-004 soft-lock).
+   */
+  _completeInvestigation(incident) {
+    if (!incident) return;
+    for (const step of incident.investigationSteps || []) step.completed = true;
+    incident.investigationProgress = incident.investigationSteps.length > 0 ? 1 : incident.investigationProgress;
+  }
+
   // ── Resolution ────────────────────────────────────────────────────────────
   resolveIncident(incidentId, actionId = 'manual') {
     const incident = this.activeIncidents.get(incidentId);
@@ -685,6 +791,7 @@ class IncidentEngine {
     this._resolving = true;
     try {
       const gameSeconds = this.elapsedTime / 1000;
+      this._completeInvestigation(incident);
       incident.resolve(gameSeconds);
       this.activeIncidents.delete(incidentId);
       this.resolvedIncidents.push(incident);
@@ -731,6 +838,7 @@ class IncidentEngine {
         namespace: incident.namespace,
         uid: incident.uid,
         targetPod: incident.targetPod || null,
+        investigationProgress: incident.investigationProgress,
         resolutionTime,
         action: actionId,
         xpEarned,
@@ -1005,7 +1113,11 @@ class IncidentEngine {
   applyIncidentEffects(incident) {
     if (!incident || !this.cluster) return { applied: false };
     const target = this._resolveTargetResource(incident);
-    if (!target) return { applied: false, reason: 'no-target' };
+    // Some incidents damage an owner/identity instead of the named target (e.g.
+    // UnauthorizedAccess targets the workload but damages its ServiceAccount's
+    // bindings). Never skip damage just because the named target could not be
+    // resolved: each damage function does its own lookups.
+    if (!target && !incident.target) return { applied: false, reason: 'no-target' };
 
     const byName = {
       CrashLoopBackOff: () => this._damagePod(incident, {
@@ -1090,10 +1202,16 @@ class IncidentEngine {
   }
 
   _damagePod(incident, opts) {
-    const pod = this._pickPodForIncident(incident);
-    if (!pod) {
+    const target = this._resolveTargetResource(incident);
+    const pods = [];
+    if (target && target.kind !== 'Pod') {
+      pods.push(...this._workloadPods(target));
+    } else {
+      const pod = this._pickPodForIncident(incident);
+      if (pod) pods.push(pod);
+    }
+    if (pods.length === 0) {
       // No pod available: mark the workload so the incident is still visible/repairable.
-      const target = this._resolveTargetResource(incident);
       if (target) {
         this._markIncident(target, incident);
         this._recordEvent(target, 'Warning', 'IncidentInjected', incident.description);
@@ -1102,6 +1220,45 @@ class IncidentEngine {
       return { applied: false, reason: 'no-pod' };
     }
 
+    // A broken image/command/config crash-loops EVERY replica of the workload,
+    // not just one Pod (and `oc logs` on the workload must show the same crash).
+    incident.damageSpec = { ...opts };
+    for (const pod of pods) this._damagePodObject(incident, pod, opts);
+
+    // Also flag the owning Deployment when relevant so the card targets a visible object.
+    if (target && target.kind !== 'Pod') {
+      this._markIncident(target, incident);
+      if (typeof target.kind === 'string' && (target.kind === 'Deployment' || target.kind === 'ReplicaSet')) {
+        this._setCondition(target, 'Available', 'False', 'MinimumReplicasUnavailable', 'The workload has unavailable replicas');
+      }
+      this._commit(target);
+      // Snapshot the template/generation AFTER the onset commit (update()
+      // bumps generation); a later real fix (oc set image, oc edit, rollout
+      // undo) changes it and is treated as the remediation even though the
+      // damaged pod object itself cannot recover (GAME-006). `containers` is a
+      // semantic fingerprint: a `oc rollout restart` annotation change must NOT
+      // count as a fix — only image/command/env/securityContext changes do.
+      // Never overwrite an existing onset baseline: damage-retry or a later
+      // re-damage must not make the (already fixed) template look "broken".
+      if (!incident.baseline?.workload) {
+        incident.baseline = incident.baseline || {};
+        incident.baseline.workload = {
+          uid: target.uid || target.metadata?.uid || null,
+          generation: Number(target.metadata?.generation ?? 1),
+          template: this._safe(() => JSON.stringify(target.spec?.template || {}), '') || '',
+          containers: this._safe(() => this._containerSemanticSignature(target), '') || '',
+        };
+      }
+    } else {
+      for (const pod of pods) this._markIncident(pod, incident);
+    }
+    for (const pod of pods) this._commit(pod);
+    return { applied: true, kind: 'pod', target: incident.targetPod || pods[0].name, pods: pods.length };
+  }
+
+  /** Mutate one Pod's container status + per-Pod crash log annotations. */
+  _damagePodObject(incident, pod, opts) {
+    if (!pod) return;
     const containers = pod.status?.containerStatuses || [];
     const first = containers[0] || { name: 'main', ready: true, started: true, state: {}, lastState: {}, restartCount: 0 };
     const newState = { ...first };
@@ -1130,30 +1287,97 @@ class IncidentEngine {
     this._setCondition(pod, 'Ready', 'False', 'ContainersNotReady', opts.message || 'Container is not ready');
     this._setCondition(pod, 'ContainersReady', 'False', 'ContainersNotReady', opts.message || '');
     this._recordEvent(pod, 'Warning', opts.eventReason || 'BackOff', opts.message || incident.description);
-
-    // Also flag the owning Deployment when relevant so the card targets a visible object.
-    const target = this._resolveTargetResource(incident);
-    if (target && target.kind !== 'Pod') {
-      this._markIncident(target, incident);
-      if (typeof target.kind === 'string' && (target.kind === 'Deployment' || target.kind === 'ReplicaSet')) {
-        this._setCondition(target, 'Available', 'False', 'MinimumReplicasUnavailable', 'The workload has unavailable replicas');
-      }
-      this._commit(target);
-      // Snapshot the template/generation AFTER the onset commit (update()
-      // bumps generation); a later real fix (oc set image, oc edit, rollout
-      // undo) changes it and is treated as the remediation even though the
-      // damaged pod object itself cannot recover (GAME-006).
-      incident.baseline = incident.baseline || {};
-      incident.baseline.workload = {
-        uid: target.uid || target.metadata?.uid || null,
-        generation: Number(target.metadata?.generation ?? 1),
-        template: this._safe(() => JSON.stringify(target.spec?.template || {}), '') || '',
-      };
-    } else {
-      this._markIncident(pod, incident);
+    // Real `oc logs` output for THIS Pod (cli reads these annotations).
+    this._applyPodLogAnnotations(incident, pod);
+    // Expose the concrete Pod name for the panel's investigation commands.
+    if (!incident.targetPod) {
+      incident.targetPod = pod.metadata?.name || pod.name || null;
+      incident.targetPodUid = pod.uid || pod.metadata?.uid || null;
     }
-    this._commit(pod);
-    return { applied: true, kind: 'pod', target: pod.name };
+    this._markIncident(pod, incident);
+  }
+
+  /** Resolve the owning workload name (Deployment/StatefulSet/...) for a Pod. */
+  _workloadNameForPod(pod) {
+    if (!pod) return '';
+    let current = pod;
+    for (let depth = 0; depth < 4; depth += 1) {
+      const ref = (current?.metadata?.ownerReferences || [])[0];
+      if (!ref?.kind || !ref?.name) break;
+      if (ref.kind !== 'ReplicaSet' && ref.kind !== 'ReplicationController') return ref.name;
+      const owner = this._safe(() => this.cluster?.get?.(ref.uid))
+        || this._findResource(ref.kind, ref.name, current?.namespace || current?.metadata?.namespace);
+      if (!owner) return ref.name;
+      current = owner;
+      if (ref.kind === 'ReplicaSet') {
+        const next = (owner?.metadata?.ownerReferences || [])[0];
+        if (next?.name) return next.name;
+      }
+    }
+    return current?.metadata?.name || '';
+  }
+
+  /**
+   * Write `oc logs` content for the damaged Pod from the incident definition's
+   * `logs` profile (tokens <pod> <deployment> <image> <namespace> substituted
+   * from the live object). cli's CommandBar renders these for `oc logs` /
+   * `oc logs --previous` instead of a generic synthetic crash log.
+   */
+  _applyPodLogAnnotations(incident, pod) {
+    if (!pod) return;
+    const def = this._defsById.get(incident.defId) || null;
+    const profile = def?.logs;
+    if (!profile) return;
+    const container =
+      profile.container
+      || (pod.spec?.containers || [])[0]?.name
+      || (pod.status?.containerStatuses || [])[0]?.name
+      || 'main';
+    const podName = pod.metadata?.name || pod.name || incident.target || 'pod';
+    const containers = pod.spec?.containers || [];
+    const containerSpec = containers.find((entry) => entry.name === container) || containers[0] || {};
+    const image = containerSpec.image || (pod.status?.containerStatuses || [])[0]?.image || '';
+    const workloadName = this._workloadNameForPod(pod) || incident.target || podName;
+    const namespace = pod.namespace || pod.metadata?.namespace || incident.namespace || '';
+    const substitute = (line) =>
+      String(line)
+        .replace(/<pod>/g, podName)
+        .replace(/<deployment>/g, workloadName)
+        .replace(/<image>/g, image)
+        .replace(/<namespace>/g, namespace);
+    const current = Array.isArray(profile.current) ? profile.current.map(substitute) : null;
+    const previous = Array.isArray(profile.previous) ? profile.previous.map(substitute) : null;
+    if (current) this._annotate(pod, 'openshiftgames.io/logs', JSON.stringify(current));
+    if (previous) this._annotate(pod, 'openshiftgames.io/logs-previous', JSON.stringify(previous));
+    this._annotate(pod, 'openshiftgames.io/logs-container', container);
+  }
+
+  _clearPodLogAnnotations(pod) {
+    for (const key of ['openshiftgames.io/logs', 'openshiftgames.io/logs-previous', 'openshiftgames.io/logs-container']) {
+      this._clearAnnotation(pod, key);
+    }
+  }
+
+  /**
+   * Semantic container fingerprint of a workload template. Deliberately ignores
+   * Pod-template metadata (e.g. `kubectl.kubernetes.io/restartedAt` added by
+   * `oc rollout restart`) and replica counts, so "restart until green" does not
+   * count as fixing a CrashLoopBackOff.
+   */
+  _containerSemanticSignature(resource) {
+    const containers = resource?.spec?.template?.spec?.containers || [];
+    return JSON.stringify(
+      containers.map((container) => ({
+        name: container.name,
+        image: container.image,
+        command: container.command,
+        args: container.args,
+        env: container.env,
+        envFrom: container.envFrom,
+        resources: container.resources,
+        securityContext: container.securityContext,
+      }))
+    );
   }
 
   _damageConfigDependency(incident, waitingReason) {
@@ -1183,41 +1407,57 @@ class IncidentEngine {
     });
   }
 
+  /**
+   * SCC admission failure. With the real OCP 4.x model the rejected Pod is
+   * never created: the owning Deployment/ReplicaSet reports
+   * ReplicaFailure/FailedCreate and `oc get pods` stays empty. Mark the workload
+   * (and the ServiceAccount identity) — do NOT fail/deny or auto-heal Pods, and
+   * never auto-grant the SCC (that is the learner's `oc adm policy` step).
+   */
   _damageScc(incident) {
-    const pod = this._pickPodForIncident(incident);
-    if (pod) {
-      this._setPhase(pod, 'Failed');
-      // Mark the real admission-denied pod the same way SimulationTick does, so
-      // granting a matching SCC (SCC dirty event) revives it instead of hiding
-      // the denial behind a fake "Failed" state.
-      this._annotate(pod, 'openshiftgames/scc-denied', 'true');
-      this._annotate(
-        pod,
-        'openshiftgames/denied-reason',
-        `pods "${pod.metadata?.name || pod.name}" is forbidden: unable to validate against any security context constraint`
-      );
-      this._setCondition(pod, 'Ready', 'False', 'SCCDenied', 'unable to validate against any security context constraint');
-      this._recordEvent(
-        pod,
-        'Warning',
-        'FailedCreate',
-        'pods is forbidden: unable to validate against any security context constraint: [provider restricted-v2: .spec.securityContext.runAsUser: Invalid value]'
-      );
-      this._markIncident(pod, incident);
-      this._commit(pod);
+    const target = this._resolveTargetResource(incident);
+    // Resolve the workload's ServiceAccount (dedicated SA preferred over default).
+    let saName = null;
+    let saNamespace = incident.namespace || '';
+    const podSpec = target?.spec?.template?.spec || (target?.kind === 'Pod' ? target.spec : null);
+    if (podSpec) {
+      saName = podSpec.serviceAccountName || podSpec.serviceAccount || 'default';
     }
-    const sa = this._findResource('ServiceAccount', incident.target, incident.namespace);
+    if (!saName) {
+      const pods = target ? this._workloadPods(target) : [];
+      if (pods.length > 0) saName = pods[0]?.spec?.serviceAccountName || 'default';
+    }
+    saName = saName || 'default';
+    const sa = this._findResource('ServiceAccount', saName, saNamespace);
     if (sa) {
+      saNamespace = sa.namespace || sa.metadata?.namespace || saNamespace;
       this._markIncident(sa, incident);
       this._commit(sa);
     }
-    const target = this._resolveTargetResource(incident);
-    if (target && target.kind !== 'Pod') {
+    incident.rbacSubject = {
+      kind: 'ServiceAccount',
+      name: saName,
+      namespace: saNamespace,
+    };
+
+    if (target && target.kind !== 'Pod' && target.kind !== 'ServiceAccount') {
       this._setCondition(target, 'Available', 'False', 'MinimumReplicasUnavailable', 'Pods rejected by security context constraints');
+      this._setCondition(target, 'ReplicaFailure', 'True', 'FailedCreate', 'pods is forbidden: unable to validate against any security context constraint');
+      this._recordEvent(
+        target,
+        'Warning',
+        'FailedCreate',
+        `Error creating: pods "${incident.target}-${incident.id}" is forbidden: unable to validate against any security context constraint: [provider restricted-v2: .securityContext.privileged: Forbidden]`
+      );
       this._markIncident(target, incident);
       this._commit(target);
     }
-    return { applied: !!pod || !!target, kind: 'pod', scc: incident.resolution?.grantScc || 'anyuid' };
+    return {
+      applied: !!target || !!sa,
+      kind: 'pod',
+      scc: incident.resolution?.grantScc || 'privileged',
+      serviceAccount: incident.rbacSubject,
+    };
   }
 
   _damagePendingScheduling(incident) {
@@ -1369,7 +1609,14 @@ class IncidentEngine {
   _damageJob(incident) {
     const job = this._resolveTargetResource(incident) || this._findResource('Job', incident.target, incident.namespace);
     if (!job) return { applied: false };
-    this._saveRestore(incident, { uid: job.uid, spec: JSON.parse(JSON.stringify(job.spec || {})) });
+    this._saveRestore(incident, {
+      uid: job.uid,
+      name: job.name,
+      namespace: job.namespace || incident.namespace,
+      spec: JSON.parse(JSON.stringify(job.spec || {})),
+      activeDeadlineSeconds: job.spec?.activeDeadlineSeconds ?? null,
+      containers: this._safe(() => this._containerSemanticSignature(job), '') || '',
+    });
     job.status = job.status || {};
     job.status.phase = 'Failed';
     job.status.conditions = [
@@ -1517,7 +1764,9 @@ class IncidentEngine {
       this._setCondition(co, 'Degraded', 'True', 'DNSUnavailable', 'In-cluster DNS resolution is failing');
       this._commit(co);
     }
-    return { applied: dnsPods.length > 0, kind: 'dns', pods: dnsPods.length };
+    // The incident is "real" even when no dns-default Pods are seeded: the
+    // target Service and the DNS ClusterOperator carry the degraded state.
+    return { applied: dnsPods.length > 0 || !!target || !!co, kind: 'dns', pods: dnsPods.length };
   }
 
   _damageIngress(incident) {
@@ -1558,6 +1807,8 @@ class IncidentEngine {
       (this._safe(() => this.cluster?.getByKindAndNamespace('ServiceAccount', incident.namespace)) || [])[0];
     const removed = [];
     if (sa) {
+      incident.namespace = sa.namespace || sa.metadata?.namespace || incident.namespace;
+      incident.rbacSubject = { kind: 'ServiceAccount', name: sa.name, namespace: incident.namespace };
       const bindings =
         this._safe(() => this.cluster?.getByKindAndNamespace('RoleBinding', incident.namespace)) ||
         this._safe(() => this.cluster?.getByKind('RoleBinding')) ||
@@ -1570,6 +1821,12 @@ class IncidentEngine {
         this._safe(() => this.cluster.remove(rb.uid));
       }
       this._markIncident(sa, incident);
+      this._recordEvent(
+        sa,
+        'Warning',
+        'Forbidden',
+        `User "system:serviceaccount:${incident.namespace}:${sa.name}" cannot get resource "pods": RBAC binding removed`
+      );
       this._commit(sa);
     }
     this._saveRestore(incident, { removedBindings: removed });
@@ -1817,7 +2074,7 @@ class IncidentEngine {
 
     switch (kind) {
       case 'pod':
-        return this._healPods(incident, target);
+        return this._healPods(incident, target, actionId);
       case 'deployment':
         return this._healDeployment(incident, target);
       case 'service':
@@ -1874,8 +2131,13 @@ class IncidentEngine {
       ...cs,
       ready: true,
       started: true,
+      // A healed container is a FRESH running instance: drop the injected
+      // previous-termination state so `oc logs <healthy-pod> --previous` reports
+      // a real "previous terminated container not found" BadRequest instead of
+      // replaying the old synthetic crash log (GAME-004).
+      restartCount: 0,
       state: { running: { startedAt: cs.state?.running?.startedAt || nowIso() } },
-      lastState: cs.lastState?.terminated ? { ...cs.lastState } : undefined,
+      lastState: {},
     }));
     pod.status = pod.status || {};
     pod.status.containerStatuses = healthy.length > 0 ? healthy : [{
@@ -1892,11 +2154,12 @@ class IncidentEngine {
     this._setCondition(pod, 'Ready', 'True', 'PodReady', '');
     this._setCondition(pod, 'ContainersReady', 'True', 'ContainersReady', '');
     this._clearAnnotation(pod, INCIDENT_ANNOTATION);
+    this._clearPodLogAnnotations(pod);
     this._recordEvent(pod, 'Normal', 'Healed', 'Pod is running and ready again');
     this._commit(pod);
   }
 
-  _healPods(incident, target) {
+  _healPods(incident, target, actionId = 'manual') {
     const pods = [];
     if (target) {
       if (target.kind === 'Pod') pods.push(target);
@@ -1907,14 +2170,25 @@ class IncidentEngine {
       if (fallback) pods.push(fallback);
     }
 
-    // SCC incident: grant the SCC BEFORE healing so the admission check below
-    // can validate the request (GAME-002). We must not fabricate a Running
-    // privileged Pod that the SCC model still forbids: a privileged request
-    // needs the `privileged` SCC, not `anyuid`.
+    // SCC incident: granting the SCC is a PLAYER action. Only the explicit
+    // "Grant a permissive SCC to the ServiceAccount" resolution action may
+    // create the binding — auto-resolve / state-driven heal must never grant an
+    // SCC by itself (that used to tick L17's objective without the player).
     if (incident.name === 'SCCForbidden') {
-      this._grantSccTo(incident, this._requiredSccForIncident(incident));
-    } else if (incident.resolution?.grantScc) {
-      this._grantSccTo(incident, incident.resolution.grantScc);
+      const explicitGrant = actionId === 'grant-scc';
+      if (explicitGrant) {
+        this._grantSccTo(incident, this._requiredSccForIncident(incident), incident.rbacSubject?.name);
+      } else if (!this._incidentSccGranted(incident)) {
+        // No grant: do not fake a heal. Report the still-denied state.
+        if (target) {
+          this._recordEvent(target, 'Warning', 'SCCDenied', 'Grant the privileged SCC to the ServiceAccount before the Pod can be admitted');
+          this._commit(target);
+        }
+        return { applied: false, kind: 'pod', reason: 'scc-not-granted' };
+      }
+    } else if (incident.resolution?.grantScc && actionId !== 'auto') {
+      // Non-SCC incidents never auto-grant either.
+      if (actionId !== 'resource-fixed') this._grantSccTo(incident, incident.resolution.grantScc);
     }
 
     let healed = 0;
@@ -2004,6 +2278,58 @@ class IncidentEngine {
     });
     if (needsPrivileged) return 'privileged';
     return incident.resolution?.grantScc || 'anyuid';
+  }
+
+  /**
+   * Is the SCC required by this incident actually granted to the workload's
+   * ServiceAccount under the OCP 4.x RBAC-binding model? Used by state-driven
+   * resolution so the incident clears when the learner runs
+   * `oc adm policy add-scc-to-user <scc> -z <sa>`, not from an auto-grant.
+   */
+  _incidentSccGranted(incident) {
+    const sccName = incident.resolution?.grantScc || this._requiredSccForIncident(incident) || 'privileged';
+    const subject = incident.rbacSubject || {};
+    const namespace = subject.namespace || incident.namespace || '';
+    const saName = subject.kind === 'ServiceAccount' ? subject.name : null;
+    const subjectStr = saName
+      ? `system:serviceaccount:${namespace}:${saName}`
+      : subject.name || incident.target;
+    const cluster = this.cluster;
+    if (!cluster) return false;
+    const toNames = (grants) =>
+      (Array.isArray(grants) ? grants : [])
+        .map((entry) => (typeof entry === 'string' ? entry : entry?.name || entry?.metadata?.name || ''))
+        .filter(Boolean);
+    try {
+      if (typeof cluster.getSCCGrantsForSubject === 'function') {
+        return toNames(cluster.getSCCGrantsForSubject(subjectStr)).includes(String(sccName));
+      }
+      if (saName && typeof cluster.getSCCsForServiceAccount === 'function') {
+        if (toNames(cluster.getSCCsForServiceAccount(namespace, saName)).includes(String(sccName))) return true;
+      }
+    } catch {
+      /* fall through to the binding scan */
+    }
+    // Binding scan (works on partially-integrated builds / before helpers land).
+    const roleName = `system:openshift:scc:${sccName}`;
+    for (const kind of ['RoleBinding', 'ClusterRoleBinding']) {
+      for (const binding of this._safe(() => cluster.getByKind(kind)) || []) {
+        const spec = binding.spec || {};
+        if ((spec.roleRef?.name || '') !== roleName) continue;
+        const subjects = spec.subjects || binding.subjects || [];
+        if (subjects.some((entry) => {
+          if (entry?.kind === 'ServiceAccount') {
+            return saName
+              ? entry.name === saName && (!entry.namespace || entry.namespace === namespace)
+              : `${entry.namespace || namespace}:${entry.name}` === incident.target;
+          }
+          return entry?.kind === 'User' && entry.name === subjectStr;
+        })) {
+          return true;
+        }
+      }
+    }
+    return false;
   }
 
   _healDeployment(incident, target) {
@@ -2889,11 +3215,109 @@ class IncidentEngine {
     if (typeof off === 'function') this._clusterUnsubscribers.push(off);
     const offAdded = this._safe(() => engine.on('cluster:added', handler));
     if (typeof offAdded === 'function') this._clusterUnsubscribers.push(offAdded);
+    // Investigation progress is driven by what the learner actually types:
+    // `oc logs`/`oc describe` on any Pod owned by the incident target advances
+    // the incident's investigation steps without the panel (GAME-004).
+    const offCommand = this._safe(() => engine.on('command:executed', (payload) => this._onCommandExecuted(payload)));
+    if (typeof offCommand === 'function') this._clusterUnsubscribers.push(offCommand);
   }
 
   _unbindClusterEvents() {
     for (const off of this._clusterUnsubscribers) this._safe(off);
     this._clusterUnsubscribers = [];
+  }
+
+  // ── CLI-driven investigation (no panel required) ─────────────────────────
+  /**
+   * @param {{raw?:string, command?:string, success?:boolean}} payload
+   */
+  _onCommandExecuted(payload = {}) {
+    if (this.paused || this._resolving) return;
+    if (payload.success === false) return;
+    const raw = String(payload.raw || payload.command || '').trim();
+    if (!/^oc\s+/i.test(raw)) return;
+    const match = raw.match(/^oc\s+(logs|describe)\s+(.*)$/i);
+    if (!match) return;
+    const action = match[1].toLowerCase();
+    const args = match[2];
+    const ref = this._parseInvestigationRef(args);
+    if (!ref) return;
+    for (const [, incident] of this.activeIncidents) {
+      if (incident.state === INCIDENT_STATE.RESOLVED) continue;
+      if (!this._commandTargetsIncident(incident, ref, action)) continue;
+      this._advanceInvestigation(incident, action, raw);
+    }
+  }
+
+  /** Parse `pod/x`, `deploy/x`, `x`, `pod x`, `x -n ns`, `x --previous`. */
+  _parseInvestigationRef(args = '') {
+    const tokens = String(args)
+      .split(/\s+/)
+      .map((token) => token.replace(/^['"]|['"]$/g, ''))
+      .filter((token) => token && !token.startsWith('-'));
+    if (tokens.length === 0) return null;
+    const first = tokens[0];
+    if (first.includes('/')) {
+      const [kind, ...rest] = first.split('/');
+      return { kind: kind.toLowerCase(), name: rest.join('/') || tokens[1] || '' };
+    }
+    const kindPrefixes = ['pod', 'pods', 'deploy', 'deployments', 'deployment', 'rs', 'replicaset', 'ds', 'daemonset', 'sts', 'statefulset', 'job', 'jobs', 'bc', 'buildconfig', 'build'];
+    if (kindPrefixes.includes(first.toLowerCase()) && tokens[1]) {
+      return { kind: first.toLowerCase(), name: tokens[1] };
+    }
+    return { kind: 'pod', name: first };
+  }
+
+  /** Does this `oc logs/describe` reference a Pod/owner of the incident target? */
+  _commandTargetsIncident(incident, ref, action) {
+    const target = this._resolveTargetResource(incident);
+    const workloadNames = new Set(
+      [incident.target, target?.name, target?.metadata?.name].filter(Boolean).map(String)
+    );
+    const podNames = new Set(
+      this._workloadPods(target).map((pod) => pod.metadata?.name || pod.name).filter(Boolean)
+    );
+    if (incident.targetPod) podNames.add(incident.targetPod);
+    const workloadKinds = new Set(['deploy', 'deployments', 'deployment', 'rs', 'replicaset', 'ds', 'daemonset', 'sts', 'statefulset']);
+    if (workloadKinds.has(ref.kind)) {
+      return workloadNames.has(ref.name);
+    }
+    if (ref.kind === 'job' || ref.kind === 'jobs') {
+      return incident.target === ref.name || target?.name === ref.name;
+    }
+    // Pod reference (explicit `pod/x` or a bare name that resolves to a Pod):
+    if (podNames.has(ref.name)) return true;
+    if (action === 'logs' && incident.resolution?.targetKind === 'Pod') {
+      // `oc logs <deployment>` is also accepted for workload incidents.
+      return workloadNames.has(ref.name) || podNames.has(ref.name);
+    }
+    return false;
+  }
+
+  /** Advance the first not-yet-completed step matching the command kind. */
+  _advanceInvestigation(incident, action, raw) {
+    const steps = incident.investigationSteps || [];
+    if (steps.length === 0) return;
+    const wantsLogs = action === 'logs';
+    const candidate = steps.findIndex((step, index) => {
+      if (step.completed || incident._investigatedSteps?.has?.(index)) return false;
+      const command = String(step.command || '').toLowerCase();
+      if (wantsLogs) return command.includes('logs');
+      return command.includes('describe') || command.includes('get pod');
+    });
+    const index = candidate >= 0
+      ? candidate
+      : steps.findIndex((step) => !step.completed);
+    if (index < 0) return;
+    incident.startInvestigation();
+    this.completeStep(incident.id, index);
+    this.emit('incident:command-investigated', {
+      id: incident.id,
+      name: incident.name,
+      command: raw,
+      stepIndex: index,
+      progress: incident.investigationProgress,
+    });
   }
 
   _onClusterModified() {
@@ -2921,11 +3345,17 @@ class IncidentEngine {
 
       // A real fix to the owning workload (oc set image / edit / rollout undo)
       // replaces the faulty Pod in a real cluster. The damaged Pod object cannot
-      // recover on its own here, so treat a template change since onset as the
-      // canonical remediation (GAME-006).
+      // recover on its own here, so treat a SEMANTIC container change since
+      // onset as the canonical remediation (GAME-006).
       if (!STATE_RESOLVABLE.has(incident.name) && incident.baseline?.workload) {
         const healedByFix = this._safe(() => this._healPodIncidentFromWorkloadChange(incident, id), false);
         if (healedByFix) continue;
+        // Not fixed yet: the controller may have recreated Pods (e.g. after
+        // `oc delete pod`). Re-inject the same damage on healthy replacements so
+        // "restart until green" does not work — the broken image/command comes
+        // back on a real cluster too.
+        this._safe(() => this._redamageReplacementPods(incident), false);
+        continue;
       }
       if (!STATE_RESOLVABLE.has(incident.name)) continue;
       // Activation grace period in simulation time (pauses do not count).
@@ -2955,21 +3385,82 @@ class IncidentEngine {
     }
   }
 
+  /**
+   * The workload template is still broken but the controller created fresh Pods
+   * (e.g. after `oc delete pod` or a rollout restart). Re-apply the onset damage
+   * to those Pods so deleting/restarting does not fake a fix.
+   */
+  _redamageReplacementPods(incident) {
+    if (this._resolving || incident._redamaging) return false;
+    if (!incident.damageSpec) return false;
+    const target = this._resolveTargetResource(incident);
+    if (!target || target.kind === 'Pod') return false;
+    // Only re-damage while the workload template is STILL the broken one: once
+    // the learner fixes the image/command/env, replacement Pods must come up
+    // healthy (otherwise this safety net would undo the fix).
+    const base = incident.baseline?.workload;
+    if (base) {
+      const currentContainers = this._safe(() => this._containerSemanticSignature(target), '') || '';
+      const currentTemplate = this._safe(() => JSON.stringify(target.spec?.template || {}), '') || '';
+      const fixed = base.containers
+        ? base.containers !== currentContainers
+        : base.template !== currentTemplate;
+      if (fixed) return false;
+    }
+    const pods = this._workloadPods(target);
+    if (pods.length === 0) return false;
+    const podHealthy = (pod) =>
+      !!pod && pod.status?.phase === 'Running' && (pod.isConditionTrue ? pod.isConditionTrue('Ready') : true);
+    const fresh = pods.filter((pod) => podHealthy(pod) && !pod.metadata?.annotations?.[INCIDENT_ANNOTATION]);
+    if (fresh.length === 0) return false;
+    incident._redamaging = true;
+    try {
+      for (const pod of fresh) this._damagePodObject(incident, pod, incident.damageSpec);
+      for (const pod of fresh) this._commit(pod);
+      this.emit('incident:redamaged', {
+        id: incident.id,
+        name: incident.name,
+        pods: fresh.map((pod) => pod.metadata?.name || pod.name),
+      });
+      return true;
+    } finally {
+      incident._redamaging = false;
+    }
+  }
+
   _healPodIncidentFromWorkloadChangeInner(incident, incidentId) {
     const target = this._resolveTargetResource(incident);
     if (!target || target.kind === 'Pod') return false;
     const base = incident.baseline?.workload;
     if (!base) return false;
     const currentTemplate = this._safe(() => JSON.stringify(target.spec?.template || {}), '') || '';
+    const currentContainers = this._safe(() => this._containerSemanticSignature(target), '') || '';
     const currentGeneration = Number(target.metadata?.generation ?? 1);
-    const changed = currentTemplate !== base.template || currentGeneration > base.generation;
+    // A fix means the CONTAINER SPEC changed — image, command/args, env,
+    // securityContext. `oc rollout restart` (template metadata annotation) or a
+    // replica-only change is NOT a fix: on a real cluster the same broken
+    // configuration comes back. CrashLoopBackOff/OOMKilled style incidents
+    // therefore only heal on a semantic container change; other pod incidents
+    // (missing ConfigMap/Secret, PendingScheduling, probes) may also heal from a
+    // template change that restores the reference.
+    const semanticOnly = new Set([
+      'CrashLoopBackOff',
+      'ImagePullBackOff',
+      'OOMKilled',
+      'CreateContainerConfigError',
+      'ReadinessProbeFailure',
+      'LivenessProbeFailure',
+    ]);
+    const semanticChanged =
+      Boolean(base.containers)
+        ? base.containers !== currentContainers
+        : currentTemplate !== base.template;
+    const templateChanged = currentTemplate !== base.template || currentGeneration > base.generation;
+    const changed = semanticOnly.has(incident.name) ? semanticChanged : templateChanged;
     if (!changed) return false;
 
-    // Heal the damaged Pod(s) so the workload can report healthy replicas.
-    const damaged = incident.targetPodUid
-      ? this._safe(() => this.cluster.get?.(incident.targetPodUid))
-      : null;
-    const pods = damaged ? [damaged] : this._workloadPods(target);
+    // Heal every damaged Pod so the workload can report healthy replicas.
+    const pods = this._workloadPods(target);
     for (const pod of pods) {
       if (!pod) continue;
       this._healPodContainer(pod);
@@ -2980,7 +3471,14 @@ class IncidentEngine {
       (pod) => pod.status?.phase === 'Running' && (pod.isConditionTrue ? pod.isConditionTrue('Ready') : true)
     );
     if (healthy) {
-      this._recordEvent(target, 'Normal', 'RolloutRecovered', 'Pod template updated; workload is healthy again');
+      this._recordEvent(
+        target,
+        'Normal',
+        'RolloutRecovered',
+        semanticOnly.has(incident.name)
+          ? 'Container spec changed; workload is healthy again'
+          : 'Pod template updated; workload is healthy again'
+      );
       this._commit(target);
       this.resolveIncident(incidentId, 'resource-fixed');
       return true;
@@ -3006,7 +3504,6 @@ class IncidentEngine {
       case 'CreateContainerConfigError':
       case 'ConfigMapMissing':
       case 'SecretMissing':
-      case 'SCCForbidden':
       case 'PendingScheduling':
       case 'ReadinessProbeFailure':
       case 'LivenessProbeFailure':
@@ -3014,6 +3511,12 @@ class IncidentEngine {
         const pods = incident.name === 'PodStuckTerminating' ? [target] : this._workloadPods(target);
         if (pods.length === 0) return podHealthy(target);
         return pods.every(podHealthy);
+      }
+      case 'SCCForbidden': {
+        // Real 4.x: the rejected Pod is never created. The incident clears when
+        // the learner's RBAC binding actually grants the SCC to the workload SA
+        // (no auto-grant, no fabricated Failed Pod).
+        return this._incidentSccGranted(incident);
       }
       case 'DeploymentStuckRollout': {
         if (target.kind !== 'Deployment') return false;
@@ -3048,6 +3551,15 @@ class IncidentEngine {
         return Array.isArray(target.spec?.ingress) && target.spec.ingress.length > 0;
       }
       case 'DNSResolutionFailure': {
+        // The learner fix on OpenShift is an egress policy allowing the
+        // dns-default Pod port (5353) to the openshift-dns namespace — accept
+        // that as remediation even before the DNS Pods are re-admitted.
+        const policies = this._safe(() => this.cluster?.getByKindAndNamespace('NetworkPolicy', incident.namespace)) || [];
+        const allowsDns = policies.some((policy) => {
+          const rules = Array.isArray(policy.spec?.egress) ? policy.spec.egress : [];
+          return rules.some((rule) => (rule.ports || []).some((port) => Number(port?.port) === 5353));
+        });
+        if (allowsDns) return true;
         const dnsPods = this._safe(() => this.cluster?.getByKindAndNamespace('Pod', 'openshift-dns')) || [];
         if (dnsPods.length === 0) {
           const co = this._safe(() => this.cluster.getClusterOperator?.('dns'));
@@ -3060,10 +3572,38 @@ class IncidentEngine {
       case 'LoadBalancerPending':
         return target.kind === 'Service' && (target.status?.loadBalancer?.ingress || []).length > 0;
       case 'UnauthorizedAccess': {
-        const sa = target.kind === 'ServiceAccount' ? target : this._findResource('ServiceAccount', incident.target, incident.namespace);
-        if (!sa) return false;
-        const bindings = this._safe(() => this.cluster?.getByKindAndNamespace('RoleBinding', sa.namespace)) || [];
-        return bindings.some((rb) => (rb.spec?.subjects || []).some((sub) => sub.kind === 'ServiceAccount' && sub.name === sa.name));
+        // The damaged identity is stored at onset (the incident target is the
+        // workload, not the ServiceAccount). Any real RoleBinding/ClusterRoleBinding
+        // for that SA (e.g. `oc adm policy add-role-to-user view -z default`)
+        // repairs the denial — the panel is not the only exit.
+        let subject = incident.rbacSubject
+          || (target.kind === 'ServiceAccount' ? { kind: 'ServiceAccount', name: target.name, namespace: target.namespace } : null);
+        if (!subject?.name) {
+          // Derive from the workload's pod template / running Pods (default SA
+          // when nothing is explicit) so older incidents still detect repairs.
+          const podSpec = target.kind === 'Pod' ? target.spec : target.spec?.template?.spec;
+          let saName = podSpec?.serviceAccountName || podSpec?.serviceAccount || '';
+          let saNamespace = incident.namespace || target.namespace || target.metadata?.namespace || '';
+          if (!saName) {
+            const pods = target.kind === 'Pod' ? [target] : this._workloadPods(target);
+            saName = pods[0]?.spec?.serviceAccountName || 'default';
+          }
+          subject = { kind: 'ServiceAccount', name: saName || 'default', namespace: saNamespace };
+        }
+        const namespace = subject.namespace || incident.namespace;
+        const bindings = [
+          ...(this._safe(() => this.cluster?.getByKindAndNamespace('RoleBinding', namespace)) || []),
+          ...(this._safe(() => this.cluster?.getByKind('ClusterRoleBinding')) || []),
+        ];
+        return bindings.some((binding) => {
+          const subjects = binding.spec?.subjects || binding.subjects || [];
+          return subjects.some(
+            (entry) =>
+              entry?.kind === 'ServiceAccount'
+              && entry.name === subject.name
+              && (!entry.namespace || entry.namespace === namespace)
+          );
+        });
       }
       case 'HTPasswdAuthFailure': {
         // Provider must be ready AND the referenced htpasswd Secret must
@@ -3097,8 +3637,23 @@ class IncidentEngine {
         if (!total) return false;
         return Number(total.used?.pods ?? 0) < Number(total.hard?.pods ?? Infinity);
       }
-      case 'JobDeadlineExceeded':
-        return target.status?.phase === 'Complete' || target.status?.phase === 'Succeeded';
+      case 'JobDeadlineExceeded': {
+        // A Failed Job cannot be resumed: the CLI repair is delete + recreate,
+        // or a patch that replaces the Job. Resolve when a Job with the target
+        // name completes after the damaged object was replaced/changed, keeping
+        // the panel from being the only exit.
+        const job = target.kind === 'Job' ? target : this._findResource('Job', incident.target, incident.namespace);
+        if (!job) return false;
+        const phase = job.status?.phase;
+        if (phase === 'Complete' || phase === 'Succeeded') return true;
+        const restore = incident.restoreState || {};
+        const recreated = restore.uid && job.uid && job.uid !== restore.uid;
+        if (recreated) return phase !== 'Failed';
+        const specChanged =
+          restore.activeDeadlineSeconds !== (job.spec?.activeDeadlineSeconds ?? null)
+          || (restore.containers && restore.containers !== this._safe(() => this._containerSemanticSignature(job), ''));
+        return specChanged && phase !== 'Failed';
+      }
       case 'CronJobMissedSchedule':
         return target.kind === 'CronJob' && target.spec?.suspend !== true;
       case 'PVCPending':
@@ -3200,6 +3755,7 @@ class IncidentEngine {
       uid: incident.uid,
       targetPod: incident.targetPod,
       targetPodUid: incident.targetPodUid,
+      damagedSubject: incident.rbacSubject || null,
       visualEffect: incident.visualEffect,
       investigationSteps: incident.investigationSteps,
       resolutionActions: incident.resolutionActions,
@@ -3262,8 +3818,10 @@ class IncidentEngine {
   reset() {
     this.stop();
     this._unbindClusterEvents();
+    this._clearAnnounceTimers();
     this.activeIncidents.clear();
     this.resolvedIncidents = [];
+    this.incidentHistory = [];
     this.incidentCounter = 0;
     this.difficultyLevel = 1;
     this.activationCount = 0;

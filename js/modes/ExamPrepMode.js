@@ -18,11 +18,17 @@
  *   - tests select `#exam-prep-overlay` or `[data-testid="exam-prep"]`;
  *     `getBulletCount()` must return 55.
  *
- * Progress semantics: a bullet is MASTERED when any linked campaign level or
- * challenge is completed, or when `ScoringEngine.markExamPrep(id, 'mastered')`
- * was recorded. `ScoringEngine.getExamPrepProgress()` / `markExamPrep()` are
- * feature-detected; if absent we fall back to `getProgress().examPrep` and then
- * to a localStorage-backed local state key (openshiftgames_exam_prep).
+ * Progress semantics (evidence-based, #14): a bullet is MASTERED only when
+ * there is drill evidence — a quick lab linked to the bullet passed its live
+ * `check` evaluation, or a linked campaign level/challenge was completed
+ * through live objective evaluation AND at least one of the bullet's own example
+ * commands was actually run successfully. Simply completing a level (or a
+ * console shortcut that writes progress) is only "Practiced". Bullets that the
+ * simulator cannot exercise (the web console) are capped at "Practiced" and
+ * label themselves documentation-only. `ScoringEngine.getExamPrepProgress()` /
+ * `markExamPrep()` / `getCommandEvidence()` are feature-detected; if absent we
+ * fall back to `getProgress()` and a localStorage-backed local state key
+ * (openshiftgames_exam_prep).
  */
 
 import {
@@ -37,6 +43,8 @@ import {
   levelTitle,
   challengeTitle,
 } from '../data/EX280Objectives.js';
+import { createObjectiveProgress, evaluateObjectives } from '../engine/ObjectiveEvaluator.js';
+import { commandSignature } from '../engine/ScoringEngine.js';
 
 const LOCAL_STORAGE_KEY = 'openshiftgames_exam_prep';
 /** Learner-facing documentation (moved out of the repo docs/ folder to the GitHub wiki). */
@@ -173,8 +181,11 @@ const EX280_STYLES = `
   width: 0%;
   border-radius: 999px;
   background: var(--accent, #EE0000);
-  transition: width 0.35s ease;
+  transition: width 0.35s ease, background-color 0.35s ease;
 }
+.ep-progress-fill.is-danger { background: var(--accent, #EE0000); }
+.ep-progress-fill.is-close { background: #d29922; }
+.ep-progress-fill.is-ready { background: #3fb950; }
 .ep-readiness {
   font-size: 0.68rem;
   font-weight: 600;
@@ -611,7 +622,7 @@ export class ExamPrepUI {
             <div class="ep-toolbar">
               <input type="search" class="ep-search" id="ep-objective-search"
                 placeholder="Search objectives, commands or topics…" autocomplete="off" spellcheck="false" aria-label="Search objectives" />
-              <span class="ep-hint">Mastered = a linked level/challenge is completed, or the quick lab is marked complete.</span>
+              <span class="ep-hint">Mastered = drill evidence: a quick-lab check passed, or a linked level/challenge completed after running the bullet's own commands.</span>
             </div>
             <div id="ep-objectives-list"></div>
           </section>
@@ -882,19 +893,81 @@ export class ExamPrepUI {
     }
   }
 
+  /**
+   * Evaluate a quick lab's `check` objectives against the LIVE cluster state.
+   * "Mark complete" is NOT self-attested: the same check the Sandbox tracker
+   * runs must pass here before the linked EX280 bullet is marked mastered.
+   * @returns {{pass: boolean, completed: number, total: number, pending: string[]}}
+   */
+  _evaluateLabCheck(lab) {
+    const checks = Array.isArray(lab?.check) ? lab.check : [];
+    if (checks.length === 0) return { pass: true, completed: 0, total: 0, pending: [] };
+    const game = typeof window !== 'undefined' ? window.game : null;
+    const clusterState = game?.gameEngine?.cluster || null;
+    if (!clusterState) {
+      return {
+        pass: false,
+        completed: 0,
+        total: checks.length,
+        pending: ['Launch the lab in Sandbox first — completion is checked against the live cluster.'],
+      };
+    }
+    const progress = createObjectiveProgress(checks);
+    try {
+      evaluateObjectives(checks, {
+        clusterState,
+        gameEngine: game?.gameEngine || null,
+        incidentEngine: game?.incidentEngine || null,
+        scoringEngine: this._scoring(),
+        manifestEngine: game?.manifestEngine || null,
+      }, { progress, recheckCompleted: true });
+    } catch (error) {
+      return {
+        pass: false,
+        completed: 0,
+        total: checks.length,
+        pending: [`Could not evaluate the lab checks: ${error?.message || error}`],
+      };
+    }
+    const pending = progress
+      .filter((objective) => !objective.completed)
+      .map((objective) => objective.label || objective.type);
+    return {
+      pass: pending.length === 0,
+      completed: progress.filter((objective) => objective.completed).length,
+      total: progress.length,
+      pending,
+    };
+  }
+
   _markLabComplete(objectiveId, labId) {
     if (!objectiveId) return;
-    this._markExamPrep(objectiveId, 'mastered');
-    this._renderAll();
     const lab = EX280_QUICK_LABS.find((entry) => entry.id === labId);
     const label = lab ? lab.title : objectiveId;
-    const message = `Marked “${label}” complete (${this.getProgressSummary().mastered}/${EX280_OBJECTIVE_COUNT} bullets mastered).`;
+    const result = lab
+      ? this._evaluateLabCheck(lab)
+      : { pass: false, completed: 0, total: 0, pending: ['Unknown quick lab — launch it in Sandbox first.'] };
+    if (!result.pass) {
+      const detail = result.pending.slice(0, 3).join('; ');
+      const message = `“${label}” not marked complete yet — the live check is ${result.completed}/${result.total}. Still to do: ${detail}`;
+      this._liveMessage(message);
+      try {
+        this._app()?._showToast?.(message);
+      } catch {
+        /* ignore */
+      }
+      return false;
+    }
+    this._markExamPrep(objectiveId, 'mastered');
+    this._renderAll();
+    const message = `“${label}” check passed (${result.completed}/${result.total}) — ${this.getProgressSummary().mastered}/${EX280_OBJECTIVE_COUNT} bullets with verified evidence.`;
     this._liveMessage(message);
     try {
       this._app()?._showToast?.(message);
     } catch {
       /* ignore */
     }
+    return true;
   }
 
   _copyCommand(command) {
@@ -1115,6 +1188,10 @@ export class ExamPrepUI {
     return {
       campaignProgress: progress?.campaignProgress || {},
       challengeProgress: progress?.challengeProgress || {},
+      commandEvidence: Array.isArray(progress?.commandEvidence) ? progress.commandEvidence : [],
+      objectiveEvidence: progress?.objectiveEvidence && typeof progress.objectiveEvidence === 'object'
+        ? progress.objectiveEvidence
+        : {},
     };
   }
 
@@ -1124,22 +1201,90 @@ export class ExamPrepUI {
     return Boolean(lookup(map));
   }
 
-  _bulletStatus(bullet, examPrep, campaignProgress, challengeProgress) {
+  /** Bullets the simulator cannot exercise (no web console UI exists). */
+  _isConsoleOnlyBullet(bullet) {
+    return /web console/i.test(String(bullet?.title || ''));
+  }
+
+  /**
+   * Does one of the bullet's own example commands appear in the successful
+   * command evidence? Uses the shared normalised signature so `pods`/`pod`,
+   * `deploy`/`deployment` and short resource names match.
+   */
+  _bulletHasCommandEvidence(bullet, commandEvidence) {
+    const commands = Array.isArray(bullet?.commands) ? bullet.commands : [];
+    if (commands.length === 0 || commandEvidence.length === 0) return false;
+    const evidenceSignatures = commandEvidence.map((raw) => commandSignature(raw)).filter(Boolean);
+    if (evidenceSignatures.length === 0) return false;
+    for (const command of commands) {
+      const wanted = commandSignature(command);
+      if (!wanted) continue;
+      const wantsOutputFormatting = /(?:^|\s)(?:-o|--output)(?:=|\s)/i.test(String(command));
+      if (wantsOutputFormatting) {
+        // "Format output with -o wide/yaml/json" style bullets: require an
+        // output-formatting flag on an actual oc get/describe command.
+        const formatted = commandEvidence.some((raw) =>
+          /(?:^|\s)(?:-o|--output)(?:=|\s)/i.test(raw)
+          && /^oc\s+(get|describe)\b/i.test(raw)
+        );
+        if (formatted) return true;
+        continue;
+      }
+      for (const signature of evidenceSignatures) {
+        if (signature === wanted) return true;
+        // Allow the learner to run a more specific form of the example command
+        // (`oc get pods -o yaml` for `oc get pods`) or vice versa.
+        if (signature.startsWith(`${wanted} `) || wanted.startsWith(`${signature} `)) return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Evidence-based bullet status (#14):
+   *  - mastered: quick-lab check passed, OR a linked level/challenge was
+   *    completed AND one of the bullet's own commands was exercised.
+   *  - practiced: linked level/challenge completed (no per-bullet proof) or the
+   *    bullet's commands were exercised outside a completed drill.
+   *  - todo: no evidence.
+   * Console-only bullets can never be "mastered" here (no console UI shipped).
+   */
+  _bulletStatus(bullet, examPrep, campaignProgress, challengeProgress, progressData = {}) {
+    const commandEvidence = progressData.commandEvidence || [];
     const examState = examPrep[bullet.id];
+    // 1) Explicit quick-lab check evidence (objectiveId + objectiveIds links).
     if (examState === 'mastered') return 'mastered';
-    for (const levelId of bullet.levels || []) {
-      const entry = campaignProgress[levelId] ?? campaignProgress[String(levelId)];
-      if (entry?.completed) return 'mastered';
-    }
-    for (const challengeId of bullet.challenges || []) {
-      const entry = challengeProgress[challengeId] ?? challengeProgress[String(challengeId)];
-      if (entry?.completed) return 'mastered';
-    }
-    if (examState === 'practiced') return 'practiced';
     for (const quickLabId of bullet.quickLabs || []) {
       const lab = EX280_QUICK_LABS.find((entry) => entry.id === quickLabId);
-      if (lab && examPrep[lab.objectiveId] === 'mastered') return 'mastered';
+      if (!lab) continue;
+      if (examPrep[lab.objectiveId] === 'mastered') return 'mastered';
+      if ((lab.objectiveIds || []).some((id) => examPrep[id] === 'mastered')) {
+        const linked = lab.objectiveId === bullet.id || (lab.objectiveIds || []).includes(bullet.id);
+        if (linked) return 'mastered';
+      }
     }
+    const consoleOnly = this._isConsoleOnlyBullet(bullet);
+    const hasCommandEvidence = this._bulletHasCommandEvidence(bullet, commandEvidence);
+    let drillCompleted = false;
+    for (const levelId of bullet.levels || []) {
+      const entry = campaignProgress[levelId] ?? campaignProgress[String(levelId)];
+      if (entry?.completed) {
+        drillCompleted = true;
+        break;
+      }
+    }
+    if (!drillCompleted) {
+      for (const challengeId of bullet.challenges || []) {
+        const entry = challengeProgress[challengeId] ?? challengeProgress[String(challengeId)];
+        if (entry?.completed) {
+          drillCompleted = true;
+          break;
+        }
+      }
+    }
+    if (!consoleOnly && drillCompleted && hasCommandEvidence) return 'mastered';
+    if (examState === 'practiced') return 'practiced';
+    if (drillCompleted || hasCommandEvidence) return 'practiced';
     for (const levelId of bullet.levels || []) {
       if (campaignProgress[levelId] ?? campaignProgress[String(levelId)]) return 'practiced';
     }
@@ -1151,17 +1296,20 @@ export class ExamPrepUI {
 
   _computeSnapshot() {
     const examPrep = this._getExamPrepState();
-    const { campaignProgress, challengeProgress } = this._progressData();
+    const progressData = this._progressData();
+    const { campaignProgress, challengeProgress } = progressData;
     const statuses = new Map();
     let masteredCount = 0;
+    let evidenceCount = 0;
     for (const bullet of EX280_OBJECTIVE_BULLETS) {
-      const status = this._bulletStatus(bullet, examPrep, campaignProgress, challengeProgress);
+      const status = this._bulletStatus(bullet, examPrep, campaignProgress, challengeProgress, progressData);
       statuses.set(bullet.id, status);
       if (status === 'mastered') masteredCount += 1;
+      if (status !== 'todo') evidenceCount += 1;
     }
     const percent = EX280_OBJECTIVE_COUNT > 0 ? Math.round((masteredCount / EX280_OBJECTIVE_COUNT) * 100) : 0;
     const ready = masteredCount / (EX280_OBJECTIVE_COUNT || 1) >= EX280_READINESS_THRESHOLD;
-    return { examPrep, statuses, masteredCount, percent, ready };
+    return { examPrep, statuses, masteredCount, evidenceCount, percent, ready, progressData };
   }
 
   // ── rendering ─────────────────────────────────────────────────────────────
@@ -1192,15 +1340,26 @@ export class ExamPrepUI {
 
   _renderProgress() {
     const snapshot = this._computeSnapshot();
-    if (this.progressFill) this.progressFill.style.width = `${snapshot.percent}%`;
-    if (this.progressLabel) this.progressLabel.innerHTML = `<strong>${snapshot.masteredCount} / ${EX280_OBJECTIVE_COUNT}</strong> bullets mastered · ${snapshot.percent}%`;
+    if (this.progressFill) {
+      this.progressFill.style.width = `${snapshot.percent}%`;
+      // Progress-bar colour follows the readiness verdict: red < 60%,
+      // amber 60–89%, green once the coverage threshold is met (#14).
+      const ready = snapshot.ready;
+      const almost = !ready && snapshot.percent >= 60;
+      this.progressFill.classList.toggle('is-ready', ready);
+      this.progressFill.classList.toggle('is-close', almost);
+      this.progressFill.classList.toggle('is-danger', !ready && !almost);
+    }
+    if (this.progressLabel) {
+      this.progressLabel.innerHTML = `<strong>${snapshot.masteredCount} / ${EX280_OBJECTIVE_COUNT}</strong> bullets with verified evidence · ${snapshot.percent}%`;
+    }
     if (this.readinessBadge) {
       const ready = snapshot.ready;
       const almost = !ready && snapshot.percent >= 60;
       this.readinessBadge.classList.toggle('is-ready', ready);
       this.readinessBadge.classList.toggle('is-close', almost);
-      this.readinessBadge.textContent = ready ? 'Exam-ready coverage' : almost ? 'Almost there' : 'Keep going';
-      this.readinessBadge.title = `Coverage threshold: ${Math.round(EX280_READINESS_THRESHOLD * 100)}% of bullets have a linked drill completed — tracked study coverage, not a Red Hat pass prediction.`;
+      this.readinessBadge.textContent = ready ? 'Drills verified' : almost ? 'Almost there' : 'Keep going';
+      this.readinessBadge.title = `Evidence threshold: ${Math.round(EX280_READINESS_THRESHOLD * 100)}% of bullets have drill evidence (a passed quick-lab check, or a completed linked drill after running the bullet's own commands). Tracked study coverage — not a Red Hat pass prediction.`;
     }
     const track = this.overlay?.querySelector('.ep-progress-track');
     if (track) track.setAttribute('aria-valuenow', String(snapshot.masteredCount));
@@ -1230,7 +1389,7 @@ export class ExamPrepUI {
         <div class="ep-group" data-testid="exam-group-${escapeHtml(group.id)}">
           <div class="ep-group-head">
             <div class="ep-group-title">${escapeHtml(group.title)}</div>
-            <div class="ep-group-count">${masteredInGroup}/${bullets.length} mastered</div>
+            <div class="ep-group-count">${masteredInGroup}/${bullets.length} verified</div>
           </div>
           ${bullets.map((bullet) => this._bulletHtml(bullet, snapshot.statuses.get(bullet.id) || 'todo')).join('')}
         </div>
@@ -1242,12 +1401,17 @@ export class ExamPrepUI {
     if (hint && query) {
       hint.textContent = `${visibleCount} of ${EX280_OBJECTIVE_COUNT} objectives match “${query}”.`;
     } else if (hint) {
-      hint.textContent = 'Mastered = a linked level/challenge is completed, or the quick lab is marked complete.';
+      hint.textContent = 'Mastered = drill evidence: a quick-lab check passed, or a linked level/challenge completed after running the bullet\'s own commands. A completed level alone only counts as Practiced.';
     }
   }
 
   _bulletHtml(bullet, statusKey) {
-    const meta = STATUS_META[statusKey] || STATUS_META.todo;
+    const consoleOnly = this._isConsoleOnlyBullet(bullet);
+    const effectiveStatus = consoleOnly && statusKey === 'mastered' ? 'practiced' : statusKey;
+    const meta = STATUS_META[effectiveStatus] || STATUS_META.todo;
+    const statusTitle = consoleOnly
+      ? 'Documentation only: the simulator has no web-console UI, so this bullet cannot be verified here — use the docs link.'
+      : 'Mastered = a passed quick-lab check, or a linked drill completed after running this bullet\'s own commands.';
     const commands = (bullet.commands || []).map((command) => `
       <div class="ep-cmd-row">
         <code>${escapeHtml(command)}</code>
@@ -1273,7 +1437,7 @@ export class ExamPrepUI {
       <div class="ep-bullet" data-testid="exam-objective-${escapeHtml(bullet.id)}">
         <div class="ep-bullet-head">
           <div class="ep-bullet-title">${escapeHtml(bullet.title)}</div>
-          <span class="ep-status ${meta.className}">${meta.label}</span>
+          <span class="ep-status ${meta.className}" title="${escapeHtml(statusTitle)}">${meta.label}${consoleOnly ? ' · docs only' : ''}</span>
         </div>
         <div class="ep-bullet-summary">${escapeHtml(bullet.summary)}</div>
         <div class="ep-cmds">${commands}</div>
@@ -1308,7 +1472,8 @@ export class ExamPrepUI {
             <button type="button" class="ep-btn ep-btn-primary" data-action="launch-lab" data-lab-id="${escapeHtml(lab.id)}">Launch in Sandbox</button>
             <button type="button" class="ep-btn ${isDone ? 'ep-btn-ghost' : ''}" data-action="mark-lab"
               data-lab-id="${escapeHtml(lab.id)}" data-objective-id="${escapeHtml(lab.objectiveId)}"
-              ${isDone ? 'disabled' : ''}>${isDone ? 'Completed' : 'Mark complete'}</button>
+              title="${isDone ? 'Lab check already passed' : 'Evaluates the lab check against the live Sandbox cluster before marking the bullet complete'}"
+              ${isDone ? 'disabled' : ''}>${isDone ? 'Completed' : 'Check & mark complete'}</button>
             <a class="ep-doc-link" href="${escapeHtml(lab.docsUrl)}" target="_blank" rel="noopener noreferrer">Docs →</a>
           </div>
         </div>

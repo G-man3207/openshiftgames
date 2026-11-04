@@ -66,6 +66,7 @@ export const OBJECTIVE_TYPES = [
   'update',
   'rollback',
   'resolve',
+  'incident',
   'investigate',
   'uptime',
   'clusterHealth',
@@ -87,7 +88,7 @@ const BOOLEAN_TYPES = new Set([
   'imageStream', 'image', 'template', 'helm', 'kustomize', 'manifest',
   'operator', 'scc', 'privileged', 'quota', 'limitRange', 'clusterQuota',
   'cronJob', 'mount', 'envFrom', 'noConfigMap', 'resources', 'probes',
-  'stable', 'leastPrivilege', 'update', 'rollback', 'resolve', 'investigate',
+  'stable', 'leastPrivilege', 'update', 'rollback', 'resolve', 'incident', 'investigate',
   'uptime', 'clusterHealth', 'reschedule', 'nodeSelector', 'taint',
   'examScore', 'architectureScore', 'label',
 ]);
@@ -1008,10 +1009,21 @@ function evaluateOperator(obj, c) {
     return haystack.includes(wanted);
   });
   const succeeded = matching.filter((subscription) => resourceStatus(subscription).phase === 'Succeeded').length;
+  const csvSucceeded = listKind(c.clusterState, 'ClusterServiceVersion').filter((csv) => {
+    const name = resourceName(csv).toLowerCase();
+    if (wanted && !name.includes(wanted)) return false;
+    return resourceStatus(csv).phase === 'Succeeded';
+  }).length;
   const installed = obj.installed !== false;
   if (installed) {
     const target = Math.max(1, asNumber(obj.count, 1));
-    return result(succeeded >= target, Math.min(succeeded, target), target);
+    const observed = Math.max(succeeded, csvSucceeded);
+    if (observed >= target) obj._installedLatch = true;
+    // Latch: in L18 the same level then uninstalls the operator, so the
+    // "install" objective must stay complete once the CSV was observed
+    // Succeeded (#14 end-state vs objective ordering; runtime repro).
+    const done = observed >= target || (Boolean(c.levelDef) && obj._installedLatch === true);
+    return result(done, done ? target : Math.min(observed, target), target);
   }
   // "Uninstall" only makes sense once the operator was present during this
   // level; otherwise the objective would be complete at level start (L18).
@@ -1033,12 +1045,139 @@ function subjectMatches(subjectList, wanted) {
   return list.includes(target);
 }
 
+/**
+ * Does a binding subject list grant `subject`? Subject strings accepted here are
+ * the game/CLI spellings: `system:serviceaccount:<ns>:<sa>`, `user:<name>`,
+ * `group:<name>`, or a bare user/group name. RBAC subjects are matched by
+ * kind + name (+ namespace for ServiceAccounts).
+ */
+function bindingSubjectMatches(subjects, wanted) {
+  if (!wanted) return true;
+  const list = asArray(subjects);
+  const target = String(wanted);
+  let kind = 'User';
+  let name = target;
+  let namespace = '';
+  if (target.startsWith('system:serviceaccount:')) {
+    kind = 'ServiceAccount';
+    const rest = target.slice('system:serviceaccount:'.length);
+    const split = rest.lastIndexOf(':');
+    if (split > 0) {
+      namespace = rest.slice(0, split);
+      name = rest.slice(split + 1);
+    } else {
+      name = rest;
+    }
+  } else if (target.startsWith('serviceaccount:')) {
+    kind = 'ServiceAccount';
+    const rest = target.slice('serviceaccount:'.length);
+    const split = rest.lastIndexOf(':');
+    namespace = split > 0 ? rest.slice(0, split) : '';
+    name = split > 0 ? rest.slice(split + 1) : rest;
+  } else if (target.startsWith('user:')) {
+    kind = 'User';
+    name = target.slice(5);
+  } else if (target.startsWith('group:')) {
+    kind = 'Group';
+    name = target.slice(6);
+  }
+  const matchesSubject = (subject) => {
+    if (!subject) return false;
+    const subjectKind = subject.kind || 'User';
+    if (kind === 'ServiceAccount') {
+      return (
+        subjectKind === 'ServiceAccount'
+        && String(subject.name) === name
+        && (!namespace || !subject.namespace || String(subject.namespace) === namespace)
+      );
+    }
+    if (kind === 'Group') return subjectKind === 'Group' && String(subject.name) === name;
+    return subjectKind === 'User' && String(subject.name) === name;
+  };
+  return list.some(matchesSubject);
+}
+
+/**
+ * Subjects granted an SCC under the OCP 4.x model. The authoritative source is
+ * an RBAC binding whose roleRef is ClusterRole `system:openshift:scc:<name>`:
+ *   - users/groups → ClusterRoleBinding
+ *   - ServiceAccounts → RoleBinding in the project
+ * `oc describe scc` users/groups lists are NOT used by real 4.x grants (they
+ * stay at their seeded defaults), so they are only a last-resort legacy fallback
+ * for partially-implemented builds.
+ * @returns {{kind: 'binding'|'legacy', subjects: object[]|string[]}}
+ */
+function sccGrantState(c, sccName) {
+  const roleName = `system:openshift:scc:${sccName}`;
+  const subjects = [];
+  let foundBinding = false;
+  for (const kind of ['RoleBinding', 'ClusterRoleBinding']) {
+    for (const binding of listKind(c.clusterState, kind)) {
+      const spec = resourceSpec(binding);
+      const roleRef = spec.roleRef || {};
+      const refName = roleRef.name || spec.roleRefName || '';
+      if (refName !== roleName) continue;
+      foundBinding = true;
+      subjects.push(...asArray(spec.subjects || binding.subjects));
+    }
+  }
+  const scc = findResource(c.clusterState, 'SecurityContextConstraints', sccName);
+  const legacy = {};
+  if (scc) {
+    const spec = resourceSpec(scc);
+    legacy.users = asArray(spec.users).map(String);
+    legacy.groups = asArray(spec.groups).map(String);
+  }
+  return { kind: foundBinding ? 'binding' : 'legacy', subjects, legacy, bindingCount: foundBinding ? 1 : 0 };
+}
+
+/** Is `subject` granted the SCC under the 4.x binding model (or legacy seed)? */
+function sccGrantedTo(c, sccName, subject) {
+  const state = sccGrantState(c, sccName);
+  const cluster = c.clusterState;
+  if (state.kind === 'binding') {
+    if (bindingSubjectMatches(state.subjects, subject)) return true;
+    // Prefer an engine helper when present (binding-aware, includes legacy seeds).
+    if (typeof cluster?.getSCCGrantsForSubject === 'function') {
+      try {
+        const grants = asArray(cluster.getSCCGrantsForSubject(subject));
+        if (grants.map(String).includes(String(sccName))) return true;
+      } catch {
+        /* ignore */
+      }
+    }
+    return false;
+  }
+  // Legacy fallback: seeded SCC users/groups lists (pre-4.x-model builds).
+  if (subject.startsWith('system:serviceaccount:') || subject.startsWith('serviceaccount:')) {
+    const rest = subject.startsWith('serviceaccount:')
+      ? subject.slice('serviceaccount:'.length)
+      : subject.slice('system:serviceaccount:'.length);
+    const split = rest.lastIndexOf(':');
+    const namespace = split > 0 ? rest.slice(0, split) : '';
+    const saName = split > 0 ? rest.slice(split + 1) : rest;
+    if (namespace && typeof cluster?.getSCCsForServiceAccount === 'function') {
+      try {
+        const names = asArray(cluster.getSCCsForServiceAccount(namespace, saName)).map((entry) =>
+          typeof entry === 'string' ? entry : entry?.name || entry?.metadata?.name || ''
+        );
+        if (names.includes(String(sccName))) return true;
+      } catch {
+        /* ignore */
+      }
+    }
+    if (saName === 'default' && state.legacy.groups?.includes(`system:serviceaccounts:${namespace}`)) return true;
+  }
+  if (subject.startsWith('group:')) return subjectMatches(state.legacy?.groups, subject.slice(6));
+  const plain = subject.replace(/^user:/, '');
+  return subjectMatches(state.legacy?.users, plain) || subjectMatches(state.legacy?.groups, plain);
+}
+
 function evaluateScc(obj, c) {
   const name = obj.scc || obj.name || obj.sccName;
   if (!name) return bool(false);
   const scc = findResource(c.clusterState, 'SecurityContextConstraints', name);
   if (!scc) return bool(false);
-  const spec = resourceSpec(scc);
   let subject = obj.subject;
   // A `*` project wildcard in the level data means "this lab's project", not
   // "any project in the cluster": `system:serviceaccount:*:default` must match
@@ -1048,9 +1187,12 @@ function evaluateScc(obj, c) {
     if (namespace) subject = String(subject).split('*').join(namespace);
   }
   const expected = obj.expected !== false;
+  const state = sccGrantState(c, name);
   const present = subject
-    ? subjectMatches(spec.users, subject) || subjectMatches(spec.groups, subject)
-    : asArray(spec.users).length > 0 || asArray(spec.groups).length > 0;
+    ? sccGrantedTo(c, name, subject)
+    : state.kind === 'binding'
+      ? asArray(state.subjects).length > 0
+      : asArray(state.legacy?.users).length > 0 || asArray(state.legacy?.groups).length > 0;
   return bool(present === expected);
 }
 
@@ -1438,12 +1580,46 @@ function evaluateResolve(obj, c) {
   return result(count >= target, Math.min(count, target), target);
 }
 
+/**
+ * "This incident actually happened during the run" gate. Used by the L20
+ * capstone so a level with scheduled incidents cannot complete before the
+ * incidents fire (no more 46-second capstone).
+ */
+function evaluateIncident(obj, c) {
+  const wanted = obj.incidentType || obj.name || null;
+  const min = Math.max(1, asNumber(obj.min ?? obj.count, 1));
+  const engine = c.incidentEngine;
+  let history = null;
+  try {
+    if (engine && typeof engine.getIncidentHistory === 'function') history = engine.getIncidentHistory();
+  } catch {
+    history = null;
+  }
+  let pool;
+  if (Array.isArray(history)) {
+    pool = history;
+  } else {
+    // Fallback: incidents that are still active or were resolved.
+    pool = [...activeIncidents(c), ...resolvedIncidents(c)];
+  }
+  const count = wanted ? pool.filter((incident) => matchesIncident(incident, wanted)).length : pool.length;
+  return result(count >= min, Math.min(count, min), min);
+}
+
 function evaluateInvestigate(obj, c) {
   const wanted = obj.incidentType || obj.name;
   const threshold = asNumber(obj.progress, 0.5);
   const pool = [...activeIncidents(c), ...resolvedIncidents(c)];
   const matching = wanted ? pool.filter((incident) => matchesIncident(incident, wanted)) : pool;
-  const progress = Math.max(0, ...matching.map((incident) => asNumber(incident?.investigationProgress, 0)));
+  // Resolving the incident implies it was investigated: the learner cannot fix
+  // a fault they never diagnosed, and the incident panel/state must not be the
+  // only path (GAME-004). Otherwise take the reported investigation progress.
+  const progressFor = (incident) => {
+    const state = String(incident?.state || '').toLowerCase();
+    if (state === 'resolved') return 1;
+    return asNumber(incident?.investigationProgress, 0);
+  };
+  const progress = Math.max(0, ...matching.map(progressFor));
   return result(progress >= threshold, progress >= threshold ? 1 : 0, 1);
 }
 
@@ -1663,6 +1839,8 @@ function evaluateByType(type, obj, c) {
       return evaluateRollback(obj, c);
     case 'resolve':
       return evaluateResolve(obj, c);
+    case 'incident':
+      return evaluateIncident(obj, c);
     case 'investigate':
       return evaluateInvestigate(obj, c);
     case 'uptime':
