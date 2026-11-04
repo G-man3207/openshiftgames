@@ -48,6 +48,10 @@ import {
 } from './RBACEngine.js';
 import { OCP_CHANNEL, OCP_VERSION as PLATFORM_OCP_VERSION } from '../data/platformVersions.js';
 import { seedMonitoringResources } from '../resources/MonitoringResources.js';
+// The cluster publishes its CA trust material as ConfigMaps (issue #43). Use the
+// same dependency-free PEM generator as the simulated `openssl`/service-ca, so
+// `openssl x509 -in kube-root-ca.crt` parses what the cluster hands out.
+import { createCertificateAuthority } from '../ui/ShellTools.js';
 
 // ─── OpenShift constants ───────────────────────────────────────────────────
 
@@ -96,6 +100,31 @@ export const DEFAULT_PROJECTS = [
   'openshift-image-registry',
   'kube-system',
 ];
+
+/**
+ * Namespaces the service-ca controller does NOT inject `openshift-service-ca.crt`
+ * into (real 4.22 excludes the Kubernetes system namespaces; every other
+ * namespace gets the trust bundle).
+ */
+export const KUBE_SYSTEM_NAMESPACES = ['kube-system', 'kube-public', 'kube-node-lease'];
+
+/** Names of the two CA trust ConfigMaps every real 4.22 namespace carries. */
+export const KUBE_ROOT_CA_CONFIGMAP = 'kube-root-ca.crt';
+export const SERVICE_CA_CONFIGMAP = 'openshift-service-ca.crt';
+
+/**
+ * Annotation the root-ca-cert-publisher sets on `kube-root-ca.crt`
+ * (`kubernetes.io/description` is what real `oc describe configmap` shows).
+ */
+const KUBE_ROOT_CA_DESCRIPTION =
+  'Contains a CA bundle that can be used to verify the kube-apiserver when using internal endpoints such as the internal service IP or kubernetes.default.svc. No other usage is guaranteed across distributions of Kubernetes clusters.';
+
+/**
+ * Annotation the service-ca controller sets on the namespaces' trust-bundle
+ * ConfigMap after injecting the CA (real 4.22 marks the object as injected so
+ * the controller does not fight manual edits).
+ */
+const SERVICE_CA_INJECTED_ANNOTATION = 'service.beta.openshift.io/inject-cabundle-injected';
 
 /** ClusterOperators seeded for the simulated 4.22 cluster. */
 export const CLUSTER_OPERATOR_NAMES = [
@@ -619,12 +648,31 @@ export class ClusterState {
     for (const name of DEFAULT_PROJECTS) {
       const project = this._seed('Project', name, {
         uid: `seed-project-${name}`,
-        labels: { 'kubernetes.io/metadata.name': name, 'openshift.io/project': name },
+        labels: {
+          'kubernetes.io/metadata.name': name,
+          'openshift.io/project': name,
+          // Real OCP labels the router namespace so NetworkPolicies can allow
+          // router traffic by namespace selector (issue #41). The ingress
+          // operator owns these two labels; no other namespace carries them.
+          ...(name === 'openshift-ingress'
+            ? {
+                'policy-group.network.openshift.io/ingress': '',
+                'network.openshift.io/policy-group': 'ingress',
+              }
+            : {}),
+        },
         annotations: { 'openshift.io/display-name': name, 'openshift.io/requester': 'kubeadmin' },
         spec: { displayName: name === 'default' ? 'Default project' : name, description: '' },
         status: { phase: 'Active' },
       });
       project.metadata.name = name;
+    }
+
+    // Kubernetes root CA publishing + service-ca trust bundle (#43): every
+    // namespace on a real 4.22 cluster carries `kube-root-ca.crt` and (outside
+    // the kube-* system namespaces) `openshift-service-ca.crt`.
+    for (const name of DEFAULT_PROJECTS) {
+      this._ensureProjectCAConfigMaps(name);
     }
 
     // Default service account in every default project.
@@ -896,6 +944,91 @@ export class ClusterState {
     return resource;
   }
 
+  // ── Kubernetes root CA publishing / service-ca trust bundle (issue #43) ──
+
+  /**
+   * PEM bundle of the cluster Kubernetes root CA. In a real 4.22 cluster the
+   * `kube-root-ca.crt` ConfigMaps in every namespace carry the kube-apiserver
+   * serving CA; the game publishes the same simulated bundle everywhere so
+   * `openssl x509 -in kube-root-ca.crt` (and in-pod API TLS checks) behave.
+   * @returns {string}
+   */
+  getRootCABundle() {
+    if (!this._rootCABundle) {
+      this._rootCABundle = createCertificateAuthority({
+        commonName: 'kube-apiserver-lb-signer',
+        organization: 'openshift-kube-apiserver',
+        days: 3650,
+      }).certPem;
+    }
+    return this._rootCABundle;
+  }
+
+  /**
+   * PEM bundle of the cluster service CA (`openshift-service-ca.crt`).
+   * @returns {string}
+   */
+  getServiceCABundle() {
+    if (!this._serviceCABundle) {
+      this._serviceCABundle = createCertificateAuthority({
+        commonName: 'service-ca',
+        organization: 'OpenShift',
+        days: 3650,
+      }).certPem;
+    }
+    return this._serviceCABundle;
+  }
+
+  /**
+   * Create one of the namespace CA trust ConfigMaps (idempotent, API-shaped).
+   * @param {string} namespace
+   * @param {string} name
+   * @param {Record<string, string>} data
+   * @param {Record<string, string>} annotations
+   * @param {string} uid
+   * @returns {object}
+   */
+  _ensureCAConfigMap(namespace, name, data, annotations, uid) {
+    const existing = this.getByName('ConfigMap', name, namespace);
+    if (existing) return existing;
+    const configMap = this._seed('ConfigMap', name, {
+      namespace,
+      uid,
+      annotations,
+      spec: {},
+    });
+    // `_seed` merges the registry's placeholder ConfigMap data; a CA publish
+    // ConfigMap contains exactly its trust-bundle key (no app sample data).
+    configMap.spec = { data: deepClone(data), binaryData: {} };
+    return configMap;
+  }
+
+  /**
+   * Ensure the two CA trust ConfigMaps a real 4.22 namespace carries
+   * (`kube-root-ca.crt` everywhere, `openshift-service-ca.crt` outside the
+   * kube-* system namespaces). Idempotent — used for seeds and `oc new-project`.
+   * @param {string} namespace
+   */
+  _ensureProjectCAConfigMaps(namespace) {
+    if (!namespace) return;
+    this._ensureCAConfigMap(
+      namespace,
+      KUBE_ROOT_CA_CONFIGMAP,
+      { 'ca.crt': this.getRootCABundle() },
+      { 'kubernetes.io/description': KUBE_ROOT_CA_DESCRIPTION },
+      `seed-configmap-${namespace}-kube-root-ca`
+    );
+    if (!KUBE_SYSTEM_NAMESPACES.includes(namespace)) {
+      this._ensureCAConfigMap(
+        namespace,
+        SERVICE_CA_CONFIGMAP,
+        { 'service-ca.crt': this.getServiceCABundle() },
+        { [SERVICE_CA_INJECTED_ANNOTATION]: 'true' },
+        `seed-configmap-${namespace}-openshift-service-ca`
+      );
+    }
+  }
+
   get totalResources() {
     return this.resources.size;
   }
@@ -973,6 +1106,15 @@ export class ClusterState {
       throw new Error(
         `${resource.kind} "${resource.metadata.name}" already exists in project "${resource.metadata.namespace || '(cluster)'}"`
       );
+    }
+    // Kubernetes labels every namespace with its own name automatically
+    // (kubernetes.io/metadata.name, K8s 1.22+). NetworkPolicy namespaceSelectors
+    // and ClusterResourceQuota project selectors rely on it (issue #41).
+    if (
+      resource.kind === 'Project' &&
+      resource.metadata.labels['kubernetes.io/metadata.name'] === undefined
+    ) {
+      resource.metadata.labels['kubernetes.io/metadata.name'] = resource.metadata.name;
     }
     this._register(resource);
     if (resource.kind === 'Project') this.ensureProjectDefaults(resource);
@@ -1906,17 +2048,18 @@ export class ClusterState {
       const usedList = exceeded
         .map((entry) => `${entry.key}=${formatValue(entry.key, entry.used)}`)
         .join(',');
-      // Real API-server wording prints the LIMIT as the bare quantity (the
-      // resource name is already in `requested`/`used`):
-      //   exceeded quota: compute-quota, requested: pods=1, used: pods=1, limited: 1
+      // Real API-server wording (resourcequota admission, prettyPrint) formats
+      // EVERY list as sorted `resource=quantity` pairs — including the limit:
+      //   exceeded quota: compute-quota, requested: pods=1, used: pods=1, limited: pods=1
       const limitedList = exceeded
-        .map((entry) =>
-          entry.key.endsWith('.cpu')
-            ? formatValue(entry.key, parseCpuMillis(entry.hard))
+        .map((entry) => {
+          const hardValue = entry.key.endsWith('.cpu')
+            ? parseCpuMillis(entry.hard)
             : entry.key.endsWith('.memory')
-              ? formatValue(entry.key, parseMemoryMi(entry.hard))
-              : String(entry.hard)
-        )
+              ? parseMemoryMi(entry.hard)
+              : entry.hard;
+          return `${entry.key}=${formatValue(entry.key, hardValue)}`;
+        })
         .join(',');
       violations.push(
         `${isClusterQuota ? 'exceeded cluster quota' : 'exceeded quota'}: ${label}, requested: ${requestedList}, used: ${usedList}, limited: ${limitedList}`
@@ -2466,20 +2609,20 @@ export class ClusterState {
     const name = project.metadata.name;
     const requester = project.metadata.annotations?.['openshift.io/requester'] || 'kubeadmin';
 
+    // Real 4.22 namespaces carry the Kubernetes root CA (all namespaces) and the
+    // service-ca trust bundle (non-kube namespaces) — issue #43.
+    this._ensureProjectCAConfigMaps(name);
+
     // Real 4.x project creation bootstraps the three built-in ServiceAccounts
     // (builder/default/deployer) — each gets its dockercfg image-pull Secret
     // from _ensureServiceAccountDockercfg(). `oc get sa` in a new project
-    // therefore lists all three.
+    // therefore lists all three. The `openshift.io/requester` annotation belongs
+    // on the Namespace/Project (already set by createProject), never the SA.
     for (const saName of ['builder', 'default', 'deployer']) {
       if (this.getByName('ServiceAccount', saName, name)) continue;
       this.addResource({
         kind: 'ServiceAccount',
-        name: saName,
-        metadata: {
-          name: saName,
-          namespace: name,
-          annotations: saName === 'default' ? { 'openshift.io/requester': requester } : undefined,
-        },
+        metadata: { name: saName, namespace: name },
         spec: {},
       });
     }
@@ -3639,19 +3782,24 @@ export class ClusterState {
   /**
    * Create and register a Build for a BuildConfig (the BuildConfig controller
    * calls this on ConfigChange triggers; `oc start-build` calls it directly).
+   *
+   * Real OCP 4.22 runPolicy `Serial` (the default) never rejects a manual
+   * `oc start-build` while another build is active: it creates the next build
+   * version with `status.phase: New` and the build controller starts it once
+   * the active build finishes (issue #42). The returned `queued` flag lets the
+   * CLI wait for the build to start.
+   *
    * @param {object} buildConfig
    * @param {{reason?: string, actor?: string, force?: boolean}} [options]
-   * @returns {{success: boolean, build?: object, message?: string}}
+   * @returns {{success: boolean, build?: object, queued?: boolean, message?: string}}
    */
   startBuildFor(buildConfig, options = {}) {
     if (!buildConfig) return { success: false, message: 'BuildConfig not found' };
     const active = this.getActiveBuildFor(buildConfig);
-    if (active && buildConfig.spec?.runPolicy === 'Serial') {
-      return {
-        success: false,
-        message: `cannot start build: Build "${active.metadata.name}" is already running for BuildConfig "${buildConfig.metadata.name}"`,
-      };
-    }
+    const runPolicy = buildConfig.spec?.runPolicy || 'Serial';
+    // A Serial policy queues the new build behind the active one instead of
+    // refusing it, exactly like the real BuildConfig controller.
+    const queued = Boolean(active && runPolicy === 'Serial');
     const version = (buildConfig.status?.lastVersion || 0) + 1;
     const buildName = `${buildConfig.metadata.name}-${version}`;
     const build = createResource('Build', {
@@ -3671,13 +3819,15 @@ export class ClusterState {
         strategy: deepClone(buildConfig.spec.strategy || {}),
         output: deepClone(buildConfig.spec.output || {}),
         serviceAccount: buildConfig.spec.serviceAccount || 'builder',
-        runPolicy: buildConfig.spec.runPolicy || 'Serial',
+        runPolicy,
       },
     });
     build.status = {
       ...(build.status || {}),
       phase: 'New',
-      startTime: new Date().toISOString(),
+      // A queued build has not started yet: real API objects leave
+      // status.startTimestamp unset until the build controller starts them.
+      ...(queued ? {} : { startTime: new Date().toISOString() }),
       conditions: [],
       output: {},
       message: '',
@@ -3694,10 +3844,16 @@ export class ClusterState {
       buildConfig: buildConfig.metadata.name,
       namespace: buildConfig.metadata.namespace,
       version,
+      queued,
       reason: options.reason || (options.actor ? 'Manual' : 'ConfigChange'),
       resource: build,
     });
-    return { success: true, build, message: `build.build.openshift.io/${buildName} started` };
+    return {
+      success: true,
+      build,
+      queued,
+      message: `build.build.openshift.io/${buildName} started`,
+    };
   }
 
   // ── Routes / networking ─────────────────────────────────────────────────

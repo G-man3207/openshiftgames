@@ -28,6 +28,129 @@ function parseMemoryToBytes(mem) {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
+/**
+ * Canonical kubelet reason/message pairs for Node conditions on OCP 4.22
+ * (issue #43). The node controller re-evaluates conditions every tick and
+ * often only passes the reason; a real node still reports the full kubelet
+ * message, so fill in the canonical text instead of blanking the field.
+ */
+const NODE_CONDITION_DEFAULTS = {
+  Ready: {
+    True: ['KubeletReady', 'kubelet is posting ready status'],
+    False: ['KubeletNotReady', 'kubelet stopped posting node status.'],
+    Unknown: ['NodeStatusUnknown', 'Kubelet stopped posting node status.'],
+  },
+  MemoryPressure: {
+    True: ['KubeletHasInsufficientMemory', 'kubelet has insufficient memory available'],
+    False: ['KubeletHasSufficientMemory', 'kubelet has sufficient memory available'],
+  },
+  DiskPressure: {
+    True: ['KubeletHasDiskPressure', 'kubelet has disk pressure'],
+    False: ['KubeletHasNoDiskPressure', 'kubelet has no disk pressure'],
+  },
+  PIDPressure: {
+    True: ['KubeletHasInsufficientPID', 'kubelet has insufficient PID available'],
+    False: ['KubeletHasSufficientPID', 'kubelet has sufficient PID available'],
+  },
+  // Real OCP kubelets report NetworkUnavailable=False with the
+  // NoNetworkPlugin reason because the OpenShift network plugin does not use
+  // the kubelet network-plugin interface; the message is the kubelet's
+  // canonical text for that condition.
+  NetworkUnavailable: {
+    True: ['NoNetworkPlugin', 'network plugin is not ready'],
+    False: ['NoNetworkPlugin', 'network plugin is not ready'],
+  },
+};
+
+const NODE_TIMESTAMP_DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const NODE_TIMESTAMP_MONTHS = [
+  'Jan',
+  'Feb',
+  'Mar',
+  'Apr',
+  'May',
+  'Jun',
+  'Jul',
+  'Aug',
+  'Sep',
+  'Oct',
+  'Nov',
+  'Dec',
+];
+
+/**
+ * Format a Node condition timestamp the way `oc describe node` does
+ * (RFC1123Z, e.g. `Wed, 04 Nov 2026 22:01:58 +0000`).
+ * @param {string|number|Date} [value]
+ * @returns {string}
+ */
+function describeNodeTime(value) {
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return '<unknown>';
+  const pad = (number) => String(number).padStart(2, '0');
+  return (
+    `${NODE_TIMESTAMP_DAYS[date.getUTCDay()]}, ${pad(date.getUTCDate())} ` +
+    `${NODE_TIMESTAMP_MONTHS[date.getUTCMonth()]} ${date.getUTCFullYear()} ` +
+    `${pad(date.getUTCHours())}:${pad(date.getUTCMinutes())}:${pad(date.getUTCSeconds())} +0000`
+  );
+}
+
+/** Columns of the real `oc describe node` Conditions table (issue #43). */
+const NODE_CONDITION_COLUMNS = [
+  'Type',
+  'Status',
+  'LastHeartbeatTime',
+  'LastTransitionTime',
+  'Reason',
+  'Message',
+];
+
+/** Render the real TYPE/STATUS/LASTHEARTBEATTIME/…/MESSAGE conditions table. */
+function describeNodeConditions(conditions = []) {
+  const rows = (conditions || []).map((condition) => [
+    condition.type || '',
+    String(condition.status ?? ''),
+    describeNodeTime(condition.lastHeartbeatTime),
+    describeNodeTime(condition.lastTransitionTime),
+    condition.reason || '',
+    condition.message || '',
+  ]);
+  const widths = NODE_CONDITION_COLUMNS.map((header, index) =>
+    Math.max(header.length, ...rows.map((row) => String(row[index]).length))
+  );
+  const renderRow = (row) =>
+    `  ${row
+      .map((cell, index) =>
+        index === row.length - 1 ? String(cell) : String(cell).padEnd(widths[index] + 2)
+      )
+      .join('')}`;
+  return [
+    renderRow(NODE_CONDITION_COLUMNS),
+    renderRow(NODE_CONDITION_COLUMNS.map((header) => '-'.repeat(header.length))),
+    ...rows.map(renderRow),
+  ].join('\n');
+}
+
+/** Render `status.addresses` with the real describe-node alignment. */
+function describeNodeAddresses(addresses = []) {
+  if (!addresses.length) return '  <none>';
+  const labels = addresses.map((address) => `${address.type}:`);
+  const width = Math.max(...labels.map((label) => label.length)) + 2;
+  return addresses
+    .map((address, index) => `  ${labels[index].padEnd(width)}${address.address}`)
+    .join('\n');
+}
+
+/** Render `spec.taints` like a real node: `key=value:effect` or `key:effect`. */
+function describeNodeTaints(taints = []) {
+  if (!taints.length) return '<none>';
+  return taints
+    .map((taint) =>
+      taint.value ? `${taint.key}=${taint.value}:${taint.effect}` : `${taint.key}:${taint.effect}`
+    )
+    .join(',');
+}
+
 export class Node extends ResourceBase {
   constructor(metadata = {}) {
     super('Node', { ...metadata, namespace: '', apiVersion: metadata.apiVersion || 'v1' });
@@ -92,7 +215,7 @@ export class Node extends ResourceBase {
           'KubeletHasSufficientPID',
           'kubelet has sufficient PID available'
         ),
-        condition('NetworkUnavailable', 'False', 'NoNetworkPlugin', 'network plugin is ready'),
+        condition('NetworkUnavailable', 'False', 'NoNetworkPlugin', 'network plugin is not ready'),
       ],
       nodeInfo: {
         kubeletVersion: metadata.kubeletVersion || KUBELET_VERSION,
@@ -115,6 +238,27 @@ export class Node extends ResourceBase {
     });
     this.pods = [];
     this.isCordon = this.spec.unschedulable === true;
+  }
+
+  /**
+   * Set a node condition, filling in the canonical kubelet reason/message when
+   * the controller (IncidentEngine / SimulationTick node tick) omits them.
+   * `lastHeartbeatTime` is refreshed on every call; `lastTransitionTime` only
+   * moves when the condition status actually changes — real node behaviour.
+   * @param {string} type
+   * @param {string} status
+   * @param {string} [reason]
+   * @param {string} [message]
+   * @returns {this}
+   */
+  setCondition(type, status, reason = '', message = '') {
+    const defaults = NODE_CONDITION_DEFAULTS[type]?.[String(status)] || null;
+    return super.setCondition(
+      type,
+      String(status),
+      reason || (defaults ? defaults[0] : ''),
+      message || (defaults ? defaults[1] : '')
+    );
   }
 
   get isReady() {
@@ -252,12 +396,13 @@ Annotations:        ${
         .map(([k, v]) => `${k}=${v}`)
         .join(', ') || '<none>'
     }
-Taints:             ${(this.spec.taints || []).map((t) => `${t.key}=${t.value}:${t.effect}`).join(', ') || '<none>'}
+CreationTimestamp:  ${describeNodeTime(this.metadata.creationTimestamp)}
+Taints:             ${describeNodeTaints(this.spec.taints || [])}
 Unschedulable:      ${this.spec.unschedulable === true}
 Conditions:
-  Type                 Status  Reason
-  ----                 ------  ------
-${(this.status.conditions || []).map((c) => `  ${c.type.padEnd(20)} ${c.status.padEnd(6)}  ${c.reason}`).join('\n')}
+${describeNodeConditions(this.status.conditions || [])}
+Addresses:
+${describeNodeAddresses(this.status.addresses || [])}
 Capacity:
   cpu:                ${this.status.capacity?.cpu}
   memory:             ${this.status.capacity?.memory}
