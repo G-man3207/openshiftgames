@@ -12,7 +12,7 @@
  *     coverage, mesh creators, factory behaviour, draw/index palette wiring.
  *  4. Default cluster state (Projects, ClusterOperators, ClusterVersion, SCCs,
  *     users/RBAC, ImageStreams) and the declarative engine self-tests.
- *  5. Campaign (20 levels / 5 chapters), Challenges (12), incidents (35+) and
+ *  5. Campaign (20 levels / 5 chapters), Challenges (13), incidents (35+) and
  *     EX280V422 objective coverage (9 groups / 55 bullets).
  *  6. ScoringEngine / achievements contract and OpenShift branding.
  *  7. Required root files, README coverage/deploy docs and image dimensions.
@@ -1078,12 +1078,13 @@ const REQUIRED_CHALLENGE_TITLES = [
   'Install an Operator',
   'HTPasswd Onboarding',
   'EX280 Speed Run',
+  'Production Network Policies',
 ];
 const challengeIds = new Set();
 const challenges = challengesMod?.CHALLENGES || [];
 if (challenges.length) {
-  if (challenges.length !== 12)
-    fail('challenges', `expected 12 challenges, found ${challenges.length}`);
+  if (challenges.length !== 13)
+    fail('challenges', `expected 13 challenges, found ${challenges.length}`);
   else passed();
   for (const [i, challenge] of challenges.entries()) {
     const owner = `challenge ${challenge.id} (${challenge.title})`;

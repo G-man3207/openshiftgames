@@ -4,6 +4,135 @@ All notable changes to OpenShift Games are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 aims to follow [Semantic Versioning](https://semver.org/).
 
+## [1.2.0] — 2026-11-04
+
+Fourth QA pass on 1.1.7 and the biggest platform-fidelity release since the conversion: closes the
+ten open report items (#27–#36), including the three P1 blockers (incidents only healing after a
+cluster write, the capstone node failure having no CLI fix, and destructive `oc` verbs falling
+through to another project's namespace), and adds a workstation shell, a real monitoring/alerting
+data model and a 13th timed lab. The game stays no-build and dependency-free.
+
+### Added
+
+- **Node troubleshooting from the CLI (issue #28).** `oc debug node/<name>` opens an interactive
+  node session: `chroot /host`, `systemctl status|restart kubelet`, `journalctl -u kubelet [| tail]`
+  and `exit`, plus the one-shot `oc debug node/x -- chroot /host <cmd>`. Restarting the kubelet is
+  the state-driven fix for the capstone's NodeNotReady incident — the drawer action remains as a
+  fallback. Nodes now have real names and roles (`worker-0`, `worker-1`, `master-0`; ROLES `worker`
+  / `control-plane,master`) and a cordoned NotReady node prints `NotReady,SchedulingDisabled`.
+- **Workstation shell tools (issue #32).** Real `base64 -d`/`-w0` (standalone, pipes, Secret
+  decoding), `openssl req -x509`/`x509` with genuine PEM files that round-trip through
+  `oc create secret tls` and `openssl x509`, `cut -c` in pipes, and a workstation-side `curl` that
+  resolves Route hosts through the router (edge/passthrough/reencrypt, http→https redirect, DNS
+  errors, NetworkPolicy reachability). `oc exec`/`oc rsh` now show the Pod's real volumes,
+  ConfigMaps, Secrets and env, and fail correctly for CrashLoopBackOff/completed containers.
+- **Service-ca and router networking (issue #33).** The service-ca controller issues Service serving
+  certificates (`service.beta.openshift.io/serving-cert-secret-name`) and injects CA bundles
+  (`inject-cabundle`), enabling the full serving-cert → reencrypt Route flow (also shipped as a new
+  quick lab). A default-deny NetworkPolicy now really blocks a project's Route; the fix is an
+  ingress policy admitting the router namespace (`policy-group.network.openshift.io/ingress: ""`),
+  and the L20 capstone grades the end-to-end curl 503 → allow → curl 200 flow.
+- **Monitoring and alerting (issue #34).** New non-placeable `PrometheusRule` and `Alertmanager`
+  kinds, seeded rule sets and `alertmanager-main` (Service, reencrypt Route, two Running pods).
+  Alerts are evaluated from live cluster state (Watchdog always fires; crash-looping/unready Pods
+  surface their rule) and are inspectable with `oc get prometheusrules -A`,
+  `oc describe prometheusrule` and `oc describe alertmanager main`.
+- **Standard OpenShift templates (issue #34).** `httpd-example`, `mysql-persistent` and
+  `postgresql-persistent` ship with real parameter lists and generator expressions, so
+  `oc get templates -n openshift`, `oc process --parameters`, `oc process | oc apply -f -` and
+  `oc new-app --template=… -p …` work like the exam expects.
+- **New objective types and content (issues #30/#34).**
+  - Behaviour-graded `networkPolicy` objectives (a default-deny, DNS 5353 egress and the
+    frontend→backend allow/deny probes are evaluated through the NetworkPolicy engine, not names),
+    `oauthProvider` (grade the resulting OAuth state), `password` (HTPasswd rotation with the OAuth
+    rollout and a login latch on the rotated Secret), `identity`, `routeAccess`, `installPlan` and
+    `subscription`, plus `user.exists:false`, `operator.namespace/allNamespaces` and a real
+    login-history latch for login objectives.
+  - **13th timed lab "Production Network Policies"**: payments namespace, gateway/ledger
+    deployments; learners write the default-deny, DNS egress and gateway→ledger allow rules
+    themselves — graded on observed traffic.
+  - **L13 HTPasswd & Users** now requires the real password-rotation flow (`oc extract` →
+    `htpasswd -B -b` → `oc set data secret/htpass-secret` → wait for the OAuth rollout → log in
+    with the new password) and deleting a departing user **and** their Identity
+    (`oc delete user bob` leaves `htpasswd:bob` behind).
+  - **L18 Operators** adds the install variants: AllNamespaces install through the global
+    OperatorGroup into `openshift-operators`, Manual `installPlanApproval` (`oc patch installplan …
+'{"spec":{"approved":true}}'`), and a pinned `startingCSV`; lab 10 gains an AllNamespaces
+    pipelines variant.
+  - **L1's welcome card** no longer leads with the restricted-v2 nginx trap; the detailed
+    admission-vs-runtime explanation moved to a troubleshooting hint on L3.
+  - **Post-campaign handover**: "Finish campaign" now opens a closing screen with the run's results,
+    weakest EX280 bullets and a persisted checklist to set up a real cluster (OpenShift Local /
+    Developer Sandbox) and redo L5/L9/L13/L14/L17, instead of silently returning to the start page.
+- **OpenShift project defaults (issue #35).** New projects get the real bootstrap objects:
+  `builder`/`default`/`deployer` ServiceAccounts, dockercfg Secrets (shown under Image pull /
+  Mountable secrets in `oc describe sa`), and the `admin` + `system:image-pullers/builders` +
+  `system:deployers` RoleBindings. `openshift-authentication` now runs `oauth-openshift-*` pods, so
+  OAuth changes genuinely require a rollout wait before login (L13 and lab 11 consistent).
+- **Kustomize v5 examples and a kustomize engine refresh (issues #34/#36).** Shipped kustomizations
+  use v5 `labels:` (with `includeSelectors`) and `patches:`; deprecated `commonLabels`/
+  `patchesStrategicMerge` remain supported, `commonLabels` now correctly propagates into selectors,
+  and `oc kustomize` output no longer starts with `---`.
+
+### Fixed
+
+- **Incidents only healed on a cluster write (issue #27).** A throttled state-reconciliation pass
+  now runs on the simulation tick (pause-aware), so fixing a resource resolves its incident without
+  an unrelated write; incidents with unresolvable/binding targets (quota) now heal from state and
+  bind to the quota actually damaged; a state-driven SCC resolution no longer re-pends an already
+  Running, admitted privileged Pod.
+- **CLI write safety (issue #29).** Every write verb (delete/label/annotate/patch/scale/edit/rollout/
+  set/expose/autoscale) is namespace-exact — no more silently modifying the same-named resource in
+  another project; `oc create` on an existing object returns the real
+  `Error from server (AlreadyExists)`; `oc delete pod -l/--all` works; `oc scale`/NotFound messages
+  use the server form; re-applying an unchanged manifest prints `… unchanged` and no longer bumps
+  `generation`; `oc describe <type>` with no name lists all objects (including quotas).
+- **Collected CLI output fidelity (issue #36).** `ls` lists immediate children with plain names,
+  redirects are silent, `--dry-run=client -o name` works, `uid` is a UUID and timestamps are
+  second-precision, `get deploy -o wide` shows CONTAINERS/IMAGES, endpoints print address lists,
+  image digests/istags are realistic (`@sha256:…`, internal-registry URLs, S2I command), Builds
+  show real STARTED/DURATION/FROM, rollout undo produces revisions 2→3 and ImagePullBackOff rollout
+  status uses the updated-replicas wording, passthrough Route PORT matches the backend, `describe
+route` shows the real host/path, jsonpath handles unset fields/escaped dots, LoadBalancer ports
+  show nodeports, quota describe columns line up, CronJob TIMEZONE is `<none>` and FailedCreate
+  events appear in `describe deployment`.
+- **Scenario realism (issue #31).** The L3/L20 CrashLoopBackOff is now caused by a seeded bad image
+  plus `APP_MODE=debug-invalid` and only heals when that value is corrected (unrelated env changes
+  and `rollout restart` no longer "fix" it); L19's JobDeadlineExceeded targets its own broken Job so
+  the player's job completes and logs real output, completed Pods stay available for `oc logs`,
+  Job STATUS is `Complete`/`Failed` and Pods are `Completed`; a new mysql image profile teaches the
+  missing-`MYSQL_*` crash-loop with 3306/TCP; a compute quota without LimitRange forbids
+  request-less pods; the L15 quota incident no longer creates a phantom Pending Pod or
+  Used>Hard — the ReplicaSet reports the real `exceeded quota` event and raising the quota recovers.
+- **State-based grading (issue #30).** Lab 9 is graded on observed NetworkPolicy behaviour (a
+  hand-written equivalent gets full marks), lab 11 grades the resulting OAuth provider state
+  (heredoc/`oc patch`/apply all count), login objectives latch on real login events (switching users
+  does not untick them), lab 11's "User alice exists" waits for the real first login, and L2's label
+  objective is namespace-correct.
+- **OpenShift platform details (issue #35).** SCC verification is real: `who-can use scc` lists the
+  granted `system:serviceaccount:<ns>:<sa>`, `scc-subject-review -f` reviews the file's pod spec,
+  `add-scc-to-user` prints the 4.x `clusterrole…/system:openshift:scc:<name> added: "<sa>"` form,
+  and SCC investigation commands now count toward incident progress. `add-role-to-group` uses the
+  real `edit`/`edit-0` binding names; `oc set env --from=secret/…` creates per-key `valueFrom`
+  entries and `--list` reports their source; `oc start-build --follow` streams and only reports
+  success when the build completes; `oc get ns/projects --show-labels` has a LABELS column and
+  ClusterResourceQuota selector matching understands `kubernetes.io/metadata.name`; `oc run
+--overrides` is deep-merged through API/SCC admission and direct Pod creation is quota-admitted;
+  `oc login -u kubeadmin -p …` validates the password when one is supplied; and `add-scc-to-user` /
+  OAuth changes now honour the real rollout/validation ordering.
+
+### Tests
+
+- The durable browser suite grew from 685 to **@@BROWSER_COUNT@@ checks** in a full run, with seven
+  new per-issue regression sections: `qa-incidents` (#27/#28), `qa-scenarios` (#31), `qa-cli`
+  (#29/#36), `qa-workstation` (#32/#33), `qa-openshift` (#35), `qa-grading` (#30) and
+  `qa-coverage` (#34). Every section passes standalone (`--only=…`).
+- Static verification grew from 899 to **@@STATIC_COUNT@@ checks** (`node scripts/verify.mjs`),
+  including the two new monitoring kinds and the 13-lab catalog.
+- README, the conversion spec and the EX280 study guide updated for the 13 timed labs, the alerting
+  model and the new workstation/node/shift-left content; the verification report was regenerated
+  from a full-suite run, and the screenshots/OG card were re-captured.
+
 ## [1.1.7] — 2026-11-04
 
 QA-retest follow-up on 1.1.6: closes the five new report items (#22–#26) — a timed-lab

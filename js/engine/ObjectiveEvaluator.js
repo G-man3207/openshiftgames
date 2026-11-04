@@ -720,6 +720,35 @@ function isAutoProvisionedProjectAdminBinding(binding) {
 }
 
 /**
+ * RoleBindings every OpenShift project provisions on creation (issue #35):
+ * the requester's `admin` binding plus the service-account image/deploy
+ * bindings. They are infrastructure, not learner work, so a count-only
+ * "create/bind a RoleBinding" objective (L14/L16/lab 11) must ignore them —
+ * otherwise the objective pre-ticks at level start. Learner bindings have
+ * different generated names (`edit`, `alice-edit`, …).
+ */
+const BOOTSTRAP_PROJECT_ROLE_BINDING_NAMES = new Set([
+  'admin',
+  'system:image-pullers',
+  'system:image-builders',
+  'system:deployers',
+]);
+const BOOTSTRAP_PROJECT_ROLE_REF_NAMES = new Set([
+  'system:image-puller',
+  'system:image-builder',
+  'system:deployer',
+]);
+
+function isBootstrapProjectRoleBinding(binding) {
+  if (!binding) return false;
+  if (isAutoProvisionedProjectAdminBinding(binding)) return true;
+  const name = resourceName(binding);
+  if (BOOTSTRAP_PROJECT_ROLE_BINDING_NAMES.has(name)) return true;
+  const roleRef = resourceSpec(binding).roleRef || {};
+  return BOOTSTRAP_PROJECT_ROLE_REF_NAMES.has(String(roleRef.name || ''));
+}
+
+/**
  * Does a resource exist AND count as up? Used by `deploy` objectives that set
  * `running: true` (L1: a Pod rejected by restricted-v2 is created in `Failed`
  * state, so mere existence must not tick "run a Pod").
@@ -772,11 +801,12 @@ function evaluateDeploy(obj, c) {
     if (expected)
       resources = resources.filter((resource) => resourceNamespace(resource) === expected);
   }
-  // The auto-provisioned project `admin` binding is not learner-created: ignore
-  // it for every RoleBinding-count objective (L14/L16) so the checklist still
-  // requires a real `oc adm policy add-role-to-*`/RoleBinding manifest.
+  // Every project provisions its four bootstrap RoleBindings (admin +
+  // system:image-pullers/builders/deployers, issue #35); they are not
+  // learner-created, so count-only RBAC objectives (L14/L16/lab 11) must ignore
+  // them or they pre-tick at level start.
   if (kind === 'RoleBinding') {
-    resources = resources.filter((resource) => !isAutoProvisionedProjectAdminBinding(resource));
+    resources = resources.filter((resource) => !isBootstrapProjectRoleBinding(resource));
   }
   if (requireRunning) resources = resources.filter((resource) => resourceIsUp(resource));
   const target = Math.max(1, asNumber(obj.count, 1));

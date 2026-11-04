@@ -832,8 +832,8 @@ export const EX280_OBJECTIVE_GROUPS = [
         levels: [15],
         challenges: [6],
         commands: [
-          `oc create clusterquota team-quota --project-label-selector=team=web --hard=pods=10 --hard=secrets=20`,
-          `oc create clusterresourcequota for-name --project-label-selector=name=frontend --hard=pods=10`,
+          `oc create clusterquota team-quota --project-label-selector=kubernetes.io/metadata.name=web --hard=pods=10 --hard=secrets=20`,
+          `oc create clusterresourcequota for-name --project-label-selector=kubernetes.io/metadata.name=frontend --hard=pods=10`,
           `oc describe clusterresourcequota team-quota`,
           `oc describe AppliedClusterResourceQuota -n web`,
         ],

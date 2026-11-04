@@ -1165,6 +1165,65 @@ const CHALLENGES = [
       'Verify the Route is admitted and the Job completes before the timer runs out.',
     ],
   },
+  {
+    id: 13,
+    title: 'Production Network Policies',
+    description:
+      'Make the payments project zero-trust: deny all ingress and egress by default, then re-open only the DNS egress and the gateway → ledger API path on port 8080 — while keeping the reverse direction blocked. You start from a seeded default-deny policy and write the allow rules yourself; the lab grades traffic behaviour, not NetworkPolicy object names.',
+    timeLimit: 300,
+    docsLinks: [DOCS.network],
+    objectives: [
+      {
+        type: 'networkPolicy',
+        probe: 'default-deny',
+        namespace: 'payments',
+        label: 'Deny all ingress and egress in payments by default',
+      },
+      {
+        type: 'networkPolicy',
+        probe: 'dns-egress',
+        namespace: 'payments',
+        source: { kind: 'Deployment', name: 'gateway' },
+        label: 'Allow DNS egress on UDP/TCP 5353 to openshift-dns',
+      },
+      {
+        type: 'networkPolicy',
+        probe: 'reach',
+        namespace: 'payments',
+        source: { kind: 'Deployment', name: 'gateway' },
+        to: { kind: 'Service', name: 'ledger' },
+        port: 8080,
+        label: 'Allow gateway → ledger on port 8080',
+      },
+      {
+        type: 'networkPolicy',
+        probe: 'deny',
+        namespace: 'payments',
+        source: { kind: 'Deployment', name: 'ledger' },
+        to: { kind: 'Service', name: 'gateway' },
+        port: 8080,
+        label: 'Keep ledger → gateway blocked (the allow is directional)',
+      },
+    ],
+    startingResources: [
+      ...nodes(3),
+      project('payments', 'Payments'),
+      deployment('gateway', { namespace: 'payments', replicas: 2, app: 'gateway' }),
+      deployment('ledger', { namespace: 'payments', replicas: 2, app: 'ledger' }),
+      service('gateway', { namespace: 'payments', app: 'gateway' }),
+      service('ledger', { namespace: 'payments', app: 'ledger' }),
+    ],
+    manifestFiles: ['challenges/payments-networkpolicy.yaml'],
+    focusFiles: ['challenges/payments-networkpolicy.yaml'],
+    availableResources: ['Project', 'NetworkPolicy', 'Deployment', 'Service', 'Pod'],
+    hints: [
+      'Start from the seeded default-deny: oc apply -f challenges/payments-networkpolicy.yaml — NetworkPolicies are additive, so the deny isolates the project and each allow rule re-opens exactly one path.',
+      'DNS: allow egress to the openshift-dns namespace on BOTH UDP and TCP port 5353 (the dns-default Pods listen on 5353, not 53). Without it, gateway cannot resolve ledger and every call fails.',
+      'Direction matters: gateway → ledger needs an ingress rule on ledger (or an egress rule on gateway). Do not mirror that rule for ledger → gateway — the deny objective proves the path stays closed.',
+      'Verify as the workloads: oc exec deploy/gateway -n payments -- curl -sv http://ledger:8080 (allowed), oc exec deploy/ledger -n payments -- curl -sv http://gateway:8080 (blocked), and oc get networkpolicy -n payments.',
+      'The check probes the traffic evaluator: hand-written policies with any names/selectors are fine as long as the resulting traffic behaviour matches.',
+    ],
+  },
 ];
 
 const REGISTRY_KINDS = new Set(RESOURCE_KINDS);

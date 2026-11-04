@@ -3440,7 +3440,7 @@ await runSection('campaign', async () => {
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
-// 9. TIMED CHALLENGES 1-12
+// 9. TIMED CHALLENGES 1-13
 // ═══════════════════════════════════════════════════════════════════════════
 const REQUIRED_CHALLENGE_TITLES = [
   'Three-Tier App',
@@ -3455,10 +3455,11 @@ const REQUIRED_CHALLENGE_TITLES = [
   'Install an Operator',
   'HTPasswd Onboarding',
   'EX280 Speed Run',
+  'Production Network Policies',
 ];
 await runSection('challenges', async () => {
   await bootMenu();
-  for (let id = 1; id <= 12; id += 1) {
+  for (let id = 1; id <= 13; id += 1) {
     const ok = await launch('challenge', id);
     await sleep(400);
     const info = await evaluate(() => {
@@ -8491,6 +8492,446 @@ await runSection('qa-coverage', async () => {
   assert(
     await waitFor(() => evaluate(() => window.game.app.modeInstance?.currentLevel === 2), 12000),
     'coverage: non-final "Next Level" still advances to level 2'
+  );
+  await returnToMenu();
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // #34 phase-2B — L1 intro move, L13 rotation + user/identity cleanup,
+  // new netpol lab 13, L18 operator variants, lab 10 AllNamespaces
+  // ═══════════════════════════════════════════════════════════════════════
+
+  // Dismiss the launch welcome modal and guarantee the mode clock is running:
+  // objectives only tick while the campaign/challenge state is PLAYING, and the
+  // intro modal that launches with a fresh run registers a clock-pause reason
+  // (`tutorial`) that must be released before objective assertions are made.
+  const ensureRunActive = async () => {
+    await evaluate(() => {
+      document.getElementById('tutorial-start')?.click();
+      const app = window.game?.app;
+      app?.hideTutorial?.();
+      app?.hidePause?.();
+      app?._resumeClocksFor?.('tutorial');
+      const mode = app?.modeInstance;
+      if (mode && mode.state === 'paused' && typeof mode.resume === 'function') mode.resume();
+      if (window.game?.gameEngine && window.game.gameEngine.state !== 'running')
+        window.game.gameEngine.resume?.();
+    });
+    await sleep(400);
+  };
+
+  // ── #34 L1 intro: the restricted-v2/nginx trap moved out of first contact ─
+  assert(await launch('campaign', 1), 'coverage: campaign L1 starts for the intro check');
+  await closeOverlays();
+  const l1Intro = await evaluate(() => {
+    const def = window.game.app.modeInstance.currentLevelDef;
+    return { description: def.description, firstMoves: (def.hints || []).slice(0, 3) };
+  });
+  assert(
+    !/restricted-v2|nginx/i.test(l1Intro.description) &&
+      !/restricted-v2|nginx/i.test(l1Intro.firstMoves.join(' ')),
+    'coverage: L1 welcome card and first moves no longer explain the nginx/restricted-v2 trap',
+    JSON.stringify(l1Intro).slice(0, 260)
+  );
+  await returnToMenu();
+  assert(await launch('campaign', 3), 'coverage: campaign L3 starts for the trap-hint check');
+  await closeOverlays();
+  const l3Hint = await evaluate(() => {
+    const def = window.game.app.modeInstance.currentLevelDef;
+    return (def.hints || []).find((hint) => /ADMITTED by|admission/i.test(hint)) || '';
+  });
+  assert(
+    /restricted-v2/.test(l3Hint) && /runAsUser: 0/.test(l3Hint),
+    'coverage: the admission-vs-runtime trap moved to the L3 troubleshooting hints',
+    l3Hint.slice(0, 220)
+  );
+  await returnToMenu();
+
+  // ── #34 auth-passwords + auth-users: L13 rotation and cleanup ────────────
+  assert(
+    await launch('campaign', 13),
+    'coverage: campaign L13 starts for the password/cleanup flow'
+  );
+  await closeOverlays();
+  await ensureRunActive();
+  const l13Def = await evaluate(() => {
+    const def = window.game.app.modeInstance.currentLevelDef;
+    return {
+      objectives: def.objectives.map((objective) => ({
+        type: objective.type,
+        name: objective.name,
+        user: objective.user,
+        exists: objective.exists,
+      })),
+      startingResources: (def.startingResources || []).map(
+        (resource) => `${resource.kind}/${resource.name}`
+      ),
+    };
+  });
+  assert(
+    l13Def.objectives.some(
+      (objective) => objective.type === 'password' && objective.user === 'alice'
+    ),
+    'coverage: L13 requires a real HTPasswd password-rotation objective',
+    JSON.stringify(l13Def.objectives)
+  );
+  assert(
+    l13Def.objectives.some(
+      (objective) =>
+        objective.type === 'user' && objective.name === 'bob' && objective.exists === false
+    ) &&
+      l13Def.objectives.some(
+        (objective) =>
+          objective.type === 'identity' && objective.user === 'bob' && objective.exists === false
+      ),
+    'coverage: L13 requires deleting both the bob User and its Identity',
+    JSON.stringify(l13Def.objectives)
+  );
+  assert(
+    l13Def.startingResources.includes('User/bob') &&
+      l13Def.startingResources.some((resource) => resource.startsWith('Identity/')),
+    'coverage: L13 seeds the departing user bob with a pre-existing Identity',
+    JSON.stringify(l13Def.startingResources)
+  );
+
+  // Configure the HTPasswd provider the way the level hints do, then rotate.
+  await runCmd('oc project identity-lab');
+  await runCmd(`htpasswd -c -B -b htpasswd alice 'OldPassw0rd!'`);
+  await runCmd(
+    'oc create secret generic htpass-secret --from-file=htpasswd=htpasswd -n openshift-config'
+  );
+  const oauthManifest = `apiVersion: config.openshift.io/v1
+kind: OAuth
+metadata:
+  name: cluster
+spec:
+  identityProviders:
+    - name: htpasswd
+      mappingMethod: claim
+      type: HTPasswd
+      htpasswd:
+        fileData:
+          name: htpass-secret`;
+  await runCmd(`cat <<EOF | oc apply -f -\n${oauthManifest}\nEOF`);
+  await advanceSimulation(8);
+  const aliceInitialLogin = await runCmd(`oc login -u alice -p 'OldPassw0rd!'`);
+  assert(
+    !aliceInitialLogin.error,
+    'coverage: L13 alice can log in with the initial HTPasswd password',
+    aliceInitialLogin.message.slice(0, 220)
+  );
+  await runCmd('oc login -u kubeadmin');
+  await runCmd('oc extract secret/htpass-secret -n openshift-config --to /tmp --confirm');
+  await runCmd(`htpasswd -bB /tmp/htpasswd alice 'NewPassw0rd!'`);
+  await runCmd(
+    'oc set data secret/htpass-secret -n openshift-config --from-file=htpasswd=/tmp/htpasswd'
+  );
+  await advanceSimulation(2);
+  const aliceEarlyLogin = await runCmd(`oc login -u alice -p 'NewPassw0rd!'`);
+  assert(
+    aliceEarlyLogin.error && /not ready|Login failed/i.test(aliceEarlyLogin.message),
+    'coverage: L13 rejects the new password until the OAuth rollout completes',
+    aliceEarlyLogin.message.slice(0, 220)
+  );
+  await advanceSimulation(8);
+  // Let one objective tick observe the rotated-but-not-yet-logged-in state: the
+  // requireLogin latch captures its login-history baseline when the new hash
+  // first verifies. (A human learner takes seconds between these commands.)
+  await sleep(1400);
+  const aliceRotatedLogin = await runCmd(`oc login -u alice -p 'NewPassw0rd!'`);
+  assert(
+    !aliceRotatedLogin.error,
+    'coverage: L13 the rotated HTPasswd password works after the OAuth rollout',
+    aliceRotatedLogin.message.slice(0, 220)
+  );
+  assert(
+    await waitFor(
+      () =>
+        evaluate(() =>
+          (window.game.app.modeInstance.objectiveProgress || []).some(
+            (objective) => objective.type === 'password' && objective.completed
+          )
+        ),
+      15000
+    ),
+    'coverage: L13 password objective completes after rotation + login with the new password'
+  );
+
+  await runCmd('oc login -u kubeadmin');
+  await expectCmd('coverage: oc delete user bob', 'oc delete user bob', /deleted/i);
+  const afterUserDelete = await evaluate(() =>
+    (window.game.app.modeInstance.objectiveProgress || [])
+      .filter((objective) => ['user', 'identity'].includes(objective.type))
+      .map((objective) => ({ type: objective.type, completed: objective.completed }))
+  );
+  assert(
+    afterUserDelete.some((objective) => objective.type === 'user' && objective.completed),
+    'coverage: L13 deleting the User completes the user-deletion objective',
+    JSON.stringify(afterUserDelete)
+  );
+  assert(
+    afterUserDelete.some((objective) => objective.type === 'identity' && !objective.completed),
+    'coverage: L13 deleting the User alone leaves the Identity behind (both deletes required)',
+    JSON.stringify(afterUserDelete)
+  );
+  await expectCmd(
+    'coverage: oc delete identity htpasswd:bob',
+    'oc delete identity htpasswd:bob',
+    /deleted/i
+  );
+  assert(
+    await waitFor(
+      () =>
+        evaluate(() => {
+          const progress = window.game.app.modeInstance.objectiveProgress || [];
+          const userObjective = progress.find(
+            (objective) => objective.type === 'user' && objective.name === 'bob'
+          );
+          const identityObjective = progress.find(
+            (objective) => objective.type === 'identity' && objective.user === 'bob'
+          );
+          return Boolean(userObjective?.completed && identityObjective?.completed);
+        }),
+      12000
+    ),
+    'coverage: L13 user + identity deletion objectives complete after both deletes'
+  );
+  await returnToMenu();
+
+  // ── #34 net-network-policies: new behaviour-graded timed lab 13 ──────────
+  assert(
+    await launch('challenge', 13),
+    'coverage: timed lab 13 (Production Network Policies) starts'
+  );
+  await closeOverlays();
+  await ensureRunActive();
+  const lab13Def = await evaluate(() => {
+    const def = window.game.app.modeInstance.currentChallengeDef;
+    return {
+      title: def.title,
+      probes: def.objectives
+        .filter((objective) => objective.type === 'networkPolicy')
+        .map((objective) => objective.probe),
+      files: def.manifestFiles || [],
+    };
+  });
+  assert(
+    lab13Def.title === 'Production Network Policies' &&
+      lab13Def.probes.length === 4 &&
+      ['default-deny', 'dns-egress', 'reach', 'deny'].every((probe) =>
+        lab13Def.probes.includes(probe)
+      ),
+    'coverage: lab 13 has 4 behaviour-based NetworkPolicy objectives',
+    JSON.stringify(lab13Def)
+  );
+  await expectCmd(
+    'coverage: lab 13 applies the starter default-deny',
+    'oc apply -f challenges/payments-networkpolicy.yaml',
+    /created|configured/i
+  );
+  await sleep(1400);
+  const starterPolicies = await evaluate(() =>
+    (window.game.app.modeInstance.objectiveProgress || [])
+      .filter((objective) => objective.type === 'networkPolicy')
+      .map((objective) => ({ probe: objective.probe, completed: objective.completed }))
+  );
+  // With only the default-deny in place the allow probes must stay incomplete
+  // (the `deny` probe is legitimately satisfied: the reverse direction is blocked).
+  assert(
+    starterPolicies.some((objective) => objective.probe === 'dns-egress' && !objective.completed) &&
+      starterPolicies.some((objective) => objective.probe === 'reach' && !objective.completed),
+    'coverage: lab 13 default-deny alone does not satisfy the DNS/reach allow objectives',
+    JSON.stringify(starterPolicies)
+  );
+  const paymentsPolicies = `apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dns-egress
+  namespace: payments
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: openshift-dns
+      ports:
+        - protocol: UDP
+          port: 5353
+        - protocol: TCP
+          port: 5353
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-gateway-egress
+  namespace: payments
+spec:
+  podSelector:
+    matchLabels:
+      app: gateway
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app: ledger
+      ports:
+        - protocol: TCP
+          port: 8080
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-gateway-to-ledger
+  namespace: payments
+spec:
+  podSelector:
+    matchLabels:
+      app: ledger
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: gateway
+      ports:
+        - protocol: TCP
+          port: 8080`;
+  const applyPolicies = await runCmd(`cat <<EOF | oc apply -f -\n${paymentsPolicies}\nEOF`);
+  assert(
+    !applyPolicies.error,
+    'coverage: lab 13 hand-written allow policies apply',
+    applyPolicies.message.slice(0, 260)
+  );
+  assert(
+    await waitFor(
+      () =>
+        evaluate(() =>
+          (window.game.app.modeInstance.objectiveProgress || [])
+            .filter((objective) => objective.type === 'networkPolicy')
+            .every((objective) => objective.completed)
+        ),
+      18000
+    ),
+    'coverage: lab 13 all NetworkPolicy objectives complete from traffic behaviour'
+  );
+  await returnToMenu();
+
+  // ── #34 ops-install: L18 AllNamespaces + Manual approval + startingCSV ──
+  assert(await launch('campaign', 18), 'coverage: campaign L18 starts for the OLM variants');
+  await closeOverlays();
+  await ensureRunActive();
+  await expectCmd(
+    'coverage: L18 applies the Manual/pinned AllNamespaces Subscription',
+    'oc apply -f examples/subscription-manual-pinned.yaml',
+    /created|configured/i
+  );
+  await advanceSimulation(3);
+  const pinnedPlanName = await evaluate(() => {
+    const plan = (window.game.cluster.getByKind('InstallPlan') || []).find(
+      (candidate) =>
+        candidate.metadata.namespace === 'openshift-operators' &&
+        (candidate.spec?.clusterServiceVersionNames || []).some((name) => /cert-manager/.test(name))
+    );
+    return plan?.metadata?.name || null;
+  });
+  assert(
+    Boolean(pinnedPlanName),
+    'coverage: L18 creates an InstallPlan for the pinned AllNamespaces install',
+    String(pinnedPlanName)
+  );
+  const pinnedPlan = await evaluate((planName) => {
+    const plan = window.game.cluster.getByName('InstallPlan', planName, 'openshift-operators');
+    return plan ? { approval: plan.spec?.approval, approved: plan.spec?.approved } : null;
+  }, pinnedPlanName);
+  assert(
+    pinnedPlan?.approval === 'Manual' && pinnedPlan?.approved === false,
+    'coverage: L18 InstallPlan waits at Manual approval',
+    JSON.stringify(pinnedPlan)
+  );
+  await expectCmd(
+    'coverage: L18 approves the Manual InstallPlan',
+    `oc patch installplan ${pinnedPlanName} -n openshift-operators --type=merge -p '{"spec":{"approved":true}}'`,
+    /patched/i
+  );
+  await advanceSimulation(20);
+  const operatorCsvs = await evaluate(() =>
+    (window.game.cluster.getByKind('ClusterServiceVersion') || [])
+      .filter((csv) => csv.metadata.namespace === 'openshift-operators')
+      .map((csv) => ({ name: csv.metadata.name, phase: csv.status?.phase }))
+  );
+  assert(
+    operatorCsvs.some(
+      (csv) => csv.name === 'cert-manager-operator.v1.15.0' && csv.phase === 'Succeeded'
+    ),
+    'coverage: L18 startingCSV pins the installed CSV to v1.15.0 and it reaches Succeeded',
+    JSON.stringify(operatorCsvs)
+  );
+  assert(
+    await waitFor(
+      () =>
+        evaluate(() => {
+          const progress = window.game.app.modeInstance.objectiveProgress || [];
+          const variantObjectives = progress.filter(
+            (objective) =>
+              objective.type === 'installPlan' ||
+              objective.type === 'subscription' ||
+              (objective.type === 'operator' && objective.namespace === 'openshift-operators')
+          );
+          return (
+            variantObjectives.length >= 3 &&
+            variantObjectives.every((objective) => objective.completed)
+          );
+        }),
+      18000
+    ),
+    'coverage: L18 AllNamespaces/Manual/startingCSV objectives all complete'
+  );
+  await returnToMenu();
+
+  // ── #34 ops-install: lab 10 AllNamespaces variant ────────────────────────
+  assert(
+    await launch('challenge', 10),
+    'coverage: timed lab 10 starts for the AllNamespaces variant'
+  );
+  await closeOverlays();
+  await ensureRunActive();
+  await expectCmd(
+    'coverage: lab 10 applies the AllNamespaces pipelines Subscription',
+    'oc apply -f examples/subscription-pipelines.yaml',
+    /created|configured/i
+  );
+  await advanceSimulation(15);
+  const pipelinesInstalled = await evaluate(() =>
+    (window.game.cluster.getByKind('ClusterServiceVersion') || []).some(
+      (csv) =>
+        csv.metadata.namespace === 'openshift-operators' &&
+        /openshift-pipelines/.test(csv.metadata.name) &&
+        csv.status?.phase === 'Succeeded'
+    )
+  );
+  assert(
+    pipelinesInstalled,
+    'coverage: lab 10 AllNamespaces install reaches CSV Succeeded in openshift-operators'
+  );
+  assert(
+    await waitFor(
+      () =>
+        evaluate(() =>
+          (window.game.app.modeInstance.objectiveProgress || []).some(
+            (objective) =>
+              objective.type === 'operator' &&
+              objective.name === 'openshift-pipelines-operator-rh' &&
+              objective.completed
+          )
+        ),
+      18000
+    ),
+    'coverage: lab 10 AllNamespaces operator objective completes'
   );
   await returnToMenu();
 });
