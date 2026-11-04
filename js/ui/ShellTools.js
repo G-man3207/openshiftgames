@@ -14,8 +14,10 @@
  *   - pipelines/redirects:  handled by CommandBar's splitPipeline (this module
  *                           only executes a single stage, stdin → stdout)
  *   - grep context:          grep -A2/-A 2/-B/-C (real grep semantics, `--` group separators)
+ *   - stream editing:        sed -n '1,40p', sed 's/foo/bar/[g]' (first occurrence per
+ *                           line unless `g`; works in pipelines: `oc describe … | sed -n 1,40p`)
  *   - commands:            cat, echo, grep, tail, head, wc, vim/vi, sort, uniq,
- *                          cut, tr, ls, rm, cp, mv, touch, pwd, which, env,
+ *                          cut, tr, sed, ls, rm, cp, mv, touch, pwd, which, env,
  *                          openssl, skopeo, htpasswd (-B forwarded to bcrypt hashing)
  *
  * The CommandBar calls `isShellLine()` to decide whether an input line is shell
@@ -31,12 +33,12 @@
 /** Shell commands recognised without the `oc ` prefix (completion + dispatch). */
 export const SHELL_COMMANDS = [
   'cat', 'echo', 'grep', 'tail', 'head', 'wc', 'vim', 'vi', 'sort', 'uniq', 'cut', 'tr',
-  'ls', 'rm', 'cp', 'mv', 'touch', 'pwd', 'which', 'env', 'printenv', 'openssl', 'skopeo',
-  'htpasswd', 'clear', 'exit',
+  'sed', 'ls', 'rm', 'cp', 'mv', 'touch', 'pwd', 'which', 'env', 'printenv', 'openssl',
+  'skopeo', 'htpasswd', 'clear', 'exit',
 ];
 
 /** Commands that take file paths (Tab completion / suggestion hints). */
-export const SHELL_FILE_COMMANDS = new Set(['cat', 'vim', 'vi', 'head', 'tail', 'wc', 'grep', 'rm', 'source']);
+export const SHELL_FILE_COMMANDS = new Set(['cat', 'vim', 'vi', 'head', 'tail', 'wc', 'grep', 'sed', 'rm', 'source']);
 
 const SHELL_COMMAND_SET = new Set(SHELL_COMMANDS);
 
@@ -82,6 +84,143 @@ function countWords(text) {
   return String(text || '')
     .split(/\s+/)
     .filter(Boolean).length;
+}
+
+/**
+ * Parse a minimal `sed` script into executable commands (issue #26).
+ *
+ * Supported forms (the ones EX280 learners actually use):
+ *   - `A,Bp` / `Ap` / `$p` / `p`  → print addressed lines (`-n` suppresses the
+ *     implicit print of every other line),
+ *   - `A,Bd` / `Ad` / `d`          → delete addressed lines,
+ *   - `s/foo/bar/`, `s|foo|bar|g`  → substitute (first occurrence unless `g`).
+ *
+ * Anything else throws so the terminal reports a real-looking `sed` error
+ * instead of silently doing the wrong thing.
+ * @param {string} script
+ * @returns {Array<{type:'print'|'delete'|'substitute', address?:{from?:number,to?:number,last?:boolean}, regex?:RegExp, replacement?:string, global?:boolean, printAfter?:boolean}>}
+ */
+function parseSedScript(script) {
+  const text = String(script ?? '');
+  if (!text.trim()) throw new Error('no script specified');
+  const commands = [];
+  for (const rawCommand of text.split(/[;\n]/)) {
+    let command = rawCommand.trim();
+    if (!command) continue;
+    let address = null;
+    let match = command.match(/^(\d+),(\d+)([\s\S]*)$/);
+    if (match) {
+      address = { from: Number(match[1]), to: Number(match[2]) };
+      command = match[3];
+    } else if ((match = command.match(/^(\d+)([\s\S]*)$/))) {
+      address = { from: Number(match[1]), to: Number(match[1]) };
+      command = match[2];
+    } else if (command.startsWith('$')) {
+      address = { last: true };
+      command = command.slice(1);
+    }
+    command = command.trim();
+    if (!command) throw new Error(`missing command in script "${rawCommand.trim()}"`);
+    const operation = command[0];
+    if (operation === 'p' && command.length === 1) {
+      commands.push({ type: 'print', address });
+      continue;
+    }
+    if (operation === 'd' && command.length === 1) {
+      commands.push({ type: 'delete', address });
+      continue;
+    }
+    if (operation === 's') {
+      const delimiter = command[1];
+      if (!delimiter || /[A-Za-z0-9\\]/.test(delimiter)) {
+        throw new Error('unterminated `s` command');
+      }
+      const fields = [];
+      let current = '';
+      let index = 2;
+      while (index < command.length) {
+        const char = command[index];
+        if (char === '\\' && index + 1 < command.length) {
+          current += char + command[index + 1];
+          index += 2;
+          continue;
+        }
+        if (char === delimiter) {
+          fields.push(current);
+          current = '';
+          index += 1;
+          if (fields.length === 2) break;
+          continue;
+        }
+        current += char;
+        index += 1;
+      }
+      if (fields.length < 2) throw new Error('unterminated `s` command');
+      const flagsText = command.slice(index);
+      const patternSource = fields[0];
+      const replacement = fields[1];
+      let regex;
+      try {
+        regex = new RegExp(patternSource, flagsText.includes('i') ? 'i' : '');
+      } catch {
+        regex = new RegExp(patternSource.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), flagsText.includes('i') ? 'i' : '');
+      }
+      commands.push({
+        type: 'substitute',
+        address,
+        regex,
+        replacement,
+        global: flagsText.includes('g'),
+        printAfter: flagsText.includes('p'),
+      });
+      continue;
+    }
+    throw new Error(`unsupported command "${command}" (simulator supports: sed -n 'A,Bp', sed 's/foo/bar/')`);
+  }
+  if (!commands.length) throw new Error('no script specified');
+  return commands;
+}
+
+/** Build the JS replacement string for a sed `s///` replacement (`&`, `\1`). */
+function sedReplacementString(replacement) {
+  let output = '';
+  for (let index = 0; index < replacement.length; index += 1) {
+    const char = replacement[index];
+    if (char === '\\' && index + 1 < replacement.length) {
+      const next = replacement[index + 1];
+      if (/[1-9]/.test(next)) {
+        output += `$${next}`;
+        index += 1;
+        continue;
+      }
+      if (next === '&') {
+        output += '&';
+        index += 1;
+        continue;
+      }
+      output += `\\${next}`;
+      index += 1;
+      continue;
+    }
+    if (char === '&') {
+      output += '$&';
+      continue;
+    }
+    if (char === '$') {
+      output += '$$';
+      continue;
+    }
+    output += char;
+  }
+  return output;
+}
+
+function sedAddressMatches(address, lineNumber, totalLines) {
+  if (!address) return true;
+  if (address.last) return lineNumber === totalLines;
+  const from = address.from ?? 1;
+  const to = address.to ?? from;
+  return lineNumber >= from && lineNumber <= to;
 }
 
 export class ShellTools {
@@ -588,6 +727,88 @@ export class ShellTools {
       out += index >= 0 ? toChars[index] ?? toChars[toChars.length - 1] ?? char : char;
     }
     return this._ok(out);
+  }
+
+  /**
+   * Minimal `sed` (issue #26): `-n 'A,Bp'`, `'Ap'`, `'$p'`, `'d'` and
+   * `'s/foo/bar/[g]'`, reading stdin (pipelines) or virtual files.
+   * @param {string[]} args
+   * @param {string|null} stdin
+   * @returns {{error:boolean,message:string}}
+   */
+  _cmd_sed(args, stdin) {
+    let quiet = false;
+    const scripts = [];
+    const files = [];
+    for (let index = 0; index < args.length; index += 1) {
+      const arg = args[index];
+      if (arg === '-n' || arg === '--quiet' || arg === '--silent') {
+        quiet = true;
+        continue;
+      }
+      if (arg === '-e' || arg === '--expression') {
+        scripts.push(String(args[++index] ?? ''));
+        continue;
+      }
+      if (arg === '-E' || arg === '-r' || arg === '--regexp-extended') continue; // same subset
+      if (arg === '--') {
+        for (const rest of args.slice(index + 1)) files.push(rest);
+        break;
+      }
+      if (arg.startsWith('-') && arg !== '-') {
+        return this._err(`sed: unsupported option '${arg}' (simulator supports: sed [-n] [-e script] [script] [file ...])`);
+      }
+      if (!scripts.length && !files.length) scripts.push(arg);
+      else files.push(arg);
+    }
+    let commands;
+    try {
+      commands = parseSedScript(scripts.join('\n'));
+    } catch (error) {
+      return this._err(`sed: ${error && error.message ? error.message : error}`);
+    }
+    let input;
+    if (files.length) {
+      const chunks = [];
+      for (const file of files) {
+        const content = this._readFile(file);
+        if (content === null) return this._err(`sed: can't read ${file}: No such file or directory`);
+        chunks.push(content);
+      }
+      input = chunks.join('\n');
+    } else {
+      input = stdin === null || stdin === undefined ? '' : String(stdin);
+    }
+    const lines = input.split('\n');
+    if (lines.length && lines[lines.length - 1] === '') lines.pop();
+    const output = [];
+    lines.forEach((line, index) => {
+      const lineNumber = index + 1;
+      let pattern = line;
+      let deleted = false;
+      for (const command of commands) {
+        const applies = sedAddressMatches(command.address, lineNumber, lines.length);
+        if (command.type === 'print') {
+          if (applies) output.push(pattern);
+          continue;
+        }
+        if (command.type === 'delete') {
+          if (applies) {
+            deleted = true;
+            break;
+          }
+          continue;
+        }
+        if (command.type === 'substitute') {
+          const global = command.global === true;
+          const regex = global ? new RegExp(command.regex.source, `${command.regex.flags.replace('g', '')}g`) : command.regex;
+          pattern = pattern.replace(regex, sedReplacementString(command.replacement));
+          if (command.printAfter && applies) output.push(pattern);
+        }
+      }
+      if (!deleted && !quiet) output.push(pattern);
+    });
+    return this._ok(output.join('\n'));
   }
 
   // ── editing / filesystem ─────────────────────────────────────────────────

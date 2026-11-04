@@ -1909,8 +1909,18 @@ export class ManifestEngine {
     let values = deepMerge(defaults, overrides);
     const setValues = isPlainObject(opts.setValues) ? opts.setValues : isPlainObject(opts.values) ? opts.values : null;
     if (setValues) values = deepMerge(values, setValues);
-    const chartName = chart.name ? String(chart.name) : basename(dir);
-    const chartVersion = chart.version ? String(chart.version) : '0.0.0';
+    // Repo charts (`bitnami/nginx --version 15.0.0`) are rendered from the
+    // bundled chart templates, but Helm exposes the CATALOG chart identity to
+    // templates (`.Chart.Name/Version/AppVersion`) and to history/list output.
+    // Callers pass those through opts so `helm rollback` can re-deploy the
+    // exact chart revision (#24).
+    const chartName = opts.chartName ? String(opts.chartName) : chart.name ? String(chart.name) : basename(dir);
+    const chartVersion = opts.chartVersion ? String(opts.chartVersion) : chart.version ? String(chart.version) : '0.0.0';
+    const chartAppVersion = opts.appVersion !== undefined && opts.appVersion !== null && opts.appVersion !== ''
+      ? String(opts.appVersion)
+      : chart.appVersion
+        ? String(chart.appVersion)
+        : '';
     const templatePaths = this.listFiles().filter((path) => {
       if (!path.startsWith(`${dir}/templates/`)) return false;
       return /\.(ya?ml)$/i.test(path);
@@ -1921,7 +1931,7 @@ export class ManifestEngine {
 
     const context = {
       Release: { Name: release, Namespace: namespace, Service: 'Helm' },
-      Chart: { Name: chartName, Version: chartVersion, AppVersion: chart.appVersion ? String(chart.appVersion) : '' },
+      Chart: { Name: chartName, Version: chartVersion, AppVersion: chartAppVersion },
       Values: values,
     };
 
@@ -1948,7 +1958,7 @@ export class ManifestEngine {
         objects.push(coerced);
       }
     }
-    return { ok: true, objects, values, chart: { name: chartName, version: chartVersion, chart }, errors: [], errorDetails: [] };
+    return { ok: true, objects, values, chart: { name: chartName, version: chartVersion, appVersion: chartAppVersion, chart }, errors: [], errorDetails: [] };
   }
 
   _renderGoTemplate(text, context, filePath) {
@@ -2084,7 +2094,9 @@ export class ManifestEngine {
         name: release,
         chart: rendered.chart.name,
         chartVersion: rendered.chart.version,
+        appVersion: rendered.chart.appVersion || '',
         namespace,
+        revision: 1,
         resources: [],
         objects: rendered.objects,
         values: clone(rendered.values),
@@ -2116,6 +2128,7 @@ export class ManifestEngine {
       name: release,
       chart: rendered.chart.name,
       chartVersion: rendered.chart.version,
+      appVersion: rendered.chart.appVersion || '',
       chartDir: normalizePath(chartDir),
       valuesPath: valuesPath ? normalizePath(valuesPath) : null,
       namespace: rendered.namespace,
@@ -2139,7 +2152,11 @@ export class ManifestEngine {
       name: release,
       chart: record.chart,
       chartVersion: record.chartVersion,
+      appVersion: record.appVersion,
+      chartDir: record.chartDir,
+      valuesPath: record.valuesPath,
       namespace: record.namespace,
+      revision: record.revision,
       resources,
       errors: [],
       errorDetails: [],
@@ -2170,6 +2187,7 @@ export class ManifestEngine {
         name: release,
         chart: rendered.chart.name,
         chartVersion: rendered.chart.version,
+        appVersion: rendered.chart.appVersion || '',
         namespace: existing.namespace,
         revision: existing.revision,
         resources: [],
@@ -2203,6 +2221,7 @@ export class ManifestEngine {
     Object.assign(existing, {
       chart: rendered.chart.name,
       chartVersion: rendered.chart.version,
+      appVersion: rendered.chart.appVersion || existing.appVersion || '',
       chartDir: normalizePath(chartDir),
       valuesPath: valuesPath ? normalizePath(valuesPath) : null,
       status: 'deployed',
@@ -2224,6 +2243,9 @@ export class ManifestEngine {
       name: release,
       chart: existing.chart,
       chartVersion: existing.chartVersion,
+      appVersion: existing.appVersion,
+      chartDir: existing.chartDir,
+      valuesPath: existing.valuesPath,
       namespace: existing.namespace,
       revision: existing.revision,
       resources,
@@ -2244,10 +2266,12 @@ export class ManifestEngine {
       name: record.name,
       chart: record.chart,
       chartVersion: record.chartVersion,
+      appVersion: record.appVersion || '',
       status: record.status,
       namespace: record.namespace,
       revision: record.revision,
       chartDir: record.chartDir,
+      valuesPath: record.valuesPath || null,
       resources: (record.resources || []).map((ref) => ({ ...ref })),
       updatedAt: record.updatedAt || record.at,
     }));

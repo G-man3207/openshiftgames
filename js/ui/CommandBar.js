@@ -63,7 +63,14 @@ import {
   RHCOS_OS_IMAGE,
 } from '../data/platformVersions.js';
 import { parseYaml } from '../engine/YamlParser.js';
-import { validateCronSchedule } from '../resources/WorkloadResources.js';
+import {
+  validateCronSchedule,
+  visibleAnnotations,
+  visibleFinalizers,
+  isInternalMetadataKey,
+  describeEventLines,
+  formatDescribeDuration,
+} from '../resources/WorkloadResources.js';
 import { ShellTools, SHELL_COMMANDS, SHELL_FILE_COMMANDS } from './ShellTools.js';
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -1016,6 +1023,77 @@ export function formatDuration(milliseconds) {
   const minutes = Math.floor(seconds / 60);
   if (minutes < 60) return `${minutes}m${seconds % 60}s`;
   return `${Math.floor(minutes / 60)}h${minutes % 60}m`;
+}
+
+/**
+ * Helm 3 prints timestamps with Go's `time.ANSIC` layout:
+ * `Thu Nov  6 16:42:23 2026` (single-digit days are space-padded).
+ * @param {Date|number|string} [value]
+ * @returns {string}
+ */
+export function formatHelmDate(value = new Date()) {
+  const date = value instanceof Date ? value : new Date(value);
+  if (!Number.isFinite(date.getTime())) return '<unknown>';
+  const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  const pad = (number) => String(number).padStart(2, '0');
+  return `${days[date.getDay()]} ${months[date.getMonth()]} ${String(date.getDate()).padStart(2, ' ')} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())} ${date.getFullYear()}`;
+}
+
+/**
+ * Strip simulator-internal `openshiftgames*` annotations/finalizers from a
+ * manifest object tree before it is printed by `oc ... -o yaml|json` (issue
+ * #23). Top-level metadata and nested pod templates are both covered; genuine
+ * user annotations are preserved.
+ * @param {any} value
+ * @param {WeakSet<object>} [seen]
+ * @returns {any}
+ */
+export function stripInternalCliMetadata(value, seen = new WeakSet()) {
+  if (!value || typeof value !== 'object') return value;
+  if (seen.has(value)) return value;
+  seen.add(value);
+  if (Array.isArray(value)) {
+    for (const entry of value) stripInternalCliMetadata(entry, seen);
+    return value;
+  }
+  const metadata = value.metadata;
+  if (metadata && typeof metadata === 'object') {
+    if (metadata.annotations && typeof metadata.annotations === 'object') {
+      for (const key of Object.keys(metadata.annotations)) {
+        if (isInternalMetadataKey(key)) delete metadata.annotations[key];
+      }
+      if (Object.keys(metadata.annotations).length === 0) delete metadata.annotations;
+    }
+    if (Array.isArray(metadata.finalizers)) {
+      const finalizers = visibleFinalizers(metadata.finalizers);
+      if (finalizers.length) metadata.finalizers = finalizers;
+      else delete metadata.finalizers;
+    }
+  }
+  for (const entry of Object.values(value)) stripInternalCliMetadata(entry, seen);
+  return value;
+}
+
+const INTERNAL_ANNOTATION_ENTRY_RE = /^openshiftgames(?:\.io)?\//;
+
+/**
+ * Scrub simulator-internal `openshiftgames*` entries from rendered describe
+ * text. Resource classes outside the CLI render `Annotations: k=v, k2=v2…`
+ * on one line; filtering here keeps every `oc describe` leak-free (#23)
+ * without changing each class, while user annotations (openshift.io/…,
+ * kubernetes.io/…) stay untouched.
+ * @param {string} text
+ * @returns {string}
+ */
+export function scrubInternalAnnotationsText(text) {
+  return String(text ?? '').replace(/^(\s*Annotations:\s*)(.*)$/gm, (line, prefix, rest) => {
+    if (!/openshiftgames/i.test(rest)) return line;
+    const entries = rest
+      .split(/,\s+/)
+      .filter((entry) => !INTERNAL_ANNOTATION_ENTRY_RE.test(entry.trim()));
+    return `${prefix}${entries.join(', ') || '<none>'}`;
+  });
 }
 
 /**
@@ -4164,7 +4242,7 @@ Object.assign(CommandBar.prototype, {
       if (!output.arg) {
         return this._err(`error: jsonpath requires a template, e.g. -o jsonpath='{.items[*].metadata.name}'`);
       }
-      const subject = single && resources.length === 1 ? resources[0] : { kind: 'List', items: resources.map((resource) => this._manifestFor(resource)) };
+      const subject = single && resources.length === 1 ? this._manifestFor(resources[0]) : { kind: 'List', items: resources.map((resource) => this._manifestFor(resource)) };
       return evaluateJsonPath(subject, output.arg);
     }
     if (output.format === 'custom-columns') {
@@ -4207,9 +4285,11 @@ Object.assign(CommandBar.prototype, {
     try {
       // apiView: real-API-shaped object (real objectMeta + status only for
       // kinds that actually have a status), matching `oc get -o yaml|json`.
-      return toManifestObject(resource, { apiView: true });
+      // Simulator book-keeping in `openshiftgames*` annotations/finalizers is
+      // never part of the real API object and must not leak to the CLI (#23).
+      return stripInternalCliMetadata(toManifestObject(resource, { apiView: true }));
     } catch {
-      return {
+      return stripInternalCliMetadata({
         apiVersion: resource?.apiVersion || apiVersionForKind(resource?.kind),
         kind: resource?.kind,
         metadata: {
@@ -4220,7 +4300,7 @@ Object.assign(CommandBar.prototype, {
         },
         spec: JSON.parse(JSON.stringify(resource?.spec || {})),
         status: JSON.parse(JSON.stringify(resource?.status || {})),
-      };
+      });
     }
   },
 
@@ -4466,8 +4546,11 @@ Object.assign(CommandBar.prototype, {
       const object = event.object
         || (involved.kind ? `${String(involved.kind).toLowerCase()}/${involved.name || ''}` : '');
       const timestamp = event.lastTimestamp ? new Date(event.lastTimestamp).getTime() : Date.now();
+      const firstRaw = event.firstTimestamp ?? event.lastTimestamp;
+      const firstTimestamp = firstRaw ? new Date(firstRaw).getTime() : timestamp;
       return {
         lastTimestamp: Number.isFinite(timestamp) ? timestamp : Date.now(),
+        firstTimestamp: Number.isFinite(firstTimestamp) ? firstTimestamp : timestamp,
         type: event.type || 'Normal',
         reason: event.reason || '',
         object,
@@ -4478,6 +4561,41 @@ Object.assign(CommandBar.prototype, {
         count: event.count,
       };
     });
+  },
+
+  /**
+   * Aggregate identical events (same TYPE/OBJECT/REASON) into one row, the way
+   * a real event recorder folds retries into a single Event series (#26).
+   * Keeps the newest message + last/first timestamps and sums the counts.
+   */
+  _aggregateEvents(events) {
+    const groups = new Map();
+    for (const event of events || []) {
+      const lastTimestamp = this._eventTimestamp(event.lastTimestamp);
+      const firstTimestamp = this._eventTimestamp(event.firstTimestamp ?? event.lastTimestamp, lastTimestamp);
+      const count = Math.max(1, Number(event.count) || 1);
+      const key = `${event.type || 'Normal'}|${event.object || ''}|${event.reason || ''}`;
+      const existing = groups.get(key);
+      if (!existing) {
+        groups.set(key, { ...event, count, lastTimestamp, firstTimestamp });
+        continue;
+      }
+      existing.count += count;
+      existing.firstTimestamp = Math.min(existing.firstTimestamp, firstTimestamp);
+      if (lastTimestamp >= existing.lastTimestamp) {
+        existing.lastTimestamp = lastTimestamp;
+        existing.message = event.message;
+        existing.subobject = event.subobject || existing.subobject;
+        existing.source = event.source || existing.source;
+      }
+    }
+    return [...groups.values()].sort((left, right) => left.lastTimestamp - right.lastTimestamp);
+  },
+
+  _eventTimestamp(value, fallback = Date.now()) {
+    if (typeof value === 'number') return Number.isFinite(value) ? value : fallback;
+    const parsed = new Date(value ?? fallback).getTime();
+    return Number.isFinite(parsed) ? parsed : fallback;
   },
 
   _filterEvents(events, flags) {
@@ -4524,22 +4642,25 @@ Object.assign(CommandBar.prototype, {
     }
     // Real oc/K8s 1.35 event printer: LAST SEEN, TYPE, REASON, OBJECT, MESSAGE
     // (SUBOBJECT/SOURCE/NAMESPACE are only shown in wide/all-namespaces output).
+    // Real events are aggregated per TYPE/OBJECT/REASON: a controller retrying
+    // ten times prints as one row with a `(x10 over 1m)` age suffix (#26).
+    const aggregated = this._aggregateEvents(events);
     const wideEvents = output.format === 'wide' || Boolean(options.namespaceColumn);
     const headers = ['LAST SEEN', 'TYPE', 'REASON', 'OBJECT', 'MESSAGE'];
-    const rows = events.map((event) => [
-      formatAge(event.lastTimestamp),
-      event.type || 'Normal',
-      event.reason || '',
-      event.object || '',
-      event.message || '',
-    ]);
+    const rows = aggregated.map((event) => {
+      let lastSeen = formatAge(event.lastTimestamp);
+      if (event.count > 1) {
+        lastSeen = `${lastSeen} (x${event.count} over ${formatDescribeDuration(Math.max(0, event.lastTimestamp - event.firstTimestamp))})`;
+      }
+      return [lastSeen, event.type || 'Normal', event.reason || '', event.object || '', event.message || ''];
+    });
     if (wideEvents) {
       headers.splice(4, 0, 'SUBOBJECT', 'SOURCE');
-      rows.forEach((row, index) => row.splice(4, 0, events[index].subobject || '', events[index].source || ''));
+      rows.forEach((row, index) => row.splice(4, 0, aggregated[index].subobject || '', aggregated[index].source || ''));
     }
     if (options.namespaceColumn) {
       headers.push('NAMESPACE');
-      rows.forEach((row, index) => row.push(events[index].namespace || ''));
+      rows.forEach((row, index) => row.push(aggregated[index].namespace || ''));
     }
     if (flags['show-labels']) headers.push('LABELS'), rows.forEach((row) => row.push('<none>'));
     const table = padTable(headers, rows);
@@ -4578,14 +4699,9 @@ Object.assign(CommandBar.prototype, {
   },
 
   _eventsSection(kind, resource) {
-    const events = this._eventsForResource(kind, resource);
-    if (!events.length) return 'Events:\n  <none>';
-    const header = '  Type     Reason                   Age   From               Message\n  ----     ------                   ----  ----               -------';
-    const rows = events.slice(-10).map(
-      (event) =>
-        `  ${String(event.type || 'Normal').padEnd(9)}${String(event.reason || '').padEnd(25)}${formatAge(event.lastTimestamp).padEnd(6)}${String(event.source || '').padEnd(19)}${event.message || ''}`,
-    );
-    return `Events:\n${header}\n${rows.join('\n')}`;
+    // Shared with the resource-level describe (real Type/Reason/Age/From/Message
+    // table, identical events aggregated as `2m (x10 over 1m)`).
+    return describeEventLines(this._eventsForResource(kind, resource)).join('\n');
   },
 
   /** Render `oc describe` output for a resource (rich toDescribe when available). */
@@ -4593,12 +4709,15 @@ Object.assign(CommandBar.prototype, {
     let output = '';
     if (typeof resource.toDescribe === 'function') {
       try {
-        output = resource.toDescribe();
+        // Resource classes resolve owner-linked children (Pod -> Node,
+        // Deployment -> ReplicaSets) from the cluster when it is available.
+        output = resource.toDescribe({ cluster: this.cluster });
       } catch {
         output = '';
       }
     }
     if (!output || typeof output !== 'string') output = this._describeLines(kind, resource).join('\n');
+    output = scrubInternalAnnotationsText(output);
     if (!/^Events:/m.test(output)) output += `\n${this._eventsSection(kind, resource)}`;
     return output;
   },
@@ -4610,7 +4729,7 @@ Object.assign(CommandBar.prototype, {
     const lines = [];
     const push = (...entries) => lines.push(...entries);
     const labels = this._labelString(resource) || '<none>';
-    const annotations = Object.entries(metadata.annotations || {}).map(([key, value]) => `${key}=${value}`).join(', ') || '<none>';
+    const annotations = Object.entries(visibleAnnotations(metadata.annotations)).map(([key, value]) => `${key}=${value}`).join(', ') || '<none>';
 
     switch (kind) {
       case 'Project': {
@@ -8852,7 +8971,15 @@ Object.assign(CommandBar.prototype, {
       const plainCommand = positionals.slice(consumed).join(' ').trim();
       command = plainCommand || (interactive ? '/bin/sh' : '');
     }
-    const lines = [`Defaulting container name to "${containerName}".`, `Use 'oc describe pod/${pod.metadata?.name} -n ${pod.metadata?.namespace}' to see all of the containers in this pod.`];
+    // Real oc only prints the "Defaulting container name" hint for
+    // MULTI-container pods when no -c container was requested (#26).
+    const containerSpecified = Boolean(flags.container && flags.container !== true);
+    const lines = containers.length > 1 && !containerSpecified
+      ? [
+          `Defaulting container name to "${containerName}".`,
+          `Use 'oc describe pod/${pod.metadata?.name} -n ${pod.metadata?.namespace}' to see all of the containers in this pod.`,
+        ]
+      : [];
     if (!command) return this._ok(lines.join('\n'));
     const output = this._simulateExecCommand(command, pod, containerName);
     return this._ok([...lines, ...output].join('\n'));
@@ -10355,16 +10482,18 @@ Object.assign(CommandBar.prototype, {
         const { releases, error } = this._helmReleaseList(namespace);
         if (error) return error;
         const rows = releases.map((release) => {
-          const meta = this._helmReleasesMeta?.get(release.name || release.release) || {};
-          const chartLabel = meta.chart ? `${meta.chart}${meta.chartVersion ? `-${meta.chartVersion}` : ''}` : release.chartVersion ? `${release.chart}-${release.chartVersion}` : release.chart || release.chartName || '';
+          const name = release.name || release.release || '';
+          const meta = this._helmReleasesMeta?.get(name) || {};
+          const chartName = release.chart || meta.chart || release.chartName || '';
+          const chartVersion = release.chartVersion || meta.chartVersion || '0.1.0';
           return [
-            release.name || release.release || '',
+            name,
             release.namespace || namespace,
             String(release.revision || 1),
             release.updatedAt ? formatAge(release.updatedAt) : release.updated || 'just now',
             release.status || 'deployed',
-            chartLabel,
-            meta.appVersion || release.appVersion || release.app_version || '1.0.0',
+            chartName ? `${chartName}${chartVersion ? `-${chartVersion}` : ''}` : '',
+            release.appVersion || release.app_version || meta.appVersion || '1.0.0',
           ];
         });
         return this._ok(padTable(['NAME', 'NAMESPACE', 'REVISION', 'UPDATED', 'STATUS', 'CHART', 'APP VERSION'], rows));
@@ -10379,16 +10508,17 @@ Object.assign(CommandBar.prototype, {
         let chartPath = chart;
         let chartRepo = null;
         let chartName = chart;
+        let catalogEntry = null;
         const slash = chart.indexOf('/');
         if (slash > 0 && repos.has(chart.slice(0, slash))) {
           chartRepo = chart.slice(0, slash);
           chartName = chart.slice(slash + 1);
-          const available = this._helmAvailableChart(chartRepo, chartName);
-          chartPath = available.path;
+          catalogEntry = this._helmAvailableChart(chartRepo, chartName);
+          chartPath = catalogEntry.path;
         } else if (slash > 0 && !chart.startsWith('.') && chart.split('/')[0] !== 'helm' && chart.split('/')[0] !== 'kustomize') {
           return this._err(`Error: repo ${chart.split('/')[0]} not found`);
         }
-        const version = flags.version && flags.version !== true ? String(flags.version) : null;
+        const requestedVersion = flags.version && flags.version !== true ? String(flags.version) : null;
         const valuesPath = flags.values && flags.values !== true ? String(flags.values) : flags['values-file'] && flags['values-file'] !== true ? String(flags['values-file']) : null;
         const method = sub === 'install' ? 'installHelm' : 'upgradeHelm';
         const dryRun = flags['dry-run'] === true || ['client', 'server'].includes(String(flags['dry-run'] || ''));
@@ -10396,45 +10526,66 @@ Object.assign(CommandBar.prototype, {
         const warnings = [];
         if (flags.wait) warnings.push('warning: --wait is accepted but not simulated (the simulator applies resources synchronously)');
         if (flags.atomic) warnings.push('warning: --atomic is accepted but not simulated');
-        const result = this._helmCall(method, [release, chartPath, valuesPath, { namespace, dryRun, setValues }]);
+        // Pass the catalog chart identity through to the renderer so templates,
+        // releases and history report the real chart name/version/appVersion
+        // (`nginx-15.0.0`, `1.25.3`) instead of the bundled chart's (#24).
+        const catalogChartVersion = requestedVersion || (catalogEntry ? catalogEntry.version : null);
+        const renderOptions = {
+          namespace,
+          dryRun,
+          setValues,
+          ...(catalogChartVersion ? { chartVersion: catalogChartVersion } : {}),
+          ...(catalogEntry?.name ? { chartName: catalogEntry.name } : {}),
+          ...(catalogEntry?.appVersion ? { appVersion: catalogEntry.appVersion } : {}),
+        };
+        const result = this._helmCall(method, [release, chartPath, valuesPath, renderOptions]);
         if (result.error) return result;
         const record = result.result || {};
         if (record.success === false || record.ok === false) {
           return this._err(record.message || record.error || 'helm failed');
         }
-        const chartVersion = version || (chartRepo ? '0.1.0' : record.chartVersion || '0.1.0');
-        const displayChart = chartRepo ? `${chartRepo}/${chartName}` : record.chart || chart;
-        this._helmReleasesMeta.set(release, { chart: displayChart, chartVersion, appVersion: '1.0.0' });
+        const resolvedChart = record.chart || catalogEntry?.name || chartName;
+        const resolvedVersion = requestedVersion || record.chartVersion || catalogEntry?.version || '0.1.0';
+        const resolvedAppVersion = record.appVersion || catalogEntry?.appVersion || '1.0.0';
+        this._helmReleasesMeta.set(release, {
+          chart: resolvedChart,
+          chartVersion: resolvedVersion,
+          appVersion: resolvedAppVersion,
+        });
+        const prior = this._helmStoredHistory(release) || [];
+        const previousRevision = prior.reduce((max, entry) => Math.max(max, Number(entry.revision) || 0), 0);
+        const revision = sub === 'install' ? 1 : previousRevision + 1;
         if (!dryRun) {
-          const prior = this._helmStoredHistory(release) || [];
-          const previousRevision = prior.reduce((max, entry) => Math.max(max, Number(entry.revision) || 0), 0);
-          const revision = sub === 'install' ? 1 : previousRevision + 1;
+          // Helm 3 keeps exactly one deployed revision: the previous revision
+          // becomes superseded once the new one is deployed.
+          for (const entry of prior) entry.status = 'superseded';
           this._helmPushHistory(release, {
             revision,
             updatedAt: Date.now(),
             status: 'deployed',
-            chart: displayChart,
-            chartVersion,
-            appVersion: '1.0.0',
+            chart: resolvedChart,
+            chartVersion: resolvedVersion,
+            appVersion: resolvedAppVersion,
+            chartPath,
+            valuesPath,
+            repo: chartRepo,
+            values: record.values ? JSON.parse(JSON.stringify(record.values)) : null,
             description: sub === 'install' ? 'Install complete' : 'Upgrade complete',
           });
         }
+        const status = dryRun ? (sub === 'install' ? 'pending-install' : 'pending-upgrade') : record.status || 'deployed';
         return this._ok(
           [
             ...warnings,
             `NAME: ${release}`,
-            `LAST DEPLOYED: ${new Date().toISOString()}`,
+            `LAST DEPLOYED: ${formatHelmDate(new Date())}`,
             `NAMESPACE: ${record.namespace || namespace}`,
-            `STATUS: ${dryRun ? 'pending-install' : record.status || 'deployed'}`,
-            `REVISION: ${sub === 'install' ? 1 : (this._helmStoredHistory(release)?.length || 1)}`,
-            `CHART: ${displayChart}-${chartVersion}`,
-            'APP VERSION: 1.0.0',
-            '',
-            dryRun ? '(dry run) rendered resources but did not install the release' : '',
-            record.message && typeof record.message === 'string' ? record.message : '',
-          ]
-            .filter((line) => line !== '')
-            .join('\n'),
+            `STATUS: ${status}`,
+            `REVISION: ${revision}`,
+            'TEST SUITE: None',
+            ...(dryRun ? ['', '(dry run) rendered resources but did not install the release'] : []),
+            ...(record.message && typeof record.message === 'string' ? [record.message] : []),
+          ].join('\n'),
         );
       }
       case 'uninstall':
@@ -10457,15 +10608,14 @@ Object.assign(CommandBar.prototype, {
         if (error) return error;
         const found = releases.find((entry) => (entry.name || entry.release) === release);
         if (!found) return this._err(`Error: release: "${release}" not found`);
-        const meta = this._helmReleasesMeta?.get(release) || {};
         return this._ok(
           [
             `NAME: ${release}`,
-            `LAST DEPLOYED: ${found.updatedAt ? new Date(found.updatedAt).toISOString() : found.updated || 'just now'}`,
+            `LAST DEPLOYED: ${found.updatedAt ? formatHelmDate(new Date(found.updatedAt)) : found.updated || 'just now'}`,
             `NAMESPACE: ${found.namespace || namespace}`,
             `STATUS: ${found.status || 'deployed'}`,
             `REVISION: ${found.revision || 1}`,
-            ...(meta.chart ? [`CHART: ${meta.chart}-${meta.chartVersion || '0.1.0'}`] : []),
+            'TEST SUITE: None',
           ].join('\n'),
         );
       }
@@ -10479,7 +10629,7 @@ Object.assign(CommandBar.prototype, {
         const history = this._helmHistoryFor(release, found);
         const rows = history.map((entry) => [
           String(entry.revision),
-          entry.updatedAt ? `${formatAge(entry.updatedAt)} ago` : 'just now',
+          entry.updatedAt ? formatHelmDate(new Date(entry.updatedAt)) : 'just now',
           entry.status || 'deployed',
           `${entry.chart || 'webapp'}-${entry.chartVersion || '0.1.0'}`,
           entry.appVersion || '1.0.0',
@@ -10499,16 +10649,41 @@ Object.assign(CommandBar.prototype, {
         const targetRevision = requested || history[history.length - 1]?.revision || 1;
         const targetEntry = history.find((entry) => Number(entry.revision) === Number(targetRevision));
         if (!targetEntry) return this._err(`Error: release "${release}" has no revision ${targetRevision}`);
-        const result = this._helmCall('upgradeHelm', [release, 'helm/webapp', null, { namespace }]);
+        // A rollback re-deploys revision N's chart AND its values (that is the
+        // whole point of the exercise): pass the stored chart path/version/
+        // appVersion/values back through the renderer (#24).
+        const rollbackValues = targetEntry.values ? JSON.parse(JSON.stringify(targetEntry.values)) : null;
+        const rollbackOptions = {
+          namespace,
+          ...(targetEntry.chartVersion ? { chartVersion: targetEntry.chartVersion } : {}),
+          ...(targetEntry.chart ? { chartName: targetEntry.chart } : {}),
+          ...(targetEntry.appVersion ? { appVersion: targetEntry.appVersion } : {}),
+          ...(rollbackValues ? { values: rollbackValues } : {}),
+        };
+        const result = this._helmCall('upgradeHelm', [release, targetEntry.chartPath || 'helm/webapp', targetEntry.valuesPath || null, rollbackOptions]);
         if (result.error) return result;
-        const meta = this._helmReleasesMeta?.get(release) || {};
+        const record = result.result || {};
+        if (record.success === false || record.ok === false) {
+          return this._err(record.message || record.error || 'helm rollback failed');
+        }
+        for (const entry of history) entry.status = 'superseded';
+        const revision = history.reduce((max, entry) => Math.max(max, Number(entry.revision) || 0), 0) + 1;
+        this._helmReleasesMeta.set(release, {
+          chart: targetEntry.chart,
+          chartVersion: targetEntry.chartVersion,
+          appVersion: targetEntry.appVersion,
+        });
         this._helmPushHistory(release, {
-          revision: history.reduce((max, entry) => Math.max(max, Number(entry.revision) || 0), 0) + 1,
+          revision,
           updatedAt: Date.now(),
           status: 'deployed',
-          chart: meta.chart || targetEntry.chart || 'webapp',
-          chartVersion: meta.chartVersion || targetEntry.chartVersion || '0.1.0',
-          appVersion: meta.appVersion || targetEntry.appVersion || '1.0.0',
+          chart: targetEntry.chart || 'webapp',
+          chartVersion: targetEntry.chartVersion || '0.1.0',
+          appVersion: targetEntry.appVersion || '1.0.0',
+          chartPath: targetEntry.chartPath || 'helm/webapp',
+          valuesPath: targetEntry.valuesPath || null,
+          repo: targetEntry.repo || null,
+          values: rollbackValues,
           description: `Rollback to ${targetRevision}`,
         });
         return this._ok('Rollback was a success! Happy Helming!');
@@ -10520,6 +10695,14 @@ Object.assign(CommandBar.prototype, {
     }
   },
 
+  /**
+   * `htpasswd` with the real Apache htpasswd output/semantics (issue #26):
+   *  - `Adding password for user u1` for a new entry,
+   *  - `Updating password for user u1` when the user already exists,
+   *  - `Deleting password for user u1` / `User u1 not found` for -D,
+   *  - `-c` truncates the target file and creates it when missing,
+   *  - without `-c` a missing file is an error (`use '-c' to create it`).
+   */
   _cmdHtpasswd(tokens) {
     let create = false;
     let batch = false;
@@ -10539,6 +10722,7 @@ Object.assign(CommandBar.prototype, {
       }
       positionals.push(token);
     }
+    void batch;
     const file = positionals[0] || 'htpasswd';
     const user = positionals[1];
     const password = positionals[2];
@@ -10547,44 +10731,41 @@ Object.assign(CommandBar.prototype, {
     }
     const me = this.manifestEngine;
     if (!me) return this._manifestNotReady();
+    const listedUsers = () => {
+      try {
+        return typeof me.htpasswdList === 'function' ? me.htpasswdList(file) || [] : [];
+      } catch {
+        return [];
+      }
+    };
     if (remove) {
+      if (!listedUsers().includes(user)) return this._ok(`User ${user} not found`);
       const result = this._htpasswdCall('remove', user, undefined, file);
       if (result.error) return result;
-      return this._ok('');
+      return this._ok(`Deleting password for user ${user}`);
     }
     if (!password) {
       return this._err('error: password is required when using -b\n\n  htpasswd -c -b [-B] <file> <user> <password>');
     }
-    const existingUsers = typeof me.htpasswdList === 'function' ? (() => {
-      try {
-        return me.htpasswdList(file) || [];
-      } catch {
-        return [];
-      }
-    })() : [];
+    const fileExists = this._readVirtualFile(file) !== null;
+    if (!fileExists && !create) {
+      return this._err(`htpasswd: cannot modify file ${file}; use '-c' to create it`);
+    }
+    const existingUsers = listedUsers();
     if (!create && existingUsers.includes(user) && typeof me.htpasswdUpdate === 'function') {
       const result = this._htpasswdCall('update', user, password, file, { bcrypt });
       if (result.error) return result;
-      return this._ok('');
+      return this._ok(`Updating password for user ${user}`);
     }
-    if (create && typeof me.htpasswdList === 'function') {
-      // `htpasswd -c <file>` truncates only the target file (never the cluster's
-      // root htpasswd file when a custom path like users.htpasswd is used).
-      try {
-        const entries = me.htpasswdList(file);
-        if (Array.isArray(entries)) {
-          for (const entry of entries) {
-            const name = typeof entry === 'string' ? entry : entry?.user || entry?.name;
-            if (name) me.htpasswdDelete?.(name, file);
-          }
-        }
-      } catch {
-        /* ignore */
-      }
+    if (create) {
+      // `htpasswd -c <file>` truncates ONLY the target file (never the cluster's
+      // root htpasswd file when a custom path like /tmp/users.htpasswd is used).
+      const truncated = this._writeVirtualFile(file, '');
+      if (truncated.error) return truncated;
     }
     const result = this._htpasswdCall('add', user, password, file, { bcrypt });
     if (result.error) return result;
-    return this._ok('');
+    return this._ok(`Adding password for user ${user}`);
   },
 
   _cmdHelp(tokens) {
@@ -11468,8 +11649,16 @@ Object.assign(CommandBar.prototype, {
       const namespaceError = this._requireNamespace(namespace);
       if (namespaceError) return namespaceError;
     }
-    const { kind, name } = this._resolveRef(positionals);
-    if (!kind) return this._resourceTypeError(positionals[0]);
+    let { kind, name } = this._resolveRef(positionals);
+    let consumed = 2;
+    if (!kind) {
+      // Real `oc rsh <pod>` treats a bare name as a Pod (same as `oc exec`).
+      const barePod = this._findResource('Pod', positionals[0], { namespace, explicitNamespace, allowPrefix: false });
+      if (!barePod) return this._resourceTypeError(positionals[0]);
+      kind = 'Pod';
+      name = positionals[0];
+      consumed = 1;
+    }
     if (!name) return this._usageError('rsh', 'resource name is required\n\n  oc rsh deployment/<name>');
     const pod = this._podForResource(kind, name, namespace, explicitNamespace);
     if (!pod) return this._err(`error: pods "${kind === 'Pod' ? name : `${name}-`}" not found`);
@@ -11478,11 +11667,15 @@ Object.assign(CommandBar.prototype, {
     if (containers.length && !containers.some((container) => container.name === containerName)) {
       return this._err(`Error from server (BadRequest): container "${containerName}" is not valid for pod "${pod.metadata?.name}"`);
     }
-    const command = positionals.slice(2).join(' ').trim();
-    const lines = [
-      `Defaulting container name to "${containerName}".`,
-      `Use 'oc describe pod/${pod.metadata?.name} -n ${pod.metadata?.namespace}' to see all of the containers in this pod.`,
-    ];
+    const command = positionals.slice(consumed).join(' ').trim();
+    // Real oc only defaults (and announces) a container for multi-container pods.
+    const containerSpecified = Boolean(flags.container && flags.container !== true);
+    const lines = containers.length > 1 && !containerSpecified
+      ? [
+          `Defaulting container name to "${containerName}".`,
+          `Use 'oc describe pod/${pod.metadata?.name} -n ${pod.metadata?.namespace}' to see all of the containers in this pod.`,
+        ]
+      : [];
     if (command) {
       const output = this._simulateExecCommand(command, pod, containerName);
       return this._ok([...lines, ...output].join('\n'));
