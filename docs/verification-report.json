@@ -1,19 +1,19 @@
 {
-  "timestamp": "2026-11-04T16:19:20.435Z",
+  "timestamp": "2026-11-04T18:09:39.886Z",
   "environment": {
     "node": "v26.10.0",
     "chrome": "Chrome/156.0.8078.79",
-    "baseUrl": "http://127.0.0.1:37433",
+    "baseUrl": "http://127.0.0.1:39045",
     "viewport": {
       "width": 1600,
       "height": 900
     },
     "puppeteerCore": "/tmp/verify-tools",
-    "startedAt": "2026-11-04T16:15:08.065Z",
-    "durationSeconds": 252
+    "startedAt": "2026-11-04T18:04:45.380Z",
+    "durationSeconds": 295
   },
   "summary": {
-    "passes": 566,
+    "passes": 685,
     "failures": 0,
     "warnings": 0,
     "consoleErrors": 0,
@@ -52,22 +52,22 @@
       "warnings": 0
     },
     "cli": {
-      "passes": 142,
+      "passes": 217,
       "failures": 0,
       "warnings": 0
     },
     "ui": {
-      "passes": 28,
+      "passes": 29,
       "failures": 0,
       "warnings": 0
     },
     "campaign": {
-      "passes": 135,
+      "passes": 147,
       "failures": 0,
       "warnings": 0
     },
     "challenges": {
-      "passes": 77,
+      "passes": 108,
       "failures": 0,
       "warnings": 0
     },
@@ -101,74 +101,74 @@
       "path": "screenshot.png",
       "width": 1600,
       "height": 900,
-      "bytes": 829470
+      "bytes": 829427
     },
     "ogImage": {
       "path": "og-image.png",
       "width": 1200,
       "height": 630,
-      "bytes": 190647
+      "bytes": 190717
     },
     "screenshots": [
       {
         "path": "docs/screenshots/menu.png",
         "width": 1600,
         "height": 900,
-        "bytes": 323620
+        "bytes": 323761
       },
       {
         "path": "docs/screenshots/exam-prep.png",
         "width": 1600,
         "height": 900,
-        "bytes": 205843
+        "bytes": 206134
       },
       {
         "path": "docs/screenshots/sandbox.png",
         "width": 1600,
         "height": 900,
-        "bytes": 828645
+        "bytes": 827766
       },
       {
         "path": "screenshot.png",
         "width": 1600,
         "height": 900,
-        "bytes": 829470
+        "bytes": 829427
       },
       {
         "path": "docs/screenshots/files-panel.png",
         "width": 1600,
         "height": 900,
-        "bytes": 230168
+        "bytes": 230203
       },
       {
         "path": "docs/screenshots/campaign-level-1.png",
         "width": 1600,
         "height": 900,
-        "bytes": 481274
+        "bytes": 486215
       },
       {
         "path": "docs/screenshots/regressions-minimap-collapsed.png",
         "width": 1600,
         "height": 900,
-        "bytes": 810704
+        "bytes": 810017
       },
       {
         "path": "docs/screenshots/regressions-campaign-restart.png",
         "width": 1600,
         "height": 900,
-        "bytes": 481284
+        "bytes": 485986
       },
       {
         "path": "docs/screenshots/draw.png",
         "width": 1600,
         "height": 900,
-        "bytes": 488617
+        "bytes": 488442
       },
       {
         "path": "og-image.png",
         "width": 1200,
         "height": 630,
-        "bytes": 190647
+        "bytes": 190717
       }
     ]
   },
@@ -815,23 +815,139 @@
     },
     {
       "section": "cli",
-      "name": "cli: nginx restricted-v2 trap deployment created"
+      "name": "cli: exec single-container pod prints no container-defaulting hint"
     },
     {
       "section": "cli",
-      "name": "cli: nginx:latest is rejected by restricted-v2 (RS FailedCreate)"
+      "name": "cli: rsh single-container pod prints no container-defaulting hint"
     },
     {
       "section": "cli",
-      "name": "cli: restricted-v2 rejection creates no Pod"
+      "name": "cli: create multi-container Pod"
     },
     {
       "section": "cli",
-      "name": "cli: restricted-v2 rejection records a FailedCreate event"
+      "name": "cli: exec multi-container pod still prints the container-defaulting hint"
+    },
+    {
+      "section": "cli",
+      "name": "cli: exec -c suppresses the container-defaulting hint"
+    },
+    {
+      "section": "cli",
+      "name": "cli: describe | sed -n '1,5p' echoes the first 5 lines"
+    },
+    {
+      "section": "cli",
+      "name": "cli: describe | sed -n 1,40p (unquoted) works in a pipe"
+    },
+    {
+      "section": "cli",
+      "name": "cli: sed s/// substitutes in a pipe"
+    },
+    {
+      "section": "cli",
+      "name": "cli: create nginx-lab project"
+    },
+    {
+      "section": "cli",
+      "name": "cli: switch back to the demo project"
+    },
+    {
+      "section": "cli",
+      "name": "cli: nginx:latest deployment is admitted under restricted-v2"
+    },
+    {
+      "section": "cli",
+      "name": "cli: nginx:latest pod is ADMITTED (pod exists, no RS FailedCreate)"
+    },
+    {
+      "section": "cli",
+      "name": "cli: admitted nginx pod runs under scc=restricted-v2"
+    },
+    {
+      "section": "cli",
+      "name": "cli: nginx pod crash-loops (CrashLoopBackOff, restarts > 0)"
+    },
+    {
+      "section": "cli",
+      "name": "cli: crash-looping nginx pod stays Running (admission did not reject it)"
+    },
+    {
+      "section": "cli",
+      "name": "cli: nginx container lastState records the crash (exit code 1)"
+    },
+    {
+      "section": "cli",
+      "name": "cli: oc get pods shows CrashLoopBackOff"
+    },
+    {
+      "section": "cli",
+      "name": "cli: nginx crash log is the permission-denied emerge"
+    },
+    {
+      "section": "cli",
+      "name": "cli: nginx deployment reports Available False MinimumReplicasUnavailable"
+    },
+    {
+      "section": "cli",
+      "name": "cli: apply explicit runAsUser:0 deployment"
+    },
+    {
+      "section": "cli",
+      "name": "cli: explicit runAsUser:0 still gets RS FailedCreate with no Pod"
+    },
+    {
+      "section": "cli",
+      "name": "cli: explicit root denial message is the SCC one"
+    },
+    {
+      "section": "cli",
+      "name": "cli: explicit violation generated >= 10 FailedCreate retries"
     },
     {
       "section": "cli",
       "name": "cli: events --field-selector reason=FailedCreate"
+    },
+    {
+      "section": "cli",
+      "name": "cli: events table keeps LAST SEEN/TYPE/REASON/OBJECT/MESSAGE header"
+    },
+    {
+      "section": "cli",
+      "name": "cli: FailedCreate retries aggregate into exactly one row"
+    },
+    {
+      "section": "cli",
+      "name": "cli: aggregated FailedCreate row carries (xN over …) with N >= 10"
+    },
+    {
+      "section": "cli",
+      "name": "cli: create nginx-sa"
+    },
+    {
+      "section": "cli",
+      "name": "cli: grant anyuid to nginx-sa"
+    },
+    {
+      "section": "cli",
+      "name": "cli: point ngx at nginx-sa"
+    },
+    {
+      "section": "cli",
+      "name": "cli: anyuid service-account fix path leaves exactly one Running/Ready pod"
+    },
+    {
+      "section": "cli",
+      "name": "cli: fixed nginx pod runs under scc=anyuid"
+    },
+    {
+      "section": "cli",
+      "name": "cli: fixed nginx deployment reports Available True MinimumReplicasAvailable"
+    },
+    {
+      "section": "cli",
+      "name": "cli: oc get deployment ngx shows 1/1 ready"
     },
     {
       "section": "cli",
@@ -876,6 +992,110 @@
     {
       "section": "cli",
       "name": "cli: helm uninstall"
+    },
+    {
+      "section": "cli",
+      "name": "cli: create helm-lab project"
+    },
+    {
+      "section": "cli",
+      "name": "cli: switch back to the demo project"
+    },
+    {
+      "section": "cli",
+      "name": "cli: helm repo add bitnami"
+    },
+    {
+      "section": "cli",
+      "name": "cli: helm install bitnami/nginx 15.0.0"
+    },
+    {
+      "section": "cli",
+      "name": "cli: helm install output has the real shape (no CHART: line)"
+    },
+    {
+      "section": "cli",
+      "name": "cli: helm upgrade bitnami/nginx 15.1.0"
+    },
+    {
+      "section": "cli",
+      "name": "cli: helm upgrade output has no CHART: line"
+    },
+    {
+      "section": "cli",
+      "name": "cli: helm rollback web 1"
+    },
+    {
+      "section": "cli",
+      "name": "cli: helm history header"
+    },
+    {
+      "section": "cli",
+      "name": "cli: helm history has exactly 3 revisions"
+    },
+    {
+      "section": "cli",
+      "name": "cli: helm history rev 1 is superseded nginx-15.0.0 1.25.3 Install complete"
+    },
+    {
+      "section": "cli",
+      "name": "cli: helm history rev 2 is superseded nginx-15.1.0 1.25.3 Upgrade complete"
+    },
+    {
+      "section": "cli",
+      "name": "cli: helm history rev 3 is deployed nginx-15.0.0 Rollback to 1 (rollback re-deploys rev 1 chart)"
+    },
+    {
+      "section": "cli",
+      "name": "cli: only the latest helm history revision is deployed"
+    },
+    {
+      "section": "cli",
+      "name": "cli: helm history CHART column has no repo prefix"
+    },
+    {
+      "section": "cli",
+      "name": "cli: helm rollback re-applies the revision 1 chart to the workload"
+    },
+    {
+      "section": "cli",
+      "name": "cli: helm list CHART/APP VERSION match the deployed revision"
+    },
+    {
+      "section": "cli",
+      "name": "cli: create pull-lab project"
+    },
+    {
+      "section": "cli",
+      "name": "cli: switch back to the demo project"
+    },
+    {
+      "section": "cli",
+      "name": "cli: apply pullapp deployment"
+    },
+    {
+      "section": "cli",
+      "name": "cli: :latest image pulls and the Deployment becomes available"
+    },
+    {
+      "section": "cli",
+      "name": "cli: oc set image to :v9-nope"
+    },
+    {
+      "section": "cli",
+      "name": "cli: :v9-nope (failure token inside the tag) is ImagePullBackOff"
+    },
+    {
+      "section": "cli",
+      "name": "cli: oc get pods shows ImagePullBackOff"
+    },
+    {
+      "section": "cli",
+      "name": "cli: recover pullapp to :latest"
+    },
+    {
+      "section": "cli",
+      "name": "cli: :latest pulls again after the image-pull failure (recovery)"
     },
     {
       "section": "cli",
@@ -1043,6 +1263,34 @@
     },
     {
       "section": "cli",
+      "name": "cli: htpasswd -c -B -b prints Adding password for user u1"
+    },
+    {
+      "section": "cli",
+      "name": "cli: htpasswd writes a bcrypt $2y$ entry"
+    },
+    {
+      "section": "cli",
+      "name": "cli: htpasswd updates print Updating password for user u1"
+    },
+    {
+      "section": "cli",
+      "name": "cli: htpasswd adds a second user"
+    },
+    {
+      "section": "cli",
+      "name": "cli: htpasswd -D prints Deleting password for user u2"
+    },
+    {
+      "section": "cli",
+      "name": "cli: htpasswd -D on a missing user prints User u2 not found"
+    },
+    {
+      "section": "cli",
+      "name": "cli: htpasswd without -c on a missing file errors like real htpasswd"
+    },
+    {
+      "section": "cli",
       "name": "auth: create htpasswd secret"
     },
     {
@@ -1128,6 +1376,58 @@
     {
       "section": "cli",
       "name": "cli: oc delete subscription"
+    },
+    {
+      "section": "cli",
+      "name": "cli: create olm-lab project"
+    },
+    {
+      "section": "cli",
+      "name": "cli: switch back to the demo project"
+    },
+    {
+      "section": "cli",
+      "name": "cli: olm-lab OperatorGroup + a healthy and an unknown-package Subscription applied"
+    },
+    {
+      "section": "cli",
+      "name": "cli: both Subscriptions in a namespace report ResolutionFailed ConstraintsNotSatisfiable"
+    },
+    {
+      "section": "cli",
+      "name": "cli: ResolutionFailed reason is ConstraintsNotSatisfiable for every Subscription"
+    },
+    {
+      "section": "cli",
+      "name": "cli: an unresolvable namespace creates no CSV/InstallPlan"
+    },
+    {
+      "section": "cli",
+      "name": "cli: oc describe subscription shows the namespace resolution failure"
+    },
+    {
+      "section": "cli",
+      "name": "cli: create olm-ok project"
+    },
+    {
+      "section": "cli",
+      "name": "cli: switch back to the demo project"
+    },
+    {
+      "section": "cli",
+      "name": "cli: apply olm-ok OperatorGroup"
+    },
+    {
+      "section": "cli",
+      "name": "cli: healthy single-Subscription namespace created"
+    },
+    {
+      "section": "cli",
+      "name": "cli: a healthy single-Subscription namespace still reaches CSV Succeeded"
+    },
+    {
+      "section": "cli",
+      "name": "cli: healthy Subscription has no ResolutionFailed condition"
     },
     {
       "section": "cli",
@@ -1276,6 +1576,10 @@
     {
       "section": "ui",
       "name": "ui: Esc opens the pause overlay instead of discarding the run"
+    },
+    {
+      "section": "ui",
+      "name": "ui: Esc pause keeps the run (main menu stays hidden)"
     },
     {
       "section": "ui",
@@ -1858,6 +2162,54 @@
       "name": "campaign: level 20 objectives panel populated"
     },
     {
+      "section": "campaign",
+      "name": "campaign gates: level 3 starts"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign gates: level 3 has a clusterHealth objective"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign gates: L3 clusterHealth is incomplete before the incident fires"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign gates: L3 triggerTime incident fires"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign gates: L3 clusterHealth stays incomplete while the incident is active"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign gates: L3 clusterHealth completes after the incident is resolved"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign gates: L3 cluster health is restored to >= 90"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign gates: level 20 starts"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign gates: L20 resolve objectives are incomplete at level start"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign gates: L20 scheduled incidents fire"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign gates: L20 resolve objectives stay incomplete while the incidents are active"
+    },
+    {
+      "section": "campaign",
+      "name": "campaign gates: L20 resolve objectives tick only after both incidents are resolved"
+    },
+    {
       "section": "challenges",
       "name": "challenges: challenge 1 starts"
     },
@@ -2164,6 +2516,130 @@
     {
       "section": "challenges",
       "name": "challenges: countdown runs again after Files closes"
+    },
+    {
+      "section": "challenges",
+      "name": "challenges: timed lab 02 starts"
+    },
+    {
+      "section": "challenges",
+      "name": "challenges: timed lab 02 is playing"
+    },
+    {
+      "section": "challenges",
+      "name": "challenges: lab 02 CrashLoopBackOff incident is active"
+    },
+    {
+      "section": "challenges",
+      "name": "challenges: lab 02 uptime objective is incomplete while the triggerTime:0 incident is active"
+    },
+    {
+      "section": "challenges",
+      "name": "challenges: lab 02 incident exposes a real crash-looping target Pod"
+    },
+    {
+      "section": "challenges",
+      "name": "challenges: lab 02 crash-looping pods are bound to a real Node (spec.nodeName)"
+    },
+    {
+      "section": "challenges",
+      "name": "challenges: oc get pods -o wide shows a real NODE column (not <none>)"
+    },
+    {
+      "section": "challenges",
+      "name": "challenges: lab 02 previous logs show the crash output"
+    },
+    {
+      "section": "challenges",
+      "name": "#23: describe pod Image matches the live spec image"
+    },
+    {
+      "section": "challenges",
+      "name": "#23: describe pod shows a real Node (not <none>/<none>)"
+    },
+    {
+      "section": "challenges",
+      "name": "#23: describe pod hides simulator-internal annotations"
+    },
+    {
+      "section": "challenges",
+      "name": "#23: oc get pod -o yaml hides simulator-internal annotations"
+    },
+    {
+      "section": "challenges",
+      "name": "#23: oc get pods -o yaml hides simulator-internal annotations"
+    },
+    {
+      "section": "challenges",
+      "name": "#23: describe deployment includes a real Pod Template section"
+    },
+    {
+      "section": "challenges",
+      "name": "#23: describe deployment Pod Template shows the container image"
+    },
+    {
+      "section": "challenges",
+      "name": "#23: describe deployment shows NewReplicaSet <hash> (3/3 replicas created)"
+    },
+    {
+      "section": "challenges",
+      "name": "#23: describe deployment reports Available False MinimumReplicasUnavailable while crash-looping"
+    },
+    {
+      "section": "challenges",
+      "name": "#23: describe deployment hides simulator-internal annotations"
+    },
+    {
+      "section": "challenges",
+      "name": "#23: oc get deployment -o yaml hides simulator-internal internals"
+    },
+    {
+      "section": "challenges",
+      "name": "#23: failing Deployment status is not Pending and carries an attention status"
+    },
+    {
+      "section": "challenges",
+      "name": "challenges: lab 02 investigate logs"
+    },
+    {
+      "section": "challenges",
+      "name": "challenges: lab 02 investigate describe"
+    },
+    {
+      "section": "challenges",
+      "name": "challenges: lab 02 investigate objective ticks after logs/describe"
+    },
+    {
+      "section": "challenges",
+      "name": "challenges: lab 02 fix image"
+    },
+    {
+      "section": "challenges",
+      "name": "#22: timed lab 02 completes after the documented image fix"
+    },
+    {
+      "section": "challenges",
+      "name": "#22: timed lab 02 reaches 4/4 objectives complete"
+    },
+    {
+      "section": "challenges",
+      "name": "#22: \"Restore cluster health to at least 90%\" ticks after the fix (triggerTime:0 baseline)"
+    },
+    {
+      "section": "challenges",
+      "name": "#22: lab 02 incident cleared and cluster health >= 90"
+    },
+    {
+      "section": "challenges",
+      "name": "#22: payment-service rolls out 3/3 Ready on real Nodes"
+    },
+    {
+      "section": "challenges",
+      "name": "#23: recovered Deployment reports Available True MinimumReplicasAvailable"
+    },
+    {
+      "section": "challenges",
+      "name": "#23: healthy Deployment status reads Running with no attention suffix"
     },
     {
       "section": "followup",
