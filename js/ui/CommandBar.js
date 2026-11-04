@@ -63,6 +63,8 @@ import {
   RHCOS_OS_IMAGE,
 } from '../data/platformVersions.js';
 import { parseYaml } from '../engine/YamlParser.js';
+import { validateCronSchedule } from '../resources/WorkloadResources.js';
+import { ShellTools, SHELL_COMMANDS, SHELL_FILE_COMMANDS } from './ShellTools.js';
 
 // ────────────────────────────────────────────────────────────────────────────
 // Constants
@@ -142,7 +144,14 @@ export const BASE_COMMANDS = {
   adm: { summary: 'Administrative commands (policy, groups, nodes, top, templates, must-gather)', usage: 'oc adm <policy|groups|cordon|uncordon|drain|taint|top|create-bootstrap-project-template|must-gather|inspect> ...' },
   auth: { summary: 'Inspect authorization', usage: 'oc auth can-i <verb> <resource> [--as=<user>] [--list]' },
   debug: { summary: 'Launch a debug shell for a node or workload', usage: 'oc debug <node|deployment>/<name>' },
-  helm: { summary: 'Install and manage Helm charts (OpenShift Helm support)', usage: 'helm install|upgrade|list|uninstall ...' },
+  helm: { summary: 'Install and manage Helm charts (OpenShift Helm support)', usage: 'helm install|upgrade|list|uninstall|history|rollback|repo|search ...' },
+  policy: { summary: 'Manage authorization policy', usage: 'oc policy add-role-to-user <role> <user> [-n <project>]  |  oc policy add-role-to-group ...' },
+  image: { summary: 'Useful commands for managing images', usage: 'oc image info <image> [-o json]' },
+  rsh: { summary: 'Start a shell session in a container', usage: 'oc rsh [-c <container>] (POD | TYPE/NAME) [COMMAND]' },
+  cp: { summary: 'Copy files between a local filesystem and a pod', usage: 'oc cp <local-path> <pod>:<path>  |  oc cp <pod>:<path> <local-path>' },
+  wait: { summary: 'Experimental: Wait for a specific condition on one or many resources', usage: 'oc wait --for=condition=Ready pod/<name> --timeout=60s' },
+  diff: { summary: 'Diff the live version against a would-be applied version', usage: 'oc diff -f <file> [-n <project>]' },
+  autoscale: { summary: 'Autoscale a deployment, replica set, replication controller or stateful set', usage: 'oc autoscale <resource>/<name> --min=<n> --max=<n> [--cpu-percent=<percent>]' },
   htpasswd: { summary: 'Manage the virtual HTPasswd identity-provider file', usage: 'htpasswd [-c|-b|-D] <file> <user> [password]' },
   config: { summary: 'Modify kubeconfig files (contexts)', usage: 'oc config <current-context|view|get-contexts>' },
   version: { summary: 'Print the client and server versions', usage: 'oc version' },
@@ -160,7 +169,7 @@ const MUTATING_COMMANDS = new Set([
   'create', 'apply', 'replace', 'delete', 'scale', 'edit', 'label', 'annotate',
   'patch', 'set', 'rollout', 'expose', 'run', 'exec', 'tag', 'import-image',
   'new-app', 'new-build', 'start-build', 'cancel-build', 'process', 'adm',
-  'login', 'logout', 'new-project', 'htpasswd',
+  'login', 'logout', 'new-project', 'htpasswd', 'policy', 'autoscale', 'cp', 'rsh',
 ]);
 
 /** Virtual `oc get` views implemented locally that still target a namespace. */
@@ -173,7 +182,7 @@ const NAMESPACED_VIRTUAL_GET_TOKENS = new Set([
 
 /** Namespace-scoped completion subcommands. */
 const SUBCOMMANDS = {
-  set: ['env', 'image', 'resources', 'probe', 'serviceaccount', 'triggers', 'selector', 'volumes', 'data'],
+  set: ['env', 'image', 'resources', 'probe', 'serviceaccount', 'triggers', 'selector', 'volumes', 'volume', 'data'],
   adm: ['policy', 'groups', 'cordon', 'uncordon', 'drain', 'taint', 'top', 'create-bootstrap-project-template', 'must-gather', 'inspect'],
   'adm policy': [
     'add-role-to-user', 'add-role-to-group', 'add-cluster-role-to-user', 'add-cluster-role-to-group',
@@ -185,12 +194,15 @@ const SUBCOMMANDS = {
   auth: ['can-i'],
   rollout: ['status', 'history', 'undo', 'restart', 'pause', 'resume'],
   expose: ['svc', 'service', 'deployment', 'deploy'],
-  create: ['route', 'secret', 'configmap', 'deployment', 'service', 'quota', 'limitrange', 'clusterquota', 'user', 'group', 'serviceaccount', 'rolebinding', 'clusterrolebinding', 'job', 'cronjob', 'project', 'namespace', 'template'],
+  create: ['route', 'secret', 'configmap', 'deployment', 'service', 'quota', 'limitrange', 'clusterquota', 'user', 'group', 'serviceaccount', 'rolebinding', 'clusterrolebinding', 'role', 'clusterrole', 'job', 'cronjob', 'project', 'namespace', 'template', 'token'],
   'create route': ['edge', 'passthrough', 'reencrypt'],
   'create secret': ['generic', 'tls', 'docker-registry'],
   'create service': ['clusterip', 'nodeport', 'loadbalancer', 'externalname'],
   config: ['current-context', 'view', 'get-contexts', 'use-context'],
-  helm: ['install', 'upgrade', 'list', 'uninstall', 'status'],
+  helm: ['install', 'upgrade', 'list', 'uninstall', 'status', 'history', 'rollback', 'repo', 'search'],
+  'helm repo': ['add', 'list', 'remove', 'update'],
+  policy: ['add-role-to-user', 'add-role-to-group', 'remove-role-from-user', 'remove-role-from-group', 'remove-user-from-project', 'remove-group-from-project', 'who-can', 'scc-review', 'scc-subject-review'],
+  image: ['info'],
 };
 
 /** Flag completion hints per base command. */
@@ -202,7 +214,7 @@ const COMMAND_FLAGS = {
   apply: ['-f', '--filename', '-k', '--kustomize', '-n', '--namespace', '--dry-run', '--overwrite', '--validate'],
   delete: ['-f', '--filename', '-k', '--kustomize', '-n', '--namespace', '-l', '--selector', '--all', '--force', '--grace-period'],
   scale: ['--replicas', '--current-replicas', '--resource-version', '-n', '--namespace'],
-  set: ['-n', '--namespace', '-c', '--containers', '--all', '--overwrite', '-e', '--env', '--from', '--prefix', '--remove', '--list', '--limits', '--requests', '--liveness', '--readiness', '--get-url', '--open-tcp', '--remove', '--add', '--name', '--mount-path', '--claim-name', '--type', '--default-volume-mode', '--from-file', '--from-literal'],
+  set: ['-n', '--namespace', '-c', '--containers', '--all', '--overwrite', '-e', '--env', '--from', '--prefix', '--remove', '--list', '--limits', '--requests', '--liveness', '--readiness', '--get-url', '--open-tcp', '--add', '--name', '-m', '--mount-path', '--sub-path', '-t', '--type', '--claim-name', '--claim-size', '--claim-mode', '--claim-class', '--configmap-name', '--secret-name', '--read-only', '--default-mode', '--from-file', '--from-literal'],
   extract: ['-n', '--namespace', '--to', '--keys', '--confirm'],
   'new-app': ['--name', '--image', '--image-stream', '--code', '--template', '-f', '--file', '-e', '--env', '-p', '--param', '--context-dir', '--source-secret', '-n', '--namespace', '--strategy', '--build'],
   'new-build': ['--name', '--code', '--image-stream', '--strategy', '--context-dir', '-n', '--namespace'],
@@ -219,6 +231,14 @@ const COMMAND_FLAGS = {
   'import-image': ['--from', '--confirm', '--all', '--scheduled', '-n', '--namespace'],
   tag: ['--scheduled', '--reference-policy', '--source', '-n', '--namespace'],
   login: ['-u', '--username', '-p', '--password', '--server', '--token'],
+  policy: ['-n', '--namespace', '-z', '--serviceaccount', '--rolebinding-name'],
+  image: ['-o', '--output', '--filter-by-os', '--dir', '--registry-config', '--insecure'],
+  rsh: ['-c', '--container', '-n', '--namespace', '-t', '--tty', '-T', '--no-tty', '--shell'],
+  cp: ['-c', '--container', '-n', '--namespace', '--no-preserve', '--retries'],
+  wait: ['--for', '--timeout', '-n', '--namespace', '-l', '--selector', '--all'],
+  diff: ['-f', '--filename', '-n', '--namespace', '--server-side', '--field-manager'],
+  autoscale: ['--min', '--max', '--cpu-percent', '--name', '-n', '--namespace', '--dry-run'],
+  helm: ['-n', '--namespace', '-f', '--values', '--set', '--version', '--repo', '--dry-run', '--wait', '--atomic', '--history-max'],
 };
 
 /** Plural resource names (used in completion, output and error messages). */
@@ -256,6 +276,9 @@ const KIND_REF_NAMES = {
   Group: 'group.user.openshift.io', Identity: 'identity.user.openshift.io', OAuth: 'oauth.config.openshift.io',
   Subscription: 'subscription.operators.coreos.com', ClusterOperator: 'clusteroperator.config.openshift.io',
   ClusterVersion: 'clusterversion.config.openshift.io',
+  OperatorGroup: 'operatorgroup.operators.coreos.com', InstallPlan: 'installplan.operators.coreos.com',
+  ClusterServiceVersion: 'clusterserviceversion.operators.coreos.com',
+  PackageManifest: 'packagemanifest.packages.operators.coreos.com', MetalLB: 'metallb.metallb.io',
 };
 
 /** Default images used by `oc new-app`/`oc new-build` when none is supplied. */
@@ -290,8 +313,9 @@ const COLUMN_OVERRIDES = {
 const KNOWN_LONG_FLAGS = new Set([
   'active-deadline-seconds', 'add', 'all', 'all-containers', 'all-namespaces', 'allow',
   'allocate-load-balancer-ip', 'api-group', 'as', 'as-group', 'audio', 'backoff-limit', 'build',
-  'builder-image', 'ca-cert', 'cascade', 'cert', 'claim-name', 'cluster-ip', 'clusterrole', 'code',
-  'command', 'commit', 'completions', 'config-map', 'confirm', 'container', 'containers', 'context',
+  'builder-image', 'ca-cert', 'cascade', 'cert', 'claim-class', 'claim-mode', 'claim-name',
+  'claim-size', 'cluster-ip', 'clusterrole', 'code',
+  'command', 'commit', 'completions', 'configmap-name', 'confirm', 'container', 'containers', 'context',
   'context-dir', 'current-replicas', 'default', 'default-mode', 'default-request',
   'delete-emptydir-data', 'description', 'dest-ca-cert', 'dest-dir', 'destination',
   'destination-ca-cert', 'display-name', 'docker-email', 'docker-password', 'docker-server',
@@ -306,10 +330,10 @@ const KNOWN_LONG_FLAGS = new Set([
   'no-cache', 'no-headers', 'no-proxy', 'node', 'now', 'open-tcp', 'orphan', 'output', 'overwrite',
   'parallelism', 'param', 'param-file', 'parameters', 'password', 'patch', 'path', 'persist',
   'port', 'prefix', 'previous', 'progress-deadline', 'project-annotation-selector',
-  'project-label-selector', 'publish-not-ready-addresses', 'readiness', 'recursive',
+  'project-label-selector', 'publish-not-ready-addresses', 'read-only', 'readiness', 'recursive',
   'reference-policy', 'remove', 'replicas', 'repo', 'request-timeout', 'requests', 'resource',
   'resource-version', 'restart', 'revision', 'role', 'rolebinding-name', 'schedule', 'scheduled',
-  'scopes', 'secret', 'selector', 'server', 'service', 'serviceaccount', 'session-affinity', 'set',
+  'scopes', 'secret-name', 'selector', 'server', 'service', 'serviceaccount', 'session-affinity', 'set',
   'show-console', 'show-context', 'show-labels', 'show-server', 'show-token', 'since', 'since-time',
   'sort-by', 'source', 'source-secret', 'stdin', 'strategy', 'sub-path', 'subresource', 'suspend',
   'tail', 'target-port', 'template', 'timeout', 'timestamps', 'to-revision', 'tty', 'type', 'user',
@@ -323,11 +347,15 @@ const KNOWN_LONG_FLAGS = new Set([
   'manual', 'overrides', 'paused', 'period-seconds', 'pod-selector', 'prune', 'quiet', 'raw',
   'reorder', 'rm', 'server-side', 'short', 'show-events', 'startup', 'state', 'tcp', 'timezone',
   'to', 'to-namespace', 'token', 'types', 'udp', 'keys', 'resource-name',
+  // #11 follow-up commands (policy/image/rsh/cp/wait/diff/autoscale/helm)
+  'audience', 'bound-object-kind', 'bound-object-name', 'bound-object-uid', 'cpu-percent',
+  'filter-by-os', 'history-max', 'insecure', 'no-preserve', 'no-tty', 'registry-config',
+  'retries', 'shell', 'keep-local', 'no-headers', 'template', 'output',
 ]);
 
 /** Short flags the simulated `oc` implements (unknown single-letter flags error). */
 const KNOWN_SHORT_FLAGS = new Set([
-  'A', 'B', 'D', 'F', 'H', 'b', 'c', 'e', 'f', 'i', 'k', 'l', 'n', 'o', 'p', 'q', 'r', 't', 'u', 'w', 'z',
+  'A', 'B', 'D', 'F', 'H', 'R', 'T', 'b', 'c', 'e', 'f', 'i', 'k', 'l', 'm', 'n', 'o', 'p', 'q', 'r', 't', 'u', 'w', 'z',
 ]);
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -587,6 +615,19 @@ export function resolveKindToken(token) {
   if (direct) return direct;
   if (text.endsWith('es') && normalizeKind(text.slice(0, -2))) return normalizeKind(text.slice(0, -2));
   if (text.endsWith('s') && normalizeKind(text.slice(0, -1))) return normalizeKind(text.slice(0, -1));
+  // Real oc accepts `<resource>.<group>` (`deployment.apps`, `clusterrolebinding.rbac`,
+  // `route.route.openshift.io`). Strip group suffixes until a kind resolves; never
+  // map the project.config singleton onto Project.
+  if (text.includes('.') && !/^projects?\.config\./.test(text)) {
+    const segments = text.split('.');
+    for (let i = segments.length - 1; i >= 1; i -= 1) {
+      const candidate = segments.slice(0, i).join('.');
+      const kind = normalizeKind(candidate) || extra[candidate];
+      if (kind) return kind;
+      if (candidate.endsWith('es') && normalizeKind(candidate.slice(0, -2))) return normalizeKind(candidate.slice(0, -2));
+      if (candidate.endsWith('s') && normalizeKind(candidate.slice(0, -1))) return normalizeKind(candidate.slice(0, -1));
+    }
+  }
   return null;
 }
 
@@ -1476,6 +1517,10 @@ export class CommandBar {
     this._outputLines = [];
     this._lastResult = null;
     this._stdinCounter = 0;
+    /** Simulated bash layer (issue #11): cat/echo/heredoc/grep/vim/skopeo… */
+    this.shellTools = new ShellTools(this);
+    /** Set by the last authorizeCommand gate call (#2). */
+    this._gate = null;
 
     this._boundKeydown = this._onGlobalKeydown.bind(this);
     this._boundShowCommandBar = () => this.show();
@@ -1695,10 +1740,15 @@ export class CommandBar {
       return filter([...new Set(flags)]);
     };
 
-    if (prior.length === 0) return filter(Object.keys(BASE_COMMANDS));
+    if (prior.length === 0) return filter([...new Set([...Object.keys(BASE_COMMANDS), ...SHELL_COMMANDS])]);
     if (word.startsWith('-')) {
       if (cmd === 'adm' && prior[1] === 'policy') return flagList(['-z', '-n', '--rolebinding-name']);
       return flagList();
+    }
+    const shellCommandLead = (prior[0] || '').toLowerCase();
+    if (SHELL_FILE_COMMANDS.has(shellCommandLead) && !word.startsWith('-')) {
+      const files = filter(this._manifestFileList());
+      if (files.length) return files;
     }
     if (current === '') {
       const previous = prior[prior.length - 1];
@@ -1825,11 +1875,16 @@ export class CommandBar {
     this._pushHistory(raw);
     this._clearInput();
 
-    const { command: normalized, usedKubectl } = stripCommandPrefix(raw);
+    // Shell preprocessing: heredocs (`cat <<EOF > file`) and `$(command)`
+    // substitution run before the oc pipeline so `oc create … --from-literal=$(openssl rand -hex 16)` works.
+    const preprocessed = this.shellTools?.preprocess
+      ? this.shellTools.preprocess(raw)
+      : { command: raw, stdin: null, display: raw };
+    const { command: normalized, usedKubectl, prefixed } = stripCommandPrefix(preprocessed.command);
     const firstTokens = tokenizeCommand(normalized);
     const baseCommand = (firstTokens[0] || '').toLowerCase();
 
-    this._echoCommand(normalized, usedKubectl);
+    this._echoCommand(preprocessed.display ?? raw, normalized, usedKubectl, prefixed);
     this._emit('command:raw', { command: normalized, raw, baseCommand });
 
     // Easter eggs short-circuit execution (never mutate the cluster).
@@ -1843,16 +1898,33 @@ export class CommandBar {
       return { error: false, message: easterEgg.message, raw, normalized, baseCommand, success: true };
     }
 
+    // #2: server-side authorization gate (engine owns the RBAC model). Runs once
+    // per command line, before any dispatch/mutation; exempt client/session
+    // commands (login/logout/whoami/project/help/auth can-i/…) pass through.
+    const gateBlocked = this._authorizationGate(normalized, raw, baseCommand);
+    if (gateBlocked) return gateBlocked;
+
     const { stages, redirect } = splitPipeline(normalized);
     const outputs = [];
-    let stdin = null;
+    let stdin = preprocessed.stdin ?? null;
     let failed = false;
     let failureMessage = '';
 
     for (let i = 0; i < stages.length; i++) {
       const stage = stages[i];
       const isLast = i === stages.length - 1;
-      const result = this._runStage(stage, stdin);
+      const result = this._runStage(stage, stdin, i === 0 && prefixed);
+      if (result.clear) {
+        this._outputLines = [];
+        if (this.output) this.output.innerHTML = '';
+        outputs.push('');
+        continue;
+      }
+      if (result.exit) {
+        this.hide();
+        outputs.push('');
+        continue;
+      }
       if (result.error) {
         failed = true;
         failureMessage = result.message || 'error: command failed';
@@ -1887,13 +1959,39 @@ export class CommandBar {
     return { error: failed, message, raw, normalized, baseCommand, success };
   }
 
-  _runStage(stage, stdin) {
+  _runStage(stage, stdin, linePrefixed = false) {
     // Stages after a pipe may repeat the `oc`/`kubectl` prefix
-    // (`oc process ... | oc apply -f -`), so normalise every stage.
+    // (`oc process ... | oc apply -f -`), so normalise every stage. The first
+    // stage inherits the prefix stripped from the whole command line, so
+    // `oc cp`/`oc rsh` are never mistaken for the shell commands of the same name.
+    const explicitlyPrefixed = Boolean(linePrefixed) || /^\s*(?:oc|kubectl)\s+/i.test(String(stage ?? ''));
     const { command } = stripCommandPrefix(stage);
     const tokens = tokenizeCommand(command);
     if (tokens.length === 0) return { error: false, message: '' };
-    const first = tokens[0].toLowerCase();
+    let first = tokens[0].toLowerCase();
+    // Shell layer first: shell flags (`-n`, `-i`…) are not oc flags, and
+    // `cat`/`grep`/`vim`/`skopeo`/`htpasswd` must never be routed through `oc`.
+    if (!explicitlyPrefixed && this.shellTools && this.shellTools.isShellLead(first)) {
+      return this.shellTools.runTokens(tokens, stdin ?? null);
+    }
+    // Real oc accepts global flags before the subcommand (`oc -n ns patch …`).
+    if (tokens.length > 1 && /^(-{1,2}[A-Za-z]|--)/.test(first) && first !== '--help' && first !== '-h' && first !== '--version') {
+      const globalFlags = [];
+      let index = 0;
+      while (index < tokens.length && tokens[index].startsWith('-') && tokens[index] !== '--') {
+        if ((tokens[index] === '-n' || tokens[index] === '--namespace') && tokens[index + 1] && !tokens[index + 1].startsWith('-')) {
+          globalFlags.push(tokens[index], tokens[index + 1]);
+          index += 2;
+          continue;
+        }
+        globalFlags.push(tokens[index]);
+        index += 1;
+      }
+      if (globalFlags.length && index < tokens.length) {
+        tokens = [...tokens.slice(index), ...globalFlags];
+        first = tokens[0].toLowerCase();
+      }
+    }
     if (first === 'help') return this._cmdHelp(tokens.slice(1));
     if (first === '--help' || first === '-h') return this._cmdHelp([]);
     if (first === '--version') return this._cmdVersion([]);
@@ -1986,6 +2084,13 @@ export class CommandBar {
       case 'auth': return this._cmdAuth(args, ctx);
       case 'debug': return this._cmdDebug(args, ctx);
       case 'helm': return this._cmdHelm(args, ctx);
+      case 'policy': return this._cmdPolicy(args, ctx);
+      case 'image': return this._cmdImage(args, ctx);
+      case 'rsh': return this._cmdRsh(args, ctx);
+      case 'cp': return this._cmdCp(args, ctx);
+      case 'wait': return this._cmdWait(args, ctx);
+      case 'diff': return this._cmdDiff(args, ctx);
+      case 'autoscale': return this._cmdAutoscale(args, ctx);
       case 'htpasswd': return this._cmdHtpasswd(args, ctx);
       case 'help': return this._cmdHelp(args, ctx);
       // Backwards-compatible bare forms
@@ -2033,8 +2138,16 @@ export class CommandBar {
     this.suggestionsEl?.classList.add('hidden');
   }
 
-  _echoCommand(normalized, usedKubectl) {
-    this._appendOutput(`${OC_PROMPT} ${normalized}`, 'text-green-400/80');
+  _echoCommand(display, normalized, usedKubectl, prefixed = false) {
+    // Only real oc commands are echoed with the `$ oc` prompt; shell input
+    // (`cat file`, `htpasswd …`) keeps its own `$ ` prompt (issue #11). An
+    // explicit `oc`/`kubectl` prefix always means oc (`oc cp`, `oc rsh`).
+    const shellLine = !prefixed && !usedKubectl && this.shellTools?.isShellLine(normalized);
+    if (shellLine) {
+      this._appendOutput(`$ ${display}`, 'text-green-400/80');
+    } else {
+      this._appendOutput(`${OC_PROMPT} ${normalized}`, 'text-green-400/80');
+    }
     if (usedKubectl) {
       this._appendOutput('tip: on OpenShift, use oc — the oc command line is the supported interface.', 'text-amber-400/80');
     }
@@ -2057,6 +2170,73 @@ export class CommandBar {
     } catch {
       /* never let telemetry break the terminal */
     }
+  }
+
+  /**
+   * #2 authorization gate: `Error from server (Forbidden): …` for commands the
+   * current user may not run. Returns a failed command result when denied.
+   * @param {string} normalized
+   * @param {string} raw
+   * @param {string} baseCommand
+   * @returns {null|{error:boolean,message:string,raw:string,normalized:string,baseCommand:string,success:boolean}}
+   */
+  _authorizationGate(normalized, raw, baseCommand) {
+    const ge = this.gameEngine;
+    if (!ge || typeof ge.authorizeCommand !== 'function') return null;
+    let gate = null;
+    try {
+      gate = ge.authorizeCommand(normalized, { user: this.currentUser, namespace: this.currentProject });
+    } catch {
+      return null;
+    }
+    if (!gate || typeof gate !== 'object') return null;
+    this._gate = gate;
+    if (gate.exempt || gate.allowed !== false) return null;
+    const message = gate.message || 'Error from server (Forbidden): request is forbidden';
+    this._appendOutput(message, 'text-red-400');
+    this._recordCommand(raw, baseCommand, false);
+    this._emit('command:executed', { command: normalized, raw, baseCommand, success: false, timestamp: Date.now() });
+    return { error: true, message, raw, normalized, baseCommand, success: false };
+  }
+
+  /**
+   * #2 authorization for `-f`/`-k`/stdin manifests: per-object
+   * `GameEngine.authorizeObject(verb, obj)` (aborts the first denial, before
+   * anything is mutated).
+   * @returns {{error:true,message:string}|null}
+   */
+  _authorizeManifestObjects(objects, verb, flags = {}) {
+    const ge = this.gameEngine;
+    if (!ge || typeof ge.authorizeObject !== 'function') return null;
+    const namespace = flags.namespace && flags.namespace !== true ? String(flags.namespace) : this.currentProject;
+    for (const object of objects || []) {
+      if (!object || typeof object !== 'object' || !object.kind) continue;
+      let result = null;
+      try {
+        result = ge.authorizeObject(verb, object, { user: this.currentUser, namespace });
+      } catch {
+        return null;
+      }
+      if (result && result.allowed === false) {
+        const message = result.message || `Error from server (Forbidden): ${String(object.kind).toLowerCase()}/${object.metadata?.name || ''} is forbidden`;
+        this._appendOutput(message, 'text-red-400');
+        return this._err(message);
+      }
+    }
+    return null;
+  }
+
+  _authorizeManifestInput(path, verb, stdinText, flags = {}) {
+    const ge = this.gameEngine;
+    if (!ge || typeof ge.authorizeObject !== 'function') return null;
+    if (!this._gate || this._gate.requiresManifestCheck === false) {
+      // `oc create/apply -f` without a manifest command gate still needs an
+      // object check; skip only when the engine has no per-object API.
+      if (!this._gate) return null;
+    }
+    const preview = this._manifestPreviewDocs(path, { stdinText });
+    if (preview.error) return null; // let the normal parser surface path/parse errors
+    return this._authorizeManifestObjects(preview.docs, verb, flags);
   }
 
   _emitMutationAuthCheck(normalized, baseCommand) {
@@ -2195,6 +2375,7 @@ export class CommandBar {
   }
 
   destroy() {
+    this._clearRolloutWatches?.();
     if (typeof document !== 'undefined') document.removeEventListener('keydown', this._boundKeydown);
     this.eventBus?.off?.('ui:show-command-bar', this._boundShowCommandBar);
     this.container?.remove();
@@ -2265,6 +2446,29 @@ Object.assign(CommandBar.prototype, {
       .map((resource) => resource.metadata?.name)
       .filter(Boolean)
       .sort((a, b) => String(a).localeCompare(String(b)));
+  },
+
+  /**
+   * Projects the current user may see (#2): engine's binding-aware visibility
+   * filter, falling back to every project without the engine helper.
+   * @returns {string[]}
+   */
+  _visibleProjectNames() {
+    const ge = this.gameEngine;
+    if (ge && typeof ge.getVisibleProjects === 'function') {
+      try {
+        const projects = ge.getVisibleProjects(this.currentUser);
+        if (Array.isArray(projects)) {
+          return projects
+            .map((project) => (typeof project === 'string' ? project : project?.metadata?.name))
+            .filter(Boolean)
+            .sort((a, b) => String(a).localeCompare(String(b)));
+        }
+      } catch {
+        /* fall through */
+      }
+    }
+    return this._projectNames();
   },
 
   _projectExists(name) {
@@ -2411,7 +2615,7 @@ Object.assign(CommandBar.prototype, {
       const { kind, name } = splitResourceRef(positionals);
       return { kind, name };
     }
-    const kind = normalizeKind(first);
+    const kind = resolveKindToken(first);
     if (kind) return { kind, name: positionals[1] || null };
     return { kind: null, name: first };
   },
@@ -2568,6 +2772,7 @@ Object.assign(CommandBar.prototype, {
     if (!this._manifestReady()) return this._manifestNotReady();
     const written = this._writeVirtualFile(redirect.file, text, { append: redirect.append });
     if (written.error) return written;
+    this.shellTools?._refreshFilesPanel?.();
     const lineCount = String(text || '').split('\n').filter((line) => line.length > 0).length;
     return {
       ok: true,
@@ -2585,10 +2790,173 @@ Object.assign(CommandBar.prototype, {
     return { file: path };
   },
 
+  // ── --dry-run support for `create|apply|replace -f|-k|- ` ───────────────
+
+  /** Parse manifest text into preview documents (Lists flattened). */
+  _parseManifestPreviewText(text, source) {
+    let docs;
+    try {
+      docs = parseYaml(text);
+    } catch (error) {
+      return { error: this._err(`error: error parsing ${source}: ${error && error.message ? error.message : error}`) };
+    }
+    if (!Array.isArray(docs) || !docs.length) {
+      return { error: this._err(`error: no objects passed to apply (file "${source}" is empty)`) };
+    }
+    const flattened = [];
+    for (const doc of docs) {
+      if (!doc || typeof doc !== 'object') continue;
+      if (doc.kind === 'List' && Array.isArray(doc.items)) {
+        flattened.push(...doc.items);
+        continue;
+      }
+      flattened.push(doc);
+    }
+    if (!flattened.length) return { error: this._err(`error: no objects passed to apply (file "${source}" is empty)`) };
+    return { docs: flattened, source };
+  },
+
+  /** Resolve documents for `-f <file|dir|->` without touching the cluster. */
+  _manifestPreviewDocs(path, options = {}) {
+    const stdinText = options.stdinText ?? null;
+    if (path === '-') {
+      if (stdinText === null || stdinText === undefined) return { error: this._err('error: no objects passed to apply') };
+      return this._parseManifestPreviewText(String(stdinText), '<stdin>');
+    }
+    const direct = this._readVirtualFile(path);
+    if (direct !== null) return this._parseManifestPreviewText(direct, path);
+    const prefix = `${String(path).replace(/\/+$/, '')}/`;
+    const files = this._manifestFileList().filter((file) => file.startsWith(prefix) && /\.(ya?ml|json)$/i.test(file));
+    if (!files.length) return { error: this._err(`error: the path "${path}" does not exist`) };
+    const docs = [];
+    for (const file of files) {
+      const parsed = this._parseManifestPreviewText(this._readVirtualFile(file) ?? '', file);
+      if (parsed.error) return parsed;
+      docs.push(...parsed.docs);
+    }
+    return { docs, source: path };
+  },
+
+  /** Deterministic fake UUID for server-side dry-run metadata. */
+  _dryRunUid(name) {
+    const hex = (input) => stableHash(String(input), 0xffffffff).toString(16).padStart(8, '0');
+    const text = String(name || 'dry-run');
+    return `${hex(text)}-${hex(`${text}-b`).slice(0, 4)}-4${hex(`${text}-c`).slice(0, 3)}-a${hex(`${text}-d`).slice(0, 3)}-${hex(`${text}-e`)}${hex(`${text}-f`)}`.slice(0, 36);
+  },
+
+  /**
+   * Print the would-be-created objects for `--dry-run=client|server`, without
+   * persisting anything (real oc prints the manifest / `<type>/<name> created (dry run)`).
+   * @param {object[]} docs
+   * @param {{command?:string, flags?:object, mode?:string, source?:string}} options
+   */
+  _printDryRunObjects(docs, options = {}) {
+    const flags = options.flags || {};
+    const command = options.command || (flags.filename ? 'create' : 'apply');
+    const mode = options.mode || 'client';
+    const output = this._outputFormat(flags);
+    const namespaceOverride = flags.namespace && flags.namespace !== true ? String(flags.namespace) : null;
+    const prepared = [];
+    for (const doc of docs) {
+      if (!doc || typeof doc !== 'object') continue;
+      const object = JSON.parse(JSON.stringify(doc));
+      const kind = resolveKindToken(String(object.kind || '')) || null;
+      if (!kind) {
+        if (!object.kind) return this._err('error: error validating data: apiVersion/kind not set');
+        return this._err(`error: the server doesn't have a resource type "${object.kind}"`);
+      }
+      object.apiVersion = object.apiVersion || apiVersionForKind(kind);
+      object.kind = kind;
+      object.metadata = object.metadata || {};
+      if (!object.metadata.name) {
+        return this._err(`error: error validating "${options.source || '<stdin>'}": metadata.name: Required value`);
+      }
+      if (this._isNamespaced(kind)) {
+        object.metadata.namespace = namespaceOverride || object.metadata.namespace || this.currentProject;
+        if (mode === 'server') {
+          const namespaceError = this._requireNamespace(object.metadata.namespace);
+          if (namespaceError) return namespaceError;
+        }
+      } else {
+        delete object.metadata.namespace;
+      }
+      const exists = Boolean(this._findResourceExact(kind, object.metadata.name, object.metadata.namespace));
+      if (mode === 'server') {
+        if (command === 'create' && exists) {
+          return this._err(`Error from server (AlreadyExists): ${this._resourceNamePlural(kind)} "${object.metadata.name}" already exists`);
+        }
+        object.metadata.uid = object.metadata.uid || this._dryRunUid(object.metadata.name);
+        object.metadata.resourceVersion = object.metadata.resourceVersion || '1';
+        object.metadata.creationTimestamp = object.metadata.creationTimestamp || new Date().toISOString();
+        object.metadata.generation = object.metadata.generation || 1;
+      }
+      prepared.push({ kind, object, exists });
+    }
+    if (!prepared.length) return this._err('error: no objects passed to apply');
+    const suffix = mode === 'server' ? ' (server dry run)' : ' (dry run)';
+    const lines = [];
+    for (const { kind, object, exists } of prepared) {
+      if (output.format === 'yaml') lines.push(toYamlDocument(object));
+      else if (output.format === 'json') lines.push(JSON.stringify(object, null, 4));
+      else if (output.format === 'name') lines.push(`${this._resourceRef(kind)}/${object.metadata?.name}`);
+      else {
+        const verb = command === 'create' ? 'created' : command === 'replace' ? 'replaced' : exists ? 'configured' : 'created';
+        lines.push(`${this._resourceRef(kind)}/${object.metadata?.name} ${verb}${suffix}`);
+      }
+    }
+    return this._ok(output.format === 'yaml' ? lines.join('\n---\n') : lines.join('\n'));
+  },
+
+  /** `-k/--kustomize` counterpart of `_printDryRunObjects` (renders without applying). */
+  _printKustomizeDryRun(dir, flags = {}, mode = 'client') {
+    const me = this.manifestEngine;
+    if (!me || typeof me.renderKustomize !== 'function') {
+      return this._err('error: oc kustomize rendering is not available in this build.');
+    }
+    let result;
+    try {
+      result = me.renderKustomize(dir);
+    } catch (error) {
+      return this._err(`error: ${error && error.message ? error.message : error}`);
+    }
+    if (!result || result.ok === false) return this._err(result?.error || result?.errors?.[0] || 'error: kustomize build failed');
+    const objects = Array.isArray(result.objects) ? result.objects : [];
+    if (!objects.length) return this._err('error: no objects passed to apply');
+    const warnings = (result.warnings || []).map((warning) => `warning: ${warning}`);
+    const printed = this._printDryRunObjects(objects, { command: 'apply', flags, mode, source: dir });
+    if (printed.error) return printed;
+    return this._ok([...warnings, printed.message].filter(Boolean).join('\n'));
+  },
+
   _applyFileDelegated(path, options = {}) {
     if (!this._manifestReady()) return this._manifestNotReady();
-    const namespaceError = this._requireManifestNamespaces(path, options.flags || {}, options.stdinText ?? null);
+    const flags = options.flags || {};
+    const dryRun = this._dryRunMode(flags);
+    if (dryRun === 'invalid') return this._err('error: --dry-run must be "none", "server", or "client"');
+    if (dryRun) {
+      // Client dry-run never contacts the server (no namespace lookup); server
+      // dry-run still validates the request server-side, just without persisting.
+      if (dryRun === 'server') {
+        const namespaceError = this._requireManifestNamespaces(path, flags, options.stdinText ?? null);
+        if (namespaceError) return namespaceError;
+        const objectVerb = options.command === 'replace' ? 'update' : options.command === 'create' ? 'create' : 'apply';
+        const authorizationError = this._authorizeManifestInput(path, objectVerb, options.stdinText ?? null, flags);
+        if (authorizationError) return authorizationError;
+      }
+      const preview = this._manifestPreviewDocs(path, options);
+      if (preview.error) return preview.error;
+      return this._printDryRunObjects(preview.docs, {
+        command: options.command || 'apply',
+        flags,
+        mode: dryRun,
+        source: preview.source || path,
+      });
+    }
+    const namespaceError = this._requireManifestNamespaces(path, flags, options.stdinText ?? null);
     if (namespaceError) return namespaceError;
+    const objectVerb = options.command === 'replace' ? 'update' : options.command === 'create' ? 'create' : 'apply';
+    const authorizationError = this._authorizeManifestInput(path, objectVerb, options.stdinText ?? null, flags);
+    if (authorizationError) return authorizationError;
     const resolved = this._resolveInputFile(path, options.stdinText);
     if (resolved.error) return resolved.error;
     const me = this.manifestEngine;
@@ -2617,6 +2985,18 @@ Object.assign(CommandBar.prototype, {
       const namespaceError = this._requireNamespace(namespace);
       if (namespaceError) return namespaceError;
     }
+    if (typeof me.renderKustomize === 'function') {
+      let rendered = null;
+      try {
+        rendered = me.renderKustomize(dir);
+      } catch {
+        rendered = null;
+      }
+      if (rendered && Array.isArray(rendered.objects) && rendered.objects.length) {
+        const authorizationError = this._authorizeManifestObjects(rendered.objects, 'apply', flags || {});
+        if (authorizationError) return authorizationError;
+      }
+    }
     let result;
     try {
       result = me.applyKustomize(dir, { namespace: namespace || undefined, autoCreateProjects: false });
@@ -2630,6 +3010,8 @@ Object.assign(CommandBar.prototype, {
     if (!this._manifestReady()) return this._manifestNotReady();
     const namespaceError = this._requireManifestNamespaces(path, options.flags || {}, options.stdinText ?? null);
     if (namespaceError) return namespaceError;
+    const authorizationError = this._authorizeManifestInput(path, 'delete', options.stdinText ?? null, options.flags || {});
+    if (authorizationError) return authorizationError;
     const me = this.manifestEngine;
     const resolved = this._resolveInputFile(path, options.stdinText ?? null);
     if (resolved.error) return resolved.error;
@@ -3399,7 +3781,7 @@ Object.assign(CommandBar.prototype, {
         return {
           NAME: name,
           'HOST/PORT': this._routeHost(resource),
-          PATH: resource.spec?.path ?? '/',
+          PATH: resource.spec?.path || '/',
           SERVICES: resource.spec?.to?.name || '<none>',
           PORT: resource.spec?.port?.targetPort ?? '<all>',
           TERMINATION: tls ? tls.termination || '' : '',
@@ -3645,6 +4027,43 @@ Object.assign(CommandBar.prototype, {
         };
       }
       case 'OAuth': {
+        return { NAME: name, AGE: age };
+      }
+      case 'OperatorGroup': {
+        return { NAME: name, AGE: age };
+      }
+      case 'InstallPlan': {
+        return {
+          NAME: name,
+          CSV: (resource.spec?.clusterServiceVersionNames || []).join(','),
+          APPROVAL: resource.spec?.approval || 'Automatic',
+          APPROVED: this._booleanCell(resource.spec?.approved === true),
+        };
+      }
+      case 'ClusterServiceVersion': {
+        const version = resource.spec?.version;
+        return {
+          NAME: name,
+          DISPLAY: resource.spec?.displayName || '<none>',
+          VERSION: typeof version === 'object' && version ? version.version || '<none>' : version || '<none>',
+          REPLACES: resource.spec?.replaces || '',
+          PHASE: this._genericStatus(resource),
+        };
+      }
+      case 'PackageManifest': {
+        const channel = (resource.status?.channels || resource.spec?.channels || [])[0] || {};
+        const description = channel.currentCSVDesc || {};
+        const displayName = description.displayName || resource.spec?.packageName || name;
+        const version = description.version || (String(channel.currentCSV || '').match(/\.v?(\d+\.\d+\.\d+)/) || [])[1] || '<none>';
+        return {
+          NAME: name,
+          DISPLAY: displayName,
+          VERSION: version,
+          CATALOG: resource.status?.catalogSource || channel.catalogSource || '<none>',
+          SOURCE: resource.status?.catalogSourceNamespace || channel.catalogSourceNamespace || '<none>',
+        };
+      }
+      case 'MetalLB': {
         return { NAME: name, AGE: age };
       }
       case 'IPAddressPool':
@@ -4799,8 +5218,12 @@ Object.assign(CommandBar.prototype, {
     const sections = [];
     let singleResource = null;
 
+    const visibleProjectNames = kinds.some((entry) => entry.kind === 'Project') ? new Set(this._visibleProjectNames()) : null;
     for (const { kind } of kinds) {
       let resources = this._resources(kind);
+      if (kind === 'Project' && visibleProjectNames) {
+        resources = resources.filter((resource) => visibleProjectNames.has(resource.metadata?.name));
+      }
       if (kind === 'Template') {
         const builtins = this._builtinTemplateObjects().filter(
           (template) =>
@@ -4931,6 +5354,17 @@ Object.assign(CommandBar.prototype, {
   _virtualViewGet(resourceToken, context) {
     const lower = String(resourceToken || '').toLowerCase();
     const { name, flags, output, allNamespaces, namespace } = context;
+    // OLM kinds are real registry resources now (#9): let the generic `oc get`
+    // path handle listing/NAMESPACE/-o jsonpath/-o yaml. The virtual views stay
+    // as a fallback for saved clusters seeded before the registry knew them.
+    const realRegistryKinds = new Set([
+      'csv', 'csvs', 'clusterserviceversion', 'clusterserviceversions',
+      'operatorgroup', 'operatorgroups', 'og',
+      'installplan', 'installplans', 'ip',
+      'packagemanifest', 'packagemanifests',
+      'metallb', 'metallbs',
+    ]);
+    if (realRegistryKinds.has(lower) && resolveKindToken(lower)) return null;
     if (['csv', 'csvs', 'clusterserviceversion', 'clusterserviceversions'].includes(lower)) {
       return this._getCsvView({ flags, output, allNamespaces, namespace, name });
     }
@@ -4965,19 +5399,36 @@ Object.assign(CommandBar.prototype, {
       const csvName = subscription.status?.installedCSV || `${spec.packageName || spec.name || subscription.metadata?.name}.v1.0.0`;
       const versionMatch = csvName.match(/\.v?(\d+\.\d+\.\d+)/);
       return {
+        namespace: subscription.metadata?.namespace,
         csvName,
         display: String(spec.packageName || spec.name || subscription.metadata?.name).replace(/-/g, ' '),
         version: versionMatch ? versionMatch[1] : '1.0.0',
         phase: subscription.status?.phase || 'Succeeded',
       };
     });
-    const headers = ['NAME', 'DISPLAY', 'VERSION', 'REPLACES', 'PHASE'];
-    const tableRows = rows.map((row) => [row.csvName, row.display, row.version, '', row.phase]);
-    if (name) {
-      const match = tableRows.find((row) => row[0] === name || row[0].startsWith(name));
-      if (!match) return this._err(`Error from server (NotFound): clusterserviceversions.operators.coreos.com "${name}" not found`);
-      return this._ok(padTable(headers, [match]));
+    const objects = rows.map((row) => ({
+      apiVersion: 'operators.coreos.com/v1alpha1',
+      kind: 'ClusterServiceVersion',
+      metadata: { name: row.csvName, namespace: row.namespace || namespace },
+      spec: { displayName: row.display, version: { version: row.version } },
+      status: { phase: row.phase },
+    }));
+    const filtered = name ? objects.filter((object) => object.metadata.name === name || object.metadata.name.startsWith(name)) : objects;
+    if (!filtered.length) {
+      if (name) return this._err(`Error from server (NotFound): clusterserviceversions.operators.coreos.com "${name}" not found`);
+      return this._ok(allNamespaces ? 'No resources found.' : `No resources found in ${namespace} namespace.`);
     }
+    if (output.format === 'yaml') return this._ok(toYamlDocument(name && filtered.length === 1 ? filtered[0] : { apiVersion: 'v1', kind: 'List', items: filtered }));
+    if (output.format === 'json') return this._ok(JSON.stringify(name && filtered.length === 1 ? filtered[0] : { apiVersion: 'v1', kind: 'List', items: filtered }, null, 4));
+    if (output.format === 'jsonpath') {
+      if (!output.arg) return this._err("error: jsonpath requires a template");
+      return this._ok(evaluateJsonPath(name && filtered.length === 1 ? filtered[0] : { kind: 'List', items: filtered }, output.arg));
+    }
+    if (output.format === 'name') return this._ok(filtered.map((object) => `clusterserviceversion.operators.coreos.com/${object.metadata.name}`).join('\n'));
+    const headers = allNamespaces ? ['NAMESPACE', 'NAME', 'DISPLAY', 'VERSION', 'REPLACES', 'PHASE'] : ['NAME', 'DISPLAY', 'VERSION', 'REPLACES', 'PHASE'];
+    const tableRows = rows
+      .filter((row) => !name || row.csvName === name || row.csvName.startsWith(name))
+      .map((row) => [...(allNamespaces ? [row.namespace || namespace] : []), row.csvName, row.display, row.version, '', row.phase]);
     return this._ok(padTable(headers, tableRows));
   },
 
@@ -5000,26 +5451,96 @@ Object.assign(CommandBar.prototype, {
   _getImageStreamTagView({ flags, allNamespaces, namespace, name }) {
     let streams = this._resources('ImageStream');
     if (!allNamespaces) streams = streams.filter((stream) => stream.metadata?.namespace === namespace);
-    const rows = [];
+    const objects = [];
     for (const stream of streams) {
       const tags = stream.status?.tags || stream.spec?.tags || [];
       const repo = stream.status?.dockerImageRepository || `${INTERNAL_REGISTRY}/${stream.metadata?.namespace}/${stream.metadata?.name}`;
-      if (!tags.length) {
-        rows.push([`${stream.metadata?.name}:latest`, `${repo}:latest`, this._creationAge(stream)]);
-        continue;
-      }
-      for (const tag of tags) {
+      const entries = tags.length ? tags : [{ tag: 'latest' }];
+      for (const tag of entries) {
         const tagName = tag.tag || tag.name;
         const reference = tag.items?.[0]?.dockerImageReference || `${repo}:${tagName}`;
-        rows.push([`${stream.metadata?.name}:${tagName}`, reference, this._creationAge(stream)]);
+        const imageName = tag.items?.[0]?.image || this._imageDigest(reference);
+        const updated = tag.updated || tag.items?.[0]?.created || stream.metadata?.creationTimestamp;
+        objects.push({
+          apiVersion: 'image.openshift.io/v1',
+          kind: 'ImageStreamTag',
+          metadata: {
+            name: `${stream.metadata?.name}:${tagName}`,
+            namespace: stream.metadata?.namespace,
+            creationTimestamp: stream.metadata?.creationTimestamp,
+            labels: { ...(stream.metadata?.labels || {}) },
+          },
+          generation: 1,
+          lookupPolicy: { local: false },
+          tag: {
+            name: tagName,
+            from: { kind: 'DockerImage', name: reference },
+            generation: 1,
+            importPolicy: {},
+            referencePolicy: { type: 'Source' },
+          },
+          image: {
+            dockerImageReference: reference,
+            metadata: { name: imageName },
+            dockerImageMetadata: { kind: 'DockerImage', apiVersion: 'v1' },
+          },
+          _updated: updated,
+          _reference: reference,
+        });
       }
     }
-    if (!rows.length) {
+    const filtered = name
+      ? objects.filter((object) => object.metadata.name === name) .concat(
+          objects.filter((object) => object.metadata.name.startsWith(name) && object.metadata.name !== name),
+        )
+      : objects;
+    if (!filtered.length) {
+      if (name) return this._err(`Error from server (NotFound): imagestreamtags.image.openshift.io "${name}" not found`);
       return this._ok(allNamespaces ? 'No resources found.' : `No resources found in ${namespace} namespace.`);
     }
-    const filtered = name ? rows.filter((row) => row[0] === name || row[0].startsWith(name)) : rows;
-    if (!filtered.length) return this._err(`Error from server (NotFound): imagestreamtags.image.openshift.io "${name}" not found`);
-    return this._ok(padTable(['NAME', 'IMAGE REFERENCE', 'UPDATED'], filtered));
+    const output = (() => {
+      const rawOutput = flags.output;
+      if (rawOutput === undefined || rawOutput === null || rawOutput === true) return { format: 'table', arg: null };
+      const text = String(rawOutput);
+      if (text.startsWith('jsonpath=')) return { format: 'jsonpath', arg: text.slice('jsonpath='.length) };
+      if (text.startsWith('custom-columns=')) return { format: 'custom-columns', arg: text.slice('custom-columns='.length) };
+      if (['wide', 'yaml', 'json', 'name'].includes(text)) return { format: text, arg: null };
+      return { format: 'table', arg: null };
+    })();
+    const clean = filtered.map((object) => {
+      const copy = { ...object };
+      delete copy._updated;
+      delete copy._reference;
+      return copy;
+    });
+    if (output.format === 'yaml') return this._ok(toYamlDocument(name && clean.length === 1 ? clean[0] : { apiVersion: 'v1', kind: 'List', items: clean }));
+    if (output.format === 'json') return this._ok(JSON.stringify(name && clean.length === 1 ? clean[0] : { apiVersion: 'v1', kind: 'List', items: clean }, null, 4));
+    if (output.format === 'name') return this._ok(clean.map((object) => `imagestreamtag.image.openshift.io/${object.metadata.name}`).join('\n'));
+    if (output.format === 'jsonpath') {
+      if (!output.arg) return this._err("error: jsonpath requires a template, e.g. -o jsonpath='{.items[*].image.dockerImageReference}'");
+      const subject = name && clean.length === 1 ? clean[0] : { kind: 'List', items: clean };
+      return this._ok(evaluateJsonPath(subject, output.arg));
+    }
+    if (output.format === 'custom-columns') {
+      const columns = String(output.arg || '')
+        .split(',')
+        .map((entry) => {
+          const colon = entry.indexOf(':');
+          return colon < 0 ? null : { header: entry.slice(0, colon), path: entry.slice(colon + 1) };
+        })
+        .filter(Boolean);
+      if (!columns.length) return this._err('error: invalid custom-columns specification');
+      const rows = clean.map((object) => columns.map((column) => String(evaluateJsonPath(object, `{${column.path.trim()}}`) || '<none>')));
+      return this._ok(padTable(columns.map((column) => column.header), rows));
+    }
+    const headers = allNamespaces ? ['NAMESPACE', 'NAME', 'IMAGE REFERENCE', 'UPDATED'] : ['NAME', 'IMAGE REFERENCE', 'UPDATED'];
+    const rows = filtered.map((object) => [
+      ...(allNamespaces ? [object.metadata.namespace || ''] : []),
+      object.metadata.name,
+      object._reference,
+      formatAge(object._updated),
+    ]);
+    return this._ok(padTable(headers, rows));
   },
 
   _getIngressControllerView({ output, name }) {
@@ -5116,6 +5637,8 @@ Object.assign(CommandBar.prototype, {
     if (!positionals.length) {
       return this._err('error: You must specify the type of resource to describe.\n\nUsage:\n  oc describe <resource> [<name>]\n\nUse "oc get" to list resources.');
     }
+    const istagRef = this._imageStreamTagRef(positionals);
+    if (istagRef) return this._describeImageStreamTag(istagRef, flags);
     const projectConfigRef = this._projectConfigRef(positionals);
     if (projectConfigRef) return this._describeProjectConfig(projectConfigRef);
     let { kind, name } = this._resolveRef(positionals);
@@ -5166,6 +5689,9 @@ Object.assign(CommandBar.prototype, {
     if (targetKind === 'Deployment' || targetKind === 'DeploymentConfig' || targetKind === 'ReplicaSet' || targetKind === 'StatefulSet' || targetKind === 'DaemonSet') {
       return this._logsForWorkload(targetKind, targetName, { namespace, explicitNamespace, flags, tail });
     }
+    if (targetKind === 'Job') {
+      return this._logsForJob(targetName, { namespace, explicitNamespace, flags, tail });
+    }
     if (targetKind !== 'Pod') return this._resourceTypeError(targetKind);
     return this._logsForPod(targetName, { namespace, explicitNamespace, flags, tail });
   },
@@ -5182,6 +5708,9 @@ Object.assign(CommandBar.prototype, {
     if (containers.length && !containers.some((container) => container.name === containerName)) {
       return this._err(`Error from server (BadRequest): container "${containerName}" is not valid for pod "${pod.metadata?.name}"`);
     }
+    if (options.flags.previous && !this._podHasPreviousContainer(pod, containerName)) {
+      return this._err(`Error from server (BadRequest): previous terminated container "${containerName}" in pod "${pod.metadata?.name}" not found`);
+    }
     const phase = pod.status?.phase || 'Pending';
     const podState = this._podStatus(pod);
     if (phase === 'Pending') {
@@ -5193,7 +5722,38 @@ Object.assign(CommandBar.prototype, {
     return this._ok(lines.join('\n'));
   },
 
+  /** Parse incident/campaign-produced `openshiftgames.io/logs*` annotations. */
+  _podLogAnnotation(pod, containerName, previous) {
+    const annotations = pod?.metadata?.annotations || {};
+    const annotationContainer = annotations['openshiftgames.io/logs-container'];
+    if (annotationContainer && annotationContainer !== containerName) return null;
+    const raw = previous ? annotations['openshiftgames.io/logs-previous'] : annotations['openshiftgames.io/logs'];
+    if (raw === undefined || raw === null) return null;
+    if (Array.isArray(raw)) return raw.map((line) => String(line));
+    const text = String(raw);
+    try {
+      const parsed = JSON.parse(text);
+      if (Array.isArray(parsed)) return parsed.map((line) => String(line));
+    } catch {
+      /* plain text annotation */
+    }
+    return text.split('\n');
+  },
+
+  /** True when the container actually terminated before (`--previous` semantics). */
+  _podHasPreviousContainer(pod, containerName) {
+    const annotations = pod?.metadata?.annotations || {};
+    if (annotations['openshiftgames.io/logs-previous'] !== undefined) {
+      const annotated = annotations['openshiftgames.io/logs-container'];
+      if (!annotated || annotated === containerName) return true;
+    }
+    const statuses = pod?.status?.containerStatuses || [];
+    return statuses.some((status) => status?.name === containerName && status?.lastState?.terminated);
+  },
+
   _podLogLines(pod, containerName, previous) {
+    const annotated = this._podLogAnnotation(pod, containerName, previous);
+    if (annotated) return annotated;
     const name = pod.metadata?.name || 'pod';
     const created = pod.metadata?.creationTimestamp ? new Date(pod.metadata.creationTimestamp).getTime() : Date.now() - 120000;
     const port = this._containerList(pod).find((container) => container.name === containerName)?.ports?.[0]?.containerPort || 8080;
@@ -5201,9 +5761,10 @@ Object.assign(CommandBar.prototype, {
     const podState = this._podStatus(pod);
     const crashing = /CrashLoopBackOff|Error|OOMKilled|CreateContainerConfigError/.test(podState.status) || pod.status?.phase === 'Failed';
     if (previous) {
+      const appName = pod.metadata?.labels?.app || pod.metadata?.labels?.['app.kubernetes.io/name'] || name.replace(/-[a-z0-9]+-[a-z0-9]+$/, '');
       return [
         'Starting application...',
-        `FATAL: could not connect to database at ${name}-db:5432`,
+        `FATAL: could not connect to database at ${appName}-db:5432`,
         '    at Object.<anonymous> (/opt/app-root/src/server.js:42:11)',
         '    at Module._compile (node:internal/modules/cjs/loader:1256:14)',
         'Error: connect ECONNREFUSED 10.128.0.42:5432',
@@ -5249,10 +5810,43 @@ Object.assign(CommandBar.prototype, {
     );
     if (!pods.length) return this._err(`error: no pods found for ${kind.toLowerCase()} "${name}"`);
     const pod = pods.find((candidate) => candidate.status?.phase === 'Running') || pods[0];
+    const logContainer = this._containerList(pod)[0]?.name || 'main';
+    if (options.flags.previous && !this._podHasPreviousContainer(pod, logContainer)) {
+      return this._err(`Error from server (BadRequest): previous terminated container "${logContainer}" in pod "${pod.metadata?.name}" not found`);
+    }
     const prefix = pods.length > 1 ? `Found ${pods.length} pods, using pod/${pod.metadata?.name}\n` : '';
-    const lines = this._podLogLines(pod, this._containerList(pod)[0]?.name || 'main', Boolean(options.flags.previous));
+    const lines = this._podLogLines(pod, logContainer, Boolean(options.flags.previous));
     const tail = Number.isFinite(options.tail) && options.tail >= 0 ? lines.slice(-options.tail) : lines;
     return this._ok(prefix + tail.join('\n'));
+  },
+
+  _logsForJob(jobName, options) {
+    const job = this._findResource('Job', jobName, {
+      namespace: options.namespace,
+      explicitNamespace: options.explicitNamespace,
+      allowPrefix: false,
+    });
+    if (!job) return this._err(this._notFoundMessage('Job', jobName));
+    const jobUid = job.uid || job.metadata?.uid;
+    const selector = job.spec?.selector?.matchLabels || {};
+    const pods = this._getKindList('Pod').filter((pod) => {
+      if (pod.metadata?.namespace !== job.metadata?.namespace) return false;
+      const owned = (pod.metadata?.ownerReferences || []).some((owner) => owner.uid === jobUid || owner.name === jobName);
+      if (owned) return true;
+      if ((pod.metadata?.labels?.['job-name'] || '') === jobName) return true;
+      return Object.keys(selector).length > 0 && Object.entries(selector).every(([key, value]) => (pod.metadata?.labels || {})[key] === value);
+    });
+    if (!pods.length) return this._err(`error: no pods found for job "${jobName}"`);
+    const pod = pods.find((candidate) => candidate.status?.phase === 'Running') || pods[pods.length - 1];
+    const containers = this._containerList(pod);
+    const containerName = options.flags.container && options.flags.container !== true ? String(options.flags.container) : containers[0]?.name || 'main';
+    if (options.flags.previous && !this._podHasPreviousContainer(pod, containerName)) {
+      return this._err(`Error from server (BadRequest): previous terminated container "${containerName}" in pod "${pod.metadata?.name}" not found`);
+    }
+    const prefix = pods.length > 1 ? `Found ${pods.length} pods, using pod/${pod.metadata?.name}\n` : '';
+    let lines = this._podLogLines(pod, containerName, Boolean(options.flags.previous));
+    if (Number.isFinite(options.tail) && options.tail >= 0) lines = lines.slice(-options.tail);
+    return this._ok(prefix + lines.join('\n'));
   },
 
   _logsForBuild(kind, name, options) {
@@ -5559,7 +6153,7 @@ Object.assign(CommandBar.prototype, {
     // GameEngine.login() emits `login` itself; only emit in the pre-engine fallback.
     if (!hadLoginApi) this._emit('login', { user, server });
 
-    const projects = this._projectNames();
+    const projects = this._visibleProjectNames();
     const current = this.currentProject;
     const lines = [
       'Login successful.',
@@ -5627,10 +6221,11 @@ Object.assign(CommandBar.prototype, {
 
   _cmdProjects(tokens) {
     const { flags } = parseArgs(tokens, { longBools: ['short', 'quiet'] });
+    const visibleProjects = this._visibleProjectNames();
     if (flags.quiet || flags.short) {
-      return this._ok(this._projectNames().join('\n'));
+      return this._ok(visibleProjects.join('\n'));
     }
-    const projects = this._projectNames();
+    const projects = visibleProjects;
     const current = this.currentProject;
     if (!projects.length) {
       return this._ok('You have access to no projects. Create one with "oc new-project <name>".');
@@ -5870,24 +6465,34 @@ Object.assign(CommandBar.prototype, {
         'project-annotation-selector', 'tcp', 'udp', 'dry-run', 'context-dir', 'source-secret',
         'strategy', 'image-stream', 'code', 'template', 'schedule', 'command', 'timezone',
         'restart', 'active-deadline-seconds', 'completions', 'parallelism', 'backoff-limit',
-        'verb', 'resource-name', 'api-group', 'resource',
+        'verb', 'resource-name', 'api-group', 'resource', 'hostname', 'path', 'service',
+        'termination', 'duration', 'audience', 'bound-object-kind', 'bound-object-name',
+        'bound-object-uid', 'insecure-policy', 'wildcard-policy',
       ],
       multi: ['from-literal', 'from-file', 'from-env-file', 'hard', 'tcp', 'udp', 'env', 'param', 'user', 'group', 'serviceaccount', 'verb', 'resource', 'resource-name', 'api-group'],
       longBools: ['dry-run', 'validate', 'overwrite'],
     };
   },
 
+  /**
+   * Interpret `--dry-run[=none|client|server]`.
+   * @returns {'client'|'server'|'invalid'|null}
+   */
   _dryRunMode(flags) {
     const value = flags['dry-run'];
-    if (!value) return null;
+    if (value === undefined || value === null || value === false || value === 'none') return null;
     if (value === true) return 'client';
-    return String(value);
+    const text = String(value).toLowerCase();
+    if (!text || text === 'none') return null;
+    if (text === 'client' || text === 'server') return text;
+    return 'invalid';
   },
 
   /** Emit a created manifest (or render it for --dry-run). */
   _finishCreateObject(object, flags, options = {}) {
     const warnings = options.warnings || [];
     const dryRun = this._dryRunMode(flags);
+    if (dryRun === 'invalid') return this._err('error: --dry-run must be "none", "server", or "client"');
     const output = this._outputFormat(flags);
     const name = object.metadata?.name || 'unnamed';
     if (dryRun) {
@@ -5895,10 +6500,11 @@ Object.assign(CommandBar.prototype, {
       // (top-level type/data), so `--dry-run=client -o yaml | oc replace -f -`
       // round-trips like a real cluster.
       const displayObject = this._apiShapedDryRunObject(object);
+      const suffix = dryRun === 'server' ? ' (server dry run)' : ' (dry run)';
       if (output.format === 'yaml') return this._ok([...warnings, toYamlDocument(displayObject)].filter(Boolean).join('\n'));
       if (output.format === 'json') return this._ok([...warnings, JSON.stringify(displayObject, null, 4)].filter(Boolean).join('\n'));
       if (output.format === 'name') return this._ok(`${this._resourceRef(object.kind)}/${name}`);
-      return this._ok([...warnings, `${this._resourceRef(object.kind)}/${name} created (dry run)`].filter(Boolean).join('\n'));
+      return this._ok([...warnings, `${this._resourceRef(object.kind)}/${name} created${suffix}`].filter(Boolean).join('\n'));
     }
     const result = this._applyObject(object);
     if (result.error) return result.error;
@@ -5996,6 +6602,8 @@ Object.assign(CommandBar.prototype, {
         return this._createRoleCommand(rest, flags, false);
       case 'clusterrole':
         return this._createRoleCommand(rest, flags, true);
+      case 'token':
+        return this._cmdCreateToken(rest, flags);
       case 'namespace':
       case 'ns':
         return this._createNamespace(rest, flags);
@@ -6429,6 +7037,11 @@ Object.assign(CommandBar.prototype, {
     if (!schedule) {
       return this._err('error: required flag(s) "schedule" not set\n\n  oc create cronjob <name> --image=<image> --schedule="*/5 * * * *"');
     }
+    // API-server-level schedule validation (runtime owns the cron parser).
+    const scheduleValidation = validateCronSchedule(schedule);
+    if (!scheduleValidation.valid) {
+      return this._err(`error: The CronJob "${name}" is invalid: ${scheduleValidation.message}`);
+    }
     const namespace = this._namespaceFromFlags(flags);
     const image = flags.image && flags.image !== true ? String(flags.image) : 'busybox:latest';
     const commandSpec = this._createContainerCommand(flags, afterDoubleDash);
@@ -6453,6 +7066,26 @@ Object.assign(CommandBar.prototype, {
   },
 
   /** Shared by `oc create route <type> <name>` and `oc expose`. */
+  /**
+   * Real oc leaves `route.spec.path` empty unless `--path` was given (the API
+   * does not default it to `/`). Kind registry/engine may fill `/`; normalise
+   * the persisted object so `oc get route -o yaml` matches a real cluster.
+   */
+  _normalizeRoutePath(name, namespace, requestedPath) {
+    const wanted = requestedPath && requestedPath !== true ? String(requestedPath) : '';
+    const route = this._findResource('Route', name, { namespace, explicitNamespace: true, allowPrefix: false });
+    if (!route) return;
+    if ((route.spec?.path || '') === wanted) return;
+    try {
+      this._updateResource('Route', name, (spec) => {
+        spec.path = wanted;
+        return {};
+      }, { namespace, explicitNamespace: true });
+    } catch {
+      /* best-effort */
+    }
+  },
+
   _createRouteCommand(rest, flags) {
     const terminations = ['edge', 'passthrough', 'reencrypt'];
     let termination = null;
@@ -6462,24 +7095,21 @@ Object.assign(CommandBar.prototype, {
       name = rest[1];
     }
     if (flags.termination && flags.termination !== true) termination = String(flags.termination);
-    if (!name) {
-      return this._err(
-        'error: name is required\n\n' +
-          '  oc create route edge <name> --service=<service> [--hostname=] [--cert=] [--key=]\n' +
-          '  oc create route passthrough <name> --service=<service>\n' +
-          '  oc create route reencrypt <name> --service=<service> --cert= --key= --dest-ca-cert=',
-      );
-    }
     const serviceName = flags.service && flags.service !== true ? String(flags.service) : null;
-    if (!serviceName) return this._err('error: --service is required for oc create route');
+    if (!serviceName) {
+      return this._err('error: required flag(s) "service" not set\n\n  oc create route edge [NAME] --service=<service> [--hostname=] [--path=]');
+    }
+    // Real oc: "If the route name is omitted, the service name will be used".
+    if (!name) name = serviceName;
     const namespace = this._namespaceFromFlags(flags);
     const warnings = [];
+    const pathProvided = flags.path !== undefined && flags.path !== true;
     const options = {
       name,
       namespace,
       service: serviceName,
       host: flags.hostname && flags.hostname !== true ? String(flags.hostname) : '',
-      path: flags.path && flags.path !== true ? String(flags.path) : '/',
+      path: pathProvided ? String(flags.path) : '',
       termination,
       insecureEdgeTerminationPolicy: flags['insecure-policy'] && flags['insecure-policy'] !== true ? String(flags['insecure-policy']) : 'None',
       wildcardPolicy: flags['wildcard-policy'] && flags['wildcard-policy'] !== true ? String(flags['wildcard-policy']) : 'None',
@@ -6495,7 +7125,8 @@ Object.assign(CommandBar.prototype, {
     if (ge && typeof ge.createRoute === 'function') {
       const result = ge.createRoute(options);
       if (result.success === false) return this._err(result.message);
-      return this._ok([...warnings, result.message || `route.route.openshift.io/${name} created`].join('\n'));
+      this._normalizeRoutePath(name, namespace, options.path);
+      return this._ok([...warnings, `route.route.openshift.io/${name} created`].join('\n'));
     }
     const routeSpec = {
       host: options.host,
@@ -6532,10 +7163,12 @@ Object.assign(CommandBar.prototype, {
     if (!filename && !kustomize) {
       return this._err('error: must specify one of -f and -k\n\n  oc apply -f <file>\n  oc apply -k <directory>');
     }
-    if (flags['dry-run']) {
-      return this._err('error: --dry-run is not supported for manifests in the simulator; open the file in the Files panel to inspect it, then apply without --dry-run.');
+    const dryRun = this._dryRunMode(flags);
+    if (dryRun === 'invalid') return this._err('error: --dry-run must be "none", "server", or "client"');
+    if (kustomize) {
+      if (dryRun) return this._printKustomizeDryRun(kustomize, flags, dryRun);
+      return this._applyKustomizeDelegated(kustomize, flags);
     }
-    if (kustomize) return this._applyKustomizeDelegated(kustomize, flags);
     return this._applyFileDelegated(String(filename), { stdinText: ctx?.stdin ?? null, command: 'apply', flags });
   },
 
@@ -6575,20 +7208,6 @@ Object.assign(CommandBar.prototype, {
     if (this._isNamespaced(kind)) {
       const namespaceError = this._requireNamespace(namespace);
       if (namespaceError) return namespaceError;
-    }
-
-    // `oc delete csv <name>` maps to the owning subscription (must run before
-    // the generic Subscription branch because the registry aliases csv→Subscription).
-    if (['csv', 'csvs', 'clusterserviceversion', 'clusterserviceversions'].includes(rawResourceToken)) {
-      const csvName = name || positionals[1];
-      const subscriptions = this._resources('Subscription');
-      const subscription = subscriptions.find(
-        (candidate) => candidate.status?.installedCSV === csvName || candidate.spec?.packageName === csvName || candidate.metadata?.name === csvName,
-      );
-      if (!subscription) return ignoreNotFound ? this._ok('') : this._err(`Error from server (NotFound): clusterserviceversions.operators.coreos.com "${csvName}" not found`);
-      this._deleteResource('Subscription', subscription.metadata?.name, { namespace: subscription.metadata?.namespace });
-      this._emit('operator:uninstalled', { name: subscription.metadata?.name, namespace: subscription.metadata?.namespace });
-      return this._ok(`clusterserviceversions.operators.coreos.com "${csvName}" deleted`);
     }
 
     // Special-case destructive identity/operator commands.
@@ -6838,7 +7457,7 @@ Object.assign(CommandBar.prototype, {
       const { kind, name } = splitResourceRef(positionals);
       return { kind, name, rest: positionals.slice(1) };
     }
-    const kind = normalizeKind(first);
+    const kind = resolveKindToken(first);
     if (kind) return { kind, name: positionals[1] || null, rest: positionals.slice(2) };
     const { kind: refKind, name } = splitResourceRef(positionals);
     return { kind: refKind, name, rest: positionals.slice(1) };
@@ -6863,10 +7482,35 @@ Object.assign(CommandBar.prototype, {
     } catch (error) {
       return this._err(`error: unable to parse patch: ${error.message}`);
     }
+    // Real oc: --type defaults to strategic for built-in types; json requires an
+    // RFC-6902 operation array, merge/strategic require an object.
+    const patchType = flags.type !== undefined && flags.type !== true ? String(flags.type).toLowerCase() : 'strategic';
+    if (!['json', 'merge', 'strategic'].includes(patchType)) {
+      return this._err('error: --type must be one of merge, strategic, json');
+    }
+    if (patchType === 'json' && !Array.isArray(patch)) {
+      return this._err('error: json patch must be an array of JSON patch operations');
+    }
+    if (patchType !== 'json' && Array.isArray(patch)) {
+      return this._err(`error: cannot use --type=${patchType} with a JSON patch array`);
+    }
     const namespace = this._namespaceFromFlags(flags);
+    const dryRun = this._dryRunMode(flags);
+    if (dryRun === 'invalid') return this._err('error: --dry-run must be "none", "server", or "client"');
+    const output = this._outputFormat(flags);
     const ge = this.gameEngine;
     if (ge && typeof ge.patchResource === 'function') {
-      const result = ge.patchResource(kind, name, patch, { namespace, type: flags.type });
+      if (dryRun) {
+        // Dry-run: the patch is validated server-side but not persisted. Print
+        // the object (or the real name-printer line) like oc.
+        const current = this._findResource(kind, name, { namespace: flags.namespace, explicitNamespace: Boolean(flags.namespace) });
+        if (!current) return this._err(this._notFoundMessage(kind, name));
+        const displayObject = this._manifestFor(current);
+        if (output.format === 'yaml') return this._ok(toYamlDocument(displayObject));
+        if (output.format === 'json') return this._ok(JSON.stringify(displayObject, null, 4));
+        return this._ok(`${this._resourceRef(kind)}/${name} patched (dry run)`);
+      }
+      const result = ge.patchResource(kind, name, patch, { namespace, type: patchType });
       if (result.success === false) return this._err(result.message);
       return this._ok(`${this._resourceRef(kind)}/${name} patched`);
     }
@@ -7105,6 +7749,10 @@ Object.assign(CommandBar.prototype, {
     if (!name) return this._usageError('set', 'resource name is required\n\n  oc set serviceaccount <resource>/<name> <serviceaccount>');
     const serviceAccount = positionals[positionals[0].includes('/') ? 1 : 2];
     if (!serviceAccount) return this._err('error: you must specify a service account name');
+    // kubectl's polymorphic helper: CronJob has no pod template (it wraps a Job).
+    if (!['Deployment', 'DeploymentConfig', 'StatefulSet', 'DaemonSet', 'Job', 'Pod', 'ReplicationController'].includes(kind)) {
+      return this._err(`error: the ${kind} ${name} is not a pod or does not have a pod template`);
+    }
     const namespace = this._namespaceFromFlags(flags);
     const ge = this.gameEngine;
     if (ge && typeof ge.setServiceAccount === 'function') {
@@ -7205,44 +7853,516 @@ Object.assign(CommandBar.prototype, {
     return this._err('error: selectors are not available in this build');
   },
 
+  /** Boolean flag value (`--overwrite` / `--overwrite=false`). */
+  _boolFlag(flags, name) {
+    const value = flags[name];
+    return value === true || value === 'true' || value === '1';
+  },
+
+  /** `path.Clean`-equivalent: oc compares volume mount paths after cleaning. */
+  _cleanPath(value) {
+    const text = String(value ?? '');
+    if (!text) return '/';
+    const absolute = text.startsWith('/');
+    const parts = [];
+    for (const segment of text.split('/')) {
+      if (!segment || segment === '.') continue;
+      if (segment === '..') {
+        parts.pop();
+        continue;
+      }
+      parts.push(segment);
+    }
+    const joined = parts.join('/');
+    if (absolute) return `/${joined}`;
+    return joined || '.';
+  },
+
+  /** Glob matcher used by `-c/--containers` (`*` and `?` wildcards). */
+  _globMatch(pattern, value) {
+    const source = String(pattern ?? '')
+      .replace(/[.+^${}()|[\]\\]/g, '\\$&')
+      .replace(/\*/g, '.*')
+      .replace(/\?/g, '.');
+    try {
+      return new RegExp(`^${source}$`).test(String(value ?? ''));
+    } catch {
+      return pattern === value;
+    }
+  },
+
+  /** Select pod-template containers for the `-c/--containers` flag (default `*`). */
+  _selectContainers(podSpec, containersFlag) {
+    const containers = podSpec?.containers || [];
+    const raw = containersFlag === undefined || containersFlag === true ? '*' : String(containersFlag);
+    if (raw === '*' || raw === '') return { containers, skipped: [] };
+    const patterns = raw.split(',').map((entry) => entry.trim()).filter(Boolean);
+    const selected = containers.filter((container) => patterns.some((pattern) => this._globMatch(pattern, container.name)));
+    const skipped = containers.filter((container) => !selected.includes(container));
+    return { containers: selected, skipped };
+  },
+
+  /**
+   * Pod-spec accessor for `oc set …` (mirrors kubectl's UpdatePodSpecForObject:
+   * Pods and workloads with a pod template are supported, CronJob is not).
+   * @returns {{podSpec: object, template: object|null}|null}
+   */
+  _podSpecForSet(kind, resource) {
+    if (!resource) return null;
+    if (kind === 'Pod' || resource.kind === 'Pod') {
+      resource.spec = resource.spec || {};
+      return { podSpec: resource.spec, template: null };
+    }
+    if (['Deployment', 'StatefulSet', 'DaemonSet', 'Job'].includes(kind)) {
+      resource.spec = resource.spec || {};
+      resource.spec.template = resource.spec.template || {};
+      resource.spec.template.spec = resource.spec.template.spec || {};
+      const podSpec = resource.spec.template.spec;
+      podSpec.containers = podSpec.containers || [];
+      return { podSpec, template: resource.spec.template };
+    }
+    return null;
+  },
+
+  /** Human description of a volume source for `oc set volumes` list output. */
+  _volumeSourceDescription(source, claimDescription) {
+    const volumeSource = source || {};
+    if (volumeSource.emptyDir !== undefined) return 'empty directory';
+    if (volumeSource.hostPath) return `host path ${volumeSource.hostPath.path || ''}`;
+    if (volumeSource.persistentVolumeClaim) {
+      return `pvc/${volumeSource.persistentVolumeClaim.claimName}${claimDescription ? ` ${claimDescription}` : ''}`;
+    }
+    if (volumeSource.secret) return `secret/${volumeSource.secret.secretName || ''}`;
+    if (volumeSource.configMap) return `configMap/${volumeSource.configMap.name || ''}`;
+    if (volumeSource.projected) return 'projected';
+    if (volumeSource.nfs) return `NFS ${volumeSource.nfs.server || ''}:${volumeSource.nfs.path || ''}`;
+    if (volumeSource.downwardAPI) return 'downward API';
+    return 'unknown';
+  },
+
+  /** `oc set volume` PVC reference annotation: `(does not exist)`, `(waiting for 10GiB allocation)` … */
+  _claimReferenceDescription(namespace, claimName) {
+    const claim = this._findResource('PersistentVolumeClaim', claimName, { namespace, explicitNamespace: true, allowPrefix: false });
+    if (!claim) return '(does not exist)';
+    const request = claim.spec?.resources?.requests?.storage;
+    if (!claim.spec?.volumeName) return request ? `(waiting for ${request}B allocation)` : '(waiting to allocate)';
+    const capacity = claim.status?.capacity?.storage || request;
+    return capacity ? `(allocated ${capacity}B)` : '(allocated unknown size)';
+  },
+
+  /** Normalise a Kubernetes storage quantity (e.g. `1G`, `512Mi`, `10`). */
+  _normalizeQuantity(text) {
+    const value = String(text ?? '').trim();
+    const match = value.match(/^([+-]?[0-9]+(?:\.[0-9]+)?)([eE][+-]?[0-9]+|[numkKMGTP]i?)?$/);
+    if (!match) return null;
+    if (!Number.isFinite(Number(match[1]))) return null;
+    return `${match[1]}${match[2] || ''}`;
+  },
+
+  /**
+   * `oc set volume(s) RESOURCE/NAME [--add|--remove] …` — real oc 4.22 flag set
+   * and semantics (openshift/oc pkg/cli/set/volume.go):
+   *   - no operation lists volumes; `--add`/`--remove` are exclusive
+   *   - `-t/--type` emptyDir|hostPath|secret|configmap|persistentVolumeClaim
+   *   - `--configmap-name`, `--secret-name`, `--claim-name`, `--claim-size`,
+   *     `--claim-mode`, `--claim-class`, `--mount-path/-m`, `--sub-path`,
+   *     `--default-mode`, `--read-only`, `--overwrite`, `-c/--containers`
+   *   - invented flags (`--config-map`, `--configmap`, `--secret`) are rejected
+   */
   _setVolumes(rest) {
     const { positionals, flags } = parseArgs(rest, {
-      shortValues: { '-n': 'namespace' },
-      longValues: ['namespace', 'name', 'claim-name', 'mount-path', 'sub-path', 'type', 'config-map', 'secret', 'default-mode'],
-      longBools: ['add', 'remove', 'overwrite'],
+      shortValues: { '-n': 'namespace', '-m': 'mount-path', '-t': 'type', '-c': 'containers', '-l': 'selector', '-o': 'output', '-f': 'filename', '-k': 'kustomize' },
+      longValues: [
+        'namespace', 'name', 'containers', 'type', 'mount-path', 'sub-path', 'default-mode', 'path',
+        'configmap-name', 'secret-name', 'claim-name', 'claim-class', 'claim-size', 'claim-mode',
+        'source', 'selector', 'filename', 'kustomize', 'output', 'dry-run', 'field-manager', 'template',
+      ],
+      longBools: ['add', 'remove', 'all', 'confirm', 'local', 'overwrite', 'read-only', 'recursive', 'allow-missing-template-keys', 'show-managed-fields'],
     });
-    const { kind, name } = this._resolveRef(positionals);
-    if (!kind) return this._resourceTypeError(positionals[0] || '');
-    if (!name) return this._usageError('set', 'resource name is required\n\n  oc set volumes <resource>/<name> --add --name=data --claim-name=data --mount-path=/data');
-    if (!flags.add && !flags.remove) return this._err('error: you must specify --add or --remove');
+    const textFlag = (name) => (flags[name] !== undefined && flags[name] !== true && flags[name] !== false ? String(flags[name]) : null);
+    const typeChanged = flags.type !== undefined && flags.type !== true;
     const namespace = this._namespaceFromFlags(flags);
-    const volumeName = flags.name && flags.name !== true ? String(flags.name) : 'data';
-    if (flags.remove) {
-      const result = this._updateResource(kind, name, (spec) => {
-        const podSpec = spec.template?.spec || spec;
-        podSpec.volumes = (podSpec.volumes || []).filter((volume) => volume.name !== volumeName);
-        for (const container of podSpec.containers || []) {
-          container.volumeMounts = (container.volumeMounts || []).filter((mount) => mount.name !== volumeName);
+    const dryRun = this._dryRunMode(flags);
+    const output = this._outputFormat(flags);
+
+    // ── Complete(): decide the operation (list is the default) ─────────────
+    const operationCount = [this._boolFlag(flags, 'add'), this._boolFlag(flags, 'remove')].filter(Boolean).length;
+    if (operationCount > 1) return this._err('error: you may only specify one operation at a time');
+    const isAdd = this._boolFlag(flags, 'add');
+    const isRemove = this._boolFlag(flags, 'remove');
+    const addOpts = {
+      type: (textFlag('type') || '').toLowerCase(),
+      mountPath: textFlag('mount-path') || '',
+      subPath: textFlag('sub-path') || '',
+      defaultMode: textFlag('default-mode') || '',
+      readOnly: this._boolFlag(flags, 'read-only'),
+      overwrite: this._boolFlag(flags, 'overwrite'),
+      path: textFlag('path') || '',
+      configMapName: textFlag('configmap-name') || '',
+      secretName: textFlag('secret-name') || '',
+      claimName: textFlag('claim-name') || '',
+      claimSize: textFlag('claim-size') || '',
+      claimMode: textFlag('claim-mode') || 'ReadWriteOnce',
+      claimClass: textFlag('claim-class') || '',
+      source: textFlag('source') || '',
+      createClaim: false,
+    };
+    if (this._boolFlag(flags, 'local') && dryRun === 'server') {
+      return this._err('error: cannot specify --local and --dry-run=server - did you mean --dry-run=client?');
+    }
+
+    // ── Complete() for --add: infer --type, normalise claim fields ─────────
+    if (isAdd) {
+      if (!addOpts.type) {
+        if (addOpts.claimName || addOpts.claimSize) addOpts.type = 'persistentvolumeclaim';
+        else if (addOpts.secretName) addOpts.type = 'secret';
+        else if (addOpts.configMapName) addOpts.type = 'configmap';
+        else if (addOpts.path) addOpts.type = 'hostpath';
+        else addOpts.type = 'emptydir';
+      }
+      if (addOpts.type === 'configmap' || addOpts.type === 'secret') {
+        if (!addOpts.defaultMode) addOpts.defaultMode = '644';
+      } else if (addOpts.defaultMode) {
+        return this._err('error: --default-mode is only available for secrets and configmaps');
+      }
+      if (addOpts.source) addOpts.type = '';
+      if (addOpts.claimSize) {
+        addOpts.createClaim = true;
+        if (!addOpts.claimName) addOpts.claimName = `pvc-${Math.random().toString(36).slice(2, 7)}`;
+        const normalisedSize = this._normalizeQuantity(addOpts.claimSize);
+        if (!normalisedSize) {
+          return this._err("error: --claim-size is not valid: quantities must match the regular expression '^([+-]?[0-9.]+)([eEinumkKMGTP]*[-+]?[0-9]*)$'");
         }
-        return {};
-      }, { namespace: flags.namespace, explicitNamespace: Boolean(flags.namespace) });
+        addOpts.claimSize = normalisedSize;
+      }
+      const claimMode = String(addOpts.claimMode).toLowerCase();
+      const claimModes = {
+        readonlymany: 'ReadOnlyMany', rom: 'ReadOnlyMany',
+        readwriteonce: 'ReadWriteOnce', rwo: 'ReadWriteOnce',
+        readwritemany: 'ReadWriteMany', rwm: 'ReadWriteMany', '': 'ReadWriteOnce',
+      };
+      if (!(claimMode in claimModes)) {
+        return this._err('error: --claim-mode must be one of ReadWriteOnce (rwo), ReadWriteMany (rwm), or ReadOnlyMany (rom)');
+      }
+      addOpts.claimMode = claimModes[claimMode];
+    }
+
+    // ── Validate() ─────────────────────────────────────────────────────────
+    if (flags.selector && this._boolFlag(flags, 'all')) {
+      return this._err('error: you may specify either --selector or --all but not both');
+    }
+    if (isAdd) {
+      if (!addOpts.type && !addOpts.source) return this._err('error: must provide --type or --source for --add operation');
+      if (typeChanged && addOpts.source) {
+        return this._err('error: either specify --type or --source but not both for --add operation');
+      }
+      switch (String(addOpts.type).toLowerCase()) {
+        case 'emptydir':
+          break;
+        case 'hostpath':
+          if (!addOpts.path) return this._err('error: must provide --path for --type=hostPath');
+          break;
+        case 'secret':
+          if (!addOpts.secretName) return this._err('error: must provide --secret-name for --type=secret');
+          if (!/^0?[0-7]{3}$/.test(addOpts.defaultMode)) return this._err('error: --default-mode must be between 0000 and 0777');
+          break;
+        case 'configmap':
+          if (!addOpts.configMapName) return this._err('error: must provide --configmap-name for --type=configmap');
+          if (!/^0?[0-7]{3}$/.test(addOpts.defaultMode)) return this._err('error: --default-mode must be between 0000 and 0777');
+          break;
+        case 'persistentvolumeclaim':
+        case 'pvc':
+          if (!addOpts.claimName && !addOpts.claimSize) return this._err('error: must provide --claim-name or --claim-size (to create a new claim) for --type=pvc');
+          break;
+        case '':
+          break;
+        default:
+          return this._err('error: invalid volume type. Supported types: emptyDir, hostPath, secret, configmap, persistentVolumeClaim');
+      }
+      if (!addOpts.type && (addOpts.path || addOpts.secretName || addOpts.claimName)) {
+        return this._err('error: --path|--secret-name|--claim-name are only valid for --type option');
+      }
+      if (addOpts.claimClass && !['persistentvolumeclaim', 'pvc'].includes(String(addOpts.type).toLowerCase())) {
+        return this._err('error: must provide --type as persistentVolumeClaim');
+      }
+      if (addOpts.claimClass && !addOpts.claimSize) return this._err('error: must provide --claim-size to create new pvc with claim-class');
+    } else if (addOpts.source || addOpts.path || addOpts.secretName || addOpts.configMapName || addOpts.claimName || addOpts.defaultMode || addOpts.overwrite) {
+      return this._err('error: --type|--path|--configmap-name|--secret-name|--claim-name|--source|--default-mode|--overwrite are only valid for --add operation');
+    }
+    const volumeNameFlag = textFlag('name');
+    if (isRemove && !volumeNameFlag && !this._boolFlag(flags, 'confirm')) {
+      return this._err('error: must provide --confirm for removing more than one volume');
+    }
+    if (flags.filename || flags.kustomize) {
+      return this._err('error: oc set volumes -f/-k is not simulated; operate on a live resource instead (e.g. oc set volume deployment/web --add …).');
+    }
+    if (!positionals.length) {
+      return this._err('error: provide one or more resources to add, list, or delete volumes on as TYPE/NAME');
+    }
+
+    // ── Resolve the target resources ───────────────────────────────────────
+    const ref = this._resolveRef(positionals);
+    const kind = ref.kind;
+    if (!kind) return this._resourceTypeError(positionals[0] || '');
+    if (this._isNamespaced(kind)) {
+      const namespaceError = this._requireNamespace(namespace);
+      if (namespaceError) return namespaceError;
+    }
+    let resources = [];
+    const explicitNamespace = Boolean(flags.namespace);
+    if (this._boolFlag(flags, 'all')) {
+      resources = this._filterResources(this._resources(kind), kind, flags);
+      if (this._isNamespaced(kind)) resources = resources.filter((resource) => resource.metadata?.namespace === namespace);
+    } else {
+      const name = ref.name;
+      if (!name) return this._usageError('set', 'resource name is required\n\n  oc set volume deployment/<name> --add --name=data --claim-path=/data');
+      const resource = this._findResource(kind, name, { namespace: flags.namespace, explicitNamespace, allowPrefix: false });
+      if (!resource) return this._err(this._notFoundMessage(kind, name));
+      resources = [resource];
+    }
+    if (!resources.length) return this._ok(this._boolFlag(flags, 'all') ? 'No resources found' : `No resources found in ${namespace} namespace.`);
+    const singleResource = resources.length === 1;
+
+    // ── List mode (no --add/--remove): `oc set volume deployment/app` ──────
+    if (!isAdd && !isRemove) {
+      const lines = [];
+      const errors = [];
+      for (const resource of resources) {
+        const target = this._podSpecForSet(kind, resource);
+        if (!target) {
+          errors.push(`error: ${resource.kind} ${resource.metadata?.name} the ${resource.kind} ${resource.metadata?.name} is not a pod or does not have a pod template`);
+          continue;
+        }
+        const { podSpec } = target;
+        const selected = this._selectContainers(podSpec, flags.containers);
+        if (!selected.containers.length && String(flags.containers || '*') !== '*') {
+          lines.push(`warning: ${resource.kind}/${resource.metadata?.name} does not have any containers matching "${flags.containers}"`);
+          continue;
+        }
+        const resourceNamespace = resource.metadata?.namespace || namespace;
+        const volumes = podSpec.volumes || [];
+        lines.push(`${resource.kind} ${resource.metadata?.name}`);
+        let found = false;
+        for (const volume of volumes) {
+          if (volumeNameFlag && volume.name !== volumeNameFlag) continue;
+          found = true;
+          const claimName = volume.persistentVolumeClaim?.claimName;
+          const claimDescription = claimName ? this._claimReferenceDescription(resourceNamespace, claimName) : '';
+          lines.push(`  ${this._volumeSourceDescription(volume, claimDescription)} as ${volume.name}`);
+          for (const container of selected.containers) {
+            for (const mount of container.volumeMounts || []) {
+              if (mount.name !== volume.name) continue;
+              const suffix = podSpec.containers.length === 1 ? '' : ` in container ${container.name}`;
+              lines.push(`    mounted at ${mount.mountPath}${suffix}`);
+            }
+          }
+        }
+        if (volumeNameFlag && !found) errors.push(`error: ${resource.kind} ${resource.metadata?.name} volume "${volumeNameFlag}" not found`);
+      }
+      if (errors.length) return this._err([...lines, ...errors].join('\n'));
+      return this._ok(lines.join('\n'));
+    }
+
+    // ── Add / remove: mutate a clone so dry-run never touches the cluster ──
+    const warnings = [];
+    const applied = [];
+    let resolvedVolumeName = volumeNameFlag;
+    for (const resource of resources) {
+      const resourceNamespace = resource.metadata?.namespace || namespace;
+      const clone = JSON.parse(JSON.stringify(resource));
+      const target = this._podSpecForSet(kind, clone);
+      if (!target) {
+        if (singleResource) return this._err(`error: the ${resource.kind} ${resource.metadata?.name} is not a pod or does not have a pod template`);
+        warnings.push(`warning: skipping ${resource.kind} ${resource.metadata?.name} (not a pod or does not have a pod template)`);
+        continue;
+      }
+      const { podSpec } = target;
+      podSpec.volumes = podSpec.volumes || [];
+      const selected = this._selectContainers(podSpec, flags.containers);
+      if (!selected.containers.length && String(flags.containers || '*') !== '*') {
+        warnings.push(`warning: ${resource.kind}/${resource.metadata?.name} does not have any containers matching "${flags.containers}"`);
+        continue;
+      }
+
+      if (isRemove) {
+        const removeName = resolvedVolumeName;
+        if (!removeName) {
+          for (const container of selected.containers) container.volumeMounts = [];
+          podSpec.volumes = [];
+        } else {
+          for (const container of selected.containers) {
+            container.volumeMounts = (container.volumeMounts || []).filter((mount) => mount.name !== removeName);
+          }
+          const stillUsed = (podSpec.containers || []).some((container) => (container.volumeMounts || []).some((mount) => mount.name === removeName));
+          if (!stillUsed) {
+            const index = podSpec.volumes.findIndex((volume) => volume.name === removeName);
+            if (index < 0) return this._err(`error: volume '${removeName}' not found`);
+            podSpec.volumes.splice(index, 1);
+          }
+        }
+      } else {
+        // Resolve/generate the volume name exactly like oc's AddVolumeOptions.
+        let claimFound = false;
+        if (!resolvedVolumeName) {
+          if (addOpts.overwrite) {
+            if (!singleResource) return this._err('error: you must specify --name for the volume name when dealing with multiple resources');
+            if (addOpts.mountPath) {
+              const matches = [];
+              for (const container of selected.containers) {
+                for (const mount of container.volumeMounts || []) {
+                  if (this._cleanPath(mount.mountPath) === this._cleanPath(addOpts.mountPath) && !matches.includes(mount.name)) matches.push(mount.name);
+                }
+              }
+              if (matches.length === 0) return this._err(`error: unable to find the volume for mount-path: ${addOpts.mountPath}`);
+              if (matches.length > 1) return this._err(`error: found multiple volumes with same mount-path: ${addOpts.mountPath}`);
+              resolvedVolumeName = matches[0];
+            } else {
+              return this._err('error: ambiguous --overwrite, specify --name or --mount-path');
+            }
+          } else {
+            const claimVolume = addOpts.claimName
+              ? podSpec.volumes.find((volume) => volume.persistentVolumeClaim?.claimName === addOpts.claimName)
+              : null;
+            if (claimVolume) {
+              resolvedVolumeName = claimVolume.name;
+              claimFound = true;
+            } else {
+              resolvedVolumeName = `volume-${Math.random().toString(36).slice(2, 7)}`;
+              warnings.push(`info: Generated volume name: ${resolvedVolumeName}`);
+            }
+          }
+        } else {
+          claimFound = Boolean(addOpts.claimName && podSpec.volumes.some((volume) => volume.persistentVolumeClaim?.claimName === addOpts.claimName));
+        }
+
+        const existingIndex = podSpec.volumes.findIndex((volume) => volume.name === resolvedVolumeName);
+        let newVolume = { name: resolvedVolumeName };
+        let setSource = true;
+        if (existingIndex >= 0) {
+          const existing = podSpec.volumes[existingIndex];
+          if (!addOpts.overwrite && !claimFound) {
+            return this._err(`error: volume '${resolvedVolumeName}' already exists. Use --overwrite to replace`);
+          }
+          if (!typeChanged && !addOpts.source) {
+            // `--overwrite` without --type keeps the existing volume source.
+            const reused = JSON.parse(JSON.stringify(existing));
+            delete reused.name;
+            newVolume = { name: resolvedVolumeName, ...reused };
+            setSource = false;
+          }
+          podSpec.volumes.splice(existingIndex, 1);
+        } else if (addOpts.overwrite) {
+          warnings.push(`warning: volume "${resolvedVolumeName}" did not previously exist and was not overwritten. A new volume with this name has been created instead.`);
+        }
+        if (setSource) {
+          const type = String(addOpts.type).toLowerCase();
+          if (type === '' && addOpts.source) {
+            let source = null;
+            try {
+              source = JSON.parse(addOpts.source);
+            } catch (error) {
+              return this._err(`error: invalid --source JSON: ${error.message}`);
+            }
+            if (!source || typeof source !== 'object' || Object.keys(source).length !== 1) {
+              return this._err('error: must provide only one volume for --source');
+            }
+            Object.assign(newVolume, source);
+          } else if (type === 'emptydir') {
+            newVolume.emptyDir = {};
+          } else if (type === 'hostpath') {
+            newVolume.hostPath = { path: addOpts.path };
+          } else if (type === 'secret') {
+            newVolume.secret = { secretName: addOpts.secretName, defaultMode: parseInt(addOpts.defaultMode, 8) };
+          } else if (type === 'configmap') {
+            newVolume.configMap = { name: addOpts.configMapName, defaultMode: parseInt(addOpts.defaultMode, 8) };
+          } else if (type === 'persistentvolumeclaim' || type === 'pvc') {
+            newVolume.persistentVolumeClaim = { claimName: addOpts.claimName };
+          }
+        }
+        podSpec.volumes.push(newVolume);
+        if (addOpts.mountPath) {
+          for (const container of selected.containers) {
+            const conflict = (container.volumeMounts || []).find(
+              (mount) => this._cleanPath(mount.mountPath) === this._cleanPath(addOpts.mountPath) && mount.name !== resolvedVolumeName,
+            );
+            if (conflict) return this._err(`error: volume mount '${addOpts.mountPath}' already exists for container '${container.name}'`);
+            container.volumeMounts = (container.volumeMounts || []);
+            if (addOpts.overwrite) container.volumeMounts = container.volumeMounts.filter((mount) => mount.name !== resolvedVolumeName);
+            const volumeMount = { name: resolvedVolumeName, mountPath: this._cleanPath(addOpts.mountPath) };
+            if (addOpts.readOnly) volumeMount.readOnly = true;
+            if (addOpts.subPath) volumeMount.subPath = this._cleanPath(addOpts.subPath);
+            container.volumeMounts.push(volumeMount);
+          }
+        }
+      }
+
+      applied.push({ resource, clone, podSpec, target });
+    }
+
+    if (!applied.length) {
+      return this._err([...warnings, isRemove ? 'error: no volumes were removed' : 'error: no volumes were added'].join('\n'));
+    }
+
+    // Optional PVC creation for `--claim-size` (real oc creates it server-side).
+    const claims = [];
+    if (isAdd && addOpts.createClaim) {
+      for (const entry of applied) {
+        if (entry.resource.metadata?.namespace === undefined && kind !== 'Pod') continue;
+        claims.push({
+          apiVersion: 'v1',
+          kind: 'PersistentVolumeClaim',
+          metadata: { name: addOpts.claimName, namespace: entry.resource.metadata?.namespace || namespace },
+          spec: {
+            accessModes: [addOpts.claimMode],
+            resources: { requests: { storage: addOpts.claimSize } },
+            ...(addOpts.claimClass ? { storageClassName: addOpts.claimClass } : {}),
+          },
+        });
+        break;
+      }
+    }
+
+    const printObject = (object) => {
+      if (output.format === 'yaml') return toYamlDocument(object);
+      if (output.format === 'json') return JSON.stringify(object, null, 4);
+      if (output.format === 'name') return `${this._resourceRef(object.kind)}/${object.metadata?.name}`;
+      return `${this._resourceRef(object.kind)}/${object.metadata?.name} volume updated`;
+    };
+    const outputLines = [];
+    for (const entry of applied) {
+      const object = {
+        apiVersion: entry.resource.apiVersion || apiVersionForKind(kind),
+        kind: entry.resource.kind || kind,
+        metadata: {
+          name: entry.resource.metadata?.name,
+          ...(entry.resource.metadata?.namespace ? { namespace: entry.resource.metadata.namespace } : {}),
+        },
+        spec: entry.clone.spec,
+      };
+      outputLines.push(printObject(object));
+      if (dryRun) continue;
+      const result = kind === 'Pod'
+        ? this._updateResource(kind, entry.resource.metadata?.name, (spec) => {
+          Object.assign(spec, entry.clone.spec);
+          return {};
+        }, { namespace: entry.resource.metadata?.namespace || flags.namespace, explicitNamespace: Boolean(entry.resource.metadata?.namespace || flags.namespace) })
+        : this._updateResource(kind, entry.resource.metadata?.name, (spec) => {
+          spec.template = entry.clone.spec.template;
+          return {};
+        }, { namespace: entry.resource.metadata?.namespace || flags.namespace, explicitNamespace: Boolean(entry.resource.metadata?.namespace || flags.namespace) });
       if (result.error) return result.error;
-      return this._ok(`${this._resourceRef(kind)}/${name} volume ${volumeName} removed`);
     }
-    const ge = this.gameEngine;
-    if (ge && typeof ge.setVolumes === 'function') {
-      const result = ge.setVolumes(kind, name, {
-        namespace,
-        name: volumeName,
-        claimName: flags['claim-name'] && flags['claim-name'] !== true ? String(flags['claim-name']) : undefined,
-        mountPath: flags['mount-path'] && flags['mount-path'] !== true ? String(flags['mount-path']) : '/data',
-        configMap: flags['config-map'] && flags['config-map'] !== true ? String(flags['config-map']) : undefined,
-        secret: flags.secret && flags.secret !== true ? String(flags.secret) : undefined,
-      });
-      if (result.success === false) return this._err(result.message);
-      return this._ok(`${this._resourceRef(kind)}/${name} volumes updated`);
+
+    if (dryRun) {
+      const display = [...warnings, ...outputLines];
+      if (claims.length) display.push(...claims.map(printObject));
+      return this._ok(display.join('\n'));
     }
-    return this._err('error: volume updates are not available in this build');
+    for (const claim of claims) {
+      const created = this._applyObject(claim);
+      if (created.error) return created.error;
+    }
+    return this._ok([...warnings, ...outputLines].join('\n'));
   },
 
   // ── rollout / run / exec ─────────────────────────────────────────────────
@@ -7270,6 +8390,53 @@ Object.assign(CommandBar.prototype, {
       return this._err(this._notFoundMessage(kind, name));
     }
     const ge = this.gameEngine;
+    // runtime owns deploy/RS/pod state; prefer its real-ReplicaSet view.
+    const sim = ge?.simulation || ge?.sim || null;
+    const refLine = `${this._resourceRef(kind)}/${name}`;
+    if (sub === 'status' && sim && typeof sim.getRolloutStatus === 'function') {
+      const status = sim.getRolloutStatus(kind, name, { namespace });
+      if (status && status.found === false) return this._err(this._notFoundMessage(kind, name));
+      if (status && status.error) return this._err(status.error);
+      if (status && status.timedOut) {
+        // Real oc: error: deployment "api-server" exceeded its progress deadline
+        const text = /^error:/.test(status.message || '') ? status.message : `error: ${status.message || `${this._singularName(kind)} "${name}" exceeded its progress deadline`}`;
+        return this._err(text);
+      }
+      if (status && status.complete) return this._ok(status.message || `${this._singularName(kind)} "${name}" successfully rolled out`);
+      const pending = status?.message || `Waiting for ${this._singularName(kind)} "${name}" rollout to finish...`;
+      this._watchRolloutStatus(kind, name, namespace, sim);
+      return this._ok(pending);
+    }
+    if (sub === 'history' && sim && typeof sim.getRolloutHistory === 'function') {
+      const history = sim.getRolloutHistory(kind, name, { namespace }) || [];
+      if (!history.length) return this._err(this._notFoundMessage(kind, name));
+      const revisionFlag = flags.revision || flags['to-revision'];
+      if (revisionFlag && revisionFlag !== true) {
+        const wanted = Number(revisionFlag);
+        const entry = history.find((item) => Number(item.revision) === wanted);
+        if (!entry) return this._err(`error: unable to find the specified revision`);
+        const images = (entry.images || []).map((image) => `    Image:\t${image}`);
+        const containers = entry.template?.spec?.containers || [];
+        const lines = [
+          `${this._resourceRef(kind)}/${name} with revision #${entry.revision}`,
+          'Pod Template:',
+          `  Labels:\t${Object.entries(entry.template?.metadata?.labels || {}).map(([key, value]) => `${key}=${value}`).join(',') || '<none>'}`,
+          '  Containers:',
+          ...(containers.length
+            ? containers.flatMap((container) => [`   ${container.name || 'main'}:`, `    Image:\t${container.image || '<none>'}`])
+            : images),
+        ];
+        return this._ok(lines.join('\n'));
+      }
+      const rows = history.map((entry) => [String(entry.revision), entry.changeCause || '<none>']);
+      return this._ok(padTable(['REVISION', 'CHANGE-CAUSE'], rows));
+    }
+    if (sub === 'undo' && sim && typeof sim.undoRollout === 'function') {
+      const revision = flags.revision || flags['to-revision'];
+      const result = sim.undoRollout(kind, name, { namespace, revision: revision && revision !== true ? Number(revision) : undefined });
+      if (!result || result.success === false) return this._err(result?.message || `error: no rollout history found for ${this._singularName(kind)} "${name}"`);
+      return this._ok(result.message || `${refLine} rolled back`);
+    }
     if (ge && typeof ge.rollout === 'function') {
       if (sub === 'history') {
         const history = typeof ge.getRolloutHistory === 'function' ? ge.getRolloutHistory(kind, name, { namespace }) : [];
@@ -7278,17 +8445,87 @@ Object.assign(CommandBar.prototype, {
         return this._ok(padTable(['REVISION', 'CHANGE-CAUSE'], rows));
       }
       if (sub === 'pause' || sub === 'resume') {
-        return this._ok(`${this._resourceRef(kind)}/${name} ${sub === 'pause' ? 'paused' : 'resumed'}`);
+        return this._ok(`${refLine} ${sub === 'pause' ? 'paused' : 'resumed'}`);
       }
       const revision = flags.revision || flags['to-revision'];
-      const result = ge.rollout(kind, sub, name, { namespace, revision: revision ? Number(revision) : undefined });
+      const result = ge.rollout(kind, sub, name, { namespace, revision: revision && revision !== true ? Number(revision) : undefined });
       if (result.success === false) return this._err(result.message);
-      if (result.status) {
-        return this._ok(`${this._resourceRef(kind)}/${name} ${result.message.includes('successfully') ? 'successfully rolled out' : result.message}`);
+      if (sub === 'status' && result.status) {
+        return this._ok(result.message || `${refLine} successfully rolled out`);
       }
-      return this._ok(result.message || `${this._resourceRef(kind)}/${name} ${sub === 'restart' ? 'restarted' : 'rolled back'}`);
+      return this._ok(result.message || `${refLine} ${sub === 'restart' ? 'restarted' : 'rolled back'}`);
     }
     return this._err(`error: rollout ${sub} is not available in this build`);
+  },
+
+  /**
+   * `oc rollout status` blocks on a real cluster; the simulator prints the
+   * current Waiting line and then appends the final state from runtime's
+   * deployment controller (progress-deadline-exceeded / complete).
+   */
+  _watchRolloutStatus(kind, name, namespace, sim) {
+    this._clearRolloutWatches();
+    const state = { stopped: false, timer: null, offs: [] };
+    const finish = (message, tone) => {
+      if (state.stopped) return;
+      state.stopped = true;
+      if (state.timer) clearInterval(state.timer);
+      for (const off of state.offs) {
+        try {
+          off();
+        } catch {
+          /* ignore */
+        }
+      }
+      state.offs = [];
+      this._rolloutWatches = (this._rolloutWatches || []).filter((entry) => entry !== state);
+      if (message) this._appendOutput(message, tone || 'text-white/70');
+    };
+    const poll = () => {
+      if (state.stopped) return;
+      let status = null;
+      try {
+        status = sim.getRolloutStatus(kind, name, { namespace });
+      } catch {
+        status = null;
+      }
+      if (!status) return;
+      if (status.timedOut) {
+        const text = /^error:/.test(status.message || '') ? status.message : `error: ${status.message || `${this._singularName(kind)} "${name}" exceeded its progress deadline`}`;
+        finish(text, 'text-red-400');
+      } else if (status.complete) {
+        finish(status.message || `${this._singularName(kind)} "${name}" successfully rolled out`, 'text-white/70');
+      } else if (status.error) {
+        finish(status.error, 'text-red-400');
+      }
+    };
+    state.timer = setInterval(poll, 1000);
+    const offDeadline = this.eventBus?.on?.('rollout:progress-deadline-exceeded', (payload) => {
+      if (payload && (payload.name !== name || (payload.kind && payload.kind !== kind))) return;
+      const text = payload?.message || `error: ${this._singularName(kind)} "${name}" exceeded its progress deadline`;
+      finish(/^error:/.test(text) ? text : `error: ${text}`, 'text-red-400');
+    });
+    const offComplete = this.eventBus?.on?.('rollout:complete', (payload) => {
+      if (payload && (payload.name !== name || (payload.kind && payload.kind !== kind))) return;
+      finish(payload?.message || `${this._singularName(kind)} "${name}" successfully rolled out`, 'text-white/70');
+    });
+    state.offs = [offDeadline, offComplete].filter((off) => typeof off === 'function');
+    this._rolloutWatches = [...(this._rolloutWatches || []), state];
+  },
+
+  _clearRolloutWatches() {
+    for (const state of this._rolloutWatches || []) {
+      state.stopped = true;
+      if (state.timer) clearInterval(state.timer);
+      for (const off of state.offs || []) {
+        try {
+          off();
+        } catch {
+          /* ignore */
+        }
+      }
+    }
+    this._rolloutWatches = [];
   },
 
   _cmdRun(tokens) {
@@ -7334,15 +8571,25 @@ Object.assign(CommandBar.prototype, {
       longValues: ['namespace', 'container'],
       longBools: ['stdin', 'tty', 'attach', 'quiet'],
     });
-    const { kind, name } = this._resolveRef(positionals);
-    const podName = kind === 'Pod' ? name : kind ? null : positionals[0];
-    if (!podName) {
-      if (kind && kind !== 'Pod') return this._err(`Error from server (BadRequest): cannot exec into a ${kind.toLowerCase()}; specify a pod`);
-      return this._usageError('exec', 'pod name is required\n\n  oc exec -it <pod> -- <command>');
-    }
+    const { kind: refKind, name: refName } = this._resolveRef(positionals);
     const namespace = this._namespaceFromFlags(flags);
-    const pod = this._findResource('Pod', podName, { namespace: flags.namespace, explicitNamespace: Boolean(flags.namespace), allowPrefix: false });
-    if (!pod) return this._err(this._notFoundMessage('Pod', podName));
+    let pod = null;
+    let kind = refKind;
+    let name = refName;
+    if (refKind === 'Pod') {
+      pod = this._findResource('Pod', refName, { namespace: flags.namespace, explicitNamespace: Boolean(flags.namespace), allowPrefix: false });
+    } else if (refKind) {
+      // Real oc resolves deployment/statefulset/job/... to a concrete pod.
+      pod = this._podForResource(refKind, refName, namespace, Boolean(flags.namespace));
+      if (!pod) return this._err(`error: no pods found for ${this._resourceRef(refKind)}/${refName}`);
+    } else {
+      // `oc exec <pod> -- …` (no resource type)
+      kind = 'Pod';
+      name = positionals[0];
+      if (!name) return this._usageError('exec', 'pod name is required\n\n  oc exec -it <pod> -- <command>');
+      pod = this._findResource('Pod', name, { namespace: flags.namespace, explicitNamespace: Boolean(flags.namespace), allowPrefix: false });
+    }
+    if (!pod) return this._err(this._notFoundMessage('Pod', refName || positionals[0] || ''));
     const containers = this._containerList(pod);
     const containerName = flags.container && flags.container !== true ? String(flags.container) : containers[0]?.name || 'main';
     if (containers.length && !containers.some((container) => container.name === containerName)) {
@@ -7351,7 +8598,8 @@ Object.assign(CommandBar.prototype, {
     const interactive = rawTokens.some((token) => /^-[a-z]*[it][a-z]*$/.test(token));
     let command = afterDoubleDash.join(' ').trim();
     if (!command) {
-      const plainCommand = positionals.slice(kind ? 2 : 1).join(' ').trim();
+      const consumed = refKind ? 2 : 1;
+      const plainCommand = positionals.slice(consumed).join(' ').trim();
       command = plainCommand || (interactive ? '/bin/sh' : '');
     }
     const lines = [`Defaulting container name to "${containerName}".`, `Use 'oc describe pod/${pod.metadata?.name} -n ${pod.metadata?.namespace}' to see all of the containers in this pod.`];
@@ -7376,6 +8624,33 @@ Object.assign(CommandBar.prototype, {
     if (/^(ls|ls -l|ls -la)$/.test(text)) return ['bin  boot  dev  etc  home  lib  media  mnt  opt  proc  root  run  sbin  srv  sys  tmp  usr  var'];
     if (/^(cat \/etc\/hostname|cat \/etc\/hosts)$/.test(text)) return [pod.metadata?.name || 'pod', '172.30.0.1 kubernetes.default.svc'];
     if (/^curl\b/.test(text)) {
+      const sim = this.gameEngine?.simulation || this.gameEngine?.sim || null;
+      const argv = text.split(/\s+/).slice(1).filter((token) => token && !token.startsWith('-'));
+      const rawTarget = argv[argv.length - 1] || '';
+      let target = rawTarget;
+      let port = null;
+      if (target) {
+        const parsed = target.match(/^[a-z]+:\/\/([^/:]+)(?::(\d+))?/i);
+        if (parsed) {
+          target = parsed[1];
+          port = parsed[2] ? Number(parsed[2]) : null;
+        } else {
+          const hostPort = target.match(/^([^:]+):(\d+)$/);
+          if (hostPort) {
+            target = hostPort[1];
+            port = Number(hostPort[2]);
+          }
+        }
+      }
+      if (sim && typeof sim.trafficForExec === 'function' && target) {
+        const result = sim.trafficForExec(pod, {
+          target,
+          ...(port ? { port } : {}),
+          namespace: pod.metadata?.namespace || 'default',
+          protocol: 'TCP',
+        });
+        if (result && Array.isArray(result.lines) && result.lines.length) return result.lines;
+      }
       const selector = pod.metadata?.labels?.app || '';
       return [`<html><body>Hello from ${selector || pod.metadata?.name} (container ${containerName})</body></html>`];
     }
@@ -7396,7 +8671,10 @@ Object.assign(CommandBar.prototype, {
   _cmdExpose(tokens) {
     const { positionals, flags } = parseArgs(tokens, {
       shortValues: { '-n': 'namespace' },
-      longValues: ['namespace', 'name', 'hostname', 'path', 'port', 'selector', 'wildcard-policy'],
+      longValues: [
+        'namespace', 'name', 'hostname', 'path', 'port', 'target-port', 'selector', 'wildcard-policy',
+        'type', 'protocol', 'labels', 'session-affinity', 'cluster-ip', 'external-name', 'load-balancer-ip', 'overrides',
+      ],
       longBools: ['internal', 'generated'],
     });
     let kind = null;
@@ -7413,21 +8691,24 @@ Object.assign(CommandBar.prototype, {
         }
       }
     }
-    if (!kind) kind = 'Service';
+    if (!kind) kind = kind || 'Service';
     if (!name) return this._usageError('expose', 'resource name is required\n\n  oc expose svc/<name> [--hostname=] [--path=]');
     const namespace = this._namespaceFromFlags(flags);
     const namespaceError = this._requireNamespace(namespace);
     if (namespaceError) return namespaceError;
+    const text = (flagName) => (flags[flagName] !== undefined && flags[flagName] !== true ? String(flags[flagName]) : null);
     const ge = this.gameEngine;
-    const options = {
-      namespace,
-      name: flags.name && flags.name !== true ? String(flags.name) : undefined,
-      hostname: flags.hostname && flags.hostname !== true ? String(flags.hostname) : '',
-      path: flags.path && flags.path !== true ? String(flags.path) : '/',
-      port: flags.port && flags.port !== true ? String(flags.port) : undefined,
-      wildcardPolicy: flags['wildcard-policy'] && flags['wildcard-policy'] !== true ? String(flags['wildcard-policy']) : undefined,
-    };
+
+    // ── `oc expose svc/<name>` → Route (never a Service) ───────────────────
     if (kind === 'Service') {
+      const options = {
+        namespace,
+        name: text('name') || undefined,
+        hostname: text('hostname') || '',
+        path: text('path') || '',
+        port: text('port') || undefined,
+        wildcardPolicy: text('wildcard-policy') || undefined,
+      };
       let service = this._findResource('Service', name, { namespace: flags.namespace, explicitNamespace: Boolean(flags.namespace) });
       let serviceWarning = '';
       if (!service) {
@@ -7460,15 +8741,16 @@ Object.assign(CommandBar.prototype, {
         }
       }
       if (!service) return this._err(this._notFoundMessage('Service', name));
+      const routeName = options.name || name;
       if (ge && typeof ge.exposeService === 'function') {
         const result = ge.exposeService(name, options);
         if (result.success === false) return this._err(result.message);
-        return this._ok([serviceWarning, result.message || `route.route.openshift.io/${name} exposed`].filter(Boolean).join('\n'));
+        this._normalizeRoutePath(routeName, namespace, options.path);
+        return this._ok([serviceWarning, `route.route.openshift.io/${routeName} exposed`].filter(Boolean).join('\n'));
       }
-      const routeName = options.name || name;
       const routeSpec = {
         host: options.hostname || '',
-        path: options.path || '/',
+        path: options.path || '',
         to: { kind: 'Service', name, weight: 100 },
         port: { targetPort: options.port || service.spec?.ports?.[0]?.name || service.spec?.ports?.[0]?.port || 'http' },
         wildcardPolicy: options.wildcardPolicy || 'None',
@@ -7480,34 +8762,65 @@ Object.assign(CommandBar.prototype, {
         spec: routeSpec,
       });
       if (created.error) return created.error;
-      return this._ok(`route.route.openshift.io/${routeName} exposed`);
+      return this._ok([serviceWarning, `route.route.openshift.io/${routeName} exposed`].filter(Boolean).join('\n'));
     }
-    if (['Deployment', 'DeploymentConfig', 'StatefulSet', 'DaemonSet'].includes(kind)) {
+
+    // ── `oc expose deployment/<name>` → Service only (issue: no Route) ─────
+    if (['Deployment', 'DeploymentConfig', 'StatefulSet', 'DaemonSet', 'ReplicaSet', 'Pod'].includes(kind)) {
       const workload = this._findResource(kind, name, { namespace: flags.namespace, explicitNamespace: Boolean(flags.namespace) });
       if (!workload) return this._err(this._notFoundMessage(kind, name));
-      const labels = workload.spec?.template?.metadata?.labels || { app: name };
-      const selector = workload.spec?.selector?.matchLabels || labels;
-      let service = this._findResource('Service', name, { namespace, explicitNamespace: true });
-      const serviceName = name;
-      if (!service) {
-        const createdService = this._applyObject({
-          apiVersion: 'v1',
-          kind: 'Service',
-          metadata: { name: serviceName, namespace, labels },
-          spec: {
-            selector,
-            ports: [{ name: 'http', port: Number(flags.port) || 8080, targetPort: Number(flags.port) || 8080, protocol: 'TCP' }],
-            type: 'ClusterIP',
-          },
-        });
-        if (createdService.error) return createdService.error;
-        service = createdService.resource;
+      const serviceName = text('name') || name;
+      const existing = this._findResource('Service', serviceName, { namespace, explicitNamespace: true, allowPrefix: false });
+      if (existing) return this._err(`Error from server (AlreadyExists): services "${serviceName}" already exists`);
+      const templateLabels = kind === 'Pod' ? workload.metadata?.labels || {} : workload.spec?.template?.metadata?.labels || {};
+      const labels = text('labels') ? parseCommaAssignments(text('labels')) : { ...(workload.metadata?.labels || templateLabels) };
+      const selector = text('selector')
+        ? parseCommaAssignments(text('selector'))
+        : kind === 'Pod'
+          ? { ...(workload.metadata?.labels || {}) }
+          : { ...(workload.spec?.selector?.matchLabels || templateLabels) };
+      if (!Object.keys(selector).length) {
+        return this._err(`error: couldn't find selectors for ${this._resourceRef(kind)}/${name}; specify --selector`);
       }
-      const routeResult = ge && typeof ge.exposeService === 'function'
-        ? ge.exposeService(serviceName, { ...options, name: options.name || serviceName })
-        : { success: true, message: `route.route.openshift.io/${serviceName} exposed` };
-      if (routeResult.success === false) return this._err(routeResult.message);
-      return this._ok(`service/${serviceName} exposed\n${routeResult.message || ''}`.trim());
+      const containerPorts = kind === 'Pod'
+        ? (workload.spec?.containers || []).flatMap((container) => container.ports || [])
+        : (workload.spec?.template?.spec?.containers || []).flatMap((container) => container.ports || []);
+      const firstPort = containerPorts[0] || null;
+      const serviceTypeToken = String(text('type') || 'ClusterIP').toLowerCase();
+      const serviceTypes = {
+        clusterip: 'ClusterIP', nodeport: 'NodePort', loadbalancer: 'LoadBalancer', externalname: 'ExternalName',
+      };
+      if (!serviceTypes[serviceTypeToken]) {
+        return this._err(`error: invalid service type "${text('type')}": must be one of ClusterIP, NodePort, LoadBalancer, ExternalName`);
+      }
+      const protocol = String(text('protocol') || firstPort?.protocol || 'TCP').toUpperCase();
+      if (!['TCP', 'UDP', 'SCTP'].includes(protocol)) return this._err(`error: invalid protocol "${text('protocol')}"`);
+      const port = text('port') ? Number(text('port')) : Number(firstPort?.containerPort) || 80;
+      const targetPortRaw = text('target-port');
+      const targetPort = targetPortRaw ? (/^\d+$/.test(targetPortRaw) ? Number(targetPortRaw) : targetPortRaw) : Number(firstPort?.containerPort) || port;
+      const servicePort = { name: firstPort?.name || 'http', port, targetPort, protocol };
+      if (/^\d+$/.test(String(servicePort.name))) servicePort.name = 'http';
+      const spec = {
+        type: serviceTypes[serviceTypeToken],
+        selector,
+        ports: [servicePort],
+      };
+      if (spec.type === 'ExternalName') {
+        delete spec.selector;
+        const externalName = text('external-name');
+        if (!externalName) return this._err('error: cannot expose an external name service without --external-name');
+        spec.externalName = externalName;
+      }
+      if (text('cluster-ip')) spec.clusterIP = text('cluster-ip');
+      if (text('session-affinity')) spec.sessionAffinity = text('session-affinity');
+      const created = this._applyObject({
+        apiVersion: 'v1',
+        kind: 'Service',
+        metadata: { name: serviceName, namespace, labels },
+        spec,
+      });
+      if (created.error) return created.error;
+      return this._ok(`service/${serviceName} exposed`);
     }
     return this._err(`error: cannot expose a ${kind}; use a Service or a workload`);
   },
@@ -8509,15 +9822,28 @@ Object.assign(CommandBar.prototype, {
     if (!verb || !resourceToken) {
       return this._usageError('auth', 'verb and resource are required\n\n  oc auth can-i <verb> <resource> [--as=<user>]\n  oc auth can-i --list');
     }
-    // SCC checks use the SCC user/group lists, mirroring oc's scc/ resource.
+    // SCC checks: the engine owns the OCP 4.x binding model (ClusterRole
+    // system:openshift:scc:<name> for users/groups, project RoleBinding for -z);
+    // fall back to the legacy spec.users/groups lists only without the engine.
     const sccMatch = resourceToken.match(/^scc\/(.+)$/);
     if (sccMatch) {
       const sccName = sccMatch[1];
       const scc = this._resources('SecurityContextConstraints').find((candidate) => candidate.metadata?.name === sccName);
       if (!scc) return this._err(`Error from server (NotFound): securitycontextconstraints.security.openshift.io "${sccName}" not found`);
       const user = asUser || this.currentUser;
-      const groups = this._userGroups(user);
-      const allowed = (scc.spec?.users || []).includes(user) || (scc.spec?.groups || []).some((group) => groups.includes(group));
+      let allowed = null;
+      if (ge && typeof ge.canI === 'function') {
+        try {
+          const engineResult = ge.canI('use', `scc/${sccName}`, namespace, user);
+          if (engineResult && typeof engineResult.allowed === 'boolean') allowed = engineResult.allowed;
+        } catch {
+          allowed = null;
+        }
+      }
+      if (allowed === null) {
+        const groups = this._userGroups(user);
+        allowed = (scc.spec?.users || []).includes(user) || (scc.spec?.groups || []).some((group) => groups.includes(group));
+      }
       return this._ok(allowed ? 'yes' : 'no');
     }
     const kind = normalizeKind(resourceToken) || resourceToken;
@@ -8568,32 +9894,146 @@ Object.assign(CommandBar.prototype, {
     );
   },
 
+  /** Helm repo/release bookkeeping for the simulated Helm client. */
+  _helmState() {
+    if (!this._helmRepoState) {
+      this._helmRepoState = new Map();
+      this._helmReleasesMeta = new Map();
+      this._helmReleaseHistory = new Map();
+    }
+    return this._helmRepoState;
+  },
+
+  _helmAvailableChart(repo, chartName) {
+    if (!repo) return null;
+    return {
+      repo,
+      name: chartName,
+      version: '0.1.0',
+      appVersion: '1.0.0',
+      description: `A Helm chart for ${chartName} (bundled simulator chart)`,
+      path: 'helm/webapp',
+    };
+  },
+
+  _helmReleaseList(namespace) {
+    const result = this._helmCall('listHelm', [{ namespace }]);
+    if (result.error) return { error: result };
+    const payload = result.result;
+    const releases = Array.isArray(payload) ? payload : Array.isArray(payload?.releases) ? payload.releases : [];
+    return { releases };
+  },
+
+  _helmHistoryFor(release, record) {
+    this._helmState();
+    let history = this._helmReleaseHistory.get(release);
+    if (!history) {
+      const meta = this._helmReleasesMeta.get(release) || {};
+      history = [{
+        revision: Number(record?.revision || 1),
+        updatedAt: record?.updatedAt || Date.now(),
+        status: record?.status || 'deployed',
+        chart: meta.chart || record?.chart || 'webapp',
+        chartVersion: meta.chartVersion || record?.chartVersion || '0.1.0',
+        appVersion: meta.appVersion || record?.appVersion || '1.0.0',
+        description: 'Install complete',
+      }];
+      this._helmReleaseHistory.set(release, history);
+    }
+    return history;
+  },
+
+  _helmRepoCommand(positionals, flags) {
+    const sub = (positionals[0] || '').toLowerCase();
+    const rest = positionals.slice(1);
+    const repos = this._helmState();
+    switch (sub) {
+      case 'add': {
+        const name = rest[0];
+        const url = rest[1];
+        if (!name || !url) {
+          return this._err('Error: "helm repo add" requires 2 arguments\n\nUsage:  helm repo add [NAME] [URL] [flags]');
+        }
+        if (repos.has(name)) return this._err(`Error: repository name (${name}) already exists, please specify a different name`);
+        repos.set(name, url);
+        return this._ok(`"${name}" has been added to your repositories`);
+      }
+      case 'list':
+      case 'ls': {
+        if (!repos.size) return this._err('Error: no repositories to show');
+        return this._ok(padTable(['NAME', 'URL'], [...repos.entries()]));
+      }
+      case 'remove':
+      case 'rm': {
+        const name = rest[0];
+        if (!name) return this._err('Error: "helm repo remove" requires 1 argument\n\nUsage:  helm repo remove [NAME]');
+        if (!repos.has(name)) return this._err(`Error: no repo named "${name}" found`);
+        repos.delete(name);
+        return this._ok(`"${name}" has been removed from your repositories`);
+      }
+      case 'update': {
+        if (!repos.size) return this._err('Error: no repositories configured');
+        const lines = ['Hang tight while we grab the latest from your chart repositories...'];
+        for (const name of repos.keys()) lines.push(`...Successfully got an update from the "${name}" chart repository`);
+        lines.push('Update Complete. ⎈Happy Helming!⎈');
+        return this._ok(lines.join('\n'));
+      }
+      case 'index': {
+        if (!repos.size) return this._err('Error: no repositories configured');
+        return this._ok('Adding repo index for local simulator charts... done');
+      }
+      default:
+        return this._err(`Error: unknown command "${sub || ''}" for "helm repo"\n\nAvailable Commands:\n  add, list, remove, update\n\nRun 'helm repo --help' for usage.`);
+    }
+  },
+
   _cmdHelm(tokens) {
     const sub = (tokens[0] || '').toLowerCase();
     const { positionals, flags } = parseArgs(tokens.slice(1), {
-      shortValues: { '-n': 'namespace', '-f': 'values' },
-      longValues: ['namespace', 'values', 'values-file', 'set', 'version', 'repo'],
+      shortValues: { '-n': 'namespace', '-f': 'values', '-o': 'output' },
+      longValues: ['namespace', 'values', 'values-file', 'set', 'version', 'repo', 'output', 'history-max', 'timeout', 'max'],
       multi: ['set'],
-      longBools: ['dry-run', 'wait', 'atomic', 'generate-name'],
+      longBools: ['dry-run', 'wait', 'atomic', 'generate-name', 'install', 'devel', 'skip-crds'],
     });
     const namespace = this._namespaceFromFlags(flags);
     const me = this.manifestEngine;
     if (!me) return this._manifestNotReady();
+    const repos = this._helmState();
     switch (sub) {
+      case 'repo':
+        return this._helmRepoCommand(positionals, flags);
+      case 'search': {
+        const searchArgs = positionals[0] === 'repo' ? positionals.slice(1) : positionals;
+        const keyword = String(searchArgs[0] || '').toLowerCase();
+        const charts = [];
+        for (const repo of repos.keys()) {
+          const chart = this._helmAvailableChart(repo, 'webapp');
+          charts.push(chart);
+        }
+        if (!charts.length) return this._err('Error: no repositories configured');
+        if (keyword === 'hub' || keyword === 'artifacts') return this._ok('No results found');
+        const filtered = charts.filter((chart) => !keyword || chart.name.toLowerCase().includes(keyword) || chart.description.toLowerCase().includes(keyword));
+        if (!filtered.length) return this._ok('No results found');
+        const rows = filtered.map((chart) => [`${chart.repo}/${chart.name}`, chart.version, chart.appVersion, chart.description]);
+        return this._ok(padTable(['NAME', 'CHART VERSION', 'APP VERSION', 'DESCRIPTION'], rows));
+      }
       case 'list':
       case 'ls': {
-        const result = this._helmCall('listHelm', [{ namespace }]);
-        if (result.error) return result;
-        const releases = Array.isArray(result.result) ? result.result : Array.isArray(result.result?.releases) ? result.result.releases : [];
-        const rows = releases.map((release) => [
-          release.name || release.release || '',
-          release.namespace || namespace,
-          String(release.revision || 1),
-          release.updatedAt ? formatAge(release.updatedAt) : release.updated || 'just now',
-          release.status || 'deployed',
-          release.chartVersion ? `${release.chart}-${release.chartVersion}` : release.chart || release.chartName || '',
-          release.appVersion || release.app_version || '1.0.0',
-        ]);
+        const { releases, error } = this._helmReleaseList(namespace);
+        if (error) return error;
+        const rows = releases.map((release) => {
+          const meta = this._helmReleasesMeta?.get(release.name || release.release) || {};
+          const chartLabel = meta.chart ? `${meta.chart}${meta.chartVersion ? `-${meta.chartVersion}` : ''}` : release.chartVersion ? `${release.chart}-${release.chartVersion}` : release.chart || release.chartName || '';
+          return [
+            release.name || release.release || '',
+            release.namespace || namespace,
+            String(release.revision || 1),
+            release.updatedAt ? formatAge(release.updatedAt) : release.updated || 'just now',
+            release.status || 'deployed',
+            chartLabel,
+            meta.appVersion || release.appVersion || release.app_version || '1.0.0',
+          ];
+        });
         return this._ok(padTable(['NAME', 'NAMESPACE', 'REVISION', 'UPDATED', 'STATUS', 'CHART', 'APP VERSION'], rows));
       }
       case 'install':
@@ -8603,6 +10043,19 @@ Object.assign(CommandBar.prototype, {
         if (!release || !chart) {
           return this._usageError('helm', `release name and chart are required\n\n  helm ${sub} <release> <chart> [-f values.yaml] [-n <project>]`);
         }
+        let chartPath = chart;
+        let chartRepo = null;
+        let chartName = chart;
+        const slash = chart.indexOf('/');
+        if (slash > 0 && repos.has(chart.slice(0, slash))) {
+          chartRepo = chart.slice(0, slash);
+          chartName = chart.slice(slash + 1);
+          const available = this._helmAvailableChart(chartRepo, chartName);
+          chartPath = available.path;
+        } else if (slash > 0 && !chart.startsWith('.') && chart.split('/')[0] !== 'helm' && chart.split('/')[0] !== 'kustomize') {
+          return this._err(`Error: repo ${chart.split('/')[0]} not found`);
+        }
+        const version = flags.version && flags.version !== true ? String(flags.version) : null;
         const valuesPath = flags.values && flags.values !== true ? String(flags.values) : flags['values-file'] && flags['values-file'] !== true ? String(flags['values-file']) : null;
         const method = sub === 'install' ? 'installHelm' : 'upgradeHelm';
         const dryRun = flags['dry-run'] === true || ['client', 'server'].includes(String(flags['dry-run'] || ''));
@@ -8610,13 +10063,30 @@ Object.assign(CommandBar.prototype, {
         const warnings = [];
         if (flags.wait) warnings.push('warning: --wait is accepted but not simulated (the simulator applies resources synchronously)');
         if (flags.atomic) warnings.push('warning: --atomic is accepted but not simulated');
-        const result = this._helmCall(method, [release, chart, valuesPath, { namespace, dryRun, setValues }]);
+        const result = this._helmCall(method, [release, chartPath, valuesPath, { namespace, dryRun, setValues }]);
         if (result.error) return result;
         const record = result.result || {};
         if (record.success === false || record.ok === false) {
           return this._err(record.message || record.error || 'helm failed');
         }
-        const revision = record.revision || (sub === 'install' ? 1 : undefined);
+        const chartVersion = version || (chartRepo ? '0.1.0' : record.chartVersion || '0.1.0');
+        const displayChart = chartRepo ? `${chartRepo}/${chartName}` : record.chart || chart;
+        this._helmReleasesMeta.set(release, { chart: displayChart, chartVersion, appVersion: '1.0.0' });
+        if (!dryRun) {
+          const history = this._helmHistoryFor(release, record);
+          const previousRevision = history.reduce((max, entry) => Math.max(max, Number(entry.revision) || 0), 0);
+          const revision = sub === 'install' ? 1 : previousRevision + 1;
+          history.push({
+            revision,
+            updatedAt: Date.now(),
+            status: 'deployed',
+            chart: displayChart,
+            chartVersion,
+            appVersion: '1.0.0',
+            description: sub === 'install' ? 'Install complete' : 'Upgrade complete',
+          });
+          this._helmReleaseHistory.set(release, history);
+        }
         return this._ok(
           [
             ...warnings,
@@ -8624,7 +10094,9 @@ Object.assign(CommandBar.prototype, {
             `LAST DEPLOYED: ${new Date().toISOString()}`,
             `NAMESPACE: ${record.namespace || namespace}`,
             `STATUS: ${dryRun ? 'pending-install' : record.status || 'deployed'}`,
-            ...(revision ? [`REVISION: ${revision}`] : []),
+            `REVISION: ${sub === 'install' ? 1 : this._helmHistoryFor(release, record).length}`,
+            `CHART: ${displayChart}-${chartVersion}`,
+            'APP VERSION: 1.0.0',
             '',
             dryRun ? '(dry run) rendered resources but did not install the release' : '',
             record.message && typeof record.message === 'string' ? record.message : '',
@@ -8642,16 +10114,18 @@ Object.assign(CommandBar.prototype, {
         if (result.result && (result.result.success === false || result.result.ok === false)) {
           return this._err(result.result.message || result.result.error || `release "${release}" not found`);
         }
+        this._helmReleasesMeta?.delete(release);
+        this._helmReleaseHistory?.delete(release);
         return this._ok(`release "${release}" uninstalled`);
       }
       case 'status': {
         const release = positionals[0];
         if (!release) return this._usageError('helm', 'release name is required\n\n  helm status <release>');
-        const listResult = this._helmCall('listHelm', [{ namespace }]);
-        if (listResult.error) return listResult;
-        const releases = Array.isArray(listResult.result) ? listResult.result : Array.isArray(listResult.result?.releases) ? listResult.result.releases : [];
+        const { releases, error } = this._helmReleaseList(namespace);
+        if (error) return error;
         const found = releases.find((entry) => (entry.name || entry.release) === release);
         if (!found) return this._err(`Error: release: "${release}" not found`);
+        const meta = this._helmReleasesMeta?.get(release) || {};
         return this._ok(
           [
             `NAME: ${release}`,
@@ -8659,11 +10133,59 @@ Object.assign(CommandBar.prototype, {
             `NAMESPACE: ${found.namespace || namespace}`,
             `STATUS: ${found.status || 'deployed'}`,
             `REVISION: ${found.revision || 1}`,
+            ...(meta.chart ? [`CHART: ${meta.chart}-${meta.chartVersion || '0.1.0'}`] : []),
           ].join('\n'),
         );
       }
+      case 'history': {
+        const release = positionals[0];
+        if (!release) return this._err('Error: "helm history" requires 1 argument\n\nUsage:  helm history [RELEASE] [flags]');
+        const { releases, error } = this._helmReleaseList(namespace);
+        if (error) return error;
+        const found = releases.find((entry) => (entry.name || entry.release) === release);
+        if (!found) return this._err(`Error: release: "${release}" not found`);
+        const history = this._helmHistoryFor(release, found);
+        const rows = history.map((entry) => [
+          String(entry.revision),
+          entry.updatedAt ? `${formatAge(entry.updatedAt)} ago` : 'just now',
+          entry.status || 'deployed',
+          `${entry.chart || 'webapp'}-${entry.chartVersion || '0.1.0'}`,
+          entry.appVersion || '1.0.0',
+          entry.description || '',
+        ]);
+        return this._ok(padTable(['REVISION', 'UPDATED', 'STATUS', 'CHART', 'APP VERSION', 'DESCRIPTION'], rows));
+      }
+      case 'rollback': {
+        const release = positionals[0];
+        if (!release) return this._err('Error: "helm rollback" requires at least 1 argument\n\nUsage:  helm rollback <RELEASE> [REVISION] [flags]');
+        const { releases, error } = this._helmReleaseList(namespace);
+        if (error) return error;
+        const found = releases.find((entry) => (entry.name || entry.release) === release);
+        if (!found) return this._err(`Error: release: "${release}" not found`);
+        const history = this._helmHistoryFor(release, found);
+        const requested = flags.revision && flags.revision !== true ? Number(flags.revision) : positionals[1] ? Number(positionals[1]) : 0;
+        const targetRevision = requested || history[history.length - 1]?.revision || 1;
+        const targetEntry = history.find((entry) => Number(entry.revision) === Number(targetRevision));
+        if (!targetEntry) return this._err(`Error: release "${release}" has no revision ${targetRevision}`);
+        const result = this._helmCall('upgradeHelm', [release, 'helm/webapp', null, { namespace }]);
+        if (result.error) return result;
+        const meta = this._helmReleasesMeta?.get(release) || {};
+        history.push({
+          revision: history.reduce((max, entry) => Math.max(max, Number(entry.revision) || 0), 0) + 1,
+          updatedAt: Date.now(),
+          status: 'deployed',
+          chart: meta.chart || targetEntry.chart || 'webapp',
+          chartVersion: meta.chartVersion || targetEntry.chartVersion || '0.1.0',
+          appVersion: meta.appVersion || targetEntry.appVersion || '1.0.0',
+          description: `Rollback to ${targetRevision}`,
+        });
+        this._helmReleaseHistory.set(release, history);
+        return this._ok('Rollback was a success! Happy Helming!');
+      }
       default:
-        return this._err(`error: unknown helm subcommand "${sub || ''}"\n\nValid subcommands: install, upgrade, list, uninstall, status`);
+        return this._err(
+          `Error: unknown command "${sub || ''}" for "helm"\n\nAvailable Commands:\n  install, upgrade, list, uninstall, status, history, rollback, repo, search\n\nRun 'helm --help' for usage.`,
+        );
     }
   },
 
@@ -9258,6 +10780,21 @@ Object.assign(CommandBar.prototype, {
     if (output.format === 'json') return this._ok(JSON.stringify(object, null, 4));
     if (output.format === 'yaml') return this._ok(toYamlDocument(object));
     if (output.format === 'name') return this._ok('project.config.openshift.io/cluster');
+    if (output.format === 'jsonpath') {
+      if (!output.arg) return this._err("error: jsonpath requires a template, e.g. -o jsonpath='{.spec.projectRequestTemplate.name}'");
+      return this._ok(evaluateJsonPath(object, output.arg));
+    }
+    if (output.format === 'custom-columns') {
+      const columns = String(output.arg || '')
+        .split(',')
+        .map((entry) => {
+          const colon = entry.indexOf(':');
+          return colon < 0 ? null : { header: entry.slice(0, colon), path: entry.slice(colon + 1) };
+        })
+        .filter(Boolean);
+      if (!columns.length) return this._err('error: invalid custom-columns specification');
+      return this._ok(padTable(columns.map((column) => column.header), [columns.map((column) => String(evaluateJsonPath(object, `{${column.path.trim()}}`) || '<none>'))]));
+    }
     return this._ok(padTable(['NAME', 'AGE'], [['cluster', this._creationAge(object)]]));
   },
 
@@ -9379,6 +10916,635 @@ Object.assign(CommandBar.prototype, {
     }
     this._emit('ui:edit-resource', { kind: 'Project', name: 'cluster', namespace: '', resource: object });
     return this._ok(`${toYamlDocument(object)}\n${EDIT_TEACHING_LINE}\n(No manifest editor is available — edit this object and apply it with oc apply -f -.)`);
+  },
+});
+
+// ────────────────────────────────────────────────────────────────────────────
+// Issue #11 follow-up commands: policy / image / rsh / cp / wait / diff /
+// autoscale / helm repo-history-rollback, and `oc create token`.
+// ────────────────────────────────────────────────────────────────────────────
+
+Object.assign(CommandBar.prototype, {
+  /** `oc policy …` is the top-level alias of `oc adm policy …` (OCP 4.22). */
+  _cmdPolicy(tokens) {
+    return this._admPolicy(tokens);
+  },
+
+  // ── oc image info ────────────────────────────────────────────────────────
+
+  /** Deterministic fake sha256 digest for simulated images. */
+  _imageDigest(seed) {
+    const cluster = this.cluster;
+    if (cluster && typeof cluster._fakeDigest === 'function') {
+      try {
+        return `sha256:${cluster._fakeDigest(String(seed))}`;
+      } catch {
+        /* fall through */
+      }
+    }
+    let out = '';
+    let counter = 0;
+    while (out.length < 64) {
+      out += stableHash(`${seed}:${counter++}`, 0xffffffff).toString(16).padStart(8, '0');
+    }
+    return `sha256:${out.slice(0, 64)}`;
+  },
+
+  /** Resolve image metadata (ImageStream-aware) for `oc image info` / describe istag. */
+  _imageInfoFor(reference, namespace = this.currentProject) {
+    const raw = String(reference || '').trim();
+    let name = raw;
+    let digest = null;
+    let pullSpec = raw;
+    let created = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString();
+    const isToken = raw.replace(/^imagestreamtag\//, '').replace(/^istag\//, '');
+    const parts = isToken.split(':');
+    const repoToken = parts[0].replace(/^imagestream\//, '').replace(/^is\//, '');
+    if (!raw.includes('/') || raw.startsWith('istag/') || raw.startsWith('imagestreamtag/') || raw.startsWith('is/')) {
+      const repoAndTag = repoToken.includes('@') ? repoToken.split('@')[0] : repoToken;
+      const tag = parts.length > 1 ? parts[1] : repoToken.includes('@') ? repoToken.split('@')[1] : 'latest';
+      const cluster = this.cluster;
+      let resolved = null;
+      if (cluster && typeof cluster.resolveImageStreamTag === 'function') {
+        try {
+          resolved = cluster.resolveImageStreamTag(namespace, repoAndTag, tag);
+        } catch {
+          resolved = null;
+        }
+      }
+      if (resolved && resolved.found) {
+        name = `${resolved.imageStream.metadata?.name}:${resolved.tag}`;
+        pullSpec = resolved.dockerImageReference || `${INTERNAL_REGISTRY}/${namespace}/${repoAndTag}:${tag}`;
+        const item = resolved.tagEntry?.items?.[0] || {};
+        digest = item.image && /^sha256:/.test(String(item.image)) ? String(item.image) : this._imageDigest(pullSpec);
+        created = item.created || created;
+      } else {
+        name = `${repoAndTag}:${tag}`;
+        pullSpec = `${INTERNAL_REGISTRY}/${namespace}/${repoAndTag}:${tag}`;
+        digest = this._imageDigest(pullSpec);
+      }
+    } else if (raw.includes('@sha256:')) {
+      digest = `sha256:${raw.split('@sha256:')[1]}`;
+      name = raw;
+    } else {
+      digest = this._imageDigest(raw);
+      name = raw;
+    }
+    const imageName = name;
+    return {
+      name: imageName,
+      reference: raw,
+      dockerImage: pullSpec,
+      digest,
+      mediaType: 'application/vnd.docker.distribution.manifest.v2+json',
+      created,
+      size: 132 * 1024 * 1024,
+      layers: 5,
+      os: 'linux',
+      arch: 'amd64',
+      entrypoint: '/usr/bin/run-httpd',
+      command: '/usr/bin/run-httpd',
+      workingDir: '/opt/app-root/src',
+      user: '1001',
+      env: ['PATH=/opt/app-root/src/bin:/opt/app-root/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'],
+      labels: {},
+    };
+  },
+
+  _describeImageInfo(info) {
+    const lines = [
+      `Name:		${info.dockerImage}`,
+      `Digest:		${info.digest}`,
+      `Media Type:	${info.mediaType}`,
+      `Created:	${formatAge(info.created)} ago`,
+      `Image Size:	132.4MB in ${info.layers} layers`,
+      `OS:		${info.os}`,
+      `Arch:		${info.arch}`,
+      `Command:	${info.command}`,
+      `Working Dir:	${info.workingDir}`,
+      `User:		${info.user}`,
+      `Environment:	${info.env[0]}`,
+    ];
+    return lines.join('\n');
+  },
+
+  _cmdImage(tokens) {
+    const sub = (tokens[0] || '').toLowerCase();
+    const { positionals, flags } = parseArgs(tokens.slice(1), {
+      shortValues: { '-o': 'output' },
+      longValues: ['output', 'filter-by-os', 'dir', 'registry-config'],
+      longBools: ['insecure', 'all'],
+    });
+    if (sub !== 'info') {
+      return this._err(`error: unknown image subcommand "${sub || ''}"\n\nAvailable subcommands:\n  info     Display information about an image\n\nRun 'oc image --help' for details.`);
+    }
+    if (!positionals.length) return this._err('error: info expects at least one argument, an image pull spec');
+    const output = this._outputFormat(flags);
+    const infos = positionals.map((reference) => this._imageInfoFor(reference, this.currentNamespaceForImage()));
+    if (String(flags.output || '') === 'json') return this._ok(JSON.stringify(infos.length === 1 ? infos[0] : infos, null, 2));
+    if (output.format === 'json') return this._ok(JSON.stringify(infos.length === 1 ? infos[0] : infos, null, 2));
+    return this._ok(infos.map((info) => this._describeImageInfo(info)).join('\n'));
+  },
+
+  currentNamespaceForImage() {
+    return this.currentProject || 'default';
+  },
+
+  // ── oc create token <serviceaccount> ────────────────────────────────────
+
+  _base64Url(text) {
+    const value = String(text ?? '');
+    let base64 = '';
+    try {
+      if (typeof btoa === 'function') base64 = btoa(unescape(encodeURIComponent(value)));
+      else if (typeof Buffer !== 'undefined') base64 = Buffer.from(value, 'utf8').toString('base64');
+    } catch {
+      base64 = value;
+    }
+    return base64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  },
+
+  _cmdCreateToken(rest, flags) {
+    const serviceAccount = rest[0];
+    if (!serviceAccount) return this._err('error: exactly one name is required\n\n  oc create token <serviceaccount> [--duration=1h]');
+    const namespace = this._namespaceFromFlags(flags);
+    const sa = this._findResource('ServiceAccount', serviceAccount, { namespace, explicitNamespace: Boolean(flags.namespace), allowPrefix: false });
+    if (!sa) return this._err(`Error from server (NotFound): serviceaccounts "${serviceAccount}" not found`);
+    const durationText = flags.duration && flags.duration !== true ? String(flags.duration) : '1h';
+    const match = durationText.match(/^(\d+)([smh])$/);
+    const seconds = match ? Number(match[1]) * (match[2] === 'h' ? 3600 : match[2] === 'm' ? 60 : 1) : 3600;
+    const now = Math.floor(Date.now() / 1000);
+    const audience = flags.audience && flags.audience !== true ? String(flags.audience).split(',') : ['https://kubernetes.default.svc'];
+    const header = this._base64Url(JSON.stringify({ alg: 'RS256', kid: '' }));
+    const payload = this._base64Url(
+      JSON.stringify({
+        aud: audience,
+        exp: now + seconds,
+        iat: now,
+        iss: 'https://kubernetes.default.svc',
+        jti: `${this._imageDigest(`${serviceAccount}-${now}`).slice(7, 39)}`,
+        kubernetes: { namespace, serviceaccount: { name: serviceAccount, uid: sa.metadata?.uid || sa.uid || '' } },
+        nbf: now,
+        sub: `system:serviceaccount:${namespace}:${serviceAccount}`,
+      }),
+    );
+    const signature = this._base64Url(this._imageDigest(`sig-${serviceAccount}-${now}`).slice(7));
+    return this._ok(`${header}.${payload}.${signature}`);
+  },
+
+  // ── pod resolution shared by exec / rsh / logs / cp ─────────────────────
+
+  /** Ready Pod for a TYPE/NAME reference (picks a real pod like oc does). */
+  _podForResource(kind, name, namespace, explicitNamespace) {
+    if (!kind || !name) return null;
+    if (kind === 'Pod') {
+      return this._findResource('Pod', name, { namespace, explicitNamespace, allowPrefix: false });
+    }
+    const workload = this._findResource(kind, name, { namespace, explicitNamespace, allowPrefix: false });
+    if (!workload) return null;
+    const pods = this._getKindList('Pod').filter((pod) => {
+      if (pod.metadata?.namespace !== workload.metadata?.namespace) return false;
+      const owners = pod.metadata?.ownerReferences || [];
+      if (owners.length) {
+        const chainMatch = owners.some((owner) => owner.name === workload.metadata?.name || owner.uid === (workload.uid || workload.metadata?.uid));
+        if (chainMatch) return true;
+      }
+      const selector = workload.spec?.selector?.matchLabels || workload.spec?.template?.metadata?.labels || {};
+      return Object.entries(selector).every(([key, value]) => (pod.metadata?.labels || {})[key] === value);
+    });
+    if (!pods.length) return null;
+    const running = pods.filter((pod) => ['Running', 'Pending'].includes(pod.status?.phase || pod.phase || 'Running'));
+    const pool = running.length ? running : pods;
+    return pool.slice().sort((left, right) => String(left.metadata?.creationTimestamp || '').localeCompare(String(right.metadata?.creationTimestamp || '')))[0];
+  },
+
+  // ── oc rsh ──────────────────────────────────────────────────────────────
+
+  _cmdRsh(tokens) {
+    const { positionals, flags } = parseArgs(tokens, {
+      shortValues: { '-n': 'namespace', '-c': 'container' },
+      longValues: ['namespace', 'container', 'shell'],
+      longBools: ['tty', 'no-tty'],
+    });
+    if (!positionals.length) {
+      return this._err("error: expected 'oc rsh [-c CONTAINER] [flags] (POD | TYPE/NAME) COMMAND [args...]'.\nPOD or TYPE/NAME is a required argument for the rsh command");
+    }
+    const namespace = this._namespaceFromFlags(flags);
+    const explicitNamespace = Boolean(flags.namespace);
+    if (this._isNamespaced('Pod')) {
+      const namespaceError = this._requireNamespace(namespace);
+      if (namespaceError) return namespaceError;
+    }
+    const { kind, name } = this._resolveRef(positionals);
+    if (!kind) return this._resourceTypeError(positionals[0]);
+    if (!name) return this._usageError('rsh', 'resource name is required\n\n  oc rsh deployment/<name>');
+    const pod = this._podForResource(kind, name, namespace, explicitNamespace);
+    if (!pod) return this._err(`error: pods "${kind === 'Pod' ? name : `${name}-`}" not found`);
+    const containers = this._containerList(pod);
+    const containerName = flags.container && flags.container !== true ? String(flags.container) : containers[0]?.name || 'main';
+    if (containers.length && !containers.some((container) => container.name === containerName)) {
+      return this._err(`Error from server (BadRequest): container "${containerName}" is not valid for pod "${pod.metadata?.name}"`);
+    }
+    const command = positionals.slice(2).join(' ').trim();
+    const lines = [
+      `Defaulting container name to "${containerName}".`,
+      `Use 'oc describe pod/${pod.metadata?.name} -n ${pod.metadata?.namespace}' to see all of the containers in this pod.`,
+    ];
+    if (command) {
+      const output = this._simulateExecCommand(command, pod, containerName);
+      return this._ok([...lines, ...output].join('\n'));
+    }
+    return this._ok([...lines, '', `(pod/${pod.metadata?.name}) $`, '(interactive shell is simulated — run `oc exec ' + `${kind === 'Pod' ? pod.metadata?.name : `${this._resourceRef(kind)}/${name}`}` + ' -- <command>` to execute commands)'].join('\n'));
+  },
+
+  // ── oc cp ───────────────────────────────────────────────────────────────
+
+  _parseCpSpec(arg) {
+    const text = String(arg || '');
+    const colon = text.indexOf(':');
+    if (colon <= 0) return { local: text };
+    const left = text.slice(0, colon);
+    const path = text.slice(colon + 1);
+    const slash = left.indexOf('/');
+    const namespace = slash >= 0 ? left.slice(0, slash) : null;
+    const podRef = slash >= 0 ? left.slice(slash + 1) : left;
+    return { podRef, podNamespace: namespace, path };
+  },
+
+  _cmdCp(tokens) {
+    const { positionals, flags } = parseArgs(tokens, {
+      shortValues: { '-n': 'namespace', '-c': 'container' },
+      longValues: ['namespace', 'container', 'retries'],
+      longBools: ['no-preserve'],
+    });
+    if (positionals.length !== 2) {
+      return this._err('error: expected `oc cp <source> <destination>`\n\n  oc cp /tmp/app.yaml pod/name:/tmp/app.yaml\n  oc cp pod/name:/etc/os-release ./os-release');
+    }
+    const [sourceArg, destArg] = positionals;
+    const source = this._parseCpSpec(sourceArg);
+    const dest = this._parseCpSpec(destArg);
+    if (Boolean(source.podRef) === Boolean(dest.podRef)) {
+      return this._err('error: one of source or destination must be a pod (use <pod>:<path>)');
+    }
+    const podSpec = source.podRef ? source : dest;
+    const namespace = podSpec.podNamespace || flags.namespace || this.currentProject;
+    const namespaceError = this._requireNamespace(namespace);
+    if (namespaceError) return namespaceError;
+    const pod = this._findResource('Pod', podSpec.podRef, { namespace, explicitNamespace: true, allowPrefix: false });
+    if (!pod) return this._err(this._notFoundMessage('Pod', podSpec.podRef));
+    this._cpFiles = this._cpFiles || {};
+    const podKey = `${namespace}/${podSpec.podRef}`;
+    if (source.podRef) {
+      // pod → local: materialise a virtual file with plausible content.
+      const content = this._cpSimulatedFile(source.path, pod);
+      const targetPath = dest.local.replace(/^\.\//, '');
+      const written = this._writeVirtualFile(targetPath, content);
+      if (written.error) return written;
+      return this._ok('');
+    }
+    // local → pod: read the virtual file (or directory) so the copy can be verified.
+    let sourceText = this._readVirtualFile(source.local);
+    if (sourceText === null) {
+      const prefix = `${source.local.replace(/\/+$/, '')}/`;
+      const files = this._manifestFileList().filter((file) => file.startsWith(prefix));
+      if (files.length) sourceText = files.map((file) => `# ${file}\n${this._readVirtualFile(file) || ''}`).join('\n');
+    }
+    if (sourceText === null) return this._err(`error: tar: ${source.local}: Cannot stat: No such file or directory`);
+    this._cpFiles[podKey] = this._cpFiles[podKey] || {};
+    this._cpFiles[podKey][dest.path] = sourceText;
+    return this._ok('');
+  },
+
+  _cpSimulatedFile(path, pod) {
+    const target = String(path || '').replace(/\/+$/, '');
+    if (/etc\/os-release$/.test(target)) return 'NAME="Red Hat Enterprise Linux"\nVERSION="9.4 (Plow)"\nID="rhel"\nID_LIKE="fedora"\n';
+    if (/etc\/hostname$/.test(target)) return `${pod.metadata?.name || 'pod'}\n`;
+    if (/etc\/hosts$/.test(target)) return '127.0.0.1\tlocalhost\n172.30.0.1\tkubernetes.default.svc\n';
+    return `simulated content of ${target} from pod/${pod.metadata?.name}\n`;
+  },
+
+  // ── oc wait ─────────────────────────────────────────────────────────────
+
+  _evaluateWaitCondition(condition, resource) {
+    const text = String(condition || '');
+    if (!text) return false;
+    if (text === 'delete') return false;
+    const match = text.match(/^jsonpath=(.+?)(?:=(.*))?$/);
+    if (match) {
+      const evaluated = evaluateJsonPath(this._manifestFor(resource), match[1]);
+      return match[2] === undefined ? Boolean(evaluated) : String(evaluated) === String(match[2]);
+    }
+    const conditionMatch = text.match(/^condition=([A-Za-z]+)(?:=([A-Za-z]+))?$/);
+    if (conditionMatch) {
+      const conditions = resource.status?.conditions || [];
+      const found = conditions.find((entry) => entry.type === conditionMatch[1]);
+      if (!found) return false;
+      return found.status === (conditionMatch[2] || 'True');
+    }
+    return false;
+  },
+
+  _cmdWait(tokens) {
+    const { positionals, flags } = parseArgs(tokens, {
+      shortValues: { '-n': 'namespace', '-l': 'selector' },
+      longValues: ['namespace', 'selector', 'timeout'],
+      longBools: ['all', 'local'],
+    });
+    const forFlag = flags.for !== undefined && flags.for !== true ? String(flags.for) : null;
+    if (!forFlag) return this._err('error: required flag(s) "for" not set');
+    const namespace = this._namespaceFromFlags(flags);
+    const explicitNamespace = Boolean(flags.namespace);
+    if (!positionals.length && !flags.all) {
+      return this._err('error: no resources to wait for specified\n\n  oc wait --for=condition=Ready pod/<name> --timeout=60s');
+    }
+    const targets = [];
+    if (flags.all) {
+      const kindToken = positionals[0] || 'pods';
+      const kind = resolveKindToken(kindToken);
+      if (!kind) return this._resourceTypeError(kindToken);
+      let resources = this._resources(kind);
+      if (this._isNamespaced(kind) && !flags['all-namespaces']) resources = resources.filter((resource) => resource.metadata?.namespace === namespace);
+      resources.forEach((resource) => targets.push({ kind, name: resource.metadata?.name, resource }));
+    } else {
+      for (const token of positionals) {
+        const { kind, name } = splitResourceRef(token.includes('/') ? [token] : [token]);
+        if (!kind || !name) return this._err(`error: invalid resource reference "${token}" (use TYPE/NAME)`);
+        const resource = this._findResource(kind, name, { namespace: flags.namespace, explicitNamespace, allowPrefix: false });
+        targets.push({ kind, name, resource });
+      }
+    }
+    const okLines = [];
+    for (const target of targets) {
+      if (forFlag === 'delete') {
+        if (!target.resource) {
+          okLines.push(`${this._resourceRef(target.kind)}/${target.name} deleted`);
+          continue;
+        }
+        return this._err(`error: timed out waiting for the condition on ${this._pluralRef(target.kind)}/${target.name}`);
+      }
+      if (!target.resource) return this._err(this._notFoundMessage(target.kind, target.name));
+      if (this._evaluateWaitCondition(forFlag, target.resource)) {
+        okLines.push(`${this._resourceRef(target.kind)}/${target.name} condition met`);
+      } else {
+        return this._err(`error: timed out waiting for the condition on ${this._pluralRef(target.kind)}/${target.name}`);
+      }
+    }
+    return this._ok(okLines.join('\n'));
+  },
+
+  _pluralRef(kind) {
+    return this._resourceNamePlural(kind);
+  },
+
+  // ── oc diff -f ──────────────────────────────────────────────────────────
+
+  _unifiedDiffLines(leftLines, rightLines, context = 2) {
+    // Simple LCS-based unified diff (no external dependency).
+    const left = leftLines || [];
+    const right = rightLines || [];
+    const rows = Array.from({ length: left.length + 1 }, () => new Array(right.length + 1).fill(0));
+    for (let i = left.length - 1; i >= 0; i -= 1) {
+      for (let j = right.length - 1; j >= 0; j -= 1) {
+        rows[i][j] = left[i] === right[j] ? rows[i + 1][j + 1] + 1 : Math.max(rows[i + 1][j], rows[i][j + 1]);
+      }
+    }
+    const ops = [];
+    let i = 0;
+    let j = 0;
+    while (i < left.length && j < right.length) {
+      if (left[i] === right[j]) {
+        ops.push({ type: ' ', line: left[i] });
+        i += 1;
+        j += 1;
+      } else if (rows[i + 1][j] >= rows[i][j + 1]) {
+        ops.push({ type: '-', line: left[i] });
+        i += 1;
+      } else {
+        ops.push({ type: '+', line: right[j] });
+        j += 1;
+      }
+    }
+    while (i < left.length) {
+      ops.push({ type: '-', line: left[i] });
+      i += 1;
+    }
+    while (j < right.length) {
+      ops.push({ type: '+', line: right[j] });
+      j += 1;
+    }
+    return { ops, context };
+  },
+
+  _formatUnifiedDiff(ops, context, livePath, mergedPath) {
+    if (!ops.some((op) => op.type !== ' ')) return '';
+    const lines = [`diff -u -N ${livePath} ${mergedPath}`, `--- ${livePath}`, `+++ ${mergedPath}`];
+    // Group changed rows with surrounding context into hunks.
+    const interesting = [];
+    ops.forEach((op, index) => {
+      if (op.type !== ' ') {
+        for (let offset = -context; offset <= context; offset += 1) interesting.push(index + offset);
+      }
+    });
+    const selected = [...new Set(interesting)].filter((index) => index >= 0 && index < ops.length).sort((a, b) => a - b);
+    let cursor = 0;
+    while (cursor < selected.length) {
+      let end = cursor;
+      while (end + 1 < selected.length && selected[end + 1] === selected[end] + 1) end += 1;
+      const startIndex = selected[cursor];
+      const endIndex = selected[end];
+      const start = ops.slice(0, startIndex);
+      const leftStart = start.filter((op) => op.type !== '+').length + 1;
+      const rightStart = start.filter((op) => op.type !== '-').length + 1;
+      const hunk = ops.slice(startIndex, endIndex + 1);
+      const leftCount = hunk.filter((op) => op.type !== '+').length;
+      const rightCount = hunk.filter((op) => op.type !== '-').length;
+      lines.push(`@@ -${leftStart},${leftCount} +${rightStart},${rightCount} @@`);
+      for (const op of hunk) lines.push(`${op.type}${op.line}`);
+      cursor = end + 1;
+    }
+    return lines.join('\n');
+  },
+
+  /** Strip server-populated metadata/status before diffing. */
+  _diffStripServerFields(manifest) {
+    const copy = JSON.parse(JSON.stringify(manifest || {}));
+    if (copy.metadata) {
+      for (const key of ['uid', 'resourceVersion', 'creationTimestamp', 'generation', 'managedFields', 'selfLink']) delete copy.metadata[key];
+      if (copy.metadata.annotations) {
+        delete copy.metadata.annotations['kubectl.kubernetes.io/last-applied-configuration'];
+        if (!Object.keys(copy.metadata.annotations).length) delete copy.metadata.annotations;
+      }
+      if (copy.metadata.labels && !Object.keys(copy.metadata.labels).length) delete copy.metadata.labels;
+    }
+    delete copy.status;
+    return copy;
+  },
+
+  /** JSON-merge style deep merge (lists replace, scalars overwrite) for diff/apply. */
+  _diffMerge(live, patch) {
+    if (!patch || typeof patch !== 'object' || Array.isArray(patch)) return patch === undefined ? live : JSON.parse(JSON.stringify(patch));
+    const base = live && typeof live === 'object' && !Array.isArray(live) ? JSON.parse(JSON.stringify(live)) : {};
+    for (const [key, value] of Object.entries(patch)) {
+      if (value && typeof value === 'object' && !Array.isArray(value) && base[key] && typeof base[key] === 'object' && !Array.isArray(base[key])) {
+        base[key] = this._diffMerge(base[key], value);
+      } else {
+        base[key] = JSON.parse(JSON.stringify(value));
+      }
+    }
+    return base;
+  },
+
+  _cmdDiff(tokens, ctx) {
+    const { positionals, flags } = parseArgs(tokens, {
+      shortValues: { '-f': 'filename', '-n': 'namespace' },
+      longValues: ['filename', 'namespace', 'field-manager', 'output'],
+      longBools: ['server-side'],
+    });
+    const filename = flags.filename || positionals[0];
+    if (!filename) return this._err('error: must specify -f <filename>\n\n  oc diff -f <file>');
+    if (!this._manifestReady()) return this._manifestNotReady();
+    const preview = this._manifestPreviewDocs(String(filename), { stdinText: ctx?.stdin ?? null });
+    if (preview.error) return preview.error;
+    const namespaceOverride = flags.namespace && flags.namespace !== true ? String(flags.namespace) : null;
+    const diffs = [];
+    for (const doc of preview.docs) {
+      const kind = resolveKindToken(String(doc.kind || ''));
+      if (!kind) return this._err(`error: the server doesn't have a resource type "${doc.kind}"`);
+      // Desired object: top-level shape from the file (data/stringData/rules/spec…),
+      // namespace defaulted like `oc apply`.
+      const desired = JSON.parse(JSON.stringify(doc));
+      desired.apiVersion = desired.apiVersion || apiVersionForKind(kind);
+      desired.kind = kind;
+      desired.metadata = desired.metadata || {};
+      if (!desired.metadata.name) return this._err(`error: error validating "${preview.source}": metadata.name: Required value`);
+      if (this._isNamespaced(kind)) desired.metadata.namespace = namespaceOverride || desired.metadata.namespace || this.currentProject;
+      else delete desired.metadata.namespace;
+      const live = this._findResourceExact(kind, desired.metadata.name, desired.metadata.namespace);
+      const fileName = `${this._resourceRef(kind).replace(/\//g, '.')}.${desired.metadata.namespace || ''}.${desired.metadata.name}`.replace(/^\.+|\.+$/g, '');
+      const mergedPath = `/tmp/MERGED-${String(stableHash(`${fileName}-${Date.now()}`, 99999999)).padStart(8, '0')}/${fileName}`;
+      let livePath = '/dev/null';
+      let liveLines = [];
+      let mergedLines = [];
+      if (live) {
+        livePath = `/tmp/LIVE-${String(live.metadata?.uid || live.uid || 'unknown').slice(0, 8)}/${fileName}`;
+        const liveClean = this._diffStripServerFields(this._manifestFor(live));
+        const merged = this._diffMerge(liveClean, desired);
+        const stripKinds = ['Secret']; // data is already comparable for simulated kinds
+        void stripKinds;
+        liveLines = toYamlDocument(liveClean).split('\n');
+        mergedLines = toYamlDocument(merged).split('\n');
+      } else {
+        const cleanDesired = this._diffStripServerFields(desired);
+        mergedLines = toYamlDocument(cleanDesired).split('\n');
+      }
+      const { ops } = this._unifiedDiffLines(liveLines, mergedLines, 2);
+      const text = this._formatUnifiedDiff(ops, 2, livePath, mergedPath);
+      if (text) diffs.push(text);
+    }
+    if (!diffs.length) return this._ok('');
+    return this._ok(diffs.join('\n'));
+  },
+
+  // ── oc autoscale ────────────────────────────────────────────────────────
+
+  // ── oc describe istag/<is>:<tag> ────────────────────────────────────────
+
+  /** Detect `oc describe istag/<name>[:<tag>]` (and imagestreamtag variants). */
+  _imageStreamTagRef(positionals) {
+    if (!positionals || !positionals.length) return null;
+    const first = String(positionals[0] || '');
+    const slash = first.indexOf('/');
+    const base = (slash >= 0 ? first.slice(0, slash) : first).toLowerCase();
+    if (!['istag', 'istags', 'imagestreamtag', 'imagestreamtags'].includes(base)) return null;
+    const name = slash >= 0 ? first.slice(slash + 1) : positionals[1];
+    if (!name) return null;
+    return { name: String(name) };
+  },
+
+  /** `oc describe istag/webapp:latest` — real output is the image description. */
+  _describeImageStreamTag(ref, flags) {
+    const namespace = flags.namespace || this.currentProject;
+    if (!namespace) return this._err('error: you must be logged in to a project');
+    const namespaceError = this._requireNamespace(namespace);
+    if (namespaceError) return namespaceError;
+    const raw = String(ref.name);
+    const at = raw.indexOf('@');
+    const colon = raw.lastIndexOf(':');
+    let repo = raw;
+    let tag = 'latest';
+    if (at >= 0) {
+      repo = raw.slice(0, at);
+    } else if (colon > 0) {
+      repo = raw.slice(0, colon);
+      tag = raw.slice(colon + 1) || 'latest';
+    }
+    const info = this._imageInfoFor(`istag/${repo}:${tag}`, namespace);
+    const lines = [
+      `Image Name:\t${info.digest}`,
+      `Docker Image:\t${info.dockerImage.includes('@') ? info.dockerImage : `${info.dockerImage.split(':')[0]}@${info.digest}`}`,
+      `Name:\t\t${info.digest}`,
+      `Created:\t${formatAge(info.created)} ago`,
+      `Image Size:\t132.4MB in ${info.layers} layers`,
+      `Image Created:\t${formatAge(info.created)} ago`,
+      `Arch:\t\t${info.arch}`,
+      `Command:\t${info.command}`,
+      `Working Dir:\t${info.workingDir}`,
+      `User:\t\t${info.user}`,
+      `Environment:\t${info.env[0]}`,
+    ];
+    return this._ok(lines.join('\n'));
+  },
+
+  _cmdAutoscale(tokens) {
+    const { positionals, flags } = parseArgs(tokens, {
+      shortValues: { '-n': 'namespace' },
+      longValues: ['namespace', 'min', 'max', 'cpu-percent', 'name', 'dry-run'],
+      longBools: ['dry-run'],
+    });
+    const { kind, name } = this._resolveRef(positionals);
+    if (!kind) return this._resourceTypeError(positionals[0] || '');
+    if (!name) return this._usageError('autoscale', 'resource name is required\n\n  oc autoscale deployment/<name> --min=2 --max=5 --cpu-percent=80');
+    if (!['Deployment', 'ReplicaSet', 'StatefulSet', 'DeploymentConfig'].includes(kind)) {
+      return this._err(`error: cannot autoscale a ${kind}`);
+    }
+    const namespace = this._namespaceFromFlags(flags);
+    const namespaceError = this._requireNamespace(namespace);
+    if (namespaceError) return namespaceError;
+    const target = this._findResource(kind, name, { namespace: flags.namespace, explicitNamespace: Boolean(flags.namespace), allowPrefix: false });
+    if (!target) return this._err(this._notFoundMessage(kind, name));
+    const min = flags.min !== undefined && flags.min !== true ? Number(flags.min) : 1;
+    const max = flags.max !== undefined && flags.max !== true ? Number(flags.max) : null;
+    if (!Number.isFinite(min) || min < 0) return this._err(`error: invalid --min value "${flags.min}"`);
+    if (max === null || !Number.isFinite(max) || max < 1) return this._err('error: must specify --max');
+    if (min > max) return this._err('error: --min must be less than or equal to --max');
+    const cpuPercent = flags['cpu-percent'] !== undefined && flags['cpu-percent'] !== true ? Number(flags['cpu-percent']) : null;
+    if (cpuPercent !== null && (!Number.isFinite(cpuPercent) || cpuPercent < 1)) return this._err('error: --cpu-percent must be greater than 0');
+    const hpaName = flags.name && flags.name !== true ? String(flags.name) : name;
+    if (this._findResourceExact('HorizontalPodAutoscaler', hpaName, namespace)) {
+      return this._err(`Error from server (AlreadyExists): horizontalpodautoscalers.autoscaling "${hpaName}" already exists`);
+    }
+    const object = {
+      apiVersion: 'autoscaling/v2',
+      kind: 'HorizontalPodAutoscaler',
+      metadata: { name: hpaName, namespace },
+      spec: {
+        scaleTargetRef: { apiVersion: apiVersionForKind(kind), kind, name },
+        minReplicas: min,
+        maxReplicas: max,
+        ...(cpuPercent !== null
+          ? { metrics: [{ type: 'Resource', resource: { name: 'cpu', target: { type: 'Utilization', averageUtilization: cpuPercent } } }] }
+          : {}),
+      },
+    };
+    if (this._dryRunMode(flags)) {
+      const output = this._outputFormat(flags);
+      if (output.format === 'yaml') return this._ok(toYamlDocument(object));
+      if (output.format === 'json') return this._ok(JSON.stringify(object, null, 4));
+      return this._ok(`horizontalpodautoscaler.autoscaling/${hpaName} autoscaled (dry run)`);
+    }
+    const created = this._applyObject(object);
+    if (created.error) return created.error;
+    return this._ok(`horizontalpodautoscaler.autoscaling/${hpaName} autoscaled`);
   },
 });
 

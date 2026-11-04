@@ -512,6 +512,45 @@ spec:
   sourceNamespace: openshift-marketplace
 `,
 
+  // OLM / MetalLB lab (L12/L18 hints): OperatorGroup scoping the namespace,
+  // then the MetalLB operand CR + address pool + L2 advertisement.
+  'examples/operatorgroup.yaml': `apiVersion: operators.coreos.com/v1
+kind: OperatorGroup
+metadata:
+  name: metallb-operatorgroup
+  namespace: metallb-system
+spec:
+  targetNamespaces:
+    - metallb-system
+`,
+
+  'examples/metallb.yaml': `apiVersion: metallb.io/v1beta1
+kind: MetalLB
+metadata:
+  name: metallb
+  namespace: metallb-system
+spec: {}
+---
+apiVersion: metallb.io/v1beta1
+kind: IPAddressPool
+metadata:
+  name: metallb-pool
+  namespace: metallb-system
+spec:
+  addresses:
+    - 192.168.100.200-192.168.100.210
+  autoAssign: true
+---
+apiVersion: metallb.io/v1beta1
+kind: L2Advertisement
+metadata:
+  name: metallb-l2
+  namespace: metallb-system
+spec:
+  ipAddressPools:
+    - metallb-pool
+`,
+
   'examples/buildconfig.yaml': `apiVersion: build.openshift.io/v1
 kind: BuildConfig
 metadata:
