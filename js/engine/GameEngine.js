@@ -21,10 +21,24 @@
 
 import { ClusterState, IMAGE_REGISTRY_HOST, OPENSHIFT_VERSION, deepClone, deepMerge, isClusterScopedKind } from './ClusterState.js';
 import { SimulationTick } from './SimulationTick.js';
-import { BUILTIN_ROLE_NAMES } from './RBACEngine.js';
+import {
+  BUILTIN_ROLE_NAMES,
+  VIRTUAL_RESOURCE_API_GROUPS,
+  apiGroupForKind as rbacApiGroupForKind,
+  getVisibleProjects as rbacGetVisibleProjects,
+  parseResourceToken,
+} from './RBACEngine.js';
+import {
+  applyJsonPatch,
+  invalidWorkloadMessage,
+  jsonMergePatch,
+  resolvePatchType,
+  strategicMergePatch,
+} from './MergePatch.js';
 import {
   apiVersionForKind,
   createResource,
+  normalizeKind,
 } from '../data/kindRegistry.js';
 
 // ─── SHA1 + base64 helpers (for the simulated {SHA} htpasswd hashes) ──────
@@ -181,6 +195,59 @@ export function verifyPasswordHash(hash, password) {
   }
   if (value.includes(':')) return null;
   return value === password;
+}
+
+/**
+ * Build the simulator's deterministic, non-reversible HTPasswd hash.
+ *
+ * Mirrors `fakeHtpasswdHash()` in js/engine/ManifestEngine.js (the `htpasswd`
+ * command writes this placeholder format) so login can validate credentials
+ * against the hash stored in the `htpass-secret` Secret. Kept in sync
+ * deliberately: the Secret is the source of truth for the identity provider,
+ * so the verifier must understand the placeholder format the file tool emits.
+ *
+ * @param {string} user
+ * @param {string} pass
+ * @returns {string} `{SHA}<url-safe-ish base64 without padding>`
+ */
+export function htpasswdSimulatorHash(user, pass) {
+  const userName = String(user);
+  const password = String(pass);
+  const input = `${userName}\u0000${password}`;
+  let h1 = 0xdeadbeef ^ userName.length;
+  let h2 = 0x41c6ce57 ^ password.length;
+  for (let i = 0; i < input.length; i++) {
+    const ch = input.charCodeAt(i);
+    h1 = Math.imul(h1 ^ ch, 2654435761);
+    h2 = Math.imul(h2 ^ ch, 1597334677);
+  }
+  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+  const digest = (h2 >>> 0).toString(16).padStart(8, '0') + (h1 >>> 0).toString(16).padStart(8, '0');
+  return `{SHA}${base64FromBytes(utf8Bytes(digest)).replace(/=+$/, '')}`;
+}
+
+/**
+ * Decode base64 text (Secret `data.*`) to a UTF-8 string.
+ * @param {string} encoded
+ * @returns {string}
+ */
+function decodeBase64(encoded) {
+  const value = String(encoded || '');
+  try {
+    if (typeof atob === 'function') {
+      const binary = atob(value);
+      if (typeof TextDecoder !== 'undefined') {
+        const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
+        return new TextDecoder('utf-8').decode(bytes);
+      }
+      return binary;
+    }
+    if (typeof Buffer !== 'undefined') return Buffer.from(value, 'base64').toString('utf8');
+  } catch {
+    return '';
+  }
+  return '';
 }
 
 // ─── Event bus ─────────────────────────────────────────────────────────────
@@ -341,6 +408,318 @@ const COMMAND_AUTHZ_MAP = {
   'adm policy': { verb: 'create', argIndex: 1, resource: 'rolebindings' },
 };
 
+// ─── Command authorization (#2) ───────────────────────────────────────────
+
+/** Commands that never touch the API server / are filtered client-side. */
+const AUTHORIZATION_EXEMPT_COMMANDS = new Set([
+  'login',
+  'logout',
+  'whoami',
+  'project',
+  'projects',
+  'status',
+  'config',
+  'version',
+  'api-resources',
+  'explain',
+  'help',
+  'completion',
+  'clear',
+  'exit',
+  'htpasswd',
+  'kustomize',
+  'process',
+]);
+
+/** Every oc subcommand the authorization gate understands (bare form allowed). */
+const KNOWN_OC_BASE_COMMANDS = new Set([
+  'get', 'describe', 'logs', 'events', 'explain', 'create', 'apply', 'replace',
+  'delete', 'scale', 'edit', 'label', 'annotate', 'patch', 'set', 'rollout',
+  'expose', 'run', 'exec', 'rsh', 'cp', 'port-forward', 'debug', 'tag',
+  'import-image', 'extract', 'new-app', 'new-build', 'start-build',
+  'cancel-build', 'process', 'kustomize', 'adm', 'auth', 'helm', 'htpasswd',
+  'help', 'login', 'logout', 'whoami', 'project', 'projects', 'new-project',
+  'delete-project', 'status', 'config', 'version', 'api-resources', 'cordon',
+  'uncordon', 'drain', 'top', 'quota', 'limitrange', 'clusterquota', 'user',
+  'group', 'sa', 'serviceaccount', 'install', 'uninstall',
+]);
+
+/** `adm` subcommands that are client-side / read-only checks. */
+const ADM_EXEMPT_SUBCOMMANDS = new Set([
+  'policy-who-can',
+  'policy-scc-review',
+  'policy-scc-subject-review',
+]);
+
+/** Long `--flags` that consume the next token as their value. */
+const CLI_LONG_VALUE_FLAGS = new Set([
+  'namespace', 'as', 'as-group', 'patch', 'type', 'filename', 'kustomize', 'output',
+  'selector', 'field-selector', 'container', 'containers', 'replicas', 'image', 'env',
+  'from', 'from-file', 'from-literal', 'from-env-file', 'display-name', 'description',
+  'serviceaccount', 'user', 'group', 'role', 'clusterrole', 'hard', 'default',
+  'default-request', 'min', 'max', 'limits', 'requests', 'schedule', 'restart', 'to',
+  'dry-run', 'revision', 'timeout', 'grace-period', 'cascade', 'service', 'port',
+  'hostname', 'mount-path', 'claim-name', 'claim-size', 'claim-mode', 'claim-class',
+  'name', 'prefix', 'remove', 'overwrite', 'target-port', 'external-name', 'from-dir',
+  'commit', 'allow', 'liveness', 'readiness', 'verb', 'resource', 'resource-name',
+  'api-group', 'users', 'field-manager', 'interval', 'for', 'sort-by', 'cluster',
+  'context', 'token', 'server', 'username', 'password', 'to-namespace', 'source',
+  'destination', 'reference', 'secret-name', 'configmap-name', 'scheduler-name',
+  'host-prefix', 'cert', 'key', 'ca-cert', 'dest', 'path', 'overwrite-file',
+  'mount-path', 'read-only', 'environment', 'pull-policy', 'source-secret',
+]);
+
+/** Short `-f` style flags that consume the next token as their value. */
+const CLI_SHORT_VALUE_FLAGS = new Set(['n', 'f', 'k', 'p', 'z', 'c', 'l', 'o', 'u', 'e', 'i', 't', 'v', 'w']);
+
+/** Create subcommands whose API resource is not a registry kind. */
+const CREATE_VIRTUAL_RESOURCES = {
+  namespace: { resource: 'namespaces', apiGroup: '', clusterScoped: true },
+  namespaces: { resource: 'namespaces', apiGroup: '', clusterScoped: true },
+  ns: { resource: 'namespaces', apiGroup: '', clusterScoped: true },
+  project: { resource: 'projects', apiGroup: 'project.openshift.io', clusterScoped: true },
+  projects: { resource: 'projects', apiGroup: 'project.openshift.io', clusterScoped: true },
+  oauth: { resource: 'oauths', apiGroup: 'config.openshift.io', clusterScoped: true },
+};
+
+/**
+ * Plural API resource name for a canonical kind
+ * (`Deployment` → `deployments`, `SecurityContextConstraints` → stays).
+ * @param {string} kind
+ * @returns {string}
+ */
+function pluralResourceName(kind) {
+  const name = String(kind || '').toLowerCase();
+  if (!name) return name;
+  if (name.endsWith('s')) return name;
+  if (name.endsWith('y')) return `${name.slice(0, -1)}ies`;
+  return `${name}s`;
+}
+
+/**
+ * Tokenize a shell-ish oc command line (quotes, whitespace) and split it into
+ * pipeline stages. Accepts a leading `oc`/`kubectl` on each stage.
+ * @param {string} raw
+ * @returns {string[][]} one token array per pipeline stage
+ */
+function splitCommandStages(raw) {
+  const text = String(raw || '');
+  const stages = [];
+  let tokens = [];
+  let current = '';
+  let quote = null;
+  const flushToken = () => {
+    if (current) {
+      tokens.push(current);
+      current = '';
+    }
+  };
+  const flushStage = () => {
+    flushToken();
+    if (tokens.length > 0) stages.push(tokens);
+    tokens = [];
+  };
+  for (let i = 0; i < text.length; i++) {
+    const char = text[i];
+    if (quote) {
+      if (char === quote) quote = null;
+      else if (char === '\\' && i + 1 < text.length) current += text[++i];
+      else current += char;
+      continue;
+    }
+    if (char === '"' || char === "'") {
+      quote = char;
+      continue;
+    }
+    if (char === '|') {
+      if (text[i + 1] === '|') {
+        current += char;
+        continue;
+      }
+      flushStage();
+      continue;
+    }
+    if (/\s/.test(char)) {
+      flushToken();
+      continue;
+    }
+    if (char === ';') {
+      flushStage();
+      continue;
+    }
+    current += char;
+  }
+  flushStage();
+  return stages;
+}
+
+/**
+ * Strip a leading `oc`/`kubectl` from a token list.
+ * @param {string[]} tokens
+ * @returns {{tokens: string[], hasPrefix: boolean}}
+ */
+function stripCliPrefixTokens(tokens) {
+  if (tokens.length === 0) return { tokens, hasPrefix: false };
+  const first = String(tokens[0]).toLowerCase();
+  if (first === 'oc' || first === 'kubectl') return { tokens: tokens.slice(1), hasPrefix: true };
+  return { tokens, hasPrefix: false };
+}
+
+/**
+ * Split raw tokens into positionals + flags (`--flag=value`, `--flag value`,
+ * `-n value`, `-f value` subsets). Values after `--` are kept separately.
+ * @param {string[]} tokens
+ * @returns {{positionals: string[], flags: Record<string, string|boolean>, afterDoubleDash: string[]}}
+ */
+function parseCommandArgs(tokens) {
+  /** @type {string[]} */
+  const positionals = [];
+  /** @type {Record<string, string|boolean>} */
+  const flags = {};
+  /** @type {string[]} */
+  let afterDoubleDash = [];
+  for (let i = 0; i < tokens.length; i++) {
+    const token = String(tokens[i]);
+    if (token === '--') {
+      afterDoubleDash = tokens.slice(i + 1).map(String);
+      break;
+    }
+    if (token.startsWith('--')) {
+      const eq = token.indexOf('=');
+      if (eq >= 0) {
+        flags[token.slice(2, eq)] = token.slice(eq + 1);
+      } else {
+        const name = token.slice(2);
+        if (CLI_LONG_VALUE_FLAGS.has(name) && i + 1 < tokens.length && !String(tokens[i + 1]).startsWith('-')) {
+          flags[name] = String(tokens[++i]);
+        } else {
+          flags[name] = true;
+        }
+      }
+      continue;
+    }
+    if (token.startsWith('-') && token.length > 1) {
+      const body = token.slice(1);
+      if (body.includes('=')) {
+        const [name, value] = body.split('=');
+        flags[name] = value;
+      } else if (CLI_SHORT_VALUE_FLAGS.has(body) && i + 1 < tokens.length && !String(tokens[i + 1]).startsWith('-')) {
+        flags[body] = String(tokens[++i]);
+      } else if (CLI_SHORT_VALUE_FLAGS.has(body[0]) && body.length > 1 && !/^-?\d/.test(body)) {
+        // `-nfoo`-style clustered shorthand
+        flags[body[0]] = body.slice(1);
+      } else {
+        flags[body] = true;
+      }
+      continue;
+    }
+    positionals.push(token);
+  }
+  return { positionals, flags, afterDoubleDash };
+}
+
+/** @param {object} flags @returns {string} namespace from -n/--namespace */
+function namespaceFromFlags(flags) {
+  const value = flags?.namespace || flags?.n;
+  return value && value !== true ? String(value) : '';
+}
+
+/** Shorthand API-group suffixes real oc accepts (`deployment.apps`, `clusterrolebinding.rbac`). */
+const API_GROUP_SHORTHANDS = {
+  apps: 'apps',
+  batch: 'batch',
+  rbac: 'rbac.authorization.k8s.io',
+  core: '',
+  policy: 'policy',
+  autoscaling: 'autoscaling',
+  route: 'route.openshift.io',
+  build: 'build.openshift.io',
+  image: 'image.openshift.io',
+  template: 'template.openshift.io',
+  project: 'project.openshift.io',
+  user: 'user.openshift.io',
+  security: 'security.openshift.io',
+  config: 'config.openshift.io',
+  quota: 'quota.openshift.io',
+  operators: 'operators.coreos.com',
+  metallb: 'metallb.io',
+  networking: 'networking.k8s.io',
+  storage: 'storage.k8s.io',
+};
+
+/**
+ * Resolve `<resource>.<group>` resource tokens (e.g. `deployment.apps`,
+ * `clusterrolebinding.rbac`, `route.route.openshift.io`).
+ * @param {string} raw
+ * @returns {{kind: string, apiGroup: string}|null}
+ */
+function resolveDottedResourceToken(raw) {
+  const base = String(raw || '').split('/')[0];
+  if (!base.includes('.') || normalizeKind(base)) return null;
+  const dot = base.indexOf('.');
+  const kind = normalizeKind(base.slice(0, dot));
+  if (!kind) return null;
+  const remainder = base.slice(dot + 1);
+  const apiGroup = Object.prototype.hasOwnProperty.call(API_GROUP_SHORTHANDS, remainder)
+    ? API_GROUP_SHORTHANDS[remainder]
+    : remainder;
+  return { kind, apiGroup };
+}
+
+/**
+ * The resource token + kind metadata used by the authorization gate.
+ * @param {string} token CLI resource token (`deploy`, `deploy/web`, `nodes`, …)
+ * @returns {{kind: string|null, token: string, resource: string, apiGroup: string, clusterScoped: boolean, name: string|null, subresource: string|null}|null}
+ */
+function resourceInfoFromToken(token) {
+  const raw = String(token || '').trim();
+  if (!raw) return null;
+  const dotted = resolveDottedResourceToken(raw);
+  if (dotted) {
+    return {
+      kind: dotted.kind,
+      token: raw,
+      resource: pluralResourceName(dotted.kind),
+      apiGroup: dotted.apiGroup,
+      clusterScoped: isClusterScopedKind(dotted.kind),
+      name: raw.includes('/') ? raw.split('/')[1] : null,
+      subresource: null,
+    };
+  }
+  const parsed = parseResourceToken(raw);
+  const base = raw.split('/')[0].toLowerCase();
+  const name = parsed.subresource ? null : parsed.name;
+  if (parsed.kind) {
+    const kind = parsed.kind;
+    const resource = parsed.subresource
+      ? `${pluralResourceName(kind)}/${parsed.subresource}`
+      : pluralResourceName(kind);
+    return {
+      kind,
+      token: raw,
+      resource,
+      apiGroup: rbacApiGroupForKind(kind),
+      clusterScoped: isClusterScopedKind(kind),
+      name,
+      subresource: parsed.subresource,
+    };
+  }
+  if (Object.prototype.hasOwnProperty.call(VIRTUAL_RESOURCE_API_GROUPS, base)) {
+    const apiGroup = VIRTUAL_RESOURCE_API_GROUPS[base];
+    const clusterScoped = ['projectrequests', 'projectrequest', 'namespaces', 'namespace', 'nodes', 'users', 'groups', 'identities', 'oauths', 'securitycontextconstraints', 'sccs', 'scc', 'projects'].includes(base);
+    return {
+      kind: null,
+      token: raw,
+      resource: base,
+      apiGroup,
+      clusterScoped,
+      name,
+      subresource: null,
+    };
+  }
+  return null;
+}
+
 // ─── GameEngine ────────────────────────────────────────────────────────────
 
 export class GameEngine {
@@ -498,16 +877,24 @@ export class GameEngine {
         this.eventBus.emit('project:switched', { from: data.name, to: 'default', reason: 'deleted' });
       }
     });
+    // Level changes / restarts call ClusterState.clear(): the previous level's
+    // project no longer exists, so validate the session project and re-read the
+    // OAuth configuration (issues #14 / #12).
+    this.eventBus.on('cluster:reset', () => {
+      this.ensureCurrentProject();
+      this._syncAuthProviderFromOAuth({ silent: true });
+    });
   }
 
   // ── Session / identity ──────────────────────────────────────────────────
 
   /** @returns {{user: string|null, project: string|null, namespace: string|null, server: string}} */
   getContext() {
+    const project = this.ensureCurrentProject();
     return {
       user: this.currentUser,
-      project: this.currentProject,
-      namespace: this.currentProject,
+      project,
+      namespace: project,
       server: 'https://api.cluster.example.com:6443',
     };
   }
@@ -555,6 +942,657 @@ export class GameEngine {
   /** `oc adm policy who-can <verb> <resource>` data. */
   whoCan(verb, resource, namespace) {
     return this.cluster.whoCan(verb, resource, namespace || this.currentProject || 'default');
+  }
+
+  // ── Command authorization gate (#2) ─────────────────────────────────────
+
+  /**
+   * Projects visible in `oc get projects` / `oc projects` / the login banner.
+   * Kubeadmin sees every project; plain users only projects they are bound in
+   * (so `openshift-*` infrastructure projects stay hidden for non-admins).
+   * @param {string} [user] defaults to the current user
+   * @returns {object[]} Project resources sorted by name
+   */
+  getVisibleProjects(user) {
+    const username = user === undefined ? this.currentUser : user;
+    return rbacGetVisibleProjects(this.cluster, username || '');
+  }
+
+  /**
+   * Make sure `currentProject` points at an existing, Active project (issue
+   * #14: switching levels / resetting the cluster used to leave a stale
+   * project, which made even cluster-scoped commands fail with
+   * `namespaces "<old-project>" not found`).
+   * @returns {string} the validated current project name
+   */
+  ensureCurrentProject() {
+    const projectName = this.currentProject;
+    const project = projectName ? this.cluster.getProject(projectName) : null;
+    if (project && !this.cluster.isProjectTerminating(projectName)) return this.currentProject;
+    const candidates = ['default', ...this.cluster.getProjects().map((entry) => entry.metadata.name)];
+    const next = candidates.find((name) => {
+      const candidate = this.cluster.getProject(name);
+      return Boolean(candidate) && !this.cluster.isProjectTerminating(name);
+    }) || 'default';
+    const from = projectName;
+    this.currentProject = next;
+    if (from !== next) this.eventBus.emit('project:switched', { from, to: next, reason: 'stale' });
+    return this.currentProject;
+  }
+
+  /**
+   * Normalise the flexible input accepted by {@link authorizeCommand}.
+   * @param {string|object} parsedOrRaw
+   * @returns {string} the command line
+   */
+  _authorizationCommandText(parsedOrRaw) {
+    if (typeof parsedOrRaw === 'string') return parsedOrRaw.trim();
+    if (!parsedOrRaw || typeof parsedOrRaw !== 'object') return '';
+    if (typeof parsedOrRaw.raw === 'string') return parsedOrRaw.raw.trim();
+    if (Array.isArray(parsedOrRaw.tokens)) {
+      return parsedOrRaw.tokens.filter((token) => token !== undefined && token !== null && token !== '').join(' ').trim();
+    }
+    if (Array.isArray(parsedOrRaw.args)) {
+      return [parsedOrRaw.baseCommand, ...parsedOrRaw.args]
+        .filter((token) => token !== undefined && token !== null && token !== '')
+        .join(' ')
+        .trim();
+    }
+    if (typeof parsedOrRaw.command === 'string') return parsedOrRaw.command.trim();
+    return '';
+  }
+
+  /**
+   * Normalise the authorization context.
+   * @param {{user?: string|null, namespace?: string, asUser?: string}} [ctx]
+   * @returns {{user: string|null, namespace: string, asUser: string}}
+   */
+  _normalizeAuthorizationContext(ctx = {}) {
+    const user = ctx.user !== undefined ? ctx.user : this.currentUser;
+    return {
+      user: user || null,
+      namespace: ctx.namespace ? String(ctx.namespace) : '',
+      asUser: ctx.asUser && String(ctx.asUser) ? String(ctx.asUser) : '',
+    };
+  }
+
+  /**
+   * Authorize a parsed/raw oc command BEFORE it executes (GitHub issue #2).
+   *
+   * Call it from the command execution path for every non-exempt command and
+   * print `result.message` on denial (it already carries the real
+   * `Error from server (Forbidden): ...` prefix and RBAC text).
+   *
+   * @param {string|object} parsedOrRaw raw command line (`oc ...` or bare), a
+   *   `GameEngine.parseCommandLine()` result, or `{baseCommand, args, tokens}`
+   * @param {{user?: string|null, namespace?: string, asUser?: string}} [ctx]
+   * @returns {{
+   *   allowed: boolean, exempt: boolean,
+   *   message: string, reason: string,
+   *   verb: string|null, resource: string|null, name: string|null,
+   *   namespace: string|null, apiGroup: string|null, user: string|null,
+   *   command: string,
+   *   requiresManifestCheck: boolean, requiresProjectFilter: boolean
+   * }}
+   */
+  authorizeCommand(parsedOrRaw, ctx = {}) {
+    const command = this._authorizationCommandText(parsedOrRaw);
+    const context = this._normalizeAuthorizationContext(ctx);
+    this.ensureCurrentProject();
+    const result = {
+      allowed: true,
+      exempt: false,
+      message: '',
+      reason: '',
+      verb: null,
+      resource: null,
+      name: null,
+      namespace: null,
+      apiGroup: null,
+      user: context.user,
+      command,
+      requiresManifestCheck: false,
+      requiresProjectFilter: false,
+    };
+    if (!command) return { ...result, exempt: true, reason: 'empty command' };
+
+    const stages = splitCommandStages(command);
+    /** @type {Array<object>} */
+    const checks = [];
+    let onlyExempt = true;
+    for (const stageTokens of stages) {
+      const prefixed = stripCliPrefixTokens(stageTokens);
+      const tokens = prefixed.tokens;
+      if (tokens.length === 0) continue;
+      if (!prefixed.hasPrefix) {
+        // `authorizeCommand` accepts the command both with and without the
+        // `oc` prefix (the CLI strips it before calling). Bare shell/local
+        // commands (cat, vim, echo, …) never reach the API.
+        const first = String(tokens[0] || '').toLowerCase();
+        if (!KNOWN_OC_BASE_COMMANDS.has(first)) continue;
+      }
+      const stage = this._authorizationForStage(tokens);
+      if (stage.requiresManifestCheck) result.requiresManifestCheck = true;
+      if (stage.requiresProjectFilter) result.requiresProjectFilter = true;
+      if (stage.exempt) continue;
+      onlyExempt = false;
+      checks.push(...(stage.checks || []));
+    }
+
+    if (onlyExempt) {
+      return {
+        ...result,
+        exempt: true,
+        reason: 'client-side/session command (no API authorization check)',
+      };
+    }
+    if (!context.user) {
+      const message = 'error: You must be logged in to the server (Unauthorized)';
+      return { ...result, allowed: false, reason: 'Unauthorized', message };
+    }
+
+    const denial = this._evaluateAuthorizationChecks(checks, context);
+    if (denial) {
+      this.eventBus.emit('auth:checked', {
+        user: context.user,
+        verb: denial.verb,
+        resource: denial.resource,
+        namespace: denial.namespace,
+        allowed: false,
+        reason: denial.reason,
+        command,
+      });
+      return { ...result, ...denial, allowed: false };
+    }
+
+    const primary = checks[0] || null;
+    const reason = primary?.reason || 'allowed';
+    this.eventBus.emit('auth:checked', {
+      user: context.user,
+      verb: primary?.verb || null,
+      resource: primary?.resource || null,
+      namespace: primary?.namespace || null,
+      allowed: true,
+      reason,
+      command,
+    });
+    return {
+      ...result,
+      allowed: true,
+      reason,
+      verb: primary?.verb || null,
+      resource: primary?.resource || null,
+      name: primary?.name || null,
+      namespace: primary?.namespace || null,
+      apiGroup: primary?.apiGroup || null,
+    };
+  }
+
+  /**
+   * Authorize a single manifest object (used by the CLI for `-f`/`-k`/stdin
+   * manifests). Accepts `create`, `update`, `patch`, `delete` and `apply`
+   * (apply checks patch for existing objects and create for new ones).
+   *
+   * @param {'create'|'update'|'patch'|'delete'|'apply'} verb
+   * @param {object} object parsed manifest object
+   * @param {{user?: string|null, namespace?: string}} [ctx]
+   * @returns {ReturnType<GameEngine['authorizeCommand']>}
+   */
+  authorizeObject(verb, object, ctx = {}) {
+    const context = this._normalizeAuthorizationContext(ctx);
+    this.ensureCurrentProject();
+    const base = {
+      allowed: true,
+      exempt: false,
+      message: '',
+      reason: '',
+      verb: String(verb || ''),
+      resource: null,
+      name: null,
+      namespace: null,
+      apiGroup: null,
+      user: context.user,
+      command: '',
+      requiresManifestCheck: false,
+      requiresProjectFilter: false,
+    };
+    if (!object || typeof object !== 'object' || !object.kind) {
+      return { ...base, exempt: true, reason: 'manifest object without kind (client-side error)' };
+    }
+    if (object.kind === 'List' && Array.isArray(object.items)) {
+      let last = base;
+      for (const item of object.items) {
+        last = this.authorizeObject(verb, item, ctx);
+        if (!last.allowed) return last;
+      }
+      return last;
+    }
+    const normalizedKind = normalizeKind(String(object.kind));
+    const metadata = object.metadata || {};
+    const name = metadata.name || object.name || '';
+    const defaultNamespace = context.namespace || this.currentProject || 'default';
+    let info = null;
+    if (String(object.kind) === 'Namespace') {
+      info = { resource: 'namespaces', apiGroup: '', clusterScoped: true };
+    } else if (normalizedKind === 'Project' && String(object.apiVersion || '').startsWith('config.openshift.io/')) {
+      info = { resource: 'projects', apiGroup: 'config.openshift.io', clusterScoped: true };
+    } else if (normalizedKind === 'Project') {
+      info = { resource: 'projects', apiGroup: 'project.openshift.io', clusterScoped: true };
+    } else if (normalizedKind === 'OAuth') {
+      info = { resource: 'oauths', apiGroup: 'config.openshift.io', clusterScoped: true };
+    } else if (normalizedKind) {
+      info = {
+        resource: pluralResourceName(normalizedKind),
+        apiGroup: rbacApiGroupForKind(normalizedKind),
+        clusterScoped: isClusterScopedKind(normalizedKind),
+      };
+    }
+    if (!info) {
+      return { ...base, exempt: true, reason: `unknown object kind ${object.kind} (client-side error)` };
+    }
+    const namespace = info.clusterScoped ? '' : (metadata.namespace || defaultNamespace);
+    let checkVerb = String(verb || 'create').toLowerCase();
+    if (checkVerb === 'apply') {
+      const existing = this.cluster.getByName(normalizedKind || object.kind, name, namespace);
+      checkVerb = existing ? 'patch' : 'create';
+    }
+    const check = {
+      verb: checkVerb,
+      resource: info.resource,
+      apiGroup: info.apiGroup,
+      clusterScoped: info.clusterScoped,
+      name: name || null,
+      namespace,
+      command: '',
+    };
+    if (!context.user) {
+      return { ...base, allowed: false, verb: checkVerb, reason: 'Unauthorized', message: 'error: You must be logged in to the server (Unauthorized)' };
+    }
+    const denial = this._evaluateAuthorizationChecks([check], context);
+    this.eventBus.emit('auth:checked', {
+      user: context.user,
+      verb: checkVerb,
+      resource: info.resource,
+      namespace,
+      allowed: !denial,
+      reason: denial?.reason || 'allowed',
+      command: `manifest:${object.kind}/${name}`,
+    });
+    if (denial) return { ...base, ...denial, allowed: false };
+    return {
+      ...base,
+      allowed: true,
+      reason: 'allowed',
+      verb: checkVerb,
+      resource: info.resource,
+      name: name || null,
+      namespace,
+      apiGroup: info.apiGroup,
+    };
+  }
+
+  /**
+   * Map one command-stage token list to authorization checks, or mark it
+   * exempt (client-side / session commands).
+   * @param {string[]} tokens tokens without the oc/kubectl prefix
+   * @returns {{exempt?: boolean, checks?: object[], requiresManifestCheck?: boolean, requiresProjectFilter?: boolean}}
+   */
+  _authorizationForStage(tokens) {
+    const base = String(tokens[0] || '').toLowerCase();
+    const { positionals, flags } = parseCommandArgs(tokens.slice(1));
+    const namespace = namespaceFromFlags(flags) || this.currentProject || 'default';
+    const exempt = { exempt: true };
+
+    /** Build a check for a CLI resource token. */
+    const makeCheck = (verb, token, name = null, options = {}) => {
+      const info = resourceInfoFromToken(token);
+      if (!info) return null;
+      const clusterScoped = options.clusterScoped !== undefined ? options.clusterScoped : info.clusterScoped;
+      return {
+        verb,
+        resource: options.resource || info.resource,
+        apiGroup: options.apiGroup !== undefined ? options.apiGroup : info.apiGroup,
+        clusterScoped,
+        name: name || info.name || null,
+        namespace: clusterScoped ? '' : (options.namespace || namespace),
+      };
+    };
+    const rawCheck = (verb, resource, apiGroup = '', options = {}) => ({
+      verb,
+      resource,
+      apiGroup,
+      clusterScoped: options.clusterScoped !== false ? Boolean(options.clusterScoped) : false,
+      name: options.name || null,
+      namespace: options.clusterScoped ? '' : (options.namespace || namespace),
+    });
+    const checks = (list) => ({ checks: list.filter(Boolean) });
+
+    /** `project.config.openshift.io/cluster` is a cluster-scoped config object. */
+    const projectConfigCheck = (verb) => rawCheck(verb, 'projects', 'config.openshift.io', { clusterScoped: true });
+
+    if (base === 'get') {
+      if (positionals.length === 0) return exempt; // client-side usage error
+      const rawToken = positionals[0];
+      if (/project\.config\.openshift\.io/i.test(rawToken)) return checks([projectConfigCheck('get')]);
+      if (/oauth\.config\.openshift\.io/i.test(rawToken)) return checks([rawCheck('get', 'oauths', 'config.openshift.io', { clusterScoped: true })]);
+      const tokensList = rawToken.split(',').map((token) => token.trim()).filter(Boolean);
+      const [firstToken, firstSub] = rawToken.split('/');
+      const resourceName = positionals[1] || (rawToken.includes('/') ? firstSub : null);
+      if (tokensList.length === 1 && ['projects', 'project'].includes(String(firstToken).toLowerCase())) {
+        if (!resourceName) return { exempt: false, requiresProjectFilter: true, checks: [] };
+        return checks([makeCheck('get', firstToken, resourceName, { clusterScoped: true })]);
+      }
+      const checkList = [];
+      for (const token of tokensList) {
+        if (token.toLowerCase() === 'all') {
+          checkList.push(rawCheck('list', 'pods', '', { namespace }));
+          continue;
+        }
+        const tokenName = token.includes('/') ? token.split('/')[1] : (tokensList.length === 1 ? resourceName : null);
+        const check = makeCheck(resourceName ? 'get' : 'list', token.split('/')[0], tokenName);
+        if (check) checkList.push(check);
+      }
+      return checkList.length > 0 ? checks(checkList) : exempt;
+    }
+
+    if (base === 'describe') {
+      if (positionals.length === 0) return exempt;
+      const rawToken = positionals[0];
+      if (/project\.config\.openshift\.io/i.test(rawToken)) return checks([projectConfigCheck('get')]);
+      const [token, sub] = rawToken.split('/');
+      const name = positionals[1] || (rawToken.includes('/') ? sub : null);
+      const check = makeCheck(name ? 'get' : 'list', token, name);
+      return check ? checks([check]) : exempt;
+    }
+
+    if (base === 'logs') {
+      if (positionals.length === 0) return exempt;
+      const ref = positionals.find((token) => token && !token.startsWith('-')) || '';
+      const [kindToken, refName] = ref.includes('/') ? ref.split('/') : ['pods', ref];
+      const info = resourceInfoFromToken(kindToken) || resourceInfoFromToken('pods');
+      const podName = ref.includes('/') ? refName : ref;
+      if (info?.kind === 'BuildConfig') {
+        return checks([rawCheck('get', 'buildconfigs/log', 'build.openshift.io', { name: podName, namespace })]);
+      }
+      if (info?.kind === 'Build') {
+        return checks([rawCheck('get', 'builds/log', 'build.openshift.io', { name: podName, namespace })]);
+      }
+      return checks([rawCheck('get', 'pods/log', '', { name: podName, namespace })]);
+    }
+
+    if (base === 'events') return checks([rawCheck('list', 'events', '', { namespace })]);
+
+    if (base === 'new-project') {
+      if (!positionals[0]) return exempt;
+      return checks([rawCheck('create', 'projectrequests', 'project.openshift.io', { clusterScoped: true, name: positionals[0] })]);
+    }
+    if (base === 'delete-project') {
+      if (!positionals[0]) return exempt;
+      return checks([rawCheck('delete', 'projects', 'project.openshift.io', { clusterScoped: true, name: positionals[0] })]);
+    }
+
+    const manifestFlag = Boolean(flags.filename || flags.f || flags.kustomize || flags.k);
+    if (base === 'create') {
+      if (manifestFlag) return { checks: [], requiresManifestCheck: true };
+      const sub = String(positionals[0] || '').toLowerCase();
+      if (!sub) return exempt;
+      if (sub === 'token') {
+        return checks([rawCheck('create', 'serviceaccounts/token', '', { name: positionals[1] || null, namespace })]);
+      }
+      if (CREATE_VIRTUAL_RESOURCES[sub]) {
+        const virtual = CREATE_VIRTUAL_RESOURCES[sub];
+        return checks([rawCheck('create', virtual.resource, virtual.apiGroup, {
+          clusterScoped: virtual.clusterScoped,
+          name: positionals[1] || null,
+        })]);
+      }
+      const info = resourceInfoFromToken(sub);
+      if (!info) return exempt; // client-side "unknown resource type"
+      return checks([makeCheck('create', sub, positionals[1] || null)]);
+    }
+    if (base === 'apply') {
+      if (manifestFlag) return { checks: [], requiresManifestCheck: true };
+      return exempt;
+    }
+    if (base === 'replace') {
+      if (manifestFlag) return { checks: [], requiresManifestCheck: true };
+      return exempt;
+    }
+    if (base === 'delete') {
+      if (manifestFlag) return { checks: [], requiresManifestCheck: true };
+      const rawToken = String(positionals[0] || '').toLowerCase();
+      if (!rawToken) return exempt;
+      if (rawToken === 'all') {
+        return checks([
+          rawCheck('delete', 'pods', '', { namespace }),
+          rawCheck('delete', 'services', '', { namespace }),
+          rawCheck('delete', 'deployments', 'apps', { namespace }),
+          rawCheck('delete', 'routes', 'route.openshift.io', { namespace }),
+        ]);
+      }
+      const info = resourceInfoFromToken(rawToken);
+      if (!info) return exempt;
+      return checks([makeCheck('delete', rawToken, positionals[1] || null)]);
+    }
+    if (base === 'patch' || base === 'edit' || base === 'label' || base === 'annotate' || base === 'scale') {
+      if (positionals.length === 0) return exempt;
+      const rawToken = positionals[0];
+      if (/project\.config\.openshift\.io/i.test(rawToken)) {
+        return checks([projectConfigCheck(base === 'patch' ? 'patch' : 'update')]);
+      }
+      const [token, sub] = rawToken.split('/');
+      const name = positionals[1] || (rawToken.includes('/') ? sub : null);
+      const info = resourceInfoFromToken(token);
+      if (!info) return exempt;
+      const verb = base === 'patch' || base === 'label' || base === 'annotate' || base === 'scale' ? 'patch' : 'update';
+      const resource = base === 'scale' ? `${info.resource}/scale` : info.resource;
+      return checks([makeCheck(verb, token, name, { resource })]);
+    }
+    if (base === 'set') {
+      const sub = String(positionals[0] || '').toLowerCase();
+      if (!sub) return exempt;
+      const ref = positionals.slice(1).find((token) => token && (token.includes('/') || resourceInfoFromToken(token)));
+      if (!ref) return exempt;
+      const token = ref.split('/')[0];
+      const info = resourceInfoFromToken(token);
+      if (!info) return exempt;
+      return checks([makeCheck('patch', token, ref.includes('/') ? ref.split('/')[1] : null)]);
+    }
+    if (base === 'rollout') {
+      const sub = String(positionals[0] || '').toLowerCase();
+      const ref = positionals[1] || 'deployments';
+      const token = ref.split('/')[0];
+      if (!['status', 'history', 'restart', 'undo', 'pause', 'resume', 'latest'].includes(sub)) return exempt;
+      const verb = ['status', 'history', 'latest'].includes(sub) ? 'get' : 'patch';
+      const check = makeCheck(verb, token, ref.includes('/') ? ref.split('/')[1] : null);
+      return check ? checks([check]) : exempt;
+    }
+    if (base === 'expose') {
+      if (!positionals[0]) return exempt;
+      const rawToken = positionals[0];
+      const [token, sub] = rawToken.split('/');
+      const info = resourceInfoFromToken(rawToken) || resourceInfoFromToken(token);
+      if (rawToken.includes('/') && info) {
+        if (info.kind === 'Service') return checks([rawCheck('create', 'routes', 'route.openshift.io', { name: sub, namespace })]);
+        if (info.kind === 'Deployment' || info.kind === 'Pod') {
+          return checks([rawCheck('create', 'services', '', { name: sub, namespace })]);
+        }
+        return checks([rawCheck('create', 'routes', 'route.openshift.io', { name: sub, namespace })]);
+      }
+      return checks([rawCheck('create', 'routes', 'route.openshift.io', { name: rawToken, namespace })]);
+    }
+    if (base === 'new-app') return checks([rawCheck('create', 'deployments', 'apps', { namespace })]);
+    if (base === 'new-build') return checks([rawCheck('create', 'buildconfigs', 'build.openshift.io', { namespace })]);
+    if (base === 'start-build') {
+      if (!positionals[0]) return exempt;
+      const token = positionals[0].split('/')[0];
+      if (positionals[0].includes('/')) {
+        const info = resourceInfoFromToken(token);
+        if (info?.kind === 'BuildConfig') return checks([rawCheck('create', 'builds', 'build.openshift.io', { namespace })]);
+        if (info?.kind === 'Build') return checks([rawCheck('update', 'builds', 'build.openshift.io', { namespace })]);
+      }
+      return checks([rawCheck('create', 'builds', 'build.openshift.io', { namespace })]);
+    }
+    if (base === 'cancel-build') {
+      return checks([rawCheck('update', 'builds', 'build.openshift.io', { namespace })]);
+    }
+    if (base === 'run') return checks([rawCheck('create', 'pods', '', { namespace })]);
+    if (base === 'exec' || base === 'rsh') return checks([rawCheck('create', 'pods/exec', '', { namespace })]);
+    if (base === 'cp') return checks([rawCheck('create', 'pods/exec', '', { namespace })]);
+    if (base === 'port-forward') return checks([rawCheck('create', 'pods/portforward', '', { namespace })]);
+    if (base === 'debug') return checks([rawCheck('create', 'pods', '', { namespace })]);
+    if (base === 'tag') return checks([rawCheck('create', 'imagestreamtags', 'image.openshift.io', { namespace })]);
+    if (base === 'import-image') return checks([rawCheck('create', 'imagestreams', 'image.openshift.io', { namespace })]);
+    if (base === 'extract') {
+      const ref = positionals.find((token) => token && (token.includes('/') || resourceInfoFromToken(token)));
+      if (!ref) return exempt;
+      const [token, sub] = ref.split('/');
+      const info = resourceInfoFromToken(token);
+      const resource = info?.kind === 'ConfigMap' ? 'configmaps' : 'secrets';
+      return checks([rawCheck('get', resource, '', { name: sub || null, namespace })]);
+    }
+    if (base === 'adm') {
+      const sub = String(positionals[0] || '').toLowerCase();
+      if (!sub) return exempt;
+      if (sub === 'policy') {
+        const policySub = String(positionals[1] || '').toLowerCase();
+        if (!policySub) return exempt;
+        if (['who-can', 'scc-review', 'scc-subject-review'].includes(policySub)) return exempt;
+        const remove = policySub.startsWith('remove');
+        const verb = remove ? 'delete' : 'create';
+        if (policySub.includes('scc')) {
+          const saForm = Boolean(flags.z || flags.serviceaccount);
+          const sccName = positionals[2] || '';
+          if (saForm || String(positionals[3] || '').startsWith('system:serviceaccount:')) {
+            const subjectNamespace = saForm ? namespace : String(positionals[3] || '').split(':')[2] || namespace;
+            return checks([rawCheck(verb, 'rolebindings', 'rbac.authorization.k8s.io', {
+              name: `system:openshift:scc:${sccName}`,
+              namespace: subjectNamespace,
+            })]);
+          }
+          return checks([rawCheck(verb, 'clusterrolebindings', 'rbac.authorization.k8s.io', {
+            clusterScoped: true,
+            name: `system:openshift:scc:${sccName}`,
+          })]);
+        }
+        const clusterWide = policySub.includes('cluster-role');
+        const resource = clusterWide ? 'clusterrolebindings' : 'rolebindings';
+        return checks([rawCheck(verb, resource, 'rbac.authorization.k8s.io', {
+          clusterScoped: clusterWide,
+          namespace: clusterWide ? '' : namespace,
+        })]);
+      }
+      if (sub === 'groups') {
+        const groupsSub = String(positionals[1] || '').toLowerCase();
+        if (['new', 'add-users', 'remove-users'].includes(groupsSub)) {
+          const verb = groupsSub === 'new' ? 'create' : 'update';
+          return checks([rawCheck(verb, 'groups', 'user.openshift.io', { clusterScoped: true })]);
+        }
+        return exempt;
+      }
+      if (['cordon', 'uncordon', 'drain', 'taint'].includes(sub)) {
+        return checks([rawCheck('update', 'nodes', '', { clusterScoped: true, name: positionals[1] || null })]);
+      }
+      if (sub === 'top') {
+        const target = String(positionals[1] || 'nodes').toLowerCase();
+        if (target.startsWith('pod')) return checks([rawCheck('get', 'pods', '', { namespace })]);
+        return checks([rawCheck('get', 'nodes', '', { clusterScoped: true })]);
+      }
+      if (['create-bootstrap-project-template', 'must-gather', 'inspect'].includes(sub)) return exempt;
+      return exempt;
+    }
+    if (base === 'helm') {
+      const sub = String(positionals[0] || '').toLowerCase();
+      if (['install', 'upgrade'].includes(sub)) return checks([rawCheck('create', 'deployments', 'apps', { namespace })]);
+      if (['uninstall', 'delete'].includes(sub)) return checks([rawCheck('delete', 'deployments', 'apps', { namespace })]);
+      if (['rollback'].includes(sub)) return checks([rawCheck('patch', 'deployments', 'apps', { namespace })]);
+      return exempt;
+    }
+    if (['quota', 'limitrange'].includes(base)) {
+      const resource = base === 'quota' ? 'resourcequotas' : 'limitranges';
+      return checks([rawCheck('create', resource, '', { namespace })]);
+    }
+    if (base === 'clusterquota') {
+      return checks([rawCheck('create', 'clusterresourcequotas', 'quota.openshift.io', { clusterScoped: true })]);
+    }
+    if (base === 'user') return checks([rawCheck('create', 'users', 'user.openshift.io', { clusterScoped: true })]);
+    if (base === 'group') return checks([rawCheck('create', 'groups', 'user.openshift.io', { clusterScoped: true })]);
+    if (base === 'sa' || base === 'serviceaccount') {
+      return checks([rawCheck('create', 'serviceaccounts', '', { namespace })]);
+    }
+    if (base === 'install') return checks([rawCheck('create', 'subscriptions', 'operators.coreos.com', { namespace })]);
+    if (base === 'uninstall') return checks([rawCheck('delete', 'subscriptions', 'operators.coreos.com', { namespace })]);
+    if (['cordon', 'uncordon', 'drain'].includes(base)) {
+      return checks([rawCheck('update', 'nodes', '', { clusterScoped: true })]);
+    }
+    if (base === 'top') {
+      const target = String(positionals[0] || 'nodes').toLowerCase();
+      if (target.startsWith('pod')) return checks([rawCheck('get', 'pods', '', { namespace })]);
+      return checks([rawCheck('get', 'nodes', '', { clusterScoped: true })]);
+    }
+
+    // Session / client-side commands and unknown commands: don't gate them
+    // (the CLI reports type/usage errors itself).
+    if (base === 'projects') return { exempt: true, requiresProjectFilter: true };
+    if (AUTHORIZATION_EXEMPT_COMMANDS.has(base)) return exempt;
+    if (ADM_EXEMPT_SUBCOMMANDS.has(base)) return exempt;
+    if (base === 'auth' || base === 'config' || base === 'version' || base === 'api-resources') return exempt;
+    return exempt;
+  }
+
+  /**
+   * Evaluate a list of authorization checks in order; returns the first denial
+   * (with a real `oc`-shaped message) or null when everything is allowed.
+   * @param {Array<object>} checks
+   * @param {{user: string, namespace: string}} context
+   * @returns {object|null}
+   */
+  _evaluateAuthorizationChecks(checks, context) {
+    const defaultNamespace = context.namespace || this.currentProject || 'default';
+    for (const check of checks || []) {
+      const namespace = check.clusterScoped ? '' : (check.namespace || defaultNamespace);
+      const result = this.cluster.canI(context.user, check.verb, check.resource, namespace);
+      if (result.allowed) {
+        check.reason = result.reason;
+        continue;
+      }
+      const forbidden = this._forbiddenMessage(check, context.user, namespace);
+      return {
+        allowed: false,
+        reason: forbidden.reason,
+        message: forbidden.message,
+        verb: check.verb,
+        resource: check.resource,
+        name: check.name || null,
+        namespace,
+        apiGroup: check.apiGroup || '',
+        user: context.user,
+      };
+    }
+    return null;
+  }
+
+  /**
+   * Build the real `oc` Forbidden message for a failed check:
+   * `Error from server (Forbidden): pods is forbidden: User "carol" cannot list
+   * resource "pods" in API group "" in the namespace "default"`.
+   * @param {object} check
+   * @param {string} user
+   * @param {string} namespace
+   * @returns {{reason: string, message: string}}
+   */
+  _forbiddenMessage(check, user, namespace) {
+    const resource = check.resource;
+    const apiGroup = check.apiGroup || '';
+    const withName = check.name && ['get', 'patch', 'update', 'delete', 'watch'].includes(check.verb);
+    const baseLabel = apiGroup ? `${resource}.${apiGroup}` : resource;
+    const resourceLabel = withName ? `${baseLabel} "${check.name}"` : baseLabel;
+    const scope = check.clusterScoped
+      ? 'at the cluster scope'
+      : `in the namespace "${namespace || 'default'}"`;
+    const verb = check.verb === 'apply' ? 'patch' : check.verb;
+    const reason = `${resourceLabel} is forbidden: User "${user}" cannot ${verb} resource "${resource}" in API group "${apiGroup}" ${scope}`;
+    return { reason, message: `Error from server (Forbidden): ${reason}` };
   }
 
   /** @returns {object|null} current identity provider config (without session) */
@@ -631,38 +1669,39 @@ export class GameEngine {
   }
 
   /**
-   * Read the virtual htpasswd file through ManifestEngine (best effort).
+   * Name of the Secret the configured HTPasswd identity provider references
+   * (`oauth.config.openshift.io/cluster` → `spec.identityProviders[].htpasswd.fileData.name`).
+   * @returns {string}
+   */
+  _providerSecretName() {
+    return this.authProvider?.secretName
+      || this.authProvider?.htpasswd?.fileData?.name
+      || this.authProvider?.htpasswd?.secret?.name
+      || 'htpasswd-secret';
+  }
+
+  /**
+   * Read the htpasswd user database from the Secret referenced by the
+   * configured identity provider (issue #12).
+   *
+   * A real OpenShift 4.22 OAuth server reads `/htpasswd` FROM THE SECRET
+   * (`data.htpasswd` in openshift-config) — editing the local htpasswd file
+   * does NOT change login until the Secret is updated
+   * (`oc extract` → `htpasswd` → `oc set data secret/... --from-file`).
+   *
+   * @param {string} [secretName] defaults to the IdP-referenced Secret
    * @returns {Array<{user: string, hash: string}>|null}
    */
-  _getHtpasswdEntries() {
-    const manifestEngine = this._getManifestEngine();
-    if (!manifestEngine) return null;
-    try {
-      if (typeof manifestEngine.htpasswdList === 'function') {
-        const list = manifestEngine.htpasswdList();
-        if (Array.isArray(list)) {
-          const entries = list
-            .map((entry) => {
-              if (typeof entry === 'string') return GameEngine._parseHtpasswdLine(entry);
-              if (entry && typeof entry === 'object') {
-                const user = entry.user || entry.username || entry.name;
-                const hash = entry.hash || entry.password || entry.encryptedPassword || '';
-                return user ? { user, hash: String(hash) } : null;
-              }
-              return null;
-            })
-            .filter(Boolean);
-          if (entries.length > 0) return entries;
-        }
-      }
-      if (typeof manifestEngine.readFile === 'function') {
-        const text = manifestEngine.readFile('htpasswd');
-        if (typeof text === 'string' && text.trim()) return GameEngine._parseHtpasswdFile(text);
-      }
-    } catch (error) {
-      console.warn('GameEngine: could not read htpasswd file from ManifestEngine:', error);
-    }
-    return null;
+  _getHtpasswdEntries(secretName) {
+    const name = secretName || this._providerSecretName();
+    const secret = this.cluster.getByName('Secret', name, 'openshift-config');
+    if (!secret) return null;
+    const data = secret.spec?.data || secret.data || {};
+    const encoded = data.htpasswd;
+    if (typeof encoded !== 'string' || !encoded) return null;
+    const text = decodeBase64(encoded);
+    if (!text || !text.trim()) return null;
+    return GameEngine._parseHtpasswdFile(text);
   }
 
   /**
@@ -689,7 +1728,9 @@ export class GameEngine {
   }
 
   /**
-   * Validate htpasswd credentials for a login attempt.
+   * Validate htpasswd credentials for a login attempt against the IdP Secret
+   * (issue #12). The virtual root `htpasswd` file is never consulted: only the
+   * Secret referenced by the configured identity provider authenticates users.
    * @param {string} username
    * @param {string} password
    * @returns {{ok: boolean, reason?: string}}
@@ -698,27 +1739,27 @@ export class GameEngine {
     if (password === undefined || password === null || password === '') {
       return { ok: false, reason: 'Verify you have provided the correct credentials.' };
     }
-    const manifestEngine = this._getManifestEngine();
     const entries = this._getHtpasswdEntries();
     if (!entries || entries.length === 0) {
-      return { ok: false, reason: 'unable to read the htpasswd file from secret/htpasswd-secret in project openshift-config' };
+      return {
+        ok: false,
+        reason: `unable to read the "htpasswd" key from secret/${this._providerSecretName()} in project openshift-config`,
+      };
     }
     const entry = entries.find((candidate) => candidate.user === username);
     if (!entry) return { ok: false, reason: 'Verify you have provided the correct credentials.' };
+    const hash = String(entry.hash || '');
 
-    // ManifestEngine owns the virtual htpasswd file: prefer its verifier
-    // (it knows the simulator's fake hash format).
-    for (const methodName of ['htpasswdCheck', 'verifyHtpasswd', 'checkHtpasswd', 'htpasswdVerify']) {
-      if (!manifestEngine || typeof manifestEngine[methodName] !== 'function') continue;
-      try {
-        const verified = manifestEngine[methodName](username, password);
-        if (verified === true) return { ok: true };
-        if (verified === false) return { ok: false, reason: 'Verify you have provided the correct credentials.' };
-      } catch {
-        /* fall through to local verification */
-      }
+    // 1) Simulator placeholder hashes written by the in-game `htpasswd` tool
+    //    (deterministic, non-reversible by design — see ManifestEngine).
+    if (hash === htpasswdSimulatorHash(username, password)) return { ok: true };
+    const isSimulatorPlaceholder = hash.startsWith('{SHA}') && hash.length !== '{SHA}'.length + 28;
+    if (isSimulatorPlaceholder) {
+      return { ok: false, reason: 'Verify you have provided the correct credentials.' };
     }
-    const verified = verifyPasswordHash(entry.hash, password);
+
+    // 2) Real htpasswd formats the browser can verify ({SHA}, plaintext).
+    const verified = verifyPasswordHash(hash, password);
     if (verified === null) return { ok: true }; // unsupported hash format in simulator
     if (!verified) return { ok: false, reason: 'Verify you have provided the correct credentials.' };
     return { ok: true };
@@ -751,7 +1792,7 @@ export class GameEngine {
     if (user === 'kubeadmin' || user === 'system:admin' || user === 'admin') {
       this.currentUser = user === 'admin' ? 'admin' : 'kubeadmin';
       this._ensureUserResource(this.currentUser, null);
-      if (!this.cluster.getProject(this.currentProject)) this.currentProject = 'default';
+      this.ensureCurrentProject();
       this.eventBus.emit('login', { user: this.currentUser, provider: 'kubeadmin', project: this.currentProject });
       return { success: true, user: this.currentUser, message: "Login successful.\n\nYou have access to 0 projects, the server console URL for the cluster is https://console-openshift-console.apps.cluster.example.com." };
     }
@@ -777,11 +1818,7 @@ export class GameEngine {
     // (or malformed) htpasswd Secret in openshift-config: the authentication
     // operator degrades and oc login is rejected. Do not let an OAuth rollout
     // "ready" flag stand in for an actual Secret (GAME-011).
-    const providerSecretName =
-      this.authProvider.secretName
-      || this.authProvider.htpasswd?.fileData?.name
-      || this.authProvider.htpasswd?.secret?.name
-      || 'htpasswd-secret';
+    const providerSecretName = this._providerSecretName();
     const providerSecret = this.cluster.getByName('Secret', providerSecretName, 'openshift-config');
     const providerSecretData = providerSecret?.spec?.data || providerSecret?.data || {};
     if (!providerSecret || !providerSecretData.htpasswd) {
@@ -809,7 +1846,7 @@ export class GameEngine {
     });
     this.cluster.createIdentity(providerName, user, userResource.metadata.name);
     this.currentUser = userResource.metadata.name;
-    if (!this.cluster.getProject(this.currentProject)) this.currentProject = 'default';
+    this.ensureCurrentProject();
     this.eventBus.emit('login', { user: this.currentUser, provider: providerName, project: this.currentProject });
     return { success: true, user: this.currentUser, message: 'Login successful.' };
   }
@@ -969,6 +2006,12 @@ export class GameEngine {
    */
   createProject(name, options = {}) {
     if (!this.currentUser) return { success: false, message: 'error: You must be logged in to the server (Unauthorized)' };
+    // Server-side authorizer: `oc new-project` creates a ProjectRequest and is
+    // governed by the `self-provisioners` ClusterRoleBinding (issue #3).
+    if (!options.bypassAuthorization) {
+      const authorization = this.authorizeCommand(`oc new-project ${name}`, { user: this.currentUser });
+      if (!authorization.allowed) return { success: false, message: authorization.message };
+    }
     // The requester is part of the real `oc new-project` flow: ClusterState
     // records it on the Project and (with a configured project template) grants
     // the requester project-admin and renders the template objects.
@@ -984,6 +2027,9 @@ export class GameEngine {
    * @returns {{success: boolean, message: string}}
    */
   deleteProject(name) {
+    if (!this.currentUser) return { success: false, message: 'error: You must be logged in to the server (Unauthorized)' };
+    const authorization = this.authorizeCommand(`oc delete project ${name}`, { user: this.currentUser });
+    if (!authorization.allowed) return { success: false, message: authorization.message };
     const result = this.cluster.deleteProject(name);
     if (!result.success) return result;
     if (this.currentProject === name) {
@@ -1239,6 +2285,22 @@ export class GameEngine {
       return existing;
     }
 
+    // Bare Pod creation goes through SCC admission like the real API server:
+    // a pod that requests more than any SCC bound to its service account allows
+    // is rejected with `pods "<name>" is forbidden`. Controllers creating pods
+    // for Deployments/ReplicaSets go through SimulationTick admission instead.
+    if (kind === 'Pod') {
+      const candidate = {
+        metadata: { name, namespace },
+        spec: deepClone(normalised.spec || {}),
+      };
+      const resolution = this.cluster.resolveSCCForPod(candidate);
+      if (!resolution.allowed) {
+        this.lastApplyError = `pods "${name}" is forbidden: unable to validate against any security context constraint`;
+        return null;
+      }
+    }
+
     // Create through the registry factory. Passing the full manifest object
     // lets createResource()/ManifestSerializer normalise flat kinds (SCC,
     // Template, User, Group, Identity, ConfigMap, Secret, RBAC, StorageClass)
@@ -1399,28 +2461,79 @@ export class GameEngine {
    * @param {{namespace?: string, type?: 'merge'|'json'|'strategic'}} [options]
    */
   patchResource(kind, name, patch, options = {}) {
+    const canonicalKind = this.cluster._canonicalKind(kind) || kind;
     const resource = this.getResource(kind, name, options.namespace);
     if (!resource) {
       return { success: false, message: `Error from server (NotFound): ${String(kind).toLowerCase()}s "${name}" not found` };
     }
-    if (Array.isArray(patch)) {
-      for (const operation of patch) this._applyJsonPatchOperation(resource, operation);
-    } else if (patch && typeof patch === 'object') {
-      if (patch.metadata) {
-        if (patch.metadata.labels) Object.assign(resource.metadata.labels, patch.metadata.labels);
-        if (patch.metadata.annotations) Object.assign(resource.metadata.annotations, patch.metadata.annotations);
+    const resolvedType = resolvePatchType(options, canonicalKind, (token) => this.cluster._canonicalKind(token));
+    if (resolvedType.error) return { success: false, message: resolvedType.error };
+    const patchType = resolvedType.type;
+
+    // Patch a plain-JSON snapshot, validate, then commit — a rejected patch
+    // must never mutate the live resource (API server semantics).
+    const candidate = {
+      apiVersion: resource.apiVersion,
+      kind: resource.kind || canonicalKind,
+      metadata: deepClone(resource.metadata || {}),
+      spec: deepClone(resource.spec || {}),
+      status: deepClone(resource.status || {}),
+    };
+    let patched = candidate;
+    if (patchType === 'json' || Array.isArray(patch)) {
+      const result = applyJsonPatch(candidate, patch);
+      if (!result.ok) {
+        return {
+          success: false,
+          message: `Error from server (BadRequest): ${result.error || 'invalid json patch'}`,
+        };
       }
-      if (patch.spec) {
-        resource.spec = deepMerge(resource.spec, patch.spec);
-        resource.metadata.generation++;
+      patched = result.result;
+    } else if (patchType === 'merge') {
+      if (!patch || typeof patch !== 'object' || Array.isArray(patch)) {
+        return { success: false, message: 'Error from server (BadRequest): patch must be a JSON object' };
       }
-      if (patch.status) {
-        resource.status = { ...resource.status, ...deepClone(patch.status) };
+      patched = jsonMergePatch(candidate, patch);
+    } else {
+      if (!patch || typeof patch !== 'object' || Array.isArray(patch)) {
+        return { success: false, message: 'Error from server (BadRequest): patch must be a JSON object' };
       }
+      patched = strategicMergePatch(candidate, patch);
     }
+    patched = patched && typeof patched === 'object' ? patched : candidate;
+
+    // Reject patches that would leave a container without an image (issue #6):
+    // the API server would reject the workload and the simulator must never run
+    // an image-less container.
+    const validationMessage = invalidWorkloadMessage(patched);
+    if (validationMessage) return { success: false, message: validationMessage };
+
+    resource.metadata.labels = patched.metadata?.labels || {};
+    resource.metadata.annotations = patched.metadata?.annotations || {};
+    if (patched.metadata?.finalizers) resource.metadata.finalizers = patched.metadata.finalizers;
+    if (patched.spec !== undefined) resource.spec = patched.spec;
+    if (patched.status !== undefined) resource.status = patched.status;
+    resource.metadata.generation = (resource.metadata.generation || 1) + 1;
     this.cluster.update(resource.uid, resource);
-    this.eventBus.emit('resource:updated', { kind, name, namespace: resource.metadata.namespace, reason: 'patch' });
-    return { success: true, message: `${String(kind).toLowerCase()}.apps "${name}" patched`, resource };
+    this.eventBus.emit('resource:updated', { kind: canonicalKind, name, namespace: resource.metadata.namespace, reason: 'patch' });
+    return { success: true, message: `${String(canonicalKind).toLowerCase()}.apps "${name}" patched`, resource, type: patchType };
+  }
+
+  /**
+   * API-server style workload validation shared with runtime admission: every
+   * container in the pod template needs a name and an image.
+   * @param {string} kind canonical kind (Pod/Deployment/StatefulSet/…)
+   * @param {{metadata?: object, spec?: object}} resourceOrSpec resource or plain pod-template object
+   * @returns {{valid: boolean, message: string|null}} message is the real
+   *   `Error from server (Invalid): …` line when invalid
+   */
+  validateWorkload(kind, resourceOrSpec = {}) {
+    const canonical = this.cluster._canonicalKind(kind) || kind;
+    const payload = resourceOrSpec && typeof resourceOrSpec === 'object'
+      ? { kind: canonical, metadata: resourceOrSpec.metadata || {}, spec: resourceOrSpec.spec || {} }
+      : { kind: canonical, metadata: {}, spec: {} };
+    const message = invalidWorkloadMessage(payload);
+    return { valid: !message, message };
   }
 
   /** Apply a single RFC-6902 JSON-patch operation to a resource. */
@@ -2260,6 +3373,28 @@ export class GameEngine {
     const resource = this.getResource(canonical, name, options.namespace);
     if (!resource) return { success: false, message: `Error from server (NotFound): ${String(canonical).toLowerCase()}s "${name}" not found` };
 
+    // Prefer the runtime controller's rollout model when it provides one
+    // (progress-deadline / ImagePullBackOff awareness lives in SimulationTick).
+    const simulation = this.simulation;
+    try {
+      if (subcommand === 'status' && typeof simulation?.getRolloutStatus === 'function') {
+        const delegated = simulation.getRolloutStatus(canonical, name, options);
+        if (delegated && typeof delegated === 'object') return delegated;
+      }
+      if (subcommand === 'undo' && typeof simulation?.undoRollout === 'function') {
+        const delegated = simulation.undoRollout(canonical, name, options);
+        if (delegated && typeof delegated === 'object') return delegated;
+      }
+      if (subcommand === 'history' && typeof simulation?.getRolloutHistory === 'function') {
+        const history = simulation.getRolloutHistory(canonical, name, options);
+        if (Array.isArray(history) && history.length > 0) {
+          return { success: true, history, message: '' };
+        }
+      }
+    } catch {
+      /* fall back to the engine's own rollout model */
+    }
+
     switch (subcommand) {
       case 'status': {
         const status = {
@@ -2319,7 +3454,17 @@ export class GameEngine {
    * @returns {Array<{revision: number, changeCause: string, images: string[]}>}
    */
   getRolloutHistory(kind, name, options = {}) {
-    const resource = this.getResource(kind || 'Deployment', name, options.namespace);
+    const canonical = this.cluster._canonicalKind(kind || 'Deployment');
+    // Prefer the runtime controller's revision model when available.
+    if (typeof this.simulation?.getRolloutHistory === 'function') {
+      try {
+        const delegated = this.simulation.getRolloutHistory(canonical, name, options);
+        if (Array.isArray(delegated) && delegated.length > 0) return delegated;
+      } catch {
+        /* fall through to the engine's own history */
+      }
+    }
+    const resource = this.getResource(canonical, name, options.namespace);
     if (!resource) return [];
     const history = resource._revisionHistory;
     if (history && history.length > 0) {
@@ -2422,12 +3567,41 @@ export class GameEngine {
     const existing = this.cluster.getByName(bindingKind, bindingName, bindingNamespace);
 
     if (options.remove) {
+      // Real `oc adm policy remove-*-from-*` finds the binding(s) by roleRef
+      // (not by the generated `<role>-<subject>` name), so it also works for
+      // bootstrap bindings such as the seeded `self-provisioners` binding
+      // (issue #3) and for bindings created with an explicit name.
+      const candidates = clusterWide
+        ? this.cluster.getByKind('ClusterRoleBinding')
+        : this.cluster.getByKindAndNamespace('RoleBinding', namespace);
+      let changedBinding = null;
+      for (const candidate of candidates) {
+        const roleRef = candidate.spec?.roleRef || {};
+        if (roleRef.name !== roleName) continue;
+        if (clusterWide && roleRef.kind !== 'ClusterRole') continue;
+        const subjects = candidate.spec?.subjects || [];
+        const next = subjects.filter((subject) => !this._sameSubject(subject, normalizedSubject.roleBindingSubject));
+        if (next.length === subjects.length) continue;
+        candidate.spec.subjects = next;
+        this.cluster.update(candidate.uid, candidate);
+        changedBinding = candidate;
+      }
+      if (changedBinding) {
+        this.eventBus.emit('rbac:updated', {
+          binding: changedBinding.metadata?.name,
+          kind: bindingKind,
+          role: roleName,
+          subject: normalizedSubject.subject,
+          action: 'remove',
+        });
+        return {
+          success: true,
+          message: `${normalizedSubject.description} removed from role ${roleName}`,
+          binding: changedBinding,
+        };
+      }
       if (!existing) return { success: true, message: `${bindingKind} "${bindingName}" not found; nothing to remove` };
       const subjects = (existing.spec.subjects || []).filter((subject) => !this._sameSubject(subject, normalizedSubject.roleBindingSubject));
-      if (subjects.length === 0) {
-        this.cluster.remove(existing.uid);
-        return { success: true, message: `${bindingKind} "${bindingName}" deleted` };
-      }
       existing.spec.subjects = subjects;
       this.cluster.update(existing.uid, existing);
       return { success: true, message: `${normalizedSubject.description} removed from ${roleName}`, binding: existing };
@@ -3337,6 +4511,7 @@ export class GameEngine {
     this.difficulty = savedState.difficulty || 'normal';
     this.currentUser = savedState.currentUser || 'kubeadmin';
     this.currentProject = savedState.currentProject || 'default';
+    this.ensureCurrentProject();
     this.authProvider = savedState.authProvider || null;
     this._score = savedState.score || 0;
     this._level = savedState.level || 1;

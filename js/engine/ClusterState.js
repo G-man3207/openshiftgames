@@ -35,8 +35,10 @@ import {
 import {
   canI as rbacCanI,
   getRoleRules,
+  getSCCGrantsForSubject as rbacGetSCCGrantsForSubject,
   getSCCs as rbacGetSCCs,
   getSCCsForServiceAccount as rbacGetSCCsForServiceAccount,
+  getSCCsForSubject as rbacGetSCCsForSubject,
   listPermissions as rbacListPermissions,
   normalizeSCCSubject,
   resolveSCCForPod as rbacResolveSCCForPod,
@@ -625,6 +627,26 @@ export class ClusterState {
       spec: {
         roleRef: { apiGroup: 'rbac.authorization.k8s.io', kind: 'ClusterRole', name: 'cluster-admin' },
         subjects: [{ kind: 'User', apiGroup: 'rbac.authorization.k8s.io', name: 'kubeadmin' }],
+      },
+    });
+    // Real OpenShift 4.x bootstrap policy: the `self-provisioners`
+    // ClusterRoleBinding binds ClusterRole `self-provisioner` to the OAuth
+    // authenticated group so any logged-in user can create projects with
+    // `oc new-project`. Removing that subject (the documented way to disable
+    // self-provisioning) must make `new-project` return Forbidden (issue #3).
+    this._seed('ClusterRole', 'self-provisioner', {
+      uid: 'seed-clusterrole-self-provisioner',
+      spec: {
+        rules: [
+          { apiGroups: ['project.openshift.io'], resources: ['projectrequests'], verbs: ['create'] },
+        ],
+      },
+    });
+    this._seed('ClusterRoleBinding', 'self-provisioners', {
+      uid: 'seed-crb-self-provisioners',
+      spec: {
+        roleRef: { apiGroup: 'rbac.authorization.k8s.io', kind: 'ClusterRole', name: 'self-provisioner' },
+        subjects: [{ kind: 'Group', apiGroup: 'rbac.authorization.k8s.io', name: 'system:authenticated:oauth' }],
       },
     });
 
@@ -2415,39 +2437,33 @@ export class ClusterState {
   }
 
   /**
-   * Remove a user and everything that references it (identities, group
-   * membership, bindings, SCC users) — matching `oc delete user` in OpenShift.
+   * Delete a User resource (`oc delete user <name>`).
+   *
+   * Real OpenShift 4.x semantics (issue #12): deleting a User does NOT delete
+   * its Identity (`oc delete identity` is a separate operation), and it does
+   * not rewrite Group membership, RBAC bindings or SCC lists. A subsequent
+   * OAuth login recreates the User and re-links the existing Identity.
    * @param {string} name
    * @returns {boolean} whether the user existed
    */
   deleteUser(name) {
     const user = this.getUser(name);
     if (!user) return false;
-
-    for (const identity of this.getIdentitiesForUser(name)) this.remove(identity.uid);
-    for (const group of this.getByKind('Group')) {
-      if ((group.spec?.users || []).includes(name)) {
-        group.spec.users = group.spec.users.filter((entry) => entry !== name);
-        this.update(group.uid, group);
-      }
-    }
-    for (const binding of [...this.getByKind('ClusterRoleBinding'), ...this.getByKind('RoleBinding')]) {
-      const subjects = binding.spec?.subjects || [];
-      const filtered = subjects.filter((subject) => !(subject.kind === 'User' && subject.name === name));
-      if (filtered.length !== subjects.length) {
-        binding.spec.subjects = filtered;
-        this.update(binding.uid, binding);
-      }
-    }
-    for (const scc of this.getByKind('SecurityContextConstraints')) {
-      const users = scc.spec?.users || [];
-      if (users.includes(name)) {
-        scc.spec.users = users.filter((entry) => entry !== name);
-        this.update(scc.uid, scc);
-      }
-    }
     this.remove(user.uid);
     this.eventBus?.emit('user:deleted', { name });
+    return true;
+  }
+
+  /**
+   * Delete an Identity resource (`oc delete identity <provider>:<user>`).
+   * @param {string} name
+   * @returns {boolean} whether the identity existed
+   */
+  deleteIdentity(name) {
+    const identity = this.getIdentity(name);
+    if (!identity) return false;
+    this.remove(identity.uid);
+    this.eventBus?.emit('identity:deleted', { name });
     return true;
   }
 
@@ -2577,6 +2593,65 @@ export class ClusterState {
   }
 
   /**
+   * SCCs usable by an arbitrary subject (user, group, SA identity or
+   * `{kind,name,namespace}`). Binding-aware 4.x model.
+   * @param {string|object} subject
+   * @param {string} [namespace]
+   * @returns {object[]}
+   */
+  getSCCsForSubject(subject, namespace = '') {
+    return rbacGetSCCsForSubject(this, subject, namespace);
+  }
+
+  /**
+   * Names of the SCCs granted to a subject through the 4.x RBAC binding model
+   * (plus seeded legacy SCC lists). Convenience for objective/incident repair
+   * detection.
+   * @param {string|object} subject
+   * @param {string} [namespace]
+   * @returns {string[]}
+   */
+  getSCCGrantsForSubject(subject, namespace = '') {
+    return rbacGetSCCGrantsForSubject(this, subject, namespace);
+  }
+
+  /**
+   * Subjects granted an SCC through the OpenShift 4.x RBAC binding model, in
+   * the canonical identity spelling used by SCC lists:
+   * `system:serviceaccount:<ns>:<sa>` for service accounts, the user name for
+   * users and `group:<name>` for groups.
+   *
+   * Example: after `oc adm policy add-scc-to-user anyuid -z default -n demo`,
+   * `cluster.getSCCGrantSubjects('anyuid')` includes
+   * `system:serviceaccount:demo:default`.
+   *
+   * @param {string} sccName
+   * @returns {string[]} sorted subject identities
+   */
+  getSCCGrantSubjects(sccName) {
+    const roleName = `system:openshift:scc:${sccName}`;
+    const identities = new Set();
+    /** @param {object} binding @param {string} bindingNamespace */
+    const collect = (binding, bindingNamespace) => {
+      if (!binding || !this._bindingHasRoleRef(binding, roleName)) return;
+      for (const subject of binding.spec?.subjects || []) {
+        if (!subject?.kind || !subject?.name) continue;
+        if (subject.kind === 'ServiceAccount') {
+          const namespace = subject.namespace || bindingNamespace || '';
+          identities.add(`system:serviceaccount:${namespace}:${subject.name}`);
+        } else if (subject.kind === 'Group') {
+          identities.add(`group:${subject.name}`);
+        } else {
+          identities.add(subject.name);
+        }
+      }
+    };
+    for (const crb of this.getByKind('ClusterRoleBinding')) collect(crb, '');
+    for (const rb of this.getByKind('RoleBinding')) collect(rb, rb.metadata?.namespace || '');
+    return [...identities].sort();
+  }
+
+  /**
    * Highest-precedence SCC bound to a service account.
    * @param {string} namespace
    * @param {string} [serviceAccount]
@@ -2601,11 +2676,24 @@ export class ClusterState {
   }
 
   /**
-   * Grant an SCC to a subject (`oc adm policy add-scc-to-user/-group/-serviceaccount`).
+   * Grant an SCC to a subject with OpenShift 4.x semantics
+   * (`oc adm policy add-scc-to-user/-group/-serviceaccount`).
+   *
+   * Real 4.x model:
+   *  - users/groups → ClusterRoleBinding named `system:openshift:scc:<scc>`
+   *    whose roleRef is ClusterRole `system:openshift:scc:<scc>`
+   *    (`use` on that one securitycontextconstraints resource),
+   *  - service accounts (`-z <sa> -n <project>`) → RoleBinding named
+   *    `system:openshift:scc:<scc>` in the SA's project with the same
+   *    ClusterRole roleRef.
+   *
+   * The SCC object's legacy `spec.users`/`spec.groups` lists are NEVER mutated
+   * by grants (that is the OCP 3.x model; issue #13).
+   *
    * @param {string} sccName
    * @param {string|object} subject user, group, SA identity or {kind,name,namespace}
    * @param {{kind?: string, namespace?: string, actor?: string}} [options]
-   * @returns {{success: boolean, scc?: object, subject?: object, message?: string}}
+   * @returns {{success: boolean, scc?: object, subject?: object, binding?: object, message?: string}}
    */
   grantSCC(sccName, subject, options = {}) {
     const scc = this.getSCC(sccName);
@@ -2614,34 +2702,53 @@ export class ClusterState {
     }
     const parsed = normalizeSCCSubject(subject, options);
     if (!parsed.name) return { success: false, message: 'error: you must specify a subject' };
-    if (parsed.kind === 'User' && !this.getUser(parsed.name) && !parsed.name.startsWith('system:')) {
-      // OpenShift allows granting to non-existent users (it is just a list of
-      // names); keep going but report it to the caller for warning output.
-    }
-    scc.spec = scc.spec || {};
-    scc.spec[parsed.entry] = scc.spec[parsed.entry] || [];
+    const roleName = `system:openshift:scc:${sccName}`;
+    this._ensureSCCClusterRole(sccName);
+    const { bindingKind, bindingNamespace, subjectEntry } = this._sccGrantBindingTarget(parsed, options.namespace);
+    const existing = this.getByName(bindingKind, roleName, bindingNamespace);
+    let binding = existing;
     let changed = false;
-    if (!scc.spec[parsed.entry].includes(parsed.subject)) {
-      scc.spec[parsed.entry].push(parsed.subject);
-      changed = true;
-    }
-    if (changed) {
-      this.update(scc.uid, scc);
-      this.eventBus?.emit('scc:granted', {
-        scc: scc.metadata.name,
-        subject: parsed.subject,
-        kind: parsed.kind,
-        name: parsed.name,
-        namespace: parsed.namespace,
-        actor: options.actor || 'kubeadmin',
-        resource: scc,
+    if (!existing) {
+      binding = this.addResource({
+        kind: bindingKind,
+        metadata: { name: roleName, namespace: bindingNamespace },
+        spec: {
+          roleRef: { apiGroup: 'rbac.authorization.k8s.io', kind: 'ClusterRole', name: roleName },
+          subjects: [subjectEntry],
+        },
       });
+      changed = Boolean(binding);
+    } else {
+      existing.spec = existing.spec || {};
+      existing.spec.subjects = existing.spec.subjects || [];
+      if (!existing.spec.subjects.some((entry) => this._sameRBACSubject(entry, subjectEntry))) {
+        existing.spec.subjects.push(subjectEntry);
+        this.update(existing.uid, existing);
+        changed = true;
+      }
+      binding = existing;
     }
-    return { success: true, scc, subject: parsed };
+    if (!changed) {
+      return { success: true, scc, subject: parsed, binding };
+    }
+    this.eventBus?.emit('scc:granted', {
+      scc: scc.metadata.name,
+      subject: parsed.subject,
+      kind: parsed.kind,
+      name: parsed.name,
+      namespace: parsed.namespace,
+      role: roleName,
+      binding: binding?.metadata?.name || roleName,
+      bindingKind,
+      actor: options.actor || 'kubeadmin',
+      resource: scc,
+    });
+    return { success: true, scc, subject: parsed, binding };
   }
 
   /**
-   * Revoke an SCC from a subject.
+   * Revoke an SCC from a subject (removes it from the 4.x RBAC bindings).
+   * The SCC object's legacy users/groups lists are left untouched.
    * @param {string} sccName
    * @param {string|object} subject
    * @param {{kind?: string, namespace?: string, actor?: string}} [options]
@@ -2653,22 +2760,131 @@ export class ClusterState {
       return { success: false, message: `Error from server (NotFound): securitycontextconstraints.security.openshift.io "${sccName}" not found` };
     }
     const parsed = normalizeSCCSubject(subject, options);
-    const list = scc.spec?.[parsed.entry] || [];
-    const next = list.filter((entry) => entry !== parsed.subject);
-    if (next.length !== list.length) {
-      scc.spec[parsed.entry] = next;
-      this.update(scc.uid, scc);
+    if (!parsed.name) return { success: false, message: 'error: you must specify a subject' };
+    const roleName = `system:openshift:scc:${sccName}`;
+    /** @type {Set<string>} */
+    const removedFrom = new Set();
+
+    const removeFromBinding = (binding, bindingNamespace) => {
+      if (!binding || !this._bindingHasRoleRef(binding, roleName)) return;
+      const subjects = binding.spec?.subjects || [];
+      const next = subjects.filter((entry) => !this._subjectMatchesSCCGrant(entry, parsed, bindingNamespace, options.namespace));
+      if (next.length !== subjects.length) {
+        binding.spec.subjects = next;
+        this.update(binding.uid, binding);
+        removedFrom.add(`${binding.kind}/${binding.metadata?.namespace || ''}/${binding.metadata?.name || ''}`);
+      }
+    };
+
+    // Cluster-wide grants live on the ClusterRoleBinding.
+    const crb = this.getByName('ClusterRoleBinding', roleName, '');
+    removeFromBinding(crb, '');
+    // `-z <sa>` grants live on RoleBindings named after the ClusterRole in the
+    // subject's project (scan every project so removal works without -n too).
+    for (const rb of this.getByKind('RoleBinding')) {
+      if ((rb.metadata?.name || '') !== roleName) continue;
+      if (parsed.kind === 'ServiceAccount' && parsed.namespace && rb.metadata?.namespace !== parsed.namespace) continue;
+      removeFromBinding(rb, rb.metadata?.namespace || '');
+    }
+
+    if (removedFrom.size > 0) {
       this.eventBus?.emit('scc:revoked', {
         scc: scc.metadata.name,
         subject: parsed.subject,
         kind: parsed.kind,
         name: parsed.name,
         namespace: parsed.namespace,
+        role: roleName,
         actor: options.actor || 'kubeadmin',
         resource: scc,
       });
     }
-    return { success: true, scc, subject: parsed };
+    return { success: true, scc, subject: parsed, removed: [...removedFrom] };
+  }
+
+  /**
+   * Ensure the OCP 4.x ClusterRole `system:openshift:scc:<name>` exists.
+   * Real 4.22 clusters ship these ClusterRoles for the default SCCs; the game
+   * creates them lazily on first grant so the seeded resource count stays
+   * faithful to a fresh cluster.
+   * @param {string} sccName
+   * @returns {object}
+   */
+  _ensureSCCClusterRole(sccName) {
+    const roleName = `system:openshift:scc:${sccName}`;
+    const existing = this.getByName('ClusterRole', roleName, '');
+    if (existing) return existing;
+    return this.addResource({
+      kind: 'ClusterRole',
+      metadata: { name: roleName },
+      spec: {
+        rules: [{
+          apiGroups: ['security.openshift.io'],
+          resources: ['securitycontextconstraints'],
+          resourceNames: [sccName],
+          verbs: ['use'],
+        }],
+      },
+    });
+  }
+
+  /**
+   * Resolve the binding kind/namespace and the RBAC subject entry for an SCC
+   * grant (users/groups → ClusterRoleBinding, service accounts → namespaced
+   * RoleBinding).
+   * @param {{kind: string, name: string, namespace: string}} parsed
+   * @param {string} [namespaceHint]
+   * @returns {{bindingKind: 'ClusterRoleBinding'|'RoleBinding', bindingNamespace: string, subjectEntry: object}}
+   */
+  _sccGrantBindingTarget(parsed, namespaceHint = '') {
+    if (parsed.kind === 'ServiceAccount') {
+      const namespace = parsed.namespace || namespaceHint || 'default';
+      return {
+        bindingKind: 'RoleBinding',
+        bindingNamespace: namespace,
+        subjectEntry: { apiGroup: '', kind: 'ServiceAccount', name: parsed.name, namespace },
+      };
+    }
+    if (parsed.kind === 'Group') {
+      return {
+        bindingKind: 'ClusterRoleBinding',
+        bindingNamespace: '',
+        subjectEntry: { apiGroup: 'rbac.authorization.k8s.io', kind: 'Group', name: parsed.name },
+      };
+    }
+    return {
+      bindingKind: 'ClusterRoleBinding',
+      bindingNamespace: '',
+      subjectEntry: { apiGroup: 'rbac.authorization.k8s.io', kind: 'User', name: parsed.name },
+    };
+  }
+
+  /** @param {object} binding @param {string} roleName @returns {boolean} */
+  _bindingHasRoleRef(binding, roleName) {
+    return (binding?.spec?.roleRef?.name || '') === roleName;
+  }
+
+  /**
+   * Does an existing RBAC subject entry refer to the parsed SCC grant subject?
+   * @param {object} entry
+   * @param {{kind: string, name: string, namespace: string}} parsed
+   * @param {string} bindingNamespace
+   * @param {string} [optionNamespace]
+   * @returns {boolean}
+   */
+  _subjectMatchesSCCGrant(entry, parsed, bindingNamespace = '', optionNamespace = '') {
+    if (!entry || entry.kind !== parsed.kind || entry.name !== parsed.name) return false;
+    if (parsed.kind !== 'ServiceAccount') return true;
+    const targetNamespace = entry.namespace || bindingNamespace || parsed.namespace || optionNamespace || '';
+    return targetNamespace === '' || targetNamespace === parsed.namespace;
+  }
+
+  /** @param {object} left @param {object} right @returns {boolean} */
+  _sameRBACSubject(left, right) {
+    return Boolean(left && right)
+      && left.kind === right.kind
+      && left.name === right.name
+      && (left.namespace || '') === (right.namespace || '');
   }
 
   // ── OAuth / identity providers ──────────────────────────────────────────

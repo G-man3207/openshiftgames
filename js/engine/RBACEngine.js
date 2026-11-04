@@ -12,11 +12,17 @@
  *      account identity.
  *   3. RoleBindings in the target project (can reference a Role or a
  *      ClusterRole).
- *   4. Built-in cluster roles (`admin`, `edit`, `view`, `self-provisioner`,
- *      `cluster-admin`) are available as fallbacks even when the corresponding
- *      ClusterRole object was not seeded into the simulated cluster.
- *   5. Any authenticated user may create projects (the OpenShift
- *      self-provisioner default binding).
+ *   4. `use securitycontextconstraints/<name>` additionally honours namespaced
+ *      RoleBindings (the OCP 4.x `add-scc-to-user -z <sa>` grant model).
+ *   5. Built-in cluster roles (`admin`, `edit`, `view`, `self-provisioner`,
+ *      `cluster-admin`, `system:openshift:scc:<name>`) are available as
+ *      fallbacks even when the corresponding ClusterRole object was not seeded
+ *      into the simulated cluster.
+ *
+ * Project creation is NOT special-cased: a real 4.x cluster seeds the
+ * `self-provisioners` ClusterRoleBinding (ClusterRole `self-provisioner` →
+ * Group `system:authenticated:oauth`), so removing that subject really does
+ * disable `oc new-project` (GitHub issue #3).
  *
  * Wildcards are supported in verbs (`*`), resources (`*`) and apiGroups (`*`).
  */
@@ -33,6 +39,59 @@ const SYSTEM_ADMIN_USERS = new Set(['kubeadmin', 'system:admin', 'system:cluster
 
 const READ_VERBS = ['get', 'list', 'watch'];
 const EDIT_VERBS = [...READ_VERBS, 'create', 'update', 'patch', 'delete', 'deletecollection'];
+
+/**
+ * API groups for virtual (non-registry) resource tokens used by the CLI /
+ * authorization gate: `projectrequests` (oc new-project), `namespaces`
+ * (`oc create namespace`), etc. Keys are lowercase CLI tokens.
+ * @type {Record<string, string>}
+ */
+export const VIRTUAL_RESOURCE_API_GROUPS = {
+  projectrequests: 'project.openshift.io',
+  projectrequest: 'project.openshift.io',
+  projects: 'project.openshift.io',
+  namespaces: '',
+  namespace: '',
+  events: '',
+  pods: '',
+  services: '',
+  serviceaccounts: '',
+  secrets: '',
+  configmaps: '',
+  persistentvolumeclaims: '',
+  resourcequotas: '',
+  limitranges: '',
+  endpoints: '',
+  nodes: '',
+  users: 'user.openshift.io',
+  groups: 'user.openshift.io',
+  identities: 'user.openshift.io',
+  oauths: 'config.openshift.io',
+  'securitycontextconstraints': 'security.openshift.io',
+  sccs: 'security.openshift.io',
+  scc: 'security.openshift.io',
+};
+
+/** Real 4.22 default SCC ClusterRoles: `system:openshift:scc:<name>`. */
+const SCC_CLUSTER_ROLE_PREFIX = 'system:openshift:scc:';
+
+/**
+ * Synthesise the policy rules of a 4.x SCC ClusterRole
+ * (`use securitycontextconstraints.security.openshift.io` with a resourceName).
+ * @param {string} roleName
+ * @returns {Array<object>|null}
+ */
+function sccClusterRoleRules(roleName) {
+  if (!String(roleName || '').startsWith(SCC_CLUSTER_ROLE_PREFIX)) return null;
+  const sccName = String(roleName).slice(SCC_CLUSTER_ROLE_PREFIX.length);
+  if (!sccName) return null;
+  return [{
+    apiGroups: ['security.openshift.io'],
+    resources: ['securitycontextconstraints'],
+    resourceNames: [sccName],
+    verbs: ['use'],
+  }];
+}
 
 /**
  * Simplified rules for OpenShift's built-in cluster roles. Used when the
@@ -82,8 +141,8 @@ export const BUILTIN_CLUSTER_ROLE_RULES = {
     { apiGroups: ['metallb.io'], resources: ['ipaddresspools', 'l2advertisements'], verbs: READ_VERBS },
   ],
   'self-provisioner': [
-    { apiGroups: ['project.openshift.io'], resources: ['projectrequests', 'projects'], verbs: ['create', 'get', 'list'] },
-    { apiGroups: [''], resources: ['namespaces'], verbs: ['create', 'get', 'list'] },
+    // Real OCP 4.x ClusterRole: `oc new-project` is a ProjectRequest create.
+    { apiGroups: ['project.openshift.io'], resources: ['projectrequests'], verbs: ['create'] },
   ],
   'system:image-puller': [
     { apiGroups: ['image.openshift.io'], resources: ['imagestreams/layers'], verbs: READ_VERBS },
@@ -94,16 +153,20 @@ export const BUILTIN_CLUSTER_ROLE_RULES = {
 /** Roles that are always accepted as a `roleRef` even without a resource object. */
 export const BUILTIN_ROLE_NAMES = new Set(Object.keys(BUILTIN_CLUSTER_ROLE_RULES));
 
-/** Project-creation resources that self-provisioner covers. */
-const PROJECT_CREATION_RESOURCES = new Set(['project', 'projects', 'projectrequest', 'projectrequests', 'namespace', 'namespaces']);
-
 /**
- * Return the API group for a canonical kind ('' for the core group).
+ * Return the API group for a canonical kind or CLI resource token
+ * ('' for the core group). Handles virtual tokens (`projectrequests`,
+ * `namespaces`, `oauths`, …) that are not registry kinds.
  * @param {string} kind
  * @returns {string}
  */
 export function apiGroupForKind(kind) {
-  const apiVersion = apiVersionForKind(kind);
+  const key = String(kind || '');
+  const lower = key.toLowerCase();
+  if (Object.prototype.hasOwnProperty.call(VIRTUAL_RESOURCE_API_GROUPS, lower)) {
+    return VIRTUAL_RESOURCE_API_GROUPS[lower];
+  }
+  const apiVersion = apiVersionForKind(key);
   if (!apiVersion || !apiVersion.includes('/')) return '';
   return apiVersion.split('/')[0];
 }
@@ -242,6 +305,10 @@ export function getUserIdentity(cluster, userName) {
     if (namespace) groups.add(`system:serviceaccounts:${namespace}`);
   } else if (userName !== 'system:anonymous') {
     groups.add('system:authenticated');
+    // Users authenticated through the OAuth server (htpasswd/AD/OIDC/…, and
+    // kubeadmin's token) also carry the `system:authenticated:oauth` group.
+    // Real OCP 4.x seeds `self-provisioners` → Group system:authenticated:oauth.
+    groups.add('system:authenticated:oauth');
   }
   return { userName, user, names, groups };
 }
@@ -280,11 +347,11 @@ export function getRoleRules(cluster, roleRef, namespace = '') {
   if (roleRef.kind === 'Role') {
     const role = cluster?.getByName ? cluster.getByName('Role', roleName, namespace) : null;
     if (role) return role.spec?.rules || [];
-    return BUILTIN_CLUSTER_ROLE_RULES[roleName] || [];
+    return BUILTIN_CLUSTER_ROLE_RULES[roleName] || sccClusterRoleRules(roleName) || [];
   }
   const clusterRole = cluster?.getByName ? cluster.getByName('ClusterRole', roleName, '') : null;
   if (clusterRole) return clusterRole.spec?.rules || [];
-  return BUILTIN_CLUSTER_ROLE_RULES[roleName] || [];
+  return BUILTIN_CLUSTER_ROLE_RULES[roleName] || sccClusterRoleRules(roleName) || [];
 }
 
 function makeAllowed(reason, extra = {}) {
@@ -351,12 +418,17 @@ export function canI(cluster, userName, verb, resource, namespace) {
     }
   }
 
-  // Default OpenShift self-provisioner binding for authenticated users.
-  if (identity.groups.has('system:authenticated') && verb === 'create' && PROJECT_CREATION_RESOURCES.has(String(resource).toLowerCase())) {
-    return makeAllowed('self-provisioner (clustered default binding to system:authenticated)', {
-      role: 'self-provisioner',
-      binding: 'self-provisioners',
-    });
+  // SCC "use" checks are special: the grant may live in a RoleBinding inside the
+  // workload's project (`oc adm policy add-scc-to-user <scc> -z <sa> -n <project>`)
+  // even though the SCC resource itself is cluster-scoped.
+  if (parsed.kind === 'SecurityContextConstraints' && parsed.name && verb === 'use') {
+    const namespaceHint = namespace || '';
+    if (identityCanUseSCC(cluster, identity, parsed.name, namespaceHint)) {
+      return makeAllowed(`SCC "${parsed.name}" granted through an RBAC binding`, {
+        role: `${SCC_CLUSTER_ROLE_PREFIX}${parsed.name}`,
+        binding: `${SCC_CLUSTER_ROLE_PREFIX}${parsed.name}`,
+      });
+    }
   }
 
   const scope = effectiveNamespace ? ` in project "${effectiveNamespace}"` : '';
@@ -471,7 +543,85 @@ export function getSCCs(cluster) {
 }
 
 /**
+ * Legacy SCC grants: does the SCC's own `spec.users`/`spec.groups` list cover
+ * the identity? The seeded default SCCs ship the real 4.22 legacy lists
+ * (`restricted-v2` → system:authenticated, `privileged` → system:admin, …);
+ * `oc adm policy add-scc-*` never mutates these lists on 4.x.
+ * @param {object} scc
+ * @param {ReturnType<typeof getUserIdentity>} identity
+ * @returns {boolean}
+ */
+export function legacySCCListAllows(scc, identity) {
+  const users = scc?.spec?.users || [];
+  const groups = scc?.spec?.groups || [];
+  if (users.includes(identity.userName)) return true;
+  return groups.some((group) => identity.groups.has(group));
+}
+
+/**
+ * Does an RBAC binding set (ClusterRoleBindings + the given namespaced
+ * RoleBindings) grant `use` on the SCC named `sccName`?
+ * OCP 4.x models SCC grants as:
+ *  - ClusterRoleBinding → ClusterRole `system:openshift:scc:<name>`
+ *    (users/groups, and cluster-wide service-account grants), and/or
+ *  - RoleBinding in the workload's project → ClusterRole
+ *    `system:openshift:scc:<name>` (the `add-scc-to-user -z <sa>` form).
+ * @param {import('./ClusterState.js').ClusterState} cluster
+ * @param {ReturnType<typeof getUserIdentity>} identity
+ * @param {string} sccName
+ * @param {string} [namespace]
+ * @returns {boolean}
+ */
+export function identityCanUseSCC(cluster, identity, sccName, namespace = '') {
+  if (!sccName) return false;
+  const parsed = parseResourceToken(`scc/${sccName}`);
+  const allows = (binding, bindingNamespace) => {
+    const subjects = binding?.spec?.subjects || [];
+    if (!subjects.some((subject) => subjectMatches(subject, identity, bindingNamespace))) return false;
+    const rules = getRoleRules(cluster, binding.spec?.roleRef || {}, bindingNamespace);
+    return Boolean(evaluateRules(rules, 'use', parsed));
+  };
+
+  for (const crb of cluster?.getByKind ? cluster.getByKind('ClusterRoleBinding') : []) {
+    if (allows(crb, '')) return true;
+  }
+  const namespaces = namespace ? [namespace] : [namespace].filter(Boolean);
+  for (const ns of namespaces) {
+    const rbs = cluster?.getByKindAndNamespace ? cluster.getByKindAndNamespace('RoleBinding', ns) : [];
+    for (const rb of rbs) {
+      if (allows(rb, ns)) return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Which SCCs may `userName` (or a `system:serviceaccount:<ns>:<sa>` identity)
+ * use? Union of the legacy SCC lists and the 4.x RBAC binding model.
+ * @param {import('./ClusterState.js').ClusterState} cluster
+ * @param {string} userName
+ * @param {string} [namespace]
+ * @returns {Array<object>} SCC objects sorted by admission precedence
+ */
+export function getSCCsForSubject(cluster, userName, namespace = '') {
+  const identity = getUserIdentity(cluster, userName);
+  const effectiveNamespace = namespace || extractServiceAccountNamespace(userName);
+  return getSCCs(cluster).filter((scc) => {
+    if (legacySCCListAllows(scc, identity)) return true;
+    return identityCanUseSCC(cluster, identity, scc.metadata.name, effectiveNamespace);
+  });
+}
+
+/** @param {string} userName @returns {string} */
+function extractServiceAccountNamespace(userName) {
+  const match = String(userName || '').match(/^system:serviceaccount:([^:]+):/);
+  return match ? match[1] : '';
+}
+
+/**
  * All SCCs usable by a service account, sorted by precedence.
+ * Binding-aware: legacy `spec.users/groups` lists + ClusterRoleBindings +
+ * the namespaced RoleBinding created by `add-scc-to-user -z <sa>`.
  * @param {import('./ClusterState.js').ClusterState} cluster
  * @param {string} namespace
  * @param {string} serviceAccount
@@ -480,10 +630,8 @@ export function getSCCs(cluster) {
 export function getSCCsForServiceAccount(cluster, namespace, serviceAccount) {
   const identity = getUserIdentity(cluster, `system:serviceaccount:${namespace}:${serviceAccount || 'default'}`);
   return getSCCs(cluster).filter((scc) => {
-    const users = scc.spec?.users || [];
-    const groups = scc.spec?.groups || [];
-    if (users.includes(identity.userName)) return true;
-    return groups.some((group) => identity.groups.has(group));
+    if (legacySCCListAllows(scc, identity)) return true;
+    return identityCanUseSCC(cluster, identity, scc.metadata.name, namespace);
   });
 }
 
@@ -499,9 +647,90 @@ export function sccForServiceAccount(cluster, namespace, serviceAccount) {
 }
 
 /**
- * Summarise the security-sensitive parts of a Pod spec.
+ * Names of the SCCs granted to an arbitrary subject through the 4.x binding
+ * model (or the legacy SCC lists). Used by objectives / incident repair
+ * detection, so it accepts every spelling the game uses:
+ * `system:serviceaccount:<ns>:<sa>`, `user:alice`, `group:devs`, a bare user
+ * name or `{kind, name, namespace}`.
+ *
+ * @param {import('./ClusterState.js').ClusterState} cluster
+ * @param {string|object} subject
+ * @param {string} [namespace] optional project scope (limits RoleBindings)
+ * @returns {string[]} SCC names, sorted
+ */
+export function getSCCGrantsForSubject(cluster, subject, namespace = '') {
+  const parsed = normalizeSCCSubject(subject, { namespace });
+  const identityName = parsed.kind === 'ServiceAccount'
+    ? `system:serviceaccount:${parsed.namespace || namespace || 'default'}:${parsed.name}`
+    : parsed.name;
+  const identity = getUserIdentity(cluster, identityName);
+  const names = new Set();
+
+  const collectFromBinding = (binding, bindingNamespace) => {
+    const roleName = String(binding?.spec?.roleRef?.name || '');
+    if (!roleName.startsWith(SCC_CLUSTER_ROLE_PREFIX)) return;
+    const sccName = roleName.slice(SCC_CLUSTER_ROLE_PREFIX.length);
+    if (!sccName) return;
+    const subjects = binding?.spec?.subjects || [];
+    if (subjects.some((s) => subjectMatches(s, identity, bindingNamespace))) names.add(sccName);
+  };
+
+  for (const crb of cluster?.getByKind ? cluster.getByKind('ClusterRoleBinding') : []) collectFromBinding(crb, '');
+  const roleBindings = namespace && cluster?.getByKindAndNamespace
+    ? cluster.getByKindAndNamespace('RoleBinding', namespace)
+    : (cluster?.getByKind ? cluster.getByKind('RoleBinding') : []);
+  for (const rb of roleBindings) collectFromBinding(rb, rb.metadata?.namespace || '');
+
+  // Legacy lists on the SCC objects (seeded 4.22 defaults, e.g. privileged
+  // grants system:admin and system:cluster-admins).
+  for (const scc of cluster?.getByKind ? cluster.getByKind('SecurityContextConstraints') : []) {
+    if (legacySCCListAllows(scc, identity)) names.add(scc.metadata.name);
+  }
+  return [...names].sort();
+}
+
+/**
+ * Projects a user may see in `oc get projects` / `oc projects`.
+ *
+ * The OpenShift project API filters the list to projects the user can access
+ * (cluster admins see everything). Plain authenticated users therefore see no
+ * projects — and never the `openshift-*` infrastructure projects.
+ *
+ * @param {import('./ClusterState.js').ClusterState} cluster
+ * @param {string} userName
+ * @returns {Array<object>} Project resources sorted by name
+ */
+export function getVisibleProjects(cluster, userName) {
+  const projects = cluster?.getProjects ? cluster.getProjects() : [];
+  if (!userName) return [];
+  if (SYSTEM_ADMIN_USERS.has(userName)) return projects;
+  const identity = getUserIdentity(cluster, userName);
+
+  // Cluster-wide read grants: any CRB whose rules allow list/get on projects
+  // (e.g. cluster-admin, cluster-reader) sees every project.
+  const projectToken = parseResourceToken('projects');
+  for (const crb of cluster?.getByKind ? cluster.getByKind('ClusterRoleBinding') : []) {
+    const subjects = crb.spec?.subjects || [];
+    if (!subjects.some((s) => subjectMatches(s, identity, ''))) continue;
+    const rules = getRoleRules(cluster, crb.spec?.roleRef || {}, '');
+    if (evaluateRules(rules, 'list', projectToken) || evaluateRules(rules, 'get', projectToken)) return projects;
+  }
+
+  // Otherwise a project is visible when the user has a RoleBinding in it (the
+  // project-request flow grants the requester `admin` there).
+  const visible = projects.filter((project) => {
+    const namespace = project.metadata?.name || '';
+    const rbs = cluster?.getByKindAndNamespace ? cluster.getByKindAndNamespace('RoleBinding', namespace) : [];
+    return rbs.some((rb) => (rb.spec?.subjects || []).some((subject) => subjectMatches(subject, identity, namespace)));
+  });
+  return visible;
+}
+
+/**
+ * Summarise the security-sensitive parts of a Pod spec — the explicit
+ * requests that SCC admission evaluates.
  * @param {object} podSpec
- * @returns {{privileged: boolean, runAsUsers: number[], hostNetwork: boolean, hostPID: boolean, hostIPC: boolean, hostPorts: number[], hostPath: boolean}}
+ * @returns {{privileged: boolean, runAsUsers: number[], hostNetwork: boolean, hostPID: boolean, hostIPC: boolean, hostPorts: number[], hostPath: boolean, allowPrivilegeEscalation: boolean, addedCapabilities: string[]}}
  */
 export function podSecurityRequest(podSpec) {
   const spec = podSpec || {};
@@ -514,15 +743,29 @@ export function podSecurityRequest(podSpec) {
     hostIPC: spec.hostIPC === true,
     hostPorts: [],
     hostPath: false,
+    allowPrivilegeEscalation: false,
+    addedCapabilities: [],
   };
 
   const podSc = spec.securityContext || {};
   if (typeof podSc.runAsUser === 'number') result.runAsUsers.push(podSc.runAsUser);
+  if (podSc.allowPrivilegeEscalation === true) result.allowPrivilegeEscalation = true;
+
+  // Only *explicit* requests matter: a bare `nginx:latest` (no securityContext)
+  // must stay admissible under restricted-v2.
+  const collectCapabilities = (sc) => {
+    for (const capability of sc?.capabilities?.add || []) {
+      if (capability && !result.addedCapabilities.includes(capability)) result.addedCapabilities.push(capability);
+    }
+  };
+  collectCapabilities(podSc);
 
   for (const container of containers) {
     const sc = container?.securityContext || {};
     if (sc.privileged === true) result.privileged = true;
     if (typeof sc.runAsUser === 'number') result.runAsUsers.push(sc.runAsUser);
+    if (sc.allowPrivilegeEscalation === true) result.allowPrivilegeEscalation = true;
+    collectCapabilities(sc);
     for (const port of container?.ports || []) {
       if (port?.hostPort) result.hostPorts.push(port.hostPort);
     }
@@ -576,6 +819,16 @@ export function sccAllowsPod(scc, podSpec) {
   if (request.hostIPC && !spec.allowHostIPC) return false;
   if (request.hostPorts.length > 0 && !spec.allowHostPorts) return false;
   if (request.hostPath && !spec.allowHostDirVolumePlugin) return false;
+  if (request.allowPrivilegeEscalation && spec.allowPrivilegeEscalation !== true) return false;
+
+  // Explicit `capabilities.add`: only the SCC's allowedCapabilities pass.
+  if (request.addedCapabilities.length > 0) {
+    const allowed = new Set([...(spec.allowedCapabilities || [])]);
+    for (const capability of request.addedCapabilities) {
+      if (allowed.has('*') || allowed.has(capability)) continue;
+      return false;
+    }
+  }
 
   for (const uid of request.runAsUsers) {
     if (!runAsUserAllowed(spec.runAsUser, uid)) return false;
@@ -657,6 +910,7 @@ export function normalizeSCCSubject(subject, options = {}) {
 export default {
   BUILTIN_CLUSTER_ROLE_RULES,
   BUILTIN_ROLE_NAMES,
+  VIRTUAL_RESOURCE_API_GROUPS,
   apiGroupForKind,
   parseResourceToken,
   ruleMatches,
@@ -667,8 +921,13 @@ export default {
   canI,
   listPermissions,
   whoCan,
+  getVisibleProjects,
   getSCCs,
+  legacySCCListAllows,
+  identityCanUseSCC,
+  getSCCsForSubject,
   getSCCsForServiceAccount,
+  getSCCGrantsForSubject,
   sccForServiceAccount,
   podSecurityRequest,
   runAsUserAllowed,
