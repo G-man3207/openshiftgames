@@ -120,9 +120,13 @@ resources:
   - deployment.yaml
   - service.yaml
 
-commonLabels:
-  app.kubernetes.io/part-of: webapp
-  app.kubernetes.io/managed-by: kustomize
+# kustomize v5 labels transformer (replaces the deprecated commonLabels field).
+# includeSelectors defaults to false, so these pairs only land in metadata.labels
+# and the base selectors stay exactly as declared in the resource files.
+labels:
+  - pairs:
+      app.kubernetes.io/part-of: webapp
+      app.kubernetes.io/managed-by: kustomize
 `,
 
   'kustomize/base/deployment.yaml': `apiVersion: apps/v1
@@ -182,8 +186,12 @@ resources:
 namespace: webapp-dev
 namePrefix: dev-
 
-commonLabels:
-  environment: dev
+# kustomize v5 labels transformer (replaces commonLabels). includeSelectors:
+# true also adds the pairs to workload selectors and pod-template labels.
+labels:
+  - pairs:
+      environment: dev
+    includeSelectors: true
 
 images:
   - name: quay.io/openshift/origin-hello-openshift
@@ -204,8 +212,12 @@ resources:
 namespace: webapp-prod
 namePrefix: prod-
 
-commonLabels:
-  environment: prod
+# kustomize v5 labels transformer (replaces commonLabels); includeSelectors:
+# true keeps the old commonLabels behaviour of also labelling selectors.
+labels:
+  - pairs:
+      environment: prod
+    includeSelectors: true
 
 images:
   - name: quay.io/openshift/origin-hello-openshift
@@ -215,8 +227,13 @@ replicas:
   - name: webapp
     count: 3
 
-patchesStrategicMerge:
-  - patch-deployment.yaml
+# kustomize v5 patches transformer (replaces patchesStrategicMerge). Each entry
+# targets objects by kind+name and points at a strategic-merge patch file.
+patches:
+  - target:
+      kind: Deployment
+      name: webapp
+    path: patch-deployment.yaml
 `,
 
   // A REAL strategic-merge patch: containers are merged by `name`, so the base

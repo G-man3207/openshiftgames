@@ -1612,6 +1612,87 @@ const CREATORS = {
     };
     return finish(group);
   },
+
+  PrometheusRule(resource) {
+    const { group, top } = stage(resource, { radius: 0.9 });
+    // Alerting-rule slate: a rule book standing on the pedestal.
+    slab(group, 1.0, 0.82, 0.09, MAT.body, { y: top + 0.6, rx: -0.18, round: 0.12 });
+    for (let i = 0; i < 4; i += 1) {
+      strap(group, 0.62 - i * 0.06, 0.035, 0.012, HUE.warm, {
+        x: -0.04 + i * 0.02,
+        y: top + 0.85 - i * 0.17,
+        z: 0.07,
+        rx: -0.18,
+        opacity: 0.55,
+      });
+    }
+    // Firing-alert beacon: the amber lamp that marks "this rule is evaluating".
+    const beaconMaterial = mat(HUE.amber, {
+      metalness: 0.2,
+      roughness: 0.3,
+      emissive: new THREE.Color(HUE.amber),
+      emissiveIntensity: 0.9,
+    });
+    const beacon = addMesh(group, new THREE.SphereGeometry(0.11, 16, 12), beaconMaterial, {
+      x: 0.44,
+      y: top + 1.02,
+      z: 0.02,
+    });
+    const halo = torus(group, 0.2, 0.014, HUE.amber, {
+      x: 0.44,
+      y: top + 1.02,
+      z: 0.02,
+      rx: Math.PI / 2,
+      opacity: 0.5,
+    });
+    group.userData.animate = (time) => {
+      beaconMaterial.emissiveIntensity = 0.65 + Math.sin(time * 1.8) * 0.3;
+      halo.rotation.z = time * 0.4;
+    };
+    return finish(group);
+  },
+
+  Alertmanager(resource) {
+    const { group, top } = stage(resource, { radius: 1.0 });
+    // Notification routing table: one mast that fans alerts out to receivers.
+    disc(group, 0.7, 0.07, MAT.bodyDark, { y: top + 0.05, round: 0.1 });
+    addMesh(group, new THREE.CylinderGeometry(0.05, 0.09, 0.7, 12), mat(MAT.metal), {
+      y: top + 0.38,
+    });
+    for (let i = 0; i < 3; i += 1) {
+      const angle = (Math.PI * 2 * i) / 3 - Math.PI / 2;
+      const x = Math.cos(angle) * 0.46;
+      const z = Math.sin(angle) * 0.46;
+      slab(group, 0.26, 0.16, 0.26, MAT.bodyLight, { x, y: top + 0.16, z, round: 0.3 });
+      strap(group, 0.12, 0.02, 0.02, HUE.teal, {
+        x,
+        y: top + 0.25,
+        z,
+        opacity: 0.8,
+      });
+    }
+    // Notification beacon: pulses while the receiver routing is live.
+    const beaconMaterial = mat(HUE.teal, {
+      metalness: 0.2,
+      roughness: 0.3,
+      emissive: new THREE.Color(HUE.teal),
+      emissiveIntensity: 0.9,
+    });
+    const beacon = addMesh(group, new THREE.SphereGeometry(0.15, 16, 12), beaconMaterial, {
+      y: top + 0.82,
+    });
+    const halo = torus(group, 0.27, 0.015, HUE.teal, {
+      y: top + 0.82,
+      rx: Math.PI / 2 + 0.3,
+      opacity: 0.5,
+    });
+    group.userData.animate = (time) => {
+      beacon.position.y = top + 0.82 + Math.sin(time * 2.4) * 0.03;
+      beaconMaterial.emissiveIntensity = 0.6 + Math.sin(time * 1.6) * 0.3;
+      halo.rotation.z = time * 0.5;
+    };
+    return finish(group);
+  },
 };
 
 // Legacy renderable type aliases (older cluster state / links may use short names).

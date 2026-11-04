@@ -47,6 +47,7 @@ import {
   whoCan as rbacWhoCan,
 } from './RBACEngine.js';
 import { OCP_CHANNEL, OCP_VERSION as PLATFORM_OCP_VERSION } from '../data/platformVersions.js';
+import { seedMonitoringResources } from '../resources/MonitoringResources.js';
 
 // ─── OpenShift constants ───────────────────────────────────────────────────
 
@@ -60,6 +61,27 @@ export const CLUSTER_DOMAIN = 'cluster.example.com';
 export const APPS_DOMAIN = `apps.${CLUSTER_DOMAIN}`;
 /** Internal image registry host used in imagestream dockerImageReference values. */
 export const IMAGE_REGISTRY_HOST = 'image-registry.openshift-image-registry.svc:5000';
+
+/**
+ * Simulated kubeadmin password stored in the real 4.x location,
+ * `kube-system/kubeadmin` Secret (key `kubeadmin`). Real installs generate a
+ * random password; the simulator uses the readable default so players can
+ * exercise `oc login -u kubeadmin -p ...` and the documented secret recovery
+ * flow.
+ */
+export const KUBEADMIN_PASSWORD = 'kubeadmin';
+
+/** Base64-encode text in browsers and Node (no dependency). */
+function encodeBase64Text(text) {
+  try {
+    return btoa(String(text));
+  } catch {
+    const bytes = new TextEncoder().encode(String(text));
+    let binary = '';
+    for (const byte of bytes) binary += String.fromCharCode(byte);
+    return btoa(binary);
+  }
+}
 
 /** Projects every simulated cluster starts with (CONVERSION-SPEC §3.2). */
 export const DEFAULT_PROJECTS = [
@@ -650,6 +672,22 @@ export class ClusterState {
         subjects: [{ kind: 'User', apiGroup: 'rbac.authorization.k8s.io', name: 'kubeadmin' }],
       },
     });
+    // Real 4.x installs store the generated kubeadmin password in the
+    // `kube-system/kubeadmin` Secret (key `kubeadmin`, base64-encoded). The
+    // simulated installer uses the readable default password so
+    // `oc login -u kubeadmin -p <password>` is validated like a real cluster,
+    // and `oc get secret kubeadmin -n kube-system -o jsonpath=...` is a usable
+    // recovery flow. Deleting the Secret removes password auth (the documented
+    // kubeadmin removal procedure) while the passwordless simulated prompt and
+    // `system:admin` fallbacks keep working.
+    this._seed('Secret', 'kubeadmin', {
+      namespace: 'kube-system',
+      uid: 'seed-secret-kube-system-kubeadmin',
+      spec: {
+        type: 'Opaque',
+        data: { kubeadmin: encodeBase64Text(KUBEADMIN_PASSWORD) },
+      },
+    });
     // Real OpenShift 4.x bootstrap policy: the `self-provisioners`
     // ClusterRoleBinding binds ClusterRole `self-provisioner` to the OAuth
     // authenticated group so any logged-in user can create projects with
@@ -788,6 +826,47 @@ export class ClusterState {
     //   edit template.yaml && oc create -f template.yaml -n openshift-config
     //   oc edit project.config.openshift.io/cluster  # spec.projectRequestTemplate.name
     this._seedProjectConfig();
+
+    // OAuth control plane: a real 4.x cluster runs the OAuth server as the
+    // `oauth-openshift` Deployment (2 replicas) in openshift-authentication with
+    // its own ServiceAccount. The authentication operator rolls these pods when
+    // the OAuth configuration (or the referenced htpasswd Secret) changes — the
+    // wait players must observe before logging in.
+    this._seed('ServiceAccount', 'oauth-openshift', {
+      namespace: 'openshift-authentication',
+      uid: 'seed-sa-openshift-authentication-oauth-openshift',
+      spec: {},
+    });
+    this._seed('Deployment', 'oauth-openshift', {
+      namespace: 'openshift-authentication',
+      uid: 'seed-deploy-openshift-authentication-oauth-openshift',
+      spec: {
+        replicas: 2,
+        selector: { matchLabels: { app: 'oauth-openshift' } },
+        template: {
+          metadata: {
+            labels: { app: 'oauth-openshift' },
+            annotations: { 'openshift.io/oauth-rollout': 'initial' },
+          },
+          spec: {
+            serviceAccountName: 'oauth-openshift',
+            containers: [
+              {
+                name: 'oauth-openshift',
+                image: 'quay.io/openshift/origin-oauth-server:latest',
+                ports: [{ containerPort: 6443, protocol: 'TCP' }],
+              },
+            ],
+          },
+        },
+      },
+    });
+
+    // Monitoring stack baseline: the shipped PrometheusRules plus
+    // alertmanager-main (CR, Service, Route and two running Pods) so monitoring
+    // surfaces (`oc get prometheusrules -A`, `oc get route alertmanager-main -n
+    // openshift-monitoring`, `oc describe alertmanager main`) are usable.
+    seedMonitoringResources(this);
   }
 
   /**
@@ -897,6 +976,10 @@ export class ClusterState {
     }
     this._register(resource);
     if (resource.kind === 'Project') this.ensureProjectDefaults(resource);
+    // Real OpenShift's service-account controller creates an image-pull
+    // dockercfg Secret for every ServiceAccount (still true on 4.22; only the
+    // long-lived API token Secret stopped being auto-created in 4.16).
+    if (resource.kind === 'ServiceAccount') this._ensureServiceAccountDockercfg(resource);
     return resource;
   }
 
@@ -2243,20 +2326,159 @@ export class ClusterState {
   ensureProjectDefaults(project) {
     if (!project || project.kind !== 'Project') return;
     const name = project.metadata.name;
-    if (!this.getByName('ServiceAccount', 'default', name)) {
+    const requester = project.metadata.annotations?.['openshift.io/requester'] || 'kubeadmin';
+
+    // Real 4.x project creation bootstraps the three built-in ServiceAccounts
+    // (builder/default/deployer) — each gets its dockercfg image-pull Secret
+    // from _ensureServiceAccountDockercfg(). `oc get sa` in a new project
+    // therefore lists all three.
+    for (const saName of ['builder', 'default', 'deployer']) {
+      if (this.getByName('ServiceAccount', saName, name)) continue;
       this.addResource({
         kind: 'ServiceAccount',
-        name: 'default',
+        name: saName,
         metadata: {
-          name: 'default',
+          name: saName,
           namespace: name,
-          annotations: {
-            'openshift.io/requester':
-              project.metadata.annotations?.['openshift.io/requester'] || 'kubeadmin',
-          },
+          annotations: saName === 'default' ? { 'openshift.io/requester': requester } : undefined,
         },
         spec: {},
       });
+    }
+
+    // Real project creation also installs the four default RoleBindings:
+    //   admin                 → ClusterRole admin, for the requesting user
+    //   system:image-pullers  → ClusterRole system:image-puller, for all SAs
+    //   system:image-builders → ClusterRole system:image-builder, for builder
+    //   system:deployers      → ClusterRole system:deployer, for deployer
+    const defaultBindings = [
+      {
+        name: 'admin',
+        role: 'admin',
+        subjects: [{ apiGroup: 'rbac.authorization.k8s.io', kind: 'User', name: requester }],
+      },
+      {
+        name: 'system:image-pullers',
+        role: 'system:image-puller',
+        subjects: [
+          {
+            apiGroup: 'rbac.authorization.k8s.io',
+            kind: 'Group',
+            name: `system:serviceaccounts:${name}`,
+          },
+        ],
+      },
+      {
+        name: 'system:image-builders',
+        role: 'system:image-builder',
+        subjects: [{ apiGroup: '', kind: 'ServiceAccount', name: 'builder', namespace: name }],
+      },
+      {
+        name: 'system:deployers',
+        role: 'system:deployer',
+        subjects: [{ apiGroup: '', kind: 'ServiceAccount', name: 'deployer', namespace: name }],
+      },
+    ];
+    for (const binding of defaultBindings) {
+      if (this.getByName('RoleBinding', binding.name, name)) continue;
+      this.addResource({
+        kind: 'RoleBinding',
+        metadata: { name: binding.name, namespace: name },
+        spec: {
+          roleRef: {
+            apiGroup: 'rbac.authorization.k8s.io',
+            kind: 'ClusterRole',
+            name: binding.role,
+          },
+          subjects: binding.subjects,
+        },
+      });
+    }
+  }
+
+  /**
+   * Create the `<serviceaccount>-dockercfg-<suffix>` image-pull Secret that a
+   * real OpenShift service-account controller provisions for every
+   * ServiceAccount, and link it from the SA's `secrets` and `imagePullSecrets`
+   * lists (so `oc describe sa <name>` shows real Image pull / Mountable
+   * secrets entries and `oc get secrets` is not empty in a new project).
+   *
+   * @param {object} serviceAccount ServiceAccount resource
+   * @returns {object|null} the dockercfg Secret (or the existing one)
+   */
+  _ensureServiceAccountDockercfg(serviceAccount) {
+    if (!serviceAccount || serviceAccount.kind !== 'ServiceAccount') return null;
+    const namespace = serviceAccount.metadata?.namespace;
+    const name = serviceAccount.metadata?.name;
+    if (!namespace || !name) return null;
+    // Seeded baseline projects keep their historical lightweight shape; only
+    // real project/API-created ServiceAccounts get the controller-managed secret.
+    const existingPull = (serviceAccount.spec.imagePullSecrets || [])
+      .map((entry) => (typeof entry === 'string' ? entry : entry?.name || ''))
+      .find((entry) => String(entry).includes('-dockercfg-'));
+    if (existingPull) return this.getByName('Secret', existingPull, namespace) || null;
+    const suffix = this._fakeDigest(`${namespace}/${name}/dockercfg`).slice(0, 5);
+    const secretName = `${name}-dockercfg-${suffix}`;
+    const existing = this.getByName('Secret', secretName, namespace);
+    if (existing) {
+      this._linkServiceAccountSecret(serviceAccount, secretName);
+      return existing;
+    }
+    const auth = encodeBase64Text(`serviceaccount:${name}-dockercfg-token`);
+    const dockercfg = JSON.stringify({
+      [IMAGE_REGISTRY_HOST]: {
+        username: 'serviceaccount',
+        password: `${name}-dockercfg-token`,
+        email: `${name}@cluster.example.com`,
+        auth,
+      },
+    });
+    const secret = this.addResource({
+      kind: 'Secret',
+      metadata: {
+        name: secretName,
+        namespace,
+        annotations: { 'openshift.io/secret-type': 'dockercfg' },
+      },
+      spec: {
+        type: 'kubernetes.io/dockercfg',
+        data: { '.dockercfg': encodeBase64Text(dockercfg) },
+      },
+    });
+    this._linkServiceAccountSecret(serviceAccount, secretName);
+    return secret;
+  }
+
+  /** Link a Secret in an SA's `secrets` + `imagePullSecrets` lists (idempotent). */
+  _linkServiceAccountSecret(serviceAccount, secretName) {
+    if (!serviceAccount || !secretName) return serviceAccount;
+    serviceAccount.spec = serviceAccount.spec || {};
+    const link = (listName) => {
+      const list = Array.isArray(serviceAccount.spec[listName])
+        ? serviceAccount.spec[listName]
+        : [];
+      const names = list.map((entry) => (typeof entry === 'string' ? entry : entry?.name));
+      if (!names.includes(secretName)) list.push({ name: secretName });
+      serviceAccount.spec[listName] = list;
+    };
+    link('secrets');
+    link('imagePullSecrets');
+    serviceAccount._bumpResourceVersion?.();
+    this._emitEvent('modified', serviceAccount);
+    return serviceAccount;
+  }
+
+  /** The simulated kubeadmin password from `kube-system/kubeadmin` (or null). */
+  getKubeadminPassword() {
+    const secret = this.getByName('Secret', 'kubeadmin', 'kube-system');
+    if (!secret) return null;
+    const data = secret.spec?.data || secret.data || {};
+    const encoded = data.kubeadmin;
+    if (typeof encoded !== 'string' || !encoded) return null;
+    try {
+      return atob(encoded);
+    } catch {
+      return null;
     }
   }
 
@@ -2269,8 +2491,8 @@ export class ClusterState {
       kind: 'Project',
       metadata: {
         name: 'cluster',
-        uid: 'seed-project-config',
-        creationTimestamp: new Date().toISOString(),
+        uid: '11111111-1111-4111-a111-111111111111',
+        creationTimestamp: new Date().toISOString().replace(/\.\d{3}Z$/, 'Z'),
         resourceVersion: '1',
         generation: 1,
       },
@@ -2710,11 +2932,15 @@ export class ClusterState {
         group.spec.users.push(userName);
         added.push(userName);
       }
-      const user = this.createUser(userName);
-      user.spec.groups = user.spec.groups || ['system:authenticated'];
-      if (!user.spec.groups.includes(groupName)) {
-        user.spec.groups.push(groupName);
-        this.update(user.uid, user);
+      // Mirror the cached group list on the User *only when the User already
+      // exists* — group membership never creates Users on a real cluster.
+      const user = this.getUser(userName);
+      if (user) {
+        user.spec.groups = user.spec.groups || ['system:authenticated'];
+        if (!user.spec.groups.includes(groupName)) {
+          user.spec.groups.push(groupName);
+          this.update(user.uid, user);
+        }
       }
     }
     if (added.length > 0) this.update(group.uid, group);

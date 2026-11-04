@@ -17,8 +17,10 @@
  *   - stream editing:        sed -n '1,40p', sed 's/foo/bar/[g]' (first occurrence per
  *                           line unless `g`; works in pipelines: `oc describe … | sed -n 1,40p`)
  *   - commands:            cat, echo, grep, tail, head, wc, vim/vi, sort, uniq,
- *                          cut, tr, sed, ls, rm, cp, mv, touch, pwd, which, env,
- *                          openssl, skopeo, htpasswd (-B forwarded to bcrypt hashing)
+ *                          cut (-c char ranges, -f fields), tr, sed, ls, rm, cp, mv,
+ *                          touch, pwd, which, env, base64 (-d/-w0), curl (workstation
+ *                          HTTP(S) to Routes), openssl (rand, req -x509, x509),
+ *                          skopeo, htpasswd (-B forwarded to bcrypt hashing)
  *
  * The CommandBar calls `isShellLine()` to decide whether an input line is shell
  * (no `oc` prefix is added), `preprocess()` for heredocs/substitutions, and
@@ -34,6 +36,7 @@
 export const SHELL_COMMANDS = [
   'cat',
   'echo',
+  'base64',
   'grep',
   'tail',
   'head',
@@ -55,6 +58,7 @@ export const SHELL_COMMANDS = [
   'env',
   'printenv',
   'openssl',
+  'curl',
   'skopeo',
   'htpasswd',
   'clear',
@@ -64,6 +68,7 @@ export const SHELL_COMMANDS = [
 /** Commands that take file paths (Tab completion / suggestion hints). */
 export const SHELL_FILE_COMMANDS = new Set([
   'cat',
+  'base64',
   'vim',
   'vi',
   'head',
@@ -261,6 +266,677 @@ function sedAddressMatches(address, lineNumber, totalLines) {
   const from = address.from ?? 1;
   const to = address.to ?? from;
   return lineNumber >= from && lineNumber <= to;
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// PEM / X.509 simulation (issue #32b, reused by the service-ca controller #33a)
+// ────────────────────────────────────────────────────────────────────────────
+//
+// `openssl req -x509` must write real-looking PEM files into the virtual
+// filesystem: `oc create secret tls` reads them, `oc get secret -o yaml` /
+// `oc extract` round-trips them, and `openssl x509` parses them back. A small
+// dependency-free DER encoder/parser is enough — the certificate bytes are
+// structurally valid X.509 (external openssl parses this output), while the
+// RSA modulus/signature are simulated stand-ins: the game never verifies
+// crypto, it only teaches the workflow.
+//
+// The service-ca controller in SimulationTick reuses these helpers to issue
+// serving certificates signed by the simulated cluster service CA.
+
+/** FNV-1a 32-bit hash (deterministic seed material). */
+function fnv1aUint(value) {
+  let hash = 0x811c9dc5;
+  const text = String(value);
+  for (let index = 0; index < text.length; index += 1) {
+    hash = Math.imul(hash ^ text.charCodeAt(index), 0x01000193) >>> 0;
+  }
+  return hash >>> 0;
+}
+
+/** Deterministic pseudo-random bytes from a seed (xorshift32). */
+function prngBytes(seed, length) {
+  const out = [];
+  let state = fnv1aUint(seed) || 0x9e3779b9;
+  while (out.length < length) {
+    state ^= state << 13;
+    state >>>= 0;
+    state ^= state >>> 17;
+    state ^= state << 5;
+    state >>>= 0;
+    out.push(state & 0xff, (state >>> 8) & 0xff, (state >>> 16) & 0xff, (state >>> 24) & 0xff);
+  }
+  return out.slice(0, length);
+}
+
+function bytesToBase64(bytes) {
+  let binary = '';
+  for (let index = 0; index < bytes.length; index += 1) {
+    binary += String.fromCharCode(bytes[index] & 0xff);
+  }
+  if (typeof btoa === 'function') return btoa(binary);
+  if (typeof Buffer !== 'undefined') return Buffer.from(bytes).toString('base64');
+  return binary;
+}
+
+function base64ToBytes(text) {
+  const clean = String(text ?? '').replace(/\s+/g, '');
+  if (!clean) return [];
+  if (typeof atob === 'function') {
+    const binary = atob(clean);
+    const bytes = [];
+    for (let index = 0; index < binary.length; index += 1) bytes.push(binary.charCodeAt(index));
+    return bytes;
+  }
+  if (typeof Buffer !== 'undefined') return Array.from(Buffer.from(clean, 'base64'));
+  return [];
+}
+
+function textToUtf8Bytes(text) {
+  if (typeof TextEncoder === 'function') return Array.from(new TextEncoder().encode(String(text)));
+  const encoded = unescape(encodeURIComponent(String(text)));
+  const bytes = [];
+  for (let index = 0; index < encoded.length; index += 1) bytes.push(encoded.charCodeAt(index));
+  return bytes;
+}
+
+function utf8BytesToText(bytes) {
+  if (typeof TextDecoder === 'function') {
+    try {
+      return new TextDecoder('utf-8').decode(Uint8Array.from(bytes));
+    } catch {
+      /* fall through */
+    }
+  }
+  return bytes.map((byte) => String.fromCharCode(byte)).join('');
+}
+
+function bytesToHex(bytes, separator = '') {
+  return bytes.map((byte) => Number(byte).toString(16).padStart(2, '0')).join(separator);
+}
+
+// ── DER encoder ─────────────────────────────────────────────────────────────
+
+function derLengthBytes(length) {
+  if (length < 0x80) return [length];
+  const bytes = [];
+  let value = length;
+  while (value > 0) {
+    bytes.unshift(value & 0xff);
+    value >>>= 8;
+  }
+  return [0x80 | bytes.length, ...bytes];
+}
+
+function derTlv(tag, content) {
+  return [tag, ...derLengthBytes(content.length), ...content];
+}
+
+function derFlatten(parts) {
+  const out = [];
+  for (const part of parts) out.push(...part);
+  return out;
+}
+
+function derSequence(...parts) {
+  return derTlv(0x30, derFlatten(parts));
+}
+
+function derSet(...parts) {
+  return derTlv(0x31, derFlatten(parts));
+}
+
+function derInteger(bytes) {
+  let trimmed = [...bytes];
+  while (trimmed.length > 1 && trimmed[0] === 0) trimmed.shift();
+  if (trimmed.length === 0) trimmed = [0];
+  if (trimmed[0] & 0x80) trimmed.unshift(0x00);
+  return derTlv(0x02, trimmed);
+}
+
+function derOid(oidBytes) {
+  return derTlv(0x06, oidBytes);
+}
+
+function derNull() {
+  return [0x05, 0x00];
+}
+
+function derBoolean(value) {
+  return [0x01, 0x01, value ? 0xff : 0x00];
+}
+
+function derUtf8String(text) {
+  return derTlv(0x0c, textToUtf8Bytes(text));
+}
+
+function derOctetString(bytes) {
+  return derTlv(0x04, bytes);
+}
+
+function derBitString(payload, unusedBits = 0) {
+  return derTlv(0x03, [unusedBits, ...payload]);
+}
+
+function derExplicit(tagNumber, content) {
+  return derTlv(0xa0 | tagNumber, content);
+}
+
+function utcTimeDer(date) {
+  const year = date.getUTCFullYear();
+  const pad = (value) => String(value).padStart(2, '0');
+  const base =
+    `${pad(date.getUTCMonth() + 1)}${pad(date.getUTCDate())}` +
+    `${pad(date.getUTCHours())}${pad(date.getUTCMinutes())}${pad(date.getUTCSeconds())}Z`;
+  if (year >= 1950 && year < 2050)
+    return derTlv(0x17, textToUtf8Bytes(`${pad(year % 100)}${base}`));
+  return derTlv(0x18, textToUtf8Bytes(`${year}${base}`));
+}
+
+const OID = {
+  rsaEncryption: [0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x01],
+  sha256WithRsa: [0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x0b],
+  commonName: [0x55, 0x04, 0x03],
+  organization: [0x55, 0x04, 0x0a],
+  organizationalUnit: [0x55, 0x04, 0x0b],
+  country: [0x55, 0x04, 0x06],
+  state: [0x55, 0x04, 0x08],
+  locality: [0x55, 0x04, 0x07],
+  subjectAltName: [0x55, 0x1d, 0x11],
+  basicConstraints: [0x55, 0x1d, 0x13],
+};
+const OID_KEY_TO_NAME = new Map(
+  Object.entries(OID).map(([name, bytes]) => [bytesToHex(bytes), name])
+);
+const NAME_FIELD_BY_OID = {
+  commonName: 'commonName',
+  organization: 'organization',
+  organizationalUnit: 'organizationalUnit',
+  country: 'country',
+  state: 'state',
+  locality: 'locality',
+};
+
+function oidShortName(bytes) {
+  return OID_KEY_TO_NAME.get(bytesToHex(bytes)) || `OID.${bytes.join('.')}`;
+}
+
+function buildDistinguishedName(attributes) {
+  const rdns = [];
+  for (const [field, value] of Object.entries(attributes)) {
+    const oid = OID[field];
+    if (!oid || value === undefined || value === null || value === '') continue;
+    rdns.push(derSet(derSequence(derOid(oid), derUtf8String(String(value)))));
+  }
+  return derSequence(...rdns);
+}
+
+function generateRsaKeyMaterial(bits = 2048) {
+  const byteLength = Math.ceil(bits / 8);
+  const seed = `${Date.now()}-${Math.random()}-${Math.random()}`;
+  const modulus = prngBytes(`${seed}-n`, byteLength);
+  modulus[0] = (modulus[0] & 0x7f) | 0x80;
+  modulus[modulus.length - 1] |= 0x01;
+  const randomOfLength = (label, length) => prngBytes(`${seed}-${label}`, length);
+  return {
+    bits: byteLength * 8,
+    modulus,
+    exponent: [0x01, 0x00, 0x01], // 65537
+    private: {
+      d: randomOfLength('d', byteLength),
+      p: randomOfLength('p', Math.ceil(byteLength / 2)),
+      q: randomOfLength('q', Math.ceil(byteLength / 2)),
+      dp: randomOfLength('dp', Math.ceil(byteLength / 2)),
+      dq: randomOfLength('dq', Math.ceil(byteLength / 2)),
+      qInv: randomOfLength('qInv', Math.ceil(byteLength / 2)),
+    },
+    seed,
+  };
+}
+
+function buildSubjectPublicKeyInfoDer(keyMaterial) {
+  const algorithm = derSequence(derOid(OID.rsaEncryption), derNull());
+  const rsaPublicKey = derSequence(
+    derInteger(keyMaterial.modulus),
+    derInteger(keyMaterial.exponent)
+  );
+  return derSequence(algorithm, derBitString(rsaPublicKey, 0));
+}
+
+function buildPrivateKeyPem(keyMaterial) {
+  const rsaPrivateKey = derSequence(
+    derInteger([0x00]),
+    derInteger(keyMaterial.modulus),
+    derInteger(keyMaterial.exponent),
+    derInteger(keyMaterial.private.d),
+    derInteger(keyMaterial.private.p),
+    derInteger(keyMaterial.private.q),
+    derInteger(keyMaterial.private.dp),
+    derInteger(keyMaterial.private.dq),
+    derInteger(keyMaterial.private.qInv)
+  );
+  const privateKeyInfo = derSequence(
+    derInteger([0x00]),
+    derSequence(derOid(OID.rsaEncryption), derNull()),
+    derOctetString(rsaPrivateKey)
+  );
+  return toPemText('PRIVATE KEY', privateKeyInfo);
+}
+
+function toPemText(label, derBytes) {
+  const base64 = bytesToBase64(derBytes);
+  const lines = [];
+  for (let index = 0; index < base64.length; index += 64)
+    lines.push(base64.slice(index, index + 64));
+  return `-----BEGIN ${label}-----\n${lines.join('\n')}\n-----END ${label}-----\n`;
+}
+
+function pemToDer(pem, label) {
+  const match = String(pem ?? '').match(
+    new RegExp(`-----BEGIN ${label}-----([\\s\\S]*?)-----END ${label}-----`)
+  );
+  if (!match) return null;
+  try {
+    return base64ToBytes(match[1]);
+  } catch {
+    return null;
+  }
+}
+
+function subjectAltNameExtension(sans = {}) {
+  const names = [];
+  for (const dns of sans.dns || []) names.push(derTlv(0x82, textToUtf8Bytes(dns)));
+  for (const ip of sans.ip || []) {
+    const parts = String(ip).split('.').map(Number);
+    if (parts.length !== 4 || parts.some((part) => !Number.isFinite(part))) continue;
+    names.push(derTlv(0x87, parts));
+  }
+  if (names.length === 0) return null;
+  return derSequence(derOid(OID.subjectAltName), derOctetString(derSequence(...names)));
+}
+
+function basicConstraintsExtension() {
+  return derSequence(
+    derOid(OID.basicConstraints),
+    derBoolean(true),
+    derOctetString(derSequence(derBoolean(true), derInteger([0x00])))
+  );
+}
+
+/** Monotonic positive certificate serial bytes. */
+let serialCounter = 0;
+function nextSerialBytes(seed) {
+  serialCounter += 1;
+  const bytes = prngBytes(`${seed ?? ''}-${Date.now()}-${serialCounter}`, 12);
+  bytes[0] &= 0x7f;
+  if (bytes[0] === 0) bytes[0] = 0x01;
+  return bytes;
+}
+
+function parseSubjectString(subject) {
+  const attributes = {};
+  const fieldForShort = {
+    CN: 'commonName',
+    O: 'organization',
+    OU: 'organizationalUnit',
+    C: 'country',
+    ST: 'state',
+    L: 'locality',
+  };
+  for (const segment of String(subject ?? '').split('/')) {
+    const trimmed = segment.trim();
+    if (!trimmed) continue;
+    const eq = trimmed.indexOf('=');
+    if (eq <= 0) continue;
+    const short = trimmed.slice(0, eq).toUpperCase();
+    const value = trimmed.slice(eq + 1);
+    const field = fieldForShort[short];
+    if (field && value) attributes[field] = value;
+  }
+  return attributes;
+}
+
+/**
+ * Build a simulated X.509 certificate + PKCS#8 private key.
+ * @param {{commonName?: string, organization?: string, days?: number,
+ *   issuer?: {commonName?: string, organization?: string}, sans?: {dns?: string[], ip?: string[]},
+ *   isCA?: boolean, bits?: number, notBefore?: string|number, notAfter?: string|number}} options
+ * @returns {{certPem: string, keyPem: string, der: number[], keyMaterial: object}}
+ */
+export function createCertificateMaterial(options = {}) {
+  const commonName = String(options.commonName || options.subject || 'localhost');
+  const organization =
+    options.organization === undefined ? 'OpenShift Games' : options.organization;
+  const days = Number.isFinite(Number(options.days)) ? Math.max(1, Number(options.days)) : 365;
+  const now = options.notBefore ? new Date(options.notBefore) : new Date();
+  const notAfter = options.notAfter
+    ? new Date(options.notAfter)
+    : new Date(now.getTime() + days * 24 * 60 * 60 * 1000);
+  const subjectAttributes = { commonName, organization };
+  const issuerAttributes = options.issuer
+    ? {
+        commonName: options.issuer.commonName || 'service-ca',
+        organization: options.issuer.organization,
+      }
+    : subjectAttributes;
+  const keyMaterial = generateRsaKeyMaterial(Number(options.bits) || 2048);
+  const signatureAlgorithm = derSequence(derOid(OID.sha256WithRsa), derNull());
+  const tbsParts = [
+    derExplicit(0, derInteger([0x02])), // v3
+    derInteger(nextSerialBytes(keyMaterial.seed)),
+    signatureAlgorithm,
+    buildDistinguishedName(issuerAttributes),
+    derSequence(utcTimeDer(now), utcTimeDer(notAfter)),
+    buildDistinguishedName(subjectAttributes),
+    buildSubjectPublicKeyInfoDer(keyMaterial),
+  ];
+  const extensions = [];
+  const san = subjectAltNameExtension(
+    options.sans || { dns: commonName.includes('.') ? [commonName] : [] }
+  );
+  if (san) extensions.push(san);
+  if (options.isCA) extensions.push(basicConstraintsExtension());
+  if (extensions.length) tbsParts.push(derExplicit(3, derSequence(...extensions)));
+  const tbs = derSequence(...tbsParts);
+  // Simulated RSA signature (256 bytes for a 2048-bit key): structurally valid
+  // DER either way, but the game never performs cryptographic verification.
+  const signature = prngBytes(`sign:${bytesToHex(tbs)}:${keyMaterial.seed}`, 256);
+  const certificate = derSequence(tbs, signatureAlgorithm, derBitString(signature, 0));
+  return {
+    certPem: toPemText('CERTIFICATE', certificate),
+    keyPem: buildPrivateKeyPem(keyMaterial),
+    der: certificate,
+    keyMaterial,
+  };
+}
+
+/** Self-signed certificate for `openssl req -x509`. */
+export function createSelfSignedCertificate(options = {}) {
+  const material = createCertificateMaterial(options);
+  return { ...material, info: parseCertificatePem(material.certPem), subject: options.subject };
+}
+
+/** Certificate issued by the simulated cluster service CA (service-ca #33a). */
+export function createServiceSignedCertificate(options = {}) {
+  const commonName = String(options.commonName || 'service');
+  const dnsNames = [commonName, ...(options.dnsNames || []).filter(Boolean)];
+  const material = createCertificateMaterial({
+    commonName,
+    organization: 'OpenShift Games',
+    days: options.days || 365,
+    issuer: options.issuer || { commonName: 'service-ca', organization: 'OpenShift' },
+    sans: { dns: dnsNames },
+  });
+  return { ...material, info: parseCertificatePem(material.certPem) };
+}
+
+/** The simulated cluster service CA (`service-ca` in `openshift-service-ca`). */
+export function createCertificateAuthority(options = {}) {
+  const commonName = String(options.commonName || 'service-ca');
+  const material = createCertificateMaterial({
+    commonName,
+    organization: options.organization || 'OpenShift',
+    days: options.days || 3650,
+    isCA: true,
+  });
+  return {
+    ...material,
+    info: parseCertificatePem(material.certPem),
+    subject: { commonName, organization: options.organization || 'OpenShift' },
+  };
+}
+
+// ── DER parser: read certificates back like `openssl x509` ──────────────────
+
+function derRead(bytes, offset) {
+  const tag = bytes[offset];
+  if (tag === undefined) return null;
+  let length = bytes[offset + 1];
+  if (length === undefined) return null;
+  let header = 2;
+  if (length & 0x80) {
+    const count = length & 0x7f;
+    length = 0;
+    for (let index = 0; index < count; index += 1) {
+      length = (length << 8) | bytes[offset + 2 + index];
+    }
+    header = 2 + count;
+  }
+  const start = offset + header;
+  return { tag, length, start, end: start + length, next: start + length };
+}
+
+function derChildren(bytes, node) {
+  const children = [];
+  let offset = node.start;
+  while (offset < node.end) {
+    const child = derRead(bytes, offset);
+    if (!child || child.length < 0) break;
+    children.push(child);
+    offset = child.next;
+  }
+  return children;
+}
+
+function derContent(bytes, node) {
+  return bytes.slice(node.start, node.end);
+}
+
+function readDerTime(bytes, node) {
+  const text = utf8BytesToText(derContent(bytes, node));
+  if (node.tag === 0x17 && text.length >= 12) {
+    const shortYear = Number(text.slice(0, 2));
+    const year = shortYear >= 50 ? 1900 + shortYear : 2000 + shortYear;
+    return new Date(
+      Date.UTC(
+        year,
+        Number(text.slice(2, 4)) - 1,
+        Number(text.slice(4, 6)),
+        Number(text.slice(6, 8)),
+        Number(text.slice(8, 10)),
+        Number(text.slice(10, 12))
+      )
+    );
+  }
+  if (node.tag === 0x18 && text.length >= 14) {
+    return new Date(
+      Date.UTC(
+        Number(text.slice(0, 4)),
+        Number(text.slice(4, 6)) - 1,
+        Number(text.slice(6, 8)),
+        Number(text.slice(8, 10)),
+        Number(text.slice(10, 12)),
+        Number(text.slice(12, 14))
+      )
+    );
+  }
+  return null;
+}
+
+function readDerName(bytes, node) {
+  const attributes = {};
+  for (const set of derChildren(bytes, node)) {
+    for (const sequence of derChildren(bytes, set)) {
+      const [oidNode, valueNode] = derChildren(bytes, sequence);
+      if (!oidNode || !valueNode) continue;
+      const field = NAME_FIELD_BY_OID[oidShortName(derContent(bytes, oidNode))];
+      if (!field) continue;
+      attributes[field] =
+        valueNode.tag === 0x0c || valueNode.tag === 0x13 || valueNode.tag === 0x16
+          ? utf8BytesToText(derContent(bytes, valueNode))
+          : bytesToHex(derContent(bytes, valueNode));
+    }
+  }
+  return attributes;
+}
+
+function readDerExtensions(bytes, node) {
+  const result = { sans: [], isCA: false };
+  if (!node) return result;
+  for (const extension of derChildren(bytes, node)) {
+    const parts = derChildren(bytes, extension);
+    if (!parts.length) continue;
+    const name = oidShortName(derContent(bytes, parts[0]));
+    const valueNode = parts[parts.length - 1];
+    if (!valueNode) continue;
+    const inner = derRead(bytes, valueNode.start);
+    if (!inner) continue;
+    if (name === 'subjectAltName') {
+      for (const generalName of derChildren(bytes, inner)) {
+        if (generalName.tag === 0x82) {
+          result.sans.push(utf8BytesToText(derContent(bytes, generalName)));
+        } else if (generalName.tag === 0x87) {
+          const ipParts = derContent(bytes, generalName);
+          if (ipParts.length === 4) result.sans.push(ipParts.join('.'));
+        }
+      }
+    } else if (name === 'basicConstraints') {
+      const children = derChildren(bytes, inner);
+      if (children[0] && children[0].tag === 0x01) {
+        const bool = derContent(bytes, children[0]);
+        result.isCA = bool.length > 0 && bool[0] !== 0;
+      }
+    }
+  }
+  return result;
+}
+
+/**
+ * Parse a PEM certificate (as generated above, or any parseable X.509).
+ * @param {string} pem
+ * @returns {null|{subject: object, issuer: object, commonName: string,
+ *   issuerCommonName: string, notBefore: Date|null, notAfter: Date|null,
+ *   serial: string, signatureAlgorithm: string, version: number, publicKeyBits: number,
+ *   modulus: number[], exponent: number, signatureBytes: number[], sans: string[],
+ *   isCA: boolean}}
+ */
+export function parseCertificatePem(pem) {
+  const der = pemToDer(pem, 'CERTIFICATE');
+  if (!der || !der.length) return null;
+  try {
+    const certificate = derRead(der, 0);
+    if (!certificate || certificate.tag !== 0x30) return null;
+    const certificateChildren = derChildren(der, certificate);
+    const [tbsNode, algorithmNode, signatureValueNode] = certificateChildren;
+    if (!tbsNode || tbsNode.tag !== 0x30) return null;
+    const tbsChildren = derChildren(der, tbsNode);
+    let index = 0;
+    let version = 1;
+    if (tbsChildren[index] && tbsChildren[index].tag === 0xa0) {
+      const versionInner = derChildren(der, tbsChildren[index])[0];
+      if (versionInner) {
+        version = Number.parseInt(bytesToHex(derContent(der, versionInner)), 16) + 1;
+      }
+      index += 1;
+    }
+    const serialNode = tbsChildren[index++];
+    const signatureAlgNode = tbsChildren[index++];
+    const issuerNode = tbsChildren[index++];
+    const validityNode = tbsChildren[index++];
+    const subjectNode = tbsChildren[index++];
+    const spkiNode = tbsChildren[index++];
+    let extensionsNode = null;
+    for (const child of tbsChildren.slice(index)) {
+      if (child.tag === 0xa3) extensionsNode = child;
+    }
+    let signatureAlgorithm = 'unknown';
+    if (signatureAlgNode) {
+      const oidNode = derChildren(der, signatureAlgNode)[0];
+      if (oidNode) {
+        const shortName = oidShortName(derContent(der, oidNode));
+        signatureAlgorithm = shortName === 'sha256WithRsa' ? 'sha256WithRSAEncryption' : shortName;
+      }
+    }
+    let publicKeyBits = 0;
+    let modulus = [];
+    let exponent = 0;
+    if (spkiNode) {
+      const spkiChildren = derChildren(der, spkiNode);
+      const bitString = spkiChildren[1];
+      if (bitString && bitString.tag === 0x03) {
+        const rsaKey = derRead(der, bitString.start + 1);
+        if (rsaKey) {
+          const rsaChildren = derChildren(der, rsaKey);
+          const modulusNode = rsaChildren[0];
+          const exponentNode = rsaChildren[1];
+          if (modulusNode && modulusNode.tag === 0x02) {
+            let modulusBytes = derContent(der, modulusNode);
+            if (modulusBytes[0] === 0) modulusBytes = modulusBytes.slice(1);
+            modulus = modulusBytes;
+            publicKeyBits = modulusBytes.length * 8;
+          }
+          if (exponentNode) {
+            exponent = Number.parseInt(bytesToHex(derContent(der, exponentNode)), 16);
+          }
+        }
+      }
+    }
+    const validityChildren = validityNode ? derChildren(der, validityNode) : [];
+    const extensions = extensionsNode
+      ? readDerExtensions(der, derChildren(der, extensionsNode)[0] || { start: 0, end: 0 })
+      : { sans: [], isCA: false };
+    const subject = subjectNode ? readDerName(der, subjectNode) : {};
+    const issuer = issuerNode ? readDerName(der, issuerNode) : {};
+    let signatureBytes = [];
+    if (signatureValueNode && signatureValueNode.tag === 0x03) {
+      signatureBytes = derContent(der, signatureValueNode).slice(1);
+    }
+    void algorithmNode;
+    return {
+      subject,
+      issuer,
+      commonName: subject.commonName || '',
+      issuerCommonName: issuer.commonName || '',
+      notBefore: validityChildren[0] ? readDerTime(der, validityChildren[0]) : null,
+      notAfter: validityChildren[1] ? readDerTime(der, validityChildren[1]) : null,
+      serial: serialNode ? bytesToHex(derContent(der, serialNode), ':') : '',
+      signatureAlgorithm,
+      version,
+      publicKeyBits,
+      modulus,
+      exponent,
+      signatureBytes,
+      sans: extensions.sans,
+      isCA: extensions.isCA,
+    };
+  } catch {
+    return null;
+  }
+}
+
+const MONTH_NAMES = [
+  'Jan',
+  'Feb',
+  'Mar',
+  'Apr',
+  'May',
+  'Jun',
+  'Jul',
+  'Aug',
+  'Sep',
+  'Oct',
+  'Nov',
+  'Dec',
+];
+
+/** openssl-style date: `Nov  4 20:03:30 2026 GMT`. */
+export function formatCertificateDate(date) {
+  if (!date || Number.isNaN(date.getTime())) return 'invalid date';
+  const pad = (value) => String(value).padStart(2, '0');
+  return `${MONTH_NAMES[date.getUTCMonth()]} ${String(date.getUTCDate()).padStart(2, ' ')} ${pad(
+    date.getUTCHours()
+  )}:${pad(date.getUTCMinutes())}:${pad(date.getUTCSeconds())} ${date.getUTCFullYear()} GMT`;
+}
+
+/** openssl-style distinguished name: `CN = web.apps.example.com, O = OpenShift`. */
+export function formatDistinguishedName(name) {
+  const parts = [];
+  if (name?.country) parts.push(`C = ${name.country}`);
+  if (name?.state) parts.push(`ST = ${name.state}`);
+  if (name?.locality) parts.push(`L = ${name.locality}`);
+  if (name?.organization) parts.push(`O = ${name.organization}`);
+  if (name?.organizationalUnit) parts.push(`OU = ${name.organizationalUnit}`);
+  if (name?.commonName) parts.push(`CN = ${name.commonName}`);
+  return parts.join(', ') || '(empty)';
 }
 
 export class ShellTools {
@@ -778,13 +1454,26 @@ export class ShellTools {
     );
   }
 
+  /**
+   * `cut` (issue #32e): field selection (`-d` + `-f`) plus the character ranges
+   * learners pipe command output through — `… | cut -c1-20` — including open
+   * ranges (`-c5-`, `-c-5`), lists (`-c1,5,10-12`) and `--complement`.
+   */
   _cmd_cut(args, stdin) {
     let delimiter = '\t';
-    let fields = [];
-    for (let i = 0; i < args.length; i += 1) {
-      const arg = args[i];
+    let fieldSpec = null;
+    let charSpec = null;
+    let complement = false;
+    let onlyDelimited = false;
+    const files = [];
+    for (let index = 0; index < args.length; index += 1) {
+      const arg = args[index];
       if (arg === '-d' || arg === '--delimiter') {
-        delimiter = args[++i] ?? '\t';
+        delimiter = args[++index] ?? '\t';
+        continue;
+      }
+      if (arg.startsWith('--delimiter=')) {
+        delimiter = arg.slice('--delimiter='.length);
         continue;
       }
       if (arg.startsWith('-d') && arg.length > 2) {
@@ -792,28 +1481,135 @@ export class ShellTools {
         continue;
       }
       if (arg === '-f' || arg === '--fields') {
-        fields = String(args[++i] ?? '1')
-          .split(',')
-          .map((value) => Number.parseInt(value, 10) - 1);
+        fieldSpec = String(args[++index] ?? '');
+        continue;
+      }
+      if (arg.startsWith('--fields=')) {
+        fieldSpec = arg.slice('--fields='.length);
         continue;
       }
       if (arg.startsWith('-f') && arg.length > 2) {
-        fields = arg
-          .slice(2)
-          .split(',')
-          .map((value) => Number.parseInt(value, 10) - 1);
+        fieldSpec = arg.slice(2);
+        continue;
       }
+      if (arg === '-c' || arg === '--characters') {
+        charSpec = String(args[++index] ?? '');
+        continue;
+      }
+      if (arg.startsWith('--characters=')) {
+        charSpec = arg.slice('--characters='.length);
+        continue;
+      }
+      if (arg.startsWith('-c') && arg.length > 2) {
+        charSpec = arg.slice(2);
+        continue;
+      }
+      if (arg === '--complement') {
+        complement = true;
+        continue;
+      }
+      if (arg === '-s' || arg === '--only-delimited') {
+        onlyDelimited = true;
+        continue;
+      }
+      if (arg === '--output-delimiter' || arg.startsWith('--output-delimiter=')) {
+        if (arg === '--output-delimiter') index += 1;
+        continue;
+      }
+      if (arg.startsWith('-')) return this._err(`cut: invalid option -- '${arg.slice(1)}'`);
+      files.push(arg);
     }
-    if (!fields.length) fields = [0];
-    const lines = String(stdin === null ? '' : stdin).split('\n');
+    const usage = 'cut: you must specify a list of bytes, characters, or fields';
+    if (charSpec !== null && fieldSpec !== null) {
+      return this._err('cut: only one type of list may be specified');
+    }
+    if (charSpec === null && fieldSpec === null) return this._err(usage);
+    if ([...String(delimiter)].length !== 1) {
+      return this._err('cut: the delimiter must be a single character');
+    }
+    const parseRanges = (spec) => {
+      const ranges = [];
+      for (const rawPart of String(spec ?? '').split(/[,\s]+/)) {
+        const part = rawPart.trim();
+        if (!part) continue;
+        const match = part.match(/^(\d*)(?:-(\d*))?$/);
+        if (!match) return null;
+        const hasDash = part.includes('-');
+        let from;
+        let to;
+        if (!hasDash) {
+          from = Number.parseInt(match[1], 10);
+          to = from;
+        } else if (match[1] === '' && (match[2] === undefined || match[2] === '')) {
+          return null;
+        } else if (match[1] === '') {
+          from = 1;
+          to = Number.parseInt(match[2], 10);
+        } else if (match[2] === undefined || match[2] === '') {
+          from = Number.parseInt(match[1], 10);
+          to = Number.POSITIVE_INFINITY;
+        } else {
+          from = Number.parseInt(match[1], 10);
+          to = Number.parseInt(match[2], 10);
+        }
+        if (!Number.isFinite(from) || from < 1 || Number.isNaN(to) || (to < from && to !== 0)) {
+          return null;
+        }
+        ranges.push({ from, to });
+      }
+      return ranges.length ? ranges : null;
+    };
+    const charRanges = charSpec === null ? null : parseRanges(charSpec);
+    if (charSpec !== null && !charRanges) return this._err(`cut: invalid range: '${charSpec}'`);
+    const fieldRanges = fieldSpec === null ? null : parseRanges(fieldSpec);
+    if (fieldSpec !== null && !fieldRanges) return this._err(`cut: invalid range: '${fieldSpec}'`);
+    const selectedIndexes = (ranges, length) => {
+      const selected = new Set();
+      for (const { from, to } of ranges) {
+        const last = Math.min(to, length);
+        for (let position = from; position <= last; position += 1) selected.add(position - 1);
+      }
+      if (!complement) return [...selected].sort((left, right) => left - right);
+      const inverted = [];
+      for (let position = 0; position < length; position += 1) {
+        if (!selected.has(position)) inverted.push(position);
+      }
+      return inverted;
+    };
+    let input;
+    if (files.length) {
+      const chunks = [];
+      for (const file of files) {
+        const content = this._readFile(file);
+        if (content === null) return this._err(`cut: ${file}: No such file or directory`);
+        chunks.push(content);
+      }
+      input = chunks.join('\n');
+    } else {
+      input = stdin === null || stdin === undefined ? '' : String(stdin);
+    }
+    const lines = input.split('\n');
     if (lines.length && lines[lines.length - 1] === '') lines.pop();
-    const out = lines.map((line) =>
-      line
-        .split(delimiter)
-        .filter((value, index) => fields.includes(index))
-        .join(delimiter)
-    );
-    return this._ok(out.join('\n'));
+    const output = [];
+    for (const line of lines) {
+      if (charRanges) {
+        const characters = Array.from(line);
+        output.push(
+          selectedIndexes(charRanges, characters.length)
+            .map((position) => characters[position])
+            .join('')
+        );
+        continue;
+      }
+      const parts = line.split(delimiter);
+      if (onlyDelimited && parts.length === 1) continue;
+      output.push(
+        selectedIndexes(fieldRanges, parts.length)
+          .map((position) => parts[position])
+          .join(delimiter)
+      );
+    }
+    return this._ok(output.join('\n'));
   }
 
   _cmd_tr(args, stdin) {
@@ -1058,44 +1854,736 @@ export class ShellTools {
     return this._cmd_env();
   }
 
-  // ── crypto / registry tools ──────────────────────────────────────────────
+  // ── crypto / HTTP tools (issues #32a/#32b/#32c) ─────────────────────────
 
   _cmd_openssl(args, stdin) {
     const sub = String(args[0] || '').toLowerCase();
-    if (sub !== 'rand') {
-      return this._err(
-        `openssl: unsupported subcommand "${sub || ''}" (simulator supports: openssl rand -hex|-base64 <n>)`
-      );
-    }
+    const rest = args.slice(1);
+    if (sub === 'rand') return this._opensslRand(rest);
+    if (sub === 'req') return this._opensslReq(rest);
+    if (sub === 'x509') return this._opensslX509(rest, stdin);
+    if (sub === 'genrsa') return this._opensslGenrsa(rest);
+    if (sub === 'version') return this._ok('OpenSSL 3.2.2 4 Jun 2024 (simulated)');
+    return this._err(
+      `openssl: unsupported subcommand "${sub || ''}" (simulator supports: openssl rand, openssl req -x509, openssl x509, openssl genrsa)`
+    );
+  }
+
+  _opensslRand(args) {
     let mode = 'hex';
     let length = 16;
-    for (let i = 1; i < args.length; i += 1) {
-      const arg = args[i];
+    for (const arg of args) {
       if (arg === '-hex' || arg === '-base64') mode = arg.slice(1);
-      else if (/^\d+$/.test(arg)) length = Number(arg);
+      else if (/^\d+$/.test(arg)) length = Math.min(1024, Number(arg));
     }
     let output = '';
     let counter = 0;
-    while (output.length < length * (mode === 'hex' ? 2 : 2)) {
+    while (output.length < length * 2) {
       const seed = `${Date.now()}-${counter++}-${Math.random()}`;
-      let hash = 0x811c9dc5;
-      for (let i = 0; i < seed.length; i += 1)
-        hash = Math.imul(hash ^ seed.charCodeAt(i), 0x01000193) >>> 0;
-      output += hash.toString(16).padStart(8, '0');
+      output += fnv1aUint(seed).toString(16).padStart(8, '0');
     }
     if (mode === 'hex') return this._ok(output.slice(0, length * 2));
     const bytes = [];
-    for (let i = 0; i < output.length; i += 2)
-      bytes.push(Number.parseInt(output.slice(i, i + 2), 16));
-    const base =
-      typeof Buffer !== 'undefined'
-        ? Buffer.from(bytes).toString('base64')
-        : (() => {
-            let text = '';
-            for (const byte of bytes) text += String.fromCharCode(byte);
-            return typeof btoa === 'function' ? btoa(text) : output.slice(0, length);
-          })();
-    return this._ok(base);
+    for (let index = 0; index < output.length; index += 2) {
+      bytes.push(Number.parseInt(output.slice(index, index + 2), 16));
+    }
+    return this._ok(bytesToBase64(bytes));
+  }
+
+  _writeGeneratedFile(path, content) {
+    const written = this._writeFile(path, content);
+    if (written && written.error) return written;
+    return null;
+  }
+
+  /** `openssl req -x509 -newkey rsa:2048 -nodes -keyout tls.key -out tls.crt -days 365 -subj "/CN=…"` */
+  _opensslReq(args) {
+    const options = {
+      x509: false,
+      nodes: false,
+      newkey: null,
+      keyout: null,
+      out: null,
+      days: 365,
+      subj: null,
+      addext: [],
+      bits: 2048,
+    };
+    const valueFlags = new Set([
+      '-newkey',
+      '-keyout',
+      '-out',
+      '-days',
+      '-subj',
+      '-addext',
+      '-config',
+      '-passin',
+      '-passout',
+      '-key',
+      '-in',
+      '-extensions',
+      '-nameopt',
+    ]);
+    const boolFlags = new Set([
+      '-x509',
+      '-new',
+      '-nodes',
+      '-noenc',
+      '-sha256',
+      '-sha384',
+      '-sha512',
+      '-batch',
+      '-quiet',
+      '-help',
+      '--help',
+    ]);
+    for (let index = 0; index < args.length; index += 1) {
+      const arg = args[index];
+      if (arg === '-help' || arg === '--help') {
+        return this._ok(
+          'openssl req -x509 -newkey rsa:2048 -nodes -keyout <key> -out <cert> -days <n> -subj "/CN=<host>"'
+        );
+      }
+      if (arg === '-nodes' || arg === '-noenc') {
+        options.nodes = true;
+        continue;
+      }
+      if (arg === '-x509') {
+        options.x509 = true;
+        continue;
+      }
+      if (boolFlags.has(arg)) continue; // -new/-sha256/... accepted and irrelevant for self-signed
+      if (valueFlags.has(arg)) {
+        const value = args[++index] ?? '';
+        if (arg === '-newkey') options.newkey = value;
+        else if (arg === '-keyout') options.keyout = value;
+        else if (arg === '-out') options.out = value;
+        else if (arg === '-days') options.days = value;
+        else if (arg === '-subj') options.subj = value;
+        else if (arg === '-addext') options.addext.push(value);
+        continue;
+      }
+      return this._err(
+        `openssl: unknown option "${arg}"\n\n  openssl req -x509 -newkey rsa:2048 -nodes -keyout <key> -out <cert> -days <n> -subj "/CN=<host>"`
+      );
+    }
+    const usage =
+      'openssl req: the simulator creates self-signed certificates only\n\n' +
+      '  openssl req -x509 -newkey rsa:2048 -nodes -keyout tls.key -out tls.crt -days 365 -subj "/CN=<host>"';
+    if (!options.x509) return this._err(usage);
+    const newkeyMatch = String(options.newkey || '').match(/^([a-z0-9]+)(?::(\d+))?$/);
+    if (!newkeyMatch) return this._err(usage);
+    if (newkeyMatch[1] !== 'rsa') {
+      return this._err(`openssl: only "-newkey rsa[:bits]" is simulated (got "${options.newkey}")`);
+    }
+    if (newkeyMatch[2]) options.bits = Math.min(4096, Math.max(1024, Number(newkeyMatch[2])));
+    const subjectAttributes = parseSubjectString(options.subj || '');
+    if (!subjectAttributes.commonName) {
+      return this._err(
+        'openssl req: no common name (interactive prompts are not simulated)\n\n  ... -subj "/CN=<host>"'
+      );
+    }
+    const dnsNames = [subjectAttributes.commonName];
+    const ipAddresses = [];
+    for (const extension of options.addext) {
+      const match = String(extension).match(/^(?:subjectAltName|SAN)\s*=\s*(.+)$/i);
+      if (!match) continue;
+      for (const entry of match[1].split(',')) {
+        const trimmed = entry.trim();
+        const dns = trimmed.match(/^DNS\s*:\s*(.+)$/i);
+        if (dns) dnsNames.push(dns[1].trim());
+        const ip = trimmed.match(/^IP\s*:\s*(.+)$/i);
+        if (ip) ipAddresses.push(ip[1].trim());
+      }
+    }
+    const material = createSelfSignedCertificate({
+      commonName: subjectAttributes.commonName,
+      organization: subjectAttributes.organization,
+      days: Number(options.days) || 365,
+      bits: options.bits,
+      sans: { dns: [...new Set(dnsNames)], ip: ipAddresses },
+    });
+    const lines = ['Generating a RSA private key', '...........+++++'];
+    if (!options.nodes) {
+      lines.push(
+        'warning: interactive passphrase prompts are not simulated; writing an unencrypted key'
+      );
+    }
+    if (options.keyout) {
+      const failed = this._writeGeneratedFile(options.keyout, material.keyPem);
+      if (failed) return failed;
+      lines.push(`writing new private key to '${options.keyout}'`, '-----');
+    } else {
+      lines.push(material.keyPem.replace(/\n$/, ''));
+    }
+    if (options.out) {
+      const failed = this._writeGeneratedFile(options.out, material.certPem);
+      if (failed) return failed;
+    } else {
+      lines.push(material.certPem.replace(/\n$/, ''));
+    }
+    return this._ok(lines.join('\n'));
+  }
+
+  /** `openssl genrsa [-out tls.key] [bits]` */
+  _opensslGenrsa(args) {
+    let out = null;
+    let bits = 2048;
+    for (let index = 0; index < args.length; index += 1) {
+      const arg = args[index];
+      if (arg === '-out') {
+        out = args[++index] ?? null;
+        continue;
+      }
+      if (/^\d+$/.test(arg)) bits = Math.min(4096, Math.max(1024, Number(arg)));
+    }
+    const material = generateRsaKeyMaterial(bits);
+    const pem = buildPrivateKeyPem(material);
+    const lines = [`Generating RSA private key, ${material.bits} bit long modulus (simulated)`];
+    if (out) {
+      const failed = this._writeGeneratedFile(out, pem);
+      if (failed) return failed;
+      lines.push(`writing new private key to '${out}'`);
+    } else {
+      lines.push(pem.replace(/\n$/, ''));
+    }
+    return this._ok(lines.join('\n'));
+  }
+
+  /** `openssl x509 -in tls.crt -noout -text|-subject|-dates|-issuer|-serial|-ext <name>` */
+  _opensslX509(args, stdin) {
+    const selectors = new Set();
+    const options = { in: null, noout: false, extensions: [] };
+    const valueFlags = new Set(['-in', '-ext', '-nameopt', '-fingerprint', '-digest']);
+    for (let index = 0; index < args.length; index += 1) {
+      const arg = args[index];
+      if (arg === '-help' || arg === '--help') {
+        return this._ok('openssl x509 -in <cert> -noout -text|-subject|-issuer|-dates|-serial');
+      }
+      if (arg === '-in') {
+        options.in = args[++index] ?? null;
+        continue;
+      }
+      if (arg === '-ext') {
+        options.extensions.push(String(args[++index] ?? ''));
+        continue;
+      }
+      if (arg === '-noout') {
+        options.noout = true;
+        continue;
+      }
+      if (
+        arg === '-text' ||
+        arg === '-subject' ||
+        arg === '-issuer' ||
+        arg === '-dates' ||
+        arg === '-serial'
+      ) {
+        selectors.add(arg.slice(1));
+        continue;
+      }
+      if (valueFlags.has(arg)) {
+        index += 1;
+        continue;
+      }
+      if (arg.startsWith('-')) continue; // -nameopt/-sha256/... accepted
+      return this._err(`openssl: unexpected argument "${arg}"`);
+    }
+    let pem = null;
+    if (options.in) {
+      pem = this._readFile(options.in);
+      if (pem === null) {
+        return this._err(`openssl: Could not open certificate file "${options.in}"`);
+      }
+    } else if (stdin !== null && stdin !== undefined) {
+      pem = String(stdin);
+    }
+    if (!pem) {
+      return this._err('openssl x509: no certificate input specified (use -in <file>)');
+    }
+    const info = parseCertificatePem(pem);
+    if (!info)
+      return this._err('openssl: unable to load certificate (not a PEM X.509 certificate)');
+    const lines = [];
+    if (!options.noout) lines.push(String(pem).replace(/\n+$/, ''));
+    if (selectors.has('subject')) lines.push(`subject=${formatDistinguishedName(info.subject)}`);
+    if (selectors.has('issuer')) lines.push(`issuer=${formatDistinguishedName(info.issuer)}`);
+    if (selectors.has('serial')) {
+      lines.push(`serial=${info.serial.replace(/:/g, '').toUpperCase()}`);
+    }
+    if (selectors.has('dates')) {
+      lines.push(`notBefore=${formatCertificateDate(info.notBefore)}`);
+      lines.push(`notAfter=${formatCertificateDate(info.notAfter)}`);
+    }
+    if (selectors.has('text')) lines.push(...this._certificateTextLines(info));
+    for (const extension of options.extensions) {
+      lines.push(...this._certificateExtensionLines(info, extension));
+    }
+    return this._ok(lines.join('\n'));
+  }
+
+  _certificateTextLines(info) {
+    const lines = [
+      'Certificate:',
+      '    Data:',
+      `        Version: ${info.version} (0x${(info.version - 1).toString(16)})`,
+    ];
+    lines.push('        Serial Number:', `            ${info.serial}`);
+    lines.push(`        Signature Algorithm: ${info.signatureAlgorithm}`);
+    lines.push(`        Issuer: ${formatDistinguishedName(info.issuer)}`);
+    lines.push('        Validity');
+    lines.push(`            Not Before: ${formatCertificateDate(info.notBefore)}`);
+    lines.push(`            Not After : ${formatCertificateDate(info.notAfter)}`);
+    lines.push(`        Subject: ${formatDistinguishedName(info.subject)}`);
+    lines.push('        Subject Public Key Info:');
+    lines.push('            Public Key Algorithm: rsaEncryption');
+    lines.push(`                Public-Key: (${info.publicKeyBits} bit)`);
+    if (info.modulus && info.modulus.length) {
+      lines.push('                Modulus:');
+      for (let offset = 0; offset < info.modulus.length; offset += 16) {
+        lines.push(
+          `                    ${bytesToHex(info.modulus.slice(offset, offset + 16), ':')}`
+        );
+      }
+    }
+    if (info.exponent) {
+      lines.push(`                Exponent: ${info.exponent} (0x${info.exponent.toString(16)})`);
+    }
+    if (info.sans.length || info.isCA) {
+      lines.push('        X509v3 extensions:');
+      if (info.sans.length) {
+        lines.push('            X509v3 Subject Alternative Name:');
+        lines.push(
+          `                ${info.sans.map((name) => (name.includes(':') ? `IP Address:${name}` : `DNS:${name}`)).join(', ')}`
+        );
+      }
+      if (info.isCA) {
+        lines.push('            X509v3 Basic Constraints: critical');
+        lines.push('                CA:TRUE');
+      }
+    }
+    lines.push(`    Signature Algorithm: ${info.signatureAlgorithm}`);
+    for (let offset = 0; offset < info.signatureBytes.length; offset += 18) {
+      lines.push(`         ${bytesToHex(info.signatureBytes.slice(offset, offset + 18), ':')}`);
+    }
+    return lines;
+  }
+
+  _certificateExtensionLines(info, extension) {
+    const name = String(extension || '')
+      .trim()
+      .toLowerCase();
+    if (name === 'subjectaltname' || name === 'san') {
+      const values = info.sans.map((entry) =>
+        entry.includes(':') ? `IP Address:${entry}` : `DNS:${entry}`
+      );
+      return ['X509v3 Subject Alternative Name: ', `    ${values.join(', ') || '<none>'}`];
+    }
+    if (name === 'basicconstraints') {
+      return ['X509v3 Basic Constraints: critical', `    CA:${info.isCA ? 'TRUE' : 'FALSE'}`];
+    }
+    return [`X509v3 extension "${extension}": not present`];
+  }
+
+  // ── base64 (issue #32a) ────────────────────────────────────────────────
+
+  /**
+   * GNU-style `base64` (issue #32a): encode stdin/files, or `-d`/`--decode`
+   * stdin/files. Decoding is the standard way to read a Secret value:
+   * `oc get secret db-secret -o jsonpath={.data.password} | base64 -d`.
+   */
+  _cmd_base64(args, stdin) {
+    let decode = false;
+    let wrap = 76;
+    let ignoreGarbage = false;
+    const files = [];
+    for (let index = 0; index < args.length; index += 1) {
+      const arg = args[index];
+      if (arg === '-d' || arg === '--decode') {
+        decode = true;
+        continue;
+      }
+      if (arg === '-i' || arg === '--ignore-garbage') {
+        ignoreGarbage = true;
+        continue;
+      }
+      if (arg === '-w' || arg === '--wrap') {
+        const value = Number.parseInt(args[++index] ?? '', 10);
+        wrap = Number.isFinite(value) ? Math.max(0, value) : 76;
+        continue;
+      }
+      if (/^-w\d+$/.test(arg)) {
+        wrap = Number.parseInt(arg.slice(2), 10);
+        continue;
+      }
+      if (/^--wrap=\d+$/.test(arg)) {
+        wrap = Number.parseInt(arg.slice('--wrap='.length), 10);
+        continue;
+      }
+      if (arg === '-h' || arg === '--help') {
+        return this._ok(
+          'Usage: base64 [OPTION]... [FILE]...\n  -d, --decode          decode data\n  -w, --wrap=COLS       wrap encoded lines after COLS characters (default 76, 0 disables)'
+        );
+      }
+      if (arg === '-' || !arg.startsWith('-')) {
+        files.push(arg);
+        continue;
+      }
+      return this._err(`base64: invalid option -- '${arg.slice(1)}'`);
+    }
+    let input;
+    if (files.length) {
+      const chunks = [];
+      for (const file of files) {
+        const content = file === '-' ? (stdin ?? '') : this._readFile(file);
+        if (content === null) return this._err(`base64: ${file}: No such file or directory`);
+        chunks.push(content);
+      }
+      input = chunks.join('');
+    } else {
+      input = stdin === null || stdin === undefined ? '' : String(stdin);
+    }
+    if (!decode) {
+      const encoded = bytesToBase64(textToUtf8Bytes(input));
+      if (wrap <= 0) return this._ok(encoded);
+      const lines = [];
+      for (let index = 0; index < encoded.length; index += wrap) {
+        lines.push(encoded.slice(index, index + wrap));
+      }
+      return this._ok(lines.join('\n'));
+    }
+    const raw = String(input);
+    const compact = raw.replace(/\s+/g, '');
+    if (!ignoreGarbage) {
+      const invalid = compact.match(/[^A-Za-z0-9+/=]/);
+      if (invalid) return this._err('base64: invalid input');
+    }
+    const clean = compact.replace(/[^A-Za-z0-9+/=]/g, '');
+    if (!clean) return this._ok('');
+    if (clean.length % 4 === 1) return this._err('base64: invalid input');
+    const padded = clean.endsWith('=')
+      ? clean
+      : clean.padEnd(clean.length + ((4 - (clean.length % 4)) % 4), '=');
+    let bytes;
+    try {
+      bytes = base64ToBytes(padded);
+    } catch {
+      return this._err('base64: invalid input');
+    }
+    return this._ok(utf8BytesToText(bytes));
+  }
+
+  // ── curl from the workstation (issue #32c) ─────────────────────────────
+
+  /** Run one workstation HTTP(S) request through the simulated router. */
+  _workstationCurl(rawUrl, options = {}) {
+    const sim = this.bar?.gameEngine?.simulation;
+    if (!sim || typeof sim.trafficForWorkstationCurl !== 'function') {
+      return { error: { code: 6, message: `Could not resolve host: ${options.host || rawUrl}` } };
+    }
+    return sim.trafficForWorkstationCurl(rawUrl, options);
+  }
+
+  _certificateMatchesHost(certificate, host) {
+    const target = String(host || '')
+      .toLowerCase()
+      .replace(/\.$/, '');
+    const candidates = [certificate?.commonName, ...(certificate?.sans || [])]
+      .filter(Boolean)
+      .map((value) => String(value).toLowerCase());
+    return candidates.some((name) => {
+      if (!name) return false;
+      if (name === target) return true;
+      if (!name.startsWith('*.')) return false;
+      const suffix = name.slice(1); // ".apps.cluster.example.com"
+      if (!target.endsWith(suffix)) return false;
+      const prefix = target.slice(0, target.length - suffix.length);
+      return prefix.length > 0 && !prefix.includes('.');
+    });
+  }
+
+  _curlFailureLines(code, message) {
+    return [`curl: (${code}) ${message}`];
+  }
+
+  /**
+   * Workstation `curl` (issue #32c): resolves Route hosts through the simulated
+   * router, honouring edge/passthrough/re-encrypt TLS, the http→https redirect
+   * policy and router→Service NetworkPolicy reachability.
+   */
+  _cmd_curl(args) {
+    const options = {
+      insecure: false,
+      silent: false,
+      showError: false,
+      include: false,
+      head: false,
+      follow: false,
+      verbose: false,
+      fail: false,
+      output: null,
+      cacert: null,
+      method: null,
+    };
+    const urls = [];
+    const shortValueFlags = new Set([
+      '-o',
+      '-H',
+      '-X',
+      '-A',
+      '-w',
+      '-m',
+      '-d',
+      '-F',
+      '-u',
+      '-b',
+      '-e',
+      '-x',
+      '-r',
+      '-E',
+      '-T',
+    ]);
+    const longValueFlags = new Set([
+      '--output',
+      '--header',
+      '--request',
+      '--user-agent',
+      '--write-out',
+      '--max-time',
+      '--connect-timeout',
+      '--data',
+      '--data-raw',
+      '--data-binary',
+      '--form',
+      '--user',
+      '--cookie',
+      '--cookie-jar',
+      '--referer',
+      '--proxy',
+      '--cert',
+      '--key',
+      '--cacert',
+      '--capath',
+      '--resolve',
+      '--retry',
+      '--retry-delay',
+      '--limit-rate',
+      '--interface',
+      '--url',
+    ]);
+    const booleanLongFlags = new Set([
+      '--insecure',
+      '--silent',
+      '--show-error',
+      '--include',
+      '--head',
+      '--location',
+      '--location-trusted',
+      '--verbose',
+      '--fail',
+      '--fail-with-body',
+      '--compressed',
+      '--http1.1',
+      '--http2',
+      '--tlsv1.2',
+      '--tlsv1.3',
+      '--globoff',
+      '--noproxy',
+      '--raw',
+    ]);
+    for (let index = 0; index < args.length; index += 1) {
+      const arg = args[index];
+      if (longValueFlags.has(arg)) {
+        const value = args[++index] ?? '';
+        if (arg === '--output') options.output = value;
+        else if (arg === '--cacert') options.cacert = value;
+        else if (arg === '--request') options.method = value.toUpperCase();
+        else if (arg === '--url') urls.push(value);
+        continue;
+      }
+      if (booleanLongFlags.has(arg)) {
+        if (arg === '--insecure') options.insecure = true;
+        else if (arg === '--silent') options.silent = true;
+        else if (arg === '--show-error') options.showError = true;
+        else if (arg === '--include') options.include = true;
+        else if (arg === '--head') options.head = true;
+        else if (arg === '--location' || arg === '--location-trusted') options.follow = true;
+        else if (arg === '--verbose') options.verbose = true;
+        else if (arg === '--fail' || arg === '--fail-with-body') options.fail = true;
+        continue;
+      }
+      if (arg.startsWith('--')) {
+        // Unknown long flag: accept and ignore (curl-style forward compatibility).
+        const eq = arg.indexOf('=');
+        if (eq < 0 && args[index + 1] && !args[index + 1].startsWith('-')) index += 1;
+        continue;
+      }
+      if (shortValueFlags.has(arg)) {
+        const value = args[++index] ?? '';
+        if (arg === '-o') options.output = value;
+        else if (arg === '-X') options.method = value.toUpperCase();
+        else if (arg === '-H') {
+          /* custom headers are echoed by -v only; the simulator keeps the defaults */
+        }
+        continue;
+      }
+      if (arg.startsWith('-') && arg.length > 1) {
+        for (const flag of arg.slice(1)) {
+          if (flag === 'k') options.insecure = true;
+          else if (flag === 's') options.silent = true;
+          else if (flag === 'S') options.showError = true;
+          else if (flag === 'i') options.include = true;
+          else if (flag === 'I') options.head = true;
+          else if (flag === 'L') options.follow = true;
+          else if (flag === 'v') options.verbose = true;
+          else if (flag === 'f') options.fail = true;
+        }
+        continue;
+      }
+      urls.push(arg);
+    }
+    if (!urls.length) {
+      return this._err(
+        "curl: no URL specified!\ncurl: try 'curl --help' or 'curl --manual' for more information"
+      );
+    }
+    let url = urls[0];
+    if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(url)) url = `http://${url}`;
+    const maxRedirects = 5;
+    const requestLines = [];
+    let result = null;
+    for (let hop = 0; hop <= maxRedirects; hop += 1) {
+      const parsed = this._parseCurlUrl(url);
+      if (parsed.error) return this._err(`curl: (1) ${parsed.error}`);
+      if (!['http', 'https'].includes(parsed.scheme)) {
+        return this._err(`curl: (1) Protocol "${parsed.scheme}" not supported`);
+      }
+      if (!parsed.hostname) {
+        return this._err('curl: (3) URL rejected: Malformed input to a URL function');
+      }
+      result = this._workstationCurl(url, {
+        method: options.head ? 'HEAD' : options.method || 'GET',
+        insecure: options.insecure,
+      });
+      if (!result || result.error) break;
+      const status = Number(result.status || 0);
+      const location = result.location;
+      if (options.follow && location && status >= 300 && status < 400) {
+        if (hop >= maxRedirects) {
+          return this._err(this._curlFailureLines(47, 'Maximum (5) redirects followed').join('\n'));
+        }
+        if (options.verbose)
+          requestLines.push(`* Issue another request to this URL: '${location}'`);
+        url = location;
+        continue;
+      }
+      break;
+    }
+    const lines = [];
+    if (result && result.error) {
+      lines.push(...requestLines);
+      lines.push(...this._curlFailureLines(result.error.code, result.error.message));
+      return this._err(lines.join('\n'));
+    }
+    if (!result) return this._err('curl: (7) Failed to connect');
+    const scheme = result.scheme || 'http';
+    const host = result.host || '';
+    const port = result.port || (scheme === 'https' ? 443 : 80);
+    const requestLine = `${options.head ? 'HEAD' : options.method || 'GET'} ${result.path || '/'} HTTP/1.1`;
+    if (scheme === 'https' && !options.insecure) {
+      const certificate = result.serverCert;
+      if (!certificate) {
+        lines.push(
+          ...this._curlFailureLines(
+            60,
+            'SSL certificate problem: unable to get local issuer certificate'
+          )
+        );
+        return this._err(lines.join('\n'));
+      }
+      if (options.cacert) {
+        const ca = this._readFile(options.cacert);
+        if (ca === null) {
+          return this._err(`curl: (77) error setting certificate file: ${options.cacert}`);
+        }
+        if (!parseCertificatePem(ca)) {
+          return this._err(`curl: (77) error setting certificate file: ${options.cacert}`);
+        }
+      } else if (!certificate.trusted) {
+        const problem = certificate.selfSigned
+          ? 'self-signed certificate'
+          : 'unable to get local issuer certificate';
+        lines.push(...this._curlFailureLines(60, `SSL certificate problem: ${problem}`));
+        lines.push(
+          'More details here: https://curl.se/docs/sslcerts.html',
+          '',
+          'curl failed to verify the legitimacy of the server and therefore could not',
+          'establish a secure connection to it. To learn more about this situation and',
+          'how to fix it, please visit the web page mentioned above.'
+        );
+        return this._err(lines.join('\n'));
+      }
+      if (!this._certificateMatchesHost(certificate, host)) {
+        lines.push(
+          ...this._curlFailureLines(
+            60,
+            `SSL: no alternative certificate subject name matches target host name '${host}'`
+          )
+        );
+        return this._err(lines.join('\n'));
+      }
+    }
+    if (options.verbose) {
+      lines.push(`*   Trying ${host}:${port}...`);
+      lines.push(`* Connected to ${host} (${result.serverIp || '172.30.0.20'}) port ${port}`);
+      if (scheme === 'https') {
+        lines.push('* TLS 1.3 connection using TLS_AES_256_GCM_SHA384');
+        lines.push('* Server certificate:');
+        lines.push(`*  subject: ${formatDistinguishedName(result.serverCert?.subject || {})}`);
+        lines.push(`*  issuer: ${formatDistinguishedName(result.serverCert?.issuer || {})}`);
+      }
+      lines.push(`> ${requestLine}`);
+      lines.push(`> Host: ${host}`);
+      lines.push('> User-Agent: curl/8.7.1');
+      lines.push('> Accept: */*');
+      lines.push('>');
+    }
+    const status = Number(result.status || 0);
+    const statusText = result.statusText || '';
+    const headers = result.headers || {};
+    const showHeaders = options.include || options.head || options.verbose;
+    if (showHeaders) {
+      lines.push(`< HTTP/1.1 ${status} ${statusText}`.trim());
+      for (const [name, value] of Object.entries(headers)) {
+        lines.push(`< ${name}: ${value}`);
+      }
+      lines.push('<');
+    }
+    if (options.fail && status >= 400) {
+      lines.push(...this._curlFailureLines(22, `The requested URL returned error: ${status}`));
+      return this._err(lines.join('\n'));
+    }
+    if (!options.head && result.body) lines.push(result.body);
+    if (options.output) {
+      const written = this._writeFile(options.output, result.body || '');
+      if (written && written.error) return written;
+      return this._ok('');
+    }
+    return this._ok(lines.join('\n'));
+  }
+
+  _parseCurlUrl(rawUrl) {
+    try {
+      const parsed = new URL(String(rawUrl));
+      return {
+        scheme: parsed.protocol.replace(/:$/, '').toLowerCase(),
+        hostname: parsed.hostname,
+        port: parsed.port ? Number(parsed.port) : null,
+        path: `${parsed.pathname || '/'}${parsed.search || ''}`,
+      };
+    } catch {
+      return { error: 'URL rejected: Malformed input to a URL function' };
+    }
   }
 
   _cmd_skopeo(args, stdin) {

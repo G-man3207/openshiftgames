@@ -819,6 +819,24 @@ function pluralResourceName(kind) {
   return `${name}s`;
 }
 
+/** Structural equality for manifest data (plain JSON-ish objects/arrays). */
+function deepEqual(a, b) {
+  if (a === b) return true;
+  if (Array.isArray(a) || Array.isArray(b)) {
+    if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
+    for (let i = 0; i < a.length; i += 1) if (!deepEqual(a[i], b[i])) return false;
+    return true;
+  }
+  if (typeof a === 'object' && typeof b === 'object' && a !== null && b !== null) {
+    const aKeys = Object.keys(a);
+    const bKeys = Object.keys(b);
+    if (aKeys.length !== bKeys.length) return false;
+    for (const key of aKeys) if (!deepEqual(a[key], b[key])) return false;
+    return true;
+  }
+  return false;
+}
+
 /**
  * Tokenize a shell-ish oc command line (quotes, whitespace) and split it into
  * pipeline stages. Accepts a leading `oc`/`kubectl` on each stage.
@@ -1086,6 +1104,13 @@ export class GameEngine {
     this.currentProject = options.currentProject || 'default';
     /** @type {{type: string, name: string, secretName: string, namespace: string, ready: boolean}|null} */
     this.authProvider = null;
+    /**
+     * Successful-login evidence for grading (L13 / lab 11 "log in as alice").
+     * Appended on every successful `login()`, survives logout/user switches and
+     * is only cleared by a cluster/engine reset (level seeding).
+     * @type {Array<{user: string, provider: string, project: string, time: number}>}
+     */
+    this.loginHistory = [];
     /** Optional injected ManifestEngine (Node harnesses / tests). */
     this.manifestEngine = null;
     /** Last error from applyManifestObject for caller diagnostics. */
@@ -1254,6 +1279,9 @@ export class GameEngine {
     this.eventBus.on('cluster:reset', () => {
       this.ensureCurrentProject();
       this._syncAuthProviderFromOAuth({ silent: true });
+      // A new level/retry is a new engine session: grading baselines the login
+      // evidence so a previous attempt cannot pre-tick the login objective.
+      this.loginHistory = [];
     });
   }
 
@@ -2305,9 +2333,36 @@ export class GameEngine {
     if (!user) return { success: false, message: 'error: you must specify a username with -u' };
 
     if (user === 'kubeadmin' || user === 'system:admin' || user === 'admin') {
+      // Real `oc login -u kubeadmin -p <password>` is validated against the
+      // generated password stored in the kube-system/kubeadmin Secret. The
+      // simulator's CLI cannot prompt interactively, so a *passwordless*
+      // `oc login -u kubeadmin` keeps working (it stands in for the password
+      // prompt); an explicitly supplied password must match.
+      if (password !== undefined && password !== null && String(password) !== '') {
+        const expected = this.cluster.getKubeadminPassword
+          ? this.cluster.getKubeadminPassword()
+          : null;
+        if (expected === null) {
+          return {
+            success: false,
+            reason: 'kubeadmin-secret-missing',
+            message:
+              'Login failed (401 Unauthorized)\nThe kubeadmin password Secret "kubeadmin" in project "kube-system" is missing: kubeadmin password authentication is not available.',
+          };
+        }
+        if (String(password) !== String(expected)) {
+          return {
+            success: false,
+            reason: 'invalid-credentials',
+            message:
+              'Login failed (401 Unauthorized)\nVerify you have provided the correct credentials.',
+          };
+        }
+      }
       this.currentUser = user === 'admin' ? 'admin' : 'kubeadmin';
       this._ensureUserResource(this.currentUser, null);
       this.ensureCurrentProject();
+      this._recordLogin(this.currentUser, 'kubeadmin');
       this.eventBus.emit('login', {
         user: this.currentUser,
         provider: 'kubeadmin',
@@ -2330,12 +2385,16 @@ export class GameEngine {
         message: `Login failed (401 Unauthorized)\nThe user "${user}" is not known to the configured identity provider: no identity provider is configured on this cluster.`,
       };
     }
-    if (!this.authProvider.ready) {
+    if (!this.authProvider.ready || this.simulation?._oauthPending) {
+      // Auth-operator rollout model: after an OAuth configuration change (or a
+      // change to the referenced htpasswd Secret, which the operator watches)
+      // the oauth-openshift pods restart and the old auth config stays active
+      // until the rollout completes. Both L13 and lab 11 must observe the wait.
       return {
         success: false,
         reason: 'identity-provider-not-ready',
         message:
-          'Login failed (401 Unauthorized)\nThe HTPasswd identity provider is not ready yet: wait for the OAuth rollout to complete (oc get clusteroperators authentication) and try again.',
+          'Login failed (401 Unauthorized)\nThe HTPasswd identity provider is not ready yet: wait for the OAuth rollout to complete (oc get pods -n openshift-authentication) and try again.',
       };
     }
 
@@ -2373,12 +2432,41 @@ export class GameEngine {
     this.cluster.createIdentity(providerName, user, userResource.metadata.name);
     this.currentUser = userResource.metadata.name;
     this.ensureCurrentProject();
+    this._recordLogin(this.currentUser, providerName);
     this.eventBus.emit('login', {
       user: this.currentUser,
       provider: providerName,
       project: this.currentProject,
     });
     return { success: true, user: this.currentUser, message: 'Login successful.' };
+  }
+
+  /**
+   * Session login evidence: one entry per successful login attempt.
+   * Reset only by an engine/cluster reset (level seeding) so objectives such as
+   * L13 "log in as alice" still tick after a later `oc login` switches users.
+   * @param {string} user
+   * @param {string} provider
+   * @returns {object} the recorded entry
+   */
+  _recordLogin(user, provider) {
+    if (!Array.isArray(this.loginHistory)) this.loginHistory = [];
+    const entry = {
+      user: String(user || ''),
+      provider: String(provider || ''),
+      project: String(this.currentProject || ''),
+      time: Date.now(),
+    };
+    this.loginHistory.push(entry);
+    return entry;
+  }
+
+  /**
+   * Successful logins observed by this engine session (oldest first).
+   * @returns {Array<{user: string, provider: string, project: string, time: number}>}
+   */
+  getLoginHistory() {
+    return Array.isArray(this.loginHistory) ? [...this.loginHistory] : [];
   }
 
   /** Ensure a User resource exists for kubeadmin-style logins. */
@@ -2835,13 +2923,32 @@ export class GameEngine {
 
     const existing = this.cluster.getByName(kind, name, namespace);
     if (existing) {
-      existing.spec = deepClone(normalised.spec || {});
-      existing.metadata.labels = { ...existing.metadata.labels, ...(metadata.labels || {}) };
+      const nextSpec = deepClone(normalised.spec || {});
+      const nextLabels = metadata.labels || {};
+      const nextAnnotations = metadata.annotations || {};
+      // Declarative apply must be idempotent (issue #29): if the manifest does
+      // not change the stored object, keep generation/resourceVersion untouched
+      // and let the caller report `deployment.apps/x unchanged`.
+      const specChanged = !deepEqual(existing.spec || {}, nextSpec);
+      const labelsChanged = Object.entries(nextLabels).some(
+        ([key, value]) => existing.metadata.labels?.[key] !== value
+      );
+      const annotationsChanged = Object.entries(nextAnnotations).some(
+        ([key, value]) => existing.metadata.annotations?.[key] !== value
+      );
+      if (!specChanged && !labelsChanged && !annotationsChanged) {
+        existing._applyAction = 'unchanged';
+        return existing;
+      }
+      existing.spec = nextSpec;
+      existing.metadata.labels = { ...existing.metadata.labels, ...nextLabels };
       existing.metadata.annotations = {
         ...existing.metadata.annotations,
-        ...(metadata.annotations || {}),
+        ...nextAnnotations,
       };
-      existing.metadata.generation++;
+      // Kubernetes bumps metadata.generation only when the spec changes
+      // (a label/annotation-only apply does not roll the workload).
+      if (specChanged) existing.metadata.generation++;
       this.cluster.update(existing.uid, existing);
       existing._applyAction = 'updated';
       this._syncHtpasswdFileFromSecret(kind, existing);
@@ -4514,12 +4621,64 @@ export class GameEngine {
       };
     }
     const roleKind = clusterWide || !roleExists ? 'ClusterRole' : 'Role';
-
-    const suffix = normalizedSubject.subject.name.replace(/[^a-zA-Z0-9-]/g, '-');
-    const bindingName = `${roleName}-${suffix}`;
     const bindingKind = clusterWide ? 'ClusterRoleBinding' : 'RoleBinding';
     const bindingNamespace = clusterWide ? '' : namespace;
-    const existing = this.cluster.getByName(bindingKind, bindingName, bindingNamespace);
+
+    // Real `oc adm policy add-role-to-*` binding naming (openshift/oc
+    // pkg/cli/admin/policy/modify_roles.go):
+    //  - if the subject is already bound by an existing RoleBinding for this
+    //    role, the command is a no-op (it prints success),
+    //  - otherwise a NEW binding is created with a default name derived from the
+    //    role name, deduplicated: `edit`, `edit-0`, `edit-1`, ….
+    // So `oc adm policy add-role-to-group edit developers` creates RoleBinding
+    // `edit`, and a later `add-role-to-group edit qa-team` creates `edit-0`
+    // (NOT `edit-developers`).
+    const roleMatches = (binding) => {
+      const roleRef = binding?.spec?.roleRef || {};
+      if (roleRef.name !== roleName) return false;
+      return clusterWide ? roleRef.kind === 'ClusterRole' : true;
+    };
+    const hasSubject = (binding) =>
+      (binding?.spec?.subjects || []).some((subject) =>
+        this._sameSubject(subject, normalizedSubject.roleBindingSubject)
+      );
+    const bindingsForRole = () =>
+      (clusterWide
+        ? this.cluster.getByKind('ClusterRoleBinding')
+        : this.cluster.getByKindAndNamespace('RoleBinding', namespace)
+      ).filter(roleMatches);
+    const uniqueBindingName = (base) => {
+      if (!this.cluster.getByName(bindingKind, base, bindingNamespace)) return base;
+      for (let index = 0; index < 1000; index += 1) {
+        const candidate = `${base}-${index}`;
+        if (!this.cluster.getByName(bindingKind, candidate, bindingNamespace)) return candidate;
+      }
+      return `${base}-${Date.now()}`;
+    };
+    const explicitBindingName =
+      options.roleBindingName && options.roleBindingName !== true
+        ? String(options.roleBindingName)
+        : '';
+    let bindingName = explicitBindingName || roleName;
+    let existing = null;
+    if (explicitBindingName) {
+      existing = this.cluster.getByName(bindingKind, explicitBindingName, bindingNamespace);
+      if (existing && !roleMatches(existing)) {
+        return {
+          success: false,
+          message: `rolebinding ${explicitBindingName} found for role ${existing.spec?.roleRef?.name || '<none>'}, not ${roleName}`,
+        };
+      }
+    } else {
+      // Already bound through any RoleBinding for this role? Then no-op.
+      const alreadyBound = bindingsForRole().find(hasSubject);
+      if (alreadyBound) {
+        bindingName = alreadyBound.metadata.name;
+        existing = alreadyBound;
+      } else {
+        bindingName = uniqueBindingName(roleName);
+      }
+    }
 
     /**
      * Fields the CLI needs for real `oc adm policy` output (issue #21), e.g.

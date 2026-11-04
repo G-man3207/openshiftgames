@@ -92,6 +92,27 @@ const STATE_RESOLVABLE = new Set([
   'DeploymentStuckRollout',
 ]);
 
+/**
+ * Minimum simulation time between two per-tick state-healing passes (#27).
+ * The state check mutates nothing, but it walks cluster collections, so a
+ * 1.5 s game-time throttle keeps the tick path predictable while still
+ * clearing an incident within about a second of the learner's fix. Pause
+ * freezes the clock (no ticks), so this throttle is pause-aware by design.
+ */
+const STATE_HEAL_INTERVAL_SECONDS = 1.5;
+
+/**
+ * Legacy level data names campaign nodes `node-1…3`; the cluster presents the
+ * realistic OCP names (`worker-0`, `worker-1`, `master-0`). Scripted incidents
+ * authored before that change must still damage the intended machine instead
+ * of silently picking the first Node (#28).
+ */
+const NODE_NAME_ALIASES = {
+  'node-1': 'worker-0',
+  'node-2': 'worker-1',
+  'node-3': 'master-0',
+};
+
 const nowIso = () => new Date().toISOString();
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -261,6 +282,9 @@ class IncidentEngine {
     // State-driven resolution bookkeeping.
     this._resolving = false;
     this._clusterUnsubscribers = [];
+    // Per-tick state-healing throttle (#27a): simulation seconds of the last
+    // pass. Reset on start()/reset() so a new run always checks immediately.
+    this._lastStateHealGameSeconds = null;
 
     // OpenShift cascade rules (parent name → children spawn chances).
     this.cascadeRules = new Map([
@@ -415,6 +439,7 @@ class IncidentEngine {
     this.incidentCounter = 0;
     this._resolving = false;
     this._externalTickSeen = false;
+    this._lastStateHealGameSeconds = null;
     this._clearAnnounceTimers();
 
     // Fallback clock only when nothing else pumps tick() (kept for modes that
@@ -515,6 +540,66 @@ class IncidentEngine {
       // also pauses auto-resolve (GAME-015).
       if (incident.isExpired(now, gameSeconds)) this.resolveIncident(id, 'auto');
     }
+    // #27(a): repairing the underlying resource is not a side effect of a
+    // cluster write. `oc adm policy add-scc-to-user`, a quota patch, a kubelet
+    // restart or a fix made BEFORE the incident fired emits no guaranteed
+    // `cluster:modified` afterwards — the state check therefore also runs on
+    // the simulation tick (throttled, pause-aware) instead of only from the
+    // watcher. `_onClusterModified()` keeps its immediate reaction for feedback.
+    this._reconcileStateHealing(gameSeconds);
+  }
+
+  /**
+   * Periodic state-healing pass (#27a). Runs ~every 1.5 game seconds:
+   *  1. retry onset damage for incidents whose target appeared late (same
+   *     contract as the cluster:modified watcher), then
+   *  2. resolve incidents whose damaged resource has been repaired in the
+   *     cluster (quota raised, SCC granted, node Ready, route admitted, …).
+   */
+  _reconcileStateHealing(gameSeconds) {
+    if (this.paused || this._resolving) return;
+    if (this.activeIncidents.size === 0) return;
+    const last = this._lastStateHealGameSeconds;
+    if (Number.isFinite(last) && gameSeconds - last < STATE_HEAL_INTERVAL_SECONDS) return;
+    this._lastStateHealGameSeconds = gameSeconds;
+    for (const [id, incident] of [...this.activeIncidents]) {
+      if (!this.activeIncidents.has(id)) continue;
+      this._safe(() => this._checkIncidentHealth(id, incident, gameSeconds));
+    }
+  }
+
+  /**
+   * State check for one active incident. Shared by the tick pass and by
+   * `_onClusterModified()` so the two paths cannot drift.
+   * @returns {boolean} true when the incident was resolved by this check
+   */
+  _checkIncidentHealth(incidentId, incident, gameSeconds) {
+    if (!incident || this._resolving) return false;
+    if (incident.state === INCIDENT_STATE.CREATED) return false;
+    if (!incident.damageApplied) {
+      // The named target did not exist at onset. The cluster:modified watcher
+      // retries the damage; the tick does too so an incident authored against
+      // a not-yet-created object becomes real even when no later write happens.
+      this._retryOnsetDamage(incident);
+      return false;
+    }
+    if (!STATE_RESOLVABLE.has(incident.name)) return false;
+    if (!this._incidentPastActivationGrace(incident, gameSeconds)) return false;
+    const healed = this._safe(() => this._targetLooksHealthy(incident), false);
+    if (!healed) return false;
+    this.resolveIncident(incidentId, 'resource-fixed');
+    return true;
+  }
+
+  /**
+   * Grace period after activation, measured in SIMULATION seconds so a paused
+   * game does not let a check race the onset damage. 1.5 s matches the
+   * historical cluster:modified grace.
+   */
+  _incidentPastActivationGrace(incident, gameSeconds) {
+    const activatedGame = Number(incident.activatedGameSeconds);
+    if (Number.isFinite(activatedGame)) return gameSeconds - activatedGame >= 1.5;
+    return !incident.activatedAt || Date.now() - incident.activatedAt >= 1500;
   }
 
   updateActiveIncidents() {
@@ -893,14 +978,23 @@ class IncidentEngine {
   _findResource(kind, name, namespace) {
     const state = this.cluster;
     if (!state || !kind || !name) return null;
-    if (namespace) {
-      const exact = this._safe(() => state.getByName(kind, name, namespace));
-      if (exact) return exact;
+    // Scripted data authored before the realistic node naming maps `node-N`
+    // onto the cluster's `worker-0`/`worker-1`/`master-0` machine (#28).
+    const legacyNodeAlias = kind === 'Node' ? NODE_NAME_ALIASES[String(name).toLowerCase()] : null;
+    const candidates = legacyNodeAlias ? [name, legacyNodeAlias] : [name];
+    for (const candidate of candidates) {
+      if (namespace) {
+        const exact = this._safe(() => state.getByName(kind, candidate, namespace));
+        if (exact) return exact;
+      }
+      const loose = this._safe(() => state.getByName(kind, candidate));
+      if (loose) return loose;
+      const list = this._safe(() => state.getByKind(kind)) || [];
+      const found =
+        list.find((r) => r.name === candidate) || list.find((r) => r.metadata?.name === candidate);
+      if (found) return found;
     }
-    const loose = this._safe(() => state.getByName(kind, name));
-    if (loose) return loose;
-    const list = this._safe(() => state.getByKind(kind)) || [];
-    return list.find((r) => r.name === name) || list.find((r) => r.metadata?.name === name) || null;
+    return null;
   }
 
   _resolveTargetResource(incident) {
@@ -2318,6 +2412,20 @@ class IncidentEngine {
       null;
 
     if (quota) {
+      // #27(b): bind the incident to the quota that is ACTUALLY damaged. L15
+      // authors the namespace ("quota-lab") as the target, and lab 6 names
+      // "team-quota" while the shipped examples/quota.yaml creates
+      // "compute-quota". Without rebinding, `_resolveTargetResource()` returns
+      // null and the state check can never run, so `autoResolveTime: null`
+      // leaves the drawer button as the only exit.
+      const quotaName = quota.name || quota.metadata?.name;
+      if (quotaName && incident.target !== quotaName) {
+        incident.target = quotaName;
+        incident.pendingTarget = false;
+      }
+      if (quotaName) incident.damagedQuotaName = quotaName;
+      incident.uid = quota.uid || quota.metadata?.uid || incident.uid;
+      incident.namespace = quota.namespace || quota.metadata?.namespace || ns;
       const savedHard = JSON.parse(JSON.stringify(quota.spec?.hard || {}));
       this._saveRestore(incident, { uid: quota.uid, hard: savedHard });
       const usage = this._safe(() => this.cluster.getQuotaUsage(ns)) || {};
@@ -2421,17 +2529,37 @@ class IncidentEngine {
     return { applied: true };
   }
 
+  /**
+   * Bind a node incident to the Node object it actually damages (#27b/#28).
+   * Level data may still name the machine `node-2` while the cluster presents
+   * `worker-1`; the state-healing path resolves targets by name, so the
+   * incident must point at the real damaged object or it can never heal.
+   */
+  _bindIncidentToNode(incident, node) {
+    if (!incident || !node) return;
+    const nodeName = node.name || node.metadata?.name;
+    if (nodeName && incident.target !== nodeName) {
+      incident.target = nodeName;
+      incident.pendingTarget = false;
+    }
+    incident.namespace = '';
+    if (!incident.uid) incident.uid = node.uid || node.metadata?.uid || null;
+  }
+
   _damageNodeReady(incident) {
     const node =
       this._resolveTargetResource(incident) ||
       this._findResource('Node', incident.target, '') ||
       (this._safe(() => this.cluster?.getByKind('Node')) || [])[0];
     if (!node) return { applied: false };
-    this._saveRestore(incident, {
-      uid: node.uid,
-      phase: node.status?.phase || 'Running',
-      unschedulable: node.spec?.unschedulable ?? false,
-    });
+    this._bindIncidentToNode(incident, node);
+    if (!incident.restoreState) {
+      this._saveRestore(incident, {
+        uid: node.uid,
+        phase: node.status?.phase || 'Running',
+        unschedulable: node.spec?.unschedulable ?? false,
+      });
+    }
     this._setPhase(node, 'NotReady');
     this._setCondition(
       node,
@@ -2458,13 +2586,15 @@ class IncidentEngine {
       this._findResource('Node', incident.target, '') ||
       (this._safe(() => this.cluster?.getByKind('Node')) || [])[0];
     if (!node) return { applied: false };
-    const saved = {
-      uid: node.uid,
-      conditions: JSON.parse(JSON.stringify(node.status?.conditions || [])),
-      memory: node.spec?.memory,
-      allocatable: node.status?.allocatable,
-    };
-    this._saveRestore(incident, saved);
+    this._bindIncidentToNode(incident, node);
+    if (!incident.restoreState) {
+      this._saveRestore(incident, {
+        uid: node.uid,
+        conditions: JSON.parse(JSON.stringify(node.status?.conditions || [])),
+        memory: node.spec?.memory,
+        allocatable: node.status?.allocatable,
+      });
+    }
     if (pressure === 'MemoryPressure' && node.spec) {
       // Shrink the node so _tickNodes keeps reporting the pressure condition.
       node.spec.memory = '1Gi';
@@ -2619,7 +2749,7 @@ class IncidentEngine {
       case 'secret':
         return this._healConfigObject(incident, target, kind);
       case 'quota':
-        return this._healQuota(incident, target);
+        return this._healQuota(incident, target, actionId);
       case 'limitrange':
         return this._healLimitRange(incident, target);
       case 'clusterquota':
@@ -2699,6 +2829,9 @@ class IncidentEngine {
       const fallback = this._pickPodForIncident(incident);
       if (fallback) pods.push(fallback);
     }
+    // State-driven resolution (the learner already repaired the cluster) must
+    // never bounce a workload that is ALREADY healthy (#27c).
+    const stateDriven = actionId === 'resource-fixed' || actionId === 'auto';
 
     // SCC incident: granting the SCC is a PLAYER action. Only the explicit
     // "Grant a permissive SCC to the ServiceAccount" resolution action may
@@ -2763,6 +2896,27 @@ class IncidentEngine {
             'Pod is still forbidden by security context constraints; grant an SCC that allows its securityContext'
           );
           this._commit(pod);
+          continue;
+        }
+        // #27(c): state-driven heal of a workload that is ALREADY Running with
+        // the SCC annotation must not re-pend it (that produced a
+        // Pending/ContainerCreating Pod on `Node: <none>` and unticked the
+        // "privileged workload Running" objective). Only reviving denied pods
+        // needs the re-admission round-trip below.
+        const alreadyHealthyAdmitted =
+          pod.status?.phase === 'Running' &&
+          Boolean(pod.metadata?.annotations?.['openshift.io/scc']) &&
+          (typeof pod.isConditionTrue !== 'function' || pod.isConditionTrue('Ready'));
+        if (stateDriven && alreadyHealthyAdmitted) {
+          this._clearAnnotation(pod, INCIDENT_ANNOTATION);
+          this._recordEvent(
+            pod,
+            'Normal',
+            'SCCAdmitted',
+            'Pod is already admitted and running under the granted SCC'
+          );
+          this._commit(pod);
+          healed++;
           continue;
         }
         // Re-run admission for real instead of pretending the Pod runs: clear
@@ -3407,15 +3561,39 @@ class IncidentEngine {
     return { applied: !!resource || healedPods > 0, kind, healedPods };
   }
 
-  _healQuota(incident, target) {
+  _healQuota(incident, target, actionId = 'manual') {
     const ns = incident.namespace || this.gameEngine?.currentProject || 'default';
     const quota =
       (target && target.kind === 'ResourceQuota' ? target : null) ||
       this._findResource('ResourceQuota', incident.target, ns) ||
       (this._safe(() => this.cluster?.getByKindAndNamespace('ResourceQuota', ns)) || [])[0] ||
       null;
+    const stateDriven = actionId === 'resource-fixed' || actionId === 'auto';
 
     if (quota) {
+      // State-driven heal: the learner already raised the quota from the CLI.
+      // Do NOT overwrite their new limits with the pre-onset snapshot (#27b) —
+      // just clear the incident bookkeeping and report the quota as within
+      // bounds. Manual/panel resolutions may restore/bump the limits.
+      if (stateDriven) {
+        this._setCondition(
+          quota,
+          'Exceeded',
+          'False',
+          'WithinQuota',
+          'Project usage is within the quota'
+        );
+        this._clearAnnotation(quota, INCIDENT_ANNOTATION);
+        this._recordEvent(
+          quota,
+          'Normal',
+          'QuotaUpdated',
+          'Project quota limits are within bounds again'
+        );
+        this._commit(quota);
+        this._safe(() => this.cluster.recalculateQuotaStatus?.());
+        return { applied: true, retried: 0, stateDriven: true };
+      }
       const usage = this._safe(() => this.cluster.getQuotaUsage(ns)) || {};
       const restored = incident.restoreState?.hard
         ? JSON.parse(JSON.stringify(incident.restoreState.hard))
@@ -4053,17 +4231,203 @@ class IncidentEngine {
     if (payload.success === false) return;
     const raw = String(payload.raw || payload.command || '').trim();
     if (!/^oc\s+/i.test(raw)) return;
-    const match = raw.match(/^oc\s+(logs|describe)\s+(.*)$/i);
-    if (!match) return;
-    const action = match[1].toLowerCase();
-    const args = match[2];
-    const ref = this._parseInvestigationRef(args);
-    if (!ref) return;
     for (const [, incident] of this.activeIncidents) {
       if (incident.state === INCIDENT_STATE.RESOLVED) continue;
-      if (!this._commandTargetsIncident(incident, ref, action)) continue;
+      if (incident.state === INCIDENT_STATE.CREATED) continue;
+      // #35/#27: count the incident's OWN diagnostic commands as investigation
+      // evidence from the CLI (no panel required) — e.g. SCCForbidden steps
+      // `oc get sa -n <ns> -o name` and `oc adm policy who-can use scc
+      // privileged`, quota `describe quota`, node `get nodes`, etc.
+      const stepIndex = this._matchInvestigationStep(incident, raw);
+      if (stepIndex >= 0) {
+        this._completeInvestigationStep(incident, stepIndex, raw);
+        continue;
+      }
+      // Legacy path: `oc logs`/`oc describe` on the damaged Pod or its owner
+      // advances the first kind-matching step (the Pod name is not known when
+      // the step text is authored).
+      const match = raw.match(/^oc\s+(logs|describe)\s+(.*)$/i);
+      if (!match) continue;
+      const action = match[1].toLowerCase();
+      const ref = this._parseInvestigationRef(match[2]);
+      if (!ref || !this._commandTargetsIncident(incident, ref, action)) continue;
       this._advanceInvestigation(incident, action, raw);
     }
+  }
+
+  /** Alias map for investigation resource words (`sa` vs `serviceaccount`). */
+  _investigationWord(word) {
+    const text = String(word || '')
+      .toLowerCase()
+      .replace(/^['"]|['"]$/g, '');
+    const aliases = {
+      sa: 'serviceaccount',
+      sas: 'serviceaccount',
+      serviceaccounts: 'serviceaccount',
+      deploy: 'deployment',
+      deployments: 'deployment',
+      bc: 'buildconfig',
+      buildconfigs: 'buildconfig',
+      is: 'imagestream',
+      imagestreams: 'imagestream',
+      istag: 'imagestreamtag',
+      istags: 'imagestreamtag',
+      sccs: 'scc',
+      ns: 'namespace',
+      namespaces: 'namespace',
+      pv: 'persistentvolume',
+      pvs: 'persistentvolume',
+      pvc: 'persistentvolumeclaim',
+      pvcs: 'persistentvolumeclaim',
+      quota: 'resourcequota',
+      quotas: 'resourcequota',
+      clusterquota: 'clusterresourcequota',
+      clusterquotas: 'clusterresourcequota',
+      pods: 'pod',
+      nodes: 'node',
+      roles: 'role',
+      rolebindings: 'rolebinding',
+      clusterrolebindings: 'clusterrolebinding',
+      configmaps: 'configmap',
+      services: 'service',
+      routes: 'route',
+      secrets: 'secret',
+    };
+    if (aliases[text]) return aliases[text];
+    if (text.startsWith('<') && text.endsWith('>')) return '<placeholder>';
+    // Generic plural folding for words not covered above.
+    if (text.length > 3 && text.endsWith('s') && !text.endsWith('ss')) return text.slice(0, -1);
+    return text;
+  }
+
+  /**
+   * Parse an `oc …` line into the words that matter for step matching plus the
+   * namespace it runs against. Flags (and their values) are dropped so
+   * `-o name` / `--output=yaml` / `--types=Warning` are optional for the learner.
+   * @returns {{words:string[], namespace:string|null}}
+   */
+  _investigationEvidence(raw) {
+    const tokens = String(raw || '')
+      .trim()
+      .replace(/^(?:oc|kubectl)\s+/i, '')
+      .split(/\s+/)
+      .map((token) => token.replace(/^['"]|['"]$/g, ''))
+      .filter(Boolean);
+    const flagsWithValues = new Set([
+      '-n',
+      '--namespace',
+      '-o',
+      '--output',
+      '-f',
+      '--filename',
+      '-l',
+      '--selector',
+      '--field-selector',
+      '--types',
+      '-c',
+      '--container',
+      '-p',
+      '--patch',
+      '--type',
+      '-z',
+      '--serviceaccount',
+      '--as',
+      '--as-group',
+      '-u',
+      '--username',
+      '--tail',
+      '--since',
+      '-A',
+      '--all-namespaces',
+    ]);
+    const words = [];
+    let namespace = null;
+    for (let i = 0; i < tokens.length; i += 1) {
+      const token = tokens[i];
+      if (token === '--') break;
+      if (token.startsWith('-')) {
+        let name = token;
+        let value = null;
+        const eq = token.indexOf('=');
+        if (eq > 0) {
+          name = token.slice(0, eq);
+          value = token.slice(eq + 1);
+        }
+        if (!value && flagsWithValues.has(name) && i + 1 < tokens.length) {
+          const next = tokens[i + 1];
+          if (!next.startsWith('-') || name === '-n' || name === '--namespace') {
+            value = next;
+            i += 1;
+          }
+        }
+        if (name === '-n' || name === '--namespace') namespace = value;
+        continue;
+      }
+      // `pod/x` / `deploy/app` references are equivalent to `pod x`.
+      if (token.includes('/')) {
+        const [kind, ...rest] = token.split('/');
+        words.push(kind, rest.join('/'));
+      } else {
+        words.push(token);
+      }
+    }
+    return { words, namespace };
+  }
+
+  /**
+   * Index of the first uncompleted investigation step that the executed
+   * command satisfies, or -1.
+   */
+  _matchInvestigationStep(incident, raw) {
+    const steps = incident?.investigationSteps || [];
+    if (steps.length === 0) return -1;
+    const evidence = this._investigationEvidence(raw);
+    if (evidence.words.length === 0) return -1;
+    for (let index = 0; index < steps.length; index += 1) {
+      const step = steps[index];
+      if (!step?.command || step.completed) continue;
+      if (this._commandSatisfiesStep(step.command, evidence, incident)) return index;
+    }
+    return -1;
+  }
+
+  /** Does an executed command satisfy one investigation step's command? */
+  _commandSatisfiesStep(stepCommand, evidence, incident) {
+    const expected = this._investigationEvidence(stepCommand);
+    const expectedWords = expected.words.map((word) => this._investigationWord(word));
+    const actualWords = evidence.words.map((word) => this._investigationWord(word));
+    if (expectedWords.length === 0 || actualWords.length === 0) return false;
+    if (expectedWords[0] !== actualWords[0]) return false;
+    let actualIndex = 0;
+    for (const word of expectedWords) {
+      const actual = actualWords[actualIndex];
+      if (actual === undefined) return false;
+      if (word !== '<placeholder>' && word !== actual) return false;
+      actualIndex += 1;
+    }
+    // A step that names the namespace only counts when the learner ran the
+    // command against the incident's namespace (or their current project).
+    if (expected.namespace) {
+      const expectedNamespace = incident.namespace || this.gameEngine?.currentProject || '';
+      const actualNamespace = evidence.namespace || this.gameEngine?.currentProject || '';
+      if (expectedNamespace && actualNamespace && expectedNamespace !== actualNamespace)
+        return false;
+    }
+    return true;
+  }
+
+  /** Mark one investigation step complete and announce it (panel + HUD). */
+  _completeInvestigationStep(incident, index, raw) {
+    if (!incident || index < 0) return;
+    incident.startInvestigation();
+    this.completeStep(incident.id, index);
+    this.emit('incident:command-investigated', {
+      id: incident.id,
+      name: incident.name,
+      command: raw,
+      stepIndex: index,
+      progress: incident.investigationProgress,
+    });
   }
 
   /** Parse `pod/x`, `deploy/x`, `x`, `pod x`, `x -n ns`, `x --previous`. */
@@ -4153,39 +4517,40 @@ class IncidentEngine {
     });
     const index = candidate >= 0 ? candidate : steps.findIndex((step) => !step.completed);
     if (index < 0) return;
-    incident.startInvestigation();
-    this.completeStep(incident.id, index);
-    this.emit('incident:command-investigated', {
-      id: incident.id,
-      name: incident.name,
-      command: raw,
-      stepIndex: index,
-      progress: incident.investigationProgress,
-    });
+    this._completeInvestigationStep(incident, index, raw);
+  }
+
+  /** Retry onset damage for an incident whose target appeared late. */
+  _retryOnsetDamage(incident) {
+    if (!incident || incident.damageApplied || incident._retryingDamage) return false;
+    incident._retryingDamage = true;
+    let damage = null;
+    try {
+      damage = this.applyIncidentEffects(incident);
+    } finally {
+      incident._retryingDamage = false;
+    }
+    if (damage && damage.applied !== false) {
+      incident.damageApplied = true;
+      incident.pendingTarget = false;
+      return true;
+    }
+    return false;
   }
 
   _onClusterModified() {
     if (this.paused || this._resolving) return;
     if (this.activeIncidents.size === 0) return;
-    const now = Date.now();
     const gameSeconds = this.elapsedTime / 1000;
     for (const [id, incident] of [...this.activeIncidents]) {
       if (incident.state === INCIDENT_STATE.CREATED) continue;
 
       // Onset damage can miss its target (e.g. a Deployment with no Pods yet).
       // Retry once resources appear so the incident becomes "real".
-      if (!incident.damageApplied && !incident._retryingDamage) {
-        incident._retryingDamage = true;
-        const damage = this._safe(() => this.applyIncidentEffects(incident));
-        incident._retryingDamage = false;
-        if (damage && damage.applied !== false) {
-          incident.damageApplied = true;
-          incident.pendingTarget = false;
-        }
+      if (!incident.damageApplied) {
+        if (!incident._retryingDamage) this._retryOnsetDamage(incident);
         continue;
       }
-
-      if (!incident.damageApplied) continue;
 
       // A real fix to the owning workload (oc set image / edit / rollout undo)
       // replaces the faulty Pod in a real cluster. The damaged Pod object cannot
@@ -4205,15 +4570,9 @@ class IncidentEngine {
         continue;
       }
       if (!STATE_RESOLVABLE.has(incident.name)) continue;
-      // Activation grace period in simulation time (pauses do not count).
-      const activatedGame = Number(incident.activatedGameSeconds);
-      if (Number.isFinite(activatedGame)) {
-        if (gameSeconds - activatedGame < 1.5) continue;
-      } else if (!incident.activatedAt || now - incident.activatedAt < 1500) {
-        continue;
-      }
-      const healed = this._safe(() => this._targetLooksHealthy(incident), false);
-      if (healed) this.resolveIncident(id, 'resource-fixed');
+      if (!this._incidentPastActivationGrace(incident, gameSeconds)) continue;
+      // Shared with the per-tick pass (#27a) so both paths stay identical.
+      this._checkIncidentHealth(id, incident, gameSeconds);
     }
   }
 
@@ -4344,7 +4703,11 @@ class IncidentEngine {
   /** Does the incident target look healthy enough to auto-clear the incident? */
   _targetLooksHealthy(incident) {
     const target = this._resolveTargetResource(incident);
-    if (!target) return false;
+    // #27(b): this function deliberately continues when the target cannot be
+    // resolved. Several checks are state-based on OTHER objects (SCC bindings,
+    // htpasswd provider, the namespace quota, DNS policies) and used to be
+    // unreachable because a null target short-circuited the whole switch. Each
+    // per-type case below guards the target it actually needs.
     // NOTE: the injected `openshiftgames.io/incident` annotation is cleared by
     // applyResolutionEffects; it must NOT block state-driven healing, otherwise
     // a player fixing the resource via the CLI would never auto-clear the card.
@@ -4377,7 +4740,7 @@ class IncidentEngine {
         return this._incidentSccGranted(incident);
       }
       case 'DeploymentStuckRollout': {
-        if (target.kind !== 'Deployment') return false;
+        if (!target || target.kind !== 'Deployment') return false;
         const desired = target.spec?.replicas ?? 1;
         return (
           (target.status?.availableReplicas || 0) >= desired &&
@@ -4385,15 +4748,18 @@ class IncidentEngine {
         );
       }
       case 'NodeNotReady':
-        return target.kind === 'Node' && this._isConditionTrue(target, 'Ready');
+        return !!target && target.kind === 'Node' && this._isConditionTrue(target, 'Ready');
       case 'NodeDiskPressure':
-        return target.kind === 'Node' && !this._isConditionTrue(target, 'DiskPressure');
+        return !!target && target.kind === 'Node' && !this._isConditionTrue(target, 'DiskPressure');
       case 'NodeMemoryPressure':
-        return target.kind === 'Node' && !this._isConditionTrue(target, 'MemoryPressure');
+        return (
+          !!target && target.kind === 'Node' && !this._isConditionTrue(target, 'MemoryPressure')
+        );
       case 'RouteNotAdmitted':
       case 'RouteTLSCertificateError':
       case 'RouteHostConflict':
         return (
+          !!target &&
           target.kind === 'Route' &&
           (typeof this.cluster?.isRouteAdmitted === 'function'
             ? !!this._safe(() => this.cluster.isRouteAdmitted(target))
@@ -4402,7 +4768,7 @@ class IncidentEngine {
               ))
         );
       case 'ServiceNoEndpoints': {
-        if (target.kind !== 'Service') return false;
+        if (!target || target.kind !== 'Service') return false;
         if (typeof this.cluster?.getServiceEndpoints === 'function') {
           return (this._safe(() => this.cluster.getServiceEndpoints(target)) || []).length > 0;
         }
@@ -4415,7 +4781,7 @@ class IncidentEngine {
         return pods.some(podHealthy);
       }
       case 'NetworkPolicyBlocking': {
-        if (target.kind !== 'NetworkPolicy') return false;
+        if (!target || target.kind !== 'NetworkPolicy') return false;
         return Array.isArray(target.spec?.ingress) && target.spec.ingress.length > 0;
       }
       case 'DNSResolutionFailure': {
@@ -4442,9 +4808,17 @@ class IncidentEngine {
         return dnsPods.every(podHealthy);
       }
       case 'IngressDegraded':
-        return target.kind === 'ClusterOperator' && !this._isConditionTrue(target, 'Degraded');
+        return (
+          !!target &&
+          target.kind === 'ClusterOperator' &&
+          !this._isConditionTrue(target, 'Degraded')
+        );
       case 'LoadBalancerPending':
-        return target.kind === 'Service' && (target.status?.loadBalancer?.ingress || []).length > 0;
+        return (
+          !!target &&
+          target.kind === 'Service' &&
+          (target.status?.loadBalancer?.ingress || []).length > 0
+        );
       case 'UnauthorizedAccess': {
         // The damaged identity is stored at onset (the incident target is the
         // workload, not the ServiceAccount). Any real RoleBinding/ClusterRoleBinding
@@ -4452,10 +4826,11 @@ class IncidentEngine {
         // repairs the denial — the panel is not the only exit.
         let subject =
           incident.rbacSubject ||
-          (target.kind === 'ServiceAccount'
+          (target?.kind === 'ServiceAccount'
             ? { kind: 'ServiceAccount', name: target.name, namespace: target.namespace }
             : null);
         if (!subject?.name) {
+          if (!target) return false;
           // Derive from the workload's pod template / running Pods (default SA
           // when nothing is explicit) so older incidents still detect repairs.
           const podSpec = target.kind === 'Pod' ? target.spec : target.spec?.template?.spec;
@@ -4507,15 +4882,32 @@ class IncidentEngine {
         return true;
       }
       case 'ResourceQuotaExceeded': {
-        const ns = incident.namespace || target.namespace;
+        // #27(b): the incident target is sometimes the namespace (L15) and
+        // sometimes a quota name the learner never created (lab 6 authors
+        // "team-quota" while examples/quota.yaml creates "compute-quota").
+        // Onset damage binds `damagedQuotaName`/`target` to the real object;
+        // the check accepts a target-less evaluation and falls back to the
+        // namespace-wide quota state so it can never soft-lock.
+        const ns = incident.namespace || target?.namespace || this.gameEngine?.currentProject || '';
         const check = this._safe(() => this.cluster.checkQuota?.(ns, 0, 0));
         if (check && check.allowed === false) return false;
         const quotas = this._safe(() => this.cluster.getResourceQuotaObjects?.(ns)) || [];
-        return quotas.length > 0;
+        if (quotas.length === 0) return false;
+        const damagedName = incident.damagedQuotaName;
+        if (damagedName) {
+          const damaged = quotas.find(
+            (quota) => (quota.name || quota.metadata?.name) === damagedName
+          );
+          // The damaged quota must still exist (raising a different quota is
+          // not a fix for this incident).
+          if (!damaged) return false;
+        }
+        return true;
       }
       case 'LimitRangeViolation':
-        return !this._isConditionTrue(target, 'Exceeded');
+        return !!target && !this._isConditionTrue(target, 'Exceeded');
       case 'ClusterResourceQuotaExceeded': {
+        if (!target) return false;
         const total = target.status?.total;
         if (!total) return false;
         return Number(total.used?.pods ?? 0) < Number(total.hard?.pods ?? Infinity);
@@ -4526,7 +4918,7 @@ class IncidentEngine {
         // name completes after the damaged object was replaced/changed, keeping
         // the panel from being the only exit.
         const job =
-          target.kind === 'Job'
+          target?.kind === 'Job'
             ? target
             : this._findResource('Job', incident.target, incident.namespace);
         if (!job) return false;
@@ -4542,11 +4934,13 @@ class IncidentEngine {
         return specChanged && phase !== 'Failed';
       }
       case 'CronJobMissedSchedule':
-        return target.kind === 'CronJob' && target.spec?.suspend !== true;
+        return !!target && target.kind === 'CronJob' && target.spec?.suspend !== true;
       case 'PVCPending':
-        return target.kind === 'PersistentVolumeClaim' && target.status?.phase === 'Bound';
+        return (
+          !!target && target.kind === 'PersistentVolumeClaim' && target.status?.phase === 'Bound'
+        );
       case 'ImageStreamTagMissing': {
-        if (target.kind !== 'ImageStream') return false;
+        if (!target || target.kind !== 'ImageStream') return false;
         const tag = incident.resolution?.tag || 'latest';
         const tags = (target.status?.tags || []).map((entry) => entry.tag || entry.name);
         const specTags = (target.spec?.tags || []).map((entry) => entry.name);
@@ -4555,6 +4949,7 @@ class IncidentEngine {
         return tags.includes(tag) || specTags.includes(tag);
       }
       case 'BuildFailed': {
+        if (!target) return false;
         const targetName = target.kind === 'Build' ? resourceName(target) : incident.target;
         const bcName =
           target.kind === 'Build' ? target.spec?.buildConfig?.name || null : targetName || null;
@@ -4585,9 +4980,9 @@ class IncidentEngine {
         return false;
       }
       case 'HPAUnableToScale':
-        return this._isConditionTrue(target, 'AbleToScale');
+        return !!target && this._isConditionTrue(target, 'AbleToScale');
       case 'OperatorInstallFailed': {
-        if (target.kind !== 'Subscription') return false;
+        if (!target || target.kind !== 'Subscription') return false;
         if (target.status?.phase !== 'Succeeded') return false;
         if (!target.status?.installedCSV) return false;
         const conditions = Array.isArray(target.status?.conditions) ? target.status.conditions : [];
@@ -4601,7 +4996,9 @@ class IncidentEngine {
         return !stillUnhealthy;
       }
       case 'SecretExposed':
-        return target.metadata?.annotations?.['openshiftgames.io/exposed'] !== 'true';
+        return (
+          Boolean(target) && target.metadata?.annotations?.['openshiftgames.io/exposed'] !== 'true'
+        );
       default:
         return false;
     }
@@ -4747,6 +5144,7 @@ class IncidentEngine {
     this.elapsedTime = 0;
     this._resolving = false;
     this._externalTickSeen = false;
+    this._lastStateHealGameSeconds = null;
   }
 
   destroy() {

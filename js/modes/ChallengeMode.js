@@ -553,7 +553,7 @@ const CHALLENGES = [
     ],
     availableResources: ['Project', 'Deployment', 'Service'],
     hints: [
-      'Review kustomize/overlays/prod/kustomization.yaml in the Files panel: namespace, namePrefix, images, replicas and patchesStrategicMerge.',
+      'Review kustomize/overlays/prod/kustomization.yaml in the Files panel: it uses v5 `labels:` (with includeSelectors) and `patches:` targeting the Deployment — namespace, namePrefix, images and replicas are composed on top. (`patchesStrategicMerge`/`commonLabels` are deprecated.)',
       'Apply the overlay: oc apply -k kustomize/overlays/prod',
       'Verify the rendered objects: oc get deploy,svc -n webapp-prod',
       'The Deployment is named prod-webapp after namePrefix; oc get deploy prod-webapp -n webapp-prod -o yaml shows image and replicas.',
@@ -687,7 +687,7 @@ const CHALLENGES = [
       {
         type: 'deploy',
         kind: 'RoleBinding',
-        name: 'edit-developers',
+        name: 'edit',
         namespace: 'team-dev',
         label: 'RoleBinding grants edit in team-dev',
       },
@@ -722,7 +722,7 @@ const CHALLENGES = [
       'Create the user and group: oc create user developer; oc adm groups new developers developer',
       'Bind the built-in edit ClusterRole at project scope: oc adm policy add-role-to-group edit developers -n team-dev',
       'Prove it: oc auth can-i delete pods --as=developer -n team-dev',
-      'Inspect the binding: oc get rolebinding edit-developers -n team-dev -o yaml',
+      'Inspect the binding: oc get rolebinding edit -n team-dev -o yaml',
       'Avoid cluster-admin and wildcard rules; edit is enough for a developer in one project.',
     ],
   },

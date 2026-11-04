@@ -64,6 +64,7 @@ import {
   PackageManifest,
   MetalLB,
 } from './OLMResources.js';
+import { PrometheusRule, Alertmanager } from './MonitoringResources.js';
 
 /** @type {Record<string, typeof import('./ResourceBase.js').ResourceBase>} */
 export const KIND_CLASSES = Object.freeze({
@@ -71,6 +72,9 @@ export const KIND_CLASSES = Object.freeze({
   Project,
   Node,
   ClusterResourceQuota,
+  // Monitoring
+  PrometheusRule,
+  Alertmanager,
   // Workloads
   Pod,
   Deployment,
@@ -139,6 +143,8 @@ export {
   Project,
   Node,
   ClusterResourceQuota,
+  PrometheusRule,
+  Alertmanager,
   Pod,
   Deployment,
   ReplicaSet,

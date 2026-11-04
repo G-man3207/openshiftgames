@@ -983,11 +983,14 @@ await runSection('sandbox', async () => {
     };
   });
   // The seeded platform baseline grew when the real OCP 4.22 default SCC set
-  // (14 objects) replaced the old 4-object approximation, and again when the
-  // OLM software catalog (PackageManifests + global-operators OperatorGroup)
-  // and the default self-provisioner RBAC objects were seeded.
+  // (14 objects) replaced the old 4-object approximation, again when the OLM
+  // software catalog (PackageManifests + global-operators OperatorGroup) and
+  // the default self-provisioner RBAC objects were seeded, and again with the
+  // 1.1.8 platform-detail seeds (default SAs/RoleBindings/dockercfg secrets,
+  // oauth pods, alerting rules + Alertmanager). The bound is a sanity envelope,
+  // not an exact count.
   assert(
-    state.resourceCount >= 45 && state.resourceCount <= 75,
+    state.resourceCount >= 45 && state.resourceCount <= 100,
     'sandbox: seeded platform resources',
     `got ${state.resourceCount}`
   );
@@ -4456,7 +4459,217 @@ await runSection('qa-scenarios', async () => {
 // QA ROUND 1.1.8 — issue #29/#36: CLI write safety and output fidelity
 // ═══════════════════════════════════════════════════════════════════════════
 await runSection('qa-cli', async () => {
-  // QA-29-36-TESTS: owned by teammate `cli-safety` — replace this comment.
+  // ── #29 write verbs must never fall through to another namespace ────────
+  // Campaign level 2 seeds `web` in `query-lab` while the session is in
+  // `default`; real oc answers NotFound for every write verb and must never
+  // mutate query-lab/web or tick the level's label objective.
+  await bootCampaign(1);
+  assert(await launch('campaign', 2), 'qa-cli: campaign level 2 starts');
+  await closeOverlays();
+  await evaluate(() => {
+    window.game?.app?.hideTutorial?.();
+    window.game?.app?.modeInstance?.pause?.();
+  });
+
+  const inspectWeb = () =>
+    evaluate(() => {
+      const resources = window.game?.cluster?.getByKind?.('Deployment') || [];
+      const web = resources.find(
+        (item) => item.metadata?.name === 'web' && item.metadata?.namespace === 'query-lab'
+      );
+      return web
+        ? {
+            exists: true,
+            tier: web.metadata?.labels?.tier || null,
+            generation: web.metadata?.generation,
+          }
+        : { exists: false };
+    });
+
+  assert(
+    await findResource('Deployment', 'web', 'query-lab'),
+    'qa-cli: level 2 seeds query-lab/web'
+  );
+  assert(
+    await evaluate(() => window.game?.gameEngine?.currentProject === 'default'),
+    'qa-cli: session starts in default'
+  );
+  const qlBefore = await inspectWeb();
+  const labelBefore = qlBefore.tier;
+
+  let r = await runCmd('oc label deploy web tier=frontend');
+  assert(
+    r.error && /Error from server \(NotFound\): deployments\.apps "web" not found/.test(r.message),
+    'qa-cli #29a: label in default does not fall through to query-lab',
+    r.message
+  );
+  const afterLabel = await inspectWeb();
+  assert(
+    afterLabel.exists && afterLabel.tier === labelBefore,
+    'qa-cli #29a: query-lab/web was not labelled',
+    JSON.stringify(afterLabel)
+  );
+  const labelObjective = await evaluate(() => {
+    const status = window.game?.app?.modeInstance?.getStatus?.();
+    return (status?.objectives || []).find((objective) =>
+      /Label Deployment web/i.test(objective.label || '')
+    );
+  });
+  assert(
+    labelObjective && labelObjective.completed === false,
+    'qa-cli #29a: failed cross-project label does not tick the label objective',
+    JSON.stringify(labelObjective)
+  );
+
+  r = await runCmd('oc delete deploy web');
+  assert(
+    r.error && /Error from server \(NotFound\): deployments\.apps "web" not found/.test(r.message),
+    'qa-cli #29a: delete in default does not delete query-lab/web',
+    r.message
+  );
+  assert((await inspectWeb()).exists, 'qa-cli #29a: query-lab/web still exists after delete');
+
+  await expectCmdError(
+    'qa-cli #29a: annotate in default is namespace-exact',
+    'oc annotate deploy web tier=frontend',
+    /Error from server \(NotFound\): deployments\.apps "web" not found/
+  );
+  await expectCmdError(
+    'qa-cli #29a: patch in default is namespace-exact',
+    'oc patch deploy/web -p \'{"spec":{"replicas":5}}\'',
+    /Error from server \(NotFound\): deployments\.apps "web" not found/
+  );
+  r = await runCmd('oc scale deploy web --replicas=3');
+  assert(
+    r.error && /Error from server \(NotFound\): deployments\.apps "web" not found/.test(r.message),
+    'qa-cli #29d: scale not-found uses the server error form',
+    r.message
+  );
+  await expectCmdError(
+    'qa-cli #29a: set image in default is namespace-exact',
+    'oc set image deploy/web main=nginx:1.26',
+    /Error from server \(NotFound\): deployments\.apps "web" not found/
+  );
+  await expectCmdError(
+    'qa-cli #29a: rollout restart in default is namespace-exact',
+    'oc rollout restart deploy/web',
+    /Error from server \(NotFound\): deployments\.apps "web" not found/
+  );
+  const afterWrites = await inspectWeb();
+  assert(
+    afterWrites.exists &&
+      afterWrites.generation === qlBefore.generation &&
+      afterWrites.tier === labelBefore,
+    'qa-cli #29a: no write verb mutated query-lab/web',
+    JSON.stringify({ before: qlBefore, after: afterWrites })
+  );
+
+  // Explicit -n still writes the target project.
+  await expectCmd(
+    'qa-cli #29a: label -n query-lab works',
+    'oc label deploy web tier=frontend -n query-lab',
+    /deployment\.apps\/web labeled/
+  );
+  const afterExplicitLabel = await inspectWeb();
+  assert(
+    afterExplicitLabel.tier === 'frontend',
+    'qa-cli #29a: label -n query-lab persisted',
+    JSON.stringify(afterExplicitLabel)
+  );
+
+  // ── #29b create is not idempotent (AlreadyExists), apply is ─────────────
+  await evaluate(() => {
+    window.game?.app?.modeInstance?.resume?.();
+  });
+  await expectCmd(
+    'qa-cli #29b: create deployment api',
+    'oc create deploy api --image=quay.io/openshift/origin-hello-openshift:latest',
+    /deployment\.apps\/api created/
+  );
+  r = await runCmd('oc create deploy api --image=quay.io/openshift/origin-hello-openshift:latest');
+  assert(
+    r.error &&
+      /Error from server \(AlreadyExists\): deployments\.apps "api" already exists/.test(r.message),
+    'qa-cli #29b: create prints the server AlreadyExists form',
+    r.message
+  );
+  await expectCmd(
+    'qa-cli #29b: create configmap dup first time',
+    'oc create configmap dup --from-literal=a=b',
+    /configmap\/dup created/
+  );
+  r = await runCmd('oc create configmap dup --from-literal=a=b');
+  assert(
+    r.error && /configmaps "dup" already exists/.test(r.message),
+    'qa-cli #29b: duplicate configmap create errors AlreadyExists',
+    r.message
+  );
+
+  // apply is idempotent: unchanged re-apply keeps generation and says unchanged.
+  await expectCmd(
+    'qa-cli #29e: apply deploys manifests/deployment.yaml',
+    'oc apply -f manifests/deployment.yaml',
+    /deployment\.apps\/webapp created/
+  );
+  const genAfterCreate = (await findResource('Deployment', 'webapp', 'default'))?.metadata
+    ?.generation;
+  r = await runCmd('oc apply -f manifests/deployment.yaml');
+  const genAfterReapply = (await findResource('Deployment', 'webapp', 'default'))?.metadata
+    ?.generation;
+  assert(
+    !r.error && /deployment\.apps\/webapp unchanged/.test(r.message),
+    'qa-cli #29e: re-applying an unchanged manifest prints unchanged',
+    r.message
+  );
+  assert(
+    genAfterCreate === genAfterReapply,
+    'qa-cli #29e: unchanged apply does not bump generation',
+    `${genAfterCreate} -> ${genAfterReapply}`
+  );
+
+  // `oc create -f` on an existing object is AlreadyExists.
+  r = await runCmd('oc create -f manifests/deployment.yaml');
+  assert(
+    r.error &&
+      /Error from server \(AlreadyExists\): deployments\.apps "webapp" already exists/.test(
+        r.message
+      ),
+    'qa-cli #29b: create -f an existing manifest errors AlreadyExists',
+    r.message
+  );
+
+  // ── #29c delete with a label selector / --all ───────────────────────────
+  await advanceSimulation(2);
+  const countApiPods = () =>
+    evaluate(() => {
+      const pods = window.game?.cluster?.getByKind?.('Pod') || [];
+      return pods.filter(
+        (pod) => pod.metadata?.namespace === 'default' && pod.metadata?.labels?.app === 'api'
+      ).length;
+    });
+  assert((await countApiPods()) > 0, 'qa-cli #29c: api Deployment spawned pods');
+  r = await runCmd('oc delete pod -l app=api');
+  assert(
+    !r.error && /pod ".*" deleted/.test(r.message),
+    'qa-cli #29c: oc delete pod -l app=api deletes matching pods',
+    r.message
+  );
+  assert((await countApiPods()) === 0, 'qa-cli #29c: selector delete removed every matching pod');
+
+  // ── #29f describe <type> with no name lists the objects ─────────────────
+  await expectCmd(
+    'qa-cli #29f: create a quota to describe',
+    'oc create quota team-quota --hard=pods=10',
+    /resourcequota\/team-quota created/
+  );
+  const describeQuota = await runCmd('oc describe quota');
+  assert(
+    !describeQuota.error && /Name:\s+team-quota/.test(describeQuota.message),
+    'qa-cli #29f: describe quota with no name describes all quotas',
+    describeQuota.message.slice(0, 300)
+  );
+
+  await returnToMenu();
 });
 
 // ═══════════════════════════════════════════════════════════════════════════

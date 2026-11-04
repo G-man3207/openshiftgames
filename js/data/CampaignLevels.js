@@ -87,12 +87,45 @@ const DOCS = {
 };
 
 // Small helpers keep the level data readable and avoid copy/paste drift.
-const node = (name, cpu = '8', memory = '16Gi', extra = {}) => ({
-  kind: 'Node',
-  name,
-  spec: { cpu, memory, status: 'Ready', ...extra.spec },
-  ...extra,
-});
+/**
+ * Campaign clusters present realistic OCP machines (#28 P4). Level data is
+ * authored with the legacy `node-1..3` names; this helper maps those onto the
+ * names and ROLES the real CLI shows (`worker-0`, `worker-1`, `master-0` with
+ * `worker` / `control-plane,master`). An explicit non-legacy name is kept
+ * verbatim so the helper stays usable for custom nodes.
+ */
+const NODE_CATALOG = [
+  { name: 'worker-0', role: 'worker' },
+  { name: 'worker-1', role: 'worker' },
+  { name: 'master-0', role: 'control-plane' },
+];
+
+const nodeRoleLabels = (role) =>
+  role === 'control-plane'
+    ? {
+        'node-role.kubernetes.io/control-plane': '',
+        'node-role.kubernetes.io/master': '',
+      }
+    : { 'node-role.kubernetes.io/worker': '' };
+
+const node = (name, cpu = '8', memory = '16Gi', extra = {}) => {
+  const legacyIndex = String(name || '').match(/^node-(\d+)$/i);
+  const catalogEntry =
+    NODE_CATALOG[(legacyIndex ? Math.max(0, Number(legacyIndex[1]) - 1) : 0) % NODE_CATALOG.length];
+  const resolvedName = legacyIndex ? catalogEntry.name : name;
+  const { spec: extraSpec, labels: extraLabels, ...rest } = extra;
+  return {
+    kind: 'Node',
+    name: resolvedName,
+    ...rest,
+    labels: {
+      ...nodeRoleLabels(catalogEntry.role),
+      'kubernetes.io/hostname': resolvedName,
+      ...(extraLabels || {}),
+    },
+    spec: { cpu, memory, status: 'Ready', ...extraSpec },
+  };
+};
 
 const project = (name, extra = {}) => ({
   kind: 'Project',
@@ -443,7 +476,7 @@ const CAMPAIGN_LEVELS = [
     ],
     incidents: [],
     hints: [
-      'Switch projects: `oc project kustomize-lab`. On a real cluster, preview the render with `oc kustomize kustomize/base`; the simulator renders the same tree when you apply it with `oc apply -k kustomize/base`.',
+      'Switch projects: `oc project kustomize-lab`. Preview the render with `oc kustomize kustomize/base`, then apply it with `oc apply -k kustomize/base`.',
       'Apply the base: `oc apply -k kustomize/base`.',
       'Verify with `oc get deployments,services` — the base creates a Deployment and a Service both named webapp.',
       'Edit `kustomize/base/deployment.yaml` (for example replicas) and re-run `oc apply -k kustomize/base` to see the change.',
@@ -505,7 +538,7 @@ const CAMPAIGN_LEVELS = [
     ],
     incidents: [],
     hints: [
-      'On a real cluster, render before applying with `oc kustomize kustomize/overlays/prod` (note the `prod-` name prefix, namespace webapp-prod, image tag and replicas); the simulator renders on `oc apply -k kustomize/overlays/prod`.',
+      'Preview the render first with `oc kustomize kustomize/overlays/prod` (note the `prod-` name prefix, namespace webapp-prod, image tag and replicas), then apply it with `oc apply -k kustomize/overlays/prod`.',
       'Apply the overlay: `oc apply -k kustomize/overlays/prod`.',
       'Verify the namespaced object: `oc get deployment -n webapp-prod` should show `prod-webapp` with 3 desired replicas.',
       'The strategic-merge patch in `patch-deployment.yaml` adds the APP_ENV=production env var and resource requests. Try `oc get deploy prod-webapp -n webapp-prod -o yaml`.',
@@ -1482,7 +1515,7 @@ const CAMPAIGN_LEVELS = [
     ],
     incidents: [
       { type: 'CrashLoopBackOff', triggerTime: 60, target: 'webapp', severity: 2 },
-      { type: 'NodeNotReady', triggerTime: 120, target: 'node-2', severity: 3 },
+      { type: 'NodeNotReady', triggerTime: 120, target: 'worker-1', severity: 3 },
     ],
     hints: [
       'Create the platform project: `oc new-project prod-platform`, then apply the quota/limits with `oc apply -f examples/quota.yaml` and `oc apply -f examples/limitrange.yaml`.',
@@ -1490,7 +1523,7 @@ const CAMPAIGN_LEVELS = [
       'Build: `oc apply -f examples/buildconfig.yaml` (it already outputs ImageStreamTag `webapp:latest`), then `oc start-build webapp --follow` and watch the Build reach Complete.',
       'Security/self-service: `oc create user developer`, `oc adm groups new developers developer`, apply the shipped `examples/default-deny.yaml` (a `networking.k8s.io/v1` NetworkPolicy that selects all pods) with `oc apply -f examples/default-deny.yaml -n prod-platform` — there is no oc create networkpolicy subcommand; use the Files panel New/Import buttons if you want to edit or add manifests.',
       'Install MetalLB the 4.x OLM way: `oc new-project metallb-system`, `oc apply -f examples/operatorgroup.yaml`, edit `examples/subscription.yaml` (spec.name/metadata.name `metallb-operator`, namespace `metallb-system`) and apply it, wait for the CSV `metallb-operator.v0.14.9` (`oc get csv -n metallb-system`) to reach Succeeded, then `oc apply -f examples/metallb.yaml` (MetalLB CR + IP pool + L2 advertisement).',
-      'Finish with a Job (`oc create job report-job --image=perl -- perl -e "print 42"`), a CronJob (`oc create cronjob nightly --image=busybox --schedule="*/5 * * * *" -- sh -c date`), then check `oc status` and the Architecture Advisor in the HUD. The capstone is gated on the scheduled incidents being RESOLVED: CrashLoopBackOff fires 60 s in on webapp and NodeNotReady fires 120 s in on node-2. Fix the workload / restore the node (or use the Incidents panel resolution actions) and confirm both are gone from the Incidents panel — the level cannot complete while either is still active.',
+      'Finish with a Job (`oc create job report-job --image=perl -- perl -e "print 42"`), a CronJob (`oc create cronjob nightly --image=busybox --schedule="*/5 * * * *" -- sh -c date`), then check `oc status` and the Architecture Advisor in the HUD. The capstone is gated on the scheduled incidents being RESOLVED: CrashLoopBackOff fires 60 s in on webapp and NodeNotReady fires 120 s in on worker-1. Fix the workload / restore the node (or use the Incidents panel resolution actions) and confirm both are gone from the Incidents panel — the level cannot complete while either is still active.',
     ],
     starCriteria: { time: 900, efficiency: 0.6, noFailures: false },
     nextLevel: null,

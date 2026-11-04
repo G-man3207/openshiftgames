@@ -1461,7 +1461,9 @@ const KUBECTL_ALLOWED_FILES = new Set([
   'js/ui/IncidentPanel.js',
   'js/ui/SettingsPanel.js',
 ]);
-const KUBECTL_ALLOWED_LINE = /(legacy|migration|alias|prefix|not kubectl|oc.*kubectl|kubectl.*oc)/i;
+// `kubectl.kubernetes.io/*` is a real Kubernetes annotation/label key prefix, not player copy.
+const KUBECTL_ALLOWED_LINE =
+  /(legacy|migration|alias|prefix|not kubectl|oc.*kubectl|kubectl.*oc|kubectl\.kubernetes\.io)/i;
 for (const rel of ['index.html', 'draw.html', ...jsFiles]) {
   if (rel.startsWith('docs/') || KUBECTL_ALLOWED_FILES.has(rel)) continue;
   const lines = read(rel).split('\n');

@@ -61,6 +61,16 @@ export class Project extends ResourceBase {
       },
       metadata.spec
     );
+    // Real Kubernetes namespaces are automatically labelled with
+    // kubernetes.io/metadata.name=<name> (NamespaceDefaultLabelName, GA since
+    // k8s 1.22); an OpenShift Project is the OpenShift-facing view of that
+    // namespace, so the label is present on the Project too. ClusterResourceQuota
+    // project selectors rely on it:
+    //   oc create clusterquota team-quota \
+    //     --project-label-selector=kubernetes.io/metadata.name=quota-lab
+    if (this.metadata.name && !this.metadata.labels['kubernetes.io/metadata.name']) {
+      this.metadata.labels['kubernetes.io/metadata.name'] = this.metadata.name;
+    }
     if (this.spec.displayName) {
       this.metadata.annotations['openshift.io/display-name'] = this.spec.displayName;
     }

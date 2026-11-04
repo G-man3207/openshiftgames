@@ -950,6 +950,46 @@ K.MetalLB = {
     'Create IPAddressPool + L2Advertisement to hand out LoadBalancer EXTERNAL-IPs.',
 };
 
+// ─── Monitoring (monitoring.coreos.com) ────────────────────────────────────
+// The monitoring stack is deployed and managed by the Cluster Monitoring
+// Operator; users inspect its CRs but do not palette-place them.
+K.PrometheusRule = {
+  apiVersion: 'monitoring.coreos.com/v1',
+  namespaced: true,
+  placeable: false,
+  aliases: ['prometheusrule', 'prometheusrules', 'promrule', 'promrules'],
+  columns: 'NAME      AGE',
+  palette: { section: 'projects', label: 'PrometheusRule' },
+  minimapSize: 13,
+  defaultNamespace: 'openshift-monitoring',
+  defaultSpec: () => ({ groups: [] }),
+  explain:
+    'PrometheusRule declares alerting and recording rule groups evaluated by the\n' +
+    'cluster Prometheus instance (monitoring.coreos.com/v1). The monitoring\n' +
+    'operator ships kubernetes-monitoring-rules, node-exporter-rules and\n' +
+    'openshift-monitoring-rules in openshift-monitoring.\n' +
+    '`oc get prometheusrules -A` / `oc describe prometheusrule <name>`; firing\n' +
+    'alerts route through Alertmanager (oc describe alertmanager main).',
+};
+K.Alertmanager = {
+  apiVersion: 'monitoring.coreos.com/v1',
+  namespaced: true,
+  placeable: false,
+  aliases: ['alertmanager', 'alertmanagers', 'am'],
+  columns: 'NAME      VERSION   REPLICAS   AGE',
+  palette: { section: 'projects', label: 'Alertmanager' },
+  minimapSize: 15,
+  defaultNamespace: 'openshift-monitoring',
+  defaultSpec: () => ({ replicas: 2, version: '0.27.0', logLevel: 'info', retention: '120h' }),
+  explain:
+    'Alertmanager is the monitoring operator operand CR that routes Prometheus\n' +
+    'alerts to receivers. The default instance is alertmanager-main in\n' +
+    'openshift-monitoring; the operator deploys two alertmanager-main-* pods,\n' +
+    'a Service and a reencrypt Route (oc get route alertmanager-main -n\n' +
+    'openshift-monitoring). Inspect firing alerts with\n' +
+    '`oc describe alertmanager main -n openshift-monitoring`.',
+};
+
 // ─── Derived exports ───────────────────────────────────────────────────────
 
 /** All kinds in canonical order (palette order follows sections). */

@@ -2547,6 +2547,358 @@ const BUILTIN_TEMPLATES = {
     ],
     message: 'Application ${APP_NAME} deployed. Run "oc get route ${APP_NAME}" to see the URL.',
   },
+
+  // Standard OpenShift sample templates (openshift namespace). The shapes and
+  // parameter names follow the templates the EX280 exam environment ships, so
+  // `oc get templates -n openshift` → `oc process --parameters` →
+  // `oc new-app --template=<name> -p KEY=VALUE` is a realistic workflow.
+  'httpd-example': {
+    description:
+      'An example Apache HTTP Server (httpd) application that serves static content. For more information about using this template, including OpenShift considerations, see https://github.com/openshift/httpd-example.',
+    parameters: [
+      {
+        name: 'NAME',
+        displayName: 'Name',
+        description: 'The name of the application.',
+        required: true,
+        value: 'httpd-example',
+      },
+      {
+        name: 'SOURCE_IMAGE',
+        displayName: 'HTTPD Docker Image',
+        description:
+          'The UBI httpd image to use for the application. Defaults to the latest ubi9/httpd-24 image.',
+        required: true,
+        value: 'registry.redhat.io/ubi9/httpd-24:latest',
+      },
+      {
+        name: 'MEMORY_LIMIT',
+        displayName: 'Memory limit',
+        description: 'Maximum amount of memory the container can use.',
+        required: true,
+        value: '512Mi',
+      },
+    ],
+    objects: [
+      {
+        apiVersion: 'apps/v1',
+        kind: 'Deployment',
+        metadata: {
+          name: '${NAME}',
+          labels: { app: '${NAME}', 'app.kubernetes.io/part-of': '${NAME}' },
+        },
+        spec: {
+          replicas: 1,
+          selector: { matchLabels: { app: '${NAME}' } },
+          template: {
+            metadata: { labels: { app: '${NAME}', deployment: '${NAME}' } },
+            spec: {
+              containers: [
+                {
+                  name: 'httpd',
+                  image: '${SOURCE_IMAGE}',
+                  ports: [{ name: 'http', containerPort: 8080, protocol: 'TCP' }],
+                  resources: { limits: { memory: '${MEMORY_LIMIT}' } },
+                },
+              ],
+            },
+          },
+        },
+      },
+      {
+        apiVersion: 'v1',
+        kind: 'Service',
+        metadata: { name: '${NAME}', labels: { app: '${NAME}' } },
+        spec: {
+          selector: { app: '${NAME}' },
+          ports: [{ name: 'http', port: 8080, targetPort: 8080 }],
+        },
+      },
+      {
+        apiVersion: 'route.openshift.io/v1',
+        kind: 'Route',
+        metadata: { name: '${NAME}', labels: { app: '${NAME}' } },
+        spec: {
+          to: { kind: 'Service', name: '${NAME}', weight: 100 },
+          port: { targetPort: 'http' },
+          wildcardPolicy: 'None',
+        },
+      },
+    ],
+    message:
+      'The following service(s) have been created in your project: ${NAME}.\n\n       Run "oc get route ${NAME}" to see the URL for the application.',
+  },
+
+  'mysql-persistent': {
+    description:
+      'MySQL database service with a persistent volume. For more information about using this template, including OpenShift considerations, see https://github.com/sclorg/mysql-container.',
+    parameters: [
+      {
+        name: 'MEMORY_LIMIT',
+        displayName: 'Memory limit',
+        description: 'Maximum amount of memory the container can use.',
+        required: true,
+        value: '512Mi',
+      },
+      {
+        name: 'DATABASE_SERVICE_NAME',
+        displayName: 'Database Service Name',
+        description: 'The name of the database service.',
+        required: true,
+        value: 'mysql',
+      },
+      {
+        name: 'MYSQL_USER',
+        displayName: 'MySQL Connection Username',
+        description:
+          'Username for MySQL user that will be used for accessing the database. The value is generated when not supplied.',
+        generate: 'expression',
+        from: '[a-zA-Z0-9]{16}',
+        required: true,
+      },
+      {
+        name: 'MYSQL_PASSWORD',
+        displayName: 'MySQL Connection Password',
+        description:
+          'Password for the MySQL connection user. The value is generated when not supplied.',
+        generate: 'expression',
+        from: '[a-zA-Z0-9]{16}',
+        required: true,
+      },
+      {
+        name: 'MYSQL_DATABASE',
+        displayName: 'MySQL Database Name',
+        description: 'Name of the MySQL database accessed by the application.',
+        required: true,
+        value: 'sampledb',
+      },
+      {
+        name: 'MYSQL_ROOT_PASSWORD',
+        displayName: 'MySQL root Password',
+        description: 'Password for the MySQL root user. The value is generated when not supplied.',
+        generate: 'expression',
+        from: '[a-zA-Z0-9]{16}',
+        required: true,
+      },
+      {
+        name: 'MYSQL_VERSION',
+        displayName: 'Version of MySQL Image',
+        description: 'Version of the MySQL image to be used (8.0 or 8.4).',
+        required: true,
+        value: '8.0',
+      },
+      {
+        name: 'VOLUME_CAPACITY',
+        displayName: 'Volume Capacity',
+        description: 'Volume space available for data, e.g. 512Mi, 2Gi.',
+        required: true,
+        value: '1Gi',
+      },
+    ],
+    objects: [
+      {
+        apiVersion: 'v1',
+        kind: 'Service',
+        metadata: {
+          name: '${DATABASE_SERVICE_NAME}',
+          labels: { name: '${DATABASE_SERVICE_NAME}' },
+        },
+        spec: {
+          selector: { name: '${DATABASE_SERVICE_NAME}' },
+          ports: [{ name: 'mysql', port: 3306, targetPort: 3306 }],
+        },
+      },
+      {
+        apiVersion: 'v1',
+        kind: 'PersistentVolumeClaim',
+        metadata: {
+          name: '${DATABASE_SERVICE_NAME}',
+          labels: { name: '${DATABASE_SERVICE_NAME}' },
+        },
+        spec: {
+          accessModes: ['ReadWriteOnce'],
+          resources: { requests: { storage: '${VOLUME_CAPACITY}' } },
+        },
+      },
+      {
+        apiVersion: 'apps/v1',
+        kind: 'Deployment',
+        metadata: {
+          name: '${DATABASE_SERVICE_NAME}',
+          labels: { name: '${DATABASE_SERVICE_NAME}' },
+        },
+        spec: {
+          replicas: 1,
+          selector: { matchLabels: { name: '${DATABASE_SERVICE_NAME}' } },
+          strategy: { type: 'Recreate' },
+          template: {
+            metadata: { labels: { name: '${DATABASE_SERVICE_NAME}' } },
+            spec: {
+              containers: [
+                {
+                  name: 'mysql',
+                  image: 'registry.redhat.io/rhel9/mysql-${MYSQL_VERSION}:latest',
+                  ports: [{ name: 'mysql', containerPort: 3306, protocol: 'TCP' }],
+                  env: [
+                    { name: 'MYSQL_USER', value: '${MYSQL_USER}' },
+                    { name: 'MYSQL_PASSWORD', value: '${MYSQL_PASSWORD}' },
+                    { name: 'MYSQL_DATABASE', value: '${MYSQL_DATABASE}' },
+                    { name: 'MYSQL_ROOT_PASSWORD', value: '${MYSQL_ROOT_PASSWORD}' },
+                  ],
+                  resources: { limits: { memory: '${MEMORY_LIMIT}' } },
+                  volumeMounts: [{ name: 'mysql-data', mountPath: '/var/lib/mysql' }],
+                },
+              ],
+              volumes: [
+                {
+                  name: 'mysql-data',
+                  persistentVolumeClaim: { claimName: '${DATABASE_SERVICE_NAME}' },
+                },
+              ],
+            },
+          },
+        },
+      },
+    ],
+    message:
+      'The following service(s) have been created in your project: ${DATABASE_SERVICE_NAME}.\n\n       Username: ${MYSQL_USER}\n       Password: ${MYSQL_PASSWORD}\n       Database Name: ${MYSQL_DATABASE}\n       Connection URL: mysql://${DATABASE_SERVICE_NAME}:3306/',
+  },
+
+  'postgresql-persistent': {
+    description:
+      'PostgreSQL database service with a persistent volume. For more information about using this template, including OpenShift considerations, see https://github.com/sclorg/postgresql-container.',
+    parameters: [
+      {
+        name: 'MEMORY_LIMIT',
+        displayName: 'Memory limit',
+        description: 'Maximum amount of memory the container can use.',
+        required: true,
+        value: '512Mi',
+      },
+      {
+        name: 'DATABASE_SERVICE_NAME',
+        displayName: 'Database Service Name',
+        description: 'The name of the database service.',
+        required: true,
+        value: 'postgresql',
+      },
+      {
+        name: 'POSTGRESQL_USER',
+        displayName: 'PostgreSQL Connection Username',
+        description:
+          'Username for PostgreSQL user that will be used for accessing the database. The value is generated when not supplied.',
+        generate: 'expression',
+        from: '[a-zA-Z0-9]{16}',
+        required: true,
+      },
+      {
+        name: 'POSTGRESQL_PASSWORD',
+        displayName: 'PostgreSQL Connection Password',
+        description:
+          'Password for the PostgreSQL connection user. The value is generated when not supplied.',
+        generate: 'expression',
+        from: '[a-zA-Z0-9]{16}',
+        required: true,
+      },
+      {
+        name: 'POSTGRESQL_DATABASE',
+        displayName: 'PostgreSQL Database Name',
+        description: 'Name of the PostgreSQL database accessed by the application.',
+        required: true,
+        value: 'sampledb',
+      },
+      {
+        name: 'POSTGRESQL_ADMIN_PASSWORD',
+        displayName: 'PostgreSQL admin Password',
+        description:
+          'Password for the PostgreSQL admin (postgres) user. The value is generated when not supplied.',
+        generate: 'expression',
+        from: '[a-zA-Z0-9]{16}',
+        required: true,
+      },
+      {
+        name: 'POSTGRESQL_VERSION',
+        displayName: 'Version of PostgreSQL Image',
+        description: 'Version of the PostgreSQL image to be used (13, 15 or 16).',
+        required: true,
+        value: '16',
+      },
+      {
+        name: 'VOLUME_CAPACITY',
+        displayName: 'Volume Capacity',
+        description: 'Volume space available for data, e.g. 512Mi, 2Gi.',
+        required: true,
+        value: '1Gi',
+      },
+    ],
+    objects: [
+      {
+        apiVersion: 'v1',
+        kind: 'Service',
+        metadata: {
+          name: '${DATABASE_SERVICE_NAME}',
+          labels: { name: '${DATABASE_SERVICE_NAME}' },
+        },
+        spec: {
+          selector: { name: '${DATABASE_SERVICE_NAME}' },
+          ports: [{ name: 'postgresql', port: 5432, targetPort: 5432 }],
+        },
+      },
+      {
+        apiVersion: 'v1',
+        kind: 'PersistentVolumeClaim',
+        metadata: {
+          name: '${DATABASE_SERVICE_NAME}',
+          labels: { name: '${DATABASE_SERVICE_NAME}' },
+        },
+        spec: {
+          accessModes: ['ReadWriteOnce'],
+          resources: { requests: { storage: '${VOLUME_CAPACITY}' } },
+        },
+      },
+      {
+        apiVersion: 'apps/v1',
+        kind: 'Deployment',
+        metadata: {
+          name: '${DATABASE_SERVICE_NAME}',
+          labels: { name: '${DATABASE_SERVICE_NAME}' },
+        },
+        spec: {
+          replicas: 1,
+          selector: { matchLabels: { name: '${DATABASE_SERVICE_NAME}' } },
+          strategy: { type: 'Recreate' },
+          template: {
+            metadata: { labels: { name: '${DATABASE_SERVICE_NAME}' } },
+            spec: {
+              containers: [
+                {
+                  name: 'postgresql',
+                  image: 'registry.redhat.io/rhel9/postgresql-${POSTGRESQL_VERSION}:latest',
+                  ports: [{ name: 'postgresql', containerPort: 5432, protocol: 'TCP' }],
+                  env: [
+                    { name: 'POSTGRESQL_USER', value: '${POSTGRESQL_USER}' },
+                    { name: 'POSTGRESQL_PASSWORD', value: '${POSTGRESQL_PASSWORD}' },
+                    { name: 'POSTGRESQL_DATABASE', value: '${POSTGRESQL_DATABASE}' },
+                    { name: 'POSTGRESQL_ADMIN_PASSWORD', value: '${POSTGRESQL_ADMIN_PASSWORD}' },
+                  ],
+                  resources: { limits: { memory: '${MEMORY_LIMIT}' } },
+                  volumeMounts: [{ name: 'postgresql-data', mountPath: '/var/lib/pgsql/data' }],
+                },
+              ],
+              volumes: [
+                {
+                  name: 'postgresql-data',
+                  persistentVolumeClaim: { claimName: '${DATABASE_SERVICE_NAME}' },
+                },
+              ],
+            },
+          },
+        },
+      },
+    ],
+    message:
+      'The following service(s) have been created in your project: ${DATABASE_SERVICE_NAME}.\n\n       Username: ${POSTGRESQL_USER}\n       Password: ${POSTGRESQL_PASSWORD}\n       Database Name: ${POSTGRESQL_DATABASE}\n       Connection URL: postgresql://${DATABASE_SERVICE_NAME}:5432/',
+  },
 };
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -2931,7 +3283,14 @@ export class CommandBar {
   executeCommand(raw) {
     let result;
     try {
-      result = this._runCommandLine(raw);
+      // `oc debug node/…` opens a small node-debug session (#28): while it is
+      // active the terminal input is fed to the debug container / host shell
+      // (`chroot /host`, `systemctl status|restart kubelet`, `journalctl`,
+      // `exit`) instead of to `oc`. `oc debug …` itself still resolves through
+      // the normal command path and opens/closes the session.
+      result = this._debugSession
+        ? this._runDebugSessionLine(String(raw ?? ''))
+        : this._runCommandLine(raw);
     } catch (error) {
       const message = `error: internal command failure: ${error && error.message ? error.message : error}`;
       this._appendOutput(message, 'text-red-400');
@@ -3036,8 +3395,8 @@ export class CommandBar {
           failed = true;
           failureMessage = written.message;
         } else {
-          this._appendOutput(written.message, 'text-white/30');
-          outputs.push(written.message || '');
+          // Shell redirection is silent on success (`cmd > file` prints nothing).
+          outputs.push('');
         }
       } else if (isLast) {
         if (text) this._appendOutput(text, 'text-white/70');
@@ -3841,6 +4200,12 @@ Object.assign(CommandBar.prototype, {
    * namespaced, prefer the current project but fall back to a unique match in
    * another project (keeps CLI usable while modes/controllers create resources
    * in a project other than the session's current one).
+   *
+   * Read paths may keep that convenience fallback. Every WRITE path must pass
+   * `allowOtherNamespaces: false`: real oc resolves names strictly inside the
+   * request namespace (`Error from server (NotFound)` otherwise), and a
+   * cross-project fallback would let `oc delete`/`oc label` mutate another
+   * project's object (issue #29).
    */
   _findResource(kind, name, options = {}) {
     if (!kind || !name) return null;
@@ -3859,7 +4224,11 @@ Object.assign(CommandBar.prototype, {
       );
       if (prefix) return prefix;
     }
-    if (!options.explicitNamespace && !options.namespace) {
+    if (
+      options.allowOtherNamespaces !== false &&
+      !options.explicitNamespace &&
+      !options.namespace
+    ) {
       const elsewhere = list.filter((resource) => (resource.metadata?.name || '') === name);
       if (elsewhere.length === 1) return elsewhere[0];
       if (!options.allowPrefix && elsewhere.length > 1) return elsewhere[0];
@@ -3867,6 +4236,12 @@ Object.assign(CommandBar.prototype, {
     return null;
   },
 
+  /**
+   * Namespace-exact lookup. Unlike `_findResource` it never falls through to a
+   * same-named resource in another project; `null` means the API server would
+   * answer NotFound for the request namespace (and for `create` requests it
+   * means the name is free).
+   */
   _findResourceExact(kind, name, namespace) {
     const list = this._resources(kind);
     if (!this._isNamespaced(kind))
@@ -3876,14 +4251,16 @@ Object.assign(CommandBar.prototype, {
         (resource) =>
           resource.metadata?.name === name &&
           (!namespace || resource.metadata?.namespace === namespace)
-      ) ||
-      list.find((resource) => resource.metadata?.name === name) ||
-      null
+      ) || null
     );
   },
 
   _notFoundMessage(kind, name) {
     return `Error from server (NotFound): ${this._resourceNamePlural(kind)} "${name}" not found`;
+  },
+
+  _alreadyExistsMessage(kind, name) {
+    return `Error from server (AlreadyExists): ${this._resourceNamePlural(kind)} "${name}" already exists`;
   },
 
   _resourceGroup(kind) {
@@ -4007,13 +4384,9 @@ Object.assign(CommandBar.prototype, {
     const written = this._writeVirtualFile(redirect.file, text, { append: redirect.append });
     if (written.error) return written;
     this.shellTools?._refreshFilesPanel?.();
-    const lineCount = String(text || '')
-      .split('\n')
-      .filter((line) => line.length > 0).length;
-    return {
-      ok: true,
-      message: `(${redirect.append ? 'appended' : 'wrote'} ${lineCount} line${lineCount === 1 ? '' : 's'} to ${redirect.file})`,
-    };
+    // Real bash prints nothing when a redirect succeeds; the file content is the
+    // only observable effect (`oc get deploy -o yaml > deploy.yaml`).
+    return { ok: true, message: '' };
   },
 
   _resolveInputFile(path, stdinText) {
@@ -4151,7 +4524,7 @@ Object.assign(CommandBar.prototype, {
         object.metadata.uid = object.metadata.uid || this._dryRunUid(object.metadata.name);
         object.metadata.resourceVersion = object.metadata.resourceVersion || '1';
         object.metadata.creationTimestamp =
-          object.metadata.creationTimestamp || new Date().toISOString();
+          object.metadata.creationTimestamp || new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
         object.metadata.generation = object.metadata.generation || 1;
       }
       prepared.push({ kind, object, exists });
@@ -4266,15 +4639,16 @@ Object.assign(CommandBar.prototype, {
       options.flags && options.flags.namespace && options.flags.namespace !== true
         ? String(options.flags.namespace)
         : null;
+    const command = options.command || 'apply';
+    const applyOptions = { command };
+    if (namespaceOverride) applyOptions.namespace = namespaceOverride;
     let result;
     try {
-      result = namespaceOverride
-        ? me.applyFile(resolved.file, { namespace: namespaceOverride })
-        : me.applyFile(resolved.file);
+      result = me.applyFile(resolved.file, applyOptions);
     } catch (error) {
       return this._err(`error: ${error && error.message ? error.message : error}`);
     }
-    return this._normalizeApplyResult(result, options.command || 'apply');
+    return this._normalizeApplyResult(result, command);
   },
 
   _applyKustomizeDelegated(dir, flags = {}) {
@@ -4410,6 +4784,11 @@ Object.assign(CommandBar.prototype, {
       : Array.isArray(result.updated)
         ? result.updated
         : [];
+    const unchanged = Array.isArray(result)
+      ? []
+      : Array.isArray(result.unchanged)
+        ? result.unchanged
+        : [];
     const verbCreated = 'created';
     const verbUpdated =
       command === 'replace' ? 'replaced' : command === 'create' ? 'created' : 'configured';
@@ -4425,6 +4804,14 @@ Object.assign(CommandBar.prototype, {
       const kind = entry?.kind || entry?.resource?.kind;
       const name = entry?.metadata?.name || entry?.name;
       if (kind && name) lines.push(`${this._resourceRef(kind)}/${name} ${verbUpdated}`);
+    }
+    for (const entry of unchanged) {
+      const kind = entry?.kind || entry?.resource?.kind;
+      const name = entry?.metadata?.name || entry?.name;
+      if (kind && name)
+        lines.push(
+          `${this._resourceRef(kind)}/${name} ${command === 'replace' ? 'replaced' : 'unchanged'}`
+        );
     }
     if (!lines.length && Array.isArray(result.resources)) {
       for (const resource of result.resources) {
@@ -4679,6 +5066,7 @@ Object.assign(CommandBar.prototype, {
     const resource = this._findResource(kind, name, {
       namespace: options.namespace,
       explicitNamespace: Boolean(options.namespace),
+      allowOtherNamespaces: false,
     });
     if (!resource) return { error: this._err(this._notFoundMessage(kind, name)) };
     const spec = JSON.parse(JSON.stringify(resource.spec || {}));
@@ -4708,6 +5096,7 @@ Object.assign(CommandBar.prototype, {
     const resource = this._findResource(kind, name, {
       namespace: options.namespace,
       explicitNamespace: Boolean(options.namespace),
+      allowOtherNamespaces: false,
     });
     if (!resource) return { error: this._err(this._notFoundMessage(kind, name)) };
     const uid = resource.metadata?.uid || resource.uid;
@@ -7891,8 +8280,10 @@ Object.assign(CommandBar.prototype, {
     if (projectConfigRef) return this._describeProjectConfig(projectConfigRef);
     let { kind, name } = this._resolveRef(positionals);
     if (!kind) return this._resourceTypeError(positionals[0]);
-    // `oc describe rs -l app=web` describes every resource matching the selector.
-    if (flags.selector && flags.selector !== true && !name) {
+    // `oc describe <type>` (no name) describes every object of that type in the
+    // namespace — real oc accepts the type alone (`oc describe quota` lists
+    // every ResourceQuota, `oc describe rs -l app=web` filters by selector).
+    if (!name && kind !== 'Project') {
       const namespace = flags.namespace || this.currentProject;
       if (this._isNamespaced(kind)) {
         const namespaceError = this._requireNamespace(namespace);
@@ -7902,19 +8293,18 @@ Object.assign(CommandBar.prototype, {
       if (this._isNamespaced(kind))
         resources = resources.filter((resource) => resource.metadata?.namespace === namespace);
       resources = this._filterResources(resources, kind, flags);
-      if (!resources.length) return this._ok(`No resources found in ${namespace} namespace.`);
+      if (!resources.length)
+        return this._ok(
+          this._isNamespaced(kind)
+            ? `No resources found in ${namespace} namespace.`
+            : 'No resources found'
+        );
       return this._ok(
         resources.map((resource) => this._describeResource(kind, resource)).join('\n\n')
       );
     }
     if (!name) {
-      if (kind === 'Project') {
-        name = this.currentProject;
-      } else {
-        return this._err(
-          'error: You must specify the name of the resource to describe.\n\nUsage:\n  oc describe <resource>/<name>'
-        );
-      }
+      name = this.currentProject;
     }
     if (this._isNamespaced(kind)) {
       const namespace = flags.namespace || this.currentProject;
@@ -9046,6 +9436,17 @@ Object.assign(CommandBar.prototype, {
       return this._err('error: --dry-run must be "none", "server", or "client"');
     const output = this._outputFormat(flags);
     const name = object.metadata?.name || 'unnamed';
+    const targetNamespace = this._isNamespaced(object.kind)
+      ? object.metadata?.namespace || this.currentProject
+      : '';
+    // `create` is NOT idempotent: a real API server rejects an existing name
+    // with AlreadyExists (unlike `apply`). Server dry-run validates the same
+    // request, so it fails the same way; client dry-run never contacts the
+    // server and therefore prints the object (issue #29).
+    if (dryRun !== 'client') {
+      if (this._findResourceExact(object.kind, name, targetNamespace))
+        return this._err(this._alreadyExistsMessage(object.kind, name));
+    }
     if (dryRun) {
       // `oc create secret/configmap … -o yaml` is rendered in real API shape
       // (top-level type/data), so `--dry-run=client -o yaml | oc replace -f -`
@@ -10123,7 +10524,14 @@ Object.assign(CommandBar.prototype, {
     }
 
     const deleteList = [];
-    if (flags.all) {
+    const hasSelector = Boolean(
+      (flags.selector && flags.selector !== true) ||
+      (flags['field-selector'] && flags['field-selector'] !== true)
+    );
+    if (flags.all || (hasSelector && !name)) {
+      // `oc delete pods --all` and `oc delete pods -l app=web` both operate on
+      // the list in the request namespace (real oc defaults to the current
+      // project; only the list path is filtered by the selector).
       let resources = this._resources(kind);
       if (this._isNamespaced(kind) && !explicitNamespace)
         resources = resources.filter(
@@ -10138,6 +10546,7 @@ Object.assign(CommandBar.prototype, {
         namespace: flags.namespace,
         explicitNamespace,
         allowPrefix: false,
+        allowOtherNamespaces: false,
       });
       if (!target)
         return ignoreNotFound ? this._ok('') : this._err(this._notFoundMessage(kind, name));
@@ -10148,6 +10557,7 @@ Object.assign(CommandBar.prototype, {
           namespace: flags.namespace,
           explicitNamespace,
           allowPrefix: false,
+          allowOtherNamespaces: false,
         });
         if (extra) deleteList.push(extra);
       }
@@ -10219,6 +10629,7 @@ Object.assign(CommandBar.prototype, {
         namespace: flags.namespace,
         explicitNamespace: Boolean(flags.namespace),
         allowPrefix: false,
+        allowOtherNamespaces: false,
       })
     ) {
       return this._err(this._notFoundMessage(kind, name));
@@ -10256,6 +10667,7 @@ Object.assign(CommandBar.prototype, {
     const resource = this._findResource(kind, name, {
       namespace: flags.namespace,
       explicitNamespace: Boolean(flags.namespace),
+      allowOtherNamespaces: false,
     });
     if (!resource) return this._err(this._notFoundMessage(kind, name));
     this._emit('ui:manifest-editor', {
@@ -10292,10 +10704,14 @@ Object.assign(CommandBar.prototype, {
     const isLabel = field === 'labels';
     const verb = isLabel ? 'label' : 'annotate';
     const { positionals, flags } = parseArgs(tokens, {
-      shortValues: { '-n': 'namespace', '-l': 'selector' },
-      longValues: ['namespace', 'selector'],
+      shortValues: { '-n': 'namespace', '-l': 'selector', '-o': 'output' },
+      longValues: ['namespace', 'selector', 'output', 'dry-run'],
       longBools: ['overwrite', 'all', 'local'],
     });
+    const dryRun = this._dryRunMode(flags);
+    if (dryRun === 'invalid')
+      return this._err('error: --dry-run must be "none", "server", or "client"');
+    const output = this._outputFormat(flags);
     const { kind, name, rest } = this._splitLabelArgs(positionals);
     if (!kind) return this._resourceTypeError(positionals[0] || '');
     const updates = {};
@@ -10319,6 +10735,7 @@ Object.assign(CommandBar.prototype, {
       const metadata = resource.metadata || (resource.metadata = { [field]: {} });
       metadata[field] = metadata[field] || {};
       let changed = false;
+      const expected = {};
       for (const [key, value] of Object.entries(updates)) {
         const current = metadata[field][key];
         if (value !== null && current !== undefined && current !== value && !flags.overwrite) {
@@ -10327,16 +10744,14 @@ Object.assign(CommandBar.prototype, {
           );
         }
         if (value === null ? current !== undefined : current !== value) changed = true;
+        expected[key] = value;
       }
-      const expected = {};
+      // Dry-run validates the request without persisting it (and without firing
+      // any controller side effects).
+      if (dryRun) return { ok: true, changed };
       for (const [key, value] of Object.entries(updates)) {
-        if (value === null) {
-          delete metadata[field][key];
-          expected[key] = null;
-        } else {
-          metadata[field][key] = value;
-          expected[key] = value;
-        }
+        if (value === null) delete metadata[field][key];
+        else metadata[field][key] = value;
       }
       const ge = this.gameEngine;
       const method = isLabel ? 'labelResource' : 'annotateResource';
@@ -10349,6 +10764,17 @@ Object.assign(CommandBar.prototype, {
         this.cluster?.update?.(resource.metadata.uid || resource.uid, {
           metadata: { [field]: metadata[field] },
         });
+      }
+      // service-ca controller inputs (issue #33a): a serving-cert / inject-cabundle
+      // annotation must materialise its Secret / CABundle key immediately — the
+      // per-tick reconcile is the steady-state safety net but would not run while
+      // the simulation is paused, right after the learner types the command.
+      if (!isLabel && typeof this.gameEngine?.simulation?.reconcileServiceCA === 'function') {
+        try {
+          this.gameEngine.simulation.reconcileServiceCA();
+        } catch {
+          /* a controller side effect must never fail the CLI command */
+        }
       }
       return { ok: true, changed };
     };
@@ -10363,9 +10789,7 @@ Object.assign(CommandBar.prototype, {
       for (const resource of resources) {
         const result = applyToResource(resource);
         if (result.error) return result;
-        lines.push(
-          `${this._resourceRef(kind)}/${resource.metadata?.name} ${result.changed ? (isLabel ? 'labeled' : 'annotated') : `not ${isLabel ? 'labeled' : 'annotated'}`}`
-        );
+        lines.push(this._labelResultLine(resource, result, { isLabel, dryRun, output }));
       }
       return this._ok(lines.join('\n'));
     }
@@ -10379,13 +10803,26 @@ Object.assign(CommandBar.prototype, {
     const resource = this._findResource(kind, name, {
       namespace: flags.namespace,
       explicitNamespace: Boolean(flags.namespace),
+      allowOtherNamespaces: false,
     });
     if (!resource) return this._err(this._notFoundMessage(kind, name));
     const result = applyToResource(resource);
     if (result.error) return result;
-    return this._ok(
-      `${this._resourceRef(kind)}/${name} ${result.changed ? (isLabel ? 'labeled' : 'annotated') : `not ${isLabel ? 'labeled' : 'annotated'}`}`
-    );
+    return this._ok(this._labelResultLine(resource, result, { isLabel, dryRun, output }));
+  },
+
+  /** One output line for `oc label`/`oc annotate` (`-o name`, `--dry-run`, plain). */
+  _labelResultLine(resource, result, { isLabel, dryRun, output }) {
+    const ref = this._resourceRef(resource.kind);
+    const name = resource.metadata?.name;
+    if (dryRun && output.format === 'name') return `${ref}/${name}`;
+    const action = result.changed
+      ? isLabel
+        ? 'labeled'
+        : 'annotated'
+      : `not ${isLabel ? 'labeled' : 'annotated'}`;
+    const suffix = dryRun ? (dryRun === 'server' ? ' (server dry run)' : ' (dry run)') : '';
+    return `${ref}/${name} ${action}${suffix}`;
   },
 
   /** Split `oc label deployment/web key=value` and `oc label deployment web key=value`. */
@@ -10445,17 +10882,21 @@ Object.assign(CommandBar.prototype, {
     if (dryRun === 'invalid')
       return this._err('error: --dry-run must be "none", "server", or "client"');
     const output = this._outputFormat(flags);
+    // Resolve strictly inside the request namespace before touching the engine:
+    // `GameEngine.patchResource()` would otherwise answer a generic NotFound last
+    // and a real oc reports `deployments.apps "web" not found` (issue #29).
+    const existingTarget = this._findResource(kind, name, {
+      namespace: flags.namespace,
+      explicitNamespace: Boolean(flags.namespace),
+      allowOtherNamespaces: false,
+    });
+    if (!existingTarget) return this._err(this._notFoundMessage(kind, name));
     const ge = this.gameEngine;
     if (ge && typeof ge.patchResource === 'function') {
       if (dryRun) {
         // Dry-run: the patch is validated server-side but not persisted. Print
         // the object (or the real name-printer line) like oc.
-        const current = this._findResource(kind, name, {
-          namespace: flags.namespace,
-          explicitNamespace: Boolean(flags.namespace),
-        });
-        if (!current) return this._err(this._notFoundMessage(kind, name));
-        const displayObject = this._manifestFor(current);
+        const displayObject = this._manifestFor(existingTarget);
         if (output.format === 'yaml') return this._ok(toYamlDocument(displayObject));
         if (output.format === 'json') return this._ok(JSON.stringify(displayObject, null, 4));
         return this._ok(`${this._resourceRef(kind)}/${name} patched (dry run)`);
@@ -10630,6 +11071,7 @@ Object.assign(CommandBar.prototype, {
       namespace: flags.namespace,
       explicitNamespace: Boolean(flags.namespace),
       allowPrefix: false,
+      allowOtherNamespaces: false,
     });
     if (!resource) return this._err(this._notFoundMessage(kind, name));
     const containers = this._containerList(resource);
@@ -10839,6 +11281,7 @@ Object.assign(CommandBar.prototype, {
       namespace: flags.namespace,
       explicitNamespace: Boolean(flags.namespace),
       allowPrefix: false,
+      allowOtherNamespaces: false,
     });
     if (!resource) return this._err(this._notFoundMessage(kind, name));
     const result = this._updateResource(
@@ -10899,6 +11342,7 @@ Object.assign(CommandBar.prototype, {
       const resource = this._findResource(kind, name, {
         namespace: flags.namespace,
         explicitNamespace: Boolean(flags.namespace),
+        allowOtherNamespaces: false,
       });
       if (!resource) return this._err(this._notFoundMessage(kind, name));
       const annotationKey = 'image.openshift.io/triggers';
@@ -11358,6 +11802,7 @@ Object.assign(CommandBar.prototype, {
         namespace: flags.namespace,
         explicitNamespace,
         allowPrefix: false,
+        allowOtherNamespaces: false,
       });
       if (!resource) return this._err(this._notFoundMessage(kind, name));
       resources = [resource];
@@ -11738,6 +12183,7 @@ Object.assign(CommandBar.prototype, {
         namespace: flags.namespace,
         explicitNamespace: Boolean(flags.namespace),
         allowPrefix: false,
+        allowOtherNamespaces: false,
       })
     ) {
       return this._err(this._notFoundMessage(kind, name));
@@ -12079,10 +12525,14 @@ Object.assign(CommandBar.prototype, {
         `Error from server (BadRequest): container "${containerName}" is not valid for pod "${pod.metadata?.name}"`
       );
     }
+    // A CrashLoopBackOff / ImagePullBackOff / completed container cannot be
+    // exec'd into; real oc fails the attach instead of pretending to run (#35).
+    const containerStateError = this._execContainerStateError(pod, containerName);
+    if (containerStateError) return this._err(containerStateError);
     const interactive = rawTokens.some((token) => /^-[a-z]*[it][a-z]*$/.test(token));
     let command = afterDoubleDash.join(' ').trim();
     if (!command) {
-      const consumed = refKind ? 2 : 1;
+      const consumed = String(positionals[0] || '').includes('/') ? 1 : refKind ? 2 : 1;
       const plainCommand = positionals.slice(consumed).join(' ').trim();
       command = plainCommand || (interactive ? '/bin/sh' : '');
     }
@@ -12102,41 +12552,179 @@ Object.assign(CommandBar.prototype, {
   },
 
   _simulateExecCommand(command, pod, containerName) {
-    const text = String(command).trim();
-    // restricted-v2 runs containers with an arbitrary, passwd-less UID, so
-    // `whoami` fails exactly like a real RHEL UBI container on OCP 4.22.
-    const podScc = String(pod.metadata?.annotations?.['openshift.io/scc'] || 'restricted-v2');
-    const restricted = /^restricted/.test(podScc);
-    const runtimeUid =
-      1000000000 + stableHash(`${pod.metadata?.namespace}/${pod.metadata?.name}`, 8999999);
-    if (/^(hostname|hostname -f)$/.test(text)) return [pod.metadata?.name || 'pod'];
-    if (/^whoami$/.test(text))
-      return restricted ? [`whoami: cannot find name for user ID ${runtimeUid}`] : ['default'];
-    if (/^id$/.test(text)) {
-      return restricted
-        ? [`uid=${runtimeUid} gid=0(root) groups=0(root),${runtimeUid}`]
-        : ['uid=1000840000(default) gid=0(root) groups=0(root),1000840000'];
+    const raw = String(command ?? '').trim();
+    if (!raw) return [];
+    const context = this._podExecContext(pod, containerName);
+    // `oc exec … -- sh -c "cmd"` / `/bin/bash -c "…"`: unwrap the script.
+    const tokens = tokenizeCommand(raw);
+    if (tokens.length >= 3 && /(?:^|\/)(?:ba)?sh$/.test(tokens[0]) && tokens[1] === '-c') {
+      return this._simulateExecCommand(tokens.slice(2).join(' '), pod, containerName);
     }
-    if (/^(env|printenv)$/.test(text)) {
-      return [
-        'PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
-        'KUBERNETES_SERVICE_HOST=172.30.0.1',
-        'KUBERNETES_SERVICE_PORT=443',
-        'HOSTNAME=' + (pod.metadata?.name || 'pod'),
-      ];
+    // Support simple pipelines like `cat /etc/app/APP_MODE | grep prod`.
+    if (tokens.includes('|')) {
+      const stages = [];
+      let current = [];
+      for (const token of tokens) {
+        if (token === '|') {
+          stages.push(current);
+          current = [];
+        } else current.push(token);
+      }
+      stages.push(current);
+      let stdin = null;
+      let lines = [];
+      for (const stage of stages) {
+        const result = this._execStage(stage, context, stdin);
+        lines = result.lines;
+        if (!result.ok) break;
+        stdin = result.lines.join('\n');
+      }
+      return lines;
     }
-    if (/^(ls|ls -l|ls -la)$/.test(text))
-      return [
-        'bin  boot  dev  etc  home  lib  media  mnt  opt  proc  root  run  sbin  srv  sys  tmp  usr  var',
-      ];
-    if (/^(cat \/etc\/hostname|cat \/etc\/hosts)$/.test(text))
-      return [pod.metadata?.name || 'pod', '172.30.0.1 kubernetes.default.svc'];
-    if (/^curl\b/.test(text)) {
+    return this._execStage(tokens, context, null).lines;
+  },
+
+  /**
+   * Run one `oc exec`/`oc rsh` command against the simulated Pod filesystem.
+   * The filesystem mirrors the Pod's mounted ConfigMaps/Secrets/downwardAPI
+   * volumes and its environment (`env`, `envFrom`, valueFrom), so
+   * `ls /etc/app` / `cat /etc/app/APP_MODE` / `env` show the real config (#32d).
+   */
+  _execStage(tokens, context, stdin) {
+    const argv = tokens.length ? tokens : ['sh'];
+    const name = String(argv[0] || '').toLowerCase();
+    const args = argv.slice(1);
+    const stdinText = stdin === null || stdin === undefined ? null : String(stdin);
+    const ok = (lines) => ({ ok: true, lines });
+    const pipeLines = () =>
+      stdinText === null
+        ? []
+        : stdinText
+            .split('\n')
+            .filter((line, index, list) => !(index === list.length - 1 && line === ''));
+    if (/^(hostname)$/.test(name)) return ok([context.podName]);
+    if (name === 'hostname' && args[0] === '-f') return ok([context.podName]);
+    if (name === 'whoami') {
+      // restricted-v2 runs with an arbitrary, passwd-less UID, so whoami fails
+      // exactly like a real RHEL UBI container on OCP 4.22.
+      return ok(
+        context.restricted
+          ? [`whoami: cannot find name for user ID ${context.runtimeUid}`]
+          : ['default']
+      );
+    }
+    if (name === 'id') {
+      return ok(
+        context.restricted
+          ? [`uid=${context.runtimeUid} gid=0(root) groups=0(root),${context.runtimeUid}`]
+          : ['uid=1000840000(default) gid=0(root) groups=0(root),1000840000']
+      );
+    }
+    if (name === 'env' || name === 'printenv') {
+      const entries = [...context.env.entries()];
+      if (name === 'printenv' && args[0]) {
+        const value = context.env.get(args[0]);
+        return ok(value === undefined ? [] : [String(value)]);
+      }
+      return ok(entries.map(([key, value]) => `${key}=${value}`));
+    }
+    if (name === 'pwd') return ok(['/']);
+    if (name === 'ls' || name === 'll') {
+      const flags = args.filter((arg) => arg.startsWith('-'));
+      const targetArg = args.find((arg) => !arg.startsWith('-')) || '/';
+      const target = this._podExecNormalizePath(targetArg, '/');
+      const longFormat = flags.some((flag) => /l/.test(flag));
+      const all = flags.some((flag) => /a/.test(flag));
+      if (context.files.has(target)) {
+        if (longFormat) {
+          const file = context.files.get(target) || '';
+          return ok([
+            `-rw-r--r--. 1 root root ${String(file.length).padStart(6)} ${target.split('/').pop()}`,
+          ]);
+        }
+        return ok([target.split('/').pop()]);
+      }
+      if (!context.dirs.has(target)) {
+        return ok([`ls: cannot access '${targetArg}': No such file or directory`]);
+      }
+      const entries = [...context.dirs.get(target)].sort();
+      const shown = all ? entries : entries.filter((entry) => !entry.startsWith('.'));
+      if (longFormat) {
+        const destination = target === '/' ? '' : target;
+        return ok(
+          shown.map((entry) => {
+            const child = `${destination}/${entry}`.replace(/\/+/g, '/');
+            const isDir = context.dirs.has(child);
+            return `${isDir ? 'drwxr-xr-x' : '-rw-r--r--'}. 1 root root ${
+              isDir ? '    4096' : String((context.files.get(child) || '').length).padStart(8)
+            } ${entry}`;
+          })
+        );
+      }
+      return ok([shown.join('  ')]);
+    }
+    if (name === 'cat') {
+      const files = args.filter((arg) => arg !== '-' && !arg.startsWith('-'));
+      if (!files.length) return ok(stdinText === null ? [] : stdinText.split('\n').slice(0, -1));
+      const lines = [];
+      let failed = false;
+      for (const file of files) {
+        const target = this._podExecNormalizePath(file, '/');
+        if (!context.files.has(target)) {
+          lines.push(`cat: ${file}: No such file or directory`);
+          failed = true;
+          continue;
+        }
+        lines.push(...String(context.files.get(target)).replace(/\n$/, '').split('\n'));
+      }
+      return { ok: !failed, lines };
+    }
+    if (name === 'echo') {
+      const text = args.filter((arg) => !/^-[neE]+$/.test(arg)).join(' ');
+      return ok([text]);
+    }
+    if (name === 'grep') {
+      const ignoreCase = args.some((arg) => /^-[A-Za-z]*i/.test(arg));
+      const invert = args.some((arg) => /^-[A-Za-z]*v/.test(arg));
+      const positional = args.filter((arg) => !arg.startsWith('-'));
+      const pattern = positional[0];
+      if (pattern === undefined) return { ok: false, lines: ['usage: grep pattern'] };
+      let matcher;
+      try {
+        matcher = new RegExp(pattern, ignoreCase ? 'i' : '');
+      } catch {
+        matcher = new RegExp(pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), ignoreCase ? 'i' : '');
+      }
+      const lines = pipeLines().filter((line) => matcher.test(line) !== invert);
+      return { ok: lines.length > 0, lines };
+    }
+    if (name === 'head' || name === 'tail') {
+      const match = args.join(' ').match(/-n?\s*(\d+)/);
+      const count = match ? Number(match[1]) : 10;
+      const lines = pipeLines();
+      return ok(
+        name === 'head' ? lines.slice(0, count) : lines.slice(Math.max(0, lines.length - count))
+      );
+    }
+    if (name === 'wc') {
+      const flag = args.find((arg) => /^-[lwc]+$/.test(arg)) || '-lwc';
+      const lines = pipeLines();
+      const counts = {
+        l: lines.length,
+        w: lines.reduce((sum, line) => sum + line.split(/\s+/).filter(Boolean).length, 0),
+        c: lines.join('\n').length,
+      };
+      return ok([
+        [
+          ...(flag.includes('l') ? [counts.l] : []),
+          ...(flag.includes('w') ? [counts.w] : []),
+          ...(flag.includes('c') ? [counts.c] : []),
+        ].join(' '),
+      ]);
+    }
+    if (name === 'curl') {
       const sim = this.gameEngine?.simulation || this.gameEngine?.sim || null;
-      const argv = text
-        .split(/\s+/)
-        .slice(1)
-        .filter((token) => token && !token.startsWith('-'));
+      const argv = args.filter((token) => token && !token.startsWith('-'));
       const rawTarget = argv[argv.length - 1] || '';
       let target = rawTarget;
       let port = null;
@@ -12154,34 +12742,294 @@ Object.assign(CommandBar.prototype, {
         }
       }
       if (sim && typeof sim.trafficForExec === 'function' && target) {
-        const result = sim.trafficForExec(pod, {
+        const result = sim.trafficForExec(context.pod, {
           target,
           ...(port ? { port } : {}),
-          namespace: pod.metadata?.namespace || 'default',
+          namespace: context.namespace,
           protocol: 'TCP',
         });
-        if (result && Array.isArray(result.lines) && result.lines.length) return result.lines;
+        if (result && Array.isArray(result.lines) && result.lines.length) return ok(result.lines);
       }
-      const selector = pod.metadata?.labels?.app || '';
-      return [
-        `<html><body>Hello from ${selector || pod.metadata?.name} (container ${containerName})</body></html>`,
-      ];
+      const selector = context.pod?.metadata?.labels?.app || '';
+      return ok([
+        `<html><body>Hello from ${selector || context.podName} (container ${context.containerName})</body></html>`,
+      ]);
     }
-    if (/^nslookup\b|^dig\b/.test(text)) {
-      const target = text.split(/\s+/).pop();
-      return [
-        `Server:		172.30.0.10`,
-        `Address:	172.30.0.10#53`,
+    if (name === 'nslookup' || name === 'dig') {
+      const target = args[args.length - 1] || '';
+      return ok([
+        'Server:\t\t172.30.0.10',
+        'Address:\t172.30.0.10#53',
         '',
-        `Name:	${target}`,
+        `Name:\t${target}`,
         'Address: 172.30.43.12',
-      ];
+      ]);
     }
-    return [
-      `(command executed in ${pod.metadata?.name}/${containerName})`,
-      `$ ${text}`,
+    // Unknown binary: keep the legacy simulator hint instead of pretending.
+    return ok([
+      `(command executed in ${context.podName}/${context.containerName})`,
+      `$ ${argv.join(' ')}`,
       'exit code 0',
-    ];
+    ]);
+  },
+
+  /** Resolve a container path (`/etc/app`, `/etc/app/APP_MODE`) against `/`. */
+  _podExecNormalizePath(path, base = '/') {
+    const target = String(path || '');
+    let resolved;
+    if (target.startsWith('/')) resolved = target;
+    else if (target === '~') resolved = '/root';
+    else if (target.startsWith('~/')) resolved = `/root/${target.slice(2)}`;
+    else resolved = `${base.replace(/\/+$/, '')}/${target}`;
+    const segments = [];
+    for (const segment of resolved.split('/')) {
+      if (!segment || segment === '.') continue;
+      if (segment === '..') segments.pop();
+      else segments.push(segment);
+    }
+    return `/${segments.join('/')}`;
+  },
+
+  /**
+   * Build the simulated Pod filesystem + environment from the Pod spec:
+   * ConfigMap/Secret/downwardAPI volumes become files, `env`/`envFrom`/
+   * `valueFrom` become environment entries (#32d).
+   */
+  _podExecContext(pod, containerName) {
+    const namespace = pod.metadata?.namespace || 'default';
+    const containers = this._containerList(pod);
+    const container =
+      containers.find((entry) => entry.name === containerName) || containers[0] || {};
+    const files = new Map();
+    const dirs = new Map([['/', new Set()]]);
+    const addDir = (path) => {
+      const clean = this._podExecNormalizePath(path);
+      if (!dirs.has(clean)) dirs.set(clean, new Set());
+      dirs.get('/').add(clean === '/' ? '' : clean.split('/')[1]);
+      const parent = clean === '/' ? null : clean.slice(0, clean.lastIndexOf('/')) || '/';
+      if (parent && dirs.has(parent)) dirs.get(parent).add(clean.split('/').pop());
+      return clean;
+    };
+    const addFile = (path, content) => {
+      const clean = this._podExecNormalizePath(path);
+      files.set(clean, String(content ?? ''));
+      addDir(clean.slice(0, clean.lastIndexOf('/')) || '/');
+      const parent = clean.slice(0, clean.lastIndexOf('/')) || '/';
+      if (dirs.has(parent)) dirs.get(parent).add(clean.split('/').pop());
+    };
+    for (const standardDir of [
+      '/bin',
+      '/boot',
+      '/dev',
+      '/etc',
+      '/home',
+      '/lib',
+      '/media',
+      '/mnt',
+      '/opt',
+      '/proc',
+      '/root',
+      '/run',
+      '/sbin',
+      '/srv',
+      '/sys',
+      '/tmp',
+      '/usr',
+      '/var',
+      '/usr/bin',
+      '/usr/sbin',
+      '/usr/local',
+      '/usr/local/bin',
+    ]) {
+      addDir(standardDir);
+    }
+    addFile('/etc/hostname', `${pod.metadata?.name || 'pod'}\n`);
+    addFile(
+      '/etc/hosts',
+      '127.0.0.1\tlocalhost\n::1\tlocalhost ip6-localhost ip6-loopback\n172.30.0.1\tkubernetes.default.svc\n'
+    );
+    addFile(
+      '/etc/os-release',
+      'NAME="Red Hat Enterprise Linux"\nVERSION="9.4 (Plow)"\nID="rhel"\nID_LIKE="fedora"\nVERSION_ID="9.4"\nPRETTY_NAME="Red Hat Enterprise Linux 9.4 (Plow)"\n'
+    );
+    addFile('/etc/passwd', 'root:x:0:0:root:/root:/bin/bash\n');
+    for (const mount of container.volumeMounts || []) {
+      const mountPath = String(mount?.mountPath || '').replace(/\/+$/, '');
+      if (!mountPath.startsWith('/')) continue;
+      const volume = (pod.spec?.volumes || []).find((entry) => entry.name === mount.name);
+      if (!volume) continue;
+      const entries = this._volumeDirectoryEntries(volume, pod, namespace);
+      if (mount.subPath) {
+        const content = entries.get(String(mount.subPath).replace(/^\/+/, ''));
+        if (content !== undefined) addFile(mountPath, content);
+        continue;
+      }
+      addDir(mountPath);
+      for (const [entryName, content] of entries) {
+        addFile(`${mountPath}/${entryName}`, content);
+      }
+    }
+    const env = this._podEnvironment(pod, container, namespace);
+    const podScc = String(pod.metadata?.annotations?.['openshift.io/scc'] || 'restricted-v2');
+    return {
+      pod,
+      podName: pod.metadata?.name || 'pod',
+      namespace,
+      container,
+      containerName: container.name || containerName,
+      restricted: /^restricted/.test(podScc),
+      runtimeUid: 1000000000 + stableHash(`${namespace}/${pod.metadata?.name || 'pod'}`, 8999999),
+      files,
+      dirs,
+      env,
+    };
+  },
+
+  /** Files contributed by a Pod volume (configMap / secret / projected / downwardAPI). */
+  _volumeDirectoryEntries(volume, pod, namespace) {
+    const entries = new Map();
+    const itemsFor = (items) => {
+      const map = new Map();
+      for (const item of items || []) {
+        if (item?.key) map.set(String(item.key), String(item.path || item.key).replace(/^\/+/, ''));
+      }
+      return map;
+    };
+    const addData = (data, items, decodeBase64Value) => {
+      const itemMap = itemsFor(items);
+      for (const [key, value] of Object.entries(data || {})) {
+        const target = itemMap.size ? itemMap.get(key) : key;
+        if (!target) continue;
+        entries.set(
+          String(target).replace(/^\/+/, ''),
+          decodeBase64Value ? this._decodeBase64(value) : String(value ?? '')
+        );
+      }
+    };
+    if (volume.configMap) {
+      const configMap = this.cluster.getByName('ConfigMap', volume.configMap.name, namespace);
+      addData(configMap?.spec?.data, volume.configMap.items, false);
+    } else if (volume.secret) {
+      const secret = this.cluster.getByName('Secret', volume.secret.name, namespace);
+      addData(secret?.spec?.data, volume.secret.items, true);
+    } else if (volume.projected) {
+      for (const source of volume.projected.sources || []) {
+        if (source.configMap) {
+          const configMap = this.cluster.getByName('ConfigMap', source.configMap.name, namespace);
+          addData(configMap?.spec?.data, source.configMap.items, false);
+        } else if (source.secret) {
+          const secret = this.cluster.getByName('Secret', source.secret.name, namespace);
+          addData(secret?.spec?.data, source.secret.items, true);
+        } else if (source.downwardAPI) {
+          for (const item of source.downwardAPI.items || []) {
+            const value = this._downwardApiValue(pod, item?.fieldRef);
+            if (value !== null && item?.path) entries.set(String(item.path), `${value}\n`);
+          }
+        }
+      }
+    } else if (volume.downwardAPI) {
+      for (const item of volume.downwardAPI.items || []) {
+        const value = this._downwardApiValue(pod, item?.fieldRef);
+        if (value !== null && item?.path) entries.set(String(item.path), `${value}\n`);
+      }
+    }
+    return entries;
+  },
+
+  /** Resolve a downwardAPI fieldRef against the Pod. */
+  _downwardApiValue(pod, fieldRef) {
+    const path = String(fieldRef?.fieldPath || '');
+    const labelled = path.match(/^metadata\.(labels|annotations)\['([^']+)'\]$/);
+    if (labelled) return (pod.metadata?.[labelled[1]] || {})[labelled[2]] ?? null;
+    switch (path) {
+      case 'metadata.name':
+        return pod.metadata?.name ?? null;
+      case 'metadata.namespace':
+        return pod.metadata?.namespace ?? null;
+      case 'metadata.uid':
+        return pod.uid || pod.metadata?.uid || null;
+      case 'spec.nodeName':
+        return pod.spec?.nodeName || null;
+      case 'spec.serviceAccountName':
+        return pod.spec?.serviceAccountName || 'default';
+      case 'status.podIP':
+      case 'status.podIPs':
+        return pod.status?.podIP || null;
+      default:
+        return null;
+    }
+  },
+
+  /** Container environment: base env + envFrom + env/valueFrom resolution. */
+  _podEnvironment(pod, container, namespace) {
+    const env = new Map();
+    env.set('PATH', '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin');
+    env.set('KUBERNETES_SERVICE_HOST', '172.30.0.1');
+    env.set('KUBERNETES_SERVICE_PORT', '443');
+    env.set('HOSTNAME', pod.metadata?.name || 'pod');
+    for (const from of container.envFrom || []) {
+      const prefix = String(from.prefix || '');
+      if (from.configMapRef) {
+        const configMap = this.cluster.getByName('ConfigMap', from.configMapRef.name, namespace);
+        for (const [key, value] of Object.entries(configMap?.spec?.data || {})) {
+          env.set(`${prefix}${key}`, String(value ?? ''));
+        }
+      } else if (from.secretRef) {
+        const secret = this.cluster.getByName('Secret', from.secretRef.name, namespace);
+        for (const [key, value] of Object.entries(secret?.spec?.data || {})) {
+          env.set(`${prefix}${key}`, this._decodeBase64(value));
+        }
+      }
+    }
+    for (const entry of container.env || []) {
+      if (!entry?.name) continue;
+      if (entry.value !== undefined) {
+        env.set(entry.name, String(entry.value));
+        continue;
+      }
+      const valueFrom = entry.valueFrom || {};
+      if (valueFrom.fieldRef?.fieldPath) {
+        const value = this._downwardApiValue(pod, valueFrom.fieldRef);
+        if (value !== null) env.set(entry.name, String(value));
+      } else if (valueFrom.configMapKeyRef) {
+        const reference = valueFrom.configMapKeyRef;
+        const configMap = this.cluster.getByName('ConfigMap', reference.name, namespace);
+        const data = configMap?.spec?.data || {};
+        if (reference.key in data) env.set(entry.name, String(data[reference.key]));
+      } else if (valueFrom.secretKeyRef) {
+        const reference = valueFrom.secretKeyRef;
+        const secret = this.cluster.getByName('Secret', reference.name, namespace);
+        const data = secret?.spec?.data || {};
+        if (reference.key in data) env.set(entry.name, this._decodeBase64(data[reference.key]));
+      }
+    }
+    return env;
+  },
+
+  /**
+   * Why `oc exec`/`oc rsh` cannot attach to this container, or null when it is
+   * running. CrashLoopBackOff / ImagePullBackOff / completed Pods must fail
+   * exactly like real oc (#35) — never pretend the command ran.
+   */
+  _execContainerStateError(pod, containerName) {
+    const phase = String(pod?.status?.phase || pod?.phase || 'Pending');
+    if (phase === 'Succeeded' || phase === 'Failed') {
+      return `error: cannot exec into a container in a completed pod; current phase is ${phase}`;
+    }
+    const statuses = pod?.status?.containerStatuses || [];
+    if (!statuses.length) {
+      if (phase === 'Running') return null;
+      return `error: unable to upgrade connection: container not found ("${containerName}")`;
+    }
+    const status = statuses.find((entry) => entry.name === containerName) || statuses[0] || null;
+    const state = status?.state || {};
+    if (state.running) return null;
+    const reason =
+      state.waiting?.reason || state.terminated?.reason || (status?.ready ? 'Ready' : phase);
+    return [
+      `error: unable to upgrade connection: container not found ("${containerName}")`,
+      `container "${containerName}" is not running (${reason}); cannot exec into a container that is not running`,
+    ].join('\n');
   },
 });
 
@@ -12254,6 +13102,7 @@ Object.assign(CommandBar.prototype, {
       let service = this._findResource('Service', name, {
         namespace: flags.namespace,
         explicitNamespace: Boolean(flags.namespace),
+        allowOtherNamespaces: false,
       });
       let serviceWarning = '';
       if (!service) {
@@ -12264,14 +13113,17 @@ Object.assign(CommandBar.prototype, {
           this._findResource('Deployment', name, {
             namespace: flags.namespace,
             explicitNamespace: Boolean(flags.namespace),
+            allowOtherNamespaces: false,
           }) ||
           this._findResource('StatefulSet', name, {
             namespace: flags.namespace,
             explicitNamespace: Boolean(flags.namespace),
+            allowOtherNamespaces: false,
           }) ||
           this._findResource('DaemonSet', name, {
             namespace: flags.namespace,
             explicitNamespace: Boolean(flags.namespace),
+            allowOtherNamespaces: false,
           });
         if (workload) {
           const labels = workload.spec?.template?.metadata?.labels || { app: name };
@@ -12344,6 +13196,7 @@ Object.assign(CommandBar.prototype, {
       const workload = this._findResource(kind, name, {
         namespace: flags.namespace,
         explicitNamespace: Boolean(flags.namespace),
+        allowOtherNamespaces: false,
       });
       if (!workload) return this._err(this._notFoundMessage(kind, name));
       const serviceName = text('name') || name;
@@ -12562,6 +13415,13 @@ Object.assign(CommandBar.prototype, {
           return this._err(
             `Error from server (NotFound): templates.template.openshift.io "${templateName}" not found`
           );
+        const missing = this._templateRequiredMissing(template, params);
+        if (missing.length)
+          return this._err(
+            `error: unable to process template: Template parameter(s) required: [${missing.join(
+              ' '
+            )}]`
+          );
         objects = this._renderTemplateObjects(template, params);
       }
     } else {
@@ -12664,12 +13524,75 @@ Object.assign(CommandBar.prototype, {
     return this._builtinTemplate(name);
   },
 
+  /** Declared parameters of a Template (builtin, file-based or API resource). */
+  _templateParameterDefinitions(template) {
+    const declared = template.spec?.parameters || template.parameters || [];
+    return Array.isArray(declared) ? declared : [];
+  },
+
+  /**
+   * Required parameters that still have no usable value: neither `-p K=V`, nor
+   * a default `value`, nor a `generate` expression. Mirrors the API server's
+   * `Template parameter(s) required: [NAME]` rejection.
+   */
+  _templateRequiredMissing(template, params) {
+    const provided = params || {};
+    const missing = [];
+    for (const parameter of this._templateParameterDefinitions(template)) {
+      if (!parameter.required) continue;
+      const supplied = provided[parameter.name];
+      if (supplied !== undefined && supplied !== '') continue;
+      if (parameter.value !== undefined) continue;
+      if (parameter.generate) continue;
+      missing.push(parameter.name);
+    }
+    return missing;
+  },
+
+  /**
+   * Expand a template `generate: expression` parameter. The simulator supports
+   * the fixed-length character-class form templates actually use
+   * (`[a-zA-Z0-9]{16}`, `[a-z0-9]{8}`...); anything else falls back to a
+   * 16-character alphanumeric value.
+   */
+  _generateTemplateValue(from) {
+    const source = String(from || '').trim();
+    const charset = (chars) => chars.replace(/[^A-Za-z0-9]/g, '');
+    const match = source.match(/\[([^\]]+)\]\{(\d+)\}/);
+    let chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
+    let length = 16;
+    if (match) {
+      const ranges = match[1];
+      const expanded = [
+        /a-z/.test(ranges) ? 'abcdefghijklmnopqrstuvwxyz' : '',
+        /A-Z/.test(ranges) ? 'ABCDEFGHIJKLMNOPQRSTUVWXYZ' : '',
+        /0-9/.test(ranges) ? '0123456789' : '',
+        charset(ranges.replace(/a-z|A-Z|0-9/g, '')),
+      ].join('');
+      if (expanded) chars = expanded;
+      length = Math.max(1, Math.min(64, parseInt(match[2], 10) || 16));
+    }
+    let value = '';
+    for (let i = 0; i < length; i += 1) {
+      value += chars[Math.floor(Math.random() * chars.length)];
+    }
+    return value;
+  },
+
   _renderTemplateObjects(template, params) {
+    const definitions = this._templateParameterDefinitions(template);
     const parameters = {};
-    for (const parameter of template.spec?.parameters || template.parameters || []) {
+    for (const parameter of definitions) {
       if (parameter.value !== undefined) parameters[parameter.name] = String(parameter.value);
     }
     Object.assign(parameters, params || {});
+    // Parameters with `generate: expression` get a fresh value, exactly like
+    // `oc process` / `oc new-app --template` on a real cluster.
+    for (const parameter of definitions) {
+      if (parameters[parameter.name] !== undefined && parameters[parameter.name] !== '') continue;
+      if (parameter.generate)
+        parameters[parameter.name] = this._generateTemplateValue(parameter.from);
+    }
     const substitute = (value) => {
       if (typeof value === 'string')
         return value.replace(/\$\{([A-Za-z0-9_]+)\}/g, (match, key) =>
@@ -12751,6 +13674,11 @@ Object.assign(CommandBar.prototype, {
       if (!template)
         return this._err(
           `Error while generating the application: template "${templateName}" not found`
+        );
+      const missing = this._templateRequiredMissing(template, params);
+      if (missing.length)
+        return this._err(
+          `error: unable to process template: Template parameter(s) required: [${missing.join(' ')}]`
         );
       const objects = this._renderTemplateObjects(template, params);
       return this._newAppDeployObjects(objects, { namespace, templateName, name });
@@ -13096,12 +14024,12 @@ Object.assign(CommandBar.prototype, {
 // ────────────────────────────────────────────────────────────────────────────
 
 Object.assign(CommandBar.prototype, {
-  _cmdAdm(tokens) {
+  _cmdAdm(tokens, ctx) {
     const sub = (tokens[0] || '').toLowerCase();
     const rest = tokens.slice(1);
     switch (sub) {
       case 'policy':
-        return this._admPolicy(rest);
+        return this._admPolicy(rest, ctx);
       case 'groups':
       case 'group':
         return this._admGroups(rest);
@@ -13128,19 +14056,21 @@ Object.assign(CommandBar.prototype, {
     }
   },
 
-  _admPolicy(tokens) {
+  _admPolicy(tokens, ctx) {
     const sub = (tokens[0] || '').toLowerCase();
     const rest = tokens.slice(1);
     const { positionals, flags } = parseArgs(rest, {
-      shortValues: { '-n': 'namespace', '-z': 'serviceaccount' },
+      shortValues: { '-n': 'namespace', '-z': 'serviceaccount', '-f': 'filename' },
       longValues: [
         'namespace',
         'serviceaccount',
+        'filename',
         'rolebinding-name',
         'clusterrole',
         'role',
         'user',
         'group',
+        'output',
       ],
       longBools: ['dry-run'],
     });
@@ -13245,9 +14175,13 @@ Object.assign(CommandBar.prototype, {
         }
         if (!result) return notAvailable();
         if (result.success === false) return this._err(result.message);
-        const subjectText = saName ? `system:serviceaccount:${namespace}:${saName}` : target;
+        // OCP 4.x output (openshift/oc since PR #412): the grant is a
+        // ClusterRole `system:openshift:scc:<name>` bound to the subject.
+        //   $ oc adm policy add-scc-to-user anyuid -z nginx-sa
+        //   clusterrole.rbac.authorization.k8s.io/system:openshift:scc:anyuid added: "nginx-sa"
+        const subjectLabel = this._rbacSubjectLabel(result, saName, target);
         return this._ok(
-          `securitycontextconstraints.security.openshift.io/${sccName} added to: ["${subjectText}"]`
+          `clusterrole.rbac.authorization.k8s.io/system:openshift:scc:${sccName} added: "${subjectLabel}"`
         );
       }
       case 'remove-scc-from-user':
@@ -13266,12 +14200,23 @@ Object.assign(CommandBar.prototype, {
         if (!result) return notAvailable();
         if (result.success === false) return this._err(result.message);
         return this._ok(
-          `securitycontextconstraints.security.openshift.io/${sccName} removed from: ["${target}"]`
+          `clusterrole.rbac.authorization.k8s.io/system:openshift:scc:${sccName} removed: "${target}"`
         );
       }
       case 'who-can': {
         const verb = positionals[0];
-        const resourceToken = positionals[1];
+        let resourceToken = positionals[1];
+        // Real syntax is `oc adm policy who-can use scc privileged` (resource
+        // type + name as two args) — also accept `scc/privileged`.
+        const firstResourceToken = String(resourceToken || '').toLowerCase();
+        if (
+          ['scc', 'sccs', 'securitycontextconstraints', 'securitycontextconstraint'].includes(
+            firstResourceToken
+          ) &&
+          positionals[2]
+        ) {
+          resourceToken = `scc/${positionals[2]}`;
+        }
         if (!verb || !resourceToken) {
           return this._usageError(
             'adm',
@@ -13289,9 +14234,14 @@ Object.assign(CommandBar.prototype, {
         const groups = (who || [])
           .filter((entry) => entry.kind === 'Group')
           .map((entry) => entry.name);
-        const serviceAccounts = (who || [])
-          .filter((entry) => entry.kind === 'ServiceAccount')
-          .map((entry) => entry.name);
+        // Real oc lists service-account subjects as `system:serviceaccount:<ns>:<sa>`
+        // under Users (there is no separate ServiceAccounts section).
+        const userIdentities = [
+          ...users,
+          ...(who || [])
+            .filter((entry) => entry.kind === 'ServiceAccount')
+            .map((entry) => entry.name),
+        ];
         const sccToken = String(resourceToken).match(/^scc\/(.+)$/);
         const clusterScoped =
           Boolean(sccToken) || isClusterScopedKind(normalizeKind(resourceToken) || '');
@@ -13306,40 +14256,106 @@ Object.assign(CommandBar.prototype, {
           `Resource:  ${resourceDisplay}`,
           '',
         ];
-        if (users.length) lines.push(`Users:  ${users.join(', ')}`);
-        if (groups.length) lines.push(`Groups: ${groups.join(', ')}`);
-        if (serviceAccounts.length) lines.push(`ServiceAccounts: ${serviceAccounts.join(', ')}`);
-        if (!users.length && !groups.length && !serviceAccounts.length) lines.push('<none>');
+        const pushList = (label, entries) => {
+          if (!entries.length) return;
+          lines.push(`${label}${entries[0]}`);
+          for (const entry of entries.slice(1)) {
+            lines.push(`${' '.repeat(label.length)}${entry}`);
+          }
+        };
+        pushList('Users:  ', userIdentities);
+        pushList('Groups: ', groups);
+        if (!userIdentities.length && !groups.length) lines.push('<none>');
         return this._ok(lines.join('\n'));
       }
       case 'scc-review':
       case 'scc-subject-review': {
-        const target = saName || subject;
-        if (!target) {
+        const cluster = this.cluster;
+        if (!cluster || typeof cluster.sccAllowsPod !== 'function') return notAvailable();
+        const filename = flags.filename && flags.filename !== true ? String(flags.filename) : null;
+        const reviewNamespace = this._namespaceFromFlags(flags) || this.currentProject || 'default';
+        /** Extract the Pod spec from a workload manifest. */
+        const podSpecFromManifest = (doc) => {
+          const kind = normalizeKind(doc?.kind) || doc?.kind;
+          const spec = doc?.spec || {};
+          if (kind === 'Pod') return { kind, spec };
+          const path = {
+            Deployment: ['template', 'spec'],
+            DeploymentConfig: ['template', 'spec'],
+            ReplicaSet: ['template', 'spec'],
+            ReplicationController: ['template', 'spec'],
+            StatefulSet: ['template', 'spec'],
+            DaemonSet: ['template', 'spec'],
+            Job: ['template', 'spec'],
+            CronJob: ['jobTemplate', 'spec', 'template', 'spec'],
+          }[kind];
+          if (!path) return { kind, spec: null };
+          let target = spec;
+          for (const segment of path) {
+            target = target?.[segment];
+            if (!target) break;
+          }
+          return { kind, spec: target || null };
+        };
+        const rows = [];
+        let docs = [];
+        if (filename) {
+          const preview = this._manifestPreviewDocs(filename, {
+            stdinText: ctx?.stdin ?? null,
+          });
+          if (preview.error) return preview.error;
+          docs = preview.docs || [];
+        } else if (!saName) {
           return this._usageError(
             'adm',
-            `subject is required\n\n  oc adm policy ${sub} -z <serviceaccount> -n <project>`
+            `a resource must be specified\n\n  oc adm policy ${sub} -f <file>   |   oc adm policy ${sub} -z <serviceaccount> -n <project>`
           );
         }
-        const identity = saName ? `system:serviceaccount:${namespace}:${saName}` : target;
-        let scc = null;
-        const cluster = this.cluster;
-        if (cluster && typeof cluster.sccForServiceAccount === 'function' && saName) {
-          try {
-            scc = cluster.sccForServiceAccount(namespace, saName);
-          } catch {
-            scc = null;
+        for (const doc of docs) {
+          const { kind, spec: podSpec } = podSpecFromManifest(doc);
+          if (!podSpec) {
+            return this._err(
+              `error: ${doc?.kind || 'resource'} is not a pod or does not have a pod template`
+            );
           }
+          const docNamespace = doc?.metadata?.namespace || reviewNamespace;
+          const serviceAccount =
+            (flags.serviceaccount && flags.serviceaccount !== true
+              ? String(flags.serviceaccount)
+              : null) ||
+            podSpec.serviceAccountName ||
+            podSpec.serviceAccount ||
+            'default';
+          const candidates =
+            typeof cluster.getSCCsForServiceAccount === 'function'
+              ? cluster.getSCCsForServiceAccount(docNamespace, serviceAccount)
+              : this._resources('SecurityContextConstraints');
+          const allowed = (candidates || []).find((scc) => cluster.sccAllowsPod(scc, podSpec));
+          const allowedBy = allowed?.metadata?.name || '<none>';
+          rows.push([
+            `${kind}/${doc?.metadata?.name || 'unnamed'}`,
+            ...(sub === 'scc-review' ? [serviceAccount] : []),
+            allowedBy,
+          ]);
         }
-        if (!scc)
-          scc =
-            this._resources('SecurityContextConstraints').find(
-              (candidate) =>
-                (candidate.spec?.users || []).includes(identity) ||
-                (candidate.spec?.groups || []).includes(identity)
-            ) || null;
-        const sccName = scc?.metadata?.name || 'restricted-v2';
-        return this._ok(`ServiceAccount ${identity} can create pods with SCC "${sccName}".`);
+        if (!docs.length) {
+          // `-z <sa>` without a resource: review the service account with an
+          // unconstrained pod spec (the most restrictive usable SCC wins).
+          const candidates =
+            typeof cluster.getSCCsForServiceAccount === 'function'
+              ? cluster.getSCCsForServiceAccount(reviewNamespace, saName)
+              : this._resources('SecurityContextConstraints');
+          rows.push([
+            `ServiceAccount/${reviewNamespace}/${saName}`,
+            ...(sub === 'scc-review' ? [saName] : []),
+            candidates?.[0]?.metadata?.name || '<none>',
+          ]);
+        }
+        const headers =
+          sub === 'scc-review'
+            ? ['RESOURCE', 'SERVICE ACCOUNT', 'ALLOWED BY']
+            : ['RESOURCE', 'ALLOWED BY'];
+        return this._ok(padTable(headers, rows));
       }
       default:
         return this._err(
@@ -13829,7 +14845,7 @@ Object.assign(CommandBar.prototype, {
   },
 
   _cmdDebug(tokens) {
-    const { positionals } = parseArgs(tokens, {
+    const { positionals, afterDoubleDash } = parseArgs(tokens, {
       longBools: [
         'keep-labels',
         'keep-init-containers',
@@ -13848,15 +14864,22 @@ Object.assign(CommandBar.prototype, {
         'resource name is required\n\n  oc debug node/<node>   |   oc debug deployment/<name>'
       );
     if (kind === 'Node') {
-      const node = this._findResource('Node', name, {});
+      const node = this._findDebugNode(name);
       if (!node) return this._err(this._notFoundMessage('Node', name));
+      const nodeName = node.metadata?.name || node.name || name;
+      // One-shot form: `oc debug node/x -- chroot /host systemctl restart kubelet`.
+      if (Array.isArray(afterDoubleDash) && afterDoubleDash.length > 0) {
+        return this._runDebugOneShot(nodeName, afterDoubleDash.join(' '));
+      }
+      // Interactive session (#28): keep the debug shell open until `exit`.
+      this._debugSession = { kind: 'node', name: nodeName, chroot: false, uid: node.uid };
       return this._ok(
         [
-          `Creating debug namespace/openshift-debug-node-${name} ...`,
-          `Starting pod/${name}-debug ...`,
+          `Creating debug namespace/openshift-debug-node-${nodeName} ...`,
+          `Starting pod/${nodeName}-debug ...`,
           `To use host binaries, run \`chroot /host\``,
           '',
-          `(node/${name}) $ `,
+          `${this._debugPrompt()} `,
         ].join('\n')
       );
     }
@@ -13877,6 +14900,376 @@ Object.assign(CommandBar.prototype, {
         .join('\n')
         .trimEnd()
     );
+  },
+
+  // ── Node debug session (issue #28) ────────────────────────────────────────
+  /**
+   * Resolve a node for `oc debug`. Real OCP names are `worker-0`/`worker-1`/
+   * `master-0`; legacy level data still says `node-2`, so accept both.
+   * @param {string} name
+   * @returns {object|null}
+   */
+  _findDebugNode(name) {
+    const aliases = {
+      'node-1': 'worker-0',
+      'node-2': 'worker-1',
+      'node-3': 'master-0',
+      'worker-0': 'node-1',
+      'worker-1': 'node-2',
+      'master-0': 'node-3',
+    };
+    const candidates = [name, aliases[String(name || '').toLowerCase()]].filter(Boolean);
+    for (const candidate of candidates) {
+      const node = this._findResource('Node', candidate, {});
+      if (node) return node;
+    }
+    return null;
+  },
+
+  /** The prompt shown for the active debug shell. */
+  _debugPrompt() {
+    const session = this._debugSession;
+    if (!session) return '$';
+    return session.chroot ? 'sh-4.4#' : `(node/${session.name}) $`;
+  },
+
+  /** Split `cmd1; cmd2 && cmd3` into individual debug-shell commands. */
+  _splitDebugCommands(commandLine) {
+    return String(commandLine || '')
+      .split(/&&|;/)
+      .map((part) => part.trim())
+      .filter(Boolean);
+  },
+
+  /** Run `oc debug node/x -- <command>` without entering the session. */
+  _runDebugOneShot(nodeName, commandLine) {
+    const session = { kind: 'node', name: nodeName, chroot: false, uid: null };
+    this._debugSession = null; // the one-shot form always exits
+    const header = [
+      `Creating debug namespace/openshift-debug-node-${nodeName} ...`,
+      `Starting pod/${nodeName}-debug ...`,
+      `To use host binaries, run \`chroot /host\``,
+    ];
+    const parts = this._splitDebugCommands(commandLine);
+    if (parts.length === 0) {
+      return this._ok([...header, `(node/${nodeName}) $ `].join('\n'));
+    }
+    const outputs = [];
+    let failed = false;
+    for (const part of parts) {
+      const outcome = this._runDebugCommandForSession(session, part);
+      if (outcome.message) outputs.push(outcome.message);
+      if (outcome.error) {
+        failed = true;
+        break;
+      }
+      if (outcome.ended) break;
+    }
+    const message = [...header, ...outputs].join('\n');
+    return failed ? this._err(message) : this._ok(message);
+  },
+
+  /**
+   * Feed one line to the active debug session (called from executeCommand while
+   * `_debugSession` is set). Echoes the debug prompt, runs the command and
+   * returns the same result shape as every other command.
+   * @param {string} rawInput
+   */
+  _runDebugSessionLine(rawInput) {
+    const raw = String(rawInput ?? '').trim();
+    const promptBefore = this._debugPrompt();
+    this._pushHistory(raw);
+    this._clearInput();
+    this._appendOutput(raw ? `${promptBefore} ${raw}` : promptBefore, 'text-green-400/80');
+    if (!raw) {
+      const empty = {
+        error: false,
+        message: '',
+        raw,
+        normalized: '',
+        baseCommand: 'debug',
+        success: true,
+      };
+      this._lastResult = empty;
+      return empty;
+    }
+    const session = this._debugSession;
+    const outcome = this._runDebugCommandForSession(session, raw);
+    if (outcome.message) {
+      this._appendOutput(outcome.message, outcome.error ? 'text-red-400' : 'text-white/70');
+    }
+    if (outcome.ended) {
+      this._appendOutput('logout', 'text-white/30');
+    } else if (this._debugSession) {
+      this._appendOutput(this._debugPrompt(), 'text-green-400/80');
+    }
+    const result = {
+      error: Boolean(outcome.error),
+      message: outcome.message || '',
+      raw,
+      normalized: raw,
+      baseCommand: 'debug',
+      success: !outcome.error,
+      debugSession: Boolean(this._debugSession),
+    };
+    this._lastResult = result;
+    return result;
+  },
+
+  /** Dispatch one debug-shell command, chrooted or inside the debug container. */
+  _runDebugCommandForSession(session, commandLine) {
+    if (!session) return { message: '', error: false, ended: true };
+    if (!session.chroot) return this._runDebugContainerCommand(session, commandLine);
+    return this._runDebugHostCommand(session, commandLine);
+  },
+
+  /** Commands available inside the debug container before `chroot /host`. */
+  _runDebugContainerCommand(session, commandLine) {
+    const tokens = tokenizeCommand(commandLine);
+    const first = (tokens[0] || '').toLowerCase();
+    if (first === 'chroot' && (tokens[1] || '') === '/host') {
+      session.chroot = true;
+      return { message: '', error: false };
+    }
+    if (first === 'chroot') {
+      return {
+        message: `chroot: ${tokens[1] ? 'cannot change root directory' : 'missing operand'}`,
+        error: true,
+      };
+    }
+    if (first === 'exit' || first === 'logout') {
+      this._debugSession = null;
+      return { message: 'exit', error: false, ended: true };
+    }
+    if (first === 'help' || first === '?') {
+      return {
+        message:
+          'Host binaries are not in this container. Run `chroot /host` first, then use systemctl/journalctl.',
+        error: false,
+      };
+    }
+    return { message: `bash: ${first || 'command'}: command not found`, error: true };
+  },
+
+  /**
+   * Commands available on the node host shell after `chroot /host`.
+   * `systemctl restart kubelet` is the state-driven repair of NodeNotReady.
+   */
+  _runDebugHostCommand(session, commandLine) {
+    // Strip an optional `chroot /host` prefix (`oc debug … -- chroot /host …`).
+    let line = String(commandLine || '').trim();
+    if (/^chroot\s+\/host\b/i.test(line)) line = line.replace(/^chroot\s+\/host\b/i, '').trim();
+    if (!line) return { message: '', error: false };
+    const { command, filters } = this._splitDebugPipeline(line);
+    const tokens = tokenizeCommand(command);
+    const first = (tokens[0] || '').toLowerCase();
+    if (first === 'exit' || first === 'logout') {
+      if (session.chroot) {
+        // First exit leaves the host shell and returns to the debug container.
+        session.chroot = false;
+        return { message: 'exit', error: false };
+      }
+      this._debugSession = null;
+      return { message: 'exit', error: false, ended: true };
+    }
+    if (first === 'systemctl') {
+      return this._debugSystemctl(session, tokens, filters);
+    }
+    if (first === 'journalctl') {
+      return this._debugJournalctl(session, tokens, filters);
+    }
+    if (first === 'hostname') {
+      return this._applyDebugFilters(session.name, filters);
+    }
+    if (first === 'uname') {
+      return this._applyDebugFilters(
+        'Linux worker 5.14.0-427.el9.x86_64 #1 SMP x86_64 GNU/Linux',
+        filters
+      );
+    }
+    if (first === 'df') {
+      return this._applyDebugFilters(
+        [
+          'Filesystem      Size  Used Avail Use% Mounted on',
+          '/dev/nvme0n1p4   50G  9.8G   40G  20% /sysroot',
+          'tmpfs           32G     0   32G   0% /host/tmp',
+        ].join('\n'),
+        filters
+      );
+    }
+    return { message: `bash: ${first || 'command'}: command not found`, error: true };
+  },
+
+  /** Split `journalctl -u kubelet | tail -n 20` into command + text filters. */
+  _splitDebugPipeline(line) {
+    const stages = String(line || '')
+      .split('|')
+      .map((stage) => stage.trim())
+      .filter(Boolean);
+    const command = stages.shift() || '';
+    return { command, filters: stages };
+  },
+
+  /** Apply a tiny subset of pipe filters (`tail`, `head`, `grep`, `wc -l`). */
+  _applyDebugFilters(text, filters = []) {
+    let output = String(text ?? '');
+    for (const filter of filters) {
+      const tokens = tokenizeCommand(filter);
+      const name = (tokens[0] || '').toLowerCase();
+      if (name === 'tail') {
+        const count = Number(tokens.find((token) => /^\d+$/.test(token)) || -10);
+        const n = Math.abs(count) || 10;
+        output = output.split('\n').slice(-n).join('\n');
+      } else if (name === 'head') {
+        const count = Number(tokens.find((token) => /^\d+$/.test(token)) || 10);
+        output = output.split('\n').slice(0, count).join('\n');
+      } else if (name === 'grep') {
+        const pattern = tokens.slice(1).find((token) => !token.startsWith('-')) || '';
+        try {
+          const regex = new RegExp(pattern, 'i');
+          output = output
+            .split('\n')
+            .filter((row) => regex.test(row))
+            .join('\n');
+        } catch {
+          output = '';
+        }
+      } else if (name === 'wc') {
+        output = String(output.split('\n').length);
+      }
+    }
+    return { message: output, error: false };
+  },
+
+  /** `systemctl …` on the host, including the kubelet restart repair. */
+  _debugSystemctl(session, tokens, filters = []) {
+    const verb = (tokens[1] || '').toLowerCase();
+    const unit = (tokens[2] || '').toLowerCase();
+    const node = this._findDebugNode(session.name);
+    const nodeReady = Boolean(
+      node &&
+      (node.status?.phase || 'Running') !== 'NotReady' &&
+      (typeof node.isConditionTrue === 'function' ? node.isConditionTrue('Ready') : true)
+    );
+    if (verb === 'status' && (unit === 'kubelet' || unit === 'kubelet.service' || !unit)) {
+      const status = nodeReady
+        ? [
+            '● kubelet.service - kubelet: The Kubernetes Node Agent',
+            '     Loaded: loaded (/etc/systemd/system/kubelet.service; enabled; preset: enabled)',
+            '     Active: active (running)',
+            '   Main PID: 2841 (kubelet)',
+            '      Tasks: 21 (limit: 100000)',
+            '     Memory: 84.2M',
+          ].join('\n')
+        : [
+            '○ kubelet.service - kubelet: The Kubernetes Node Agent',
+            '     Loaded: loaded (/etc/systemd/system/kubelet.service; enabled; preset: enabled)',
+            '     Active: inactive (dead)',
+          ].join('\n');
+      return this._applyDebugFilters(status, filters);
+    }
+    if (verb === 'restart' && (unit === 'kubelet' || unit === 'kubelet.service')) {
+      const repaired = this._restartKubelet(session.name, session);
+      if (!repaired.ok) return { message: repaired.message, error: true };
+      return { message: '', error: false };
+    }
+    if (verb === 'is-active') {
+      return { message: nodeReady ? 'active' : 'inactive', error: false };
+    }
+    if (verb === 'start' && (unit === 'kubelet' || unit === 'kubelet.service')) {
+      this._restartKubelet(session.name, session);
+      return { message: '', error: false };
+    }
+    return {
+      message: `Unknown command verb ${verb || '(none)'}.`,
+      error: true,
+    };
+  },
+
+  /** `journalctl -u kubelet …` on the host. */
+  _debugJournalctl(session, tokens, filters = []) {
+    const joined = tokens.join(' ');
+    if (!/-u\s+kubelet|--unit[= ]kubelet/i.test(joined)) {
+      return { message: '-- No entries --', error: false };
+    }
+    const node = this._findDebugNode(session.name);
+    const nodeReady = Boolean(
+      node &&
+      (node.status?.phase || 'Running') !== 'NotReady' &&
+      (typeof node.isConditionTrue === 'function' ? node.isConditionTrue('Ready') : true)
+    );
+    const lines = nodeReady
+      ? [
+          '-- Logs begin at Mon 2026-11-04 20:00:00 UTC, end at Mon 2026-11-04 20:10:00 UTC. --',
+          'Nov 04 20:00:01 worker systemd[1]: Starting kubelet: The Kubernetes Node Agent...',
+          'Nov 04 20:00:02 worker systemd[1]: Started kubelet: The Kubernetes Node Agent.',
+          'Nov 04 20:00:05 worker kubelet[2841]: I1104 20:00:05.301 kubelet.go:2457] "Node status is Ready"',
+        ]
+      : [
+          '-- Logs begin at Mon 2026-11-04 20:00:00 UTC, end at Mon 2026-11-04 20:10:00 UTC. --',
+          'Nov 04 20:08:10 worker systemd[1]: kubelet.service: Main process exited, code=exited, status=1/FAILURE',
+          "Nov 04 20:08:10 worker systemd[1]: kubelet.service: Failed with result 'exit-code'.",
+          'Nov 04 20:08:10 worker systemd[1]: Failed to start kubelet: The Kubernetes Node Agent.',
+        ];
+    return this._applyDebugFilters(lines.join('\n'), filters);
+  },
+
+  /**
+   * State-driven repair used by `systemctl restart kubelet` (#28): the kubelet
+   * posts Ready again, so the Node becomes Ready and IncidentEngine's per-tick
+   * state check clears NodeNotReady. Workload rescheduling/uncordon is done by
+   * the incident's own resolution effect (or `oc adm uncordon`).
+   */
+  _restartKubelet(nodeName, session = null) {
+    const node = this._findDebugNode(nodeName);
+    if (!node)
+      return { ok: false, message: `Failed to restart kubelet.service: "${nodeName}" not found` };
+    if (typeof node.setPhase === 'function') {
+      node.setPhase('Running');
+    } else {
+      node.status = node.status || {};
+      node.status.phase = 'Running';
+    }
+    if (typeof node.setCondition === 'function') {
+      node.setCondition('Ready', 'True', 'KubeletReady', 'kubelet is posting ready status');
+    } else {
+      node.status = node.status || {};
+      node.status.conditions = Array.isArray(node.status.conditions) ? node.status.conditions : [];
+      const index = node.status.conditions.findIndex((condition) => condition.type === 'Ready');
+      const ready = {
+        type: 'Ready',
+        status: 'True',
+        reason: 'KubeletReady',
+        message: 'kubelet is posting ready status',
+        lastTransitionTime: new Date().toISOString(),
+      };
+      if (index >= 0) node.status.conditions[index] = ready;
+      else node.status.conditions.push(ready);
+    }
+    if (typeof node.recordEvent === 'function') {
+      node.recordEvent(
+        'Normal',
+        'NodeReady',
+        'kubelet restarted via oc debug; node is posting ready status'
+      );
+    }
+    try {
+      this.cluster?.update?.(node.uid, node);
+    } catch {
+      /* cluster may be mid-reset */
+    }
+    if (this.gameEngine && typeof this.gameEngine.emit === 'function') {
+      try {
+        this.gameEngine.emit('node:kubelet-restarted', {
+          node: node.metadata?.name || nodeName,
+          actor: this.currentUser,
+        });
+      } catch {
+        /* ignore */
+      }
+    }
+    if (session) session.kubeletRestarted = true;
+    return { ok: true };
   },
 
   /** Helm repo/release bookkeeping for the simulated Helm client. */
@@ -14871,6 +16264,7 @@ Object.assign(CommandBar.prototype, {
       namespace: flags.namespace,
       explicitNamespace: Boolean(flags.namespace),
       allowPrefix: false,
+      allowOtherNamespaces: false,
     });
     if (!resource) return this._err(this._notFoundMessage(kind, name));
     const isSecret = kind === 'Secret';
@@ -15434,6 +16828,7 @@ Object.assign(CommandBar.prototype, {
       namespace,
       explicitNamespace: Boolean(flags.namespace),
       allowPrefix: false,
+      allowOtherNamespaces: false,
     });
     if (!sa)
       return this._err(
@@ -15546,6 +16941,9 @@ Object.assign(CommandBar.prototype, {
       kind = 'Pod';
       name = positionals[0];
       consumed = 1;
+    } else if (String(positionals[0] || '').includes('/')) {
+      // `oc rsh deployment/app env`: TYPE/NAME is a single positional token.
+      consumed = 1;
     }
     if (!name)
       return this._usageError('rsh', 'resource name is required\n\n  oc rsh deployment/<name>');
@@ -15561,6 +16959,10 @@ Object.assign(CommandBar.prototype, {
         `Error from server (BadRequest): container "${containerName}" is not valid for pod "${pod.metadata?.name}"`
       );
     }
+    // A CrashLoopBackOff / ImagePullBackOff / completed container cannot be
+    // exec'd into; real oc fails the attach instead of pretending to run (#35).
+    const containerStateError = this._execContainerStateError(pod, containerName);
+    if (containerStateError) return this._err(containerStateError);
     const command = positionals.slice(consumed).join(' ').trim();
     // Real oc only defaults (and announces) a container for multi-container pods.
     const containerSpecified = Boolean(flags.container && flags.container !== true);
@@ -16027,6 +17429,7 @@ Object.assign(CommandBar.prototype, {
       namespace: flags.namespace,
       explicitNamespace: Boolean(flags.namespace),
       allowPrefix: false,
+      allowOtherNamespaces: false,
     });
     if (!target) return this._err(this._notFoundMessage(kind, name));
     const min = flags.min !== undefined && flags.min !== true ? Number(flags.min) : 1;

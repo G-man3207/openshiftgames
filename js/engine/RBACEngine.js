@@ -225,6 +225,20 @@ export const BUILTIN_CLUSTER_ROLE_RULES = {
     { apiGroups: ['image.openshift.io'], resources: ['imagestreams/layers'], verbs: READ_VERBS },
     { apiGroups: [''], resources: ['pods/log'], verbs: READ_VERBS },
   ],
+  // Real 4.x project defaults: `system:image-builders` and `system:deployers`
+  // RoleBindings reference these built-in ClusterRoles.
+  'system:image-builder': [
+    {
+      apiGroups: ['image.openshift.io'],
+      resources: ['imagestreams', 'imagestreams/layers', 'imagestreamtags'],
+      verbs: EDIT_VERBS,
+    },
+    { apiGroups: ['build.openshift.io'], resources: ['builds'], verbs: EDIT_VERBS },
+  ],
+  'system:deployer': [
+    { apiGroups: ['apps'], resources: ['deployments'], verbs: EDIT_VERBS },
+    { apiGroups: ['extensions', 'apps'], resources: ['replicationcontrollers'], verbs: EDIT_VERBS },
+  ],
 };
 
 /** Roles that are always accepted as a `roleRef` even without a resource object. */
@@ -613,6 +627,16 @@ export function whoCan(cluster, verb, resource, namespace = 'default') {
       ? cluster.getByKindAndNamespace('RoleBinding', effectiveNamespace)
       : []) {
       collect(rb, effectiveNamespace);
+    }
+  } else if (cluster?.getByKind) {
+    // Cluster-scoped resources (notably `use scc/<name>`): OCP 4.x allows an
+    // SCC grant to live on a RoleBinding in the workload's project — the
+    // `oc adm policy add-scc-to-user <scc> -z <sa> -n <project>` form — even
+    // though the SecurityContextConstraints resource itself is cluster-scoped.
+    // `oc adm policy who-can use scc <name>` therefore scans every project's
+    // RoleBindings, not just the default namespace.
+    for (const rb of cluster.getByKind('RoleBinding')) {
+      collect(rb, rb.metadata?.namespace || '');
     }
   }
   return Array.from(found.values());

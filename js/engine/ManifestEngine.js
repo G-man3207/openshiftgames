@@ -80,6 +80,29 @@ function isPlainObject(value) {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
+/** Irregural plurals used by the API server in error messages (`oc` fidelity). */
+const KIND_PLURALS = {
+  Ingress: 'ingresses',
+  NetworkPolicy: 'networkpolicies',
+  StorageClass: 'storageclasses',
+  PersistentVolumeClaim: 'persistentvolumeclaims',
+  HorizontalPodAutoscaler: 'horizontalpodautoscalers',
+  SecurityContextConstraints: 'securitycontextconstraints',
+  ClusterResourceQuota: 'clusterresourcequotas',
+  PodDisruptionBudget: 'poddisruptionbudgets',
+  ConfigMap: 'configmaps',
+  ImageStreamTag: 'imagestreamtags',
+};
+
+/** `deployments.apps` / `pods` — the resource name a real API server uses. */
+function resourceNamePlural(kind) {
+  const canonical = normalizeKind(kind) || kind;
+  const plural = KIND_PLURALS[canonical] || `${String(canonical).toLowerCase()}s`;
+  const apiVersion = apiVersionForKind(canonical) || '';
+  const group = apiVersion.includes('/') ? apiVersion.split('/')[0] : '';
+  return group ? `${plural}.${group}` : plural;
+}
+
 function clone(value) {
   if (value === undefined) return undefined;
   return JSON.parse(JSON.stringify(value));
@@ -684,6 +707,7 @@ export class ManifestEngine {
       ok: false,
       created: [],
       updated: [],
+      unchanged: [],
       errors: [],
       errorDetails: [],
       warnings: [],
@@ -803,6 +827,7 @@ export class ManifestEngine {
     );
     let resource = null;
     let created = !existed;
+    let unchanged = false;
 
     if (engine && typeof engine.applyManifestObject === 'function') {
       const rawObj = {
@@ -834,6 +859,9 @@ export class ManifestEngine {
       } else if (returned) {
         resource = returned;
       }
+      // The engine marks a declarative apply that changed nothing as
+      // `_applyAction: 'unchanged'` (no generation bump, same resourceVersion).
+      if (resource && resource._applyAction === 'unchanged') unchanged = true;
       if (!resource)
         resource = this._findResource(normalized.kind, normalized.name, normalized.namespace);
       if (!resource && returned === undefined) {
@@ -847,6 +875,7 @@ export class ManifestEngine {
 
     return {
       created,
+      unchanged,
       ref: {
         kind: resource?.kind || normalized.kind,
         name: resource?.metadata?.name || normalized.name,
@@ -875,6 +904,7 @@ export class ManifestEngine {
     const warnings = [];
     const created = [];
     const updated = [];
+    const unchanged = [];
     const autoCreatedProjects = [];
     const autoCreateProjects =
       opts.autoCreateProjects !== undefined
@@ -940,12 +970,30 @@ export class ManifestEngine {
     for (const normalized of applicable) {
       if (normalized.namespaced && skippedNamespaces.has(normalized.namespace)) continue;
       try {
+        // `oc create -f` is not idempotent: an existing name is a server-side
+        // AlreadyExists error (the create/apply distinction is exam material).
+        if (opts.command === 'create') {
+          const existing = this._findResource(
+            normalized.kind,
+            normalized.name,
+            normalized.namespace
+          );
+          if (existing) {
+            const message = `Error from server (AlreadyExists): ${resourceNamePlural(
+              normalized.kind
+            )} "${normalized.name}" already exists`;
+            result.errors.push(message);
+            result.errorDetails.push({ file: source, message });
+            continue;
+          }
+        }
         const applied = this._applyOne(normalized);
         if (applied.projectConfig) {
           projectConfigApplied = true;
           continue;
         }
         if (applied.created) created.push(applied.ref);
+        else if (applied.unchanged) unchanged.push(applied.ref);
         else updated.push(applied.ref);
       } catch (err) {
         result.errors.push(formatError(err, source));
@@ -955,6 +1003,7 @@ export class ManifestEngine {
 
     result.created = created;
     result.updated = updated;
+    result.unchanged = unchanged;
     result.autoCreatedProjects = autoCreatedProjects;
     result.warnings.push(...warnings);
     result.ok = result.errors.length === 0;
@@ -1049,6 +1098,7 @@ export class ManifestEngine {
       path: norm,
       event: 'manifest:applied',
       namespace: options.namespace,
+      command: options.command,
       autoCreateProjects: options.autoCreateProjects,
     });
     if (result.ok) {
@@ -1124,6 +1174,7 @@ export class ManifestEngine {
       path: source,
       event: 'manifest:applied',
       namespace: options.namespace,
+      command: options.command,
       autoCreateProjects: options.autoCreateProjects,
     });
 
@@ -1416,19 +1467,25 @@ export class ManifestEngine {
     const namespace = kustomization.namespace ? String(kustomization.namespace) : '';
     const namePrefix = kustomization.namePrefix ? String(kustomization.namePrefix) : '';
     const nameSuffix = kustomization.nameSuffix ? String(kustomization.nameSuffix) : '';
-    const commonLabels = {
-      ...(isPlainObject(kustomization.commonLabels) ? kustomization.commonLabels : {}),
-    };
-    const labelPairs = {};
-    let includeSelectors = false;
+    // Deprecated `commonLabels` behaves like the old kustomize transformer: the
+    // pairs land in metadata.labels AND in Service/workload selectors + pod
+    // templates. The v5 `labels:` transformer only touches selectors when an
+    // entry sets `includeSelectors: true` (#36).
+    const deprecatedCommonLabels = isPlainObject(kustomization.commonLabels)
+      ? { ...kustomization.commonLabels }
+      : {};
+    const metadataPairs = { ...deprecatedCommonLabels };
+    const selectorPairs = { ...deprecatedCommonLabels };
     if (Array.isArray(kustomization.labels)) {
       for (const entry of kustomization.labels) {
         if (!isPlainObject(entry)) continue;
-        Object.assign(commonLabels, isPlainObject(entry.pairs) ? entry.pairs : {});
-        if (entry.includeSelectors === true) includeSelectors = true;
+        const pairs = isPlainObject(entry.pairs) ? entry.pairs : {};
+        Object.assign(metadataPairs, pairs);
+        if (entry.includeSelectors === true) Object.assign(selectorPairs, pairs);
       }
     }
-    if (includeSelectors) Object.assign(labelPairs, commonLabels);
+    const commonLabels = metadataPairs;
+    const labelPairs = selectorPairs;
     const commonAnnotations = isPlainObject(kustomization.commonAnnotations)
       ? kustomization.commonAnnotations
       : {};
@@ -1653,7 +1710,11 @@ export class ManifestEngine {
     }
     try {
       const loaded = this._loadKustomization(dir);
-      const yaml = loaded.objects.map((obj) => `---\n${stringifyYaml(obj)}`).join('');
+      // Real `oc kustomize` starts directly with the first document (no leading
+      // `---`); later documents are separated by `---` like kubectl output.
+      const yaml = loaded.objects
+        .map((obj, index) => `${index === 0 ? '' : '---\n'}${stringifyYaml(obj)}`)
+        .join('');
       return { ok: true, objects: loaded.objects, yaml, warnings: loaded.warnings, errors: [] };
     } catch (err) {
       const message = formatError(err, kustomizationPath);

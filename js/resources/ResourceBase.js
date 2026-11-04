@@ -8,11 +8,26 @@ import {
 
 let uidCounter = 0;
 
+/**
+ * RFC 4122 v4 UUID, like the API server assigns to `metadata.uid`
+ * (`crypto.randomUUID()` in every browser this game supports).
+ * @returns {string}
+ */
 function generateUID() {
+  if (typeof globalThis.crypto?.randomUUID === 'function') return globalThis.crypto.randomUUID();
   uidCounter++;
-  const timestamp = Date.now().toString(36);
-  const random = Math.random().toString(36).substring(2, 10);
-  return `${timestamp}-${random}-${uidCounter.toString(36).padStart(4, '0')}`;
+  const hex = (length) =>
+    Math.floor(Math.random() * 16 ** length)
+      .toString(16)
+      .padStart(length, '0');
+  // v4 layout: 8-4-4-4-12 with version nibble 4 and variant nibble a/b.
+  const variant = '89ab'[Math.floor(Math.random() * 4)];
+  return `${hex(8)}-${hex(4)}-4${hex(3)}-${variant}${hex(3)}-${hex(8)}${hex(4)}`;
+}
+
+/** metav1.Time-style RFC3339 timestamp (second precision, no milliseconds). */
+function isoTimestamp(value = Date.now()) {
+  return new Date(value).toISOString().replace(/\.\d{3}Z$/, 'Z');
 }
 
 /**
@@ -52,7 +67,7 @@ export class ResourceBase {
       uid: md.uid || meta.uid || generateUID(),
       labels: deepClone(md.labels || meta.labels || {}),
       annotations: deepClone(md.annotations || meta.annotations || {}),
-      creationTimestamp: md.creationTimestamp || new Date().toISOString(),
+      creationTimestamp: md.creationTimestamp || isoTimestamp(),
       deletionTimestamp: md.deletionTimestamp || null,
       generation: md.generation || 1,
       resourceVersion: md.resourceVersion || '1',
@@ -243,7 +258,7 @@ export class ResourceBase {
 
   markForDeletion() {
     if (!this.metadata.deletionTimestamp) {
-      this.metadata.deletionTimestamp = new Date().toISOString();
+      this.metadata.deletionTimestamp = isoTimestamp();
       this._bumpResourceVersion();
       this.recordEvent('Normal', 'Killing', 'Resource marked for deletion');
     }
@@ -473,7 +488,7 @@ export class ResourceBase {
       cloned[key] = deepClone(value);
     }
     cloned.metadata.uid = generateUID();
-    cloned.metadata.creationTimestamp = new Date().toISOString();
+    cloned.metadata.creationTimestamp = isoTimestamp();
     cloned.metadata.resourceVersion = '1';
     cloned._events = [];
     cloned._listeners = new Map();

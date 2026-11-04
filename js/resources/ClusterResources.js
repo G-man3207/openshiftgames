@@ -222,12 +222,26 @@ export class Node extends ResourceBase {
     };
   }
 
+  /**
+   * ROLES value for `oc get nodes` / `oc describe node` (#28 P4): derived from
+   * the `node-role.kubernetes.io/*` labels, with a name-based fallback so a
+   * machine is never rendered as `<none>`.
+   */
+  get roles() {
+    const labels = this.metadata?.labels || {};
+    const roles = Object.keys(labels)
+      .filter((key) => key.startsWith('node-role.kubernetes.io/'))
+      .map((key) => key.slice('node-role.kubernetes.io/'.length))
+      .filter(Boolean);
+    if (roles.length > 0) return roles.sort().join(',');
+    const name = String(this.metadata?.name || '');
+    if (/^(master|control-plane)/.test(name)) return 'control-plane,master';
+    return 'worker';
+  }
+
   toDescribe() {
-    const roleLabel =
-      this.metadata.labels['node-role.kubernetes.io/master'] ??
-      this.metadata.labels['node-role.kubernetes.io/control-plane'];
     return `Name:               ${this.metadata.name}
-Roles:              ${roleLabel !== undefined ? 'control-plane,master' : 'worker'}
+Roles:              ${this.roles}
 Labels:             ${
       Object.entries(this.metadata.labels)
         .map(([k, v]) => `${k}=${v}`)

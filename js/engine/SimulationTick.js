@@ -39,6 +39,15 @@ import {
   nextCronOccurrence,
 } from '../resources/WorkloadResources.js';
 import { knownImageRuntimeFailure } from '../resources/ImageSecurityProfiles.js';
+// The service-ca controller issues serving certificates with the same
+// dependency-free PEM helpers that back the shell's simulated `openssl`
+// commands (issue #32b/#33a), so `openssl x509` can read the resulting Secret.
+import {
+  createCertificateAuthority,
+  createSelfSignedCertificate,
+  createServiceSignedCertificate,
+  parseCertificatePem,
+} from '../ui/ShellTools.js';
 
 /** Fixed controller timings in game seconds (1 tick = 0.05 s at 20 TPS). */
 const BUILD_PHASE_NEW_SECONDS = 1;
@@ -117,6 +126,67 @@ const IMAGE_PULL_FAILURE_TAG_RE =
   /(does-not-exist|doesnotexist|doesnt-exist|nonexistent|no-such|not-found|notfound|missing|invalid|bogus|nope|broken)/i;
 const IMAGE_PULL_FAILURE_REPO_RE =
   /(^|[\/])(does-not-exist|doesnotexist|nonexistent|no-such-repo|missing-repo)([\/:.]|$)/i;
+
+/** service-ca / router constants (issues #32c, #33a, #33b). */
+const SERVING_CERT_ANNOTATION = 'service.beta.openshift.io/serving-cert-secret-name';
+const INJECT_CABUNDLE_ANNOTATION = 'service.beta.openshift.io/inject-cabundle';
+const INJECT_CABUNDLE_KEY = 'service-ca.crt';
+const ROUTER_NAMESPACE = 'openshift-ingress';
+const ROUTER_NAMESPACE_LABEL = 'policy-group.network.openshift.io/ingress';
+const ROUTER_DEFAULT_IP = '172.30.0.20';
+const ROUTER_404_BODY =
+  '<html><body><h1>404 Not Found</h1>\nThe requested URL was not found on this server.</body></html>';
+const ROUTER_503_BODY =
+  '<html><body><h1>503 Service Unavailable</h1>\nNo server is available to handle this request.</body></html>';
+
+/** Base64-encode UTF-8 text (Secret `data` values / CABundle keys). */
+function base64EncodeText(text) {
+  const value = String(text ?? '');
+  try {
+    if (typeof btoa === 'function') return btoa(unescape(encodeURIComponent(value)));
+  } catch {
+    /* fall through */
+  }
+  if (typeof Buffer !== 'undefined') return Buffer.from(value, 'utf8').toString('base64');
+  return value;
+}
+
+/** Decode a base64 Secret `data` value back to UTF-8 text. */
+function base64DecodeText(value) {
+  const raw = String(value ?? '');
+  try {
+    if (typeof atob === 'function') {
+      const binary = atob(raw.replace(/\s+/g, ''));
+      const bytes = new Uint8Array(binary.length);
+      for (let index = 0; index < binary.length; index += 1)
+        bytes[index] = binary.charCodeAt(index);
+      return new TextDecoder().decode(bytes);
+    }
+  } catch {
+    /* fall through */
+  }
+  try {
+    if (typeof Buffer !== 'undefined') return Buffer.from(raw, 'base64').toString('utf8');
+  } catch {
+    /* fall through */
+  }
+  return '';
+}
+
+/** Parse an absolute/relative HTTP URL (the workstation curl front end). */
+function parseHttpUrl(rawUrl) {
+  try {
+    const parsed = new URL(String(rawUrl));
+    return {
+      scheme: parsed.protocol.replace(/:$/, '').toLowerCase(),
+      hostname: parsed.hostname,
+      port: parsed.port ? Number(parsed.port) : null,
+      path: `${parsed.pathname || '/'}${parsed.search || ''}`,
+    };
+  } catch {
+    return null;
+  }
+}
 
 export class SimulationTick {
   /**
@@ -280,6 +350,7 @@ export class SimulationTick {
     this._tickImageStreams(dt);
     if (this.tickCount % this.probeInterval === 0) this._tickProbes(dt);
     this._tickRoutes(dt);
+    this._tickServiceCA();
     this._tickSCC(dt);
     this._ensureOLMDefaults();
     this._tickSubscriptions(dt);
@@ -5082,7 +5153,20 @@ export class SimulationTick {
   /** Labels used to match a namespace selector (Project labels + name label). */
   _namespaceLabels(namespace) {
     const project = this.cluster.getByName('Project', namespace, '');
-    return { 'kubernetes.io/metadata.name': namespace, ...(project?.metadata?.labels || {}) };
+    const labels = {
+      'kubernetes.io/metadata.name': namespace,
+      ...(project?.metadata?.labels || {}),
+    };
+    // The ingress operator labels the router namespace so a NetworkPolicy can
+    // allow router traffic after a default-deny (#33b):
+    //   namespaceSelector: matchLabels: policy-group.network.openshift.io/ingress: ""
+    if (namespace === ROUTER_NAMESPACE || namespace === 'openshift-ingress-operator') {
+      if (labels[ROUTER_NAMESPACE_LABEL] === undefined) labels[ROUTER_NAMESPACE_LABEL] = '';
+      if (labels['network.openshift.io/policy-group'] === undefined) {
+        labels['network.openshift.io/policy-group'] = 'ingress';
+      }
+    }
+    return labels;
   }
 
   /** Match a LabelSelector ({matchLabels,matchExpressions}) against labels. */
@@ -5264,7 +5348,8 @@ export class SimulationTick {
     const destination = this._resolveTrafficDestination(target, options);
     if (!destination) return { allowed: false, reason: 'target-not-found' };
     if (destination.pods.length === 0) return { allowed: false, reason: 'no-endpoints', pods: [] };
-    const port = Number(options.port ?? destination.port ?? 80);
+    const requestedPort = Number(options.port ?? destination.port ?? 80);
+    const port = Number.isFinite(requestedPort) ? requestedPort : 80;
     const protocol = String(options.protocol || 'TCP').toUpperCase();
 
     for (const destinationPod of destination.pods) {
@@ -5381,10 +5466,18 @@ export class SimulationTick {
     if (typeof target === 'object') {
       if (target.kind === 'Service' || target.spec?.selector) {
         const pods = this.cluster.getServiceEndpoints(target);
-        const port = Number(
-          options.port ?? target.spec?.ports?.[0]?.targetPort ?? target.spec?.ports?.[0]?.port ?? 80
+        const resolvedPort = this._routeBackendPort(
+          { spec: { port: { targetPort: options.targetPort } } },
+          target,
+          pods
         );
-        return { kind: 'Service', name: target.metadata?.name, pods, port };
+        const port = Number(options.port ?? resolvedPort);
+        return {
+          kind: 'Service',
+          name: target.metadata?.name,
+          pods,
+          port: Number.isFinite(port) ? port : resolvedPort,
+        };
       }
       if (target.kind === 'Pod' || (target.metadata && target.spec)) {
         const pod = this._resolvePodLike(target, namespace);
@@ -5434,9 +5527,12 @@ export class SimulationTick {
     const service = this.cluster.getByName('Service', serviceName, serviceNamespace);
     if (service) {
       const pods = this.cluster.getServiceEndpoints(service);
-      const servicePort =
-        port ?? service.spec?.ports?.[0]?.targetPort ?? service.spec?.ports?.[0]?.port ?? 80;
-      const numericPort = Number(servicePort);
+      const resolvedPort = this._routeBackendPort(
+        { spec: { port: { targetPort: options.targetPort } } },
+        service,
+        pods
+      );
+      const numericPort = Number(port ?? resolvedPort);
       return {
         kind: 'Service',
         name: serviceName,
@@ -5552,6 +5648,580 @@ export class SimulationTick {
       policy: null,
       lines: [`<html><body>Hello from ${app} (container ${container})</body></html>`],
     };
+  }
+
+  // ── Router traffic + workstation curl (issues #32c, #33a, #33b) ────────
+  //
+  // A workstation `curl` resolves `<route>-<project>.apps.<domain>` through
+  // the router. Admission only asks "does the Service have endpoints?", so a
+  // Route can be Admitted=True while the router is blocked by the project's
+  // NetworkPolicies — exactly the default-deny lesson (#33b). Router traffic is
+  // evaluated as a synthetic `openshift-ingress` Pod, which is how the
+  // `policy-group.network.openshift.io/ingress: ""` namespace selector works.
+
+  /** Synthetic router Pod in `openshift-ingress` (source of Route traffic). */
+  _routerPod() {
+    return {
+      metadata: {
+        name: 'router-default-6b8f7c9d4-abcde',
+        namespace: ROUTER_NAMESPACE,
+        labels: { app: 'router', 'ingress.operator.openshift.io/default-router': 'true' },
+      },
+      spec: {
+        containers: [
+          {
+            name: 'router',
+            image: 'quay.io/openshift/origin-haproxy-router:4.22',
+            ports: [
+              { containerPort: 80, protocol: 'TCP' },
+              { containerPort: 443, protocol: 'TCP' },
+            ],
+          },
+        ],
+      },
+      status: { podIP: ROUTER_DEFAULT_IP, phase: 'Running' },
+    };
+  }
+
+  /** Resolve a Route object / name / `{kind:'Route', name, namespace}` ref. */
+  _resolveRouteLike(routeOrTarget, options = {}) {
+    if (!routeOrTarget) return null;
+    if (typeof routeOrTarget === 'string') {
+      const namespace = options.namespace;
+      if (namespace) return this.cluster.getByName('Route', routeOrTarget, namespace);
+      return (
+        this.cluster.getByKind('Route').find((route) => route.metadata?.name === routeOrTarget) ||
+        null
+      );
+    }
+    if (routeOrTarget.kind && routeOrTarget.kind !== 'Route') return null;
+    if (routeOrTarget.metadata?.name && (routeOrTarget.spec || routeOrTarget.kind === 'Route')) {
+      return routeOrTarget;
+    }
+    const name = routeOrTarget.name || routeOrTarget.metadata?.name;
+    if (!name) return null;
+    const namespace =
+      routeOrTarget.namespace || routeOrTarget.metadata?.namespace || options.namespace;
+    if (namespace) return this.cluster.getByName('Route', name, namespace);
+    return this.cluster.getByKind('Route').find((route) => route.metadata?.name === name) || null;
+  }
+
+  /** Numeric container port behind a Route's Service (resolves named ports). */
+  _routeBackendPort(route, service, pods) {
+    const requested = route?.spec?.port?.targetPort;
+    const servicePorts = service?.spec?.ports || [];
+    let servicePort = null;
+    if (requested !== undefined && requested !== null && requested !== '') {
+      servicePort =
+        servicePorts.find(
+          (port) =>
+            port.name === requested ||
+            String(port.port) === String(requested) ||
+            String(port.targetPort) === String(requested)
+        ) || null;
+    }
+    servicePort = servicePort || servicePorts[0] || null;
+    let target = servicePort?.targetPort ?? requested ?? servicePort?.port ?? 80;
+    if (typeof target === 'string' && !/^\d+$/.test(target)) {
+      const namedServicePort = servicePorts.find((port) => port.name === target);
+      if (namedServicePort) target = namedServicePort.port;
+    }
+    if (typeof target === 'string' && !/^\d+$/.test(target)) {
+      for (const pod of pods || []) {
+        for (const container of pod?.spec?.containers || []) {
+          const match = (container.ports || []).find((port) => port.name === target);
+          if (match) return Number(match.containerPort);
+        }
+      }
+    }
+    const numeric = Number(target);
+    return Number.isFinite(numeric) ? numeric : 80;
+  }
+
+  /**
+   * Can the router reach a Route's backend? (issue #33b)
+   *
+   * Route admission only checks that the Service has ready endpoints. Traffic
+   * additionally has to pass the project's NetworkPolicies, evaluated with the
+   * router as the source Pod: after a default-deny, a Route stays Admitted but
+   * connection attempts fail until an ingress policy allows the router
+   * namespace (`namespaceSelector: matchLabels: policy-group.network.openshift.io/ingress: ""`).
+   *
+   * @param {object|string} routeOrTarget Route object, Route name, or `{kind:'Route',name,namespace}`
+   * @param {{namespace?: string}} [options]
+   * @returns {{allowed: boolean, reason: string, policy: string|null, route: object|null,
+   *   service: object|null, pods: object[], port: number, termination: string|null}}
+   */
+  canRouterReach(routeOrTarget, options = {}) {
+    const route = this._resolveRouteLike(routeOrTarget, options);
+    if (!route) {
+      return {
+        allowed: false,
+        reason: 'route-not-found',
+        policy: null,
+        route: null,
+        service: null,
+        pods: [],
+        port: 0,
+        termination: null,
+      };
+    }
+    const termination = route.spec?.tls?.termination || null;
+    const service = this.cluster.getRouteService(route);
+    const base = {
+      allowed: false,
+      reason: '',
+      policy: null,
+      route,
+      service,
+      pods: [],
+      port: 0,
+      termination,
+    };
+    if (!this.cluster.isRouteAdmitted(route)) return { ...base, reason: 'route-not-admitted' };
+    if (!service) return { ...base, reason: 'service-not-found' };
+    const pods = this.cluster.getServiceEndpoints(service);
+    const port = this._routeBackendPort(route, service, pods);
+    if (!pods.length) return { ...base, pods, port, reason: 'no-endpoints' };
+    const reach = this.canReach(this._routerPod(), pods[0], {
+      port,
+      protocol: 'TCP',
+      namespace: route.metadata.namespace,
+    });
+    return {
+      allowed: reach.allowed,
+      reason: reach.allowed ? 'allowed' : reach.reason,
+      policy: reach.policy || null,
+      route,
+      service,
+      pods: reach.pods?.length ? reach.pods : pods,
+      port,
+      termination,
+    };
+  }
+
+  /** Default router wildcard certificate (`*.apps.<cluster domain>`). */
+  _routerDefaultCertificateInfo() {
+    if (!this._routerDefaultCertificateInfoCache) {
+      const material = createSelfSignedCertificate({
+        commonName: `*.apps.${APPS_DOMAIN}`,
+        organization: 'OpenShift',
+        days: 365,
+      });
+      this._routerDefaultCertificateInfoCache = material.info;
+    }
+    return this._routerDefaultCertificateInfoCache;
+  }
+
+  /** Serialisable view of the TLS certificate presented to a curl client. */
+  _certificateView(info, options = {}) {
+    if (!info) return null;
+    const subjectJson = JSON.stringify(info.subject || {});
+    const issuerJson = JSON.stringify(info.issuer || {});
+    return {
+      commonName: info.commonName || '',
+      sans: [...(info.sans || [])],
+      subject: info.subject || {},
+      issuer: info.issuer || {},
+      selfSigned: subjectJson === issuerJson,
+      trusted:
+        options.trusted === undefined
+          ? String(info.issuerCommonName || '') === 'service-ca'
+          : options.trusted,
+      notAfter: info.notAfter || null,
+    };
+  }
+
+  /** Serving certificate of a Service (the service-ca secret), if present. */
+  _servingCertificateInfo(service) {
+    const secretName = service?.metadata?.annotations?.[SERVING_CERT_ANNOTATION];
+    if (!secretName) return null;
+    const secret = this.cluster.getByName('Secret', secretName, service.metadata.namespace);
+    if (!secret) return null;
+    const data = secret.spec?.data || secret.data || {};
+    const pem = base64DecodeText(data['tls.crt'] || '');
+    if (!pem) return null;
+    return parseCertificatePem(pem);
+  }
+
+  _routerResponseHeaders(body) {
+    return {
+      'content-type': 'text/html; charset=utf-8',
+      'content-length': String(String(body ?? '').length),
+      date: new Date().toUTCString(),
+      server: 'haproxy',
+    };
+  }
+
+  /**
+   * Find the Route serving `host` + `requestPath` (longest matching path wins,
+   * like the HAProxy router).
+   */
+  _routeForHost(host, requestPath = '/') {
+    const targetHost = String(host || '').toLowerCase();
+    const candidates = this.cluster
+      .getByKind('Route')
+      .filter(
+        (route) => String(this.cluster.getRouteHost(route) || '').toLowerCase() === targetHost
+      );
+    if (!candidates.length) return null;
+    const matched = candidates.filter((route) => {
+      const prefix = String(route.spec?.path || '');
+      if (!prefix || prefix === '/') return true;
+      const cleanPrefix = prefix.endsWith('/') ? prefix : `${prefix}/`;
+      return requestPath === prefix || requestPath.startsWith(cleanPrefix);
+    });
+    const pool = matched.length ? matched : candidates;
+    return pool.sort(
+      (left, right) => String(right.spec?.path || '').length - String(left.spec?.path || '').length
+    )[0];
+  }
+
+  /** Response body for a successful Route request (the backend workload). */
+  _workloadHttpBody(service, pod) {
+    const container = pod?.spec?.containers?.[0] || {};
+    const image = String(container.image || '');
+    const app = pod?.metadata?.labels?.app || service?.metadata?.name || 'app';
+    if (/hello-openshift/.test(image)) {
+      return '<html><body>Hello OpenShift!</body></html>';
+    }
+    if (/nginx/.test(image)) {
+      return (
+        '<html><body><h1>Welcome to nginx!</h1>\n' +
+        '<p>If you see this page, the nginx web server is successfully installed and working.</p>' +
+        '</body></html>'
+      );
+    }
+    return `<html><body>Hello from ${app} (container ${container.name || 'main'})</body></html>`;
+  }
+
+  /**
+   * Workstation `curl` against a Route (issue #32c): resolve the host to a
+   * Route, apply edge/passthrough/re-encrypt TLS + the http→https redirect
+   * policy, then evaluate router→backend NetworkPolicy reachability (#33b).
+   *
+   * @param {string} rawUrl
+   * @param {{method?: string, insecure?: boolean}} [options]
+   * @returns {{error?: {code: number, message: string}, scheme?: string, host?: string,
+   *   port?: number, path?: string, status?: number, statusText?: string,
+   *   headers?: object, body?: string, location?: string,
+   *   serverCert?: object|null, route?: string, routeNamespace?: string,
+   *   termination?: string|null, reason?: string, policy?: string|null,
+   *   targetPort?: number, serverIp?: string}}
+   */
+  trafficForWorkstationCurl(rawUrl, options = {}) {
+    const parsed = parseHttpUrl(rawUrl);
+    if (!parsed) {
+      return { error: { code: 3, message: 'URL rejected: Malformed input to a URL function' } };
+    }
+    if (!['http', 'https'].includes(parsed.scheme)) {
+      return { error: { code: 1, message: `Protocol "${parsed.scheme}" not supported` } };
+    }
+    const scheme = parsed.scheme;
+    const host = String(parsed.hostname || '').toLowerCase();
+    const method = String(options.method || 'GET').toUpperCase();
+    const expectedPort = scheme === 'https' ? 443 : 80;
+    const port = parsed.port ? Number(parsed.port) : expectedPort;
+    const requestPath = parsed.path || '/';
+    const base = { scheme, host, port, path: requestPath, method };
+    if (port !== expectedPort) {
+      return {
+        error: {
+          code: 7,
+          message: `Failed to connect to ${host} port ${port} after 0 ms: Connection refused`,
+        },
+      };
+    }
+
+    const route = this._routeForHost(host, requestPath);
+    if (!route) {
+      const routerDomain = String(APPS_DOMAIN).toLowerCase();
+      const isRouterHost = host === routerDomain || host.endsWith(`.${routerDomain}`);
+      if (!isRouterHost) {
+        return { error: { code: 6, message: `Could not resolve host: ${host}` } };
+      }
+      const result = {
+        ...base,
+        status: 404,
+        statusText: 'Not Found',
+        headers: this._routerResponseHeaders(ROUTER_404_BODY),
+        body: method === 'HEAD' ? '' : ROUTER_404_BODY,
+        reason: 'no-route',
+      };
+      if (scheme === 'https') {
+        result.serverCert = this._certificateView(this._routerDefaultCertificateInfo(), {
+          trusted: true,
+        });
+      }
+      return result;
+    }
+
+    const tls = route.spec?.tls || null;
+    const termination = tls?.termination || null;
+    const insecurePolicy = String(tls?.insecureEdgeTerminationPolicy || 'None').toLowerCase();
+    const routeBase = {
+      ...base,
+      host: this.cluster.getRouteHost(route),
+      route: route.metadata.name,
+      routeNamespace: route.metadata.namespace,
+      termination,
+    };
+    const respond404 = (reason) => ({
+      ...routeBase,
+      status: 404,
+      statusText: 'Not Found',
+      headers: this._routerResponseHeaders(ROUTER_404_BODY),
+      body: method === 'HEAD' ? '' : ROUTER_404_BODY,
+      reason,
+    });
+    const respond503 = (reason, policy = null) => ({
+      ...routeBase,
+      status: 503,
+      statusText: 'Service Unavailable',
+      headers: this._routerResponseHeaders(ROUTER_503_BODY),
+      body: method === 'HEAD' ? '' : ROUTER_503_BODY,
+      reason,
+      policy,
+    });
+
+    let serverCert = null;
+    if (scheme === 'http') {
+      if (termination === 'edge' || termination === 'reencrypt') {
+        if (insecurePolicy === 'redirect') {
+          const location = `https://${host}${requestPath}`;
+          const body = `<html><body>Redirecting to ${location}</body></html>`;
+          return {
+            ...routeBase,
+            status: 302,
+            statusText: 'Found',
+            headers: { location, 'content-length': String(body.length) },
+            location,
+            body: method === 'HEAD' ? '' : body,
+            reason: 'redirect-to-https',
+          };
+        }
+        if (insecurePolicy !== 'allow') return respond404('insecure-policy-none');
+      } else if (termination === 'passthrough') {
+        // The router cannot route plain HTTP for a passthrough Route (no
+        // insecure listener, and it cannot read the payload to route it).
+        return respond404('passthrough-http');
+      }
+    } else if (termination === 'passthrough') {
+      // The client talks TLS end-to-end with the backend: it sees the backend
+      // serving certificate (service-ca signed for the Service DNS names).
+      const backendCert = this._servingCertificateInfo(this.cluster.getRouteService(route));
+      serverCert = backendCert
+        ? this._certificateView(backendCert)
+        : this._certificateView(
+            createSelfSignedCertificate({
+              commonName: `${route.spec?.to?.name}.${route.metadata.namespace}.svc`,
+              organization: 'OpenShift Games',
+              issuer: { commonName: 'service-ca', organization: 'OpenShift' },
+            }).info
+          );
+    } else if (termination === 'edge' || termination === 'reencrypt') {
+      const configured = tls?.certificate ? parseCertificatePem(tls.certificate) : null;
+      serverCert = configured
+        ? this._certificateView(configured)
+        : this._certificateView(this._routerDefaultCertificateInfo(), { trusted: true });
+    } else {
+      // HTTPS against a plain HTTP Route: the router falls back to its default
+      // certificate and has no TLS route mapping for the host.
+      const result = respond404('no-tls-route');
+      result.serverCert = this._certificateView(this._routerDefaultCertificateInfo(), {
+        trusted: true,
+      });
+      return result;
+    }
+
+    if (!this.cluster.isRouteAdmitted(route)) return respond503('no-endpoints');
+    const service = this.cluster.getRouteService(route);
+    if (!service) return respond503('service-not-found');
+    const pods = this.cluster.getServiceEndpoints(service);
+    if (!pods.length) return respond503('no-endpoints');
+    if (termination === 'reencrypt') {
+      // Re-encrypt needs to verify the backend TLS certificate: either the
+      // Route's destinationCACertificate or (when omitted) the cluster service
+      // CA, which means the backend must present a service-ca serving cert.
+      if (tls?.destinationCACertificate) {
+        const caInfo = parseCertificatePem(tls.destinationCACertificate);
+        if (!caInfo || !caInfo.isCA) return respond503('bad-destination-ca');
+      }
+      if (!this._servingCertificateInfo(service)) return respond503('backend-tls-verify');
+    }
+    const reach = this.canRouterReach(route);
+    if (!reach.allowed) return respond503(reach.reason, reach.policy);
+    const destinationPod = reach.pods[0] || pods[0];
+    const body = this._workloadHttpBody(service, destinationPod);
+    return {
+      ...routeBase,
+      status: 200,
+      statusText: 'OK',
+      headers: this._routerResponseHeaders(body),
+      body: method === 'HEAD' ? '' : body,
+      serverCert,
+      reason: 'allowed',
+      targetPort: reach.port,
+      serverIp: ROUTER_DEFAULT_IP,
+    };
+  }
+
+  // ── service-ca controller (issue #33a) ─────────────────────────────────
+  //
+  // Two annotations are modelled:
+  //   Service:   service.beta.openshift.io/serving-cert-secret-name=<secret>
+  //              → service-ca creates a kubernetes.io/tls Secret (tls.crt/tls.key)
+  //                whose DNS names cover the Service; reencrypt Routes consume it,
+  //   ConfigMap: service.beta.openshift.io/inject-cabundle=true
+  //              → service-ca injects the `service-ca.crt` trust bundle key.
+
+  /** Lazily-created simulated cluster service CA (one per engine instance). */
+  _ensureServiceCA() {
+    if (!this._serviceCA) {
+      this._serviceCA = createCertificateAuthority({
+        commonName: 'service-ca',
+        organization: 'OpenShift',
+        days: 3650,
+      });
+    }
+    return this._serviceCA;
+  }
+
+  /** PEM bundle the controller injects into annotated ConfigMaps. */
+  getServiceCABundle() {
+    return this._ensureServiceCA().certPem;
+  }
+
+  _serviceServingCertName(service) {
+    return service?.metadata?.annotations?.[SERVING_CERT_ANNOTATION] || null;
+  }
+
+  /** DNS names a service-serving certificate must cover. */
+  _servingCertDnsNames(service) {
+    const name = service.metadata.name;
+    const namespace = service.metadata.namespace;
+    return [
+      `${name}.${namespace}.svc`,
+      `${name}.${namespace}.svc.cluster.local`,
+      `${name}.${namespace}.svc.cluster.local.`,
+      `${name}.${namespace}`,
+    ];
+  }
+
+  /** Create/repair the serving-cert Secret for an annotated Service. */
+  _ensureServingCertSecret(service) {
+    const secretName = this._serviceServingCertName(service);
+    if (!secretName) return null;
+    const namespace = service.metadata.namespace;
+    const existing = this.cluster.getByName('Secret', secretName, namespace);
+    if (existing) {
+      const data = existing.spec?.data || existing.data || {};
+      if (data['tls.crt'] && data['tls.key']) return existing;
+    }
+    const ca = this._ensureServiceCA();
+    const commonName = `${service.metadata.name}.${namespace}.svc`;
+    const material = createServiceSignedCertificate({
+      commonName,
+      dnsNames: this._servingCertDnsNames(service),
+      days: 365,
+      issuer: { commonName: ca.subject.commonName, organization: ca.subject.organization },
+    });
+    const spec = {
+      type: 'kubernetes.io/tls',
+      data: {
+        'tls.crt': base64EncodeText(material.certPem),
+        'tls.key': base64EncodeText(material.keyPem),
+      },
+    };
+    const metadata = {
+      labels: { 'service.beta.openshift.io/serving-cert': '' },
+      annotations: {
+        'service.beta.openshift.io/serving-cert-generation': '1',
+        'service.beta.openshift.io/serving-cert-overflow': 'false',
+      },
+    };
+    let secret = null;
+    if (existing) {
+      secret = this.cluster.update(existing.uid, { spec, metadata });
+    } else {
+      secret = this.cluster.addResource({
+        apiVersion: 'v1',
+        kind: 'Secret',
+        metadata: { name: secretName, namespace, ...metadata },
+        spec,
+        status: { phase: 'Active' },
+      });
+    }
+    if (secret) {
+      this.eventBus?.emit('service-ca:serving-cert', {
+        namespace,
+        service: service.metadata.name,
+        secret: secretName,
+      });
+    }
+    return secret;
+  }
+
+  /** Inject/replace the `service-ca.crt` key on an annotated ConfigMap. */
+  _injectServiceCABundle(configMap) {
+    const annotation = String(configMap?.metadata?.annotations?.[INJECT_CABUNDLE_ANNOTATION] ?? '');
+    if (!/^true$/i.test(annotation)) return null;
+    const bundle = this.getServiceCABundle();
+    const data = configMap.spec?.data || configMap.data || {};
+    if (data[INJECT_CABUNDLE_KEY] === bundle) return configMap;
+    const updated = this.cluster.update(configMap.uid, {
+      spec: { data: { ...data, [INJECT_CABUNDLE_KEY]: bundle } },
+    });
+    if (updated) {
+      this.eventBus?.emit('service-ca:cabundle-injected', {
+        namespace: configMap.metadata.namespace,
+        configMap: configMap.metadata.name,
+      });
+    }
+    return updated;
+  }
+
+  /**
+   * Run the service-ca controller once (also called synchronously by the
+   * CommandBar right after a successful `oc annotate`, so the resulting Secret
+   * or CABundle is visible immediately even while the simulation is paused).
+   * @returns {{secrets: string[], configMaps: string[]}} created/injected refs
+   */
+  reconcileServiceCA() {
+    const createdSecrets = [];
+    const injectedConfigMaps = [];
+    for (const service of this.cluster.getByKind('Service')) {
+      const secretName = this._serviceServingCertName(service);
+      if (!secretName) continue;
+      const existed = Boolean(
+        this.cluster.getByName('Secret', secretName, service.metadata.namespace)
+      );
+      const secret = this._ensureServingCertSecret(service);
+      if (secret && !existed) {
+        createdSecrets.push(`${secret.metadata.namespace}/${secret.metadata.name}`);
+      }
+    }
+    for (const configMap of this.cluster.getByKind('ConfigMap')) {
+      const annotation = String(
+        configMap?.metadata?.annotations?.[INJECT_CABUNDLE_ANNOTATION] ?? ''
+      );
+      if (!/^true$/i.test(annotation)) continue;
+      const hadBundle = Boolean(configMap.spec?.data?.[INJECT_CABUNDLE_KEY]);
+      const updated = this._injectServiceCABundle(configMap);
+      if (updated && !hadBundle) {
+        injectedConfigMaps.push(`${updated.metadata.namespace}/${updated.metadata.name}`);
+      }
+    }
+    return { secrets: createdSecrets, configMaps: injectedConfigMaps };
+  }
+
+  /** Controller tick: service-ca convergence (called every tick). */
+  _tickServiceCA() {
+    try {
+      this.reconcileServiceCA();
+    } catch {
+      /* never let a side controller break the simulation loop */
+    }
   }
 
   _recordMetrics() {
