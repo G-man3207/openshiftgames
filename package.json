@@ -1,0 +1,19 @@
+{
+  "name": "openshift-games",
+  "version": "1.1.7",
+  "private": true,
+  "description": "OpenShift Games static site — dev tooling only (runtime is dependency-free/no-build)",
+  "main": "index.html",
+  "scripts": {
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "knip": "knip",
+    "lint": "npm run format:check && npm run knip",
+    "prepare": "husky"
+  },
+  "devDependencies": {
+    "husky": "^9.1.7",
+    "knip": "^5.88.1",
+    "prettier": "^3.9.10"
+  }
+}

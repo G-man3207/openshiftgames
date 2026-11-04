@@ -1,16 +1,16 @@
 {
-  "timestamp": "2026-11-04T18:09:39.886Z",
+  "timestamp": "2026-11-04T18:32:11.784Z",
   "environment": {
     "node": "v26.10.0",
     "chrome": "Chrome/156.0.8078.79",
-    "baseUrl": "http://127.0.0.1:39045",
+    "baseUrl": "http://127.0.0.1:33013",
     "viewport": {
       "width": 1600,
       "height": 900
     },
     "puppeteerCore": "/tmp/verify-tools",
-    "startedAt": "2026-11-04T18:04:45.380Z",
-    "durationSeconds": 295
+    "startedAt": "2026-11-04T18:27:15.925Z",
+    "durationSeconds": 296
   },
   "summary": {
     "passes": 685,
@@ -101,74 +101,74 @@
       "path": "screenshot.png",
       "width": 1600,
       "height": 900,
-      "bytes": 829427
+      "bytes": 828128
     },
     "ogImage": {
       "path": "og-image.png",
       "width": 1200,
       "height": 630,
-      "bytes": 190717
+      "bytes": 190446
     },
     "screenshots": [
       {
         "path": "docs/screenshots/menu.png",
         "width": 1600,
         "height": 900,
-        "bytes": 323761
+        "bytes": 323810
       },
       {
         "path": "docs/screenshots/exam-prep.png",
         "width": 1600,
         "height": 900,
-        "bytes": 206134
+        "bytes": 206067
       },
       {
         "path": "docs/screenshots/sandbox.png",
         "width": 1600,
         "height": 900,
-        "bytes": 827766
+        "bytes": 828699
       },
       {
         "path": "screenshot.png",
         "width": 1600,
         "height": 900,
-        "bytes": 829427
+        "bytes": 828128
       },
       {
         "path": "docs/screenshots/files-panel.png",
         "width": 1600,
         "height": 900,
-        "bytes": 230203
+        "bytes": 229878
       },
       {
         "path": "docs/screenshots/campaign-level-1.png",
         "width": 1600,
         "height": 900,
-        "bytes": 486215
+        "bytes": 486469
       },
       {
         "path": "docs/screenshots/regressions-minimap-collapsed.png",
         "width": 1600,
         "height": 900,
-        "bytes": 810017
+        "bytes": 809586
       },
       {
         "path": "docs/screenshots/regressions-campaign-restart.png",
         "width": 1600,
         "height": 900,
-        "bytes": 485986
+        "bytes": 485776
       },
       {
         "path": "docs/screenshots/draw.png",
         "width": 1600,
         "height": 900,
-        "bytes": 488442
+        "bytes": 488531
       },
       {
         "path": "og-image.png",
         "width": 1200,
         "height": 630,
-        "bytes": 190717
+        "bytes": 190446
       }
     ]
   },

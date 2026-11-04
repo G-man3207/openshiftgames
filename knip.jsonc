@@ -1,0 +1,47 @@
+{
+  // ───────────────────────────────────────────────────────────────────────────────────────────
+  // Knip configuration — "real garbage only" mode.
+  //
+  // The runtime app is dependency-free, no-build vanilla ES modules. Most of its exports are
+  // consumed from the inline <script type="module"> blocks in index.html/draw.html, from the
+  // window.game / window.* runtime, or from browser-context dynamic import() calls that static
+  // analysis cannot trace. Enforcing unused-export strictness (the 245+ export inventory) would
+  // therefore demand deleting legitimate, actually-used API — that cleanup is deliberately
+  // deferred. The rules below keep the build-blocking categories (dead files, unused/unlisted
+  // dependencies, unresolved imports and binaries) strict, and switch the noisy static-analysis
+  // categories off. See README "Development tooling" for the user-facing rationale.
+  // ───────────────────────────────────────────────────────────────────────────────────────────
+  "entry": [
+    // Mirrors the imports of the inline HTML modules (Knip cannot see into HTML).
+    "scripts/knip-entrypoints.mjs",
+    // Node-side maintenance harnesses: they import the app modules directly.
+    "scripts/verify.mjs",
+    "scripts/browser-test.mjs",
+    "scripts/visual-qa.mjs",
+  ],
+  // Only first-party code is project code; do not scan docs/assets/configs.
+  "project": ["js/**/*.js", "scripts/**/*.mjs"],
+  // `three` resolves through the browser import map (https://unpkg.com/three@0.152.0/) and has no
+  // package.json entry; `puppeteer-core` is deliberately installed out-of-repo (/tmp/verify-tools)
+  // and loaded via createRequire so the repo stays dependency-free at runtime. Both are real
+  // dependencies of scripts/modules, just not npm-listed ones — excluding them is accurate.
+  "ignoreDependencies": ["three", "puppeteer-core"],
+  // scripts/browser-test.mjs imports /js/rendering/ResourceStatus.js in the browser context
+  // (page.evaluate), where the leading slash is the served site root, not a filesystem path.
+  "ignoreUnresolved": ["/js/*"],
+  "rules": {
+    // Real garbage — must block the pre-commit gate.
+    "files": "error",
+    "dependencies": "error",
+    "devDependencies": "error",
+    "unlisted": "error",
+    "unresolved": "error",
+    "binaries": "error",
+    // Deferred (documented above): legitimate exports/duplicates are consumed from inline HTML,
+    // window.game runtime and browser-context dynamic imports that Knip cannot trace.
+    "exports": "off",
+    "types": "off",
+    "duplicates": "off",
+    "enumMembers": "off",
+  },
+}

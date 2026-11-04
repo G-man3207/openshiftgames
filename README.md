@@ -120,21 +120,21 @@ names are shown in EX280 Prep).
 
 ### Controls
 
-| Input | Action |
-|-------|--------|
-| `/` | `oc` command bar |
-| `F` | Files / manifests panel (`apply -f`, `apply -k`, templates, Helm; New/Import/Delete files) |
-| `?` | EX280 Prep (objective tracker, quick labs, cheat sheet) |
-| `H` | Help / How to play |
-| `Space` | Pause / resume the simulation |
-| `M` | Metrics dashboard |
-| `Esc` | Close the topmost panel/overlay; with nothing open, open the pause menu (Resume, Restart level, Main menu) |
-| `1–9` | Quick-place a resource from the palette (opens the name prompt) |
-| Left-click | Select resource |
-| Left-drag | Move resource or rotate camera |
-| Right-click | Context menu (Expose, Start Build, Scale, Rollout, Delete, …) |
-| Right-drag | Pan camera |
-| Scroll | Zoom |
+| Input       | Action                                                                                                     |
+| ----------- | ---------------------------------------------------------------------------------------------------------- |
+| `/`         | `oc` command bar                                                                                           |
+| `F`         | Files / manifests panel (`apply -f`, `apply -k`, templates, Helm; New/Import/Delete files)                 |
+| `?`         | EX280 Prep (objective tracker, quick labs, cheat sheet)                                                    |
+| `H`         | Help / How to play                                                                                         |
+| `Space`     | Pause / resume the simulation                                                                              |
+| `M`         | Metrics dashboard                                                                                          |
+| `Esc`       | Close the topmost panel/overlay; with nothing open, open the pause menu (Resume, Restart level, Main menu) |
+| `1–9`       | Quick-place a resource from the palette (opens the name prompt)                                            |
+| Left-click  | Select resource                                                                                            |
+| Left-drag   | Move resource or rotate camera                                                                             |
+| Right-click | Context menu (Expose, Start Build, Scale, Rollout, Delete, …)                                              |
+| Right-drag  | Pan camera                                                                                                 |
+| Scroll      | Zoom                                                                                                       |
 
 Bottom toolbar: **Auto-align** | **Reset view** | **Terminal** | **Files** | **YAML** | **EX280** | **Help**.
 
@@ -145,19 +145,19 @@ Bottom toolbar: **Auto-align** | **Reset view** | **Terminal** | **Files** | **Y
 The game is organised around the official EX280V422 objective groups. Campaign level data carries
 `examObjectives` and `docsLinks`; challenges and quick labs carry docs links; the in-app EX280 Prep
 tracker maps every bullet to its campaign levels, timed labs and quick labs. The table below is
-derived from that same data (9 objective groups, 55 bullets; *timed labs* are the 12 challenge drills):
+derived from that same data (9 objective groups, 55 bullets; _timed labs_ are the 12 challenge drills):
 
-| EX280V422 objective group | Where it is practiced | Levels | Timed labs | Quick lab |
-|---|---|---|---|---|
-| Manage OpenShift Container Platform (projects, `oc` CLI, querying, health) | Campaign ch. 1, Sandbox, `oc` terminal | 1, 2, 3, 4, 9, 10, 15, 20 | 1, 2, 4, 5, 9, 12 | Projects & the oc CLI |
-| Declarative Resource Management (manifests, Kustomize, secrets/configmaps) | Files panel, `oc apply -f/-k`, `oc process` | 4, 5, 6, 7, 10, 11 | 1, 3, 4, 10, 11, 12 | Kustomize prod overlay |
-| Deploy applications (templates, Helm, builds, rollouts, Services, Routes) | Builds/ImageStream controllers, `oc new-app`, `oc start-build`, `oc rollout` | 2, 8, 10, 11, 12 | 1, 3, 5, 9, 10, 12 | Route with edge TLS |
-| Manage authentication and authorization (HTPasswd, users, groups, RBAC) | `oc login`, users/groups, `oc adm policy`, `oc auth can-i` | 13, 14, 16 | 7, 11, 12 | HTPasswd users & login |
-| Configure network security (Services, Routes, NetworkPolicy, TLS) | Route admission, TLS edge/passthrough, default-deny NetworkPolicy | 3, 11, 12, 20 | 3, 8, 9, 10 | — |
-| Expose non-HTTP/SNI Applications | passthrough Routes, LoadBalancer services | 12 | 10 | — |
-| Enable developer self-service (quotas, LimitRanges, project templates) | ResourceQuota/LimitRange/ClusterResourceQuota; project-request template flow (generate → edit → create in `openshift-config` → point `project.config.openshift.io/cluster` at it) | 8, 15, 20 | 6, 12 | ResourceQuota + LimitRange |
-| Manage OpenShift operators (OLM) | Subscription → CSV phases, operator effects, uninstall | 12, 18 | 10 | Install an operator |
-| Configure application security (SCCs, service accounts, jobs/cronjobs) | SCC grants/denials, `oc set serviceaccount`, `oc debug`, Jobs/CronJobs | 7, 16, 17, 19 | 3, 7, 8, 12 | Service account + SCC grant; Job + CronJob |
+| EX280V422 objective group                                                  | Where it is practiced                                                                                                                                                             | Levels                    | Timed labs          | Quick lab                                  |
+| -------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------- | ------------------- | ------------------------------------------ |
+| Manage OpenShift Container Platform (projects, `oc` CLI, querying, health) | Campaign ch. 1, Sandbox, `oc` terminal                                                                                                                                            | 1, 2, 3, 4, 9, 10, 15, 20 | 1, 2, 4, 5, 9, 12   | Projects & the oc CLI                      |
+| Declarative Resource Management (manifests, Kustomize, secrets/configmaps) | Files panel, `oc apply -f/-k`, `oc process`                                                                                                                                       | 4, 5, 6, 7, 10, 11        | 1, 3, 4, 10, 11, 12 | Kustomize prod overlay                     |
+| Deploy applications (templates, Helm, builds, rollouts, Services, Routes)  | Builds/ImageStream controllers, `oc new-app`, `oc start-build`, `oc rollout`                                                                                                      | 2, 8, 10, 11, 12          | 1, 3, 5, 9, 10, 12  | Route with edge TLS                        |
+| Manage authentication and authorization (HTPasswd, users, groups, RBAC)    | `oc login`, users/groups, `oc adm policy`, `oc auth can-i`                                                                                                                        | 13, 14, 16                | 7, 11, 12           | HTPasswd users & login                     |
+| Configure network security (Services, Routes, NetworkPolicy, TLS)          | Route admission, TLS edge/passthrough, default-deny NetworkPolicy                                                                                                                 | 3, 11, 12, 20             | 3, 8, 9, 10         | —                                          |
+| Expose non-HTTP/SNI Applications                                           | passthrough Routes, LoadBalancer services                                                                                                                                         | 12                        | 10                  | —                                          |
+| Enable developer self-service (quotas, LimitRanges, project templates)     | ResourceQuota/LimitRange/ClusterResourceQuota; project-request template flow (generate → edit → create in `openshift-config` → point `project.config.openshift.io/cluster` at it) | 8, 15, 20                 | 6, 12               | ResourceQuota + LimitRange                 |
+| Manage OpenShift operators (OLM)                                           | Subscription → CSV phases, operator effects, uninstall                                                                                                                            | 12, 18                    | 10                  | Install an operator                        |
+| Configure application security (SCCs, service accounts, jobs/cronjobs)     | SCC grants/denials, `oc set serviceaccount`, `oc debug`, Jobs/CronJobs                                                                                                            | 7, 16, 17, 19             | 3, 7, 8, 12         | Service account + SCC grant; Job + CronJob |
 
 Cross-cutting drills (not a separate V422 objective group): troubleshooting/operations content —
 logs, events, `oc adm top`, `oc adm cordon|drain`, Jobs/CronJobs — appears in levels 3, 19, 20 and
@@ -176,9 +176,11 @@ Official sources (verify against these before your exam):
 
 ## Run locally
 
-There is **no build step** and no dependencies to install. The app is plain ES modules served
-statically (Three.js and Tailwind are loaded from CDNs; an internet connection is required for
-those, and a WebGL-capable browser is required for the 3D view).
+There is **no build step** and no runtime dependencies to install. The app is plain ES modules
+served statically (Three.js and Tailwind are loaded from CDNs; an internet connection is required
+for those, and a WebGL-capable browser is required for the 3D view). The only optional `npm`
+install is the dev-only formatting/linting toolchain — see
+[Development tooling](#development-tooling).
 
 ```bash
 git clone https://github.com/G-man3207/openshiftgames.git
@@ -189,6 +191,39 @@ python3 -m http.server 8080
 
 > Serve over HTTP (not `file://`) — ES modules, import maps and the optional Files/EX280 Prep panels
 > rely on HTTP semantics (`/draw` is served by a static rewrite in production).
+
+## Development tooling
+
+The game itself stays no-build and dependency-free; the repo carries an optional, dev-only
+toolchain (Prettier 3, Knip 5, husky 9) that keeps the tree clean. It is not needed to play, serve
+or deploy the app, and `node_modules/` is gitignored.
+
+```bash
+npm install          # dev tooling only — no runtime dependencies
+npm run format       # Prettier: rewrite all text files
+npm run format:check # Prettier: strict check (same as the pre-commit gate)
+npm run knip         # Knip: dead files, unused/unlisted deps, unresolved imports, binaries
+npm run lint         # both gates
+```
+
+- **Prettier is strict and repo-wide** (`.prettierrc`: single quotes, semicolons, print width 100,
+  ES5 trailing commas). `.prettierignore` skips `node_modules/`, binary assets, `docs/screenshots/`,
+  vendored skill assets (`.taste-skill/`, `.agents/`) and `.husky/`.
+- **Knip runs in "real garbage only" mode** (`knip.jsonc`): dead files, unused/unlisted
+  dependencies, unresolved imports and binaries are **errors**; unused-export, duplicate-export,
+  type and enum-member rules are **off by design**. This is a no-build vanilla-ESM app: much of its
+  API is consumed from the inline `<script type="module">` blocks in `index.html`/`draw.html`, from
+  the `window.game` runtime and from browser-context dynamic imports, which static analysis cannot
+  trace — enforcing unused-export strictness would mean deleting legitimate, used code, so that
+  cleanup is deliberately deferred. `scripts/knip-entrypoints.mjs` mirrors every import of the
+  inline HTML modules so dead-file detection still works, and `scripts/verify.mjs` fails if the
+  mirror drifts. `three` (browser import map) and `puppeteer-core` (installed out-of-repo for the
+  QA harnesses) are explicitly ignored, as is `/js/*` for the browser-context import in
+  `scripts/browser-test.mjs`.
+- **husky pre-commit gate** (`.husky/pre-commit`) runs `prettier --check .` and `npx knip` and
+  blocks the commit on any issue; if `node_modules/` is missing it tells you to run `npm install`.
+  Keep the toolchain to `prettier`, `knip` and `husky`: `scripts/verify.mjs` enforces that the only
+  `devDependencies` are those three, with no runtime `dependencies` and no bundler/build config.
 
 ## Deploy
 
@@ -208,7 +243,8 @@ The repo is a static site and deploys to any static host. The canonical demo is 
 - **No build step** — vanilla ES modules + import maps. No bundler, no framework, no npm runtime
   dependencies. Tailwind is loaded from the CDN for utility classes; custom styling lives in
   `style.css` (in-game shell) and `start.css` (start page). Type is set in Schibsted Grotesk with
-  JetBrains Mono reserved for real terminal/YAML code.
+  JetBrains Mono reserved for real terminal/YAML code. An optional Prettier + Knip + husky dev
+  toolchain guards repo hygiene — see [Development tooling](#development-tooling).
 - **Three.js r152** (`https://unpkg.com/three@0.152.0/...`, pinned in the import map) powers the 3D
   cluster view and the whiteboard; WebGL is required.
 - **Central kind registry** — `js/data/kindRegistry.js` is the single source of truth for kinds,
@@ -251,8 +287,12 @@ js/rendering/         Three.js renderer, meshes, connection lines, particles, la
 js/ui/                CommandBar, ShellTools, HUD, Inspector, ContextMenu, Metrics, IncidentPanel,
                       Minimap, Settings, ManifestPanel, StartMenu
 js/modes/             CampaignMode, ChallengeMode, ChaosMode, SandboxMode, ExamPrepMode
+scripts/              verify / browser-test / visual-qa harnesses + Knip entry mirror
 vercel.json           static hosting: /draw rewrite + cache/bot headers
 og-image.html         OpenGraph card source (1200×630) — PNG regenerated by the verifier
+package.json          dev-only toolchain (Prettier/Knip/husky); no runtime dependencies
+knip.jsonc            Knip "real garbage only" configuration (documented rules)
+.husky/pre-commit     pre-commit gate: prettier --check + knip
 ```
 
 ---
@@ -267,7 +307,9 @@ This is an education project. Useful contributions:
 - Report a bug with browser, mode, level and the exact `oc` command/output.
 
 Please keep the no-build, dependency-free architecture (`scripts/verify.mjs` checks syntax, imports,
-registry consistency and forbidden legacy strings). Do not add npm dependencies.
+registry consistency and forbidden legacy strings). The app must not gain runtime dependencies or a
+bundler; dev tooling is limited to Prettier, Knip and husky behind the pre-commit gate (see
+[Development tooling](#development-tooling)).
 
 ---
 

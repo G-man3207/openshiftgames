@@ -1,0 +1,25 @@
+# Dependencies and vendored skill assets (installed by npm / external tools)
+node_modules/
+.taste-skill/
+.agents/
+
+# Binary / generated assets are not text and are checked elsewhere
+img/
+docs/screenshots/
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.webp
+*.ico
+*.woff2
+
+# Git hooks (shell scripts) and hosting internals
+.git/
+.husky/
+.vercel/
+
+# Local artifacts and logs
+*.log
+test-results/
+playwright-report/

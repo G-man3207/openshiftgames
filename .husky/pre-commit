@@ -1,0 +1,19 @@
+# OpenShift Games — pre-commit gate (husky v9; no shebang needed, run with `sh`).
+# The game itself is no-build/dependency-free; this dev-only gate keeps the repo clean by
+# requiring strict Prettier formatting and a zero-issue soft Knip run ("real garbage only").
+#
+# Emergency bypass (not for normal work): git commit --no-verify
+if [ ! -d node_modules ]; then
+  echo "husky pre-commit: node_modules is missing. Run \`npm install\` first (dev tooling only; the game has no build step)." >&2
+  exit 1
+fi
+
+if ! npx prettier --check .; then
+  echo "husky pre-commit: Prettier reported unformatted files. Run \`npm run format\`, stage the changes, and commit again." >&2
+  exit 1
+fi
+
+if ! npx knip; then
+  echo "husky pre-commit: Knip reported issues (dead files, unused/unlisted dependencies, unresolved imports or binaries). Fix them (see knip.jsonc) and commit again." >&2
+  exit 1
+fi
