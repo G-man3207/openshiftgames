@@ -123,11 +123,11 @@ route` shows the real host/path, jsonpath handles unset fields/escaped dots, Loa
 
 ### Tests
 
-- The durable browser suite grew from 685 to **@@BROWSER_COUNT@@ checks** in a full run, with seven
+- The durable browser suite grew from 685 to **1220 checks** in a full run, with seven
   new per-issue regression sections: `qa-incidents` (#27/#28), `qa-scenarios` (#31), `qa-cli`
   (#29/#36), `qa-workstation` (#32/#33), `qa-openshift` (#35), `qa-grading` (#30) and
   `qa-coverage` (#34). Every section passes standalone (`--only=…`).
-- Static verification grew from 899 to **@@STATIC_COUNT@@ checks** (`node scripts/verify.mjs`),
+- Static verification grew from 899 to **942 checks** (`node scripts/verify.mjs`),
   including the two new monitoring kinds and the 13-lab catalog.
 - README, the conversion spec and the EX280 study guide updated for the 13 timed labs, the alerting
   model and the new workstation/node/shift-left content; the verification report was regenerated

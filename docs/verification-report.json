@@ -1,19 +1,19 @@
 {
-  "timestamp": "2026-11-04T18:32:11.784Z",
+  "timestamp": "2026-11-04T21:31:58.189Z",
   "environment": {
     "node": "v26.10.0",
     "chrome": "Chrome/156.0.8078.79",
-    "baseUrl": "http://127.0.0.1:33013",
+    "baseUrl": "http://127.0.0.1:46319",
     "viewport": {
       "width": 1600,
       "height": 900
     },
     "puppeteerCore": "/tmp/verify-tools",
-    "startedAt": "2026-11-04T18:27:15.925Z",
-    "durationSeconds": 296
+    "startedAt": "2026-11-04T21:21:44.155Z",
+    "durationSeconds": 614
   },
   "summary": {
-    "passes": 685,
+    "passes": 1220,
     "failures": 0,
     "warnings": 0,
     "consoleErrors": 0,
@@ -67,7 +67,7 @@
       "warnings": 0
     },
     "challenges": {
-      "passes": 108,
+      "passes": 114,
       "failures": 0,
       "warnings": 0
     },
@@ -78,6 +78,71 @@
     },
     "regressions": {
       "passes": 22,
+      "failures": 0,
+      "warnings": 0
+    },
+    "incidents: L17 SCCForbidden self-heals from state (CLI-only)": {
+      "passes": 13,
+      "failures": 0,
+      "warnings": 0
+    },
+    "incidents: L15 quota incident heals from state, CLI-only": {
+      "passes": 19,
+      "failures": 0,
+      "warnings": 0
+    },
+    "incidents: lab 8 SCCForbidden fix-before-trigger": {
+      "passes": 9,
+      "failures": 0,
+      "warnings": 0
+    },
+    "incidents: lab 6 quota incident heals from state": {
+      "passes": 11,
+      "failures": 0,
+      "warnings": 0
+    },
+    "incidents: L20 NodeNotReady recovered via oc debug/systemctl": {
+      "passes": 24,
+      "failures": 0,
+      "warnings": 0
+    },
+    "incidents: CrashLoopBackOff seed/fix contract (L3)": {
+      "passes": 9,
+      "failures": 0,
+      "warnings": 0
+    },
+    "incidents: repaired Job is never force-completed (no empty logs)": {
+      "passes": 6,
+      "failures": 0,
+      "warnings": 0
+    },
+    "qa-scenarios": {
+      "passes": 68,
+      "failures": 0,
+      "warnings": 0
+    },
+    "qa-cli": {
+      "passes": 77,
+      "failures": 0,
+      "warnings": 0
+    },
+    "qa-workstation": {
+      "passes": 114,
+      "failures": 0,
+      "warnings": 0
+    },
+    "qa-openshift": {
+      "passes": 50,
+      "failures": 0,
+      "warnings": 0
+    },
+    "qa-grading": {
+      "passes": 38,
+      "failures": 0,
+      "warnings": 0
+    },
+    "qa-coverage": {
+      "passes": 91,
       "failures": 0,
       "warnings": 0
     },
@@ -101,74 +166,74 @@
       "path": "screenshot.png",
       "width": 1600,
       "height": 900,
-      "bytes": 828128
+      "bytes": 890107
     },
     "ogImage": {
       "path": "og-image.png",
       "width": 1200,
       "height": 630,
-      "bytes": 190446
+      "bytes": 196357
     },
     "screenshots": [
       {
         "path": "docs/screenshots/menu.png",
         "width": 1600,
         "height": 900,
-        "bytes": 323810
+        "bytes": 331570
       },
       {
         "path": "docs/screenshots/exam-prep.png",
         "width": 1600,
         "height": 900,
-        "bytes": 206067
+        "bytes": 200152
       },
       {
         "path": "docs/screenshots/sandbox.png",
         "width": 1600,
         "height": 900,
-        "bytes": 828699
+        "bytes": 889955
       },
       {
         "path": "screenshot.png",
         "width": 1600,
         "height": 900,
-        "bytes": 828128
+        "bytes": 890107
       },
       {
         "path": "docs/screenshots/files-panel.png",
         "width": 1600,
         "height": 900,
-        "bytes": 229878
+        "bytes": 233103
       },
       {
         "path": "docs/screenshots/campaign-level-1.png",
         "width": 1600,
         "height": 900,
-        "bytes": 486469
+        "bytes": 470510
       },
       {
         "path": "docs/screenshots/regressions-minimap-collapsed.png",
         "width": 1600,
         "height": 900,
-        "bytes": 809586
+        "bytes": 865423
       },
       {
         "path": "docs/screenshots/regressions-campaign-restart.png",
         "width": 1600,
         "height": 900,
-        "bytes": 485776
+        "bytes": 472309
       },
       {
         "path": "docs/screenshots/draw.png",
         "width": 1600,
         "height": 900,
-        "bytes": 488531
+        "bytes": 488628
       },
       {
         "path": "og-image.png",
         "width": 1200,
         "height": 630,
-        "bytes": 190446
+        "bytes": 196357
       }
     ]
   },
@@ -2499,6 +2564,30 @@
     },
     {
       "section": "challenges",
+      "name": "challenges: challenge 13 starts"
+    },
+    {
+      "section": "challenges",
+      "name": "challenges: challenge 13 currentChallenge"
+    },
+    {
+      "section": "challenges",
+      "name": "challenges: challenge 13 title"
+    },
+    {
+      "section": "challenges",
+      "name": "challenges: challenge 13 objectives populated"
+    },
+    {
+      "section": "challenges",
+      "name": "challenges: challenge 13 objectives panel populated"
+    },
+    {
+      "section": "challenges",
+      "name": "challenges: challenge 13 getStatus works"
+    },
+    {
+      "section": "challenges",
       "name": "challenges: Files panel opens from F"
     },
     {
@@ -2832,6 +2921,2122 @@
     {
       "section": "regressions",
       "name": "regressions: next level starts auto-aligned (no stacked pile)"
+    },
+    {
+      "section": "incidents: L17 SCCForbidden self-heals from state (CLI-only)",
+      "name": "qa-incidents: L17 launches"
+    },
+    {
+      "section": "incidents: L17 SCCForbidden self-heals from state (CLI-only)",
+      "name": "qa-incidents: L17 SCCForbidden activates"
+    },
+    {
+      "section": "incidents: L17 SCCForbidden self-heals from state (CLI-only)",
+      "name": "qa-incidents: SCC-rejected Pod is never created on 4.x"
+    },
+    {
+      "section": "incidents: L17 SCCForbidden self-heals from state (CLI-only)",
+      "name": "qa-incidents: investigation ignores a wrong-namespace command"
+    },
+    {
+      "section": "incidents: L17 SCCForbidden self-heals from state (CLI-only)",
+      "name": "qa-incidents: `oc get sa -n <ns> -o name` counts toward investigation progress"
+    },
+    {
+      "section": "incidents: L17 SCCForbidden self-heals from state (CLI-only)",
+      "name": "qa-incidents: `oc adm policy who-can use scc privileged` counts toward investigation progress"
+    },
+    {
+      "section": "incidents: L17 SCCForbidden self-heals from state (CLI-only)",
+      "name": "qa-incidents: `oc get rolebinding -n <ns>` counts toward investigation progress"
+    },
+    {
+      "section": "incidents: L17 SCCForbidden self-heals from state (CLI-only)",
+      "name": "qa-incidents: L17 grant privileged SCC succeeds"
+    },
+    {
+      "section": "incidents: L17 SCCForbidden self-heals from state (CLI-only)",
+      "name": "qa-incidents: SCCForbidden resolves from cluster state on the tick (no later write)"
+    },
+    {
+      "section": "incidents: L17 SCCForbidden self-heals from state (CLI-only)",
+      "name": "qa-incidents: privileged Pod is Running+Ready after the state-driven heal"
+    },
+    {
+      "section": "incidents: L17 SCCForbidden self-heals from state (CLI-only)",
+      "name": "qa-incidents: state-driven heal never re-pends the running Pod (#27c)"
+    },
+    {
+      "section": "incidents: L17 SCCForbidden self-heals from state (CLI-only)",
+      "name": "qa-incidents: L17 objectives complete CLI-only"
+    },
+    {
+      "section": "incidents: L17 SCCForbidden self-heals from state (CLI-only)",
+      "name": "qa-incidents: L17 completes CLI-only"
+    },
+    {
+      "section": "incidents: L15 quota incident heals from state, CLI-only",
+      "name": "qa-incidents: L15 launches"
+    },
+    {
+      "section": "incidents: L15 quota incident heals from state, CLI-only",
+      "name": "qa-incidents: L15 apply examples/quota.yaml"
+    },
+    {
+      "section": "incidents: L15 quota incident heals from state, CLI-only",
+      "name": "qa-incidents: L15 apply examples/limitrange.yaml"
+    },
+    {
+      "section": "incidents: L15 quota incident heals from state, CLI-only",
+      "name": "qa-incidents: L15 set web resource requests/limits"
+    },
+    {
+      "section": "incidents: L15 quota incident heals from state, CLI-only",
+      "name": "qa-incidents: L15 create ClusterResourceQuota"
+    },
+    {
+      "section": "incidents: L15 quota incident heals from state, CLI-only",
+      "name": "qa-incidents: L15 create project-request Template"
+    },
+    {
+      "section": "incidents: L15 quota incident heals from state, CLI-only",
+      "name": "qa-incidents: L15 patch project.config template"
+    },
+    {
+      "section": "incidents: L15 quota incident heals from state, CLI-only",
+      "name": "qa-incidents: L15 ResourceQuotaExceeded fires"
+    },
+    {
+      "section": "incidents: L15 quota incident heals from state, CLI-only",
+      "name": "qa-incidents: L15 incident is bound to the quota actually damaged (compute-quota)"
+    },
+    {
+      "section": "incidents: L15 quota incident heals from state, CLI-only",
+      "name": "qa-incidents: quota damage never lets Used exceed Hard (#31 A2)"
+    },
+    {
+      "section": "incidents: L15 quota incident heals from state, CLI-only",
+      "name": "qa-incidents: damaged quota is exactly full so the controller cannot replace the Pod"
+    },
+    {
+      "section": "incidents: L15 quota incident heals from state, CLI-only",
+      "name": "qa-incidents: quota damage does not fabricate Failed/Pending Pod objects"
+    },
+    {
+      "section": "incidents: L15 quota incident heals from state, CLI-only",
+      "name": "qa-incidents: ReplicaSet reports Error creating: exceeded quota (#31 A2)"
+    },
+    {
+      "section": "incidents: L15 quota incident heals from state, CLI-only",
+      "name": "qa-incidents: L15 raise the damaged quota (last write)"
+    },
+    {
+      "section": "incidents: L15 quota incident heals from state, CLI-only",
+      "name": "qa-incidents: ResourceQuotaExceeded resolves from the tick with no write after the fix"
+    },
+    {
+      "section": "incidents: L15 quota incident heals from state, CLI-only",
+      "name": "qa-incidents: state-driven heal does not overwrite the raised quota"
+    },
+    {
+      "section": "incidents: L15 quota incident heals from state, CLI-only",
+      "name": "qa-incidents: workload re-schedules after the quota is raised"
+    },
+    {
+      "section": "incidents: L15 quota incident heals from state, CLI-only",
+      "name": "qa-incidents: L15 objectives complete CLI-only"
+    },
+    {
+      "section": "incidents: L15 quota incident heals from state, CLI-only",
+      "name": "qa-incidents: L15 completes CLI-only"
+    },
+    {
+      "section": "incidents: lab 8 SCCForbidden fix-before-trigger",
+      "name": "qa-incidents: lab 8 launches"
+    },
+    {
+      "section": "incidents: lab 8 SCCForbidden fix-before-trigger",
+      "name": "qa-incidents: lab 8 apply privileged-app manifest"
+    },
+    {
+      "section": "incidents: lab 8 SCCForbidden fix-before-trigger",
+      "name": "qa-incidents: lab 8 create ServiceAccount priv-sa"
+    },
+    {
+      "section": "incidents: lab 8 SCCForbidden fix-before-trigger",
+      "name": "qa-incidents: lab 8 grant SCC before the incident fires"
+    },
+    {
+      "section": "incidents: lab 8 SCCForbidden fix-before-trigger",
+      "name": "qa-incidents: lab 8 privileged Pod runs before the incident activates"
+    },
+    {
+      "section": "incidents: lab 8 SCCForbidden fix-before-trigger",
+      "name": "qa-incidents: lab 8 SCCForbidden resolves by tick state check (fix before trigger)"
+    },
+    {
+      "section": "incidents: lab 8 SCCForbidden fix-before-trigger",
+      "name": "qa-incidents: lab 8 running Pod survives the state-driven resolution (not re-pended)"
+    },
+    {
+      "section": "incidents: lab 8 SCCForbidden fix-before-trigger",
+      "name": "qa-incidents: lab 8 objectives complete CLI-only (privileged objective stays ticked)"
+    },
+    {
+      "section": "incidents: lab 8 SCCForbidden fix-before-trigger",
+      "name": "qa-incidents: lab 8 completes"
+    },
+    {
+      "section": "incidents: lab 6 quota incident heals from state",
+      "name": "qa-incidents: lab 6 launches"
+    },
+    {
+      "section": "incidents: lab 6 quota incident heals from state",
+      "name": "qa-incidents: lab 6 create quota team-quota"
+    },
+    {
+      "section": "incidents: lab 6 quota incident heals from state",
+      "name": "qa-incidents: lab 6 create LimitRange"
+    },
+    {
+      "section": "incidents: lab 6 quota incident heals from state",
+      "name": "qa-incidents: lab 6 create deployment api"
+    },
+    {
+      "section": "incidents: lab 6 quota incident heals from state",
+      "name": "qa-incidents: lab 6 set api requests/limits"
+    },
+    {
+      "section": "incidents: lab 6 quota incident heals from state",
+      "name": "qa-incidents: lab 6 ResourceQuotaExceeded fires"
+    },
+    {
+      "section": "incidents: lab 6 quota incident heals from state",
+      "name": "qa-incidents: lab 6 incident binds to the quota that exists"
+    },
+    {
+      "section": "incidents: lab 6 quota incident heals from state",
+      "name": "qa-incidents: lab 6 raise the damaged quota (last write)"
+    },
+    {
+      "section": "incidents: lab 6 quota incident heals from state",
+      "name": "qa-incidents: lab 6 quota incident resolves by tick state check"
+    },
+    {
+      "section": "incidents: lab 6 quota incident heals from state",
+      "name": "qa-incidents: lab 6 objectives complete CLI-only"
+    },
+    {
+      "section": "incidents: lab 6 quota incident heals from state",
+      "name": "qa-incidents: lab 6 completes"
+    },
+    {
+      "section": "incidents: L20 NodeNotReady recovered via oc debug/systemctl",
+      "name": "qa-incidents: L20 launches"
+    },
+    {
+      "section": "incidents: L20 NodeNotReady recovered via oc debug/systemctl",
+      "name": "qa-incidents: nodes use real names (worker-0, not node-1)"
+    },
+    {
+      "section": "incidents: L20 NodeNotReady recovered via oc debug/systemctl",
+      "name": "qa-incidents: worker ROLES rendered (not <none>)"
+    },
+    {
+      "section": "incidents: L20 NodeNotReady recovered via oc debug/systemctl",
+      "name": "qa-incidents: control-plane,master ROLES rendered"
+    },
+    {
+      "section": "incidents: L20 NodeNotReady recovered via oc debug/systemctl",
+      "name": "qa-incidents: cordoned Ready node shows Ready,SchedulingDisabled"
+    },
+    {
+      "section": "incidents: L20 NodeNotReady recovered via oc debug/systemctl",
+      "name": "qa-incidents: L20 NodeNotReady fires"
+    },
+    {
+      "section": "incidents: L20 NodeNotReady recovered via oc debug/systemctl",
+      "name": "qa-incidents: one node is NotReady"
+    },
+    {
+      "section": "incidents: L20 NodeNotReady recovered via oc debug/systemctl",
+      "name": "qa-incidents: cordoned NotReady node shows NotReady,SchedulingDisabled"
+    },
+    {
+      "section": "incidents: L20 NodeNotReady recovered via oc debug/systemctl",
+      "name": "qa-incidents: oc debug node/<n> opens a debug shell"
+    },
+    {
+      "section": "incidents: L20 NodeNotReady recovered via oc debug/systemctl",
+      "name": "qa-incidents: host binaries are unavailable before chroot /host"
+    },
+    {
+      "section": "incidents: L20 NodeNotReady recovered via oc debug/systemctl",
+      "name": "qa-incidents: chroot /host succeeds"
+    },
+    {
+      "section": "incidents: L20 NodeNotReady recovered via oc debug/systemctl",
+      "name": "qa-incidents: journalctl -u kubelet shows kubelet logs on the host"
+    },
+    {
+      "section": "incidents: L20 NodeNotReady recovered via oc debug/systemctl",
+      "name": "qa-incidents: journalctl pipe tail is supported in the debug shell"
+    },
+    {
+      "section": "incidents: L20 NodeNotReady recovered via oc debug/systemctl",
+      "name": "qa-incidents: kubelet reports inactive (dead) on the NotReady node"
+    },
+    {
+      "section": "incidents: L20 NodeNotReady recovered via oc debug/systemctl",
+      "name": "qa-incidents: systemctl restart kubelet succeeds"
+    },
+    {
+      "section": "incidents: L20 NodeNotReady recovered via oc debug/systemctl",
+      "name": "qa-incidents: exit leaves the debug session"
+    },
+    {
+      "section": "incidents: L20 NodeNotReady recovered via oc debug/systemctl",
+      "name": "qa-incidents: normal oc commands resume after the debug session"
+    },
+    {
+      "section": "incidents: L20 NodeNotReady recovered via oc debug/systemctl",
+      "name": "qa-incidents: node is Ready again after systemctl restart kubelet"
+    },
+    {
+      "section": "incidents: L20 NodeNotReady recovered via oc debug/systemctl",
+      "name": "qa-incidents: NodeNotReady resolves from state with no later write command"
+    },
+    {
+      "section": "incidents: L20 NodeNotReady recovered via oc debug/systemctl",
+      "name": "qa-incidents: one-shot oc debug node/x -- chroot /host <cmd> runs"
+    },
+    {
+      "section": "incidents: L20 NodeNotReady recovered via oc debug/systemctl",
+      "name": "qa-incidents: one-shot systemctl restart kubelet succeeds"
+    },
+    {
+      "section": "incidents: L20 NodeNotReady recovered via oc debug/systemctl",
+      "name": "qa-incidents: drawer-path NodeNotReady can be spawned on a node"
+    },
+    {
+      "section": "incidents: L20 NodeNotReady recovered via oc debug/systemctl",
+      "name": "qa-incidents: drawer resolution action returns a result"
+    },
+    {
+      "section": "incidents: L20 NodeNotReady recovered via oc debug/systemctl",
+      "name": "qa-incidents: drawer action heals and uncordons the node"
+    },
+    {
+      "section": "incidents: CrashLoopBackOff seed/fix contract (L3)",
+      "name": "qa-incidents: L3 launches"
+    },
+    {
+      "section": "incidents: CrashLoopBackOff seed/fix contract (L3)",
+      "name": "qa-incidents: L3 starting Deployment carries the invalid APP_MODE seed"
+    },
+    {
+      "section": "incidents: CrashLoopBackOff seed/fix contract (L3)",
+      "name": "qa-incidents: L3 CrashLoopBackOff activates"
+    },
+    {
+      "section": "incidents: CrashLoopBackOff seed/fix contract (L3)",
+      "name": "qa-incidents: L3 workload Pods are crash-looping"
+    },
+    {
+      "section": "incidents: CrashLoopBackOff seed/fix contract (L3)",
+      "name": "qa-incidents: L3 unrelated env change succeeds"
+    },
+    {
+      "section": "incidents: CrashLoopBackOff seed/fix contract (L3)",
+      "name": "qa-incidents: unrelated env change does NOT heal CrashLoopBackOff (#31 A1)"
+    },
+    {
+      "section": "incidents: CrashLoopBackOff seed/fix contract (L3)",
+      "name": "qa-incidents: L3 correct APP_MODE succeeds"
+    },
+    {
+      "section": "incidents: CrashLoopBackOff seed/fix contract (L3)",
+      "name": "qa-incidents: correcting the seeded value heals CrashLoopBackOff from state"
+    },
+    {
+      "section": "incidents: CrashLoopBackOff seed/fix contract (L3)",
+      "name": "qa-incidents: L3 workload is healthy after the real fix"
+    },
+    {
+      "section": "incidents: repaired Job is never force-completed (no empty logs)",
+      "name": "qa-incidents: sandbox launches"
+    },
+    {
+      "section": "incidents: repaired Job is never force-completed (no empty logs)",
+      "name": "qa-incidents: create Job report-batch"
+    },
+    {
+      "section": "incidents: repaired Job is never force-completed (no empty logs)",
+      "name": "qa-incidents: JobDeadlineExceeded damages the Job into Failed"
+    },
+    {
+      "section": "incidents: repaired Job is never force-completed (no empty logs)",
+      "name": "qa-incidents: recreate healthy Job report-batch"
+    },
+    {
+      "section": "incidents: repaired Job is never force-completed (no empty logs)",
+      "name": "qa-incidents: repaired Job is not force-completed without a Pod"
+    },
+    {
+      "section": "incidents: repaired Job is never force-completed (no empty logs)",
+      "name": "qa-incidents: repaired Job logs still show its real output"
+    },
+    {
+      "section": "qa-scenarios",
+      "name": "scenarios: L3 starts"
+    },
+    {
+      "section": "qa-scenarios",
+      "name": "scenarios: L3 broken Deployment uses its own bad image (not the healthy origin-hello image)"
+    },
+    {
+      "section": "qa-scenarios",
+      "name": "scenarios: L3 Deployment actually carries env APP_MODE=debug-invalid"
+    },
+    {
+      "section": "qa-scenarios",
+      "name": "scenarios: L3 CrashLoopBackOff incident fires"
+    },
+    {
+      "section": "qa-scenarios",
+      "name": "scenarios: L3 Pods visibly CrashLoopBackOff"
+    },
+    {
+      "section": "qa-scenarios",
+      "name": "scenarios: L3 crash log names the seeded faulty APP_MODE value"
+    },
+    {
+      "section": "qa-scenarios",
+      "name": "scenarios: L3 unrelated env edit applies"
+    },
+    {
+      "section": "qa-scenarios",
+      "name": "scenarios: L3 unrelated env FOO=bar does NOT resolve the incident"
+    },
+    {
+      "section": "qa-scenarios",
+      "name": "scenarios: L3 rollout restart applies"
+    },
+    {
+      "section": "qa-scenarios",
+      "name": "scenarios: L3 rollout restart does NOT resolve the incident"
+    },
+    {
+      "section": "qa-scenarios",
+      "name": "scenarios: L3 correcting APP_MODE applies"
+    },
+    {
+      "section": "qa-scenarios",
+      "name": "scenarios: L3 incident resolves once APP_MODE is corrected"
+    },
+    {
+      "section": "qa-scenarios",
+      "name": "scenarios: L3 Deployment now carries APP_MODE=production"
+    },
+    {
+      "section": "qa-scenarios",
+      "name": "scenarios: L19 starts"
+    },
+    {
+      "section": "qa-scenarios",
+      "name": "scenarios: L19 seeded report-batch Job fails on its own short deadline"
+    },
+    {
+      "section": "qa-scenarios",
+      "name": "scenarios: L19 broken Job exposes a real activeDeadlineSeconds in its spec"
+    },
+    {
+      "section": "qa-scenarios",
+      "name": "scenarios: L19 get jobs shows the seeded Job as Failed (not Pending)"
+    },
+    {
+      "section": "qa-scenarios",
+      "name": "scenarios: L19 broken Job logs are its own output, not generic web-server lines"
+    },
+    {
+      "section": "qa-scenarios",
+      "name": "scenarios: L19 JobDeadlineExceeded incident fires on the seeded Job"
+    },
+    {
+      "section": "qa-scenarios",
+      "name": "scenarios: L19 player simple Job created"
+    },
+    {
+      "section": "qa-scenarios",
+      "name": "scenarios: L19 simple Job reaches Complete quickly"
+    },
+    {
+      "section": "qa-scenarios",
+      "name": "scenarios: L19 Job status is Complete with 1/1 succeeded and no active Pods"
+    },
+    {
+      "section": "qa-scenarios",
+      "name": "scenarios: L19 Job events never read \"Phase changed from undefined\""
+    },
+    {
+      "section": "qa-scenarios",
+      "name": "scenarios: L19 oc logs job/<name> shows the container real stdout (42)"
+    },
+    {
+      "section": "qa-scenarios",
+      "name": "scenarios: L19 completed Pod still exists and shows STATUS Completed"
+    },
+    {
+      "section": "qa-scenarios",
+      "name": "scenarios: L19 broken Job can be deleted"
+    },
+    {
+      "section": "qa-scenarios",
+      "name": "scenarios: L19 broken Job recreated with a longer deadline"
+    },
+    {
+      "section": "qa-scenarios",
+      "name": "scenarios: L19 incident clears once the Job is recreated with a longer deadline"
+    },
+    {
+      "section": "qa-scenarios",
+      "name": "scenarios: L19 replacement Job completes"
+    },
+    {
+      "section": "qa-scenarios",
+      "name": "scenarios: L19 replacement Job logs remain available after completion"
+    },
+    {
+      "section": "qa-scenarios",
+      "name": "scenarios: lab 1 starts"
+    },
+    {
+      "section": "qa-scenarios",
+      "name": "scenarios: lab 1 oc new-app mysql runs"
+    },
+    {
+      "section": "qa-scenarios",
+      "name": "scenarios: lab 1 MySQL Pod CrashLoopBackOffs without credentials"
+    },
+    {
+      "section": "qa-scenarios",
+      "name": "scenarios: lab 1 MySQL crash log is the real missing-credentials message"
+    },
+    {
+      "section": "qa-scenarios",
+      "name": "scenarios: lab 1 MySQL Service exposes the image port 3306/TCP"
+    },
+    {
+      "section": "qa-scenarios",
+      "name": "scenarios: lab 1 MySQL container spec uses port 3306"
+    },
+    {
+      "section": "qa-scenarios",
+      "name": "scenarios: lab 1 credentials env applies"
+    },
+    {
+      "section": "qa-scenarios",
+      "name": "scenarios: lab 1 MySQL recovers after oc set env supplies credentials"
+    },
+    {
+      "section": "qa-scenarios",
+      "name": "scenarios: lab 12 starts"
+    },
+    {
+      "section": "qa-scenarios",
+      "name": "scenarios: lab 12 prod-quota created"
+    },
+    {
+      "section": "qa-scenarios",
+      "name": "scenarios: lab 12 Job object is created"
+    },
+    {
+      "section": "qa-scenarios",
+      "name": "scenarios: lab 12 Job without requests is rejected by the compute quota"
+    },
+    {
+      "section": "qa-scenarios",
+      "name": "scenarios: lab 12 rejected Job leaves NO Pod object"
+    },
+    {
+      "section": "qa-scenarios",
+      "name": "scenarios: lab 12 FailedCreate reports the real \"must specify requests\" message"
+    },
+    {
+      "section": "qa-scenarios",
+      "name": "scenarios: lab 12 direct `oc run` Pod is forbidden with the failed-quota message"
+    },
+    {
+      "section": "qa-scenarios",
+      "name": "scenarios: lab 12 forbidden direct Pod object was never created"
+    },
+    {
+      "section": "qa-scenarios",
+      "name": "scenarios: lab 12 Job requests can be set"
+    },
+    {
+      "section": "qa-scenarios",
+      "name": "scenarios: lab 12 Job completes after its requests are set"
+    },
+    {
+      "section": "qa-scenarios",
+      "name": "scenarios: L15 starts"
+    },
+    {
+      "section": "qa-scenarios",
+      "name": "scenarios: L15 quota manifest applies"
+    },
+    {
+      "section": "qa-scenarios",
+      "name": "scenarios: L15 LimitRange manifest applies"
+    },
+    {
+      "section": "qa-scenarios",
+      "name": "scenarios: L15 ResourceQuotaExceeded incident fires"
+    },
+    {
+      "section": "qa-scenarios",
+      "name": "scenarios: L15 quota damage does not fabricate a contradictory Pending Pod"
+    },
+    {
+      "section": "qa-scenarios",
+      "name": "scenarios: L15 quota Used never exceeds Hard"
+    },
+    {
+      "section": "qa-scenarios",
+      "name": "scenarios: L15 FailedCreate event is on the ReplicaSet with the real wording"
+    },
+    {
+      "section": "qa-scenarios",
+      "name": "scenarios: L15 quota can be raised"
+    },
+    {
+      "section": "qa-scenarios",
+      "name": "scenarios: L15 workload schedules again after raising the quota"
+    },
+    {
+      "section": "qa-scenarios",
+      "name": "scenarios: L15 incident clears once the quota is raised"
+    },
+    {
+      "section": "qa-scenarios",
+      "name": "scenarios: L20 starts"
+    },
+    {
+      "section": "qa-scenarios",
+      "name": "scenarios: L20 webapp manifest applies"
+    },
+    {
+      "section": "qa-scenarios",
+      "name": "scenarios: L20 capstone CrashLoopBackOff fires"
+    },
+    {
+      "section": "qa-scenarios",
+      "name": "scenarios: L20 incident seeds the faulty APP_MODE into the live Deployment"
+    },
+    {
+      "section": "qa-scenarios",
+      "name": "scenarios: L20 broken Deployment image is seeded and is not L1s healthy origin-hello image"
+    },
+    {
+      "section": "qa-scenarios",
+      "name": "scenarios: L20 unrelated env edit applies"
+    },
+    {
+      "section": "qa-scenarios",
+      "name": "scenarios: L20 unrelated env change does NOT resolve the capstone incident"
+    },
+    {
+      "section": "qa-scenarios",
+      "name": "scenarios: L20 APP_MODE correction applies"
+    },
+    {
+      "section": "qa-scenarios",
+      "name": "scenarios: L20 capstone CrashLoopBackOff resolves only after APP_MODE is corrected"
+    },
+    {
+      "section": "qa-scenarios",
+      "name": "scenarios: L20 Deployment carries APP_MODE=production after the fix"
+    },
+    {
+      "section": "qa-cli",
+      "name": "qa-cli: campaign level 2 starts"
+    },
+    {
+      "section": "qa-cli",
+      "name": "qa-cli: level 2 seeds query-lab/web"
+    },
+    {
+      "section": "qa-cli",
+      "name": "qa-cli: session starts in default"
+    },
+    {
+      "section": "qa-cli",
+      "name": "qa-cli #29a: label in default does not fall through to query-lab"
+    },
+    {
+      "section": "qa-cli",
+      "name": "qa-cli #29a: query-lab/web was not labelled"
+    },
+    {
+      "section": "qa-cli",
+      "name": "qa-cli #29a: failed cross-project label does not tick the label objective"
+    },
+    {
+      "section": "qa-cli",
+      "name": "qa-cli #29a: delete in default does not delete query-lab/web"
+    },
+    {
+      "section": "qa-cli",
+      "name": "qa-cli #29a: query-lab/web still exists after delete"
+    },
+    {
+      "section": "qa-cli",
+      "name": "qa-cli #29a: annotate in default is namespace-exact"
+    },
+    {
+      "section": "qa-cli",
+      "name": "qa-cli #29a: patch in default is namespace-exact"
+    },
+    {
+      "section": "qa-cli",
+      "name": "qa-cli #29d: scale not-found uses the server error form"
+    },
+    {
+      "section": "qa-cli",
+      "name": "qa-cli #29a: set image in default is namespace-exact"
+    },
+    {
+      "section": "qa-cli",
+      "name": "qa-cli #29a: rollout restart in default is namespace-exact"
+    },
+    {
+      "section": "qa-cli",
+      "name": "qa-cli #29a: no write verb mutated query-lab/web"
+    },
+    {
+      "section": "qa-cli",
+      "name": "qa-cli #29a: label -n query-lab works"
+    },
+    {
+      "section": "qa-cli",
+      "name": "qa-cli #29a: label -n query-lab persisted"
+    },
+    {
+      "section": "qa-cli",
+      "name": "qa-cli #29b: create deployment api"
+    },
+    {
+      "section": "qa-cli",
+      "name": "qa-cli #29b: create prints the server AlreadyExists form"
+    },
+    {
+      "section": "qa-cli",
+      "name": "qa-cli #29b: create configmap dup first time"
+    },
+    {
+      "section": "qa-cli",
+      "name": "qa-cli #29b: duplicate configmap create errors AlreadyExists"
+    },
+    {
+      "section": "qa-cli",
+      "name": "qa-cli #29e: apply deploys manifests/deployment.yaml"
+    },
+    {
+      "section": "qa-cli",
+      "name": "qa-cli #29e: re-applying an unchanged manifest prints unchanged"
+    },
+    {
+      "section": "qa-cli",
+      "name": "qa-cli #29e: unchanged apply does not bump generation"
+    },
+    {
+      "section": "qa-cli",
+      "name": "qa-cli #29b: create -f an existing manifest errors AlreadyExists"
+    },
+    {
+      "section": "qa-cli",
+      "name": "qa-cli #29c: api Deployment spawned pods"
+    },
+    {
+      "section": "qa-cli",
+      "name": "qa-cli #29c: oc delete pod -l app=api deletes matching pods"
+    },
+    {
+      "section": "qa-cli",
+      "name": "qa-cli #29c: selector delete removed every matching pod"
+    },
+    {
+      "section": "qa-cli",
+      "name": "qa-cli #29f: create a quota to describe"
+    },
+    {
+      "section": "qa-cli",
+      "name": "qa-cli #29f: describe quota with no name describes all quotas"
+    },
+    {
+      "section": "qa-cli",
+      "name": "qa-cli #36: sandbox mode boots"
+    },
+    {
+      "section": "qa-cli",
+      "name": "qa-cli #36: create deployment web in sandbox"
+    },
+    {
+      "section": "qa-cli",
+      "name": "qa-cli #36: shell redirect prints nothing on success"
+    },
+    {
+      "section": "qa-cli",
+      "name": "qa-cli #36: redirect wrote the file"
+    },
+    {
+      "section": "qa-cli",
+      "name": "qa-cli #36: label --dry-run=client -o name works"
+    },
+    {
+      "section": "qa-cli",
+      "name": "qa-cli #36: label dry-run does not persist"
+    },
+    {
+      "section": "qa-cli",
+      "name": "qa-cli #36: metadata.uid is a UUID"
+    },
+    {
+      "section": "qa-cli",
+      "name": "qa-cli #36: creationTimestamp is second precision"
+    },
+    {
+      "section": "qa-cli",
+      "name": "qa-cli #36: oc get deploy -o wide has CONTAINERS and IMAGES"
+    },
+    {
+      "section": "qa-cli",
+      "name": "qa-cli #36: wide IMAGES cell shows the container image"
+    },
+    {
+      "section": "qa-cli",
+      "name": "qa-cli #36: expose the web deployment"
+    },
+    {
+      "section": "qa-cli",
+      "name": "qa-cli #36: endpoints columns are NAME ENDPOINTS AGE"
+    },
+    {
+      "section": "qa-cli",
+      "name": "qa-cli #36: endpoints row lists address:port pairs"
+    },
+    {
+      "section": "qa-cli",
+      "name": "qa-cli #36: oc get istag prints @sha256 reference"
+    },
+    {
+      "section": "qa-cli",
+      "name": "qa-cli #36: image digest is realistic (not one 8-char chunk repeated)"
+    },
+    {
+      "section": "qa-cli",
+      "name": "qa-cli #36: describe istag Docker Image uses the internal registry"
+    },
+    {
+      "section": "qa-cli",
+      "name": "qa-cli #36: describe istag Command is container-appropriate for nodejs"
+    },
+    {
+      "section": "qa-cli",
+      "name": "qa-cli #36: oc new-build with image~git source"
+    },
+    {
+      "section": "qa-cli",
+      "name": "qa-cli #36: BuildConfig FROM column is the short builder tag"
+    },
+    {
+      "section": "qa-cli",
+      "name": "qa-cli #36: start the build"
+    },
+    {
+      "section": "qa-cli",
+      "name": "qa-cli #36: build reaches Complete"
+    },
+    {
+      "section": "qa-cli",
+      "name": "qa-cli #36: build STARTED + FROM are real"
+    },
+    {
+      "section": "qa-cli",
+      "name": "qa-cli #36: describe build shows BuildConfig and image"
+    },
+    {
+      "section": "qa-cli",
+      "name": "qa-cli #36: create rollout deployment"
+    },
+    {
+      "section": "qa-cli",
+      "name": "qa-cli #36: change the rollout image"
+    },
+    {
+      "section": "qa-cli",
+      "name": "qa-cli #36: oc rollout undo"
+    },
+    {
+      "section": "qa-cli",
+      "name": "qa-cli #36: rollout history after undo is 2,3"
+    },
+    {
+      "section": "qa-cli",
+      "name": "qa-cli #36: create bad-image deployment"
+    },
+    {
+      "section": "qa-cli",
+      "name": "qa-cli #36: rollout status on ImagePullBackOff reports updated replicas available"
+    },
+    {
+      "section": "qa-cli",
+      "name": "qa-cli #36: passthrough Route PORT is the backend port"
+    },
+    {
+      "section": "qa-cli",
+      "name": "qa-cli #36: describe route shows the real Requested Host"
+    },
+    {
+      "section": "qa-cli",
+      "name": "qa-cli #36: describe route shows the real Path"
+    },
+    {
+      "section": "qa-cli",
+      "name": "qa-cli #36: describe auto-generated route shows a real host"
+    },
+    {
+      "section": "qa-cli",
+      "name": "qa-cli #36: LoadBalancer PORT(S) shows the allocated nodePort"
+    },
+    {
+      "section": "qa-cli",
+      "name": "qa-cli #36: jsonpath on an unset field prints empty"
+    },
+    {
+      "section": "qa-cli",
+      "name": "qa-cli #36: jsonpath escaped-dot annotations work"
+    },
+    {
+      "section": "qa-cli",
+      "name": "qa-cli #36: describe quota columns align"
+    },
+    {
+      "section": "qa-cli",
+      "name": "qa-cli #36: CronJob TIMEZONE column is <none>"
+    },
+    {
+      "section": "qa-cli",
+      "name": "qa-cli #36: describe deploy shows Events during FailedCreate"
+    },
+    {
+      "section": "qa-cli",
+      "name": "qa-cli #36: oc kustomize output does not start with ---"
+    },
+    {
+      "section": "qa-cli",
+      "name": "qa-cli #36: deprecated commonLabels reach Deployment selectors"
+    },
+    {
+      "section": "qa-cli",
+      "name": "qa-cli #36: v5 labels without includeSelectors only labels metadata"
+    },
+    {
+      "section": "qa-cli",
+      "name": "qa-cli #36: v5 labels includeSelectors reaches the selector"
+    },
+    {
+      "section": "qa-cli",
+      "name": "qa-cli #36: kustomize v5 patches apply strategic-merge semantics"
+    },
+    {
+      "section": "qa-cli",
+      "name": "qa-cli #36: oc get ns --show-labels has a LABELS column"
+    },
+    {
+      "section": "qa-cli",
+      "name": "qa-cli #36: monitoring Alertmanager columns"
+    },
+    {
+      "section": "qa-cli",
+      "name": "qa-cli #36: PrometheusRule columns"
+    },
+    {
+      "section": "qa-cli",
+      "name": "qa-cli #36: cordoned node STATUS is Ready,SchedulingDisabled"
+    },
+    {
+      "section": "qa-workstation",
+      "name": "qa-workstation: create project"
+    },
+    {
+      "section": "qa-workstation",
+      "name": "qa-workstation: create configmap"
+    },
+    {
+      "section": "qa-workstation",
+      "name": "qa-workstation: create secret"
+    },
+    {
+      "section": "qa-workstation",
+      "name": "qa-workstation: create deployment"
+    },
+    {
+      "section": "qa-workstation",
+      "name": "qa-workstation: set env literal"
+    },
+    {
+      "section": "qa-workstation",
+      "name": "qa-workstation: set env from configmap"
+    },
+    {
+      "section": "qa-workstation",
+      "name": "qa-workstation: mount configmap volume"
+    },
+    {
+      "section": "qa-workstation",
+      "name": "qa-workstation: app pod Running with config mounted"
+    },
+    {
+      "section": "qa-workstation",
+      "name": "qa-workstation: exec ls /etc/app lists mounted ConfigMap keys"
+    },
+    {
+      "section": "qa-workstation",
+      "name": "qa-workstation: exec cat /etc/app/APP_MODE returns the ConfigMap value"
+    },
+    {
+      "section": "qa-workstation",
+      "name": "qa-workstation: exec sh -c \"…\" unwraps the script"
+    },
+    {
+      "section": "qa-workstation",
+      "name": "qa-workstation: exec cat missing file reports No such file"
+    },
+    {
+      "section": "qa-workstation",
+      "name": "qa-workstation: rsh env shows envFrom ConfigMap + literal env"
+    },
+    {
+      "section": "qa-workstation",
+      "name": "qa-workstation: exec hostname still returns the Pod name"
+    },
+    {
+      "section": "qa-workstation",
+      "name": "qa-workstation: mount Secret volume + env"
+    },
+    {
+      "section": "qa-workstation",
+      "name": "qa-workstation: env from Secret"
+    },
+    {
+      "section": "qa-workstation",
+      "name": "qa-workstation: exec cat reads a mounted Secret value"
+    },
+    {
+      "section": "qa-workstation",
+      "name": "qa-workstation: rsh env shows Secret-key env values"
+    },
+    {
+      "section": "qa-workstation",
+      "name": "qa-workstation: echo | cut -c1-5"
+    },
+    {
+      "section": "qa-workstation",
+      "name": "qa-workstation: echo | cut -c 3-"
+    },
+    {
+      "section": "qa-workstation",
+      "name": "qa-workstation: echo | cut -c1,3,5-6"
+    },
+    {
+      "section": "qa-workstation",
+      "name": "qa-workstation: ls at / lists immediate children only"
+    },
+    {
+      "section": "qa-workstation",
+      "name": "qa-workstation: ls manifests prints child file names only"
+    },
+    {
+      "section": "qa-workstation",
+      "name": "qa-workstation: ls <file> prints the file path"
+    },
+    {
+      "section": "qa-workstation",
+      "name": "qa-workstation: ls marks subdirectories with a trailing slash"
+    },
+    {
+      "section": "qa-workstation",
+      "name": "qa-workstation: secret jsonpath | base64 -d decodes the Secret"
+    },
+    {
+      "section": "qa-workstation",
+      "name": "qa-workstation: echo | base64 -d"
+    },
+    {
+      "section": "qa-workstation",
+      "name": "qa-workstation: echo -n | base64 encodes"
+    },
+    {
+      "section": "qa-workstation",
+      "name": "qa-workstation: base64 -d | cut -c1-3 chains both fixes"
+    },
+    {
+      "section": "qa-workstation",
+      "name": "qa-workstation: base64 -d rejects invalid input"
+    },
+    {
+      "section": "qa-workstation",
+      "name": "qa-workstation: openssl req -x509 writes the key/cert files"
+    },
+    {
+      "section": "qa-workstation",
+      "name": "qa-workstation: tls.crt is a PEM certificate"
+    },
+    {
+      "section": "qa-workstation",
+      "name": "qa-workstation: tls.key is a PEM private key"
+    },
+    {
+      "section": "qa-workstation",
+      "name": "qa-workstation: openssl x509 -subject shows the requested CN"
+    },
+    {
+      "section": "qa-workstation",
+      "name": "qa-workstation: openssl x509 -dates prints notBefore/notAfter"
+    },
+    {
+      "section": "qa-workstation",
+      "name": "qa-workstation: openssl x509 -text renders the certificate"
+    },
+    {
+      "section": "qa-workstation",
+      "name": "qa-workstation: openssl x509 on a missing file errors"
+    },
+    {
+      "section": "qa-workstation",
+      "name": "qa-workstation: openssl req without -x509 is rejected"
+    },
+    {
+      "section": "qa-workstation",
+      "name": "qa-workstation: oc create secret tls reads the real PEM files (no simulated cert)"
+    },
+    {
+      "section": "qa-workstation",
+      "name": "qa-workstation: web-tls Secret is kubernetes.io/tls with tls.crt/tls.key"
+    },
+    {
+      "section": "qa-workstation",
+      "name": "qa-workstation: Secret data base64 round-trips the PEM certificate"
+    },
+    {
+      "section": "qa-workstation",
+      "name": "qa-workstation: oc get secret -o yaml exposes the tls data"
+    },
+    {
+      "section": "qa-workstation",
+      "name": "qa-workstation: extract Secret writes the PEM files back"
+    },
+    {
+      "section": "qa-workstation",
+      "name": "qa-workstation: extracted certificate parses back with the same CN"
+    },
+    {
+      "section": "qa-workstation",
+      "name": "qa-workstation: base64 -w0 matches the Secret data encoding"
+    },
+    {
+      "section": "qa-workstation",
+      "name": "qa-workstation: expose app Service"
+    },
+    {
+      "section": "qa-workstation",
+      "name": "qa-workstation: Route app admitted"
+    },
+    {
+      "section": "qa-workstation",
+      "name": "qa-workstation: curl http://<route-host> reaches the app"
+    },
+    {
+      "section": "qa-workstation",
+      "name": "qa-workstation: curl -i prints the HTTP response headers"
+    },
+    {
+      "section": "qa-workstation",
+      "name": "qa-workstation: https against a plain HTTP Route is a router 404"
+    },
+    {
+      "section": "qa-workstation",
+      "name": "qa-workstation: curl unknown host fails with (6) Could not resolve host"
+    },
+    {
+      "section": "qa-workstation",
+      "name": "qa-workstation: create edge Route with the openssl cert"
+    },
+    {
+      "section": "qa-workstation",
+      "name": "qa-workstation: edge Route web admitted"
+    },
+    {
+      "section": "qa-workstation",
+      "name": "qa-workstation: curl -k https://<edge-route> terminates TLS at the router"
+    },
+    {
+      "section": "qa-workstation",
+      "name": "qa-workstation: a self-signed edge certificate fails verification without -k"
+    },
+    {
+      "section": "qa-workstation",
+      "name": "qa-workstation: create edge Route without --cert"
+    },
+    {
+      "section": "qa-workstation",
+      "name": "qa-workstation: default-cert edge Route admitted"
+    },
+    {
+      "section": "qa-workstation",
+      "name": "qa-workstation: edge Route without --cert keeps the router default cert (no simulated PEM)"
+    },
+    {
+      "section": "qa-workstation",
+      "name": "qa-workstation: the router default certificate serves the edge Route"
+    },
+    {
+      "section": "qa-workstation",
+      "name": "qa-workstation: create redirect-policy edge Route"
+    },
+    {
+      "section": "qa-workstation",
+      "name": "qa-workstation: redirect Route admitted"
+    },
+    {
+      "section": "qa-workstation",
+      "name": "qa-workstation: http→https Redirect policy returns 302 + location"
+    },
+    {
+      "section": "qa-workstation",
+      "name": "qa-workstation: curl -kL follows the http→https redirect"
+    },
+    {
+      "section": "qa-workstation",
+      "name": "qa-workstation: create passthrough Route"
+    },
+    {
+      "section": "qa-workstation",
+      "name": "qa-workstation: passthrough Route admitted"
+    },
+    {
+      "section": "qa-workstation",
+      "name": "qa-workstation: curl -k https://<passthrough-route> passes TLS to the backend"
+    },
+    {
+      "section": "qa-workstation",
+      "name": "qa-workstation: a passthrough Route does not serve plain HTTP"
+    },
+    {
+      "section": "qa-workstation",
+      "name": "qa-workstation: create api deployment"
+    },
+    {
+      "section": "qa-workstation",
+      "name": "qa-workstation: expose api deployment creates Service"
+    },
+    {
+      "section": "qa-workstation",
+      "name": "qa-workstation: api pod Running"
+    },
+    {
+      "section": "qa-workstation",
+      "name": "qa-workstation: annotate svc serving-cert"
+    },
+    {
+      "section": "qa-workstation",
+      "name": "qa-workstation: service-ca creates the api-tls serving-cert Secret"
+    },
+    {
+      "section": "qa-workstation",
+      "name": "qa-workstation: serving-cert Secret has tls.crt + tls.key"
+    },
+    {
+      "section": "qa-workstation",
+      "name": "qa-workstation: create CA ConfigMap"
+    },
+    {
+      "section": "qa-workstation",
+      "name": "qa-workstation: annotate configmap inject-cabundle"
+    },
+    {
+      "section": "qa-workstation",
+      "name": "qa-workstation: inject-cabundle adds the service-ca.crt key"
+    },
+    {
+      "section": "qa-workstation",
+      "name": "qa-workstation: extract ConfigMap writes service-ca.crt"
+    },
+    {
+      "section": "qa-workstation",
+      "name": "qa-workstation: the injected bundle is a CA certificate"
+    },
+    {
+      "section": "qa-workstation",
+      "name": "qa-workstation: extract api-tls serving certificate"
+    },
+    {
+      "section": "qa-workstation",
+      "name": "qa-workstation: serving certificate is issued by service-ca for the Service DNS name"
+    },
+    {
+      "section": "qa-workstation",
+      "name": "qa-workstation: create reencrypt Route from the serving cert"
+    },
+    {
+      "section": "qa-workstation",
+      "name": "qa-workstation: reencrypt Route admitted"
+    },
+    {
+      "section": "qa-workstation",
+      "name": "qa-workstation: curl -k https://<reencrypt-route> survives router→backend TLS"
+    },
+    {
+      "section": "qa-workstation",
+      "name": "qa-workstation: reencrypt Route stores cert + destinationCACertificate"
+    },
+    {
+      "section": "qa-workstation",
+      "name": "qa-workstation: Route works before the default-deny"
+    },
+    {
+      "section": "qa-workstation",
+      "name": "qa-workstation: apply default-deny NetworkPolicy"
+    },
+    {
+      "section": "qa-workstation",
+      "name": "qa-workstation: default-deny makes workstation curl fail with 503"
+    },
+    {
+      "section": "qa-workstation",
+      "name": "qa-workstation: Route stays Admitted=True while NetworkPolicy blocks the router (real-cluster lesson)"
+    },
+    {
+      "section": "qa-workstation",
+      "name": "qa-workstation: openshift-ingress carries the router policy-group label"
+    },
+    {
+      "section": "qa-workstation",
+      "name": "qa-workstation: apply allow-from-router NetworkPolicy"
+    },
+    {
+      "section": "qa-workstation",
+      "name": "qa-workstation: allowing the router namespace restores the Route"
+    },
+    {
+      "section": "qa-workstation",
+      "name": "qa-workstation: canReach(source, target, {port}) contract preserved"
+    },
+    {
+      "section": "qa-workstation",
+      "name": "qa-workstation: canResolveDNS/trafficForExec contracts preserved"
+    },
+    {
+      "section": "qa-workstation",
+      "name": "qa-workstation: canRouterReach sees the router allow policy"
+    },
+    {
+      "section": "qa-workstation",
+      "name": "qa-workstation: crash-loop project"
+    },
+    {
+      "section": "qa-workstation",
+      "name": "qa-workstation: crash-loop deployment"
+    },
+    {
+      "section": "qa-workstation",
+      "name": "qa-workstation: nginx pod reaches CrashLoopBackOff"
+    },
+    {
+      "section": "qa-workstation",
+      "name": "qa-workstation: exec into a CrashLoopBackOff container fails like oc"
+    },
+    {
+      "section": "qa-workstation",
+      "name": "qa-workstation: rsh into a CrashLoopBackOff container fails like oc"
+    },
+    {
+      "section": "qa-workstation",
+      "name": "qa-workstation: return to the app project"
+    },
+    {
+      "section": "qa-workstation",
+      "name": "qa-workstation: L20 capstone launches"
+    },
+    {
+      "section": "qa-workstation",
+      "name": "qa-workstation: L20 create capstone project"
+    },
+    {
+      "section": "qa-workstation",
+      "name": "qa-workstation: L20 webapp Deployment manifest applies"
+    },
+    {
+      "section": "qa-workstation",
+      "name": "qa-workstation: L20 webapp Service manifest applies"
+    },
+    {
+      "section": "qa-workstation",
+      "name": "qa-workstation: L20 create webapp Route"
+    },
+    {
+      "section": "qa-workstation",
+      "name": "qa-workstation: L20 Route webapp admitted"
+    },
+    {
+      "section": "qa-workstation",
+      "name": "qa-workstation: L20 capstone Route answers curl before the default-deny"
+    },
+    {
+      "section": "qa-workstation",
+      "name": "qa-workstation: L20 apply shipped default-deny"
+    },
+    {
+      "section": "qa-workstation",
+      "name": "qa-workstation: L20 capstone default-deny blocks workstation curl (503)"
+    },
+    {
+      "section": "qa-workstation",
+      "name": "qa-workstation: L20 Route stays Admitted while the router is policy-blocked"
+    },
+    {
+      "section": "qa-workstation",
+      "name": "qa-workstation: L20 apply shipped allow-from-router"
+    },
+    {
+      "section": "qa-workstation",
+      "name": "qa-workstation: L20 allow-from-router restores workstation curl (200)"
+    },
+    {
+      "section": "qa-workstation",
+      "name": "qa-workstation: L20 ships the routeAccess objective in the capstone data"
+    },
+    {
+      "section": "qa-workstation",
+      "name": "qa-workstation: L20 routeAccess objective completes after curl is restored"
+    },
+    {
+      "section": "qa-openshift",
+      "name": "openshift: sandbox boots"
+    },
+    {
+      "section": "qa-openshift",
+      "name": "openshift: oc new-project creates the project"
+    },
+    {
+      "section": "qa-openshift",
+      "name": "openshift: new project seeds builder/default/deployer ServiceAccounts"
+    },
+    {
+      "section": "qa-openshift",
+      "name": "openshift: new project seeds admin + system image/deployer RoleBindings"
+    },
+    {
+      "section": "qa-openshift",
+      "name": "openshift: oc get rolebinding shows the default bindings"
+    },
+    {
+      "section": "qa-openshift",
+      "name": "openshift: new project gets builder/default/deployer dockercfg Secrets"
+    },
+    {
+      "section": "qa-openshift",
+      "name": "openshift: describe sa shows Image pull / Mountable dockercfg secrets"
+    },
+    {
+      "section": "qa-openshift",
+      "name": "openshift: every Project carries kubernetes.io/metadata.name"
+    },
+    {
+      "section": "qa-openshift",
+      "name": "openshift: oc get ns --show-labels renders the LABELS column with metadata.name"
+    },
+    {
+      "section": "qa-openshift",
+      "name": "openshift: add-scc-to-user prints the 4.x ClusterRole form"
+    },
+    {
+      "section": "qa-openshift",
+      "name": "openshift: who-can use scc lists the granted ServiceAccount"
+    },
+    {
+      "section": "qa-openshift",
+      "name": "openshift: scc-subject-review reviews the manifest pod spec (no \"subject is required\")"
+    },
+    {
+      "section": "qa-openshift",
+      "name": "openshift: scc-subject-review reports the admitting SCC after the grant"
+    },
+    {
+      "section": "qa-openshift",
+      "name": "openshift: who-can stays accurate for additional grants"
+    },
+    {
+      "section": "qa-openshift",
+      "name": "openshift: add-role-to-group output names the edit ClusterRole"
+    },
+    {
+      "section": "qa-openshift",
+      "name": "openshift: first binding is named edit (not edit-developers)"
+    },
+    {
+      "section": "qa-openshift",
+      "name": "openshift: a second add-role-to-group creates edit-0"
+    },
+    {
+      "section": "qa-openshift",
+      "name": "openshift: kube-system/kubeadmin Secret seeds the kubeadmin password"
+    },
+    {
+      "section": "qa-openshift",
+      "name": "openshift: passwordless kubeadmin login still works"
+    },
+    {
+      "section": "qa-openshift",
+      "name": "openshift: an explicit wrong kubeadmin password is rejected"
+    },
+    {
+      "section": "qa-openshift",
+      "name": "openshift: the seeded kubeadmin password is accepted"
+    },
+    {
+      "section": "qa-openshift",
+      "name": "openshift: successful logins are recorded in gameEngine.loginHistory"
+    },
+    {
+      "section": "qa-openshift",
+      "name": "openshift: group membership does not create a User object before first login"
+    },
+    {
+      "section": "qa-openshift",
+      "name": "openshift: set env --from=secret succeeds"
+    },
+    {
+      "section": "qa-openshift",
+      "name": "openshift: set env --from generates PASSWORD with valueFrom.secretKeyRef"
+    },
+    {
+      "section": "qa-openshift",
+      "name": "openshift: set env --from does not create an envFrom.secretRef"
+    },
+    {
+      "section": "qa-openshift",
+      "name": "openshift: set env --list shows \"# PASSWORD from secret db-secret, key password\""
+    },
+    {
+      "section": "qa-openshift",
+      "name": "openshift: start-build --follow reports no success while the build is running"
+    },
+    {
+      "section": "qa-openshift",
+      "name": "openshift: start-build --follow prints --> Success only once the build completes"
+    },
+    {
+      "section": "qa-openshift",
+      "name": "openshift: oc run --overrides runAsUser:0 is rejected by SCC admission"
+    },
+    {
+      "section": "qa-openshift",
+      "name": "openshift: rejected run --overrides creates no Pod"
+    },
+    {
+      "section": "qa-openshift",
+      "name": "openshift: create clusterquota with the real project label"
+    },
+    {
+      "section": "qa-openshift",
+      "name": "openshift: ClusterResourceQuota selects quota-lab via kubernetes.io/metadata.name"
+    },
+    {
+      "section": "qa-openshift",
+      "name": "openshift: jsonpath supports an escaped dot in annotation keys"
+    },
+    {
+      "section": "qa-openshift",
+      "name": "openshift: openshift-authentication runs oauth-openshift-* pods"
+    },
+    {
+      "section": "qa-openshift",
+      "name": "openshift: OAuth provider can be applied declaratively"
+    },
+    {
+      "section": "qa-openshift",
+      "name": "openshift: the identity provider is not ready immediately after an OAuth change"
+    },
+    {
+      "section": "qa-openshift",
+      "name": "openshift: login is blocked during the OAuth rollout"
+    },
+    {
+      "section": "qa-openshift",
+      "name": "openshift: the identity provider becomes ready after the rollout"
+    },
+    {
+      "section": "qa-openshift",
+      "name": "openshift: login succeeds after the OAuth rollout"
+    },
+    {
+      "section": "qa-openshift",
+      "name": "openshift: oc whoami is alice after login"
+    },
+    {
+      "section": "qa-openshift",
+      "name": "openshift: first login creates the Identity"
+    },
+    {
+      "section": "qa-openshift",
+      "name": "openshift: session restored to kubeadmin"
+    },
+    {
+      "section": "qa-openshift",
+      "name": "openshift: campaign L13 launches"
+    },
+    {
+      "section": "qa-openshift",
+      "name": "openshift: L13 OAuth provider applied"
+    },
+    {
+      "section": "qa-openshift",
+      "name": "openshift: L13 blocks login until the OAuth rollout completes"
+    },
+    {
+      "section": "qa-openshift",
+      "name": "openshift: L13 login succeeds after the OAuth rollout"
+    },
+    {
+      "section": "qa-openshift",
+      "name": "openshift: a rotated htpasswd Secret also waits for the OAuth rollout (L13/lab 11 consistent)"
+    },
+    {
+      "section": "qa-openshift",
+      "name": "openshift: the rotated password works after the rollout"
+    },
+    {
+      "section": "qa-openshift",
+      "name": "openshift: oauth-openshift pods are Running after the rollouts"
+    },
+    {
+      "section": "qa-grading",
+      "name": "qa-grading #30a: lab 9 starts"
+    },
+    {
+      "section": "qa-grading",
+      "name": "qa-grading #30a: lab 9 objectives are not pre-ticked before any policy exists"
+    },
+    {
+      "section": "qa-grading",
+      "name": "qa-grading #30a: apply hand-written policy set"
+    },
+    {
+      "section": "qa-grading",
+      "name": "qa-grading #30a: hand-written default-deny ticks without the provided policy names"
+    },
+    {
+      "section": "qa-grading",
+      "name": "qa-grading #30a: DNS egress on port 53 does not count (OpenShift DNS listens on 5353)"
+    },
+    {
+      "section": "qa-grading",
+      "name": "qa-grading #30a: re-apply corrected hand-written set"
+    },
+    {
+      "section": "qa-grading",
+      "name": "qa-grading #30a: playthrough uses hand-written policy names only"
+    },
+    {
+      "section": "qa-grading",
+      "name": "qa-grading #30a: all behaviour objectives tick for the hand-written set"
+    },
+    {
+      "section": "qa-grading",
+      "name": "qa-grading #30a: scripted DNS incident is still unresolved before it fires"
+    },
+    {
+      "section": "qa-grading",
+      "name": "qa-grading #30a: hand-written solution reaches 6/6 (incident resolves)"
+    },
+    {
+      "section": "qa-grading",
+      "name": "qa-grading #30a: lab 9 completes on behaviour alone"
+    },
+    {
+      "section": "qa-grading",
+      "name": "qa-grading #30b: lab 9 starts for the provided file"
+    },
+    {
+      "section": "qa-grading",
+      "name": "qa-grading #30b: apply provided policy set"
+    },
+    {
+      "section": "qa-grading",
+      "name": "qa-grading #30b: provided challenges/shop-networkpolicy.yaml still reaches 6/6"
+    },
+    {
+      "section": "qa-grading",
+      "name": "qa-grading #30c: lab 11 starts"
+    },
+    {
+      "section": "qa-grading",
+      "name": "qa-grading #30c: heredoc oc apply -f - configures OAuth"
+    },
+    {
+      "section": "qa-grading",
+      "name": "qa-grading #30c: heredoc OAuth apply ticks the state-based identity-provider objective"
+    },
+    {
+      "section": "qa-grading",
+      "name": "qa-grading #30c: create group developers"
+    },
+    {
+      "section": "qa-grading",
+      "name": "qa-grading #30c: oc adm groups new does not create the User object"
+    },
+    {
+      "section": "qa-grading",
+      "name": "qa-grading #30c: \"User alice exists\" is not ticked by group membership"
+    },
+    {
+      "section": "qa-grading",
+      "name": "qa-grading #30c: log in as alice"
+    },
+    {
+      "section": "qa-grading",
+      "name": "qa-grading #30c: session user is alice"
+    },
+    {
+      "section": "qa-grading",
+      "name": "qa-grading #30c: first login creates the real User object"
+    },
+    {
+      "section": "qa-grading",
+      "name": "qa-grading #30c: login objective ticks on a successful login"
+    },
+    {
+      "section": "qa-grading",
+      "name": "qa-grading #30c: log back in as kubeadmin"
+    },
+    {
+      "section": "qa-grading",
+      "name": "qa-grading #30c: login objective latches across a user switch"
+    },
+    {
+      "section": "qa-grading",
+      "name": "qa-grading #30d: lab 11 starts for the patch flow"
+    },
+    {
+      "section": "qa-grading",
+      "name": "qa-grading #30d: oc patch oauth cluster --type=merge"
+    },
+    {
+      "section": "qa-grading",
+      "name": "qa-grading #30d: oc patch oauth cluster ticks the state-based objective"
+    },
+    {
+      "section": "qa-grading",
+      "name": "qa-grading #30e: campaign level 13 starts"
+    },
+    {
+      "section": "qa-grading",
+      "name": "qa-grading #30e: oc apply -f idp.yaml activates the OAuth provider"
+    },
+    {
+      "section": "qa-grading",
+      "name": "qa-grading #30e: L13 log in as alice"
+    },
+    {
+      "section": "qa-grading",
+      "name": "qa-grading #30e: L13 switch back to kubeadmin"
+    },
+    {
+      "section": "qa-grading",
+      "name": "qa-grading #30e: L13 \"Log in to the CLI as alice\" latches after the user switch"
+    },
+    {
+      "section": "qa-grading",
+      "name": "qa-grading #30e: L13 User alice exists after first login"
+    },
+    {
+      "section": "qa-grading",
+      "name": "qa-grading #30f: campaign level 2 starts"
+    },
+    {
+      "section": "qa-grading",
+      "name": "qa-grading #30f: wrong-namespace label does not tick \"Label Deployment web\""
+    },
+    {
+      "section": "qa-grading",
+      "name": "qa-grading #30f: correct-namespace label ticks \"Label Deployment web\""
+    },
+    {
+      "section": "qa-coverage",
+      "name": "coverage: sandbox boots for templates/alerting/alerts checks"
+    },
+    {
+      "section": "qa-coverage",
+      "name": "coverage: oc get templates -n openshift lists the standard sample templates"
+    },
+    {
+      "section": "qa-coverage",
+      "name": "coverage: oc process --parameters httpd-example exposes real parameters"
+    },
+    {
+      "section": "qa-coverage",
+      "name": "coverage: mysql-persistent exposes generated MYSQL_* parameters"
+    },
+    {
+      "section": "qa-coverage",
+      "name": "coverage: oc new-project template-lab"
+    },
+    {
+      "section": "qa-coverage",
+      "name": "coverage: oc process httpd-example | oc apply -f -"
+    },
+    {
+      "section": "qa-coverage",
+      "name": "coverage: processed httpd template creates Deployment + Service + Route"
+    },
+    {
+      "section": "qa-coverage",
+      "name": "coverage: httpd SOURCE_IMAGE parameter is substituted into the Deployment"
+    },
+    {
+      "section": "qa-coverage",
+      "name": "coverage: oc new-app --template=mysql-persistent -p ..."
+    },
+    {
+      "section": "qa-coverage",
+      "name": "coverage: mysql-persistent deploys a Deployment and a PVC"
+    },
+    {
+      "section": "qa-coverage",
+      "name": "coverage: -p values replace the generated mysql parameters in the Deployment env"
+    },
+    {
+      "section": "qa-coverage",
+      "name": "coverage: mysql VOLUME_CAPACITY parameter lands on the PVC"
+    },
+    {
+      "section": "qa-coverage",
+      "name": "coverage: oc new-app --template=postgresql-persistent (generated params)"
+    },
+    {
+      "section": "qa-coverage",
+      "name": "coverage: postgresql-persistent deploys a Deployment"
+    },
+    {
+      "section": "qa-coverage",
+      "name": "coverage: generated POSTGRESQL_* parameters expand to a 16-char expression value"
+    },
+    {
+      "section": "qa-coverage",
+      "name": "coverage: postgresql POSTGRESQL_VERSION parameter is substituted into the image"
+    },
+    {
+      "section": "qa-coverage",
+      "name": "coverage: webapp-template keeps working"
+    },
+    {
+      "section": "qa-coverage",
+      "name": "coverage: the original webapp-template still deploys"
+    },
+    {
+      "section": "qa-coverage",
+      "name": "coverage: oc get prometheusrules -A lists the monitoring rules"
+    },
+    {
+      "section": "qa-coverage",
+      "name": "coverage: oc describe prometheusrule shows the alert rules"
+    },
+    {
+      "section": "qa-coverage",
+      "name": "coverage: oc get alertmanager lists the main instance"
+    },
+    {
+      "section": "qa-coverage",
+      "name": "coverage: describe alertmanager shows a firing Watchdog alert"
+    },
+    {
+      "section": "qa-coverage",
+      "name": "coverage: alertmanager pods are seeded in openshift-monitoring"
+    },
+    {
+      "section": "qa-coverage",
+      "name": "coverage: alertmanager route is seeded"
+    },
+    {
+      "section": "qa-coverage",
+      "name": "coverage: alerting events surface in oc get events"
+    },
+    {
+      "section": "qa-coverage",
+      "name": "coverage: create a broken workload for live alert evaluation"
+    },
+    {
+      "section": "qa-coverage",
+      "name": "coverage: Alertmanager surfaces an alert for the real broken workload"
+    },
+    {
+      "section": "qa-coverage",
+      "name": "coverage: Files/ManifestEngine ready for the kustomize drill"
+    },
+    {
+      "section": "qa-coverage",
+      "name": "coverage: kustomize examples teach v5 labels:/patches:"
+    },
+    {
+      "section": "qa-coverage",
+      "name": "coverage: deprecated commonLabels/patchesStrategicMerge removed from the examples"
+    },
+    {
+      "section": "qa-coverage",
+      "name": "coverage: oc new-project kustomize-v5-lab"
+    },
+    {
+      "section": "qa-coverage",
+      "name": "coverage: oc apply -k kustomize/base"
+    },
+    {
+      "section": "qa-coverage",
+      "name": "coverage: kustomize base renders Deployment/webapp"
+    },
+    {
+      "section": "qa-coverage",
+      "name": "coverage: labels: pairs land in metadata.labels (v5 transformer)"
+    },
+    {
+      "section": "qa-coverage",
+      "name": "coverage: labels: without includeSelectors leaves the selector alone (v5 semantics)"
+    },
+    {
+      "section": "qa-coverage",
+      "name": "coverage: oc apply -k kustomize/overlays/prod"
+    },
+    {
+      "section": "qa-coverage",
+      "name": "coverage: prod overlay renders prefixed Deployment/prod-webapp"
+    },
+    {
+      "section": "qa-coverage",
+      "name": "coverage: prod overlay replicas transformer sets 3 replicas"
+    },
+    {
+      "section": "qa-coverage",
+      "name": "coverage: prod overlay images transformer pins the tag"
+    },
+    {
+      "section": "qa-coverage",
+      "name": "coverage: patches: strategic-merge patch merges the APP_ENV env var"
+    },
+    {
+      "section": "qa-coverage",
+      "name": "coverage: labels: + includeSelectors: true updates selectors in v5"
+    },
+    {
+      "section": "qa-coverage",
+      "name": "coverage: campaign level 20 starts for the handover flow"
+    },
+    {
+      "section": "qa-coverage",
+      "name": "coverage: level 20 restart still works before the finish flow"
+    },
+    {
+      "section": "qa-coverage",
+      "name": "coverage: final level relabels the primary action to \"Finish campaign\""
+    },
+    {
+      "section": "qa-coverage",
+      "name": "coverage: \"Finish campaign\" opens the post-campaign handover instead of the start page"
+    },
+    {
+      "section": "qa-coverage",
+      "name": "coverage: handover has closing copy about a real cluster"
+    },
+    {
+      "section": "qa-coverage",
+      "name": "coverage: handover stats show 20/20 levels and 60/60 stars"
+    },
+    {
+      "section": "qa-coverage",
+      "name": "coverage: handover checklist tells the learner to set up a real cluster"
+    },
+    {
+      "section": "qa-coverage",
+      "name": "coverage: handover checklist redo list covers L5/L9/L13/L14/L17"
+    },
+    {
+      "section": "qa-coverage",
+      "name": "coverage: handover lists weak EX280 bullets from the readiness evidence"
+    },
+    {
+      "section": "qa-coverage",
+      "name": "coverage: handover offers EX280 Prep, back-to-menu and exam links"
+    },
+    {
+      "section": "qa-coverage",
+      "name": "coverage: handover tears the run down and focuses its primary action"
+    },
+    {
+      "section": "qa-coverage",
+      "name": "coverage: handover checklist persists ticks in localStorage"
+    },
+    {
+      "section": "qa-coverage",
+      "name": "coverage: checklist progress counter updates"
+    },
+    {
+      "section": "qa-coverage",
+      "name": "coverage: \"Back to start page\" closes the handover onto the start page"
+    },
+    {
+      "section": "qa-coverage",
+      "name": "coverage: campaign level 1 starts for the next-level control"
+    },
+    {
+      "section": "qa-coverage",
+      "name": "coverage: non-final \"Next Level\" still advances to level 2"
+    },
+    {
+      "section": "qa-coverage",
+      "name": "coverage: campaign L1 starts for the intro check"
+    },
+    {
+      "section": "qa-coverage",
+      "name": "coverage: L1 welcome card and first moves no longer explain the nginx/restricted-v2 trap"
+    },
+    {
+      "section": "qa-coverage",
+      "name": "coverage: campaign L3 starts for the trap-hint check"
+    },
+    {
+      "section": "qa-coverage",
+      "name": "coverage: the admission-vs-runtime trap moved to the L3 troubleshooting hints"
+    },
+    {
+      "section": "qa-coverage",
+      "name": "coverage: campaign L13 starts for the password/cleanup flow"
+    },
+    {
+      "section": "qa-coverage",
+      "name": "coverage: L13 requires a real HTPasswd password-rotation objective"
+    },
+    {
+      "section": "qa-coverage",
+      "name": "coverage: L13 requires deleting both the bob User and its Identity"
+    },
+    {
+      "section": "qa-coverage",
+      "name": "coverage: L13 seeds the departing user bob with a pre-existing Identity"
+    },
+    {
+      "section": "qa-coverage",
+      "name": "coverage: L13 alice can log in with the initial HTPasswd password"
+    },
+    {
+      "section": "qa-coverage",
+      "name": "coverage: L13 rejects the new password until the OAuth rollout completes"
+    },
+    {
+      "section": "qa-coverage",
+      "name": "coverage: L13 the rotated HTPasswd password works after the OAuth rollout"
+    },
+    {
+      "section": "qa-coverage",
+      "name": "coverage: L13 password objective completes after rotation + login with the new password"
+    },
+    {
+      "section": "qa-coverage",
+      "name": "coverage: oc delete user bob"
+    },
+    {
+      "section": "qa-coverage",
+      "name": "coverage: L13 deleting the User completes the user-deletion objective"
+    },
+    {
+      "section": "qa-coverage",
+      "name": "coverage: L13 deleting the User alone leaves the Identity behind (both deletes required)"
+    },
+    {
+      "section": "qa-coverage",
+      "name": "coverage: oc delete identity htpasswd:bob"
+    },
+    {
+      "section": "qa-coverage",
+      "name": "coverage: L13 user + identity deletion objectives complete after both deletes"
+    },
+    {
+      "section": "qa-coverage",
+      "name": "coverage: timed lab 13 (Production Network Policies) starts"
+    },
+    {
+      "section": "qa-coverage",
+      "name": "coverage: lab 13 has 4 behaviour-based NetworkPolicy objectives"
+    },
+    {
+      "section": "qa-coverage",
+      "name": "coverage: lab 13 applies the starter default-deny"
+    },
+    {
+      "section": "qa-coverage",
+      "name": "coverage: lab 13 default-deny alone does not satisfy the DNS/reach allow objectives"
+    },
+    {
+      "section": "qa-coverage",
+      "name": "coverage: lab 13 hand-written allow policies apply"
+    },
+    {
+      "section": "qa-coverage",
+      "name": "coverage: lab 13 all NetworkPolicy objectives complete from traffic behaviour"
+    },
+    {
+      "section": "qa-coverage",
+      "name": "coverage: campaign L18 starts for the OLM variants"
+    },
+    {
+      "section": "qa-coverage",
+      "name": "coverage: L18 applies the Manual/pinned AllNamespaces Subscription"
+    },
+    {
+      "section": "qa-coverage",
+      "name": "coverage: L18 creates an InstallPlan for the pinned AllNamespaces install"
+    },
+    {
+      "section": "qa-coverage",
+      "name": "coverage: L18 InstallPlan waits at Manual approval"
+    },
+    {
+      "section": "qa-coverage",
+      "name": "coverage: L18 approves the Manual InstallPlan"
+    },
+    {
+      "section": "qa-coverage",
+      "name": "coverage: L18 startingCSV pins the installed CSV to v1.15.0 and it reaches Succeeded"
+    },
+    {
+      "section": "qa-coverage",
+      "name": "coverage: L18 AllNamespaces/Manual/startingCSV objectives all complete"
+    },
+    {
+      "section": "qa-coverage",
+      "name": "coverage: timed lab 10 starts for the AllNamespaces variant"
+    },
+    {
+      "section": "qa-coverage",
+      "name": "coverage: lab 10 applies the AllNamespaces pipelines Subscription"
+    },
+    {
+      "section": "qa-coverage",
+      "name": "coverage: lab 10 AllNamespaces install reaches CSV Succeeded in openshift-operators"
+    },
+    {
+      "section": "qa-coverage",
+      "name": "coverage: lab 10 AllNamespaces operator objective completes"
     },
     {
       "section": "draw",
