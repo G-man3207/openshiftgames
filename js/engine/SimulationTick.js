@@ -7,7 +7,12 @@
  *   - BuildConfig → Build → ImageStream (+ ImageChange rollout triggers)
  *   - OLM Subscriptions (Installing → Succeeded) and operator effects
  *   - MetalLB IPAddressPool/L2Advertisement → Service EXTERNAL-IP
- *   - SCC admission (privileged / runAsUser:0 → Failed + `scc:denied`)
+ *   - SCC admission before pod creation (ReplicaSet FailedCreate, no Pod)
+ *   - kubelet image pulls (internal ImageStreamTag + registry pull failures →
+ *     ErrImagePull/ImagePullBackOff), Deployment progress deadlines
+ *   - OLM: PackageManifest catalog, Subscription → InstallPlan → CSV,
+ *     CSV-owned operator Deployment, MetalLB operand CR lifecycle
+ *   - NetworkPolicy traffic evaluation (ingress+egress, DNS on port 5353)
  *   - LimitRange defaults/min/max enforcement
  *   - ResourceQuota / ClusterResourceQuota enforcement
  *   - OAuth identity-provider rollout (~5s) and ClusterOperator health
@@ -28,17 +33,83 @@ import {
   parseMemoryMi,
 } from './ClusterState.js';
 import { podSecurityRequest } from './RBACEngine.js';
+import {
+  validateCronSchedule,
+  parseCronSchedule,
+  nextCronOccurrence,
+} from '../resources/WorkloadResources.js';
 
 /** Fixed controller timings in game seconds (1 tick = 0.05 s at 20 TPS). */
 const BUILD_PHASE_NEW_SECONDS = 1;
 const BUILD_PHASE_PENDING_SECONDS = 1;
 const BUILD_PHASE_RUNNING_SECONDS = 6;
 const SUBSCRIPTION_INSTALL_SECONDS = 8;
+/** OLM install-plan/CSV step timings in game seconds (compressed vs. real OLM). */
+const INSTALLPLAN_COMPLETE_SECONDS = 2;
+const CSV_INSTALL_SECONDS = 5;
+/** Socially-acceptable interval between duplicate FailedCreate events. */
+const FAILED_CREATE_EVENT_SECONDS = 10;
+/** How long a container keeps retrying before the state reports ImagePullBackOff. */
+const IMAGE_PULL_RETRY_SECONDS = 2;
+
+/**
+ * Software catalog advertised by the simulated openshift-marketplace
+ * (PackageManifest objects). Keep this list small: the objects are real cluster
+ * resources and every seeded resource gets a 3D mesh.
+ */
+const OLM_CATALOG = [
+  {
+    name: 'metallb',
+    displayName: 'MetalLB Operator',
+    currentCSV: 'metallb-operator.v0.14.9',
+    channel: 'stable',
+    provider: 'Red Hat',
+    description: 'MetalLB is a load-balancer implementation for bare-metal clusters using standard routing protocols.',
+    crds: [{ kind: 'MetalLB', name: 'metallbs.metallb.io', version: 'v1beta1' }],
+  },
+  {
+    name: 'ansible-automation-platform-operator',
+    displayName: 'Ansible Automation Platform',
+    currentCSV: 'aap-operator.v2.6.0',
+    channel: 'stable-2.6',
+    provider: 'Red Hat',
+    description: 'Deploys and manages Ansible Automation Platform instances.',
+    crds: [],
+  },
+  {
+    name: 'openshift-pipelines-operator-rh',
+    displayName: 'Red Hat OpenShift Pipelines',
+    currentCSV: 'openshift-pipelines-operator-rh.v1.18.0',
+    channel: 'latest',
+    provider: 'Red Hat',
+    description: 'Tekton-based CI/CD pipelines for OpenShift.',
+    crds: [],
+  },
+  {
+    name: 'cert-manager-operator',
+    displayName: 'cert-manager Operator for Red Hat OpenShift',
+    currentCSV: 'cert-manager-operator.v1.17.0',
+    channel: 'stable',
+    provider: 'Red Hat',
+    description: 'Automates certificate management with cert-manager on OpenShift.',
+    crds: [],
+  },
+];
+
 const OAUTH_ROLLOUT_SECONDS = 5;
 const PROJECT_TERMINATION_SECONDS = 2;
 /** Real nodes reserve kube/system resources, so allocatable < capacity. */
 const RESERVED_CPU_MILLICORES = 250;
 const RESERVED_MEMORY_MIB = 1024;
+
+/**
+ * Image references the simulated registries cannot resolve. A tag such as
+ * `quay.io/openshift/origin-hello-openshift:does-not-exist` is exactly the L10
+ * rolling-update scenario; `:not-found` is used by the DeploymentStuckRollout
+ * incident. Public images are otherwise assumed pullable.
+ */
+const IMAGE_PULL_FAILURE_TAG_RE = /^(does-not-exist|doesnotexist|doesnt-exist|nonexistent|no-such|not-found|notfound|missing|invalid|bogus|nope|broken)/i;
+const IMAGE_PULL_FAILURE_REPO_RE = /(^|[\/])(does-not-exist|doesnotexist|nonexistent|no-such-repo|missing-repo)([\/:.]|$)/i;
 
 export class SimulationTick {
   /**
@@ -50,6 +121,20 @@ export class SimulationTick {
     this.eventBus = eventBus || null;
     this.cluster._evictedOwnerCounts = new Map();
     this.cluster._rescheduledCount = 0;
+    /**
+     * Virtual wall-clock anchor. CronJob schedules (and `status.lastScheduleTime`)
+     * are computed against `_simEpoch + gameSeconds*1000`, so a schedule fires
+     * after its scheduled amount of *simulated* time and time scaling applies.
+     */
+    this._simEpoch = Date.now();
+    /** OLM state kept outside the resource objects (reconcile bookkeeping). */
+    this._olmOperatorDeployments = new Map();
+    this._olmCatalogEnsuredAt = -Infinity;
+    /** MetalLB operand resources created by the operator (uid → kind/ns). */
+    this._metallbOperands = new Map();
+    /** Known CSVs (uid → {name, namespace, packageName}) for uninstall cleanup. */
+    this._knownCSVs = new Map();
+    this._lastCronTickAt = -Infinity;
 
     if (eventBus) {
       eventBus.on('cluster:deleted:Pod', (data) => {
@@ -83,6 +168,28 @@ export class SimulationTick {
       });
       eventBus.on('cluster:added:SecurityContextConstraints', () => {
         this._sccDirty = true;
+      });
+      // OCP 4.x SCC grants are (Cluster)RoleBindings to
+      // system:openshift:scc:<name>; re-evaluate when those change.
+      for (const eventName of [
+        'cluster:added:RoleBinding',
+        'cluster:modified:RoleBinding',
+        'cluster:deleted:RoleBinding',
+        'cluster:added:ClusterRoleBinding',
+        'cluster:modified:ClusterRoleBinding',
+        'cluster:deleted:ClusterRoleBinding',
+        'scc:granted',
+        'scc:revoked',
+      ]) {
+        eventBus.on(eventName, () => {
+          this._sccDirty = true;
+        });
+      }
+
+      // OLM uninstall: deleting the CSV removes the operator Deployment that
+      // the CSV's install strategy created (the Subscription does NOT).
+      eventBus.on('cluster:deleted:ClusterServiceVersion', (data) => {
+        this._onCSVDeleted(data?.resource || data);
       });
     }
 
@@ -144,6 +251,7 @@ export class SimulationTick {
     this._tickLimitRanges(dt);
     this._tickQuotaEnforcement(dt);
     this._tickPodScheduling(dt);
+    this._tickImagePulls(dt);
     this._tickPodLifecycle(dt);
     this._tickContainerResources(dt);
     this._tickHealthChecks(dt);
@@ -165,6 +273,7 @@ export class SimulationTick {
     if (this.tickCount % this.probeInterval === 0) this._tickProbes(dt);
     this._tickRoutes(dt);
     this._tickSCC(dt);
+    this._ensureOLMDefaults();
     this._tickSubscriptions(dt);
     this._tickOperatorEffects(dt);
     if (this.tickCount % 5 === 0) this.cluster.recalculateQuotaStatus(true);
@@ -270,6 +379,7 @@ export class SimulationTick {
     // nodes keep running already-bound pods; only new placement is blocked.
     for (const pod of pods) {
       if (pod.status.phase !== 'Pending' || !pod.spec.nodeName || pod.isDeleting || this._isPodBlocked(pod)) continue;
+      if (pod._nodeBound) continue; // already bound; kubelet owns it now
       const node = nodes.find((entry) => entry.metadata.name === pod.spec.nodeName);
       if (!node) {
         const message = `node "${pod.spec.nodeName}" not found`;
@@ -287,21 +397,193 @@ export class SimulationTick {
     }
   }
 
-  /** Bind a Pending pod to a node and start it (shared by scheduler and DS). */
+  /**
+   * Bind a Pending pod to a node (shared by the scheduler and DaemonSet
+   * controller). The kubelet still has to pull images and start containers:
+   * the phase only becomes Running in {@link _tickImagePulls} once every image
+   * pull succeeds (an unpullable image leaves the Pod Pending in
+   * ErrImagePull/ImagePullBackOff, exactly like a real cluster).
+   */
   _schedulePodOnNode(pod, node) {
+    if (pod._nodeBound) return pod;
+    pod._nodeBound = true;
     pod.spec.nodeName = node.metadata.name;
-    pod.status.phase = 'Running';
     pod.status.startTime = pod.status.startTime || new Date().toISOString();
     pod.status.hostIP = node.status.addresses?.[0]?.address || '10.0.0.1';
     pod.status.podIP = pod.status.podIP || this._generatePodIP();
     pod.setCondition('PodScheduled', 'True', 'Scheduled', `Successfully assigned ${pod.metadata.namespace}/${pod.metadata.name} to ${node.metadata.name}`);
     pod.setCondition('Initialized', 'True', 'PodInitialized');
-    pod.setCondition('Ready', 'False', 'ContainersNotReady');
+    pod.setCondition('Ready', 'False', 'ContainersNotReady', 'containers with unready status: [' + (pod.spec.containers || []).map((container) => container.name).join(' ') + ']');
     this._trackRescheduledPod(pod);
     pod.recordEvent('Normal', 'Scheduled', `Successfully assigned ${pod.metadata.namespace}/${pod.metadata.name} to ${node.metadata.name}`);
     this._initContainerStatuses(pod);
+    pod.status.phase = 'Pending';
     this.cluster.update(pod.uid, pod);
     return pod;
+  }
+
+  /**
+   * Kubelet image-pull controller. Bound pods stay Pending until every
+   * container image can be pulled; failures surface as ErrImagePull then
+   * ImagePullBackOff container states + kubelet events, never as Running pods.
+   */
+  _tickImagePulls(dt) {
+    const pendingPods = this.cluster.getByKind('Pod').filter(
+      (pod) => pod.status.phase === 'Pending' && pod._nodeBound && !pod.isDeleting
+        && !this._isPodBlocked(pod) && !this._isIncidentControlled(pod)
+    );
+    for (const pod of pendingPods) {
+      if (pod._imagePullDone) continue;
+      // Kubelet retries failed pulls on backoff; once the image/tag appears the
+      // Pod recovers instead of being stuck in ImagePullBackOff forever. While
+      // waiting for the next retry the state escalates ErrImagePull ->
+      // ImagePullBackOff like a real kubelet (describe/get STATUS).
+      const retryDue = !pod._imagePullFailed
+        || typeof pod._nextImagePullRetryAt !== 'number'
+        || this.gameSeconds >= pod._nextImagePullRetryAt;
+      if (!retryDue) {
+        let changed = false;
+        for (const status of pod.status.containerStatuses || []) {
+          const waitingReason = status.state?.waiting?.reason;
+          if (waitingReason === 'ErrImagePull') {
+            status.state = { waiting: { reason: 'ImagePullBackOff', message: status.state.waiting.message } };
+            changed = true;
+          }
+        }
+        if (changed) this.cluster.update(pod.uid, pod);
+        continue;
+      }
+      const containers = pod.spec.containers || [];
+      if (containers.length === 0) continue;
+      if (!pod.status.containerStatuses || pod.status.containerStatuses.length !== containers.length) {
+        this._initContainerStatuses(pod);
+      }
+      const results = containers.map((container) => this._resolveContainerImagePull(container));
+      const failure = results.find((result) => !result.ok);
+      if (!failure) {
+        pod._imagePullDone = true;
+        pod._imagePullFailed = false;
+        pod._nextImagePullRetryAt = undefined;
+        // Containers restart from ContainerCreating before the kubelet starts
+        // them (the previous waiting reason may have been ImagePullBackOff).
+        this._initContainerStatuses(pod);
+        pod.status.phase = 'Running';
+        pod.setCondition('Ready', 'False', 'ContainersNotReady', 'containers with unready status: [' + containers.map((container) => container.name).join(' ') + ']');
+        pod.recordEvent('Normal', 'Pulled', `Successfully pulled image "${containers[0]?.image || ''}"`);
+        this.cluster.update(pod.uid, pod);
+        continue;
+      }
+
+      const message = failure.message || 'manifest unknown';
+      pod._imagePullFailed = true;
+      pod._nextImagePullRetryAt = this.gameSeconds + 10;
+      if (typeof pod._imagePullFailedAt !== 'number') pod._imagePullFailedAt = this.gameSeconds;
+      const backoff = this.gameSeconds - pod._imagePullFailedAt >= IMAGE_PULL_RETRY_SECONDS;
+      const reason = backoff ? 'ImagePullBackOff' : 'ErrImagePull';
+      for (let index = 0; index < pod.status.containerStatuses.length; index++) {
+        const status = pod.status.containerStatuses[index];
+        const containerFailure = results[index] && !results[index].ok ? results[index] : null;
+        if (!containerFailure) continue;
+        status.ready = false;
+        status.started = false;
+        status.state = { waiting: { reason, message: containerFailure.message } };
+      }
+      pod.setCondition('Ready', 'False', 'ContainersNotReady', `containers with unready status: [${containers.map((container) => container.name).join(' ')}]`);
+      // kubectl/oc describe show ErrImagePull first, then the exponential
+      // ImagePullBackOff retries — throttle duplicate events like a real kubelet.
+      const nextLog = pod._imagePullNextEventAt;
+      if (typeof nextLog !== 'number' || this.gameSeconds >= nextLog) {
+        if (!backoff) {
+          pod.recordEvent('Warning', 'Failed', `Failed to pull image "${failure.image}": ${message}`);
+        } else {
+          pod.recordEvent('Normal', 'BackOff', `Back-off pulling image "${failure.image}"`);
+          if (!pod._imagePullBackOffLogged) {
+            pod._imagePullBackOffLogged = true;
+            pod.recordEvent('Warning', 'Failed', `Error: ImagePullBackOff`);
+          }
+        }
+        pod._imagePullNextEventAt = this.gameSeconds + 10;
+      }
+      this.cluster.update(pod.uid, pod);
+    }
+  }
+
+  /**
+   * Would the container image pull succeed? Mirrors the interesting failure
+   * modes of a real cluster:
+   *   - internal registry: the ImageStreamTag must exist and have a digest;
+   *   - external registries: a small set of obviously-missing references
+   *     (does-not-exist / not-found tags, missing repositories) fails, while
+   *     public images are assumed pullable (the simulator has no registry).
+   * @param {object} container
+   * @returns {{ok: boolean, image: string, message?: string}}
+   */
+  _resolveContainerImagePull(container) {
+    const image = String(container?.image || '').trim();
+    if (!image) return { ok: false, image, message: 'invalid reference format: image is required' };
+    const internal = this._parseInternalImageReference(image);
+    if (internal) {
+      const resolved = this.cluster.resolveImageStreamTag(internal.namespace, internal.name, internal.tag);
+      const available = Boolean(resolved.found && (resolved.tagEntry?.items || []).length > 0);
+      if (!available) {
+        return {
+          ok: false,
+          image,
+          message: `reading manifest ${internal.tag} in repository ${internal.namespace}/${internal.name}: manifest unknown`,
+        };
+      }
+      return { ok: true, image };
+    }
+    const lastSlash = image.lastIndexOf('/');
+    const lastColon = image.lastIndexOf(':');
+    const tag = lastColon > lastSlash ? image.slice(lastColon + 1) : '';
+    const repository = tag ? image.slice(0, lastColon) : image;
+    const badTag = IMAGE_PULL_FAILURE_TAG_RE.test(tag) ? tag : '';
+    const badRepoMatch = repository.match(IMAGE_PULL_FAILURE_REPO_RE);
+    if (badTag || badRepoMatch) {
+      return {
+        ok: false,
+        image,
+        message: `failed to resolve reference "${image}": manifest unknown`,
+      };
+    }
+    return { ok: true, image };
+  }
+
+  /**
+   * Parse an internal-registry pull spec
+   * (`image-registry.openshift-image-registry.svc:5000/ns/stream:tag`).
+   * @returns {{namespace: string, name: string, tag: string}|null}
+   */
+  _parseInternalImageReference(image) {
+    const hosts = [
+      IMAGE_REGISTRY_HOST,
+      'image-registry.openshift-image-registry.svc',
+      'docker-registry.default.svc:5000',
+    ];
+    for (const host of hosts) {
+      if (!image.startsWith(`${host}/`)) continue;
+      let remainder = image.slice(host.length + 1);
+      let digest = '';
+      const atIndex = remainder.indexOf('@');
+      if (atIndex >= 0) {
+        digest = remainder.slice(atIndex + 1);
+        remainder = remainder.slice(0, atIndex);
+      }
+      const parts = remainder.split('/');
+      if (parts.length < 2) return null;
+      const name = parts[parts.length - 1];
+      const namespace = parts[parts.length - 2];
+      let tag = digest ? digest : 'latest';
+      const colonIndex = name.lastIndexOf(':');
+      let streamName = name;
+      if (colonIndex > 0) {
+        streamName = name.slice(0, colonIndex);
+        tag = name.slice(colonIndex + 1);
+      }
+      return { namespace, name: streamName, tag };
+    }
+    return null;
   }
 
   _trackRescheduledPod(pod) {
@@ -547,8 +829,15 @@ export class SimulationTick {
     }));
   }
 
+  /** True for Pods the IncidentEngine is actively managing (damaged state). */
+  _isIncidentControlled(pod) {
+    return Boolean(pod?.metadata?.annotations?.['openshiftgames.io/incident']);
+  }
+
   _tickPodLifecycle(dt) {
-    const runningPods = this.cluster.getByKind('Pod').filter((pod) => pod.status.phase === 'Running');
+    const runningPods = this.cluster.getByKind('Pod').filter(
+      (pod) => pod.status.phase === 'Running' && !this._isIncidentControlled(pod)
+    );
     for (const pod of runningPods) {
       if (!pod.status.containerStatuses) continue;
       const containers = pod.spec.containers || [];
@@ -651,7 +940,7 @@ export class SimulationTick {
   _tickContainerResources(dt) {
     const failureRate = this._effectiveFailureRatePerSecond();
     const runningPods = this.cluster.getByKind('Pod').filter(
-      (pod) => pod.status.phase === 'Running' && pod.status.containerStatuses
+      (pod) => pod.status.phase === 'Running' && pod.status.containerStatuses && !this._isIncidentControlled(pod)
     );
     for (const pod of runningPods) {
       for (const status of pod.status.containerStatuses) {
@@ -684,7 +973,7 @@ export class SimulationTick {
 
   _tickHealthChecks(dt) {
     const runningPods = this.cluster.getByKind('Pod').filter(
-      (pod) => pod.status.phase === 'Running' && pod.status.containerStatuses
+      (pod) => pod.status.phase === 'Running' && pod.status.containerStatuses && !this._isIncidentControlled(pod)
     );
     for (const pod of runningPods) {
       const containers = pod.spec.containers || [];
@@ -748,7 +1037,7 @@ export class SimulationTick {
 
   _tickOOMKiller(dt) {
     const runningPods = this.cluster.getByKind('Pod').filter(
-      (pod) => pod.status.phase === 'Running' && pod.status.containerStatuses
+      (pod) => pod.status.phase === 'Running' && pod.status.containerStatuses && !this._isIncidentControlled(pod)
     );
     for (const pod of runningPods) {
       for (const status of pod.status.containerStatuses) {
@@ -972,15 +1261,29 @@ export class SimulationTick {
       }
       if (currentSet) this._reconcileReplicaSet(currentSet, currentTarget, minReadySeconds);
       if (activeOld > 0) {
+        // Real Deployment controller math (reconcileOldReplicaSets):
+        //   maxScaledDown = allPodsCount - minAvailable - newRSUnavailablePods
+        // where newRSUnavailablePods are the new ReplicaSet's pods that are not
+        // yet available. This is what keeps the old ReplicaSet serving when the
+        // new image cannot be pulled (issue #7) and what removes the failed
+        // ReplicaSet's leftovers after `oc rollout undo`.
         const minAvailable = Math.max(0, desiredReplicas - maxUnavailable);
-        const totalReady = (currentSet ? this._readyPodsOf(currentSet, minReadySeconds).length : 0)
-          + oldSets.reduce((sum, rs) => sum + this._readyPodsOf(rs, minReadySeconds).length, 0);
-        // One old pod may go only while one more than minAvailable stays ready.
-        if (totalReady > minAvailable) {
-          const victimSet = oldSets
+        const newSetSpecReplicas = Math.max(0, Number(currentSet?.spec.replicas ?? 0) || 0);
+        const newUnavailable = Math.max(0, newSetSpecReplicas - (currentSet ? this._readyPodsOf(currentSet, minReadySeconds).length : 0));
+        const allPodsCount = activeOld + Math.max(activeCurrent, newSetSpecReplicas);
+        const maxScaledDown = allPodsCount - minAvailable - newUnavailable;
+        if (maxScaledDown > 0) {
+          let remaining = maxScaledDown;
+          const victims = oldSets
             .filter((rs) => this._activePodsOf(rs).length > 0)
-            .sort((a, b) => this._replicaSetRevision(a) - this._replicaSetRevision(b))[0];
-          if (victimSet) this._reconcileReplicaSet(victimSet, this._activePodsOf(victimSet).length - 1, minReadySeconds);
+            .sort((a, b) => this._replicaSetRevision(a) - this._replicaSetRevision(b));
+          for (const victim of victims) {
+            if (remaining <= 0) break;
+            const active = this._activePodsOf(victim).length;
+            const remove = Math.min(remaining, active);
+            this._reconcileReplicaSet(victim, active - remove, minReadySeconds);
+            remaining -= remove;
+          }
         }
       }
       for (const rs of oldSets) {
@@ -1001,13 +1304,21 @@ export class SimulationTick {
     let revision = ownedSets.reduce((max, rs) => Math.max(max, this._replicaSetRevision(rs)), 0) + 1;
     let rs = this.cluster.getByName('ReplicaSet', name, namespace);
     if (!rs) {
+      // Real Deployment controller copies the Deployment's annotations onto each
+      // new ReplicaSet, which is where `oc rollout history` reads
+      // kubernetes.io/change-cause from.
+      const changeCause = deploy.metadata?.annotations?.['kubernetes.io/change-cause']
+        || template?.metadata?.annotations?.['kubernetes.io/change-cause']
+        || '';
+      const rsAnnotations = { 'deployment.kubernetes.io/revision': String(revision) };
+      if (changeCause) rsAnnotations['kubernetes.io/change-cause'] = changeCause;
       rs = this.cluster.addResource({
         kind: 'ReplicaSet',
         metadata: {
           name,
           namespace,
           labels: { ...selector, 'pod-template-hash': templateHash },
-          annotations: { 'deployment.kubernetes.io/revision': String(revision) },
+          annotations: rsAnnotations,
         },
         spec: {
           replicas: 0,
@@ -1089,11 +1400,20 @@ export class SimulationTick {
     const readyCurrent = currentPods.filter((pod) => this._podIsReady(pod, minReadySeconds));
     const available = readyAll.length;
     const minAvailable = Math.max(0, desiredReplicas - maxUnavailable);
-    // Admission-denied pods are Failed objects, so they are not "active"; scan
-    // all owned pods (not just active ones) to surface ReplicaFailure.
+    // Admission rejections no longer create Failed Pod objects (issue #13):
+    // the ReplicaSet carries a ReplicaFailure/FailedCreate condition instead.
+    // The legacy denied-Pod scan is kept for pre-existing/incident pods.
     const deniedPods = ownedSets
       .flatMap((rs) => this.cluster.getChildren(rs.uid))
       .filter((child) => child.kind === 'Pod' && this._isPodBlocked(child));
+    const failingSets = ownedSets.filter((rs) => this._hasReplicaFailure(rs));
+    const replicaFailure = failingSets.length > 0
+      ? (failingSets[0].status.conditions || []).find((condition) => condition.type === 'ReplicaFailure')
+      : null;
+    const admissionBlocked = Boolean(replicaFailure) || deniedPods.length > 0;
+    const admissionMessage = replicaFailure?.message
+      || deniedPods[0]?.metadata?.annotations?.['openshiftgames/denied-reason']
+      || '';
     const oldSetPods = ownedSets.filter((rs) => rs !== currentSet).reduce((sum, rs) => sum + this._activePodsOf(rs).length, 0);
     const rolloutPending = flags.rolloutPending === true
       || oldSetPods > 0
@@ -1101,35 +1421,43 @@ export class SimulationTick {
       || (currentSet && this._stableStringify(currentSet.spec.template || {}) !== this._stableStringify(deploy.spec.template || {}));
 
     const previousSignature = deploy._deploymentStatusSignature;
+    const progressDeadlineSeconds = Math.max(1, Number(deploy.spec.progressDeadlineSeconds) || 600);
+    const progressing = !paused && (admissionBlocked || rolloutPending);
     deploy.status.replicas = allPods.length;
-    deploy.status.readyReplicas = (!paused && rolloutPending && currentSet) ? readyCurrent.length : readyAll.length;
+    // Deployment.status.readyReplicas counts every ready Pod of the Deployment
+    // (old + new ReplicaSets), like a real cluster.
+    deploy.status.readyReplicas = readyAll.length;
     deploy.status.availableReplicas = available;
     deploy.status.updatedReplicas = currentPods.length;
     deploy.status.unavailableReplicas = Math.max(0, desiredReplicas - available);
     deploy.status.observedGeneration = deploy.metadata.generation;
+    if (progressing && typeof deploy._progressingSince !== 'number') deploy._progressingSince = this.gameSeconds;
+    if (!progressing) deploy._progressingSince = undefined;
+    const timedOut = progressing && typeof deploy._progressingSince === 'number'
+      && this.gameSeconds - deploy._progressingSince >= progressDeadlineSeconds;
 
-    if (deniedPods.length > 0) {
-      const deadline = Math.max(1, Number(deploy.spec.progressDeadlineSeconds) || 600);
-      if (typeof deploy._progressingSince !== 'number') deploy._progressingSince = this.gameSeconds;
-      const timedOut = this.gameSeconds - deploy._progressingSince >= deadline;
+    if (admissionBlocked) {
       deploy.setCondition('Available', 'False', 'MinimumReplicasUnavailable', `${available}/${desiredReplicas} replicas available`);
       deploy.setCondition(
         'Progressing',
         timedOut ? 'False' : 'True',
         timedOut ? 'ProgressDeadlineExceeded' : 'ReplicaSetUpdated',
-        timedOut ? 'ReplicaSet has timed out progressing because pods are rejected by admission' : 'waiting for pods to be admitted'
+        timedOut
+          ? `ReplicaSet "${currentSet?.metadata?.name || 'new'}" has timed out progressing.`
+          : `waiting for pods to be admitted: ${admissionMessage}`
       );
-      deploy.setCondition('ReplicaFailure', 'True', 'FailedCreate', deniedPods[0].metadata.annotations['openshiftgames/denied-reason'] || 'unable to admit pod');
+      deploy.setCondition('ReplicaFailure', 'True', 'FailedCreate', admissionMessage || 'unable to admit pod');
     } else {
       deploy.setCondition('ReplicaFailure', 'False', 'NoReplicaFailure', '');
       if (paused) {
-        deploy._progressingSince = undefined;
         deploy.setCondition('Progressing', 'True', 'DeploymentPaused', 'deployment is paused; rollout will not continue until resumed');
-        deploy.setCondition('Available', available >= Math.min(desiredReplicas, minAvailable) ? 'True' : 'False', available >= Math.min(desiredReplicas, minAvailable) ? 'MinimumReplicasAvailable' : 'MinimumReplicasUnavailable', `${available}/${desiredReplicas} replicas available`);
+        deploy.setCondition(
+          'Available',
+          available >= Math.min(desiredReplicas, minAvailable) ? 'True' : 'False',
+          available >= Math.min(desiredReplicas, minAvailable) ? 'MinimumReplicasAvailable' : 'MinimumReplicasUnavailable',
+          `${available}/${desiredReplicas} replicas available`
+        );
       } else if (rolloutPending) {
-        const deadline = Math.max(1, Number(deploy.spec.progressDeadlineSeconds) || 600);
-        if (typeof deploy._progressingSince !== 'number') deploy._progressingSince = this.gameSeconds;
-        const timedOut = this.gameSeconds - deploy._progressingSince >= deadline;
         if (timedOut) {
           deploy.setCondition('Progressing', 'False', 'ProgressDeadlineExceeded', `ReplicaSet "${currentSet?.metadata?.name || 'new'}" has timed out progressing.`);
         } else {
@@ -1137,10 +1465,41 @@ export class SimulationTick {
         }
         deploy.setCondition('Available', available >= minAvailable ? 'True' : 'False', available >= minAvailable ? 'MinimumReplicasAvailable' : 'MinimumReplicasUnavailable', `${available}/${desiredReplicas} replicas available`);
       } else {
-        deploy._progressingSince = undefined;
         deploy.setCondition('Available', 'True', 'MinimumReplicasAvailable', '');
         deploy.setCondition('Progressing', 'True', 'NewReplicaSetAvailable', '');
       }
+    }
+
+    // Engine hooks consumed by `oc rollout status` / other UI surfaces.
+    if (timedOut && !deploy._deadlineEventEmitted) {
+      deploy._deadlineEventEmitted = true;
+      const message = `error: deployment "${deploy.metadata.name}" exceeded its progress deadline`;
+      this.eventBus?.emit('rollout:progress-deadline-exceeded', {
+        kind: 'Deployment',
+        name: deploy.metadata.name,
+        namespace: deploy.metadata.namespace,
+        revision: this._replicaSetRevision(currentSet) || null,
+        deadlineSeconds: progressDeadlineSeconds,
+        message,
+        resource: deploy,
+      });
+    }
+    if (!timedOut) deploy._deadlineEventEmitted = false;
+
+    const wasPending = deploy._rolloutPendingLast === true;
+    deploy._rolloutPendingLast = progressing;
+    if (progressing) {
+      deploy._rolloutCompleteEmitted = false;
+    } else if (wasPending && !deploy._rolloutCompleteEmitted) {
+      deploy._rolloutCompleteEmitted = true;
+      this.eventBus?.emit('rollout:complete', {
+        kind: 'Deployment',
+        name: deploy.metadata.name,
+        namespace: deploy.metadata.namespace,
+        revision: this._replicaSetRevision(currentSet) || null,
+        message: `deployment "${deploy.metadata.name}" successfully rolled out`,
+        resource: deploy,
+      });
     }
 
     const signature = JSON.stringify({
@@ -1174,6 +1533,241 @@ export class SimulationTick {
     const value = Number(rs.metadata?.annotations?.['deployment.kubernetes.io/revision']);
     if (Number.isFinite(value)) return value;
     return 0;
+  }
+
+  // ── Rollout engine hooks (consumed by the CLI and UI) ────────────────────
+
+  /** Resolve a workload for rollout inspection (`oc rollout …`). */
+  _rolloutResource(kind, name, options = {}) {
+    const canonical = this.cluster._canonicalKind(kind || 'Deployment') || kind || 'Deployment';
+    const namespace = options.namespace || 'default';
+    const resource = this.cluster.getByName(canonical, name, namespace);
+    return { canonical, resource, namespace };
+  }
+
+  /**
+   * Rollout status for `oc rollout status <kind>/<name>`, mirroring the real
+   * oc contract: the CLI polls this through a `pending` state and prints the
+   * failure line when the Deployment exhausts its progressDeadlineSeconds.
+   *
+   * @param {string} kind `Deployment`/`StatefulSet`/`DaemonSet`
+   * @param {string} name
+   * @param {{namespace?: string}} [options]
+   * @returns {{
+   *   found: boolean, complete: boolean, pending: boolean, timedOut: boolean,
+   *   error?: string, message: string, reason: string|null,
+   *   deadlineSeconds: number|null, remainingSeconds: number|null,
+   *   revision: number|null,
+   *   status: {desired: number, updated: number, ready: number, available: number, replicas: number, unavailable: number}
+   * }}
+   */
+  getRolloutStatus(kind, name, options = {}) {
+    const { canonical, resource } = this._rolloutResource(kind, name, options);
+    const singular = String(canonical || 'resource').toLowerCase();
+    if (!resource) {
+      return {
+        found: false,
+        complete: false,
+        pending: false,
+        timedOut: false,
+        message: `Error from server (NotFound): ${singular}s "${name}" not found`,
+        reason: null,
+        deadlineSeconds: null,
+        remainingSeconds: null,
+        revision: null,
+        status: { desired: 0, updated: 0, ready: 0, available: 0, replicas: 0, unavailable: 0 },
+      };
+    }
+    if (!['Deployment', 'StatefulSet', 'DaemonSet'].includes(canonical)) {
+      return {
+        found: true,
+        complete: false,
+        pending: false,
+        timedOut: false,
+        error: `error: no rollout strategy for "${singular}"`,
+        message: `error: no rollout strategy for "${singular}"`,
+        reason: 'NoRolloutStrategy',
+        deadlineSeconds: null,
+        remainingSeconds: null,
+        revision: null,
+        status: { desired: 0, updated: 0, ready: 0, available: 0, replicas: 0, unavailable: 0 },
+      };
+    }
+
+    if (canonical === 'Deployment') {
+      const desired = Math.max(0, Number(resource.spec.replicas ?? 1) || 0);
+      const status = {
+        desired,
+        updated: Number(resource.status.updatedReplicas || 0),
+        ready: Number(resource.status.readyReplicas || 0),
+        available: Number(resource.status.availableReplicas || 0),
+        replicas: Number(resource.status.replicas || 0),
+        unavailable: Number(resource.status.unavailableReplicas || 0),
+      };
+      const progressing = resource.getCondition('Progressing');
+      const paused = resource.spec.paused === true;
+      const timedOut = !paused && progressing?.status === 'False' && progressing.reason === 'ProgressDeadlineExceeded';
+      const failedCreate = (resource.status.conditions || []).some(
+        (condition) => condition.type === 'ReplicaFailure' && condition.status === 'True'
+      );
+      const complete = !paused && !timedOut && !failedCreate
+        && status.updated >= desired
+        && status.available >= desired
+        && status.replicas <= desired;
+      const deadlineSeconds = Math.max(1, Number(resource.spec.progressDeadlineSeconds) || 600);
+      const remainingSeconds = typeof resource._progressingSince === 'number'
+        ? Math.max(0, deadlineSeconds - (this.gameSeconds - resource._progressingSince))
+        : null;
+      let message;
+      if (timedOut) {
+        message = `error: deployment "${name}" exceeded its progress deadline`;
+      } else if (complete) {
+        message = `deployment "${name}" successfully rolled out`;
+      } else if (paused) {
+        message = `Waiting for deployment "${name}" rollout to finish: deployment is paused`;
+      } else if (status.updated < status.desired) {
+        message = `Waiting for deployment "${name}" rollout to finish: ${status.updated} out of ${status.desired} new replicas have been updated...`;
+      } else if (status.replicas > status.updated) {
+        message = `Waiting for deployment "${name}" rollout to finish: ${Math.max(0, status.replicas - status.updated)} old replicas are pending termination...`;
+      } else {
+        message = `Waiting for deployment "${name}" rollout to finish: ${status.available} of ${status.updated} updated replicas are available...`;
+      }
+      return {
+        found: true,
+        complete,
+        pending: !complete && !timedOut,
+        timedOut,
+        message,
+        reason: timedOut ? 'ProgressDeadlineExceeded' : (complete ? 'NewReplicaSetAvailable' : (progressing?.reason || null)),
+        deadlineSeconds,
+        remainingSeconds,
+        revision: Number(resource.metadata?.annotations?.['deployment.kubernetes.io/revision']) || null,
+        status,
+      };
+    }
+
+    const desired = Math.max(0, Number(resource.spec.replicas ?? 1) || 0);
+    const status = {
+      desired,
+      updated: Number(resource.status.updatedReplicas || resource.status.currentReplicas || 0),
+      ready: Number(resource.status.readyReplicas || resource.status.numberReady || 0),
+      available: Number(resource.status.availableReplicas || resource.status.numberAvailable || 0),
+      replicas: Number(resource.status.replicas || resource.status.currentReplicas || 0),
+      unavailable: Number(resource.status.unavailableReplicas || 0),
+    };
+    const complete = status.updated >= desired && status.ready >= desired && status.replicas >= desired;
+    return {
+      found: true,
+      complete,
+      pending: !complete,
+      timedOut: false,
+      message: complete
+        ? `${singular} "${name}" successfully rolled out`
+        : `Waiting for ${singular} "${name}" rollout to finish: ${status.ready} of ${status.desired} updated replicas are ready...`,
+      reason: complete ? 'NewReplicaSetAvailable' : 'ReplicaSetUpdated',
+      deadlineSeconds: null,
+      remainingSeconds: null,
+      revision: null,
+      status,
+    };
+  }
+
+  /**
+   * Real rollout history: derived from the Deployment's ReplicaSets
+   * (`deployment.kubernetes.io/revision` + `kubernetes.io/change-cause`), so
+   * revisions appear as they really happened instead of a synthesised rev 1.
+   *
+   * @returns {Array<{revision:number, changeCause:string, images:string[], name:string, active:boolean, template:object}>}
+   */
+  getRolloutHistory(kind, name, options = {}) {
+    const { canonical, resource } = this._rolloutResource(kind, name, options);
+    if (!resource || !['Deployment', 'StatefulSet', 'DaemonSet'].includes(canonical)) return [];
+    const ownedSets = this.cluster.getChildren(resource.uid).filter((child) => child.kind === 'ReplicaSet');
+    const history = ownedSets.map((rs) => {
+      const revision = this._replicaSetRevision(rs);
+      const activePods = this._activePodsOf(rs).length;
+      return {
+        revision,
+        changeCause: rs.metadata?.annotations?.['kubernetes.io/change-cause'] || '',
+        images: (rs.spec?.template?.spec?.containers || []).map((container) => `${container.name}=${container.image}`),
+        name: rs.metadata.name,
+        active: activePods > 0,
+        replicas: Number(rs.spec?.replicas || 0),
+        template: deepClone(rs.spec?.template || {}),
+      };
+    }).filter((entry) => entry.revision > 0);
+    history.sort((a, b) => a.revision - b.revision);
+    if (history.length > 0) return history;
+    // Legacy/saved cluster without ReplicaSets: reflect the current template as
+    // revision 1 so `rollout history` still has a row (no fake change-cause).
+    const currentRevision = Number(resource.metadata?.annotations?.['deployment.kubernetes.io/revision']) || 1;
+    return [{
+      revision: currentRevision,
+      changeCause: resource.metadata?.annotations?.['kubernetes.io/change-cause'] || '',
+      images: (resource.spec?.template?.spec?.containers || []).map((container) => `${container.name}=${container.image}`),
+      name: `${resource.metadata.name}-current`,
+      active: true,
+      replicas: Number(resource.spec?.replicas || 0),
+      template: deepClone(resource.spec?.template || {}),
+    }];
+  }
+
+  /**
+   * `oc rollout undo`: restore the pod template of a previous revision. The
+   * Deployment controller then re-activates the existing (kept) ReplicaSet, so
+   * availability is restored without creating a bogus new revision.
+   *
+   * @param {string} kind
+   * @param {string} name
+   * @param {{namespace?: string, revision?: number}} [options]
+   * @returns {{success: boolean, message: string, revision?: number}}
+   */
+  undoRollout(kind, name, options = {}) {
+    const { canonical, resource } = this._rolloutResource(kind, name, options);
+    const singular = String(canonical || 'resource').toLowerCase();
+    if (!resource) return { success: false, message: `Error from server (NotFound): ${singular}s "${name}" not found` };
+    if (canonical !== 'Deployment') {
+      return { success: false, message: `error: no rollout history found for ${singular} "${name}"` };
+    }
+    const history = this.getRolloutHistory(canonical, name, options);
+    if (history.length === 0) return { success: false, message: `error: no rollout history found for ${singular} "${name}"` };
+    const currentRevision = Number(resource.metadata?.annotations?.['deployment.kubernetes.io/revision']) || history[history.length - 1].revision;
+    let target;
+    if (options.revision !== undefined && options.revision !== null) {
+      target = history.find((entry) => entry.revision === Number(options.revision));
+      if (!target) {
+        return { success: false, message: `error: unable to find specified revision ${options.revision}` };
+      }
+    } else {
+      target = [...history].reverse().find((entry) => entry.revision < currentRevision);
+      if (!target) {
+        // `oc rollout undo` on a Deployment with a single revision rolls back to
+        // that revision (no-op) instead of erroring.
+        target = history[history.length - 1];
+      }
+    }
+    resource.spec.template = deepClone(target.template || {});
+    resource.metadata.generation = (Number(resource.metadata.generation) || 1) + 1;
+    resource._progressingSince = undefined;
+    resource._deadlineEventEmitted = false;
+    this.cluster.update(resource.uid, resource);
+    // Counters/events shared with the objective + scoring layers (the legacy
+    // GameEngine.rollout('undo') path emitted these too).
+    this.cluster._rollbackCount = (this.cluster._rollbackCount || 0) + 1;
+    this.eventBus?.emit('resource:rollback', { uid: resource.uid, kind: canonical, name, revision: target.revision });
+    this.eventBus?.emit('rollout:triggered', {
+      kind: canonical,
+      name,
+      namespace: resource.metadata.namespace,
+      revision: target.revision,
+      reason: 'undo',
+      resource,
+    });
+    return {
+      success: true,
+      revision: target.revision,
+      message: `${singular}.apps/${name} rolled back`,
+    };
   }
 
   _activePodsOf(owner) {
@@ -1307,13 +1901,21 @@ export class SimulationTick {
       'apps.kubernetes.io/pod-index': String(ordinal),
       'controller-revision-hash': revisionName,
     };
+    const admissionFailure = this._admissionFailureMessage(podSpec, namespace, podName);
+    if (admissionFailure) {
+      this._recordFailedCreate(statefulSet, podName, admissionFailure);
+      return null;
+    }
     const pod = this.cluster.addResource({
       kind: 'Pod',
       metadata: { name: podName, namespace, labels },
       spec: podSpec,
       status: { phase: 'Pending' },
     });
-    if (pod) this.cluster.addRelationship(statefulSet.uid, pod.uid);
+    if (pod) {
+      this.cluster.addRelationship(statefulSet.uid, pod.uid);
+      this._clearReplicaFailure(statefulSet);
+    }
     return pod;
   }
 
@@ -1527,17 +2129,40 @@ export class SimulationTick {
       while (failed.length > failedLimit) this.cluster.remove(failed.shift().uid);
 
       if (cronJob.spec.suspend) continue;
-      const interval = this._parseCronInterval(cronJob.spec.schedule || '*/5 * * * *');
-      const now = Date.now();
-      const lastSchedule = cronJob.status.lastScheduleTime ? new Date(cronJob.status.lastScheduleTime).getTime() : 0;
-      if (lastSchedule && now - lastSchedule < interval) continue;
+
+      // Real cron validation + next-run scheduling: a CronJob never creates a
+      // Job at creation time, only at the next occurrence of its schedule
+      // (issue #14). The simulated clock advances with game time.
+      const parsed = parseCronSchedule(cronJob.spec.schedule || '*/5 * * * *');
+      if (!parsed.valid) {
+        if (!cronJob._invalidScheduleLogged) {
+          cronJob._invalidScheduleLogged = true;
+          cronJob.setCondition('ScheduleInvalid', 'True', 'InvalidSchedule', `invalid CronJob schedule: ${parsed.message || cronJob.spec.schedule}`);
+          cronJob.recordEvent('Warning', 'InvalidSchedule', `invalid CronJob schedule: ${parsed.message || cronJob.spec.schedule}`);
+          this.cluster.update(cronJob.uid, cronJob);
+        }
+        continue;
+      }
+      cronJob._invalidScheduleLogged = false;
+      const nowMs = this._virtualNowMs();
+      if (typeof cronJob._nextScheduleAtMs !== 'number' || !Number.isFinite(cronJob._nextScheduleAtMs)) {
+        const next = nextCronOccurrence(parsed, new Date(nowMs));
+        cronJob._nextScheduleAtMs = next ? next.getTime() : Number.POSITIVE_INFINITY;
+        this.cluster.update(cronJob.uid, cronJob);
+        continue;
+      }
+      if (nowMs < cronJob._nextScheduleAtMs) continue;
+      const scheduledAtMs = cronJob._nextScheduleAtMs;
+      const scheduledAt = new Date(scheduledAtMs);
 
       const policy = cronJob.spec.concurrencyPolicy || 'Allow';
       if (running.length > 0) {
         if (policy === 'Forbid') {
           cronJob.recordEvent('Normal', 'JobAlreadyActive', 'Skipped scheduled job: concurrency policy Forbid');
-          // Avoid re-logging the same skip every cron check.
-          cronJob.status.lastScheduleTime = new Date(now).toISOString();
+          cronJob.status.lastScheduleTime = scheduledAt.toISOString();
+          const nextSkip = nextCronOccurrence(parsed, scheduledAt);
+          cronJob._nextScheduleAtMs = nextSkip ? nextSkip.getTime() : Number.POSITIVE_INFINITY;
+          this.cluster.update(cronJob.uid, cronJob);
           continue;
         }
         if (policy === 'Replace') {
@@ -1546,11 +2171,12 @@ export class SimulationTick {
         }
       }
 
-      let jobName = `${cronJob.metadata.name}-${Math.floor(now / 60000)}`;
+      // Real job names are `<cronjob>-<scheduled epoch minutes>`.
+      let jobName = `${cronJob.metadata.name}-${Math.floor(scheduledAtMs / 60000)}`;
       let suffix = 0;
       while (this.cluster.getByName('Job', jobName, namespace)) {
         suffix += 1;
-        jobName = `${cronJob.metadata.name}-${Math.floor(now / 60000)}-${suffix}`;
+        jobName = `${cronJob.metadata.name}-${Math.floor(scheduledAtMs / 60000)}-${suffix}`;
       }
       const jobSpec = deepClone(cronJob.spec.jobTemplate?.spec || {});
       const newJob = this.cluster.addResource({
@@ -1568,36 +2194,18 @@ export class SimulationTick {
       });
       if (!newJob) continue;
       this.cluster.addRelationship(cronJob.uid, newJob.uid);
-      cronJob.status.lastScheduleTime = new Date(now).toISOString();
+      cronJob.status.lastScheduleTime = scheduledAt.toISOString();
       cronJob.status.active = [...(cronJob.status.active || []), { apiVersion: 'batch/v1', kind: 'Job', name: jobName, namespace, uid: newJob.metadata.uid }];
       cronJob.recordEvent('Normal', 'SuccessfulCreate', `Created job ${jobName}`);
+      const nextAfterJob = nextCronOccurrence(parsed, new Date(scheduledAtMs + 1000));
+      cronJob._nextScheduleAtMs = nextAfterJob ? nextAfterJob.getTime() : Number.POSITIVE_INFINITY;
+      this.cluster.update(cronJob.uid, cronJob);
     }
   }
 
-  /**
-   * Average schedule interval in milliseconds for common 5-field cron forms
-   * (used as a compressed-time scheduler; supports daily/hourly/every-N).
-   */
-  _parseCronInterval(schedule) {
-    const parts = String(schedule || '').trim().split(/\s+/);
-    if (parts.length < 5) return 300000;
-    const [minuteField, hourField] = parts;
-    const parseField = (field) => {
-      if (!field || field === '*') return { any: true };
-      if (field.startsWith('*/')) return { step: Math.max(1, parseInt(field.slice(2), 10) || 1) };
-      if (/^\d+$/.test(field)) return { value: parseInt(field, 10) };
-      return { any: true };
-    };
-    const minute = parseField(minuteField);
-    const hour = parseField(hourField);
-    if (hour.any && minute.any) return 60 * 1000; // every minute
-    if (hour.any && minute.step) return minute.step * 60 * 1000;
-    if (hour.step && minute.any) return hour.step * 60 * 60 * 1000;
-    if (hour.step && minute.value !== undefined) return hour.step * 60 * 60 * 1000;
-    if (hour.value !== undefined && minute.any) return 60 * 60 * 1000;
-    if (hour.value !== undefined && minute.step) return Math.max(60 * 1000, minute.step * 60 * 1000);
-    if (hour.value !== undefined && minute.value !== undefined) return 24 * 60 * 60 * 1000;
-    return 60 * 60 * 1000;
+  /** Virtual wall-clock for CronJob scheduling (simulated time). */
+  _virtualNowMs() {
+    return this._simEpoch + this.gameSeconds * 1000;
   }
 
   _tickHPA(dt) {
@@ -1899,15 +2507,300 @@ export class SimulationTick {
    * Services of type LoadBalancer (CONVERSION-SPEC §5).
    */
   _tickOperatorEffects(dt) {
+    this._tickMetalLBOperands(dt);
     this._tickMetalLB(dt);
   }
 
-  _tickMetalLB(dt) {
-    const subscriptions = this.cluster.getByKind('Subscription');
-    const metallbInstalled = subscriptions.some(
-      (subscription) => subscription.status.phase === 'Succeeded'
-        && /metallb/i.test(subscription.spec?.packageName || subscription.metadata.name)
+  /**
+   * Public synchronous seed hook for the app bootstrap (`launchGame`).
+   *
+   * The OLM catalog + global OperatorGroup are part of the seeded platform but
+   * are owned by the simulation layer. They must exist BEFORE the app runs its
+   * initial cluster auto-align (`_layoutClusterAfterModeStart`) so every mesh
+   * gets a unique layout target; the per-tick {@link _ensureOLMDefaults} stays
+   * as an idempotent safety net (level changes, manual deletion, saved games).
+   *
+   * @returns {void}
+   */
+  ensureOLMDefaultsSync() {
+    this._ensureOLMDefaults();
+  }
+
+  /**
+   * Ensure the simulated openshift-marketplace software catalog exists:
+   * PackageManifest objects (cluster-scoped) + the global-operators
+   * OperatorGroup that a real cluster ships in openshift-operators.
+   * Runs every tick but only creates missing objects (a level change/reset
+   * re-seeds them; players cannot permanently remove the catalog).
+   */
+  _ensureOLMDefaults() {
+    if (this.cluster.getByKind('PackageManifest').length === 0) {
+      for (const entry of OLM_CATALOG) {
+        this.cluster.addResource({
+          kind: 'PackageManifest',
+          metadata: { name: entry.name, labels: { 'olm.catalogSource': 'redhat-operators' } },
+          spec: {
+            packageName: entry.name,
+            defaultChannel: entry.channel,
+            channels: [{ name: entry.channel, currentCSV: entry.currentCSV }],
+          },
+          status: {
+            catalogSource: 'redhat-operators',
+            catalogSourceNamespace: 'openshift-marketplace',
+            packageName: entry.name,
+            defaultChannel: entry.channel,
+            provider: { name: entry.provider },
+            channels: [{
+              name: entry.channel,
+              currentCSV: entry.currentCSV,
+              currentCSVDesc: {
+                displayName: entry.displayName,
+                version: (entry.currentCSV.match(/\.v?(\d+\.\d+\.\d+)/) || [])[1] || '1.0.0',
+                description: entry.description,
+                provider: { name: entry.provider },
+              },
+            }],
+          },
+        });
+      }
+    }
+    if (this.cluster.getByName('Project', 'openshift-operators', '')
+      && !this.cluster.getByName('OperatorGroup', 'global-operators', 'openshift-operators')) {
+      this.cluster.addResource({
+        kind: 'OperatorGroup',
+        metadata: { name: 'global-operators', namespace: 'openshift-operators' },
+        spec: { targetNamespaces: [] },
+        status: { namespaces: [] },
+      });
+    }
+  }
+
+  /** Target CSV name for a package (PackageManifest currentCSV), otherwise a
+   * package-derived name (never the Subscription name — issue #9). */
+  _csvNameForPackage(packageName) {
+    const manifest = this.cluster.getByName('PackageManifest', packageName, '');
+    if (manifest && typeof manifest.currentCSV === 'string' && manifest.currentCSV) return manifest.currentCSV;
+    const channels = manifest?.spec?.channels || manifest?.status?.channels || [];
+    const channel = channels.find((entry) => entry.currentCSV) || null;
+    if (channel?.currentCSV) return channel.currentCSV;
+    return `${packageName}.v1.0.0`;
+  }
+
+  /** `oc rollout`-independent helper: package name a Subscription tracks. */
+  _packageNameForSubscription(subscription) {
+    return subscription?.spec?.packageName
+      || subscription?.spec?.name
+      || subscription?.metadata?.name
+      || 'operator';
+  }
+
+  _csvVersionForPackage(packageName) {
+    const csvName = this._csvNameForPackage(packageName);
+    const match = String(csvName).match(/\.v?(\d+\.\d+\.\d+)/);
+    return match ? match[1] : '1.0.0';
+  }
+
+  /** InstallPlan owned by a Subscription (created by this controller). */
+  _installPlanForSubscription(subscription, namespace) {
+    const child = this.cluster.getChildren(subscription.uid).find((entry) => entry.kind === 'InstallPlan');
+    if (child) return child;
+    return this.cluster.getByKindAndNamespace('InstallPlan', namespace).find(
+      (plan) => plan.metadata?.labels?.['operators.coreos.com/subscription'] === subscription.metadata.name
+    ) || null;
+  }
+
+  /** CSV installed by a Subscription (status.installedCSV / currentCSV). */
+  _csvForSubscription(subscription, namespace) {
+    const csvName = subscription.status?.installedCSV || subscription.status?.currentCSV || '';
+    if (csvName) {
+      const named = this.cluster.getByName('ClusterServiceVersion', csvName, namespace);
+      if (named) return named;
+    }
+    return this.cluster.getByKindAndNamespace('ClusterServiceVersion', namespace).find(
+      (csv) => csv.metadata?.labels?.['operators.coreos.com/subscription'] === subscription.metadata.name
+    ) || null;
+  }
+
+  /**
+   * Create the operator Deployment described by a CSV install strategy, the way
+   * OLM does after the CSV reaches Succeeded. The Deployment is labelled with
+   * olm.owner so deleting the CSV can remove it (real uninstall).
+   */
+  _ensureOperatorDeploymentForCSV(csv, packageName) {
+    if (!csv) return null;
+    const namespace = csv.metadata.namespace;
+    const strategyDeployment = csv.spec?.install?.spec?.deployments?.[0];
+    const deploymentName = strategyDeployment?.name
+      || `${String(csv.metadata.name).replace(/\.v\d.*$/, '')}-controller-manager`;
+    const existing = this.cluster.getByName('Deployment', deploymentName, namespace);
+    if (existing) {
+      this._olmOperatorDeployments.set(csv.uid, existing.uid);
+      return existing;
+    }
+    const spec = deepClone(strategyDeployment?.spec || {
+      replicas: 1,
+      selector: { matchLabels: { name: `${packageName}-operator` } },
+      template: {
+        metadata: { labels: { name: `${packageName}-operator` } },
+        spec: {
+          serviceAccountName: 'default',
+          containers: [{
+            name: 'manager',
+            image: `${packageName.replace(/-operator$/, '')}-operator:latest`,
+            resources: { requests: { cpu: '10m', memory: '64Mi' }, limits: { cpu: '200m', memory: '256Mi' } },
+          }],
+        },
+      },
+    });
+    if (!spec.selector) spec.selector = { matchLabels: { name: `${packageName}-operator` } };
+    const deployment = this.cluster.addResource({
+      kind: 'Deployment',
+      metadata: {
+        name: deploymentName,
+        namespace,
+        labels: {
+          'olm.owner': csv.metadata.name,
+          'olm.owner.namespace': namespace,
+          'olm.package': packageName,
+          'app.kubernetes.io/managed-by': 'olm',
+        },
+        annotations: {
+          'olm.operatorGroup': csv.metadata.annotations?.['olm.operatorGroup'] || '',
+        },
+      },
+      spec,
+    });
+    if (deployment) this._olmOperatorDeployments.set(csv.uid, deployment.uid);
+    return deployment;
+  }
+
+  /** `cluster:deleted:ClusterServiceVersion` → real uninstall of its operator. */
+  _onCSVDeleted(csv) {
+    if (!csv) return;
+    const namespace = csv.metadata?.namespace || '';
+    const csvName = csv.metadata?.name || '';
+    const removed = [];
+    for (const deployment of this.cluster.getByKindAndNamespace('Deployment', namespace)) {
+      const owner = deployment.metadata?.labels?.['olm.owner'];
+      if (owner === csvName || (owner && owner === csv.metadata?.name)) {
+        this.cluster.remove(deployment.uid);
+        removed.push(deployment.metadata.name);
+      }
+    }
+    this._olmOperatorDeployments.delete(csv.uid);
+    this._knownCSVs.delete(csv.uid);
+    this.eventBus?.emit('operator:csv-deleted', {
+      name: csvName,
+      namespace,
+      packageName: csv.metadata?.labels?.['olm.package'] || '',
+      removedDeployments: removed,
+    });
+  }
+
+  /**
+   * MetalLB operator effects: once the operator CSV is Succeeded AND a MetalLB
+   * custom resource exists (the operand CR the docs require after installing
+   * the operator), the operator deploys the controller Deployment and the
+   * speaker DaemonSet in the CR's namespace. Deleting the CR (or the CSV)
+   * tears the operands down again.
+   */
+  _tickMetalLBOperands(dt) {
+    const csvReady = this.cluster.getByKind('ClusterServiceVersion').some(
+      (csv) => csv.status.phase === 'Succeeded'
+        && (/metallb/i.test(csv.metadata?.name || '') || csv.metadata?.labels?.['olm.package'] === 'metallb')
     );
+    const crs = this.cluster.getByKind('MetalLB');
+    const desired = new Map();
+    if (csvReady) {
+      for (const cr of crs) {
+        const namespace = cr.metadata.namespace;
+        desired.set(`Deployment/${namespace}/controller`, {
+          kind: 'Deployment',
+          name: 'controller',
+          namespace,
+          spec: {
+            replicas: 1,
+            selector: { matchLabels: { app: 'metallb', component: 'controller' } },
+            template: {
+              metadata: { labels: { app: 'metallb', component: 'controller' } },
+              spec: {
+                serviceAccountName: 'default',
+                containers: [{
+                  name: 'controller',
+                  image: 'quay.io/metallb/controller:v0.14.9',
+                  args: ['--port=7472', '--log-level=info'],
+                  ports: [{ name: 'monitoring', containerPort: 7472 }],
+                  resources: { requests: { cpu: '10m', memory: '32Mi' }, limits: { cpu: '100m', memory: '128Mi' } },
+                }],
+              },
+            },
+          },
+        });
+        desired.set(`DaemonSet/${namespace}/speaker`, {
+          kind: 'DaemonSet',
+          name: 'speaker',
+          namespace,
+          spec: {
+            selector: { matchLabels: { app: 'metallb', component: 'speaker' } },
+            template: {
+              metadata: { labels: { app: 'metallb', component: 'speaker' } },
+              spec: {
+                serviceAccountName: 'default',
+                containers: [{
+                  name: 'speaker',
+                  image: 'quay.io/metallb/speaker:v0.14.9',
+                  args: ['--port=7472', '--log-level=info'],
+                  ports: [{ name: 'monitoring', containerPort: 7472 }],
+                  resources: { requests: { cpu: '10m', memory: '32Mi' }, limits: { cpu: '100m', memory: '128Mi' } },
+                }],
+              },
+            },
+          },
+        });
+      }
+    }
+
+    // Create/reconcile the operands that should exist.
+    for (const wanted of desired.values()) {
+      const existing = this.cluster.getByName(wanted.kind, wanted.name, wanted.namespace);
+      if (existing) {
+        this._metallbOperands.set(existing.uid, { kind: wanted.kind, name: wanted.name, namespace: wanted.namespace });
+        continue;
+      }
+      const created = this.cluster.addResource({
+        kind: wanted.kind,
+        metadata: {
+          name: wanted.name,
+          namespace: wanted.namespace,
+          labels: { app: 'metallb', component: wanted.kind === 'Deployment' ? 'controller' : 'speaker', 'app.kubernetes.io/managed-by': 'metallb-operator' },
+        },
+        spec: deepClone(wanted.spec),
+      });
+      if (created) this._metallbOperands.set(created.uid, { kind: wanted.kind, name: wanted.name, namespace: wanted.namespace });
+    }
+
+    // Remove operands that are no longer desired (CR or operator removed).
+    for (const [uid, entry] of this._metallbOperands) {
+      const resource = this.cluster.get(uid);
+      if (!resource) {
+        this._metallbOperands.delete(uid);
+        continue;
+      }
+      const key = `${entry.kind}/${entry.namespace}/${entry.name}`;
+      if (desired.has(key)) continue;
+      this.cluster.remove(uid);
+      this._metallbOperands.delete(uid);
+    }
+  }
+
+  _tickMetalLB(dt) {
+    // MetalLB only programs LoadBalancer Services when the operator is
+    // installed AND the MetalLB operand CR exists (real MetalLB flow).
+    const metallbCRs = this.cluster.getByKind('MetalLB');
+    const csvReady = this.cluster.getByKind('ClusterServiceVersion').some(
+      (csv) => csv.status.phase === 'Succeeded' && /metallb/i.test(csv.metadata?.name || '')
+    );
+    const metallbInstalled = metallbCRs.length > 0 && csvReady;
     const pools = this.cluster.getByKind('IPAddressPool').filter((pool) => (pool.spec?.addresses || []).length > 0);
     const advertisements = this.cluster.getByKind('L2Advertisement');
     const advertisedPools = new Set();
@@ -2303,8 +3196,19 @@ export class SimulationTick {
   _tickSubscriptions(dt) {
     for (const subscription of this.cluster.getByKind('Subscription')) {
       if (subscription.metadata.deletionTimestamp) continue;
-      const packageName = subscription.spec?.packageName || subscription.metadata.name;
+      const namespace = subscription.metadata.namespace;
+      const packageName = this._packageNameForSubscription(subscription);
+      const csvName = this._csvNameForPackage(packageName);
+      const version = this._csvVersionForPackage(packageName);
+      const setStatus = (reason, message, phase = subscription.status.phase || 'Installing') => {
+        if (subscription.status.phase === phase && subscription.status.reason === reason) return;
+        subscription.status.phase = phase;
+        subscription.status.reason = reason;
+        subscription.status.message = message || '';
+        this.cluster.update(subscription.uid, subscription);
+      };
 
+      // Simulated install failure flag (used by the OperatorInstallFailed incident).
       if (subscription.spec?.failure === true || subscription.spec?.installFailed === true) {
         if (subscription.status.phase !== 'Failed') {
           subscription.status.phase = 'Failed';
@@ -2312,59 +3216,251 @@ export class SimulationTick {
           subscription.status.message = subscription.spec.failureMessage || `operator ${packageName} failed to install`;
           subscription.setCondition('InstallPlanComplete', 'False', 'InstallFailed', subscription.status.message);
           this.cluster.update(subscription.uid, subscription);
-          this.eventBus?.emit('operator:failed', { name: subscription.metadata.name, namespace: subscription.metadata.namespace, packageName });
+          this.eventBus?.emit('operator:failed', { name: subscription.metadata.name, namespace, packageName });
         }
         continue;
       }
-
-      const phase = subscription.status.phase;
-      if (phase === 'Failed') {
+      if (subscription.status.phase === 'Failed') {
         // Failure flag cleared → retry the install.
         subscription.status.phase = 'Installing';
+        subscription.status.reason = 'Installing';
         subscription._installElapsed = 0;
         this.cluster.update(subscription.uid, subscription);
         continue;
       }
-      if (phase === 'Succeeded') continue;
 
-      if (phase !== 'Installing') {
+      // A namespaced API object requires its project to exist.
+      if (!this.cluster.getByName('Project', namespace, '')) {
+        setStatus('NamespaceNotFound', `namespaces "${namespace}" not found`);
+        if (!subscription._noNamespaceLogged) {
+          subscription._noNamespaceLogged = true;
+          subscription.setCondition('InstallPlanPending', 'False', 'NamespaceNotFound', `namespaces "${namespace}" not found`);
+          subscription.recordEvent('Warning', 'FailedCreate', `namespaces "${namespace}" not found`);
+          this.cluster.update(subscription.uid, subscription);
+        }
+        continue;
+      }
+      subscription._noNamespaceLogged = false;
+
+      // OperatorGroup: openshift-operators has the cluster-global group, other
+      // namespaces require one (SingleNamespace installs) before OLM can deploy
+      // the CSV (real 4.22 semantics — issue #9).
+      const globalNamespace = namespace === 'openshift-operators';
+      const operatorGroup = this.cluster.getByKindAndNamespace('OperatorGroup', namespace)[0] || null;
+      if (!globalNamespace && !operatorGroup) {
+        setStatus('NoOperatorGroup', `no operator group found in namespace "${namespace}"`);
+        if (!subscription._noOperatorGroupLogged) {
+          subscription._noOperatorGroupLogged = true;
+          subscription.setCondition('InstallPlanPending', 'False', 'NoOperatorGroup', `no operator group found in namespace "${namespace}"`);
+          subscription.recordEvent('Warning', 'NoOperatorGroup', 'OperatorGroup required to install this operator in the namespace');
+          this.cluster.update(subscription.uid, subscription);
+          this.eventBus?.emit('operator:no-operatorgroup', {
+            name: subscription.metadata.name,
+            namespace,
+            packageName,
+            message: `no operator group found in namespace "${namespace}"`,
+          });
+        }
+        continue;
+      }
+      subscription._noOperatorGroupLogged = false;
+
+      // A Subscription whose CSV was deleted re-installs it (OLM keeps the
+      // operator installed while the Subscription exists). Only deleting the
+      // Subscription too makes the CSV deletion the real uninstall.
+      let csv = this._csvForSubscription(subscription, namespace);
+      if ((subscription.status.phase === 'Succeeded' || subscription.status.installPlanComplete === true) && !csv) {
         subscription.status.phase = 'Installing';
+        subscription.status.reason = 'Installing';
+        subscription.status.installedCSV = '';
+        subscription.status.currentCSV = '';
         subscription._installElapsed = 0;
+        this.cluster.update(subscription.uid, subscription);
+        continue;
+      }
+
+      if (typeof subscription._installElapsed !== 'number') {
+        subscription._installElapsed = 0;
+        subscription.status.phase = 'Installing';
         subscription.status.reason = 'Installing';
         subscription.status.message = `installing operator ${packageName}`;
         this.cluster.update(subscription.uid, subscription);
-        this.eventBus?.emit('operator:installing', { name: subscription.metadata.name, namespace: subscription.metadata.namespace, packageName });
+        this.eventBus?.emit('operator:installing', { name: subscription.metadata.name, namespace, packageName, csv: csvName });
+      }
+      subscription._installElapsed += dt;
+      const elapsed = subscription._installElapsed;
+
+      // 1) InstallPlan (RequiresApproval until approved for Manual installs).
+      let plan = this._installPlanForSubscription(subscription, namespace);
+      if (!plan && elapsed >= 0.5) {
+        const suffix = this._randomSuffix();
+        plan = this.cluster.addResource({
+          kind: 'InstallPlan',
+          metadata: {
+            name: `install-${suffix}`,
+            namespace,
+            labels: {
+              'operators.coreos.com/subscription': subscription.metadata.name,
+              'operators.coreos.com/package': packageName,
+            },
+          },
+          spec: {
+            approval: subscription.spec?.installPlanApproval || 'Automatic',
+            approved: false,
+            clusterServiceVersionNames: [csvName],
+            source: subscription.spec?.source || '',
+            sourceNamespace: subscription.spec?.sourceNamespace || '',
+          },
+          status: { phase: 'RequiresApproval' },
+        });
+        if (plan) {
+          plan.setPlan(csvName, version);
+          this.cluster.update(plan.uid, plan);
+          this.eventBus?.emit('installplan:created', {
+            name: plan.metadata.name,
+            namespace,
+            subscription: subscription.metadata.name,
+            csv: csvName,
+          });
+        }
+      }
+      if (!plan) continue;
+
+      // Automatic plans are approved by OLM; Manual plans wait for the player
+      // (`oc patch installplan install-xxxxx --type=merge -p '{"spec":{"approved":true}}'`).
+      if (plan.spec.approval !== 'Manual' && plan.spec.approved !== true) {
+        plan.spec.approved = true;
+        this.cluster.update(plan.uid, plan);
+      }
+      if (plan.spec.approved !== true) {
+        subscription.setCondition('InstallPlanPending', 'False', 'RequiresApproval', `install plan ${plan.metadata.name} requires approval`);
+        setStatus('RequiresApproval', `install plan ${plan.metadata.name} requires approval`);
         continue;
       }
+      if (typeof plan._approvedAtGameSeconds !== 'number') plan._approvedAtGameSeconds = this.gameSeconds;
+      if (plan.status.phase !== 'Complete') {
+        if (elapsed >= 1 || this.gameSeconds - plan._approvedAtGameSeconds >= INSTALLPLAN_COMPLETE_SECONDS) {
+          plan.markComplete();
+          this.cluster.update(plan.uid, plan);
+          subscription.status.installPlanRef = { name: plan.metadata.name, namespace };
+          this.cluster.update(subscription.uid, subscription);
+          this.eventBus?.emit('installplan:complete', { name: plan.metadata.name, namespace, subscription: subscription.metadata.name });
+        } else {
+          setStatus('Installing', `waiting for InstallPlan ${plan.metadata.name} to complete`);
+          continue;
+        }
+      }
 
-      subscription._installElapsed = (subscription._installElapsed || 0) + dt;
-      if (subscription._installElapsed < SUBSCRIPTION_INSTALL_SECONDS) continue;
+      // 2) ClusterServiceVersion, named after the package (never the Subscription).
+      csv = this._csvForSubscription(subscription, namespace);
+      if (!csv) {
+        csv = this.cluster.addResource({
+          kind: 'ClusterServiceVersion',
+          metadata: {
+            name: csvName,
+            namespace,
+            labels: {
+              'operators.coreos.com/subscription': subscription.metadata.name,
+              'olm.package': packageName,
+            },
+            annotations: {
+              'olm.operatorNamespace': namespace,
+              'olm.operatorGroup': operatorGroup ? `${operatorGroup.metadata.namespace}/${operatorGroup.metadata.name}` : '',
+              'olm.targetNamespaces': operatorGroup && Array.isArray(operatorGroup.spec.targetNamespaces) && operatorGroup.spec.targetNamespaces.length > 0
+                ? operatorGroup.spec.targetNamespaces.join(',')
+                : (globalNamespace ? '' : namespace),
+            },
+          },
+          spec: {
+            displayName: this._catalogDisplayName(packageName),
+            version,
+            customresourcedefinitions: { owned: deepClone(this._catalogCrds(packageName)) },
+          },
+          status: { phase: 'Installing' },
+        });
+        if (csv) {
+          csv._installStartedAt = this.gameSeconds;
+          csv.markInstalling(`installing ${csvName}`);
+          this.cluster.update(csv.uid, csv);
+          this._knownCSVs.set(csv.uid, { name: csvName, namespace, packageName });
+          subscription.status.currentCSV = csvName;
+          this.cluster.update(subscription.uid, subscription);
+          this.eventBus?.emit('operator:csv-created', { name: csvName, namespace, packageName, subscription: subscription.metadata.name });
+        }
+      }
+      if (!csv) continue;
 
-      const installedCSV = `${packageName}.v1.0.0`;
-      subscription.status.phase = 'Succeeded';
-      subscription.status.installedCSV = installedCSV;
-      subscription.status.currentCSV = installedCSV;
-      subscription.status.reason = 'InstallSucceeded';
-      subscription.status.message = `operator ${packageName} installed successfully`;
-      subscription.status.installPlanRef = { name: `install-${packageName}`, namespace: subscription.metadata.namespace };
-      subscription.status.installPlanComplete = true;
-      subscription.setCondition('InstallPlanComplete', 'True', 'InstallSucceeded');
-      this.cluster.update(subscription.uid, subscription);
-      this.eventBus?.emit('operator:installed', {
-        name: subscription.metadata.name,
-        namespace: subscription.metadata.namespace,
-        packageName,
-        csv: installedCSV,
-        channel: subscription.spec?.channel,
-        source: subscription.spec?.source,
-        resource: subscription,
-      });
+      // 3) CSV install strategy → Succeeded + operator Deployment.
+      if (csv.status.phase !== 'Succeeded') {
+        if (typeof csv._installStartedAt !== 'number') csv._installStartedAt = this.gameSeconds;
+        if (this.gameSeconds - csv._installStartedAt < CSV_INSTALL_SECONDS) {
+          setStatus('Installing', `waiting for ClusterServiceVersion ${csvName} to succeed`);
+          continue;
+        }
+        csv.markSucceeded();
+        this.cluster.update(csv.uid, csv);
+        this._knownCSVs.set(csv.uid, { name: csvName, namespace, packageName });
+        this.eventBus?.emit('operator:csv-succeeded', { name: csvName, namespace, packageName });
+      }
+      const operatorDeployment = this._ensureOperatorDeploymentForCSV(csv, packageName);
+      if (operatorDeployment && operatorDeployment.status?.phase !== 'Running') {
+        // Deployment controller creates the operator Pod; nothing else to do here.
+      }
+
+      if (subscription.status.phase !== 'Succeeded') {
+        subscription.status.phase = 'Succeeded';
+        subscription.status.installedCSV = csvName;
+        subscription.status.currentCSV = csvName;
+        subscription.status.reason = 'InstallSucceeded';
+        subscription.status.message = `operator ${packageName} installed successfully`;
+        subscription.status.installPlanRef = { name: plan.metadata.name, namespace };
+        subscription.status.installPlanComplete = true;
+        subscription.setCondition('InstallPlanComplete', 'True', 'InstallSucceeded');
+        subscription.setCondition('InstallPlanPending', 'False', 'InstallPlanComplete');
+        this.cluster.update(subscription.uid, subscription);
+        if (!subscription._installedEmitted) {
+          subscription._installedEmitted = true;
+          this.eventBus?.emit('operator:installed', {
+            name: subscription.metadata.name,
+            namespace,
+            packageName,
+            csv: csvName,
+            channel: subscription.spec?.channel,
+            source: subscription.spec?.source,
+            resource: subscription,
+          });
+        }
+      }
+    }
+
+    // Keep track of CSVs created by earlier ticks so deleting them (including
+    // during level teardown) performs the uninstall cleanup exactly once.
+    for (const csv of this.cluster.getByKind('ClusterServiceVersion')) {
+      if (!this._knownCSVs.has(csv.uid)) {
+        const packageName = csv.metadata?.labels?.['olm.package']
+          || String(csv.metadata?.name || '').replace(/\.v\d.*$/, '');
+        this._knownCSVs.set(csv.uid, { name: csv.metadata.name, namespace: csv.metadata.namespace, packageName });
+      }
+    }
+    for (const [uid, entry] of this._knownCSVs) {
+      if (!this.cluster.get(uid)) {
+        this._onCSVDeleted({ ...entry, metadata: { name: entry.name, namespace: entry.namespace, labels: { 'olm.package': entry.packageName } } });
+        this._knownCSVs.delete(uid);
+      }
     }
   }
 
-  /** @param {object} subscription @returns {string} */
-  _operatorVersionForSubscription(subscription) {
-    return `${subscription.spec?.packageName || subscription.metadata.name}.v1.0.0`;
+  /** Display name advertised by the catalog for a package. */
+  _catalogDisplayName(packageName) {
+    const entry = OLM_CATALOG.find((candidate) => candidate.name === packageName);
+    if (entry) return entry.displayName;
+    return String(packageName).replace(/[-_]/g, ' ').replace(/\b\w/g, (character) => character.toUpperCase());
+  }
+
+  /** CRDs advertised by the catalog for a package (CSV customresourcedefinitions). */
+  _catalogCrds(packageName) {
+    const entry = OLM_CATALOG.find((candidate) => candidate.name === packageName);
+    return entry?.crds || [];
   }
 
   // ── OpenShift: SCC admission ───────────────────────────────────────────
@@ -2424,21 +3520,123 @@ export class SimulationTick {
    * fully seeded) unless they request elevated capabilities.
    */
   _resolvePodSCC(pod) {
-    const resolution = this.cluster.resolveSCCForPod(pod);
-    if (resolution.candidates && resolution.candidates.length > 0) return resolution;
+    return this._resolveAdmissionForSpec(pod.spec || {}, pod.metadata?.namespace || 'default', pod);
+  }
 
-    // No SCC bound to the service account at all (e.g. custom namespace).
-    const request = podSecurityRequest(pod.spec || {});
+  /**
+   * SCC admission for a (candidate) Pod spec. Works before the Pod object
+   * exists, so controllers can reject a workload without ever creating a Pod
+   * (issue #13: real clusters show `FailedCreate … unable to validate against
+   * any security context constraint` on the ReplicaSet and no Pod).
+   *
+   * @param {object} podSpec
+   * @param {string} namespace
+   * @returns {{allowed: boolean, scc: object|null, candidates: object[], message?: string}}
+   */
+  _resolveAdmissionForSpec(podSpec, namespace) {
+    const candidate = {
+      metadata: { name: 'admission-candidate', namespace, labels: {} },
+      spec: podSpec || {},
+    };
+    const resolution = this.cluster.resolveSCCForPod(candidate);
+    if (resolution.allowed) return resolution;
+    if (resolution.candidates && resolution.candidates.length > 0) {
+      return { ...resolution, message: 'unable to validate against any security context constraint' };
+    }
+
+    // No SCC bound to the service account at all (e.g. a custom namespace the
+    // player just created): restricted pods are still admitted, elevated ones
+    // are not (matches the real default `system:authenticated` binding).
+    const request = podSecurityRequest(podSpec || {});
     const elevated = request.privileged || request.hostNetwork || request.hostPID || request.hostIPC || request.hostPath
       || request.hostPorts.length > 0 || request.runAsUsers.includes(0);
     if (elevated) {
-      return { ...resolution, allowed: false };
+      return { ...resolution, allowed: false, message: 'unable to validate against any security context constraint' };
     }
     const restricted = this.cluster.getSCC('restricted-v2') || this.cluster.getSCCs()[0] || null;
-    if (restricted && this.cluster.sccAllowsPod(restricted, pod.spec || {})) {
+    if (restricted && this.cluster.sccAllowsPod(restricted, podSpec || {})) {
       return { allowed: true, scc: restricted, candidates: [restricted] };
     }
-    return resolution;
+    return { ...resolution, message: 'unable to validate against any security context constraint' };
+  }
+
+  /**
+   * Record a controller-side FailedCreate (no Pod object is created) the way
+   * the ReplicaSet/Job/DaemonSet controllers do, with duplicate-event
+   * throttling like a real events recorder.
+   * @param {object} parent controller resource
+   * @param {string} podName candidate pod name (for the message)
+   * @param {string} message admission/validation reason
+   * @returns {null}
+   */
+  _recordFailedCreate(parent, podName, message) {
+    const reason = String(message || 'unable to admit pod');
+    // Real events are aggregated, not one-per-pod-attempt: throttle on the
+    // failure reason so a controller retrying every tick does not flood Events.
+    const signature = reason;
+    const last = parent._lastFailedCreate;
+    if (last && last.signature === signature && this.gameSeconds - last.at < FAILED_CREATE_EVENT_SECONDS) {
+      return null;
+    }
+    parent._lastFailedCreate = { signature, at: this.gameSeconds };
+    const fullMessage = `Error creating: pods "${podName}" ${reason}`;
+    parent.recordEvent('Warning', 'FailedCreate', fullMessage);
+    if (parent.kind === 'ReplicaSet' || parent.kind === 'StatefulSet' || parent.kind === 'DaemonSet') {
+      parent.setCondition('ReplicaFailure', 'True', 'FailedCreate', `pods "${podName}" ${reason}`);
+      parent.status.replicas = parent.status.replicas || 0;
+      parent.status.readyReplicas = 0;
+      parent.status.availableReplicas = 0;
+      parent.status.observedGeneration = parent.metadata.generation;
+    }
+    this.cluster.update(parent.uid, parent);
+    this.eventBus?.emit('pod:failedcreate', {
+      kind: parent.kind,
+      name: parent.metadata.name,
+      namespace: parent.metadata.namespace,
+      pod: podName,
+      message: `pods "${podName}" ${reason}`,
+      reason: 'FailedCreate',
+    });
+    return null;
+  }
+
+  /** True when a controller resource currently has an active FailedCreate. */
+  _hasReplicaFailure(parent) {
+    return (parent?.status?.conditions || []).some(
+      (condition) => condition.type === 'ReplicaFailure' && condition.status === 'True'
+    );
+  }
+
+  /** Clear the FailedCreate condition after the controller succeeds again. */
+  _clearReplicaFailure(parent) {
+    if (!this._hasReplicaFailure(parent)) return;
+    parent.setCondition('ReplicaFailure', 'False', 'NoReplicaFailure', '');
+    parent._lastFailedCreate = null;
+    this.cluster.update(parent.uid, parent);
+  }
+
+  /**
+   * Validate a candidate Pod spec before it is created (API-server admission +
+   * basic pod validation), returning a failure message or null when admitted.
+   * @param {object} podSpec
+   * @param {string} namespace
+   * @param {string} podName
+   * @returns {string|null}
+   */
+  _admissionFailureMessage(podSpec, namespace, podName) {
+    const containers = podSpec?.containers || [];
+    for (let index = 0; index < containers.length; index++) {
+      const container = containers[index];
+      if (!container || !String(container.image || '').trim()) {
+        return `is invalid: spec.containers[${index}].image: Required value`;
+      }
+      if (!String(container.name || '').trim()) {
+        return `is invalid: spec.containers[${index}].name: Required value`;
+      }
+    }
+    const resolution = this._resolveAdmissionForSpec(podSpec, namespace);
+    if (resolution.allowed) return null;
+    return `is forbidden: ${resolution.message || 'unable to validate against any security context constraint'}`;
   }
 
   /** Whether a Pod is blocked by SCC/LimitRange/quota admission. */
@@ -2707,6 +3905,15 @@ export class SimulationTick {
     const labels = { ...selectorLabels, ...templateLabels };
     if (templateHash) labels['pod-template-hash'] = templateHash;
 
+    // API-server admission + validation happen BEFORE the Pod object exists:
+    // a rejected workload create leaves no Pod behind (issue #13), just a
+    // FailedCreate event/condition on the owning controller.
+    const admissionFailure = this._admissionFailureMessage(podSpec, namespace, podName);
+    if (admissionFailure) {
+      this._recordFailedCreate(parent, podName, admissionFailure);
+      return null;
+    }
+
     const pod = this.cluster.addResource({
       kind: 'Pod',
       metadata: { name: podName, namespace, labels },
@@ -2715,7 +3922,406 @@ export class SimulationTick {
     });
     if (!pod) return null;
     this.cluster.addRelationship(parent.uid, pod.uid);
+    this._clearReplicaFailure(parent);
+    if (parent.kind === 'ReplicaSet') {
+      parent.status.replicas = (parent.status.replicas || 0) + 1;
+      parent.recordEvent('Normal', 'SuccessfulCreate', `Created pod: ${podName}`);
+    }
     return pod;
+  }
+
+  // ── NetworkPolicy traffic evaluation ───────────────────────────────────
+  //
+  // Real Kubernetes NetworkPolicy semantics: a Pod is isolated for a direction
+  // as soon as any policy with that policyType selects it; traffic is then
+  // allowed only by an explicit rule of one of those policies. Both egress (in
+  // the source namespace) and ingress (in the destination namespace) must
+  // allow the flow. OpenShift's dns-default pods listen on port 5353, so DNS
+  // egress policies must open 5353 (not 53) to restore name resolution
+  // (issue #14).
+
+  /** Labels used to match a namespace selector (Project labels + name label). */
+  _namespaceLabels(namespace) {
+    const project = this.cluster.getByName('Project', namespace, '');
+    return { 'kubernetes.io/metadata.name': namespace, ...(project?.metadata?.labels || {}) };
+  }
+
+  /** Match a LabelSelector ({matchLabels,matchExpressions}) against labels. */
+  _labelSelectorMatches(selector, labels) {
+    if (!selector || typeof selector !== 'object') return true;
+    const matchLabels = selector.matchLabels && typeof selector.matchLabels === 'object'
+      ? selector.matchLabels
+      : (selector.matchExpressions ? {} : selector);
+    for (const [key, value] of Object.entries(matchLabels)) {
+      if ((labels || {})[key] !== value) return false;
+    }
+    for (const expression of selector.matchExpressions || []) {
+      if (!expression || !expression.key) continue;
+      const values = Array.isArray(expression.values) ? expression.values : [];
+      const actual = (labels || {})[expression.key];
+      switch (expression.operator) {
+        case 'In':
+          if (actual === undefined || !values.includes(actual)) return false;
+          break;
+        case 'NotIn':
+          if (actual !== undefined && values.includes(actual)) return false;
+          break;
+        case 'Exists':
+          if (actual === undefined) return false;
+          break;
+        case 'DoesNotExist':
+          if (actual !== undefined) return false;
+          break;
+        default:
+          return false;
+      }
+    }
+    return true;
+  }
+
+  _networkPoliciesIn(namespace) {
+    return this.cluster.getByKindAndNamespace('NetworkPolicy', namespace);
+  }
+
+  _policyTypes(policy) {
+    if (Array.isArray(policy?.spec?.policyTypes) && policy.spec.policyTypes.length > 0) {
+      return policy.spec.policyTypes.map((entry) => String(entry));
+    }
+    const types = ['Ingress'];
+    if (Array.isArray(policy?.spec?.egress) && policy.spec.egress.length > 0) types.push('Egress');
+    return types;
+  }
+
+  _policySelectsPod(policy, pod) {
+    return this._labelSelectorMatches(policy?.spec?.podSelector || {}, pod?.metadata?.labels || {});
+  }
+
+  /** Policies that isolate `pod` for the given direction ('Ingress'|'Egress'). */
+  _policiesForPod(pod, direction) {
+    return this._networkPoliciesIn(pod?.metadata?.namespace || 'default').filter(
+      (policy) => this._policyTypes(policy).includes(direction) && this._policySelectsPod(policy, pod)
+    );
+  }
+
+  _networkPolicyPortMatches(rulePorts, port, protocol, destinationPod) {
+    if (!Array.isArray(rulePorts) || rulePorts.length === 0) return true;
+    for (const rulePort of rulePorts) {
+      if (!rulePort || typeof rulePort !== 'object') continue;
+      const ruleProtocol = String(rulePort.protocol || 'TCP').toUpperCase();
+      const wantedProtocol = String(protocol || 'TCP').toUpperCase();
+      if (ruleProtocol !== wantedProtocol) continue;
+      if (rulePort.port === undefined || rulePort.port === null || rulePort.port === '') return true;
+      const numeric = Number(rulePort.port);
+      if (Number.isFinite(numeric)) {
+        if (Number(port) === numeric) return true;
+        if (Number.isFinite(Number(rulePort.endPort)) && Number(port) >= numeric && Number(port) <= Number(rulePort.endPort)) return true;
+        continue;
+      }
+      // Named port: resolve against the destination container ports.
+      const matched = (destinationPod?.spec?.containers || []).some((container) => (container.ports || []).some(
+        (containerPort) => containerPort.name === rulePort.port && Number(containerPort.containerPort) === Number(port)
+      ));
+      if (matched) return true;
+    }
+    return false;
+  }
+
+  _ipInCidr(ip, cidr) {
+    if (!ip || !cidr || !String(cidr).includes('/')) return false;
+    const [network, prefixRaw] = String(cidr).split('/');
+    const prefix = Number(prefixRaw);
+    const toInt = (value) => {
+      const parts = String(value).split('.').map(Number);
+      if (parts.length !== 4 || parts.some((part) => !Number.isFinite(part))) return null;
+      return (((parts[0] << 24) >>> 0) + ((parts[1] << 16) >>> 0) + ((parts[2] << 8) >>> 0) + parts[3]) >>> 0;
+    };
+    const ipValue = toInt(ip);
+    const networkValue = toInt(network);
+    if (ipValue === null || networkValue === null || !Number.isFinite(prefix)) return false;
+    if (prefix <= 0) return true;
+    const mask = prefix >= 32 ? 0xffffffff : ((0xffffffff << (32 - prefix)) >>> 0);
+    return (ipValue & mask) === (networkValue & mask);
+  }
+
+  /**
+   * Does a NetworkPolicy peer (from/to entry) select `targetPod`?
+   * @param {object} peer
+   * @param {string} peerNamespace namespace the policy lives in (podSelector is scoped to it)
+   * @param {object} targetPod
+   */
+  _peerMatchesPod(peer, peerNamespace, targetPod) {
+    if (!peer || typeof peer !== 'object') return false;
+    const targetNamespace = targetPod?.metadata?.namespace || 'default';
+    if (peer.ipBlock) {
+      const podIp = targetPod?.status?.podIP || null;
+      if (!podIp) return false;
+      if (!this._ipInCidr(podIp, peer.ipBlock.cidr)) return false;
+      return !(peer.ipBlock.except || []).some((cidr) => this._ipInCidr(podIp, cidr));
+    }
+    const hasPodSelector = Boolean(peer.podSelector);
+    const hasNamespaceSelector = Boolean(peer.namespaceSelector);
+    if (!hasPodSelector && !hasNamespaceSelector) return true; // empty peer: everything
+    if (hasNamespaceSelector) {
+      if (!this._labelSelectorMatches(peer.namespaceSelector, this._namespaceLabels(targetNamespace))) return false;
+    } else if (targetNamespace !== peerNamespace) {
+      // A bare podSelector only matches Pods in the policy's own namespace.
+      return false;
+    }
+    if (hasPodSelector) return this._labelSelectorMatches(peer.podSelector, targetPod?.metadata?.labels || {});
+    return true;
+  }
+
+  _rulesAllowTraffic(rules, peerKey, peerNamespace, peerPod, port, protocol, destinationPod) {
+    if (!Array.isArray(rules) || rules.length === 0) return false;
+    for (const rule of rules) {
+      if (!rule || typeof rule !== 'object') continue;
+      const peers = rule[peerKey];
+      const peersMatch = !Array.isArray(peers) || peers.length === 0
+        || peers.some((peer) => this._peerMatchesPod(peer, peerNamespace, peerPod));
+      if (!peersMatch) continue;
+      if (!this._networkPolicyPortMatches(rule.ports, port, protocol, destinationPod)) continue;
+      return true;
+    }
+    return false;
+  }
+
+  /**
+   * Can pod-to-pod traffic flow from `source` to `target`?
+   * @param {object|string} sourcePod
+   * @param {object|string} target Pod, Service or `{kind,name,namespace}`
+   * @param {{port?: number, protocol?: string, namespace?: string}} [options]
+   * @returns {{allowed: boolean, reason: string, policy?: string, pods?: object[]}}
+   */
+  canReach(sourcePod, target, options = {}) {
+    const namespace = options.namespace || 'default';
+    const source = this._resolvePodLike(sourcePod, namespace);
+    if (!source) return { allowed: false, reason: 'source-not-found' };
+    const destination = this._resolveTrafficDestination(target, options);
+    if (!destination) return { allowed: false, reason: 'target-not-found' };
+    if (destination.pods.length === 0) return { allowed: false, reason: 'no-endpoints', pods: [] };
+    const port = Number(options.port ?? destination.port ?? 80);
+    const protocol = String(options.protocol || 'TCP').toUpperCase();
+
+    for (const destinationPod of destination.pods) {
+      const egressPolicies = this._policiesForPod(source, 'Egress');
+      let egressAllowed = egressPolicies.length === 0;
+      let blockedBy = null;
+      if (!egressAllowed) {
+        for (const policy of egressPolicies) {
+          if (this._rulesAllowTraffic(policy.spec?.egress, 'to', policy.metadata.namespace, destinationPod, port, protocol, destinationPod)) {
+            egressAllowed = true;
+            break;
+          }
+          blockedBy = blockedBy || policy.metadata.name;
+        }
+      }
+      if (!egressAllowed) return { allowed: false, reason: 'egress', policy: blockedBy, pods: destination.pods };
+
+      const ingressPolicies = this._policiesForPod(destinationPod, 'Ingress');
+      let ingressAllowed = ingressPolicies.length === 0;
+      blockedBy = null;
+      if (!ingressAllowed) {
+        for (const policy of ingressPolicies) {
+          if (this._rulesAllowTraffic(policy.spec?.ingress, 'from', policy.metadata.namespace, source, port, protocol, destinationPod)) {
+            ingressAllowed = true;
+            break;
+          }
+          blockedBy = blockedBy || policy.metadata.name;
+        }
+      }
+      if (!ingressAllowed) return { allowed: false, reason: 'ingress', policy: blockedBy, pods: destination.pods };
+      return { allowed: true, reason: 'allowed', pods: destination.pods };
+    }
+    return { allowed: false, reason: 'no-endpoints', pods: [] };
+  }
+
+  /**
+   * DNS resolution requires egress to the dns-default pods in openshift-dns on
+   * port 5353 (OpenShift's DNS pods do not listen on 53 — issue #14). When the
+   * source Pod is selected by any egress policy, a rule must explicitly allow
+   * that traffic or name resolution fails.
+   * @param {object|string} sourcePod
+   * @returns {{allowed: boolean, reason: string, policy?: string}}
+   */
+  canResolveDNS(sourcePod) {
+    const source = this._resolvePodLike(sourcePod);
+    if (!source) return { allowed: false, reason: 'source-not-found' };
+    const dnsPod = {
+      metadata: {
+        name: 'dns-default',
+        namespace: 'openshift-dns',
+        labels: { 'dns.operator.openshift.io/daemonset-dns': 'default', app: 'dns-default' },
+      },
+      status: { podIP: '172.30.0.10', phase: 'Running' },
+    };
+    const egressPolicies = this._policiesForPod(source, 'Egress');
+    if (egressPolicies.length === 0) return { allowed: true, reason: 'no-egress-policy' };
+    for (const policy of egressPolicies) {
+      for (const protocol of ['UDP', 'TCP']) {
+        if (this._rulesAllowTraffic(policy.spec?.egress, 'to', policy.metadata.namespace, dnsPod, 5353, protocol, dnsPod)) {
+          return { allowed: true, reason: 'dns-egress-allowed', policy: policy.metadata.name };
+        }
+      }
+    }
+    return { allowed: false, reason: 'dns-egress', policy: egressPolicies[0]?.metadata.name };
+  }
+
+  /** Resolve a pod resource / name / uid used by the evaluators. */
+  _resolvePodLike(value, namespace = 'default') {
+    if (!value) return null;
+    if (typeof value === 'string') {
+      return this.cluster.getByName('Pod', value, namespace) || this.cluster.get(value) || null;
+    }
+    if (value.metadata && value.spec) return value;
+    if (value.uid) return this.cluster.get(value.uid);
+    return null;
+  }
+
+  /** Resolve a `canReach` target into concrete Pods + a port. */
+  _resolveTrafficDestination(target, options = {}) {
+    const namespace = options.namespace || 'default';
+    if (!target) return null;
+    if (typeof target === 'object') {
+      if (target.kind === 'Service' || target.spec?.selector) {
+        const pods = this.cluster.getServiceEndpoints(target);
+        const port = Number(options.port ?? target.spec?.ports?.[0]?.targetPort ?? target.spec?.ports?.[0]?.port ?? 80);
+        return { kind: 'Service', name: target.metadata?.name, pods, port };
+      }
+      if (target.kind === 'Pod' || (target.metadata && target.spec)) {
+        const pod = this._resolvePodLike(target, namespace);
+        const port = Number(options.port ?? pod?.spec?.containers?.[0]?.ports?.[0]?.containerPort ?? 80);
+        return pod ? { kind: 'Pod', name: pod.metadata.name, pods: [pod], port } : null;
+      }
+      if (target.kind && target.name) {
+        const resource = this.cluster.getByName(target.kind, target.name, target.namespace || namespace);
+        return resource ? this._resolveTrafficDestination(resource, options) : null;
+      }
+      return null;
+    }
+
+    let host = String(target).trim();
+    if (!host) return null;
+    host = host.replace(/^https?:\/\//, '').split('/')[0];
+    let port = options.port !== undefined ? Number(options.port) : undefined;
+    const portMatch = host.match(/^(.*):(\d+)$/);
+    if (portMatch) {
+      host = portMatch[1];
+      if (port === undefined) port = Number(portMatch[2]);
+    }
+    if (/^\d{1,3}(?:\.\d{1,3}){3}$/.test(host)) {
+      const pod = this.cluster.getByKind('Pod').find((entry) => entry.status?.podIP === host);
+      return pod ? { kind: 'Pod', name: pod.metadata.name, pods: [pod], port: port ?? 80, host, requiresDNS: false } : { kind: 'IP', name: host, pods: [], port: port ?? 80, host, requiresDNS: false };
+    }
+    const svcMatch = host.match(/^([a-z0-9-]+)(?:\.([a-z0-9-]+))?(?:\.svc(?:\.cluster\.local)?)?$/i);
+    const serviceName = svcMatch ? svcMatch[1] : host;
+    const serviceNamespace = svcMatch && svcMatch[2] ? svcMatch[2] : namespace;
+    const service = this.cluster.getByName('Service', serviceName, serviceNamespace);
+    if (service) {
+      const pods = this.cluster.getServiceEndpoints(service);
+      const servicePort = port
+        ?? service.spec?.ports?.[0]?.targetPort
+        ?? service.spec?.ports?.[0]?.port
+        ?? 80;
+      const numericPort = Number(servicePort);
+      return {
+        kind: 'Service',
+        name: serviceName,
+        namespace: serviceNamespace,
+        pods,
+        port: Number.isFinite(numericPort) ? numericPort : 80,
+        host,
+        requiresDNS: true,
+      };
+    }
+    // Unresolvable/external host: name resolution is required and egress
+    // policies around ipBlock decide reachability.
+    return { kind: 'External', name: host, pods: [], port: port ?? 80, host, requiresDNS: true };
+  }
+
+  /**
+   * Evaluate `oc exec <pod> -- curl <target>` against the cluster's
+   * NetworkPolicies and return display-ready output lines.
+   *
+   * @param {object|string} sourcePod
+   * @param {{target: string, namespace?: string, port?: number, protocol?: string}} options
+   * @returns {{allowed: boolean, reason: string, policy: string|null, lines: string[]}}
+   */
+  trafficForExec(sourcePod, options = {}) {
+    const namespace = options.namespace || 'default';
+    const source = this._resolvePodLike(sourcePod, namespace);
+    if (!source) {
+      return { allowed: false, reason: 'source-not-found', policy: null, lines: ['error: unable to resolve the source Pod'] };
+    }
+    const destination = this._resolveTrafficDestination(options.target, { ...options, namespace });
+    if (!destination) {
+      return { allowed: false, reason: 'target-not-found', policy: null, lines: [`curl: (6) Could not resolve host: ${String(options.target || '')}`] };
+    }
+    const host = destination.host || destination.name || String(options.target || '');
+    const port = Number(options.port ?? destination.port ?? 80);
+
+    if (destination.requiresDNS) {
+      const dns = this.canResolveDNS(source);
+      if (!dns.allowed) {
+        return {
+          allowed: false,
+          reason: 'dns-egress',
+          policy: dns.policy || null,
+          lines: [`curl: (6) Could not resolve host: ${host}`],
+        };
+      }
+    }
+    if (destination.kind === 'External') {
+      // External traffic is only blocked by an egress policy that has no
+      // matching ipBlock rule; the simulator has no external IPs, so treat an
+      // egress-isolated Pod as blocked.
+      const egressPolicies = this._policiesForPod(source, 'Egress');
+      if (egressPolicies.length > 0) {
+        return {
+          allowed: false,
+          reason: 'egress',
+          policy: egressPolicies[0]?.metadata?.name || null,
+          lines: [`curl: (7) Failed to connect to ${host} port ${port} after 0 ms: Connection timed out`],
+        };
+      }
+      return {
+        allowed: true,
+        reason: 'external',
+        policy: null,
+        lines: ['<html><body>Hello from the Internet (container main)</body></html>'],
+      };
+    }
+    if (destination.pods.length === 0) {
+      return {
+        allowed: false,
+        reason: 'no-endpoints',
+        policy: null,
+        lines: [`curl: (7) Failed to connect to ${host} port ${port} after 0 ms: Couldn't connect to server`],
+      };
+    }
+    // The destination is already resolved to concrete Pods; evaluate against
+    // the first endpoint (all endpoints of a Service share the selector rules).
+    const reach = this.canReach(source, destination.pods[0], {
+      port,
+      protocol: options.protocol || 'TCP',
+      namespace: destination.namespace || namespace,
+    });
+    if (!reach.allowed) {
+      return {
+        allowed: false,
+        reason: reach.reason,
+        policy: reach.policy || null,
+        lines: [`curl: (7) Failed to connect to ${host} port ${port} after 0 ms: Couldn't connect to server`],
+      };
+    }
+    const destinationPod = reach.pods?.[0] || destination.pods[0];
+    const app = destinationPod?.metadata?.labels?.app || destinationPod?.metadata?.name || host;
+    const container = destinationPod?.spec?.containers?.[0]?.name || 'main';
+    return {
+      allowed: true,
+      reason: 'allowed',
+      policy: null,
+      lines: [`<html><body>Hello from ${app} (container ${container})</body></html>`],
+    };
   }
 
   _recordMetrics() {
@@ -2790,6 +4396,13 @@ export class SimulationTick {
     this._oauthPending = null;
     this._sccDirty = false;
     this._quotaViolationNamespaces = new Set();
+    // OLM / operator bookkeeping refers to resources of the previous run; a new
+    // level/cluster starts with none of them (the catalog is re-seeded by
+    // ensureOLMDefaultsSync() before the app's initial auto-align).
+    this._olmOperatorDeployments.clear();
+    this._metallbOperands.clear();
+    this._knownCSVs.clear();
+    this._simEpoch = Date.now();
   }
 
   // ── Helpers ────────────────────────────────────────────────────────────

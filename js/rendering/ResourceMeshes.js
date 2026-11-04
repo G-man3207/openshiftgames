@@ -1290,6 +1290,87 @@ const CREATORS = {
     };
     return finish(group);
   },
+
+  // ── OLM / operators ───────────────────────────────────────────────────────
+  OperatorGroup(resource) {
+    const { group, top } = stage(resource, { radius: 0.92 });
+    slab(group, 1.35, 0.14, 1.15, MAT.body, { y: top + 0.09, round: 0.16 });
+    for (let index = 0; index < 3; index += 1) {
+      slab(group, 0.92, 0.07, 0.17, MAT.bodyLight, {
+        y: top + 0.24 + index * 0.14, round: 0.3,
+      });
+      strap(group, 0.72, 0.014, 0.012, HUE.open, {
+        y: top + 0.27 + index * 0.14, z: 0.05, opacity: 0.6,
+      });
+    }
+    torus(group, 0.5, 0.02, HUE.open, { y: top + 0.66, rx: Math.PI / 2 });
+    return finish(group);
+  },
+
+  InstallPlan(resource) {
+    const { group, top } = stage(resource, { radius: 0.9 });
+    slab(group, 1.2, 0.1, 1.2, MAT.bodyDark, { y: top + 0.07, round: 0.14 });
+    for (let index = 0; index < 3; index += 1) {
+      slab(group, 1.0 - index * 0.16, 0.05, 0.18, MAT.bodyLight, {
+        y: top + 0.2 + index * 0.12, round: 0.3,
+      });
+      strap(group, 0.18, 0.03, 0.02, HUE.warm, {
+        x: 0.44 - index * 0.08, y: top + 0.23 + index * 0.12, opacity: 0.8,
+      });
+    }
+    return finish(group);
+  },
+
+  ClusterServiceVersion(resource) {
+    const { group, top } = stage(resource, { radius: 0.95 });
+    disc(group, 0.36, 0.12, MAT.body, { y: top + 0.06 });
+    addMesh(group, new THREE.CylinderGeometry(0.05, 0.08, 0.5, 10), mat(MAT.metal), { y: top + 0.4 });
+    const badge = addMesh(group, new THREE.IcosahedronGeometry(0.26, 0), glow(HUE.ice, 0.55), {
+      y: top + 0.8,
+    });
+    const halo = torus(group, 0.42, 0.02, HUE.ice, { y: top + 0.8, rx: Math.PI / 2 + 0.25 });
+    group.userData.animate = (time) => {
+      badge.rotation.y = time * 0.5;
+      halo.rotation.z = time * 0.3;
+    };
+    return finish(group);
+  },
+
+  PackageManifest(resource) {
+    const { group, top } = stage(resource, { radius: 1.0 });
+    slab(group, 1.5, 0.07, 1.2, MAT.bodyDark, { y: top + 0.15, round: 0.1 });
+    for (let row = 0; row < 2; row += 1) {
+      for (let column = 0; column < 3; column += 1) {
+        addMesh(group, new THREE.BoxGeometry(0.3, 0.12, 0.3), glow(HUE.warm, 0.32), {
+          x: -0.44 + column * 0.44,
+          y: top + 0.24,
+          z: -0.22 + row * 0.44,
+        });
+      }
+    }
+    return finish(group);
+  },
+
+  MetalLB(resource) {
+    const { group, top } = stage(resource, { radius: 0.95 });
+    disc(group, 0.4, 0.1, MAT.body, { y: top + 0.05 });
+    addMesh(group, new THREE.CylinderGeometry(0.04, 0.06, 0.6, 10), mat(MAT.metal), { y: top + 0.4 });
+    addMesh(group, new THREE.CylinderGeometry(0.02, 0.02, 1.0, 8), mat(MAT.metal), {
+      y: top + 0.8, rx: Math.PI / 2, rz: Math.PI / 2, z: 0,
+    });
+    const beaconMaterial = mat(HUE.sky, {
+      metalness: 0.2,
+      roughness: 0.3,
+      emissive: new THREE.Color(HUE.sky),
+      emissiveIntensity: 0.9,
+    });
+    const beacon = addMesh(group, new THREE.SphereGeometry(0.16, 16, 12), beaconMaterial, { y: top + 0.78 });
+    group.userData.animate = (time) => {
+      beacon.position.y = top + 0.78 + Math.sin(time * 2.2) * 0.05;
+      beaconMaterial.emissiveIntensity = 0.7 + Math.sin(time * 2.2) * 0.25;
+    };
+    return finish(group);
+  },
 };
 
 // Legacy renderable type aliases (older cluster state / links may use short names).

@@ -658,6 +658,189 @@ ${this.events.slice(-10).map((e) => `  ${e.type}\t${e.reason}\t${e.message}`).jo
   }
 }
 
+// ─── Cron schedule parsing (batch/v1 CronJob) ───────────────────────────────
+//
+// Kubernetes CronJob.spec.schedule accepts the standard 5-field cron format
+// (minute hour day-of-month month day-of-week) plus the @hourly/@daily/@weekly/
+// @monthly/@yearly/@midnight descriptors. Six-field (with seconds), free text
+// ("every 5 min") or otherwise malformed values are rejected by the API server
+// with a `spec.schedule: Invalid value: ...` validation error.
+//
+// The helpers below are shared by the CLI (create/apply validation) and the
+// SimulationTick CronJob controller (real next-run computation, so a Job is no
+// longer created immediately when the CronJob is created).
+
+const CRON_DESCRIPTORS = {
+  '@yearly': '0 0 1 1 *',
+  '@annually': '0 0 1 1 *',
+  '@monthly': '0 0 1 * *',
+  '@weekly': '0 0 * * 0',
+  '@daily': '0 0 * * *',
+  '@midnight': '0 0 * * *',
+  '@hourly': '0 * * * *',
+};
+
+const CRON_MONTH_NAMES = {
+  jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6,
+  jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12,
+};
+const CRON_DAY_NAMES = { sun: 0, mon: 1, tue: 2, wed: 3, thu: 4, fri: 5, sat: 6 };
+
+function parseCronField(field, min, max, { names = null, allowSevenAsZero = false } = {}) {
+  const text = String(field || '').trim();
+  if (!text) return { valid: false, detail: 'empty field' };
+  const values = new Set();
+  let wildcard = false;
+  const parseNumber = (token) => {
+    const lowered = token.toLowerCase();
+    if (names && names[lowered] !== undefined) return names[lowered];
+    if (!/^\d+$/.test(token)) return null;
+    const value = Number(token);
+    if (allowSevenAsZero && value === 7) return 0;
+    return value;
+  };
+  const addRange = (startToken, endToken, step) => {
+    const start = parseNumber(startToken);
+    const end = parseNumber(endToken);
+    if (start === null || end === null) return `invalid range "${startToken}-${endToken}"`;
+    if (start < min || end > max || start > end) return `range "${startToken}-${endToken}" out of bounds ${min}-${max}`;
+    for (let value = start; value <= end; value += step) values.add(value);
+    return null;
+  };
+  for (const part of text.split(',')) {
+    const piece = part.trim();
+    if (!piece) return { valid: false, detail: `empty list element in "${text}"` };
+    const stepMatch = piece.match(/^(\*|[\w-]+)\/(\d+)$/);
+    if (stepMatch) {
+      const step = Number(stepMatch[2]);
+      if (!Number.isFinite(step) || step < 1) return { valid: false, detail: `invalid step in "${piece}"` };
+      if (stepMatch[1] === '*') {
+        wildcard = true;
+        for (let value = min; value <= max; value += step) values.add(value);
+      } else if (stepMatch[1].includes('-')) {
+        const [startToken, endToken] = stepMatch[1].split('-');
+        const error = addRange(startToken, endToken, step);
+        if (error) return { valid: false, detail: error };
+      } else {
+        const start = parseNumber(stepMatch[1]);
+        if (start === null || start < min || start > max) return { valid: false, detail: `invalid value in "${piece}"` };
+        for (let value = start; value <= max; value += step) values.add(value);
+      }
+      continue;
+    }
+    if (piece === '*') {
+      wildcard = true;
+      for (let value = min; value <= max; value += 1) values.add(value);
+      continue;
+    }
+    const rangeMatch = piece.match(/^([\w]+)-([\w]+)$/);
+    if (rangeMatch) {
+      const error = addRange(rangeMatch[1], rangeMatch[2], 1);
+      if (error) return { valid: false, detail: error };
+      continue;
+    }
+    const value = parseNumber(piece);
+    if (value === null) return { valid: false, detail: `invalid value "${piece}"` };
+    if (value < min || value > max) return { valid: false, detail: `value "${piece}" out of bounds ${min}-${max}` };
+    values.add(value);
+  }
+  return { valid: true, values, wildcard };
+}
+
+/**
+ * Parse a Kubernetes CronJob schedule.
+ * @param {string} schedule
+ * @returns {{valid: boolean, descriptor?: string, minutes?: number[], hours?: number[], daysOfMonth?: number[], months?: number[], daysOfWeek?: number[], domWildcard?: boolean, dowWildcard?: boolean, message?: string}}
+ */
+export function parseCronSchedule(schedule) {
+  const raw = String(schedule ?? '').trim();
+  if (!raw) {
+    return { valid: false, message: 'spec.schedule: Required value: schedule is required' };
+  }
+  let expression = raw;
+  let descriptor = '';
+  if (raw.startsWith('@')) {
+    descriptor = raw.toLowerCase();
+    if (!CRON_DESCRIPTORS[descriptor]) {
+      return { valid: false, message: `spec.schedule: Invalid value: "${raw}": unsupported descriptor` };
+    }
+    expression = CRON_DESCRIPTORS[descriptor];
+  }
+  const fields = expression.split(/\s+/).filter(Boolean);
+  if (fields.length !== 5) {
+    return {
+      valid: false,
+      message: `spec.schedule: Invalid value: "${raw}": expected exactly 5 fields, found ${fields.length}: [${fields.join(' ')}]`,
+    };
+  }
+  const minute = parseCronField(fields[0], 0, 59);
+  if (!minute.valid) return { valid: false, message: `spec.schedule: Invalid value: "${raw}": minute field: ${minute.detail}` };
+  const hour = parseCronField(fields[1], 0, 23);
+  if (!hour.valid) return { valid: false, message: `spec.schedule: Invalid value: "${raw}": hour field: ${hour.detail}` };
+  const dayOfMonth = parseCronField(fields[2], 1, 31);
+  if (!dayOfMonth.valid) return { valid: false, message: `spec.schedule: Invalid value: "${raw}": day-of-month field: ${dayOfMonth.detail}` };
+  const month = parseCronField(fields[3], 1, 12, { names: CRON_MONTH_NAMES });
+  if (!month.valid) return { valid: false, message: `spec.schedule: Invalid value: "${raw}": month field: ${month.detail}` };
+  const dayOfWeek = parseCronField(fields[4], 0, 6, { names: CRON_DAY_NAMES, allowSevenAsZero: true });
+  if (!dayOfWeek.valid) return { valid: false, message: `spec.schedule: Invalid value: "${raw}": day-of-week field: ${dayOfWeek.detail}` };
+  return {
+    valid: true,
+    descriptor,
+    expression,
+    minutes: [...minute.values].sort((a, b) => a - b),
+    hours: [...hour.values].sort((a, b) => a - b),
+    daysOfMonth: [...dayOfMonth.values],
+    months: [...month.values],
+    daysOfWeek: [...dayOfWeek.values],
+    domWildcard: dayOfMonth.wildcard,
+    dowWildcard: dayOfWeek.wildcard,
+  };
+}
+
+/**
+ * Validate a CronJob schedule for the CLI / manifest apply paths.
+ * @param {string} schedule
+ * @returns {{valid: boolean, message?: string}}
+ */
+export function validateCronSchedule(schedule) {
+  const parsed = parseCronSchedule(schedule);
+  return parsed.valid ? { valid: true } : { valid: false, message: parsed.message };
+}
+
+/**
+ * Next occurrence of a cron schedule strictly after `from`.
+ * @param {string|object} scheduleOrParsed cron string or parseCronSchedule() result
+ * @param {Date} [from]
+ * @returns {Date|null}
+ */
+export function nextCronOccurrence(scheduleOrParsed, from = new Date()) {
+  const parsed = typeof scheduleOrParsed === 'string' ? parseCronSchedule(scheduleOrParsed) : scheduleOrParsed;
+  if (!parsed || !parsed.valid) return null;
+  const start = new Date(from.getTime() + 60 * 1000);
+  start.setSeconds(0, 0);
+  const minutes = parsed.minutes;
+  const hours = parsed.hours;
+  for (let dayOffset = 0; dayOffset <= 400; dayOffset += 1) {
+    const day = new Date(start.getFullYear(), start.getMonth(), start.getDate() + dayOffset);
+    if (!parsed.months.includes(day.getMonth() + 1)) continue;
+    const domMatches = parsed.daysOfMonth.includes(day.getDate());
+    const dowMatches = parsed.daysOfWeek.includes(day.getDay() % 7);
+    let dayMatches;
+    if (parsed.domWildcard && parsed.dowWildcard) dayMatches = true;
+    else if (parsed.domWildcard) dayMatches = dowMatches;
+    else if (parsed.dowWildcard) dayMatches = domMatches;
+    else dayMatches = domMatches || dowMatches; // cron OR semantics when both are restricted
+    if (!dayMatches) continue;
+    for (const hour of hours) {
+      for (const minute of minutes) {
+        const candidate = new Date(day.getFullYear(), day.getMonth(), day.getDate(), hour, minute, 0, 0);
+        if (candidate.getTime() >= start.getTime()) return candidate;
+      }
+    }
+  }
+  return null;
+}
+
 // ─── CronJob ────────────────────────────────────────────────────────────────
 
 export class CronJob extends ResourceBase {

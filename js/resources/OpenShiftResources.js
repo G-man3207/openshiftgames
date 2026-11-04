@@ -955,13 +955,10 @@ export class ClusterResourceQuota extends ResourceBase {
       namespace: '',
       apiVersion: metadata.apiVersion || 'quota.openshift.io/v1',
     });
-    const hard = deepClone(
-      metadata.hard || {
-        pods: '50',
-        'requests.cpu': '10',
-        'requests.memory': '20Gi',
-      }
-    );
+    // No invented hard limits: spec.quota.hard is exactly what the caller
+    // passed (issue #14 — ghosts like requests.cpu: 10 / requests.memory: 20Gi
+    // were being merged into every ClusterResourceQuota).
+    const hard = deepClone(metadata.hard || metadata.spec?.quota?.hard || {});
     const defaults = {
       selector: {
         labels: {

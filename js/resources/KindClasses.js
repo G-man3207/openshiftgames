@@ -38,6 +38,13 @@ import {
   L2Advertisement,
 } from './OpenShiftResources.js';
 import { User, Group, Identity } from './IdentityResources.js';
+import {
+  OperatorGroup,
+  InstallPlan,
+  ClusterServiceVersion,
+  PackageManifest,
+  MetalLB,
+} from './OLMResources.js';
 
 /** @type {Record<string, typeof import('./ResourceBase.js').ResourceBase>} */
 export const KIND_CLASSES = Object.freeze({
@@ -92,6 +99,11 @@ export const KIND_CLASSES = Object.freeze({
   Subscription,
   ClusterOperator,
   ClusterVersion,
+  OperatorGroup,
+  InstallPlan,
+  ClusterServiceVersion,
+  PackageManifest,
+  MetalLB,
 });
 
 /**
@@ -147,6 +159,11 @@ export {
   Subscription,
   ClusterOperator,
   ClusterVersion,
+  OperatorGroup,
+  InstallPlan,
+  ClusterServiceVersion,
+  PackageManifest,
+  MetalLB,
 };
 
 export default KIND_CLASSES;

@@ -100,9 +100,12 @@ K.ClusterResourceQuota = {
   columns: 'NAME              AGE   REQUEST   LIMIT',
   palette: { section: 'projects', label: 'ClusterQuota' },
   minimapSize: 16,
+  // Hard limits are never defaulted: a ClusterResourceQuota created with
+  // `--hard=pods=10` must contain exactly that one limit, not invented
+  // requests.cpu / requests.memory entries (issue #14).
   defaultSpec: () => ({
     selector: { labels: { matchLabels: {} } },
-    quota: { hard: { pods: '50', 'requests.cpu': '10', 'requests.memory': '20Gi' } },
+    quota: { hard: {} },
   }),
   explain:
     'ClusterResourceQuota applies a quota across all projects selected by labels.\n' +
@@ -688,6 +691,93 @@ K.ClusterVersion = {
   minimapSize: 12,
   defaultSpec: () => ({ channel: 'stable-4.22' }),
   explain: 'ClusterVersion is the singleton describing the desired/current OCP version (oc get clusterversion).',
+};
+
+K.OperatorGroup = {
+  apiVersion: 'operators.coreos.com/v1',
+  namespaced: true,
+  placeable: false,
+  aliases: ['operatorgroup', 'operatorgroups', 'og'],
+  columns: 'NAME      AGE',
+  palette: { section: 'identity', label: 'OperatorGroup' },
+  minimapSize: 12,
+  defaultNamespace: 'openshift-operators',
+  defaultSpec: () => ({ targetNamespaces: [] }),
+  explain:
+    'OperatorGroup configures which namespaces the Operators installed in its\n' +
+    'namespace watch. One OperatorGroup per namespace; AllNamespaces installs\n' +
+    'live in openshift-operators (global-operators), SingleNamespace installs\n' +
+    'require an OperatorGroup in the target project.',
+};
+K.InstallPlan = {
+  apiVersion: 'operators.coreos.com/v1alpha1',
+  namespaced: true,
+  placeable: false,
+  aliases: ['installplan', 'installplans', 'ip'],
+  columns: 'NAME              CSV                            APPROVAL    APPROVED',
+  palette: { section: 'identity', label: 'InstallPlan' },
+  minimapSize: 12,
+  defaultNamespace: 'openshift-operators',
+  defaultSpec: () => ({ approval: 'Automatic', approved: false, clusterServiceVersionNames: [] }),
+  explain:
+    'InstallPlan is the calculated set of resources OLM installs/upgrades for a\n' +
+    'Subscription. Automatic plans are approved for you; Manual plans wait for\n' +
+    '`spec.approved: true` (console: Install Plan -> Approve).',
+};
+K.ClusterServiceVersion = {
+  apiVersion: 'operators.coreos.com/v1alpha1',
+  namespaced: true,
+  placeable: false,
+  aliases: ['clusterserviceversion', 'clusterserviceversions', 'csv'],
+  columns: 'NAME           DISPLAY            VERSION   REPLACES   PHASE',
+  palette: { section: 'identity', label: 'CSV' },
+  minimapSize: 13,
+  defaultNamespace: 'openshift-operators',
+  defaultSpec: () => ({
+    displayName: '',
+    version: '1.0.0',
+    maturity: 'stable',
+    installModes: [
+      { type: 'OwnNamespace', supported: true },
+      { type: 'SingleNamespace', supported: true },
+      { type: 'MultiNamespace', supported: false },
+      { type: 'AllNamespaces', supported: true },
+    ],
+    customresourcedefinitions: { owned: [] },
+  }),
+  explain:
+    'ClusterServiceVersion is the installed "operator instance" record: versioned\n' +
+    'metadata plus the install strategy OLM runs. Phase Installing -> Succeeded.\n' +
+    'Deleting the CSV (not just the Subscription) is the real uninstall step.',
+};
+K.PackageManifest = {
+  apiVersion: 'packages.operators.coreos.com/v1',
+  namespaced: false,
+  placeable: false,
+  aliases: ['packagemanifest', 'packagemanifests'],
+  columns: 'NAME           DISPLAY          VERSION   CATALOG   SOURCE',
+  palette: { section: 'identity', label: 'Package' },
+  minimapSize: 11,
+  defaultSpec: () => ({ packageName: '', defaultChannel: 'stable', channels: [] }),
+  explain:
+    'PackageManifest is the cluster-scoped software-catalog entry for one\n' +
+    'operator package (channels, current CSV, catalog source).\n' +
+    '`oc get packagemanifests -n openshift-marketplace` lists the catalog.',
+};
+K.MetalLB = {
+  apiVersion: 'metallb.io/v1beta1',
+  namespaced: true,
+  placeable: false,
+  aliases: ['metallb', 'metallbs'],
+  columns: 'NAME      AGE',
+  palette: { section: 'network', label: 'MetalLB' },
+  minimapSize: 14,
+  defaultNamespace: 'metallb-system',
+  defaultSpec: () => ({ nodeSelector: {}, speaker: { frr: {}, logLevel: 'info' }, controller: { logLevel: 'info' } }),
+  explain:
+    'MetalLB is the MetalLB Operator operand CR: the operator only deploys the\n' +
+    'controller and speaker pods (in metallb-system) after this instance exists.\n' +
+    'Create IPAddressPool + L2Advertisement to hand out LoadBalancer EXTERNAL-IPs.',
 };
 
 // ─── Derived exports ───────────────────────────────────────────────────────
