@@ -1745,6 +1745,74 @@ await runSection('regressions', async () => {
     JSON.stringify(collapsedSecond),
   );
 
+  // ── 1b. Incident drawer: single panel, engine-truth count, no overlap ─────
+  // #1: a level change/retry used to append a second #incident-panel whose
+  // frozen HTML showed "0 active"; the drawer also covered the mission card and
+  // the bottom view toolbar.
+  await evaluate(() => window.game.app.launchGame('sandbox'));
+  await waitFor(
+    () => evaluate(() => window.game?.app?.currentMode === 'sandbox' && !!window.game?.app?.modeInstance),
+    12000,
+  );
+  await sleep(1800);
+  const panelCount = await evaluate(() => document.querySelectorAll('#incident-panel').length);
+  assert(panelCount === 1, 'regressions: relaunch keeps a single incident panel', `got ${panelCount}`);
+  await evaluate(() => document.activeElement?.blur?.());
+  await evaluate(() => document.getElementById('hud-alerts')?.click());
+  await sleep(500);
+  const drawer = await evaluate(() => {
+    const panel = document.querySelector('#incident-panel');
+    const objectives = document.querySelector('#objectives-panel');
+    const toolbar = document.querySelector('#view-toolbar');
+    const p = panel.getBoundingClientRect();
+    const o = objectives.getBoundingClientRect();
+    const t = toolbar.getBoundingClientRect();
+    return {
+      open: panel.classList.contains('is-open'),
+      bodyClass: document.body.classList.contains('side-panel-left-open'),
+      bell: document.getElementById('hud-alerts')?.getAttribute('aria-expanded'),
+      headerCount: document.querySelector('#incident-count')?.textContent,
+      engineCount: String(window.game.incidentEngine.getActiveIncidents().length),
+      empty: /No active incidents/.test(document.querySelector('#incident-list')?.textContent || ''),
+      panelRight: Math.round(p.right),
+      objectivesLeft: Math.round(o.left),
+      objectivesDisplay: getComputedStyle(objectives).display,
+      toolbarLeft: Math.round(t.left),
+      viewport: innerWidth,
+    };
+  });
+  assert(
+    drawer.open && drawer.bodyClass && drawer.bell === 'true',
+    'regressions: incidents drawer opens with shared state + HUD aria',
+    JSON.stringify(drawer),
+  );
+  assert(
+    drawer.headerCount === drawer.engineCount && (Number(drawer.engineCount) > 0 || drawer.empty),
+    'regressions: incidents drawer header matches the engine count',
+    JSON.stringify(drawer),
+  );
+  if (drawer.viewport > 900) {
+    assert(
+      drawer.objectivesLeft >= drawer.panelRight && drawer.toolbarLeft >= drawer.panelRight,
+      'regressions: incidents drawer no longer covers mission card or view toolbar',
+      JSON.stringify(drawer),
+    );
+  } else {
+    assert(drawer.objectivesDisplay === 'none', 'regressions: narrow viewport stacks drawer over mission card', JSON.stringify(drawer));
+  }
+  await page.keyboard.press('Escape');
+  await sleep(450);
+  const drawerClosed = await evaluate(() => ({
+    open: document.querySelector('#incident-panel')?.classList.contains('is-open'),
+    bodyClass: document.body.classList.contains('side-panel-left-open'),
+    bell: document.getElementById('hud-alerts')?.getAttribute('aria-expanded'),
+  }));
+  assert(
+    drawerClosed.open === false && drawerClosed.bodyClass === false && drawerClosed.bell === 'false',
+    'regressions: Esc closes the incidents drawer and clears its layout state',
+    JSON.stringify(drawerClosed),
+  );
+
   // ── 2. Restart level auto-aligns the rebuilt cluster ─────────────────────
   const readScene = () =>
     evaluate(() => {
