@@ -1585,9 +1585,11 @@ class IncidentEngine {
     if (!pod.status.podIP) {
       const generated =
         simulation && typeof simulation._generatePodIP === 'function'
-          ? this._safe(() => simulation._generatePodIP(), null)
+          ? this._safe(() => simulation._generatePodIP(nodeName), null)
           : null;
-      pod.status.podIP = generated || '10.244.0.10';
+      // #62B: an incident-bound Pod answers from the OpenShift pod network
+      // (10.128.0.0/14), never the old kubeadm pod range.
+      pod.status.podIP = generated || '10.128.0.10';
     }
     const message = `Successfully assigned ${namespace}/${podName} to ${nodeName}`;
     if (typeof pod.setCondition === 'function') {

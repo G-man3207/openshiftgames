@@ -3465,14 +3465,6 @@ export class ShellTools {
         container: context.containerName,
       });
     }
-    const requestLines = [];
-    if (options.verbose) {
-      requestLines.push(`*   Trying ${parsed.hostname}:${port}...`);
-      requestLines.push(`* Connected to ${parsed.hostname} port ${port}`);
-      if (parsed.scheme === 'https') {
-        requestLines.push('* TLS 1.3 connection using TLS_AES_256_GCM_SHA384');
-      }
-    }
     /** Real curl exit code for a simulated deny reason (issue #43). */
     const failureFor = () => {
       if (!result) return { code: 6, message: `Could not resolve host: ${parsed.hostname}` };
@@ -3507,6 +3499,24 @@ export class ShellTools {
       serverIp: (result && result.serverIp) || '',
     });
     const failure = failureFor();
+    // #61 item 4: real curl resolves the name BEFORE it opens a connection. A
+    // DNS failure only prints `* Could not resolve host: …`; a connection
+    // failure after a resolved name prints `*   Trying host:port...` but never
+    // `* Connected` (that line only appears once the request actually works).
+    const requestLines = [];
+    if (options.verbose) {
+      if (failure && Number(failure.code) === 6) {
+        requestLines.push(`* Could not resolve host: ${parsed.hostname}`);
+      } else {
+        requestLines.push(`*   Trying ${parsed.hostname}:${port}...`);
+        if (!failure) {
+          requestLines.push(`* Connected to ${parsed.hostname} port ${port}`);
+          if (parsed.scheme === 'https') {
+            requestLines.push('* TLS 1.3 connection using TLS_AES_256_GCM_SHA384');
+          }
+        }
+      }
+    }
     if (failure) {
       return asResult(
         this._curlFailureOutput(options, failure, { lines: requestLines, writeOutValues })

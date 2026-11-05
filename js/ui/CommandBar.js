@@ -72,7 +72,7 @@ import {
   describeEventLines,
   estimateJobRuntimeSeconds,
 } from '../resources/WorkloadResources.js';
-import { formatEndpointAddresses } from '../resources/NetworkResources.js';
+import { formatEndpointAddresses, resolveEndpointPort } from '../resources/NetworkResources.js';
 import { ShellTools, SHELL_COMMANDS, SHELL_FILE_COMMANDS } from './ShellTools.js';
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -5855,24 +5855,45 @@ Object.assign(CommandBar.prototype, {
           },
         ];
       case 'RoleBinding':
-      case 'ClusterRoleBinding': {
-        const subjectNames = (resource, kindName) =>
-          (resource.spec?.subjects || [])
-            .filter((subject) => subject.kind === kindName)
-            .map((subject) => subject.name)
-            .join(',');
+      case 'ClusterRoleBinding':
         return [
-          { header: 'USERS', value: (resource) => subjectNames(resource, 'User') },
-          { header: 'GROUPS', value: (resource) => subjectNames(resource, 'Group') },
+          {
+            header: 'USERS',
+            value: (resource) => this._roleBindingSubjectNames(resource, 'User'),
+          },
+          {
+            header: 'GROUPS',
+            value: (resource) => this._roleBindingSubjectNames(resource, 'Group'),
+          },
           {
             header: 'SERVICEACCOUNTS',
-            value: (resource) => subjectNames(resource, 'ServiceAccount'),
+            value: (resource) => this._roleBindingSubjectNames(resource, 'ServiceAccount'),
           },
         ];
-      }
       default:
         return [];
     }
+  },
+
+  /**
+   * `rbac.SubjectsStrings` for one subject kind (#62 D). Real kubectl prints a
+   * ServiceAccount subject as `<namespace>/<name>` (`qa8/deployer`), falling back
+   * to the binding's own namespace when the subject omits one and never emitting
+   * a leading `/`; User/Group subjects stay bare names.
+   * @param {object} resource RoleBinding/ClusterRoleBinding
+   * @param {string} kindName subject kind (`User` | `Group` | `ServiceAccount`)
+   * @returns {string}
+   */
+  _roleBindingSubjectNames(resource, kindName) {
+    const bindingNamespace = resource?.metadata?.namespace;
+    return (resource?.spec?.subjects || [])
+      .filter((subject) => subject?.kind === kindName)
+      .map((subject) => {
+        if (kindName !== 'ServiceAccount') return String(subject.name ?? '');
+        const namespace = subject.namespace || bindingNamespace;
+        return namespace ? `${namespace}/${subject.name}` : String(subject.name ?? '');
+      })
+      .join(',');
   },
 
   _nodeAddress(resource, type) {
@@ -6272,22 +6293,17 @@ Object.assign(CommandBar.prototype, {
       }
       case 'RoleBinding':
       case 'ClusterRoleBinding': {
-        const subjects = resource.spec?.subjects || [];
         const roleRef = resource.spec?.roleRef || {};
-        const byKind = (kindName) =>
-          subjects
-            .filter((subject) => subject.kind === kindName)
-            .map((subject) => subject.name)
-            .join(',');
         return {
           NAME: name,
           // Real kubectl/oc rolebinding printer: `RoleRef.Kind/RoleRef.Name`
           // (e.g. `ClusterRole/admin`, `Role/edit`) — not the bare role name.
           ROLE: `${roleRef.kind || 'Role'}/${roleRef.name || ''}`,
           AGE: age,
-          USERS: byKind('User'),
-          GROUPS: byKind('Group'),
-          SERVICEACCOUNTS: byKind('ServiceAccount'),
+          USERS: this._roleBindingSubjectNames(resource, 'User'),
+          GROUPS: this._roleBindingSubjectNames(resource, 'Group'),
+          // #62 D: `<subject.namespace>/<subject.name>` like rbac.SubjectsStrings.
+          SERVICEACCOUNTS: this._roleBindingSubjectNames(resource, 'ServiceAccount'),
         };
       }
       case 'ServiceAccount': {
@@ -7212,9 +7228,37 @@ Object.assign(CommandBar.prototype, {
     // so the table can never be printed twice (#36/#43).
     const liveSection = this._eventsSection(kind, resource);
     const eventsAt = output.search(/^Events:/m);
-    if (eventsAt < 0) output += `\n${liveSection}`;
-    else output = `${output.slice(0, eventsAt)}${liveSection}`;
+    // #62 F: the `<none>` placeholder must start at the same tabwriter column as
+    // the top-level `Label:` values above it (kubectl uses one tabwriter for the
+    // whole describe). `describeEventLines` carries a fixed 10-space placeholder,
+    // which is one column short for Services (`Session Affinity:`), so align it
+    // dynamically with the widest label already printed.
+    let eventsSection = liveSection;
+    if (/^Events:[ \t]*<none>$/m.test(eventsSection)) {
+      const labelsText = eventsAt < 0 ? output : output.slice(0, eventsAt);
+      const column = this._describeValueColumn(labelsText);
+      eventsSection = `Events:${' '.repeat(Math.max(1, column - 'Events:'.length))}<none>`;
+    }
+    if (eventsAt < 0) output += `\n${eventsSection}`;
+    else output = `${output.slice(0, eventsAt)}${eventsSection}`;
     return output;
+  },
+
+  /**
+   * The column where `oc describe` top-level label values start, derived from
+   * the widest `Label:` line already printed (kubectl's single text/tabwriter,
+   * padding 2) — used to align the `Events:  <none>` placeholder (#62 F).
+   * @param {string} output describe output before the Events block
+   * @returns {number} 0-based column index of the value
+   */
+  _describeValueColumn(output) {
+    let widest = 0;
+    for (const line of String(output || '').split('\n')) {
+      const match = line.match(/^([A-Za-z][^:\t]*):(?:[ \t]|$)/);
+      if (match) widest = Math.max(widest, match[1].length + 1);
+    }
+    // Fall back to the historical 10-space placeholder when no label is printed.
+    return widest ? widest + 2 : 'Events:'.length + 10;
   },
 
   _describeLines(kind, resource) {
@@ -8698,7 +8742,14 @@ Object.assign(CommandBar.prototype, {
       // A Service's Endpoints object is one row: every ready address:port pair.
       const subsets = [];
       for (const port of service.spec?.ports || []) {
-        const targetPort = port.targetPort ?? port.port;
+        // #62 E: resolve a (possibly NAMED) targetPort against the endpoint
+        // Pod's container ports — dns/dns-tcp => 5353 on the dns container,
+        // metrics => the kube-rbac-proxy sidecar's 9154 (the shared helper keeps
+        // the last matching container port, like the EndpointSlice controller).
+        const resolvedPort = pods.length ? resolveEndpointPort(port, pods[0]) : port.port;
+        const endpointPort = Number.isFinite(Number(resolvedPort))
+          ? Number(resolvedPort)
+          : port.port;
         const addresses = [];
         for (const pod of pods) {
           const podIp = pod.status?.podIP || pod.ip;
@@ -8711,7 +8762,7 @@ Object.assign(CommandBar.prototype, {
             ports: [
               {
                 name: port.name,
-                port: Number.isFinite(Number(targetPort)) ? Number(targetPort) : port.port,
+                port: endpointPort,
                 protocol: port.protocol || 'TCP',
               },
             ],
@@ -13609,13 +13660,19 @@ Object.assign(CommandBar.prototype, {
           ]
         : [];
     if (!command) return this._ok(lines.join('\n'));
-    const output = this._simulateExecCommand(command, pod, containerName);
-    return this._ok([...lines, ...output].join('\n'));
+    // #62 A: modelled image binaries can carry an explicit remote exit status
+    // (`exitCode`); real oc prints `command terminated with exit code <N>`, exits
+    // N and marks the result as an error so `&&`/`||` chains behave like a shell.
+    const { lines: output, exitCode } = this._simulateExecCommand(command, pod, containerName);
+    const execLines = [...lines, ...output];
+    if (exitCode) execLines.push(`command terminated with exit code ${exitCode}`);
+    const message = execLines.join('\n');
+    return exitCode ? this._err(message) : this._ok(message);
   },
 
   _simulateExecCommand(command, pod, containerName) {
     const raw = String(command ?? '').trim();
-    if (!raw) return [];
+    if (!raw) return { lines: [], exitCode: 0 };
     const context = this._podExecContext(pod, containerName);
     // `oc exec … -- sh -c "cmd"` / `/bin/bash -c "…"`: unwrap the script.
     const tokens = tokenizeCommand(raw);
@@ -13635,15 +13692,18 @@ Object.assign(CommandBar.prototype, {
       stages.push(current);
       let stdin = null;
       let lines = [];
+      let exitCode = 0;
       for (const stage of stages) {
         const result = this._execStage(stage, context, stdin);
         lines = result.lines;
+        if (result.exitCode) exitCode = result.exitCode;
         if (!result.ok) break;
         stdin = result.lines.join('\n');
       }
-      return lines;
+      return { lines, exitCode };
     }
-    return this._execStage(tokens, context, null).lines;
+    const result = this._execStage(tokens, context, null);
+    return { lines: result.lines, exitCode: result.exitCode || 0 };
   },
 
   /**
@@ -13654,7 +13714,12 @@ Object.assign(CommandBar.prototype, {
    */
   _execStage(tokens, context, stdin) {
     const argv = tokens.length ? tokens : ['sh'];
-    const name = String(argv[0] || '').toLowerCase();
+    // #62 A: binaries are matched by basename, so `/bin/cat` and `cat` both hit
+    // the modelled `cat` (real images install coreutils in /bin or /usr/bin).
+    const name = String(argv[0] || 'sh')
+      .split('/')
+      .pop()
+      .toLowerCase();
     const args = argv.slice(1);
     const stdinText = stdin === null || stdin === undefined ? null : String(stdin);
     const ok = (lines) => ({ ok: true, lines });
@@ -13833,36 +13898,212 @@ Object.assign(CommandBar.prototype, {
       ]);
     }
     if (name === 'nslookup' || name === 'dig') {
-      const target = args[args.length - 1] || '';
-      // `dig` keeps the legacy simulator output (not part of #60); only
-      // `nslookup` performs a real cluster-DNS resolution.
-      if (name === 'dig') {
-        return ok([
-          'Server:\t\t172.30.0.10',
-          'Address:\t172.30.0.10#53',
-          '',
-          `Name:\t${target}`,
-          'Address: 172.30.43.12',
-        ]);
+      // #61: both tools query the real cluster DNS Service, which needs egress
+      // to the dns-default pods on 5353. A Pod isolated by a NetworkPolicy
+      // without a DNS rule gets the real `connection timed out` line and the
+      // real non-zero status (nslookup 1, dig 9).
+      if (this._execDnsBlocked(context)) {
+        return {
+          ok: false,
+          exitCode: name === 'dig' ? 9 : 1,
+          lines: [';; connection timed out; no servers could be reached'],
+        };
       }
+      if (name === 'dig') return this._execDig(args, context);
+      const target = args.filter((arg) => !arg.startsWith('-')).pop() || '';
       const serverIp = this._clusterDnsServiceIP();
       const header = [`Server:\t\t${serverIp}`, `Address:\t${serverIp}#53`, ''];
-      const resolution = this._resolveClusterDnsName(target, context.namespace);
+      const resolution = this._resolveClusterDnsRecord(target, context.namespace);
       if (!resolution) {
-        // Real nslookup: a name the cluster DNS cannot resolve prints only the
-        // NXDOMAIN line — never a fabricated answer address.
-        return ok([...header, `** server can't find ${target}: NXDOMAIN`]);
+        // Real nslookup: a name the cluster DNS cannot resolve prints the
+        // NXDOMAIN line and exits 1 — never a fabricated answer address.
+        return {
+          ok: false,
+          exitCode: 1,
+          lines: [...header, `** server can't find ${target}: NXDOMAIN`],
+        };
       }
-      // `Name:` echoes the queried name; headless Services resolve to one
-      // Address line per ready endpoint Pod IP, everything else to its ClusterIP.
-      return ok([...header, `Name:\t${resolution.name}`, ...resolution.addresses]);
+      // `Name:` prints the canonical cluster-DNS FQDN (a bare `web` resolves
+      // through the Pod's search list to `web.<ns>.svc.cluster.local`, #61/#62);
+      // headless Services resolve to one Address line per ready endpoint Pod IP,
+      // ExternalName Services to their CNAME target.
+      const addresses = resolution.cname
+        ? [`Address: ${resolution.cname}`]
+        : resolution.ips.map((ip) => `Address: ${ip}`);
+      return ok([...header, `Name:\t${resolution.fqdn}`, ...addresses]);
     }
-    // Unknown binary: keep the legacy simulator hint instead of pretending.
-    return ok([
-      `(command executed in ${context.podName}/${context.containerName})`,
-      `$ ${argv.join(' ')}`,
-      'exit code 0',
-    ]);
+    if (name === 'getent') return this._execGetent(args, context);
+    // A bare interactive shell is a no-op in the simulator (#62 A): `oc exec …
+    // -- sh` / `bash` must not report a missing binary. `sh -c "…"` is unwrapped
+    // by `_simulateExecCommand` before reaching this point.
+    if (name === 'sh' || name === 'bash') return ok([]);
+    // #62 A: everything the image does not model is a real OCI runtime exec
+    // failure — the exact containerd/kubelet wording + exit code 127. The result
+    // is an error so `&&` chains stop and `||` recovery branches run.
+    return {
+      ok: false,
+      exitCode: 127,
+      lines: [
+        `error: Internal error occurred: error executing command in container: failed to exec in container: OCI runtime exec failed: exec failed: unable to start container process: exec: "${name}": executable file not found in $PATH: unknown`,
+      ],
+    };
+  },
+
+  /**
+   * `dig` with its own real output format (#61 item 6): `+short` answers only,
+   * `+search` applies the Pod's resolv.conf search list, plain `dig` does not.
+   * Unknown names are NXDOMAIN with exit 0 (dig's own status), and a DNS
+   * NetworkPolicy block is the real timeout line with status 9.
+   * @param {string[]} args dig argv (command name stripped)
+   * @param {object} context `_podExecContext(pod, containerName)`
+   * @returns {{ok: boolean, lines: string[], exitCode?: number}}
+   */
+  _execDig(args, context) {
+    const flags = args
+      .filter((arg) => arg.startsWith('+'))
+      .map((arg) => arg.slice(1).toLowerCase());
+    const short = flags.includes('short');
+    // Real dig defaults to +nosearch; `+search` opts into the resolv.conf list.
+    const search = flags.includes('search') && !flags.includes('nosearch');
+    // The query name is the sole positional; record-type positionals (`A`,
+    // `AAAA`, …) and `-t/--type <type>` values are not names.
+    const recordTypes = new Set(['a', 'aaaa', 'cname', 'ns', 'mx', 'txt', 'soa', 'srv', 'ptr']);
+    const positionals = [];
+    for (let index = 0; index < args.length; index += 1) {
+      const arg = args[index];
+      if (arg === '-t' || arg === '--type') {
+        index += 1;
+        continue;
+      }
+      if (arg.startsWith('+') || arg.startsWith('-') || arg.startsWith('@')) continue;
+      positionals.push(arg);
+    }
+    const name =
+      positionals.find((arg) => !recordTypes.has(arg.toLowerCase())) || positionals[0] || '';
+    const target = String(name || '');
+    const serverIp = this._clusterDnsServiceIP();
+    // The caller already applied the #61 NetworkPolicy DNS gate (timeout + exit 9).
+    const record = target
+      ? this._resolveClusterDnsRecord(target, context.namespace, { search, absoluteOnly: true })
+      : null;
+    if (short) {
+      if (!record) return { ok: true, lines: [] };
+      return { ok: true, lines: record.cname ? [record.cname] : [...record.ips] };
+    }
+    const questionName = record
+      ? `${record.fqdn}.`
+      : `${String(target || '.').replace(/\.+$/, '')}.`;
+    const answers = record
+      ? record.cname
+        ? [`${record.fqdn}. 30 IN CNAME ${record.cname}.`]
+        : record.ips.map((ip) => `${record.fqdn}. 30 IN A ${ip}`)
+      : [];
+    const status = record ? 'NOERROR' : 'NXDOMAIN';
+    const id = stableHash(args.join(' ') || 'dig', 65535);
+    const lines = [
+      `; <<>> DiG 9.18.28 <<>> ${args.join(' ')}`.trimEnd(),
+      ';; global options: +cmd',
+      ';; Got answer:',
+      `;; ->>HEADER<<- opcode: QUERY, status: ${status}, id: ${id}`,
+      `;; flags: qr aa rd ra; QUERY: 1, ANSWER: ${answers.length}, AUTHORITY: 0, ADDITIONAL: 1`,
+      '',
+      ';; OPT PSEUDOSECTION:',
+      '; EDNS: version: 0, flags:; udp: 1232',
+      ';; QUESTION SECTION:',
+      `;${questionName} IN A`,
+      '',
+    ];
+    if (answers.length) lines.push(';; ANSWER SECTION:', ...answers, '');
+    // Real dig's `;; WHEN:` is `Thu Nov 05 16:21:26 UTC 2026` (ctime-style,
+    // UTC), not Date#toUTCString's RFC-1123 form — the container clock is UTC.
+    const when = new Date();
+    const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+    const monthNames = [
+      'Jan',
+      'Feb',
+      'Mar',
+      'Apr',
+      'May',
+      'Jun',
+      'Jul',
+      'Aug',
+      'Sep',
+      'Oct',
+      'Nov',
+      'Dec',
+    ];
+    const pad2 = (value) => String(value).padStart(2, '0');
+    const whenText = `${dayNames[when.getUTCDay()]} ${monthNames[when.getUTCMonth()]} ${pad2(
+      when.getUTCDate()
+    )} ${pad2(when.getUTCHours())}:${pad2(when.getUTCMinutes())}:${pad2(
+      when.getUTCSeconds()
+    )} UTC ${when.getUTCFullYear()}`;
+    lines.push(
+      ';; Query time: 0 msec',
+      `;; SERVER: ${serverIp}#53(${serverIp}) (UDP)`,
+      `;; WHEN: ${whenText}`,
+      `;; MSG SIZE  rcvd: ${answers.length ? 74 : 108}`
+    );
+    return { ok: true, lines };
+  },
+
+  /**
+   * `getent` (#61 item 8): `hosts` resolves through /etc/hosts then the Pod's
+   * DNS search list + NetworkPolicy check, printing glibc's `%-15s %s` format;
+   * `passwd`/`group` read the Pod's files. Unknown names/databases fail.
+   * @param {string[]} args getent argv (command name stripped)
+   * @param {object} context `_podExecContext(pod, containerName)`
+   * @returns {{ok: boolean, lines: string[], exitCode?: number}}
+   */
+  _execGetent(args, context) {
+    const database = String(args[0] || '').toLowerCase();
+    const key = args[1];
+    const ok = (lines) => ({ ok: true, lines });
+    const formatHost = (address, canonical) => `${String(address).padEnd(15)} ${String(canonical)}`;
+    if (!database) {
+      return { ok: false, exitCode: 1, lines: ['getent: missing database argument'] };
+    }
+    if (database === 'hosts') {
+      const hostsText = String(context?.files?.get?.('/etc/hosts') || '');
+      const entries = [];
+      for (const line of hostsText.split('\n')) {
+        const trimmed = line.trim();
+        if (!trimmed || trimmed.startsWith('#')) continue;
+        const parts = trimmed.split(/\s+/);
+        if (parts.length < 2) continue;
+        entries.push({ address: parts[0], names: parts.slice(1) });
+      }
+      if (!key) {
+        // No key: enumerate the /etc/hosts entries (the optional real form).
+        return ok(entries.map((entry) => formatHost(entry.address, entry.names.join(' '))));
+      }
+      // /etc/hosts answers without touching the network (the early "own Pod
+      // hostname" case in glibc's files NSS module).
+      const fromHosts = entries.filter((entry) => entry.names.includes(key));
+      if (fromHosts.length) {
+        return ok(fromHosts.map((entry) => formatHost(entry.address, entry.names.join(' '))));
+      }
+      // Unknown name and DNS blocked are both a silent status 2.
+      if (this._execDnsBlocked(context)) return { ok: false, exitCode: 2, lines: [] };
+      const record = this._resolveClusterDnsRecord(key, context.namespace);
+      if (!record) return { ok: false, exitCode: 2, lines: [] };
+      if (record.cname) return ok([formatHost(record.cname, record.fqdn)]);
+      return ok(record.ips.map((ip) => formatHost(ip, record.fqdn)));
+    }
+    if (database === 'passwd' || database === 'group') {
+      const path = `/etc/${database}`;
+      const content = context?.files?.get?.(path);
+      if (content === undefined) {
+        return { ok: false, exitCode: 1, lines: [`getent: ${path}: No such file or directory`] };
+      }
+      const fileLines = String(content).replace(/\n$/, '').split('\n').filter(Boolean);
+      const lines = key
+        ? fileLines.filter((line) => line.split(':')[0] === String(key))
+        : fileLines;
+      if (!lines.length) return { ok: false, exitCode: 2, lines: [] };
+      return ok(lines);
+    }
+    return { ok: false, exitCode: 1, lines: [`Unknown database: ${database}`] };
   },
 
   /** Resolve a container path (`/etc/app`, `/etc/app/APP_MODE`) against `/`. */
@@ -13894,29 +14135,90 @@ Object.assign(CommandBar.prototype, {
   },
 
   /**
-   * Resolve a name the way cluster DNS (CoreDNS) would for `nslookup` (#60).
-   * Supported shapes, with the search-domain expansion a Pod gets from its
-   * `/etc/resolv.conf`: `<svc>.<ns>.svc.cluster.local`, `<svc>.<ns>.svc`,
-   * `<svc>.<ns>` and a bare `<svc>` (the exec Pod's namespace), each optionally
-   * with a trailing dot. Returns `null` when no Service matches (NXDOMAIN).
-   * @param {string} target queried name as typed by the user
-   * @param {string} [defaultNamespace] namespace of the exec Pod (bare names)
-   * @returns {{name: string, addresses: string[]}|null}
+   * True when a NetworkPolicy blocks this Pod's DNS egress (#61). The engine
+   * owns the policy evaluation (`SimulationTick.canResolveDNS`: egress to the
+   * openshift-dns pods on 5353); the CLI only gates nslookup/dig/getent.
+   * @param {object} context `_podExecContext(pod, containerName)`
+   * @returns {boolean}
    */
-  _resolveClusterDnsName(target, defaultNamespace = this.currentProject || 'default') {
+  _execDnsBlocked(context = {}) {
+    const sim = this.gameEngine?.simulation || this.gameEngine?.sim || null;
+    if (!sim || typeof sim.canResolveDNS !== 'function') return false;
+    if (!context || !context.pod) return false;
+    try {
+      const result = sim.canResolveDNS(context.pod);
+      return Boolean(result && result.allowed === false);
+    } catch {
+      return false;
+    }
+  },
+
+  /**
+   * Resolve a query through the Pod's `/etc/resolv.conf` search list the way
+   * glibc + CoreDNS do (#61). The search domains are
+   * `<ns>.svc.cluster.local svc.cluster.local cluster.local` with `options
+   * ndots:5`: names with 5+ dots (or a trailing dot) are tried verbatim first,
+   * everything else is expanded through the search list before the absolute
+   * form. `dig` opts out with `{search:false}` and only accepts absolute names.
+   * @param {string} target queried name as typed by the user
+   * @param {string} [defaultNamespace] namespace of the exec Pod
+   * @param {{search?: boolean, absoluteOnly?: boolean}} [options]
+   * @returns {{fqdn: string, ips: string[], cname: string|null}|null}
+   */
+  _resolveClusterDnsRecord(
+    target,
+    defaultNamespace = this.currentProject || 'default',
+    { search = true, absoluteOnly = false } = {}
+  ) {
     const original = String(target || '').trim();
     const name = original.replace(/\.+$/, '');
     if (!name) return null;
-    const labels = name.toLowerCase().split('.');
-    let serviceName = labels[0];
-    let namespace = defaultNamespace;
-    // Strip the Kubernetes DNS suffixes from the right, most specific first.
-    if (
+    const namespace = defaultNamespace || 'default';
+    const dots = (name.match(/\./g) || []).length;
+    const candidates = [];
+    if (original.endsWith('.') || dots >= 5) candidates.push(name);
+    if (search) {
+      for (const suffix of [
+        `${namespace}.svc.cluster.local`,
+        'svc.cluster.local',
+        'cluster.local',
+      ]) {
+        candidates.push(`${name}.${suffix}`);
+      }
+    }
+    if (!candidates.includes(name)) candidates.push(name);
+    for (const candidate of candidates) {
+      const record = this._lookupClusterDnsName(candidate, namespace, absoluteOnly);
+      if (record) return record;
+    }
+    return null;
+  },
+
+  /**
+   * Look up one fully-qualified Service name in the simulated cluster DNS zone.
+   * Accepts the same shapes a learner types (`<svc>.<ns>.svc.cluster.local`,
+   * `<svc>.<ns>.svc`, `<svc>.<ns>`, bare `<svc>`) because the search-list
+   * expansion happens in `_resolveClusterDnsRecord`; `absoluteOnly` restricts
+   * the query to the cluster zone itself (`dig` without `+search`).
+   * @param {string} name
+   * @param {string} defaultNamespace
+   * @param {boolean} absoluteOnly
+   * @returns {{fqdn: string, ips: string[], cname: string|null}|null}
+   */
+  _lookupClusterDnsName(name, defaultNamespace, absoluteOnly = false) {
+    const labels = String(name || '')
+      .toLowerCase()
+      .split('.');
+    if (!labels.length || labels.some((label) => !label)) return null;
+    const zoneForm =
       labels.length === 5 &&
       labels[2] === 'svc' &&
       labels[3] === 'cluster' &&
-      labels[4] === 'local'
-    ) {
+      labels[4] === 'local';
+    if (absoluteOnly && !zoneForm) return null;
+    let serviceName = labels[0];
+    let namespace = defaultNamespace;
+    if (zoneForm) {
       namespace = labels[1];
     } else if (labels.length === 3 && labels[2] === 'svc') {
       namespace = labels[1];
@@ -13928,24 +14230,49 @@ Object.assign(CommandBar.prototype, {
     if (!serviceName || !namespace) return null;
     const service = this.cluster?.getByName?.('Service', serviceName, namespace);
     if (!service) return null;
-    const nameLine = original;
+    const fqdn = `${serviceName}.${namespace}.svc.cluster.local`;
     // ExternalName Services answer with their CNAME target; headless Services
-    // (`clusterIP: None`) answer with every ready endpoint Pod IP, one Address
-    // line per Pod like real nslookup.
+    // (`clusterIP: None`) answer every ready endpoint Pod IP, one Address line
+    // per Pod like real nslookup; everything else answers the Service ClusterIP.
     if (service.spec?.type === 'ExternalName') {
       const externalName = String(service.spec?.externalName || '').replace(/\.+$/, '');
-      return externalName ? { name: nameLine, addresses: [`Address: ${externalName}`] } : null;
+      return externalName ? { fqdn, ips: [], cname: externalName } : null;
     }
     const clusterIP = service.spec?.clusterIP;
     if (!clusterIP || clusterIP === 'None') {
       const pods = (this.cluster?.getServiceEndpoints?.(service) || []).sort((a, b) =>
         String(a.metadata?.name).localeCompare(String(b.metadata?.name))
       );
-      const ips = pods.map((pod) => String(pod.status?.podIP || pod.ip || '')).filter(Boolean);
+      const ips = [
+        ...new Set(pods.map((pod) => String(pod.status?.podIP || pod.ip || '')).filter(Boolean)),
+      ];
       if (!ips.length) return null;
-      return { name: nameLine, addresses: [...new Set(ips)].map((ip) => `Address: ${ip}`) };
+      return { fqdn, ips, cname: null };
     }
-    return { name: nameLine, addresses: [`Address: ${clusterIP}`] };
+    return { fqdn, ips: [String(clusterIP)], cname: null };
+  },
+
+  /**
+   * The kubelet-managed Pod `/etc/hosts` file (#62 C): the standard
+   * Kubernetes-managed header/loopback lines plus the Pod's own IP + name, and
+   * no Service entries (real kubelet does not add `kubernetes.default.svc`).
+   * @param {object} pod
+   * @returns {string} file content (trailing newline included)
+   */
+  _podHostsFile(pod) {
+    const podName = pod?.metadata?.name || 'pod';
+    const podIP = String(pod?.status?.podIP || pod?.status?.podIp || '').trim();
+    const lines = [
+      '# Kubernetes-managed hosts file.',
+      '127.0.0.1\tlocalhost',
+      '::1\tlocalhost ip6-localhost ip6-loopback',
+      'fe00::0\tip6-localnet',
+      'fe00::0\tip6-mcastprefix',
+      'fe00::1\tip6-allnodes',
+      'fe00::2\tip6-allrouters',
+    ];
+    if (podIP) lines.push(`${podIP}\t${podName}`);
+    return `${lines.join('\n')}\n`;
   },
 
   /**
@@ -14002,10 +14329,8 @@ Object.assign(CommandBar.prototype, {
       addDir(standardDir);
     }
     addFile('/etc/hostname', `${pod.metadata?.name || 'pod'}\n`);
-    addFile(
-      '/etc/hosts',
-      '127.0.0.1\tlocalhost\n::1\tlocalhost ip6-localhost ip6-loopback\n172.30.0.1\tkubernetes.default.svc\n'
-    );
+    // #62 C: the kubelet-managed /etc/hosts (own IP + Pod name; no Service IP).
+    addFile('/etc/hosts', this._podHostsFile(pod));
     // Every real Pod's /etc/resolv.conf points at the cluster DNS Service
     // ClusterIP — that is `openshift-dns/dns-default` 172.30.0.10 on OCP. The
     // command is the first thing a learner runs when lab 13 breaks DNS (#58).
@@ -14018,6 +14343,8 @@ Object.assign(CommandBar.prototype, {
       'NAME="Red Hat Enterprise Linux"\nVERSION="9.4 (Plow)"\nID="rhel"\nID_LIKE="fedora"\nVERSION_ID="9.4"\nPRETTY_NAME="Red Hat Enterprise Linux 9.4 (Plow)"\n'
     );
     addFile('/etc/passwd', 'root:x:0:0:root:/root:/bin/bash\n');
+    // `getent group` reads the same file the image would ship (#61 item 8).
+    addFile('/etc/group', 'root:x:0:\n');
     for (const mount of container.volumeMounts || []) {
       const mountPath = String(mount?.mountPath || '').replace(/\/+$/, '');
       if (!mountPath.startsWith('/')) continue;
@@ -18542,8 +18869,13 @@ Object.assign(CommandBar.prototype, {
           ]
         : [];
     if (command) {
-      const output = this._simulateExecCommand(command, pod, containerName);
-      return this._ok([...lines, ...output].join('\n'));
+      // #62 A: same remote exit-status contract as `oc exec` (foobar => 127 and
+      // `&&`/`||` chaining), shared through `_simulateExecCommand`.
+      const { lines: output, exitCode } = this._simulateExecCommand(command, pod, containerName);
+      const execLines = [...lines, ...output];
+      if (exitCode) execLines.push(`command terminated with exit code ${exitCode}`);
+      const message = execLines.join('\n');
+      return exitCode ? this._err(message) : this._ok(message);
     }
     return this._ok(
       [
@@ -18630,8 +18962,7 @@ Object.assign(CommandBar.prototype, {
     if (/etc\/os-release$/.test(target))
       return 'NAME="Red Hat Enterprise Linux"\nVERSION="9.4 (Plow)"\nID="rhel"\nID_LIKE="fedora"\n';
     if (/etc\/hostname$/.test(target)) return `${pod.metadata?.name || 'pod'}\n`;
-    if (/etc\/hosts$/.test(target))
-      return '127.0.0.1\tlocalhost\n172.30.0.1\tkubernetes.default.svc\n';
+    if (/etc\/hosts$/.test(target)) return this._podHostsFile(pod);
     return `simulated content of ${target} from pod/${pod.metadata?.name}\n`;
   },
 

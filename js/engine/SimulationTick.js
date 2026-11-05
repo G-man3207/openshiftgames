@@ -171,7 +171,12 @@ const ROUTER_DEPLOYMENT_NAME = 'router-default';
  */
 const DNS_DEFAULT_SERVICE_NAME = 'dns-default';
 const DNS_DEFAULT_SERVICE_IP = '172.30.0.10';
-/** Container port the DNS pods listen on inside the pod network (not :53). */
+/**
+ * Resolved container port the DNS pods listen on inside the pod network (not
+ * :53). The dns-default Service exposes named targetPorts (`dns`/`dns-tcp` →
+ * 5353, `metrics` → kube-rbac-proxy 9154, #62E); this constant is the resolved
+ * DNS port NetworkPolicy checks must allow (5353, never 53).
+ */
 const DNS_DEFAULT_SERVICE_TARGET_PORT = 5353;
 const ROUTER_INTERNAL_SERVICE_NAME = 'router-internal-default';
 /** Label the ingress operator puts on the default router Pods (and selects on). */
@@ -719,20 +724,24 @@ export class SimulationTick {
       clusterIP: DNS_DEFAULT_SERVICE_IP,
       labels: { 'dns.operator.openshift.io/owning-dns': 'default' },
       selector: { 'dns.operator.openshift.io/daemonset-dns': 'default' },
+      // Real 4.22 spec (issue #62E): the Service ports use NAMED targetPorts
+      // (`dns`/`dns-tcp` on the CoreDNS container, `metrics` on the
+      // kube-rbac-proxy sidecar), not the 5353/9154 numbers `oc describe`
+      // shows as resolved endpoints.
       ports: [
         {
           name: 'dns',
           port: 53,
           protocol: 'UDP',
-          targetPort: DNS_DEFAULT_SERVICE_TARGET_PORT,
+          targetPort: 'dns',
         },
         {
           name: 'dns-tcp',
           port: 53,
           protocol: 'TCP',
-          targetPort: DNS_DEFAULT_SERVICE_TARGET_PORT,
+          targetPort: 'dns-tcp',
         },
-        { name: 'metrics', port: 9154, protocol: 'TCP', targetPort: 9154 },
+        { name: 'metrics', port: 9154, protocol: 'TCP', targetPort: 'metrics' },
       ],
     });
     this._ensurePlatformService({
@@ -1230,7 +1239,7 @@ export class SimulationTick {
     const hostIP = seed.node.status?.addresses?.[0]?.address || '10.0.0.1';
     pod.status.hostIP = hostIP;
     // hostNetwork Pods report the node IP as their Pod IP.
-    pod.status.podIP = podSpec.hostNetwork ? hostIP : this._generatePodIP();
+    pod.status.podIP = podSpec.hostNetwork ? hostIP : this._generatePodIP(seed.node);
     pod.status.conditions = [];
     pod.setCondition('PodScheduled', 'True', 'Scheduled', `Assigned to ${nodeName}`);
     pod.setCondition('Initialized', 'True', 'PodInitialized', '');
@@ -1380,7 +1389,7 @@ export class SimulationTick {
     // router Service endpoints (#58).
     pod.status.podIP =
       pod.status.podIP ||
-      (pod.spec.hostNetwork === true ? pod.status.hostIP : this._generatePodIP());
+      (pod.spec.hostNetwork === true ? pod.status.hostIP : this._generatePodIP(node));
     pod.setCondition(
       'PodScheduled',
       'True',
@@ -8814,8 +8823,72 @@ export class SimulationTick {
 
   // ── Helpers ────────────────────────────────────────────────────────────
 
-  _generatePodIP() {
-    return `10.244.${Math.floor(Math.random() * 255)}.${Math.floor(Math.random() * 254) + 1}`;
+  /**
+   * Generate a Pod-network IP from the Pod's Node `spec.podCIDR` (issue #62B).
+   *
+   * A real OpenShift 4.22 cluster runs OVN-Kubernetes with the default
+   * `clusterNetwork` 10.128.0.0/14 and hostPrefix /23, so every Node owns a /23
+   * (`oc get node -o yaml` → `spec.podCIDR`) and the kubelet/OVN allocates each
+   * Pod IP inside that Node's /23. This models it: parse the Node's podCIDR,
+   * allocate the host octet in 2–254 (never the network or gateway address) and
+   * skip addresses already assigned to another Pod so two Pods cannot share an
+   * IP.
+   *
+   * When the Node (or its CIDR) is unknown — e.g. a Pod bound by an incident
+   * handler — fall back to an address in the 10.128–10.131 clusterNetwork range.
+   *
+   * @param {object|string|null} [nodeOrName] Node resource or Node name
+   * @returns {string}
+   */
+  _generatePodIP(nodeOrName = null) {
+    const node =
+      nodeOrName && typeof nodeOrName === 'object'
+        ? nodeOrName
+        : nodeOrName
+          ? this.cluster.getByName('Node', String(nodeOrName), '')
+          : null;
+    const used = new Set(
+      this.cluster
+        .getByKind('Pod')
+        .map((pod) => pod?.status?.podIP)
+        .filter(Boolean)
+    );
+    const cidrMatch = String(node?.spec?.podCIDR || '').match(
+      /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})\/(\d{1,2})$/
+    );
+    if (cidrMatch) {
+      const prefix = Number(cidrMatch[5]);
+      const hostBits = 32 - prefix;
+      if (hostBits >= 3 && hostBits <= 24) {
+        const network =
+          this._ipToInt([
+            Number(cidrMatch[1]),
+            Number(cidrMatch[2]),
+            Number(cidrMatch[3]),
+            Number(cidrMatch[4]),
+          ]) &
+          ((0xffffffff << hostBits) >>> 0);
+        // Host octet 2–254: a subset of the Node's subnet that never lands on
+        // the network/broadcast address (real OVN also starts allocating at .2).
+        const lastOctet = Math.min(254, 2 ** hostBits - 2);
+        const candidateCount = lastOctet - 2 + 1;
+        const start = Math.floor(Math.random() * candidateCount);
+        for (let attempt = 0; attempt < candidateCount; attempt += 1) {
+          const candidate = this._intToIp(
+            (network + 2 + ((start + attempt) % candidateCount)) >>> 0
+          );
+          if (!used.has(candidate)) return candidate;
+        }
+      }
+    }
+    // No Node/CIDR information: any address in the 10.128.0.0/14 clusterNetwork.
+    for (let attempt = 0; attempt < 1024; attempt += 1) {
+      const candidate = `10.${128 + Math.floor(Math.random() * 4)}.${Math.floor(
+        Math.random() * 256
+      )}.${2 + Math.floor(Math.random() * 253)}`;
+      if (!used.has(candidate)) return candidate;
+    }
+    return '10.128.0.10';
   }
 
   _generateExternalIP() {

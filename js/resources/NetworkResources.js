@@ -152,16 +152,31 @@ function endpointAddress(endpoint) {
 /**
  * EndpointSlice port for a Service port: the resolved targetPort, as a number
  * (named target ports are resolved against the endpoint Pod's container ports).
+ *
+ * A named targetPort is looked up in every container of the endpoint Pod and
+ * the LAST matching container port wins. That is what the real EndpointSlice
+ * controller does for the 4.22 `dns-default` Pods: both the CoreDNS container
+ * and the `kube-rbac-proxy` sidecar declare a `metrics` port, and the Service's
+ * `metrics` targetPort must resolve to the sidecar's 9154, not CoreDNS' 9153
+ * (issue #62E). Numeric target ports are returned verbatim.
+ *
+ * @param {{targetPort?: number|string, port?: number}} port Service port
+ * @param {{spec?: {containers?: object[]}}} [endpoint] ready endpoint Pod
+ * @returns {number|null}
  */
-function resolveEndpointPort(port, endpoint) {
+export function resolveEndpointPort(port, endpoint) {
   const target = port?.targetPort ?? port?.port;
   if (typeof target === 'number' && Number.isFinite(target)) return target;
   const text = String(target ?? '');
   if (/^\d+$/.test(text)) return Number(text);
+  let namedPort = null;
   for (const container of endpoint?.spec?.containers || []) {
-    const match = (container.ports || []).find((entry) => entry.name === text);
-    if (match && Number.isFinite(Number(match.containerPort))) return Number(match.containerPort);
+    for (const entry of container.ports || []) {
+      if (entry.name === text && Number.isFinite(Number(entry.containerPort)))
+        namedPort = Number(entry.containerPort);
+    }
   }
+  if (namedPort !== null) return namedPort;
   const servicePort = Number(port?.port);
   return Number.isFinite(servicePort) ? servicePort : null;
 }
