@@ -9,8 +9,9 @@
  * `ClusterState.clear()` re-seeds the default OpenShift baseline (Projects,
  * default ServiceAccounts, SCCs, kubeadmin/admin, ClusterOperators,
  * ClusterVersion, OAuth, ImageStreams, project-request Template). SandboxMode
- * deliberately KEEPS that baseline and only adds worker Nodes on top, instead
- * of fighting the reseed with a custom namespace.
+ * deliberately KEEPS that baseline and only adds platform Nodes on top
+ * (worker-0/worker-1/master-0 from the shared catalog, #53F), instead of
+ * fighting the reseed with a custom namespace.
  */
 
 import {
@@ -22,6 +23,7 @@ import {
   toManifestYAML,
 } from '../data/kindRegistry.js';
 import { MANIFEST_FILES } from '../data/ManifestFiles.js';
+import { catalogNode } from '../engine/ClusterState.js';
 import {
   createObjectiveProgress,
   evaluateObjectives,
@@ -105,17 +107,19 @@ class SandboxMode {
 
     const count = Math.max(1, Number(nodeCount) || 3);
     this.nodeCount = count;
-    for (let i = 1; i <= count; i += 1) {
-      const name = `sandbox-node-${i}`;
+    // Same machine names as every other mode (#53F): worker-0, worker-1,
+    // master-0 (2-node clusters stop after worker-1). A 3-node cluster has a
+    // control-plane node, exactly like the campaign.
+    for (let index = 0; index < count; index += 1) {
+      const machine = catalogNode(index);
       const node = clusterState.addResource({
         kind: 'Node',
-        name,
+        name: machine.name,
         metadata: {
-          name,
+          name: machine.name,
           labels: {
-            role: 'worker',
-            'node-role.kubernetes.io/worker': '',
-            'topology.kubernetes.io/zone': `zone-${(i % 3) + 1}`,
+            ...machine.labels,
+            'topology.kubernetes.io/zone': `zone-${(index % 3) + 1}`,
           },
         },
         spec: { cpu: '16', memory: '32Gi', pods: 250 },

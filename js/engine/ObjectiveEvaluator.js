@@ -1857,9 +1857,25 @@ function evaluateOperator(obj, c) {
       `${resourceName(subscription)} ${spec.name || ''} ${spec.packageName || ''}`.toLowerCase();
     return haystack.includes(wanted);
   });
-  const succeeded = matching.filter(
-    (subscription) => resourceStatus(subscription).phase === 'Succeeded'
-  ).length;
+  const succeeded = matching.filter((subscription) => {
+    const status = resourceStatus(subscription);
+    // Fast path: the Subscription itself reports Succeeded.
+    if (status.phase === 'Succeeded') return true;
+    // Real OLM (#53D): once a channel upgrade is resolved the Subscription
+    // reports state/phase UpgradePending even though the PREVIOUSLY installed
+    // CSV keeps running — the operator IS installed. Count it when
+    // status.installedCSV names a Succeeded CSV in the same namespace, so the
+    // "install the operator" objective stays observable for a pinned Manual
+    // install (L18) whose upgrade plan is still waiting for approval.
+    const installedCSV = String(status.installedCSV || '');
+    if (!installedCSV) return false;
+    return listKind(c.clusterState, 'ClusterServiceVersion').some(
+      (csv) =>
+        resourceName(csv) === installedCSV &&
+        resourceNamespace(csv) === resourceNamespace(subscription) &&
+        resourceStatus(csv).phase === 'Succeeded'
+    );
+  }).length;
   const csvSucceeded = listKind(c.clusterState, 'ClusterServiceVersion').filter((csv) => {
     if (namespaceFilter && resourceNamespace(csv) !== namespaceFilter) return false;
     const name = resourceName(csv).toLowerCase();

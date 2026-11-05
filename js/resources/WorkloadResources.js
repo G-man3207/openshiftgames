@@ -153,7 +153,16 @@ function describeTimestampMs(event) {
 
 function describeEventFrom(event) {
   const source = String(event?.source || event?.reportingComponent || event?.from || '');
+  const reason = String(event?.reason || '');
   if (source) {
+    // The scheduler — not the kubelet — reports Pod scheduling events in a real
+    // cluster (`oc describe pod` FROM column: `default-scheduler` for
+    // Scheduled/FailedScheduling, `kubelet` for Pulling/Pulled/Created/
+    // Started). Pod event records use the Kind as their source, so map on the
+    // reason first.
+    if (source === 'Pod' || source === 'kubelet') {
+      if (reason === 'Scheduled' || reason === 'FailedScheduling') return 'default-scheduler';
+    }
     // Resource-level event records use the Kind as source; real describe shows
     // the component that reported the event.
     const component = {

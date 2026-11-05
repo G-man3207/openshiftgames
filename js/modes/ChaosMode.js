@@ -16,7 +16,7 @@
  */
 
 import { INCIDENT_CATEGORIES } from '../data/IncidentDefs.js';
-import { OPENSHIFT_VERSION } from '../engine/ClusterState.js';
+import { OPENSHIFT_VERSION, catalogNode } from '../engine/ClusterState.js';
 
 const CHAOS_STATE = {
   IDLE: 'idle',
@@ -38,11 +38,17 @@ const INITIAL_CLUSTER = {
       spec: { displayName: 'Platform services', description: 'Workers, jobs and batch processing' },
     },
   ],
-  nodes: [
-    { kind: 'Node', name: 'chaos-node-1', spec: { cpu: '8', memory: '16Gi' } },
-    { kind: 'Node', name: 'chaos-node-2', spec: { cpu: '8', memory: '16Gi' } },
-    { kind: 'Node', name: 'chaos-node-3', spec: { cpu: '8', memory: '16Gi' } },
-  ],
+  // Same machine names/roles as every other mode (#53F): worker-0, worker-1,
+  // master-0 from the shared ClusterState catalog.
+  nodes: [0, 1, 2].map((index) => {
+    const machine = catalogNode(index);
+    return {
+      kind: 'Node',
+      name: machine.name,
+      labels: machine.labels,
+      spec: { cpu: '8', memory: '16Gi' },
+    };
+  }),
   workloads: [
     {
       kind: 'Deployment',

@@ -277,12 +277,18 @@ export class SimulationTick {
         });
       });
 
-      // OAuth: provider changes need a simulated oauth rollout.
-      eventBus.on('cluster:added:OAuth', () => this._scheduleOAuthRollout());
-      eventBus.on('cluster:modified:OAuth', () => this._scheduleOAuthRollout());
+      // OAuth: a CONFIG change needs a simulated oauth rollout (issue #54f).
       // The authentication operator also watches the htpasswd Secret referenced
       // by the identity provider: changing its data (password rotation, adding a
       // user) triggers the same oauth-openshift rollout, so logins must wait.
+      //
+      // A fresh cluster must stay settled: ClusterState.clear()/mode setup
+      // re-add the SAME baseline OAuth singleton, and that must not start a
+      // rollout (it used to, so a fresh sandbox showed authentication
+      // PROGRESSING=True immediately). The config signature comparison in
+      // {@link _noteOAuthConfigChange} filters those no-op re-seeds out.
+      eventBus.on('cluster:added:OAuth', () => this._noteOAuthConfigChange());
+      eventBus.on('cluster:modified:OAuth', () => this._noteOAuthConfigChange());
       for (const eventName of ['cluster:added:Secret', 'cluster:modified:Secret']) {
         eventBus.on(eventName, (data) => {
           const resource = data?.resource;
@@ -291,7 +297,7 @@ export class SimulationTick {
           const provider = this.cluster.getAuthProviderConfig?.();
           if (!provider) return;
           if (resource.metadata?.name !== provider.secretName) return;
-          this._scheduleOAuthRollout();
+          this._noteOAuthConfigChange();
         });
       }
 
@@ -362,6 +368,12 @@ export class SimulationTick {
     this._oauthPending = null;
     this._sccDirty = false;
     this._quotaViolationNamespaces = new Set();
+    /**
+     * Signature of the last observed OAuth configuration (#54f). The cluster
+     * starts settled: only a real identityProviders/tokenConfig or htpasswd
+     * Secret DATA change differs from this signature and triggers a rollout.
+     */
+    this._oauthConfigSignature = this._oauthSignature();
   }
 
   // ── Tick pipeline ───────────────────────────────────────────────────────
@@ -381,6 +393,7 @@ export class SimulationTick {
     // Core OpenShift controllers.
     this._tickProjects(dt);
     this._tickNodes(dt);
+    this._ensurePlatformWorkloads();
     this._tickLimitRanges(dt);
     this._tickQuotaEnforcement(dt);
     this._tickPodScheduling(dt);
@@ -589,6 +602,203 @@ export class SimulationTick {
     return this._syncNodeNotReadyTaints(node, false);
   }
 
+  // ── OpenShift platform workloads (issue #53G) ───────────────────────────
+  //
+  // A real OCP 4.22 cluster ships controller-owned work that a player sees
+  // immediately: two router-default Pods in openshift-ingress, and a
+  // dns-default + node-resolver DaemonSet Pod on every node. The namespaces /
+  // Secrets are seeded by ClusterState; the workload Pods are seeded here so
+  // they exist in every mode and are visible to `oc get pods -n
+  // openshift-ingress|openshift-dns` (and to lab 13's DNS egress lesson).
+  //
+  // They are static seed Pods (bound to a node, Running/Ready, no controller
+  // owner) so the scheduling / GC / image-pull controllers never churn them.
+  // The reconcile is idempotent: it only creates a Pod when a Pod with that
+  // name does not exist, so it never fabricates duplicates on every tick.
+  _ensurePlatformWorkloads() {
+    const nodes = this.cluster
+      .getByKind('Node')
+      .filter((node) => node.status?.phase !== 'Terminating' && !node.metadata?.deletionTimestamp);
+    if (nodes.length === 0) return; // safe before a mode seeds its Nodes
+    this._ensureRouterPods(nodes);
+    this._ensureDnsPods(nodes);
+  }
+
+  /** router-default Pods: one per worker node, at least two (issue #53G). */
+  _ensureRouterPods(nodes) {
+    if (!this.cluster.getByName('Project', ROUTER_NAMESPACE, '')) return;
+    const workers = nodes.filter(
+      (node) =>
+        node.metadata?.labels?.['node-role.kubernetes.io/worker'] !== undefined ||
+        /^worker-/.test(String(node.metadata?.name || ''))
+    );
+    const candidates = workers.length > 0 ? workers : nodes;
+    // A real 4.22 ingress operator runs at least two router-default replicas.
+    const targets = candidates.slice(0, 2);
+    for (const node of targets) {
+      const nodeName = node.metadata.name;
+      const token = (this._hashString(`router-default:${nodeName}`) >>> 0).toString(16);
+      const suffix = (this._hashString(`router-suffix:${nodeName}`) >>> 0)
+        .toString(36)
+        .padStart(5, '0')
+        .slice(-5);
+      const name = `router-default-${token.slice(0, 10).padEnd(10, '0')}-${suffix}`;
+      if (this.cluster.getByName('Pod', name, ROUTER_NAMESPACE)) continue;
+      this._seedPlatformPod({
+        name,
+        namespace: ROUTER_NAMESPACE,
+        node,
+        labels: {
+          app: 'router',
+          router: 'router-default',
+          'ingress.operator.openshift.io/default-router': 'true',
+        },
+        container: {
+          name: 'router',
+          image: 'quay.io/openshift/origin-haproxy-router:4.22',
+          ports: [
+            { name: 'http', containerPort: 80, hostPort: 80, protocol: 'TCP' },
+            { name: 'https', containerPort: 443, hostPort: 443, protocol: 'TCP' },
+            { name: 'metrics', containerPort: 1936, protocol: 'TCP' },
+          ],
+          resources: {
+            requests: { cpu: '100m', memory: '256Mi' },
+            limits: { cpu: '500m', memory: '512Mi' },
+          },
+        },
+      });
+    }
+  }
+
+  /** dns-default + node-resolver DaemonSet Pods, one per node (issue #53G). */
+  _ensureDnsPods(nodes) {
+    if (!this.cluster.getByName('Project', 'openshift-dns', '')) return;
+    for (const node of nodes) {
+      const nodeName = node.metadata.name;
+      const suffix = (salt) =>
+        (this._hashString(`${salt}:${nodeName}`) >>> 0).toString(36).padStart(5, '0').slice(-5);
+      const dnsName = `dns-default-${suffix('dns-default')}`;
+      if (!this.cluster.getByName('Pod', dnsName, 'openshift-dns')) {
+        this._seedPlatformPod({
+          name: dnsName,
+          namespace: 'openshift-dns',
+          node,
+          labels: {
+            app: 'dns-default',
+            'dns.operator.openshift.io/daemonset-dns': 'default',
+          },
+          container: {
+            name: 'dns',
+            image: 'quay.io/openshift/origin-coredns:4.22',
+            ports: [
+              { name: 'dns', containerPort: 5353, hostPort: 5353, protocol: 'UDP' },
+              { name: 'dns-tcp', containerPort: 5353, hostPort: 5353, protocol: 'TCP' },
+              { name: 'metrics', containerPort: 9153, protocol: 'TCP' },
+            ],
+            resources: {
+              requests: { cpu: '50m', memory: '64Mi' },
+              limits: { cpu: '200m', memory: '256Mi' },
+            },
+          },
+        });
+      }
+      const resolverName = `node-resolver-${suffix('node-resolver')}`;
+      if (!this.cluster.getByName('Pod', resolverName, 'openshift-dns')) {
+        this._seedPlatformPod({
+          name: resolverName,
+          namespace: 'openshift-dns',
+          node,
+          labels: {
+            app: 'node-resolver',
+            'dns.operator.openshift.io/daemonset-node-resolver': 'default',
+          },
+          container: {
+            name: 'dns-node-resolver',
+            image: 'quay.io/openshift/origin-node-resolver:4.22',
+            ports: [{ name: 'metrics', containerPort: 9113, protocol: 'TCP' }],
+            resources: {
+              requests: { cpu: '10m', memory: '16Mi' },
+              limits: { cpu: '50m', memory: '64Mi' },
+            },
+          },
+        });
+      }
+    }
+  }
+
+  /**
+   * Create one Running/Ready platform seed Pod bound to a node, with the full
+   * status + kubelet lifecycle event stream a real cluster shows. Static: no
+   * ownerReferences, so the RS/GC controllers leave it alone.
+   * @param {{name: string, namespace: string, node: object, labels: object, container: object}} seed
+   * @returns {object|null}
+   */
+  _seedPlatformPod(seed) {
+    const nodeName = seed.node.metadata.name;
+    const now = new Date().toISOString();
+    const pod = this.cluster.addResource({
+      kind: 'Pod',
+      metadata: {
+        name: seed.name,
+        namespace: seed.namespace,
+        labels: { ...seed.labels },
+        annotations: {
+          'openshift.io/scc': 'hostnetwork',
+          'k8s.v1.cni.cncf.io/network-status': '{}',
+        },
+      },
+      spec: {
+        nodeName,
+        hostNetwork: true,
+        serviceAccountName: 'default',
+        containers: [deepClone(seed.container)],
+      },
+      status: { phase: 'Running', startTime: now },
+    });
+    if (!pod) return null;
+    pod._nodeBound = true;
+    pod._imagePullDone = true;
+    pod._pullStarted = true;
+    pod._sccEvaluated = true;
+    pod._readyAt = this.gameSeconds;
+    pod.status.podIP = this._generatePodIP();
+    pod.status.hostIP = seed.node.status?.addresses?.[0]?.address || '10.0.0.1';
+    pod.status.conditions = [];
+    pod.setCondition('PodScheduled', 'True', 'Scheduled', `Assigned to ${nodeName}`);
+    pod.setCondition('Initialized', 'True', 'PodInitialized', '');
+    pod.setCondition('ContainersReady', 'True', 'ContainersReady', '');
+    pod.setCondition('Ready', 'True', 'PodReady', '');
+    pod.status.containerStatuses = (pod.spec.containers || []).map((container) => ({
+      name: container.name,
+      image: container.image,
+      ready: true,
+      started: true,
+      restartCount: 0,
+      state: { running: { startedAt: now } },
+      lastState: {},
+      resources: {
+        cpu: 0,
+        memory: 0,
+        cpuLimit: parseCpuMillis(container.resources?.limits?.cpu || '0'),
+        memoryLimit: parseMemoryMi(container.resources?.limits?.memory || '0'),
+        cpuRequest: parseCpuMillis(container.resources?.requests?.cpu || '100m'),
+        memoryRequest: parseMemoryMi(container.resources?.requests?.memory || '128Mi'),
+      },
+    }));
+    const container = pod.spec.containers?.[0] || {};
+    pod.recordEvent(
+      'Normal',
+      'Scheduled',
+      `Successfully assigned ${seed.namespace}/${seed.name} to ${nodeName}`
+    );
+    pod.recordEvent('Normal', 'Pulling', `Pulling image "${container.image || ''}"`);
+    pod.recordEvent('Normal', 'Pulled', `Successfully pulled image "${container.image || ''}"`);
+    pod.recordEvent('Normal', 'Created', `Created container ${container.name || 'main'}`);
+    pod.recordEvent('Normal', 'Started', `Started container ${container.name || 'main'}`);
+    this.cluster.update(pod.uid, pod);
+    return pod;
+  }
+
   _tickPodScheduling(dt) {
     const pods = this.cluster.getByKind('Pod');
     const nodes = this.cluster.getByKind('Node');
@@ -730,6 +940,17 @@ export class SimulationTick {
       ) {
         this._initContainerStatuses(pod);
       }
+      // Real kubelet event stream (#54e): Pulling appears once when the image
+      // pull starts, then Pulled and Created for each container. The order is
+      // Scheduled → Pulling → Pulled → Created → Started; there is no kubelet
+      // `Ready` event (the Pod Ready condition is status, not an event) and no
+      // `PhaseChange` event.
+      if (!pod._pullStarted) {
+        pod._pullStarted = true;
+        for (const container of containers) {
+          pod.recordEvent('Normal', 'Pulling', `Pulling image "${container.image || ''}"`);
+        }
+      }
       const results = containers.map((container) => this._resolveContainerImagePull(container));
       const failure = results.find((result) => !result.ok);
       if (!failure) {
@@ -748,11 +969,16 @@ export class SimulationTick {
             containers.map((container) => container.name).join(' ') +
             ']'
         );
-        pod.recordEvent(
-          'Normal',
-          'Pulled',
-          `Successfully pulled image "${containers[0]?.image || ''}"`
-        );
+        for (const container of containers) {
+          pod.recordEvent(
+            'Normal',
+            'Pulled',
+            `Successfully pulled image "${container.image || ''}"`
+          );
+        }
+        for (const container of containers) {
+          pod.recordEvent('Normal', 'Created', `Created container ${container.name}`);
+        }
         this.cluster.update(pod.uid, pod);
         continue;
       }
@@ -1292,11 +1518,13 @@ export class SimulationTick {
         if (status.state.running) {
           anyRunning = true;
           // Containers with a readinessProbe are owned by _tickHealthChecks:
-          // never auto-ready them here (SIM-019).
+          // never auto-ready them here (SIM-019). Becoming Ready is a status
+          // condition change, NOT a kubelet event (issue #54e: no `Ready`
+          // event reason — real kubelet emits Scheduled/Pulling/Pulled/
+          // Created/Started).
           const startupPending = Boolean(container.startupProbe) && !status._startupComplete;
           if (!status.ready && status.started && !container.readinessProbe && !startupPending) {
             status.ready = true;
-            pod.recordEvent('Normal', 'Ready', `Container ${status.name} is ready`);
           }
         }
         if (!status.ready) allReady = false;
@@ -1462,7 +1690,6 @@ export class SimulationTick {
             );
           } else if (ready && !status.ready) {
             status.ready = true;
-            pod.recordEvent('Normal', 'Ready', `Container ${status.name} is ready`);
           }
         }
       }
@@ -3646,8 +3873,16 @@ export class SimulationTick {
         reason = 'ServiceNotFound';
         message = `service "${route.spec.to.name}" not found`;
       } else {
-        const endpoints = this.cluster.getServiceEndpoints(service);
-        if (endpoints.length > 0) {
+        // Issue #52: Route ADMISSION is a host/path-ownership and TLS/config
+        // check only. A Service with NO ready endpoints stays Admitted=True —
+        // the HAProxy router simply answers 503 for that host. The old
+        // "no endpoints available" ServiceUnavailable admission reason made the
+        // Route look broken when the real fault is the Service selector.
+        const claim = this._routeHostClaimConflict(route, host);
+        if (claim) {
+          reason = 'HostAlreadyClaimed';
+          message = claim.message;
+        } else {
           admitted = true;
           reason = 'Accepted';
           message = 'The route has been admitted by the router';
@@ -3708,6 +3943,66 @@ export class SimulationTick {
         });
       }
     }
+  }
+
+  /**
+   * Host-ownership admission check (OpenShift router `UniqueHost` plugin).
+   *
+   * The router requires a unique host+path claim: with the default
+   * `namespaceOwnership: Strict` route admission the OLDEST route for a
+   * host/path combination is admitted and later claims report
+   * `Admitted=False, reason=HostAlreadyClaimed` with the router's own wording
+   * ("route X already exposes H and is older" / "a route in another namespace
+   * holds H and is older than X"). Deleting the owner admits the waiting route
+   * on the next reconcile.
+   *
+   * @param {object} route
+   * @param {string} host
+   * @returns {{owner: object, message: string}|null}
+   */
+  _routeHostClaimConflict(route, host) {
+    const namespace = route?.metadata?.namespace || '';
+    const path = this._routeAdmissionPath(route);
+    const claims = [route];
+    for (const other of this.cluster.getByKind('Route')) {
+      if (other === route) continue;
+      if (this.cluster.getRouteHost(other) !== host) continue;
+      const otherNamespace = other.metadata?.namespace || '';
+      const otherPath = this._routeAdmissionPath(other);
+      // Different namespaces always conflict under Strict ownership; within one
+      // namespace only a duplicate host+path is a conflict.
+      const conflicts =
+        otherNamespace !== namespace || (otherPath === path && otherNamespace === namespace);
+      if (conflicts) claims.push(other);
+    }
+    if (claims.length < 2) return null;
+    claims.sort((left, right) => this._compareRouteClaims(left, right));
+    const owner = claims[0];
+    if (owner === route) return null;
+    const sameNamespace = (owner.metadata?.namespace || '') === namespace;
+    return {
+      owner,
+      message: sameNamespace
+        ? `route ${owner.metadata.name} already exposes ${host} and is older`
+        : `a route in another namespace holds ${host} and is older than ${route.metadata.name}`,
+    };
+  }
+
+  /** Normalised `spec.path` used by the router's host+path uniqueness rule. */
+  _routeAdmissionPath(route) {
+    const path = String(route?.spec?.path || '');
+    return path && path !== '/' ? path.replace(/\/$/, '') : '/';
+  }
+
+  /** Real `RouteLessThan`: oldest creationTimestamp wins, then UID. */
+  _compareRouteClaims(left, right) {
+    const leftTime = String(left.metadata?.creationTimestamp || '');
+    const rightTime = String(right.metadata?.creationTimestamp || '');
+    if (leftTime !== rightTime) return leftTime < rightTime ? -1 : 1;
+    const leftUid = String(left.uid || left.metadata?.uid || '');
+    const rightUid = String(right.uid || right.metadata?.uid || '');
+    if (leftUid !== rightUid) return leftUid < rightUid ? -1 : 1;
+    return String(left.metadata?.name || '').localeCompare(String(right.metadata?.name || ''));
   }
 
   /**
@@ -3831,6 +4126,10 @@ export class SimulationTick {
    */
   ensureOLMDefaultsSync() {
     this._ensureOLMDefaults();
+    // Platform workload pods are part of the seeded 4.22 platform (#53G): create
+    // them synchronously too, so the auto-align lays out each mesh instead of
+    // adding them after the first tick at the fallback position.
+    this._ensurePlatformWorkloads();
     // The oauth-openshift control-plane pods are controller-owned too: create
     // the ReplicaSet + pods synchronously before the app auto-align so each mesh
     // gets a unique layout target (otherwise RS + 2 pods share the deployment's
@@ -4135,6 +4434,259 @@ export class SimulationTick {
   }
 
   /**
+   * The next CSV a Subscription should move to after its currently installed
+   * CSV, i.e. the tracked channel's head when it differs from `installedCSV`
+   * (issue #53D). Real OLM always resolves the channel head; for a Manual
+   * subscription the resulting upgrade InstallPlan simply waits for approval.
+   * @returns {{headCsv: string, version: string, channel: string}|null}
+   */
+  _subscriptionUpgradeTarget(subscription, packageName) {
+    const installed = String(subscription.status?.installedCSV || '');
+    if (!installed) return null;
+    const channels = this._safe(() => this._packageChannels(packageName), []) || [];
+    if (channels.length === 0) return null;
+    const manifest = this.cluster.getByName('PackageManifest', packageName, '');
+    const defaultChannel = String(
+      manifest?.status?.defaultChannel || manifest?.spec?.defaultChannel || ''
+    );
+    const requested = String(subscription.spec?.channel || '');
+    const channel = requested
+      ? channels.find((candidate) => candidate.name === requested) || null
+      : channels.find((candidate) => candidate.name === defaultChannel) || channels[0] || null;
+    if (!channel?.currentCSV) return null;
+    if (channel.currentCSV === installed) return null;
+    return {
+      headCsv: channel.currentCSV,
+      version: csvVersion(channel.currentCSV),
+      channel: channel.name,
+    };
+  }
+
+  /**
+   * Reconcile a Subscription's channel upgrade one step (issue #53D):
+   *
+   *  1. resolve the channel head and create the SECOND InstallPlan
+   *     (`clusterServiceVersionNames: [head]`, `approval` copied from the
+   *     Subscription, `approved: false` for Manual);
+   *  2. while it is unapproved report the real OLM status — currentCSV=head,
+   *     installedCSV=stays the pinned CSV, `phase/state UpgradePending`,
+   *     `InstallPlanPending True RequiresApproval`;
+   *  3. after approval, complete the plan, install the head CSV to Succeeded,
+   *     switch the operator Deployment owner to it, remove the old CSV (the
+   *     real OLM replacement), and report Succeeded / InstallPlanComplete.
+   *
+   * Automatic-approval subscriptions approve their upgrade plan automatically
+   * (real OLM), so this is not Manual-only.
+   */
+  _tickSubscriptionUpgrade(subscription, namespace, packageName, target) {
+    const headCsv = target.headCsv;
+    const baseStatus = () => {
+      subscription.status.currentCSV = headCsv;
+      subscription.status.phase = 'UpgradePending';
+      subscription.status.state = 'UpgradePending';
+    };
+
+    let plan =
+      this._safe(() =>
+        this.cluster
+          .getByKindAndNamespace('InstallPlan', namespace)
+          .find(
+            (candidate) =>
+              candidate.metadata?.labels?.['operators.coreos.com/subscription'] ===
+                subscription.metadata.name &&
+              (candidate.spec?.clusterServiceVersionNames || []).includes(headCsv)
+          )
+      ) || null;
+
+    if (!plan) {
+      const suffix = this._randomSuffix();
+      plan = this.cluster.addResource({
+        kind: 'InstallPlan',
+        metadata: {
+          name: `install-${suffix}`,
+          namespace,
+          labels: {
+            'operators.coreos.com/subscription': subscription.metadata.name,
+            'operators.coreos.com/package': packageName,
+          },
+        },
+        spec: {
+          approval: subscription.spec?.installPlanApproval || 'Automatic',
+          approved: false,
+          clusterServiceVersionNames: [headCsv],
+          source: subscription.spec?.source || '',
+          sourceNamespace: subscription.spec?.sourceNamespace || '',
+        },
+        status: { phase: 'RequiresApproval' },
+      });
+      if (!plan) return;
+      plan.setPlan(headCsv, target.version);
+      this.cluster.update(plan.uid, plan);
+      this.eventBus?.emit('installplan:created', {
+        name: plan.metadata.name,
+        namespace,
+        subscription: subscription.metadata.name,
+        csv: headCsv,
+      });
+    }
+
+    // Automatic approvals approve their own upgrade plan (real OLM).
+    if (plan.spec.approval !== 'Manual' && plan.spec.approved !== true) {
+      plan.spec.approved = true;
+      this.cluster.update(plan.uid, plan);
+    }
+    if (plan.spec.approved !== true) {
+      baseStatus();
+      // The previous (pinned) plan already completed; the upgrade is pending.
+      subscription.status.installPlanComplete = false;
+      subscription.status.reason = 'RequiresApproval';
+      subscription.status.message = `install plan ${plan.metadata.name} requires approval`;
+      subscription.setCondition(
+        'InstallPlanPending',
+        'True',
+        'RequiresApproval',
+        `install plan ${plan.metadata.name} requires approval`
+      );
+      subscription.setCondition('InstallPlanComplete', 'False', 'InstallPlanPending', '');
+      this.cluster.update(subscription.uid, subscription);
+      return;
+    }
+
+    if (typeof plan._approvedAtGameSeconds !== 'number') {
+      plan._approvedAtGameSeconds = this.gameSeconds;
+    }
+    if (plan.status.phase !== 'Complete') {
+      if (this.gameSeconds - plan._approvedAtGameSeconds >= INSTALLPLAN_COMPLETE_SECONDS) {
+        plan.markComplete();
+        this.cluster.update(plan.uid, plan);
+        subscription.status.installPlanRef = { name: plan.metadata.name, namespace };
+        this.cluster.update(subscription.uid, subscription);
+        this.eventBus?.emit('installplan:complete', {
+          name: plan.metadata.name,
+          namespace,
+          subscription: subscription.metadata.name,
+        });
+      } else {
+        baseStatus();
+        subscription.status.reason = 'Installing';
+        subscription.status.message = `waiting for InstallPlan ${plan.metadata.name} to complete`;
+        this.cluster.update(subscription.uid, subscription);
+        return;
+      }
+    }
+
+    // Install the head ClusterServiceVersion (the upgraded CSV replaces the old
+    // one; the spec/annotations mirror the initial-install path).
+    let csv = this.cluster.getByName('ClusterServiceVersion', headCsv, namespace);
+    if (!csv) {
+      const operatorGroup =
+        this.cluster.getByKindAndNamespace('OperatorGroup', namespace)[0] || null;
+      const globalNamespace = namespace === 'openshift-operators';
+      csv = this.cluster.addResource({
+        kind: 'ClusterServiceVersion',
+        metadata: {
+          name: headCsv,
+          namespace,
+          labels: {
+            'operators.coreos.com/subscription': subscription.metadata.name,
+            'olm.package': packageName,
+          },
+          annotations: {
+            'olm.operatorNamespace': namespace,
+            'olm.operatorGroup': operatorGroup
+              ? `${operatorGroup.metadata.namespace}/${operatorGroup.metadata.name}`
+              : '',
+            'olm.targetNamespaces':
+              operatorGroup &&
+              Array.isArray(operatorGroup.spec.targetNamespaces) &&
+              operatorGroup.spec.targetNamespaces.length > 0
+                ? operatorGroup.spec.targetNamespaces.join(',')
+                : globalNamespace
+                  ? ''
+                  : namespace,
+          },
+        },
+        spec: {
+          displayName: this._catalogDisplayName(packageName),
+          version: target.version,
+          customresourcedefinitions: { owned: deepClone(this._catalogCrds(packageName)) },
+        },
+        status: { phase: 'Installing' },
+      });
+      if (csv) {
+        csv._installStartedAt = this.gameSeconds;
+        csv.markInstalling(`installing ${headCsv}`);
+        this.cluster.update(csv.uid, csv);
+        this._knownCSVs.set(csv.uid, { name: headCsv, namespace, packageName });
+        this.eventBus?.emit('operator:csv-created', {
+          name: headCsv,
+          namespace,
+          packageName,
+          subscription: subscription.metadata.name,
+        });
+      }
+    }
+    if (!csv) return;
+    if (csv.status.phase !== 'Succeeded') {
+      if (typeof csv._installStartedAt !== 'number') csv._installStartedAt = this.gameSeconds;
+      if (this.gameSeconds - csv._installStartedAt < CSV_INSTALL_SECONDS) {
+        baseStatus();
+        subscription.status.reason = 'Installing';
+        subscription.status.message = `waiting for ClusterServiceVersion ${headCsv} to succeed`;
+        this.cluster.update(subscription.uid, subscription);
+        return;
+      }
+      csv.markSucceeded();
+      this.cluster.update(csv.uid, csv);
+      this._knownCSVs.set(csv.uid, { name: headCsv, namespace, packageName });
+      this.eventBus?.emit('operator:csv-succeeded', {
+        name: headCsv,
+        namespace,
+        packageName,
+      });
+    }
+    // The operator Deployment is re-owned by the new CSV BEFORE the old CSV is
+    // removed, so its uninstall handler does not tear the operator down.
+    this._ensureOperatorDeploymentForCSV(csv, packageName);
+
+    const previousCsvName = String(subscription.status.installedCSV || '');
+    if (previousCsvName && previousCsvName !== headCsv) {
+      const previousCsv = this.cluster.getByName(
+        'ClusterServiceVersion',
+        previousCsvName,
+        namespace
+      );
+      // Real OLM replaces the old CSV on a successful upgrade (it is no longer
+      // the installed CSV and is garbage-collected).
+      if (previousCsv) this.cluster.remove(previousCsv.uid);
+    }
+
+    subscription.status.installedCSV = headCsv;
+    subscription.status.currentCSV = headCsv;
+    subscription.status.phase = 'Succeeded';
+    subscription.status.state = 'AtLatestKnown';
+    subscription.status.reason = 'InstallSucceeded';
+    subscription.status.message = `operator ${packageName} installed successfully`;
+    subscription.status.installPlanRef = { name: plan.metadata.name, namespace };
+    subscription.status.installPlanComplete = true;
+    subscription.setCondition('InstallPlanPending', 'False', 'InstallPlanComplete');
+    subscription.setCondition('InstallPlanComplete', 'True', 'InstallSucceeded');
+    this.cluster.update(subscription.uid, subscription);
+    if (!subscription._installedEmitted) {
+      subscription._installedEmitted = true;
+      this.eventBus?.emit('operator:installed', {
+        name: subscription.metadata.name,
+        namespace,
+        packageName,
+        csv: headCsv,
+        channel: subscription.spec?.channel,
+        source: subscription.spec?.source,
+        resource: subscription,
+      });
+    }
+  }
+
+  /**
    * Create the operator Deployment described by a CSV install strategy, the way
    * OLM does after the CSV reaches Succeeded. The Deployment is labelled with
    * olm.owner so deleting the CSV can remove it (real uninstall).
@@ -4148,6 +4700,16 @@ export class SimulationTick {
       `${String(csv.metadata.name).replace(/\.v\d.*$/, '')}-controller-manager`;
     const existing = this.cluster.getByName('Deployment', deploymentName, namespace);
     if (existing) {
+      // A channel UPGRADE reuses the same operator Deployment name; OLM updates
+      // its owning-CSV label so deleting the superseded CSV does not uninstall
+      // the freshly upgraded operator (issue #53D).
+      const ownerName = csv.metadata.name;
+      if (existing.metadata?.labels?.['olm.owner'] !== ownerName) {
+        existing.metadata.labels = existing.metadata.labels || {};
+        existing.metadata.labels['olm.owner'] = ownerName;
+        existing.metadata.labels['olm.owner.namespace'] = namespace;
+        this.cluster.update(existing.uid, existing);
+      }
       this._olmOperatorDeployments.set(csv.uid, existing.uid);
       return existing;
     }
@@ -4895,7 +5457,13 @@ export class SimulationTick {
       'ConstraintsNotSatisfiable',
       resolutionMessage
     );
-    subscription.setCondition('InstallPlanPending', 'False', 'NoInstallPlan', '');
+    // Real OLM does NOT add install-plan conditions when dependency resolution
+    // fails (there is no install plan to report on) — issue #54b. Reporting
+    // `InstallPlanPending False NoInstallPlan` alongside ResolutionFailed was a
+    // simulator-only artefact.
+    subscription.status.conditions = (subscription.status.conditions || []).filter(
+      (condition) => condition.type !== 'InstallPlanPending'
+    );
     this.cluster.update(subscription.uid, subscription);
     subscription.recordEvent('Warning', 'ResolutionFailed', resolutionMessage);
     this.cluster.update(subscription.uid, subscription);
@@ -5096,6 +5664,14 @@ export class SimulationTick {
       }
       const csvName = target.csvName;
       const version = target.version;
+      // Real OLM resolves the package graph immediately: the Subscription's
+      // status.currentCSV names the resolved CSV (the startingCSV pin for a
+      // pinned Manual install) BEFORE the first InstallPlan is approved —
+      // installedCSV stays empty until that CSV actually succeeds (issue #53D).
+      if (!subscription.status.installedCSV && subscription.status.currentCSV !== csvName) {
+        subscription.status.currentCSV = csvName;
+        this.cluster.update(subscription.uid, subscription);
+      }
 
       // A Subscription whose CSV was deleted re-installs it (OLM keeps the
       // operator installed while the Subscription exists). Only deleting the
@@ -5119,6 +5695,17 @@ export class SimulationTick {
         const stalePlan = this._installPlanForSubscription(subscription, namespace);
         if (stalePlan) this.cluster.remove(stalePlan.uid);
         this.cluster.update(subscription.uid, subscription);
+        continue;
+      }
+
+      // Issue #53D: a Subscription that already installed a CSV (typically a
+      // `startingCSV` pin older than the channel head) immediately resolves the
+      // NEXT step of its channel and creates an upgrade InstallPlan. With
+      // `installPlanApproval: Manual` the plan waits unapproved, so
+      // installedCSV keeps the pin while currentCSV already names the head.
+      const upgradeTarget = this._subscriptionUpgradeTarget(subscription, packageName);
+      if (upgradeTarget) {
+        this._tickSubscriptionUpgrade(subscription, namespace, packageName, upgradeTarget);
         continue;
       }
 
@@ -5286,6 +5873,7 @@ export class SimulationTick {
 
       if (subscription.status.phase !== 'Succeeded') {
         subscription.status.phase = 'Succeeded';
+        subscription.status.state = 'AtLatestKnown';
         subscription.status.installedCSV = csvName;
         subscription.status.currentCSV = csvName;
         subscription.status.reason = 'InstallSucceeded';
@@ -5867,6 +6455,49 @@ export class SimulationTick {
   }
 
   // ── OpenShift: OAuth rollout + cluster operators ───────────────────────
+
+  /**
+   * Reconcile an observed OAuth/Secret update against the settled baseline
+   * (issue #54f). ClusterState.clear() and mode setup re-add the SAME baseline
+   * OAuth singleton, which must NOT start an oauth-openshift rollout — a fresh
+   * cluster shows authentication Progressing=False/AsExpected. Only a real
+   * identityProviders/tokenConfig or htpasswd Secret data change is a rollout.
+   */
+  _noteOAuthConfigChange() {
+    const signature = this._oauthSignature();
+    const hadBaseline = typeof this._oauthConfigSignature === 'string';
+    if (this._oauthConfigSignature === signature) return;
+    this._oauthConfigSignature = signature;
+    if (!hadBaseline) return; // first observation is the settled baseline
+    this._scheduleOAuthRollout();
+  }
+
+  /**
+   * Stable fingerprint of the OAuth configuration the authentication operator
+   * watches: spec.identityProviders, spec.tokenConfig and the DATA of the
+   * htpasswd Secret the identity provider references. The *names* of things
+   * (secret/name) are included so adding a provider that references a different
+   * Secret also counts as a change.
+   * @returns {string}
+   */
+  _oauthSignature() {
+    const oauth = this.cluster.getOAuth?.();
+    const spec = oauth?.spec || {};
+    const provider = this.cluster.getAuthProviderConfig?.() || null;
+    let secretData = '';
+    if (provider?.secretName) {
+      const secret = this.cluster.getByName('Secret', provider.secretName, provider.namespace);
+      const data = secret?.spec?.data || secret?.data || {};
+      secretData = this._stableStringify(data);
+    }
+    return this._stableStringify({
+      identityProviders: spec.identityProviders || [],
+      tokenConfig: spec.tokenConfig || null,
+      providerName: provider?.name || '',
+      secretName: provider?.secretName || '',
+      secretData,
+    });
+  }
 
   /**
    * Authentication-operator reconciliation: an OAuth configuration change (or a
@@ -6686,6 +7317,28 @@ export class SimulationTick {
         lines: ['error: unable to resolve the source Pod'],
       };
     }
+    // Loopback / own-Pod-IP targets hit the pod's OWN container app (issue #54d):
+    // `oc exec <pod> -- curl -s localhost:8080` must return the real app body,
+    // not the generic external "Hello from the Internet" page.
+    const localDestination = this._localExecDestination(source, options);
+    if (localDestination && !localDestination.listening) {
+      return {
+        allowed: false,
+        reason: 'local-connection-refused',
+        policy: null,
+        lines: [
+          `curl: (7) Failed to connect to ${localDestination.host} port ${localDestination.port} after 0 ms: Connection refused`,
+        ],
+      };
+    }
+    if (localDestination) {
+      return {
+        allowed: true,
+        reason: 'local',
+        policy: null,
+        lines: [localDestination.body],
+      };
+    }
     const destination = this._resolveTrafficDestination(options.target, { ...options, namespace });
     if (!destination) {
       return {
@@ -6998,9 +7651,22 @@ export class SimulationTick {
 
   /** Response body for a successful Route request (the backend workload). */
   _workloadHttpBody(service, pod) {
-    const container = pod?.spec?.containers?.[0] || {};
+    return this._podHttpBody(pod, { fallbackApp: service?.metadata?.name });
+  }
+
+  /**
+   * HTTP body served by a Pod's container. Uses the real image personality
+   * (origin-hello-openshift / nginx) and the Pod's ACTUAL container name, never
+   * a hardcoded `main` — issue #54d (`oc exec … -- curl localhost:8080` must
+   * return the app's real response from the pod's own container).
+   * @param {object|null} pod
+   * @param {{container?: object, fallbackApp?: string}} [options]
+   * @returns {string}
+   */
+  _podHttpBody(pod, options = {}) {
+    const container = options.container || pod?.spec?.containers?.[0] || {};
     const image = String(container.image || '');
-    const app = pod?.metadata?.labels?.app || service?.metadata?.name || 'app';
+    const app = pod?.metadata?.labels?.app || options.fallbackApp || pod?.metadata?.name || 'app';
     if (/hello-openshift/.test(image)) {
       return '<html><body>Hello OpenShift!</body></html>';
     }
@@ -7012,6 +7678,78 @@ export class SimulationTick {
       );
     }
     return `<html><body>Hello from ${app} (container ${container.name || 'main'})</body></html>`;
+  }
+
+  /**
+   * Resolve `curl <target>` executed INSIDE a Pod to the pod's own container
+   * when the target is loopback / the pod's own IP (issue #54d): `localhost`,
+   * `127.0.0.1`, `::1`, or `status.podIP` / `status.hostIP`. Returns null for
+   * anything else so external hosts keep the normal traffic model.
+   * @param {object} source pod resolved by `_resolvePodLike`
+   * @param {{target?: string, port?: number, container?: string}} options
+   * @returns {{kind: string, local: boolean, name: string, pods: object[],
+   *   port: number, host: string, requiresDNS: boolean, body: string,
+   *   listening: boolean}|null}
+   */
+  _localExecDestination(source, options = {}) {
+    if (!source) return null;
+    let raw = String(options.target || '')
+      .trim()
+      .toLowerCase();
+    if (!raw) return null;
+    raw = raw.replace(/^[a-z][a-z0-9+.-]*:\/\//, '').split('/')[0];
+    let hostPart = raw;
+    let targetPort = null;
+    const portMatch = raw.match(/^(\[[0-9a-f:]+\]|[^:]+):(\d+)$/);
+    if (portMatch) {
+      hostPart = portMatch[1];
+      targetPort = Number(portMatch[2]);
+    }
+    const bareHost = hostPart.replace(/^\[|\]$/g, '');
+    const ownAddresses = [source.status?.podIP, source.status?.hostIP]
+      .filter(Boolean)
+      .map((value) => String(value).toLowerCase());
+    const loopback = ['localhost', '127.0.0.1', '::1', '0.0.0.0'];
+    if (!loopback.includes(bareHost) && !ownAddresses.includes(bareHost)) return null;
+
+    const containers = source.spec?.containers || [];
+    const requested = Number(options.port ?? targetPort ?? 0);
+    // The container is the one declaring the port the app listens on; fall back
+    // to the explicit container name (from the workload template) or the first.
+    let container = options.container
+      ? containers.find((entry) => entry.name === options.container)
+      : null;
+    let listening = true;
+    if (!container) {
+      const declared = containers.find((entry) =>
+        (entry.ports || []).some((port) => Number(port.containerPort) === requested)
+      );
+      if (declared) container = declared;
+    }
+    if (!container && containers.length > 0) {
+      const anyDeclared = containers.some((entry) => (entry.ports || []).length > 0);
+      container = containers[0];
+      // A loopback request to a port the container does not declare is a real
+      // connection refusal (e.g. `curl localhost:9999`).
+      if (requested && anyDeclared) {
+        listening = containers.some((entry) =>
+          (entry.ports || []).some((port) => Number(port.containerPort) === requested)
+        );
+      }
+    }
+    const port =
+      requested || Number(containers[0]?.ports?.[0]?.containerPort) || Number(options.port) || 80;
+    return {
+      kind: 'Pod',
+      local: true,
+      name: source.metadata?.name || 'pod',
+      pods: [source],
+      port,
+      host: bareHost,
+      requiresDNS: false,
+      listening,
+      body: this._podHttpBody(source, { container: container || undefined }),
+    };
   }
 
   /**
@@ -7459,6 +8197,23 @@ export class SimulationTick {
       hash = Math.imul(hash, 0x01000193) >>> 0;
     }
     return hash >>> 0;
+  }
+
+  /**
+   * Run `fn` and fall back to `fallback` when the controller helper throws.
+   * Defensive helper for best-effort reconciliation (a malformed object must
+   * never take down the whole simulation tick).
+   * @template T
+   * @param {() => T} fn
+   * @param {T} [fallback]
+   * @returns {T}
+   */
+  _safe(fn, fallback = null) {
+    try {
+      return fn();
+    } catch {
+      return fallback;
+    }
   }
 }
 

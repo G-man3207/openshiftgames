@@ -32,6 +32,11 @@
  * seeded defaults.
  */
 
+// Campaign machines come from the same catalog every mode uses (#53F). The
+// import is data-only (ClusterState is the engine's seed module and has no DOM
+// dependencies), so the level data and per-mode seeds cannot drift apart.
+import { NODE_CATALOG, catalogNode } from '../engine/ClusterState.js';
+
 const DOCS = {
   cli: 'https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/cli_tools/openshift-cli-oc',
   projects:
@@ -90,28 +95,15 @@ const DOCS = {
 /**
  * Campaign clusters present realistic OCP machines (#28 P4). Level data is
  * authored with the legacy `node-1..3` names; this helper maps those onto the
- * names and ROLES the real CLI shows (`worker-0`, `worker-1`, `master-0` with
- * `worker` / `control-plane,master`). An explicit non-legacy name is kept
+ * SHARED machine catalog in ClusterState (imported below, #53F) so campaign,
+ * labs, sandbox and chaos all show `worker-0`, `worker-1`, `master-0` with
+ * `worker` / `control-plane,master` roles. An explicit non-legacy name is kept
  * verbatim so the helper stays usable for custom nodes.
  */
-const NODE_CATALOG = [
-  { name: 'worker-0', role: 'worker' },
-  { name: 'worker-1', role: 'worker' },
-  { name: 'master-0', role: 'control-plane' },
-];
-
-const nodeRoleLabels = (role) =>
-  role === 'control-plane'
-    ? {
-        'node-role.kubernetes.io/control-plane': '',
-        'node-role.kubernetes.io/master': '',
-      }
-    : { 'node-role.kubernetes.io/worker': '' };
-
 const node = (name, cpu = '8', memory = '16Gi', extra = {}) => {
   const legacyIndex = String(name || '').match(/^node-(\d+)$/i);
-  const catalogEntry =
-    NODE_CATALOG[(legacyIndex ? Math.max(0, Number(legacyIndex[1]) - 1) : 0) % NODE_CATALOG.length];
+  const legacyPosition = legacyIndex ? Math.max(0, Number(legacyIndex[1]) - 1) : 0;
+  const catalogEntry = catalogNode(legacyPosition % NODE_CATALOG.length);
   const resolvedName = legacyIndex ? catalogEntry.name : name;
   const { spec: extraSpec, labels: extraLabels, ...rest } = extra;
   return {
@@ -119,7 +111,7 @@ const node = (name, cpu = '8', memory = '16Gi', extra = {}) => {
     name: resolvedName,
     ...rest,
     labels: {
-      ...nodeRoleLabels(catalogEntry.role),
+      ...catalogEntry.labels,
       'kubernetes.io/hostname': resolvedName,
       ...(extraLabels || {}),
     },

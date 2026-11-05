@@ -21,6 +21,7 @@ import {
   evaluateObjectives,
   getObjectiveSummary,
 } from '../engine/ObjectiveEvaluator.js';
+import { catalogNode } from '../engine/ClusterState.js';
 import { RESOURCE_KINDS } from '../data/kindRegistry.js';
 
 const CHALLENGE_STATE = {
@@ -58,15 +59,22 @@ const DEFAULT_IMAGE = 'quay.io/openshift/origin-hello-openshift:latest';
 
 // ─── starting-resource helpers ─────────────────────────────────────────────
 
-/** Two-to-three Ready worker Nodes for a lab cluster. */
+/**
+ * Ready Nodes for a lab cluster, built from the shared machine catalog (#53F):
+ * 2 nodes are `worker-0`/`worker-1`, 3 nodes add the `master-0` control-plane
+ * machine — exactly the names/roles campaign levels and the sandbox show.
+ */
 function nodes(count = 2, cpu = '16', memory = '32Gi') {
-  return Array.from({ length: count }, (_, index) => ({
-    kind: 'Node',
-    name: `node-${index + 1}`,
-    labels: { role: 'worker', 'node-role.kubernetes.io/worker': '' },
-    spec: { cpu, memory, pods: 250 },
-    status: { phase: 'Running' },
-  }));
+  return Array.from({ length: count }, (_, index) => {
+    const machine = catalogNode(index);
+    return {
+      kind: 'Node',
+      name: machine.name,
+      labels: machine.labels,
+      spec: { cpu, memory, pods: 250 },
+      status: { phase: 'Running' },
+    };
+  });
 }
 
 function project(name, displayName = name) {

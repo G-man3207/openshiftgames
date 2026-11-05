@@ -103,6 +103,71 @@ function encodeBase64Text(text) {
   }
 }
 
+/**
+ * Service-account token signing key stored in
+ * `openshift-config/initial-service-account-private-key` (key `sa.key`). Real
+ * installs generate this RSA key during bootstrap and the
+ * kube-controller-manager signs ServiceAccount tokens with it; the value here
+ * is a structurally valid PKCS#8 PEM so `oc extract`/`base64 -d` show the same
+ * shape a learner sees on a real cluster (#53G).
+ */
+const INITIAL_SERVICE_ACCOUNT_PRIVATE_KEY_PEM = `-----BEGIN PRIVATE KEY-----
+MIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQDVol3WFknhIhcS
+snMPt+0PqXqNmOVp0Mxzi3n8+DLmb6SilZ5Ez+dyo1Lu6j59/jdS42HzN15zLk0B
+BvOao9hWL5vTF/Rnf/I0/rzOqYcwfquJd7ZKixuvEyomEIE04HkZTHWRInw4Jnw3
+OR73yQMiSYmdPPMdKTu4RnkKD6pkd71YgqaXQCRfjKrvMbNSd1NDqgydQQLdAGsz
+O7JAEZFenMyc6/vG4TPkz+psj/jcl8mBbhEi7a/rx2J/19R11F8DMb387fUyCWq7
+YKZs3rmQFnH1xV0bJxEbjdS7IPyIZGb1lBo6mDYDYrQH1sdg9zEwKBJg+m2Th2xF
+p6/JO1anAgMBAAECggEBAM6exZfA1JWnhpK2vFXbKrJV8UHB4PIOEukNAEbXyByw
+1LbBCXkCftxBoBSar26MzeN+bEvb679SGVtfV+eFuDvFfIpLTAdJhpxXunK4vHAx
+q1YS+si3KqiB3KoknKBimCSSWUJqb7hzQBj3tF9EGajWZs6SXLKFnFvACnO7DjdL
+q0Ln9rKT98iyELhqRfhifXBnI29WtGF6QxaB0QfzaJpjcQIFdKroLkfDYE+jEAm2
+DW+6FyCmJxHxTplZkoyteK2pyu4S3hXE2Z4jhQVx4ClFntjf7VEbTj6c+qCAldmc
+NJRRYz+nMGtUYjiFTXsmpyoCsmHxCB0f8IltfnklLiUCgYEAugsJkSVjvL/pg8NI
+dklpL/XAts6BH6XDy/r0ar3jEUBOzKnwHnMt7ZnFnCpOLdj3thpDvLwSoz2GFWOh
+jzmluWUODswEuJe1rzB0EH/oUlrxcfzskHKOOj4XXW+Djex6jZ3PgHKCvhxKJeRS
+7MPsH6QEsXX2aJDxkQBUbXKQjEUCgYBWR/u3HvMsPZk1o8qxMRguZrHuLWecg4Ng
+iO/xMYqSHLsXRfci8fnjTCZmZnsUUfcUzB1uu9x7JO36fqL860/ZZEU/oo3l7xji
+w5hvELpziwhFCXrc56UHE3SZ0N4Idj3oa9tx29JqiKOjCpQc0KrPyEOKIJGBnXYG
+mlcTrWvy4gKBgQDkGHnollfap0LBNEjMwIHTAJWemP+z6A20mHxpodUmt2iuyt8L
+hvrK1slO3Wx29YpwaiSj5dUl4wl8smqQnFqDdGrWyTjvhZcpuz1mJYNG+rTwZG4t
+GTP+ZgPIPzRKP8sIukJtKUZ3enDB98ScPOKnJFhI7sL62UxC47EDbinuxAKBgQCR
+PDO0Yd2Pp3C9Wdjrmw4RksAAjPuZSxZho+3LgSi2j5KXYx6a2q3+xbQp+j0hn1pB
+EqNpNMGNdkHqzxtCmXA2LrZBjuxnAajSF2gbezjZKxCcHZY/VW6WO/D6xWVlRuQQ
+87A12TmOUeMCH0CCaiWoOC/Qq0N82GiL0lWNKYiR1wKBgAmnYTZpT5BSNxjVNB7I
+pW3tK2pApqXmp+/dGRkduyF2PEwFad0j19DrqD+hur1+0J419v483vgwwz/WTNRQ
+7e5Ppwna3zfmMvEXqHcappffsIXKQc4s7T70j+D1m8LRZxom06/ScRCppypmQv6u
+Y2Gg8DCDcnizOax2H4Fp6JKW
+-----END PRIVATE KEY-----
+`;
+
+/**
+ * Installer pull secret stored in `openshift-config/pull-secret` (real 4.22
+ * cluster-install flow). It is the combined docker config for the Red Hat
+ * registries, so `oc extract secret/pull-secret -n openshift-config` prints a
+ * Docker config first, not an opaque blob (#53G).
+ */
+const DEFAULT_PULL_SECRET_DOCKERCONFIG = JSON.stringify({
+  auths: {
+    'cloud.openshift.com': {
+      auth: encodeBase64Text('kubeadmin:simulated-cloud-telemetry-token'),
+      email: 'admin@example.com',
+    },
+    'quay.io': {
+      auth: encodeBase64Text('openshift-games:simulated-quay-token'),
+      email: 'admin@example.com',
+    },
+    'registry.connect.redhat.com': {
+      auth: encodeBase64Text('openshift-games:simulated-connect-token'),
+      email: 'admin@example.com',
+    },
+    'registry.redhat.io': {
+      auth: encodeBase64Text('openshift-games:simulated-redhat-token'),
+      email: 'admin@example.com',
+    },
+  },
+});
+
 /** Projects every simulated cluster starts with (CONVERSION-SPEC §3.2). */
 export const DEFAULT_PROJECTS = [
   'default',
@@ -110,6 +175,7 @@ export const DEFAULT_PROJECTS = [
   'openshift-config',
   'openshift-operators',
   'openshift-ingress',
+  'openshift-dns',
   'openshift-monitoring',
   'openshift-console',
   'openshift-authentication',
@@ -158,6 +224,69 @@ export const CLUSTER_OPERATOR_NAMES = [
   'storage',
   'etcd',
 ];
+
+// ─── Machine-name catalog (shared by every mode) ──────────────────────────
+
+/**
+ * Machine catalog shared by every game mode (#53F).
+ *
+ * A real 3-node OCP 4.22 cluster presents `worker-0`, `worker-1` and
+ * `master-0`, and the campaign has always used those names; the timed labs and
+ * sandbox used to invent per-mode names (numbered nodes with all workers and no
+ * control plane), so `oc debug node/worker-0` muscle memory did not transfer
+ * and hints differed per mode. Modes now build their Nodes from this one
+ * catalog:
+ *
+ *   index 0 → worker-0 (node-role.kubernetes.io/worker)
+ *   index 1 → worker-1 (node-role.kubernetes.io/worker)
+ *   index 2 → master-0 (node-role.kubernetes.io/control-plane + …/master)
+ *
+ * 2-node clusters use indexes 0-1 (worker-0, worker-1); 3-node clusters use all
+ * three. Indexes beyond the catalog keep naming additional workers.
+ */
+export const NODE_CATALOG = [
+  { name: 'worker-0', role: 'worker' },
+  { name: 'worker-1', role: 'worker' },
+  { name: 'master-0', role: 'control-plane' },
+];
+
+/**
+ * Kubernetes node-role labels for a catalog role. `control-plane` machines also
+ * carry the legacy `master` role label — real `oc get nodes` prints ROLES
+ * `control-plane,master` (#53F).
+ * @param {'worker'|'control-plane'} role
+ * @returns {Record<string, string>}
+ */
+export function nodeRoleLabels(role) {
+  return role === 'control-plane'
+    ? {
+        'node-role.kubernetes.io/control-plane': '',
+        'node-role.kubernetes.io/master': '',
+      }
+    : { 'node-role.kubernetes.io/worker': '' };
+}
+
+/**
+ * Resolve the catalog machine for a 0-based node index, with its realistic
+ * labels (role labels + `kubernetes.io/hostname`). Beyond the catalog the
+ * cluster grows more workers (`worker-2`, `worker-3`, …).
+ * @param {number} index
+ * @returns {{name: string, role: 'worker'|'control-plane', labels: Record<string, string>}}
+ */
+export function catalogNode(index) {
+  const position = Math.max(0, Math.trunc(Number(index) || 0));
+  const entry =
+    position < NODE_CATALOG.length
+      ? NODE_CATALOG[position]
+      : { name: `worker-${position - 1}`, role: 'worker' };
+  return {
+    ...entry,
+    labels: {
+      ...nodeRoleLabels(entry.role),
+      'kubernetes.io/hostname': entry.name,
+    },
+  };
+}
 
 /** ImageStreams pre-installed in the `openshift` project (OCP 4.22 samples).
  * `latestVersion` is the UBI image the samples' `latest` tag resolves to. */
@@ -744,6 +873,31 @@ export class ClusterState {
         data: { kubeadmin: encodeBase64Text(KUBEADMIN_PASSWORD_HASH) },
       },
     });
+    // Platform bootstrap secrets in `openshift-config` (#53G). Every real 4.22
+    // install carries (at least) these two:
+    //   - pull-secret: the installer's combined docker config for the Red Hat
+    //     registries; operators/image imports consume it, and it is the first
+    //     place an admin looks when pulls fail;
+    //   - initial-service-account-private-key: the SA token signing key created
+    //     during bootstrap (kube-controller-manager signs tokens with it).
+    // `htpass-secret`/`htpasswd-secret` are deliberately NOT seeded: identity
+    // providers are an admin opt-in and the HTPasswd labs create them.
+    this._seed('Secret', 'pull-secret', {
+      namespace: 'openshift-config',
+      uid: 'seed-secret-openshift-config-pull-secret',
+      spec: {
+        type: 'kubernetes.io/dockerconfigjson',
+        data: { '.dockerconfigjson': encodeBase64Text(DEFAULT_PULL_SECRET_DOCKERCONFIG) },
+      },
+    });
+    this._seed('Secret', 'initial-service-account-private-key', {
+      namespace: 'openshift-config',
+      uid: 'seed-secret-openshift-config-initial-service-account-private-key',
+      spec: {
+        type: 'Opaque',
+        data: { 'sa.key': encodeBase64Text(INITIAL_SERVICE_ACCOUNT_PRIVATE_KEY_PEM) },
+      },
+    });
     // Real OpenShift 4.x bootstrap policy: the `self-provisioners`
     // ClusterRoleBinding binds ClusterRole `self-provisioner` to the OAuth
     // authenticated group so any logged-in user can create projects with
@@ -1162,7 +1316,6 @@ export class ClusterState {
     this._removeFromLabelIndex(resource);
 
     if (updates instanceof ResourceBase) {
-      const oldPhase = resource.status.phase;
       resource.spec = deepClone(updates.spec);
       resource.status = deepClone(updates.status);
       if (!Array.isArray(resource.status.conditions)) resource.status.conditions = [];
@@ -1170,14 +1323,6 @@ export class ClusterState {
       Object.assign(resource.metadata.labels, updates.metadata.labels);
       Object.assign(resource.metadata.annotations, updates.metadata.annotations);
       resource._bumpResourceVersion();
-
-      if (oldPhase !== resource.status.phase) {
-        resource.recordEvent(
-          'Normal',
-          'PhaseChange',
-          `Phase changed from ${oldPhase} to ${resource.status.phase}`
-        );
-      }
     } else if (updates && typeof updates === 'object') {
       if (updates.spec) {
         resource.spec = deepMerge(resource.spec, updates.spec);

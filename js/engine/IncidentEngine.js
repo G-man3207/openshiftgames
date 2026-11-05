@@ -1391,6 +1391,14 @@ class IncidentEngine {
       `Deployment is configured with ${changes.join(', ')}; the container cannot start with this configuration`
     );
     this._commit(target);
+    // Issue #51: let the Deployment controller create the new revision NOW so
+    // the damage pass below chooses the NEW ReplicaSet's Pods. Old-revision Pods
+    // keep serving, the surge pod crash-loops and the rollout stalls — the real
+    // "a bad rollout does not take the app down" lesson.
+    const simulation = this.gameEngine?.simulation || null;
+    if (simulation && typeof simulation._reconcileDeployment === 'function') {
+      this._safe(() => simulation._reconcileDeployment(target));
+    }
     return true;
   }
 
@@ -1405,21 +1413,53 @@ class IncidentEngine {
     return entry ? String(entry.value ?? '') : null;
   }
 
-  /** Is the authored fix contract satisfied on the owning workload? */
+  /**
+   * Is the authored fix contract satisfied on the owning workload?
+   *
+   * Issue #51: removing the faulty value entirely — `oc set env deploy/x
+   * APP_MODE-` or `oc rollout undo`, which restores the previous revision whose
+   * template never had the seeded key — is exactly as much of a fix as setting
+   * an allowed value: the crash loop stops on a real cluster. A still-present
+   * bad value (or an unrelated env edit) is NOT a fix.
+   */
   _incidentFixSatisfied(incident, target) {
     const fix = incident?.fix;
     if (!fix?.env?.name) return false;
     const value = this._incidentEnvValue(incident, target);
-    if (value === null) return false;
+    if (value === null) return true;
     const allowed = Array.isArray(fix.env.allowed) ? fix.env.allowed.map(String) : [];
     return allowed.includes(value);
+  }
+
+  /**
+   * Which Pods a template-fault incident damages (issue #51).
+   *
+   * A seeded CrashLoopBackOff writes the faulty value into the live Deployment
+   * template, which rolls out a NEW ReplicaSet. On a real cluster only that new
+   * revision's Pods crash-loop; the old ReplicaSet keeps its Pods Running and
+   * the Service keeps serving. Only pods of the ReplicaSet matching the live
+   * template hash are damaged for a seeded incident; non-seeded incidents keep
+   * the historical "damage every replica" behaviour.
+   *
+   * @param {object} incident
+   * @param {object} target workload resource
+   * @returns {object[]}
+   */
+  _workloadPodsForDamage(incident, target) {
+    const pods = this._workloadPods(target);
+    if (!incident?.seed || !target || target.kind !== 'Deployment') return pods;
+    const simulation = this.gameEngine?.simulation || null;
+    if (!simulation || typeof simulation._templateHash !== 'function') return pods;
+    const hash = this._safe(() => simulation._templateHash(target.spec?.template || {}), null);
+    if (!hash) return pods;
+    return pods.filter((pod) => pod?.metadata?.labels?.['pod-template-hash'] === hash);
   }
 
   _damagePod(incident, opts) {
     const target = this._resolveTargetResource(incident);
     const pods = [];
     if (target && target.kind !== 'Pod') {
-      pods.push(...this._workloadPods(target));
+      pods.push(...this._workloadPodsForDamage(incident, target));
     } else {
       const pod = this._pickPodForIncident(incident);
       if (pod) pods.push(pod);
@@ -1609,6 +1649,11 @@ class IncidentEngine {
       opts.message || 'Container is not ready'
     );
     this._setCondition(pod, 'ContainersReady', 'False', 'ContainersNotReady', opts.message || '');
+    // A damaged Pod is a container that really went through the kubelet
+    // lifecycle before it broke; make sure `oc describe pod` shows the real
+    // Scheduled → Pulling → Pulled → Created → Started stream even when the
+    // incident damages it right after the controller created it (#54e).
+    if (!unschedulablePending) this._ensureKubeletLifecycleEvents(pod, opts);
     this._recordEvent(
       pod,
       'Warning',
@@ -1623,6 +1668,38 @@ class IncidentEngine {
       incident.targetPodUid = pod.uid || pod.metadata?.uid || null;
     }
     this._markIncident(pod, incident);
+  }
+
+  /**
+   * Ensure a damaged Pod carries the kubelet lifecycle events it would have
+   * recorded before the failure (issue #54e). Reasons already recorded are
+   * never duplicated; the failure mode decides which transitions happened:
+   *  - image-pull failure: only `Pulling` (the image never got pulled);
+   *  - container-create failure: `Pulling` + `Pulled` (no Created/Started);
+   *  - crash/probe/OOM: the full Pulling → Pulled → Created → Started stream.
+   * The Pod Ready CONDITION staying False is status, not an event: real kubelet
+   * emits no `Ready`/`PhaseChange` reasons.
+   * @param {object} pod
+   * @param {{waitingReason?: string}} [opts]
+   */
+  _ensureKubeletLifecycleEvents(pod, opts = {}) {
+    if (!pod || typeof pod.recordEvent !== 'function') return;
+    const events = Array.isArray(pod.events) ? pod.events : [];
+    const has = (reason) => events.some((event) => event.reason === reason);
+    const containers = pod.spec?.containers || [];
+    const container = containers[0] || {};
+    const image = container.image || '';
+    const containerName = container.name || 'main';
+    const waitingReason = String(opts.waitingReason || '');
+    const imagePullFailure =
+      waitingReason === 'ImagePullBackOff' || waitingReason === 'ErrImagePull';
+    const createFailed = waitingReason === 'CreateContainerConfigError';
+    if (!has('Pulling')) pod.recordEvent('Normal', 'Pulling', `Pulling image "${image}"`);
+    if (imagePullFailure) return;
+    if (!has('Pulled')) pod.recordEvent('Normal', 'Pulled', `Successfully pulled image "${image}"`);
+    if (createFailed) return;
+    if (!has('Created')) pod.recordEvent('Normal', 'Created', `Created container ${containerName}`);
+    if (!has('Started')) pod.recordEvent('Normal', 'Started', `Started container ${containerName}`);
   }
 
   /** Resolve the owning workload name (Deployment/StatefulSet/...) for a Pod. */
@@ -2165,6 +2242,24 @@ class IncidentEngine {
     return { applied: true, kind: 'service', target: svc.name };
   }
 
+  /**
+   * Route damage (issues #52 + #39). `Admitted=False` must only ever be a REAL
+   * admission failure — a router host-claim conflict or a bad external
+   * certificate — never "no endpoints": a Route with an empty Endpoints list is
+   * still admitted and the router answers 503.
+   *
+   *  - 'host-conflict' / 'not-admitted': plant an older Route in another
+   *    namespace claiming the same host so the router's UniqueHost admission
+   *    rejects the target with the real HostAlreadyClaimed wording. The
+   *    claimant is recorded in the restore state so healing (or deleting it
+   *    from the CLI) admits the target again.
+   *  - 'tls': point `spec.tls.externalCertificate` at a missing Secret, which
+   *    the router validates as ExternalCertificateValidationFailed (real 4.22
+   *    external-certificate admission).
+   *
+   * @param {object} incident
+   * @param {'host-conflict'|'not-admitted'|'tls'} mode
+   */
   _damageRoute(incident, mode) {
     const route =
       this._resolveTargetResource(incident) ||
@@ -2178,22 +2273,25 @@ class IncidentEngine {
       uid: route.uid,
       host: route.spec?.host || '',
       tls: JSON.parse(JSON.stringify(route.spec?.tls || {})),
+      conflictRouteUid: null,
     };
     this._saveRestore(incident, save);
+    const simulation = this.gameEngine?.simulation || null;
 
-    if (mode === 'host-conflict') {
-      if (route.spec) route.spec.host = 'conflict.apps.cluster.example.com';
-      this._recordEvent(
-        route,
-        'Warning',
-        'HostAlreadyClaimed',
-        `route "${route.name}" host "conflict.apps.cluster.example.com" is already claimed by another namespace`
-      );
-    } else if (mode === 'tls') {
+    if (mode === 'tls') {
+      route.spec = route.spec || {};
+      const tls = { ...(route.spec.tls || {}) };
+      tls.termination = tls.termination || 'edge';
+      // The router can only admit an externalCertificate once the Secret exists
+      // and its service account may read it; point at a missing one.
+      tls.externalCertificate = { name: 'route-external-cert-missing' };
+      delete tls.certificate;
+      delete tls.key;
+      route.spec.tls = tls;
       this._annotate(
         route,
         'openshiftgames.io/tls-error',
-        'certificate SAN does not match route host'
+        'external certificate secret is missing or unreadable'
       );
       this._recordEvent(
         route,
@@ -2202,7 +2300,25 @@ class IncidentEngine {
         'certificate is not valid for the requested host'
       );
     } else {
-      this._recordEvent(route, 'Warning', 'ServiceUnavailable', 'no endpoints available');
+      // Plant a real competing claim (older route in another namespace) unless
+      // one already exists, so the router's admission decision is truthful.
+      const existingClaim =
+        simulation && typeof simulation._routeHostClaimConflict === 'function'
+          ? this._safe(() => simulation._routeHostClaimConflict(route, host), null)
+          : null;
+      if (!existingClaim) {
+        const created = this._createRouteClaimant(route, host);
+        if (created?.claimant) {
+          save.conflictRouteUid = created.claimant.uid;
+          save.conflictServiceUid = created.serviceUid;
+          this._recordEvent(
+            route,
+            'Warning',
+            'HostAlreadyClaimed',
+            `route "${route.name}" host "${host}" is already claimed by another namespace`
+          );
+        }
+      }
     }
 
     route.status.ingress = [
@@ -2214,18 +2330,11 @@ class IncidentEngine {
           {
             type: 'Admitted',
             status: 'False',
-            reason:
-              mode === 'host-conflict'
-                ? 'HostAlreadyClaimed'
-                : mode === 'tls'
-                  ? 'CertificateError'
-                  : 'ServiceUnavailable',
+            reason: mode === 'tls' ? 'ExternalCertificateValidationFailed' : 'HostAlreadyClaimed',
             message:
-              mode === 'host-conflict'
-                ? 'host already claimed'
-                : mode === 'tls'
-                  ? 'bad certificate'
-                  : 'no endpoints available',
+              mode === 'tls'
+                ? `spec.tls.externalCertificate: Not found: secrets "route-external-cert-missing" not found`
+                : `a route in another namespace holds ${host} and is older than ${route.name}`,
             lastTransitionTime: nowIso(),
           },
         ],
@@ -2234,6 +2343,87 @@ class IncidentEngine {
     this._markIncident(route, incident);
     this._commit(route);
     return { applied: true, kind: 'route', target: route.name };
+  }
+
+  /**
+   * Create an OLDER Route in another project claiming `host`, so the router's
+   * Strict host-ownership admission rejects the incident target with a real
+   * HostAlreadyClaimed condition (issue #52). Returns the created Route.
+   * @param {object} route target Route
+   * @param {string} host
+   * @returns {object|null}
+   */
+  _createRouteClaimant(route, host) {
+    const namespace = route.namespace || route.metadata?.namespace || 'default';
+    const projects = (this._safe(() => this.cluster?.getByKind('Project')) || [])
+      .filter((project) => project.status?.phase !== 'Terminating')
+      .map((project) => project.metadata?.name)
+      .filter((name) => name && name !== namespace);
+    const claimantNamespace =
+      projects.find((name) => name === 'default') || projects[0] || 'openshift-monitoring';
+    if (!claimantNamespace || claimantNamespace === namespace) return null;
+    const stackHash = Math.abs(
+      String(host)
+        .split('')
+        .reduce((hash, character) => (hash * 31 + character.charCodeAt(0)) % 99991, 7)
+    );
+    const claimName = `host-claim-${stackHash}`;
+    const existing = this.cluster.getByName('Route', claimName, claimantNamespace);
+    if (existing) return existing;
+    const serviceName = route.spec?.to?.name || route.name;
+    let serviceUid = null;
+    if (!this.cluster.getByName('Service', serviceName, claimantNamespace)) {
+      // The competing namespace really runs the same app: give its claim a
+      // backing Service so the claimant Route itself is admitted (the router
+      // rejects the target because the HOST is taken, not the claimant).
+      const service = this._safe(() =>
+        this.cluster.addResource({
+          kind: 'Service',
+          metadata: {
+            name: serviceName,
+            namespace: claimantNamespace,
+            labels: { 'openshiftgames.io/route-host-claim': 'true' },
+            annotations: { 'openshiftgames.io/incident-target': 'true' },
+          },
+          spec: {
+            selector: { app: serviceName },
+            ports: [
+              {
+                name: 'http',
+                port: Number(route.spec?.port?.targetPort) || 8080,
+                targetPort: Number(route.spec?.port?.targetPort) || 8080,
+                protocol: 'TCP',
+              },
+            ],
+          },
+          status: {},
+        })
+      );
+      serviceUid = service?.uid || null;
+    }
+    const claimant = this._safe(() =>
+      this.cluster.addResource({
+        kind: 'Route',
+        metadata: {
+          name: claimName,
+          namespace: claimantNamespace,
+          // Older claim: the router admits the oldest Route for a host/path.
+          creationTimestamp: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
+          labels: { 'openshiftgames.io/route-host-claim': 'true' },
+          annotations: { 'openshiftgames.io/incident-target': 'true' },
+        },
+        spec: {
+          host,
+          path: route.spec?.path || '/',
+          to: { kind: 'Service', name: serviceName, weight: route.spec?.to?.weight || 100 },
+          port: route.spec?.port ? JSON.parse(JSON.stringify(route.spec.port)) : undefined,
+          wildcardPolicy: 'None',
+        },
+        status: {},
+      })
+    );
+    if (!claimant) return null;
+    return { claimant, serviceUid };
   }
 
   _damageNetworkPolicy(incident) {
@@ -3328,17 +3518,36 @@ class IncidentEngine {
       () => this.cluster.defaultRouteHost?.(route.name, route.namespace),
       `${route.name}-${route.namespace || 'default'}.apps.cluster.example.com`
     );
-    if (effect === 'restore-host') {
-      if (route.spec) route.spec.host = incident.restoreState?.host || defaultHost;
+    // Real HostAlreadyClaimed admission is cleared by removing the competing
+    // host claim / giving the Route an unclaimed host (issue #52). The incident
+    // panel's resolution action removes the claim it planted at onset.
+    const claimantUid = incident.restoreState?.conflictRouteUid;
+    if (claimantUid && this.cluster.get(claimantUid)) {
+      this._safe(() => this.cluster.remove(claimantUid));
+    }
+    const claimantServiceUid = incident.restoreState?.conflictServiceUid;
+    if (claimantServiceUid && this.cluster.get(claimantServiceUid)) {
+      this._safe(() => this.cluster.remove(claimantServiceUid));
+    }
+    if (effect === 'restore-host' || effect === 'admit') {
+      if (route.spec) {
+        const wantedHost = incident.restoreState?.host || defaultHost;
+        route.spec.host = wantedHost;
+      }
     }
     if (effect === 'restore-tls') {
       route.spec = route.spec || {};
-      route.spec.tls = { ...(incident.restoreState?.tls || {}), termination: 'edge' };
+      if (incident.restoreState?.tls && Object.keys(incident.restoreState.tls).length > 0) {
+        route.spec.tls = JSON.parse(JSON.stringify(incident.restoreState.tls));
+      } else {
+        route.spec.tls = { termination: 'edge' };
+      }
       if (!route.spec.tls.certificate)
         route.spec.tls.certificate =
           '-----BEGIN CERTIFICATE-----\n[renewed]\n-----END CERTIFICATE-----';
       if (!route.spec.tls.key)
         route.spec.tls.key = '-----BEGIN PRIVATE KEY-----\n[renewed]\n-----END PRIVATE KEY-----';
+      delete route.spec.tls.externalCertificate;
       this._clearAnnotation(route, 'openshiftgames.io/tls-error');
     }
 
@@ -4808,7 +5017,7 @@ class IncidentEngine {
         : base.template !== currentTemplate;
       if (fixed) return false;
     }
-    const pods = this._workloadPods(target);
+    const pods = this._workloadPodsForDamage(incident, target);
     if (pods.length === 0) return false;
     const podHealthy = (pod) =>
       !!pod &&

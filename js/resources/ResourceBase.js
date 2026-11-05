@@ -304,12 +304,18 @@ export class ResourceBase {
     return condition ? condition.status === 'True' : false;
   }
 
+  /**
+   * Change the resource phase. Real kubelet/controllers never emit a
+   * `PhaseChange` event (they emit reasons such as Scheduled/Pulling/Created/
+   * Started for Pods), so this only updates status.phase — recording lifecycle
+   * events is the simulation/incident engine's job (#54e).
+   * @param {string} phase
+   * @returns {this}
+   */
   setPhase(phase) {
     if (this.status.phase !== phase) {
-      const oldPhase = this.status.phase;
       this.status.phase = phase;
       this._bumpResourceVersion();
-      this.recordEvent('Normal', 'PhaseChange', `Phase changed from ${oldPhase} to ${phase}`);
     }
     return this;
   }

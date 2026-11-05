@@ -2983,6 +2983,9 @@ export class CommandBar {
 
   init() {
     if (typeof document === 'undefined') return;
+    // #50: exported shell variables live in the session/terminal, but a new
+    // game run (engine reset) starts a fresh shell like a new login session.
+    this._installEngineResetListener();
     if (this.container?.isConnected) return;
     this.container?.remove();
     this.container = document.createElement('div');
@@ -3361,6 +3364,15 @@ export class CommandBar {
     return this.executeCommand(raw);
   }
 
+  /** Reset the simulated shell session when the engine restarts (#50). */
+  _installEngineResetListener() {
+    if (this._boundEngineReset) return;
+    const bus = this.eventBus;
+    if (!bus || typeof bus.on !== 'function') return;
+    this._boundEngineReset = () => this.shellTools?.resetSession?.();
+    bus.on('engine:reset', this._boundEngineReset);
+  }
+
   _runCommandLine(rawInput) {
     const raw = String(rawInput ?? '').trim();
     if (!raw)
@@ -3374,35 +3386,63 @@ export class CommandBar {
     const preprocessed = this.shellTools?.preprocess
       ? this.shellTools.preprocess(raw)
       : { command: raw, stdin: null, display: raw };
+    // #50: split `;` / `&&` / `||` BEFORE anything executes. The splitter is
+    // quote/escape-aware and keeps pipes/redirects inside one segment; the
+    // unsupported-grammar check runs over every segment up front so no part of
+    // an unsupported line is ever executed silently.
+    const plan = this.shellTools?.splitCommandLine
+      ? this.shellTools.splitCommandLine(preprocessed.command)
+      : { segments: [preprocessed.command], operators: [], error: null };
+    const syntaxError =
+      plan.error ||
+      (this.shellTools?.findUnsupportedShellSyntax
+        ? this.shellTools.findUnsupportedShellSyntax(plan.segments)
+        : null);
     const { command: normalized, usedKubectl, prefixed } = stripCommandPrefix(preprocessed.command);
-    const firstTokens = tokenizeCommand(normalized);
+    const firstTokens = tokenizeCommand(plan.segments[0] || '');
     const baseCommand = (firstTokens[0] || '').toLowerCase();
 
     this._echoCommand(preprocessed.display ?? raw, normalized, usedKubectl, prefixed);
     this._emit('command:raw', { command: normalized, raw, baseCommand });
-
-    // Easter eggs short-circuit execution (never mutate the cluster).
-    const easterEgg = this._checkEasterEggs(normalized);
-    if (easterEgg) {
-      this._appendOutput(easterEgg.message, easterEgg.color || 'text-amber-400');
-      if (easterEgg.xp) this._emit('xp:gain', { amount: easterEgg.xp });
-      if (easterEgg.achievement) this._emit('easter-egg:triggered', { id: easterEgg.achievement });
-      this._recordCommand(raw, baseCommand, true);
+    if (syntaxError) {
+      this._appendOutput(syntaxError, 'text-red-400');
+      this._recordCommand(raw, baseCommand, false);
       this._emit('command:executed', {
         command: normalized,
         raw,
         baseCommand,
-        success: true,
+        success: false,
         timestamp: Date.now(),
       });
-      return {
-        error: false,
-        message: easterEgg.message,
-        raw,
-        normalized,
-        baseCommand,
-        success: true,
-      };
+      return { error: true, message: syntaxError, raw, normalized, baseCommand, success: false };
+    }
+
+    // Easter eggs short-circuit execution (never mutate the cluster). They are
+    // exact whole-line phrases, so a chained line dispatches normally.
+    if (plan.segments.length === 1) {
+      const easterEgg = this._checkEasterEggs(normalized);
+      if (easterEgg) {
+        this._appendOutput(easterEgg.message, easterEgg.color || 'text-amber-400');
+        if (easterEgg.xp) this._emit('xp:gain', { amount: easterEgg.xp });
+        if (easterEgg.achievement)
+          this._emit('easter-egg:triggered', { id: easterEgg.achievement });
+        this._recordCommand(raw, baseCommand, true);
+        this._emit('command:executed', {
+          command: normalized,
+          raw,
+          baseCommand,
+          success: true,
+          timestamp: Date.now(),
+        });
+        return {
+          error: false,
+          message: easterEgg.message,
+          raw,
+          normalized,
+          baseCommand,
+          success: true,
+        };
+      }
     }
 
     // #2: server-side authorization gate (engine owns the RBAC model). Runs once
@@ -3411,27 +3451,99 @@ export class CommandBar {
     const gateBlocked = this._authorizationGate(normalized, raw, baseCommand);
     if (gateBlocked) return gateBlocked;
 
-    const { stages, redirect } = splitPipeline(normalized);
-    const outputs = [];
-    let stdin = preprocessed.stdin ?? null;
-    let failed = false;
-    let failureMessage = '';
+    const lineOutputs = [];
+    let lastStatus = true;
+    let stdinPending = preprocessed.stdin ?? null;
+    let ranSegment = false;
 
-    for (let i = 0; i < stages.length; i++) {
-      const stage = stages[i];
-      const isLast = i === stages.length - 1;
-      const result = this._runStage(stage, stdin, i === 0 && prefixed);
+    for (let index = 0; index < plan.segments.length; index += 1) {
+      const separator = index === 0 ? null : plan.operators[index - 1];
+      // Shell sequencing: `;` always runs, `&&` only after success, `||` only
+      // after failure. A skipped segment leaves the previous exit status alone
+      // (POSIX left-associative `a && b || c`).
+      const shouldRun =
+        index === 0 ||
+        separator === ';' ||
+        (separator === '&&' && lastStatus) ||
+        (separator === '||' && !lastStatus);
+      if (!shouldRun) continue;
+      const segment = String(plan.segments[index] ?? '').trim();
+      if (!segment) continue;
+      // Variables expand per segment (bash expands after parsing), so a value
+      // containing `;` is never re-parsed as an operator.
+      const expanded = this.shellTools?.expandVariables
+        ? this.shellTools.expandVariables(segment)
+        : segment;
+      // Bare shell variable assignment (`HOST=$(oc get route … -o …)`, the L20
+      // hint form): silent, session-persistent, and visible to `$VAR` in later
+      // segments of the same line (#50).
+      const assignment = this.shellTools?.parseShellAssignment?.(expanded);
+      if (assignment) {
+        this.shellTools.setSessionVariable(assignment.name, assignment.value);
+        stdinPending = null;
+        ranSegment = true;
+        lastStatus = true;
+        continue;
+      }
+      const result = this._runSegment(expanded, stdinPending, !ranSegment && prefixed);
+      stdinPending = null;
+      ranSegment = true;
+      lastStatus = !result.error;
       if (result.clear) {
         this._outputLines = [];
         if (this.output) this.output.innerHTML = '';
-        outputs.push('');
+        lineOutputs.length = 0;
         continue;
       }
       if (result.exit) {
         this.hide();
-        outputs.push('');
-        continue;
+        break;
       }
+      let text = result.error ? result.message || '' : result.output || '';
+      // Multi-command lines append each segment's stdout in order; strip the
+      // shell command's single trailing newline so `echo a; echo b` prints two
+      // lines instead of a blank line between the segments (#50).
+      if (plan.segments.length > 1) text = text.replace(/\n$/, '');
+      if (text) this._appendOutput(text, result.error ? 'text-red-400' : 'text-white/70');
+      lineOutputs.push(text);
+    }
+
+    // Exit status of the last executed segment is the line's result.
+    const message = lineOutputs.filter(Boolean).join('\n');
+    const success = lastStatus;
+    this._recordCommand(raw, baseCommand, success);
+    this._emit('command:executed', {
+      command: normalized,
+      raw,
+      baseCommand,
+      success,
+      timestamp: Date.now(),
+    });
+    if (success && MUTATING_COMMANDS.has(baseCommand))
+      this._emitMutationAuthCheck(normalized, baseCommand);
+    return { error: !success, message, raw, normalized, baseCommand, success };
+  }
+
+  /**
+   * Run one shell sequencing segment (#50): its own pipeline stages plus a
+   * trailing output redirect. Pipes feed stdout to the next stage inside the
+   * segment only; output of every executed segment is appended by the caller.
+   * @param {string} segment
+   * @param {string|null} stdin piped/heredoc stdin (first executed segment only)
+   * @param {boolean} linePrefixed true when the original line started with `oc`
+   * @returns {{error:boolean,message:string,output:string,clear?:boolean,exit?:boolean}}
+   */
+  _runSegment(segment, stdin, linePrefixed = false) {
+    const { stages, redirect } = splitPipeline(segment);
+    let stageStdin = stdin ?? null;
+    let failed = false;
+    let failureMessage = '';
+    let output = '';
+    for (let index = 0; index < stages.length; index += 1) {
+      const isLast = index === stages.length - 1;
+      const result = this._runStage(stages[index], stageStdin, index === 0 && linePrefixed);
+      if (result.clear) return { error: false, message: '', output: '', clear: true };
+      if (result.exit) return { error: false, message: '', output: '', exit: true };
       if (result.error) {
         failed = true;
         // Silent shell commands (`curl -s` on a failed request) print nothing at
@@ -3447,32 +3559,16 @@ export class CommandBar {
           failureMessage = written.message;
         } else {
           // Shell redirection is silent on success (`cmd > file` prints nothing).
-          outputs.push('');
+          output = '';
         }
       } else if (isLast) {
-        if (text) this._appendOutput(text, 'text-white/70');
-        outputs.push(text);
+        output = text;
       } else {
         // Pipes: stdout feeds the next stage and is not echoed by the shell.
-        stdin = text;
+        stageStdin = text;
       }
     }
-
-    if (failed && failureMessage) this._appendOutput(failureMessage, 'text-red-400');
-
-    const message = failed ? failureMessage : outputs.filter(Boolean).join('\n');
-    const success = !failed;
-    this._recordCommand(raw, baseCommand, success);
-    this._emit('command:executed', {
-      command: normalized,
-      raw,
-      baseCommand,
-      success,
-      timestamp: Date.now(),
-    });
-    if (success && MUTATING_COMMANDS.has(baseCommand))
-      this._emitMutationAuthCheck(normalized, baseCommand);
-    return { error: failed, message, raw, normalized, baseCommand, success };
+    return { error: failed, message: failureMessage, output };
   }
 
   _runStage(stage, stdin, linePrefixed = false) {
@@ -3493,6 +3589,11 @@ export class CommandBar {
     if (!explicitlyPrefixed && this.shellTools && this.shellTools.isShellLead(first)) {
       return this.shellTools.runTokens(tokens, stdin ?? null);
     }
+    // Cobra validates flag values before dispatch: `oc -n` / `oc --namespace`
+    // must report `flag needs an argument` instead of an unknown-command error
+    // (#54a). Runs before the global-flag hoisting below.
+    const flagValueError = this._validateFlagValues(tokens);
+    if (flagValueError) return flagValueError;
     // Real oc accepts global flags before the subcommand (`oc -n ns patch …`).
     if (
       tokens.length > 1 &&
@@ -3560,6 +3661,74 @@ export class CommandBar {
             `Error: unknown shorthand flag: '${char}' in ${token}\nSee 'oc ${command} --help' for usage.`
           );
         }
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Validate that flags which take a value actually received one (#54a).
+   *
+   * cobra/pflag parse values before the command runs, so `oc -n` must fail with
+   * `flag needs an argument: 'n' in -n` and `oc --namespace` with
+   * `flag needs an argument: --namespace` — not an unknown-command error or a
+   * namespace literally called `true`. Only flags whose value semantics are
+   * unambiguous across every command are checked (`-c/-f/-p` are value flags in
+   * some commands and boolean flags in others, e.g. `oc logs -f`).
+   * @param {string[]} tokens
+   * @returns {{error:true,message:string}|null}
+   */
+  _validateFlagValues(tokens) {
+    // Short flags that always consume a value in the simulated CLI. `-n`
+    // (namespace), `-o` (output), `-l` (selector), `-k`, `-e`, `-u`, `-z` —
+    // ambiguous `-c/-f/-p` (value for some commands, boolean for `oc logs -f`)
+    // are deliberately excluded.
+    const shortValueFlags = new Set(['e', 'k', 'l', 'n', 'o', 'u', 'z']);
+    // Some long flags are booleans for a specific command even though the shared
+    // VALUE_LONG_FLAGS set lists them as value-taking (`oc delete --cascade` vs
+    // `oc set env --from`, …). Skip those to avoid rejecting valid invocations.
+    const booleanElsewhere = new Set([
+      'build',
+      'containers',
+      'dockerfile',
+      'format',
+      'node',
+      'overwrite',
+      'reference-policy',
+      'remove',
+      'source',
+    ]);
+    for (let i = 0; i < tokens.length; i += 1) {
+      const token = String(tokens[i] ?? '');
+      if (token === '--') break;
+      if (token === '-' || !token.startsWith('-')) continue;
+      if (/^-\d/.test(token)) continue; // negative number positional
+      const next = tokens[i + 1];
+      const hasNext = next !== undefined && !(String(next).startsWith('-') && String(next) !== '-');
+      if (token.startsWith('--')) {
+        const [name, inline] = token.slice(2).split('=');
+        if (inline !== undefined) continue;
+        if (
+          !VALUE_LONG_FLAGS.has(name) ||
+          BOOLEAN_LONG_FLAGS.has(name) ||
+          booleanElsewhere.has(name)
+        )
+          continue;
+        // Real cobra prints these messages with a lowercase `error:` prefix.
+        if (!hasNext) return this._err(`error: flag needs an argument: --${name}`);
+        continue;
+      }
+      const rest = token.slice(1);
+      if (rest.includes('=')) continue;
+      // Inspect a short-flag cluster left-to-right: a value-taking shorthand
+      // consumes the remainder of the cluster as its attached value (`-owide`),
+      // or needs the next token when it is the last character (`-n`).
+      for (let charIndex = 0; charIndex < rest.length; charIndex += 1) {
+        if (!shortValueFlags.has(rest[charIndex])) continue;
+        if (charIndex < rest.length - 1) break; // attached value, nothing missing
+        if (!hasNext)
+          return this._err(`error: flag needs an argument: '${rest[charIndex]}' in ${token}`);
+        break;
       }
     }
     return null;
@@ -3990,6 +4159,8 @@ export class CommandBar {
 
   destroy() {
     if (this._pendingLogin) this._closeLoginPrompt();
+    if (this._boundEngineReset) this.eventBus?.off?.('engine:reset', this._boundEngineReset);
+    this._boundEngineReset = null;
     this._clearRolloutWatches?.();
     this._clearBuildWatches?.();
     if (typeof document !== 'undefined')
@@ -4396,11 +4567,26 @@ Object.assign(CommandBar.prototype, {
     }
   },
 
+  /**
+   * Map an absolute `/home/student/...` path (what `$HOME` expands to after the
+   * shell layer runs, #50) back onto the virtual filesystem, whose root is the
+   * workstation home directory. Other paths pass through unchanged (the
+   * ManifestEngine normalises leading slashes itself).
+   * @param {string} path
+   * @returns {string}
+   */
+  _normalizeVirtualPath(path) {
+    const raw = String(path ?? '');
+    if (raw === '/home/student') return '';
+    if (raw.startsWith('/home/student/')) return raw.slice('/home/student/'.length);
+    return raw;
+  },
+
   _readVirtualFile(path) {
     const me = this.manifestEngine;
     if (!me || typeof me.readFile !== 'function') return null;
     try {
-      const text = me.readFile(path);
+      const text = me.readFile(this._normalizeVirtualPath(path));
       return typeof text === 'string' ? text : null;
     } catch {
       return null;
@@ -4411,6 +4597,7 @@ Object.assign(CommandBar.prototype, {
     const me = this.manifestEngine;
     if (!me || typeof me.writeFile !== 'function') return this._manifestNotReady();
     try {
+      path = this._normalizeVirtualPath(path);
       let value = String(content ?? '');
       if (options.append) {
         const existing = this._readVirtualFile(path);
@@ -4452,7 +4639,7 @@ Object.assign(CommandBar.prototype, {
       if (!tempPath) return { error: this._manifestNotReady() };
       return { file: tempPath };
     }
-    return { file: path };
+    return { file: this._normalizeVirtualPath(path) };
   },
 
   // ── --dry-run support for `create|apply|replace -f|-k|- ` ───────────────
@@ -4636,6 +4823,7 @@ Object.assign(CommandBar.prototype, {
 
   _applyFileDelegated(path, options = {}) {
     if (!this._manifestReady()) return this._manifestNotReady();
+    path = this._normalizeVirtualPath(path);
     const flags = options.flags || {};
     const dryRun = this._dryRunMode(flags);
     if (dryRun === 'invalid')
@@ -4708,6 +4896,7 @@ Object.assign(CommandBar.prototype, {
 
   _applyKustomizeDelegated(dir, flags = {}) {
     if (!this._manifestReady()) return this._manifestNotReady();
+    dir = this._normalizeVirtualPath(dir);
     const me = this.manifestEngine;
     if (typeof me.applyKustomize !== 'function') {
       return this._err(
@@ -4750,6 +4939,7 @@ Object.assign(CommandBar.prototype, {
 
   _deleteFileDelegated(path, options = {}) {
     if (!this._manifestReady()) return this._manifestNotReady();
+    path = this._normalizeVirtualPath(path);
     const namespaceError = this._requireManifestNamespaces(
       path,
       options.flags || {},
@@ -6494,7 +6684,11 @@ Object.assign(CommandBar.prototype, {
       });
     }
 
-    // 2. Pod lifecycle events (Normal) + failure events (Warning).
+    // 2. Pod failure events (Warning). The kubelet lifecycle stream
+    // (Scheduled → Pulling → Pulled → Created → Started) is recorded by the
+    // engine's real event recorder (#54e); synthesizing Scheduled/Pulling/
+    // Pulled/Created/Started/Ready here as well made `oc describe pod` print a
+    // duplicate, wrongly ordered stream. Warning events stay synthetic.
     for (const pod of this._getKindList('Pod')) {
       const name = pod.metadata?.name;
       if (!name) continue;
@@ -6502,80 +6696,25 @@ Object.assign(CommandBar.prototype, {
       const created = pod.metadata?.creationTimestamp
         ? new Date(pod.metadata.creationTimestamp).getTime()
         : Date.now() - 300000;
-      const node = pod.spec?.nodeName || `worker-${stableHash(name, 3) + 1}`;
-      const object = `pod/${name}`;
-      push({
-        lastTimestamp: created + 2000,
-        type: 'Normal',
-        reason: 'Scheduled',
-        object,
-        subobject: '',
-        source: 'default-scheduler',
-        message: `Successfully assigned ${podNamespace}/${name} to ${node}`,
-        namespace: podNamespace,
-      });
       const podStatus = this._podStatus(pod);
       const phase = pod.status?.phase || 'Pending';
-      if (phase === 'Pending') continue;
-      push({
-        lastTimestamp: created + 4000,
-        type: 'Normal',
-        reason: 'Pulling',
-        object,
-        subobject: '',
-        source: 'kubelet',
-        message: `Pulling image "${this._containerList(pod)[0]?.image || 'nginx:latest'}"`,
-        namespace: podNamespace,
-      });
-      push({
-        lastTimestamp: created + 6000,
-        type: 'Normal',
-        reason: 'Pulled',
-        object,
-        subobject: '',
-        source: 'kubelet',
-        message: 'Successfully pulled image',
-        namespace: podNamespace,
-      });
-      push({
-        lastTimestamp: created + 7000,
-        type: 'Normal',
-        reason: 'Created',
-        object,
-        subobject: '',
-        source: 'kubelet',
-        message: `Created container ${this._containerList(pod)[0]?.name || 'main'}`,
-        namespace: podNamespace,
-      });
-      if (phase === 'Running') {
-        push({
-          lastTimestamp: created + 8000,
-          type: 'Normal',
-          reason: 'Started',
-          object,
-          subobject: '',
-          source: 'kubelet',
-          message: `Started container ${this._containerList(pod)[0]?.name || 'main'}`,
-          namespace: podNamespace,
-        });
-      } else if (
+      const failedStatus =
         phase === 'Failed' ||
-        /BackOff|Error|ImagePull|CreateContainer|CrashLoop/.test(podStatus.status)
-      ) {
-        push({
-          lastTimestamp: created + 12000,
-          type: 'Warning',
-          reason: podStatus.status === 'ImagePullBackOff' ? 'Failed' : 'BackOff',
-          object,
-          subobject: '',
-          source: 'kubelet',
-          message:
-            podStatus.status === 'ImagePullBackOff'
-              ? 'Failed to pull image: manifest unknown'
-              : 'Back-off restarting failed container',
-          namespace: podNamespace,
-        });
-      }
+        /BackOff|Error|ImagePull|CreateContainer|CrashLoop/.test(podStatus.status);
+      if (!failedStatus) continue;
+      push({
+        lastTimestamp: created + 12000,
+        type: 'Warning',
+        reason: podStatus.status === 'ImagePullBackOff' ? 'Failed' : 'BackOff',
+        object: `pod/${name}`,
+        subobject: '',
+        source: 'kubelet',
+        message:
+          podStatus.status === 'ImagePullBackOff'
+            ? 'Failed to pull image: manifest unknown'
+            : 'Back-off restarting failed container',
+        namespace: podNamespace,
+      });
     }
 
     // 3. Deployment scaling events.
@@ -7773,6 +7912,15 @@ Object.assign(CommandBar.prototype, {
         const dcAlias = ['dc', 'deploymentconfig', 'deploymentconfigs'];
         if (dcAlias.includes(kindToken.toLowerCase())) kind = 'Deployment';
       }
+      // `endpoints` is a virtual view (endpoints are synthesized from Services);
+      // accept it in multi-resource requests too, e.g. `oc get pods,endpoints,route`
+      // (#52 — it used to fail with "the server doesn't have a resource type").
+      if (
+        !kind &&
+        ['endpoints', 'ep', 'endslices', 'endpointslices'].includes(kindToken.toLowerCase())
+      ) {
+        kind = 'Endpoints';
+      }
       if (!kind) return this._resourceTypeError(kindToken);
       kinds.push({ kind, token: kindToken });
     }
@@ -7793,6 +7941,21 @@ Object.assign(CommandBar.prototype, {
       ? new Set(this._visibleProjectNames())
       : null;
     for (const { kind } of kinds) {
+      // Virtual Endpoints: synthesized from Services, one object per Service.
+      if (kind === 'Endpoints') {
+        const endpointsObjects = this._endpointsObjects({ allNamespaces, namespace });
+        if (multiKindStructured) {
+          if (endpointsObjects.length) combinedResources.push(...endpointsObjects);
+          continue;
+        }
+        if (endpointsObjects.length) {
+          sections.push(
+            this._formatEndpointsObjects(endpointsObjects, { output, allNamespaces, name: null })
+              .message
+          );
+        }
+        continue;
+      }
       let resources = this._resources(kind);
       if (kind === 'Project' && visibleProjectNames) {
         resources = resources.filter((resource) =>
@@ -8447,8 +8610,16 @@ Object.assign(CommandBar.prototype, {
     return this._ok(padTable(['NAME', 'AGE'], filtered));
   },
 
-  _getEndpointsView({ flags, allNamespaces, namespace, name }) {
-    const output = this._outputFormat(flags);
+  /**
+   * Build the virtual Endpoints objects for every Service (#52): one object per
+   * Service, `subsets` listing the ready pod IPs + target ports.
+   * `oc get endpoints` has always been a virtual view; the multi-kind resolver
+   * (`oc get pods,endpoints,route`) reuses this instead of failing with
+   * "the server doesn't have a resource type \"endpoints\"".
+   * @param {{allNamespaces?: boolean, namespace?: string, name?: string|null}} [options]
+   * @returns {object[]}
+   */
+  _endpointsObjects({ allNamespaces = false, namespace = 'default', name = null } = {}) {
     let services = this._resources('Service');
     if (!allNamespaces)
       services = services.filter((service) => service.metadata?.namespace === namespace);
@@ -8502,12 +8673,11 @@ Object.assign(CommandBar.prototype, {
         subsets,
       });
     }
-    if (!endpointsObjects.length) {
-      if (name) return this._err(`Error from server (NotFound): endpoints "${name}" not found`);
-      return this._ok(
-        allNamespaces ? 'No resources found.' : `No resources found in ${namespace} namespace.`
-      );
-    }
+    return endpointsObjects;
+  },
+
+  /** Render a list of virtual Endpoints objects in cli-runtime format. */
+  _formatEndpointsObjects(endpointsObjects, { output, allNamespaces, name = null }) {
     if (output.format === 'name') {
       return this._ok(
         endpointsObjects.map((object) => `endpoints/${object.metadata.name}`).join('\n')
@@ -8550,6 +8720,18 @@ Object.assign(CommandBar.prototype, {
       ];
     });
     return this._ok(padTable(headers, rows));
+  },
+
+  _getEndpointsView({ flags, allNamespaces, namespace, name }) {
+    const output = this._outputFormat(flags);
+    const endpointsObjects = this._endpointsObjects({ allNamespaces, namespace, name });
+    if (!endpointsObjects.length) {
+      if (name) return this._err(`Error from server (NotFound): endpoints "${name}" not found`);
+      return this._ok(
+        allNamespaces ? 'No resources found.' : `No resources found in ${namespace} namespace.`
+      );
+    }
+    return this._formatEndpointsObjects(endpointsObjects, { output, allNamespaces, name });
   },
 
   _cmdGetEvents(tokens) {
@@ -10959,18 +11141,48 @@ Object.assign(CommandBar.prototype, {
         return this._ok(result.message);
       }
     }
-    if (kind === 'Subscription' && name) {
+    if (kind === 'Subscription') {
+      // `oc delete sub a b -n ns` deletes every requested Subscription (#53E):
+      // this special case used to return after the first name, silently leaving
+      // the rest behind. Deleting a Subscription still uninstalls the operator
+      // while keeping its CSV, like real OLM.
+      const requested = name ? [name, ...positionals.slice(2)] : positionals.slice(1);
       const subscriptions = this._resources('Subscription');
-      const target = subscriptions.find((subscription) => subscription.metadata?.name === name);
-      if (target) {
-        this._deleteResource('Subscription', name, { namespace: target.metadata?.namespace });
-        this._emit('operator:uninstalled', { name, namespace: target.metadata?.namespace });
-        return this._ok(`subscription.operators.coreos.com "${name}" deleted`);
+      const deletedLines = [];
+      const missing = [];
+      for (const subscriptionName of requested) {
+        const target = subscriptions.find(
+          (subscription) => subscription.metadata?.name === subscriptionName
+        );
+        if (!target) {
+          missing.push(subscriptionName);
+          continue;
+        }
+        if (dryRun) {
+          deletedLines.push(
+            `subscription.operators.coreos.com "${subscriptionName}" deleted (dry run)`
+          );
+          continue;
+        }
+        this._deleteResource('Subscription', subscriptionName, {
+          namespace: target.metadata?.namespace,
+        });
+        this._emit('operator:uninstalled', {
+          name: subscriptionName,
+          namespace: target.metadata?.namespace,
+        });
+        deletedLines.push(`subscription.operators.coreos.com "${subscriptionName}" deleted`);
       }
-      if (ignoreNotFound) return this._ok('');
-      return this._err(
-        `Error from server (NotFound): subscriptions.operators.coreos.com "${name}" not found`
-      );
+      if (missing.length && !ignoreNotFound) {
+        // Real oc deletes the names it finds, then reports each missing one and
+        // exits non-zero.
+        const notFoundLines = missing.map(
+          (missingName) =>
+            `Error from server (NotFound): subscriptions.operators.coreos.com "${missingName}" not found`
+        );
+        return this._err([...deletedLines, ...notFoundLines].join('\n'));
+      }
+      return this._ok(deletedLines.join('\n'));
     }
     if (kind === 'Identity') {
       const identityName = name || positionals[1];
@@ -13454,8 +13666,18 @@ Object.assign(CommandBar.prototype, {
           ...(port ? { port } : {}),
           namespace: context.namespace,
           protocol: 'TCP',
+          // Container resolved from the workload's pod template, not `main`
+          // (#54d: `oc exec deploy/webapp -- curl …` runs in container webapp).
+          container: context.containerName,
         });
         if (result && Array.isArray(result.lines) && result.lines.length) return ok(result.lines);
+      }
+      // Fallback body when the engine cannot route the request: use the app's
+      // real response for the origin-hello-openshift image and the resolved
+      // container name (never a hardcoded `main`, #54d).
+      const image = String(context.container?.image || '');
+      if (/hello-openshift/.test(image)) {
+        return ok(['<html><body>Hello OpenShift!</body></html>']);
       }
       const selector = context.pod?.metadata?.labels?.app || '';
       return ok([
@@ -15890,26 +16112,32 @@ Object.assign(CommandBar.prototype, {
 
   // ── Node debug session (issue #28) ────────────────────────────────────────
   /**
-   * Resolve a node for `oc debug`. Real OCP names are `worker-0`/`worker-1`/
-   * `master-0`; legacy level data still says `node-2`, so accept both.
+   * Resolve a node for `oc debug` (#53F).
+   *
+   * Resolution is exact-first: the requested name must match a real Node
+   * resource. Only when that misses do we accept a *forward* legacy alias from
+   * the campaign node catalog (`node-1 → worker-0`, `node-2 → worker-1`,
+   * `node-3 → master-0`) — the reverse direction used to alias a real name
+   * onto whichever legacy node happened to exist, so `oc debug node/worker-9`
+   * (or `worker-0` on a legacy-named cluster) could silently land elsewhere.
+   * Forward aliases stay so campaign level data authored with `node-N` keeps
+   * working (contract with IncidentEngine NODE_NAME_ALIASES).
    * @param {string} name
    * @returns {object|null}
    */
   _findDebugNode(name) {
-    const aliases = {
-      'node-1': 'worker-0',
-      'node-2': 'worker-1',
-      'node-3': 'master-0',
-      'worker-0': 'node-1',
-      'worker-1': 'node-2',
-      'master-0': 'node-3',
-    };
-    const candidates = [name, aliases[String(name || '').toLowerCase()]].filter(Boolean);
-    for (const candidate of candidates) {
-      const node = this._findResource('Node', candidate, {});
-      if (node) return node;
-    }
-    return null;
+    const requested = String(name || '').trim();
+    if (!requested) return null;
+    const exact = this._findResource('Node', requested, {});
+    if (exact) return exact;
+    // Forward-only legacy alias: campaign level data still names nodes node-1…3
+    // while the cluster presents worker-0/worker-1/master-0.
+    const legacy = requested.toLowerCase().match(/^node-([1-9]\d*)$/);
+    if (!legacy) return null;
+    const catalog = ['worker-0', 'worker-1', 'master-0'];
+    const mapped = catalog[Number(legacy[1]) - 1];
+    if (!mapped) return null;
+    return this._findResource('Node', mapped, {});
   },
 
   /**

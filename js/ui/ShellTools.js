@@ -59,6 +59,10 @@ export const SHELL_COMMANDS = [
   'which',
   'env',
   'printenv',
+  'export',
+  'unset',
+  'true',
+  'false',
   'openssl',
   'curl',
   'skopeo',
@@ -120,6 +124,228 @@ export function tokenizeShell(input) {
   }
   if (current !== '') tokens.push(current);
   return tokens;
+}
+
+/**
+ * Split a raw shell command line into `;` / `&&` / `||` segments (issue #50).
+ *
+ * The split is quote- and escape-aware, so operators inside quotes are plain
+ * data; pipes and redirects stay inside one segment (the CommandBar's
+ * splitPipeline() scopes them per segment). Newlines behave like `;`, so a
+ * multi-line paste never silently runs only its first line.
+ *
+ * @param {string} input
+ * @returns {{segments: string[], operators: Array<';'|'&&'|'||'>, error: string|null}}
+ */
+export function splitShellSegments(input) {
+  const text = String(input ?? '');
+  const segments = [];
+  const operators = [];
+  let current = '';
+  let quote = null;
+  let escaped = false;
+  const flushSegment = () => {
+    const segment = current.trim();
+    current = '';
+    return segment;
+  };
+  const syntaxError = (token, message) => ({
+    segments,
+    operators,
+    error: message || `simulator: syntax error near unexpected token \`${token}'`,
+  });
+  for (let i = 0; i < text.length; i += 1) {
+    const ch = text[i];
+    if (escaped) {
+      // Keep the backslash for the tokenizer, which unescapes the pair.
+      current += `\\${ch}`;
+      escaped = false;
+      continue;
+    }
+    if (ch === '\\') {
+      escaped = true;
+      continue;
+    }
+    if (quote) {
+      current += ch;
+      if (ch === quote) quote = null;
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      quote = ch;
+      current += ch;
+      continue;
+    }
+    if (ch === '&' && text[i + 1] === '&') {
+      const segment = flushSegment();
+      if (!segment) return syntaxError('&&');
+      segments.push(segment);
+      operators.push('&&');
+      i += 1;
+      continue;
+    }
+    if (ch === '|' && text[i + 1] === '|') {
+      const segment = flushSegment();
+      if (!segment) return syntaxError('||');
+      segments.push(segment);
+      operators.push('||');
+      i += 1;
+      continue;
+    }
+    if (ch === '&') {
+      // Single `&` would background the pipeline. The simulator runs
+      // synchronously, so fail loudly instead of pretending (#50).
+      return syntaxError(
+        '&',
+        'simulator: background jobs (&) are not supported — run one command per line'
+      );
+    }
+    if (ch === ';' || ch === '\n') {
+      const segment = flushSegment();
+      // A leading/duplicate separator (`; echo`, `a;;b`) is a bash syntax error.
+      if (!segment) return syntaxError(ch);
+      segments.push(segment);
+      operators.push(';');
+      continue;
+    }
+    current += ch;
+  }
+  if (escaped) current += '\\';
+  if (quote) {
+    return syntaxError(quote, 'simulator: syntax error: unterminated quoted string');
+  }
+  const last = flushSegment();
+  if (last) segments.push(last);
+  if (operators.length >= segments.length) {
+    const dangling = operators.pop();
+    if (dangling !== ';') {
+      return syntaxError(
+        dangling,
+        `simulator: syntax error: unexpected end of command line after \`${dangling}'`
+      );
+    }
+  }
+  return { segments, operators, error: null };
+}
+
+/**
+ * Expand `$NAME` / `${NAME}` in a shell word list, bash-style (issue #50).
+ * Single quotes protect the literal; double quotes and unquoted words expand;
+ * a backslash escapes `$`; undefined variables expand to the empty string.
+ * The replacement text is never re-parsed for `;`/`&&` (bash expands after
+ * parsing), which is why the CommandBar calls this per segment.
+ * @param {string} text
+ * @param {Record<string, string>} [env]
+ * @returns {string}
+ */
+export function expandShellVariables(text, env = {}) {
+  const source = String(text ?? '');
+  const lookup = (name) =>
+    Object.prototype.hasOwnProperty.call(env, name) ? String(env[name] ?? '') : '';
+  // `$NAME` / `${NAME}` at position `start` (source[start] === '$').
+  const expansionAt = (start) => {
+    if (source[start + 1] === '{') {
+      const close = source.indexOf('}', start + 2);
+      if (close < 0) return null;
+      const name = source.slice(start + 2, close);
+      if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) return null;
+      return { value: lookup(name), end: close + 1 };
+    }
+    const match = source.slice(start + 1).match(/^[A-Za-z_][A-Za-z0-9_]*/);
+    if (!match) return null;
+    return { value: lookup(match[0]), end: start + 1 + match[0].length };
+  };
+  let result = '';
+  let i = 0;
+  while (i < source.length) {
+    const ch = source[i];
+    if (ch === "'") {
+      const close = source.indexOf("'", i + 1);
+      if (close < 0) return result + source.slice(i);
+      result += source.slice(i, close + 1);
+      i = close + 1;
+      continue;
+    }
+    if (ch === '"') {
+      result += ch;
+      i += 1;
+      while (i < source.length) {
+        const inner = source[i];
+        if (inner === '\\' && i + 1 < source.length) {
+          result += inner + source[i + 1];
+          i += 2;
+          continue;
+        }
+        if (inner === '"') {
+          result += inner;
+          i += 1;
+          break;
+        }
+        if (inner === '$') {
+          const expansion = expansionAt(i);
+          if (expansion) {
+            result += expansion.value;
+            i = expansion.end;
+            continue;
+          }
+        }
+        result += inner;
+        i += 1;
+      }
+      continue;
+    }
+    if (ch === '\\' && i + 1 < source.length) {
+      result += ch + source[i + 1];
+      i += 2;
+      continue;
+    }
+    if (ch === '$') {
+      const expansion = expansionAt(i);
+      if (expansion) {
+        result += expansion.value;
+        i = expansion.end;
+        continue;
+      }
+    }
+    result += ch;
+    i += 1;
+  }
+  return result;
+}
+
+/**
+ * Detect bash constructs the simulator does not model and return a clear error
+ * (#50). Callers must check this for the whole line BEFORE running any segment,
+ * so an unsupported loop/conditional never executes part of the line.
+ * @param {string[]} segments
+ * @returns {string|null}
+ */
+export function findUnsupportedShellSyntax(segments) {
+  const loops = new Set(['for', 'while', 'until', 'do', 'done', 'select']);
+  const conditionals = new Set(['if', 'then', 'elif', 'else', 'fi', 'case', 'esac']);
+  const functions = new Set(['function', '{', '(', '}']);
+  for (const segment of segments || []) {
+    const tokens = tokenizeShell(segment);
+    if (!tokens.length) continue;
+    const first = tokens[0].toLowerCase();
+    if (loops.has(first)) {
+      return 'simulator: shell loops are not supported — run one command per line';
+    }
+    if (conditionals.has(first)) {
+      return 'simulator: shell conditionals are not supported — run one command per line';
+    }
+    if (functions.has(first)) {
+      return 'simulator: shell functions are not supported — run one command per line';
+    }
+    // `foo() { …; }` / `foo () { … }` function definitions.
+    if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(first) && (tokens[1] === '()' || tokens[1] === '(')) {
+      return 'simulator: shell functions are not supported — run one command per line';
+    }
+    if (/^[A-Za-z_][A-Za-z0-9_]*\(\)$/.test(first)) {
+      return 'simulator: shell functions are not supported — run one command per line';
+    }
+  }
+  return null;
 }
 
 function countWords(text) {
@@ -986,6 +1212,93 @@ export class ShellTools {
     this.cwd = '/';
     /** Last command exit code / status, exposed for teaching hints. */
     this.lastExitCode = 0;
+    /**
+     * Exported shell variables (`export NAME=value`, issue #50). Persisted for
+     * the page session / terminal (the same `ShellTools` instance lives across
+     * commands); reset when the engine resets, like a fresh login shell.
+     * @type {Map<string, string>}
+     */
+    this.env = new Map();
+    /**
+     * Plain shell variables (`NAME=value`, not exported). Expand like exported
+     * variables but are not listed by `env`/`printenv`, matching bash (#50).
+     * @type {Map<string, string>}
+     */
+    this.vars = new Map();
+  }
+
+  /** Forget exported / shell variables and shell state (called on `engine:reset`). */
+  resetSession() {
+    this.env.clear();
+    this.vars.clear();
+    this.lastExitCode = 0;
+  }
+
+  /**
+   * The shell environment used for `$VAR` expansion and `env`/`printenv`:
+   * the fixed workstation variables plus every exported variable.
+   * @returns {Record<string, string>}
+   */
+  exportedEnvironment() {
+    const environment = {
+      PATH: '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
+      HOME: '/home/student',
+      USER: String(this.bar?.currentUser || 'kubeadmin'),
+      KUBECONFIG: '/home/student/.kube/config',
+      SHELL: '/bin/bash',
+    };
+    for (const [name, value] of this.env) environment[name] = String(value ?? '');
+    return environment;
+  }
+
+  /**
+   * Variables visible to `$NAME`/`${NAME}` expansion: the workstation
+   * environment plus exported and plain shell variables (later wins).
+   * @returns {Record<string, string>}
+   */
+  sessionEnvironment() {
+    const environment = this.exportedEnvironment();
+    for (const [name, value] of this.vars) environment[name] = String(value ?? '');
+    return environment;
+  }
+
+  /** Expand `$NAME`/`${NAME}` for one shell segment (issue #50). */
+  expandVariables(text) {
+    return expandShellVariables(text, this.sessionEnvironment());
+  }
+
+  /**
+   * Parse a bare `NAME=value` shell assignment (`HOST=$(oc get route …)`).
+   * Only a whole segment whose only token is the assignment qualifies; a
+   * command prefix such as `FOO=bar oc get pods` is not modelled.
+   * @param {string} text
+   * @returns {{name: string, value: string}|null}
+   */
+  parseShellAssignment(text) {
+    const tokens = tokenizeShell(text);
+    if (tokens.length !== 1) return null;
+    const token = tokens[0];
+    const equals = token.indexOf('=');
+    if (equals <= 0) return null;
+    const name = token.slice(0, equals);
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) return null;
+    return { name, value: token.slice(equals + 1) };
+  }
+
+  /** Store a shell variable (exported or not) for later `$VAR` expansion. */
+  setSessionVariable(name, value, { exported = false } = {}) {
+    if (exported) this.env.set(name, String(value ?? ''));
+    else this.vars.set(name, String(value ?? ''));
+  }
+
+  /** Split `a; b && c || d` into segments (issue #50). */
+  splitCommandLine(command) {
+    return splitShellSegments(command);
+  }
+
+  /** Clear simulator message for unsupported bash grammar (issue #50). */
+  findUnsupportedShellSyntax(segments) {
+    return findUnsupportedShellSyntax(segments);
   }
 
   // ── classification / preprocessing ───────────────────────────────────────
@@ -995,12 +1308,35 @@ export class ShellTools {
     return SHELL_COMMAND_SET.has(String(token ?? '').toLowerCase());
   }
 
+  /** Bash reserved words that are shell input even though unsupported (#50). */
+  isShellKeyword(token) {
+    return [
+      'for',
+      'while',
+      'until',
+      'do',
+      'done',
+      'select',
+      'if',
+      'then',
+      'elif',
+      'else',
+      'fi',
+      'case',
+      'esac',
+      'function',
+    ].includes(String(token ?? '').toLowerCase());
+  }
+
   /** True when the whole command line should be treated as shell input. */
   isShellLine(command) {
     const text = String(command ?? '').trim();
     if (!text) return false;
     const first = tokenizeShell(text.split(/\s/)[0])[0] || '';
-    return this.isShellLead(first);
+    if (/^[A-Za-z_][A-Za-z0-9_]*\(\)$/.test(first)) return true; // `foo() { … }`
+    // `NAME=value` shell assignment.
+    if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(first)) return true;
+    return this.isShellLead(first) || this.isShellKeyword(first);
   }
 
   _readFile(path) {
@@ -1060,11 +1396,45 @@ export class ShellTools {
   }
 
   _runSubcommand(command) {
-    const tokens = tokenizeShell(command);
-    if (!tokens.length) return '';
-    const result = this.runTokens(tokens, null);
-    const text = result && typeof result.message === 'string' ? result.message : '';
-    return text.trim().replace(/\n+/g, ' ');
+    const expanded = this.expandVariables(command);
+    const plan = splitShellSegments(expanded);
+    if (plan.error) return '';
+    const cliAvailable = typeof this.bar?._runSegment === 'function';
+    const firstTokens = tokenizeShell(plan.segments[0] || '');
+    const first = String(firstTokens[0] || '').toLowerCase();
+    if (!cliAvailable) {
+      // Standalone ShellTools (Node tests): only a single shell pipeline runs.
+      const result = this.runTokens(firstTokens, null);
+      const text = result && typeof result.message === 'string' ? result.message : '';
+      return text.trim().replace(/\n+/g, ' ');
+    }
+    if (!(first === 'oc' || first === 'kubectl') && !this.isShellLead(first)) {
+      // Not a command this simulator knows; let the CLI surface its error when
+      // the (unevaluated) substitution is re-run as part of the line.
+      return '';
+    }
+    // Run every `;`/`&&`/`||` segment of the substitution like a shell would,
+    // capturing stdout only (#50). Values are never re-parsed as operators.
+    const outputs = [];
+    let lastStatus = true;
+    for (let index = 0; index < plan.segments.length; index += 1) {
+      const separator = index === 0 ? null : plan.operators[index - 1];
+      const shouldRun =
+        index === 0 ||
+        separator === ';' ||
+        (separator === '&&' && lastStatus) ||
+        (separator === '||' && !lastStatus);
+      if (!shouldRun) continue;
+      const segment = String(plan.segments[index] || '').trim();
+      if (!segment) continue;
+      const result = this.bar._runSegment(segment, null, false);
+      lastStatus = !result.error;
+      // Command substitution captures stdout only: stderr (error messages) is
+      // not part of the substituted value, exactly like bash.
+      const text = result.output || '';
+      if (text) outputs.push(text.replace(/\n$/, ''));
+    }
+    return outputs.join('\n').trim().replace(/\n+/g, ' ');
   }
 
   /**
@@ -1150,6 +1520,11 @@ export class ShellTools {
     const raw = String(path ?? '');
     if (raw === '~') return '';
     if (raw.startsWith('~/')) return raw.slice(2);
+    // `$HOME` is expanded by the shell layer (#50) before the command runs, so
+    // map the expanded absolute home directory back onto the virtual filesystem
+    // root (which is the workstation home directory).
+    const absoluteHome = raw.match(/^\/home\/student(?:\/(.*))?$/);
+    if (absoluteHome) return absoluteHome[1] ?? '';
     const home = raw.match(/^\$(?:\{HOME\}|HOME)(\/.*)?$/);
     if (home) return home[1] ? home[1].slice(1) : '';
     return raw;
@@ -1975,18 +2350,75 @@ export class ShellTools {
 
   _cmd_env() {
     return this._ok(
-      [
-        'PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
-        'HOME=/home/student',
-        `USER=${this.bar?.currentUser || 'kubeadmin'}`,
-        'KUBECONFIG=/home/student/.kube/config',
-        'SHELL=/bin/bash',
-      ].join('\n')
+      Object.entries(this.exportedEnvironment())
+        .map(([name, value]) => `${name}=${value}`)
+        .join('\n')
     );
   }
 
-  _cmd_printenv() {
-    return this._cmd_env();
+  _cmd_printenv(args) {
+    const names = (args || []).filter((name) => name && !String(name).startsWith('-'));
+    const environment = this.exportedEnvironment();
+    if (!names.length) return this._cmd_env();
+    const found = [];
+    let missing = false;
+    for (const name of names) {
+      if (Object.prototype.hasOwnProperty.call(environment, name))
+        found.push(String(environment[name]));
+      else missing = true;
+    }
+    if (missing) {
+      // Real printenv exits 1 for an unknown variable without printing an error.
+      return { error: true, message: found.join('\n'), silentFailure: found.length === 0 };
+    }
+    return this._ok(found.join('\n'));
+  }
+
+  /** Shell builtin `unset NAME` — removes a variable exported this session (#50). */
+  _cmd_unset(args) {
+    for (const name of args || []) {
+      if (String(name).startsWith('-')) continue;
+      this.env.delete(String(name));
+      this.vars.delete(String(name));
+    }
+    return this._ok('');
+  }
+
+  /** Shell builtins `true` / `false` keep the `&&` / `||` grammar honest. */
+  _cmd_true() {
+    return this._ok('');
+  }
+
+  _cmd_false() {
+    return { error: true, message: '', silentFailure: true };
+  }
+
+  /**
+   * `export NAME=value` (issue #50): silent on success, persists in the page
+   * session / terminal and is usable by `$NAME` / `${NAME}` in later commands.
+   */
+  _cmd_export(args) {
+    if (!args.length) {
+      const environment = this.exportedEnvironment();
+      return this._ok(
+        Object.entries(environment)
+          .sort(([left], [right]) => left.localeCompare(right))
+          .map(([name, value]) => `declare -x ${name}="${value}"`)
+          .join('\n')
+      );
+    }
+    const lines = [];
+    for (const arg of args) {
+      const equals = String(arg).indexOf('=');
+      const name = String(equals < 0 ? arg : arg.slice(0, equals)).trim();
+      if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) {
+        lines.push(`bash: export: \`${arg}': not a valid identifier`);
+        continue;
+      }
+      this.env.set(name, equals < 0 ? '' : String(arg).slice(equals + 1));
+      this.vars.delete(name);
+    }
+    return lines.length ? this._err(lines.join('\n')) : this._ok('');
   }
 
   // ── crypto / HTTP tools (issues #32a/#32b/#32c) ─────────────────────────
@@ -2940,11 +3372,23 @@ export class ShellTools {
     const headers = result.headers || {};
     const showHeaders = options.include || options.head || options.verbose;
     if (showHeaders) {
-      lines.push(`< HTTP/1.1 ${status} ${statusText}`.trim());
-      for (const [name, value] of Object.entries(headers)) {
-        lines.push(`< ${name}: ${value}`);
+      if (options.verbose) {
+        // Only `curl -v` uses the `< ` direction markers for response headers.
+        lines.push(`< HTTP/1.1 ${status} ${statusText}`.trim());
+        for (const [name, value] of Object.entries(headers)) {
+          lines.push(`< ${name}: ${value}`);
+        }
+        lines.push('<');
+      } else {
+        // `-I/--head` and `-i/--include` write the status line and headers to
+        // stdout as plain lines followed by the blank header/body separator
+        // (#54: they used to leak the verbose `< ` format).
+        lines.push(`HTTP/1.1 ${status} ${statusText}`.trim());
+        for (const [name, value] of Object.entries(headers)) {
+          lines.push(`${name}: ${value}`);
+        }
+        lines.push('');
       }
-      lines.push('<');
     }
     if (options.fail && status >= 400) {
       return this._curlFailureOutput(
@@ -3016,6 +3460,9 @@ export class ShellTools {
         scheme: parsed.scheme,
         namespace: context.namespace,
         protocol: 'TCP',
+        // Real container name resolved from the workload pod template
+        // (`webapp`, not a hardcoded `main`, #54d).
+        container: context.containerName,
       });
     }
     const requestLines = [];
@@ -3067,9 +3514,13 @@ export class ShellTools {
     }
     const body = ((result && result.lines) || []).join('\n');
     const showHeaders = options.verbose || options.include || options.head;
-    const headerLines = showHeaders
-      ? ['HTTP/1.1 200 OK', 'content-type: text/html; charset=utf-8', '']
-      : [];
+    // Same distinction as the workstation curl (#54): `-v` marks response
+    // headers with `< `; `-i`/`-I` print plain header lines.
+    const headerLines = !showHeaders
+      ? []
+      : options.verbose
+        ? ['< HTTP/1.1 200 OK', '< content-type: text/html; charset=utf-8', '<']
+        : ['HTTP/1.1 200 OK', 'content-type: text/html; charset=utf-8', ''];
     const responseText = [
       ...requestLines,
       ...headerLines,
