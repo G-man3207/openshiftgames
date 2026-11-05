@@ -4,6 +4,75 @@ All notable changes to OpenShift Games are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 aims to follow [Semantic Versioning](https://semver.org/).
 
+## [1.7.0] — 2026-11-05
+
+Ninth QA pass on 1.6.0: closes the two open report items (#57–#58) from the 1.6.0 CLI playthrough.
+The release makes the last container/platform-fidelity surfaces behave like a real 4.22 install: the
+platform bootstrap seeds the real `openshift-dns/dns-default` (ClusterIP `172.30.0.10`) and
+`openshift-ingress/router-internal-default` Services in every mode — including the paused pre-start
+sandbox — so `oc get svc,endpoints -n openshift-dns` is the real DNS-troubleshooting check and lab 13
+works; DNS Pods move to the pod network (`10.x`, `hostNetwork: false`) while `node-resolver` and the
+router stay hostNetwork; both DNS DaemonSets carry the real `kubernetes.io/os=linux` template
+nodeSelector and the router Pods the ingress-controller label docs select on; and
+`oc exec … cat /etc/resolv.conf` prints the real cluster DNS contract. Unschedulable Pods now report
+`0/1 Pending` (not `ContainerCreating`) with `Node: <none>` in `oc describe`, and FailedScheduling
+retries use the real scheduler backoff so the event series read as realistic small counts over a
+nonzero window instead of `(x167 over 0s)`. The release also accepts the kubectl empty-value
+`oc adm taint node <n> key=:Effect` grammar and prints the full deterministic ReplicaSet name in the
+paused pre-start `oc new-app` ScalingReplicaSet event. The game stays no-build and dependency-free.
+
+### Added
+
+- **Real platform Services in every mode (issue #58).** The platform bootstrap now seeds the two
+  Services a real 4.22 install carries: `openshift-dns/dns-default` (ClusterIP `172.30.0.10`, ports
+  `53/UDP`, `53/TCP`, `9154/TCP`) and `openshift-ingress/router-internal-default` (ClusterIP, ports
+  `80/TCP`, `443/TCP`, `1936/TCP`), in every mode including the paused pre-start sandbox.
+  `oc get svc -n openshift-dns` / `oc get svc -n openshift-ingress` return them,
+  `oc get endpoints -n openshift-dns` lists the pod-network DNS Pod IPs on `5353`, and
+  `oc get svc,endpoints -n openshift-dns` — the first check when DNS breaks after a NetworkPolicy
+  change (lab 13) — works end to end. `oc exec <pod> -- cat /etc/resolv.conf` shows the matching
+  cluster DNS contract: the `<project>.svc.cluster.local svc.cluster.local cluster.local` search
+  domains, `nameserver 172.30.0.10` and `options ndots:5`.
+- **Real DNS Pod networking and platform-pod detail (issue #58).** `dns-default` Pods now run on the
+  pod network with `10.x` Pod IPs and `hostNetwork: false`; `node-resolver` and the router stay
+  hostNetwork. Both DNS DaemonSet templates carry the real `kubernetes.io/os=linux` nodeSelector,
+  shown in the `NODE SELECTOR` column of `oc get ds -n openshift-dns`, and router Pods carry
+  `ingresscontroller.operator.openshift.io/deployment-ingresscontroller=default`, so the
+  label-selected `oc delete pod -n openshift-ingress -l …` flow documented by Red Hat finds and
+  deletes them (the Deployment controller heals them, as before).
+- **Real scheduler retry backoff and event series (issue #57).** FailedScheduling retries follow the
+  real kube-scheduler backoff (`podInitialBackoffDuration` 1 s, doubling, `podMaxBackoffDuration`
+  10 s maximum) instead of recording one failed attempt per simulation tick, so `oc describe pod` /
+  `oc get events` aggregate into realistic small counts over a nonzero window (e.g. `(x4 over 7s)`)
+  instead of a zero-second burst such as `(x167 over 0s)`, and a failure series preserves its
+  `firstTimestamp`. A Pod whose scheduling succeeds leaves the unschedulable queue — its retry state
+  is discarded, so a later eviction/reschedule starts a fresh event series like a real cluster.
+
+### Changed
+
+- README and CONVERSION-SPEC describe the seeded platform Services, DNS Pod networking/nodeSelector/
+  router label, the scheduler/Pending and `exec`/`resolv.conf` fidelity and the taint/new-app fixes
+  (issues #57–#58); the verification report records the ninth QA pass.
+
+### Fixed
+
+- **Unschedulable Pods show `Pending`, not `ContainerCreating` (issue #57).** `oc get pod` prints
+  `0/1 Pending` for every unbound Pod — an excess CPU request, both workers cordoned, or a recreated
+  router Pod with no node available — matching the real API phase; `ContainerCreating` only appears
+  once the Pod is bound to a node and the kubelet is pulling. `oc describe pod` prints `Node: <none>`
+  for an unscheduled Pod instead of a derived worker, so the "Pod is Pending → describe →
+  FailedScheduling" troubleshooting flow points at the scheduler, not at the image or volumes.
+- **`oc adm taint` accepts the kubectl empty-value grammar (issue #58).**
+  `oc adm taint node <node> <key>=:<Effect>` (e.g.
+  `oc adm taint node master-0 node-role.kubernetes.io/master=:NoSchedule`) is parsed like real
+  `kubectl` instead of returning `invalid taint spec`; the removal forms (`<key>-`,
+  `<key>:<Effect>-`, `<key>=<value>:<Effect>-`) keep working.
+- **Full ReplicaSet name in the paused `oc new-app` event (issue #58).** In the paused pre-start
+  sandbox the `ScalingReplicaSet` event now prints the full deterministic
+  `<name>-<10-char pod-template-hash>` ReplicaSet name instead of a truncated `pre-667`-style
+  prefix, and after start the Deployment creates exactly that ReplicaSet, so
+  `oc get rs` / `oc describe rs` match the event.
+
 ## [1.6.0] — 2026-11-05
 
 Eighth QA pass on 1.5.0: closes the two open report items (#55–#56) from the 1.5.0 CLI playthrough.

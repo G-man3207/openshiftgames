@@ -31,7 +31,8 @@ names are shown in EX280 Prep).
   `new-app`, `new-project`, `expose`, `create route`, `start-build`, `set env|image|resources|volume`,
   `rollout` (`status --timeout|history|undo`), `logs` (Pods, Deployments, Jobs), `exec`, `rsh`, `cp`, `wait`,
   `diff -f`, `patch --type=strategic|merge|json`, `adm policy` (RBAC + SCC), `auth can-i`,
-  `adm top`, `adm cordon|drain`, `create quota|clusterquota` (LimitRanges are declarative —
+  `adm top`, `adm cordon|drain`, `adm taint` (all real forms, including kubectl's empty-value
+  `key=:Effect`), `create quota|clusterquota` (LimitRanges are declarative —
   `oc apply -f`, there is no `oc create limitrange` subcommand), `create token`,
   `image info`, `process`, `helm` (repo/search/install/upgrade/history/rollback), `htpasswd`,
   `debug node` (interactive `chroot /host` + `systemctl`/`journalctl` kubelet troubleshooting),
@@ -52,7 +53,9 @@ names are shown in EX280 Prep).
   resolves Route hosts through the router model (edge/passthrough/reencrypt, http redirect and
   NetworkPolicy reachability), with real flags and `-w/--write-out` (`%{http_code}` etc.), and
   `oc exec`/`oc rsh` show the Pod's real volumes, ConfigMaps, Secrets, service-account token and
-  env.
+  env, and `cat /etc/resolv.conf` inside a Pod prints the cluster DNS configuration
+  (`search <project>.svc.cluster.local svc.cluster.local cluster.local`, `nameserver 172.30.0.10`,
+  `options ndots:5`).
 - **First-class OpenShift resources** — Project, Pod, Deployment, ReplicaSet, StatefulSet, DaemonSet,
   Job, CronJob, Service, Route, Ingress, NetworkPolicy, ConfigMap, Secret, PVC, PV, StorageClass,
   HPA, PDB, ResourceQuota, LimitRange, ClusterResourceQuota, ServiceAccount, Role, RoleBinding,
@@ -62,7 +65,10 @@ names are shown in EX280 Prep).
   A single central registry (`js/data/kindRegistry.js`) drives the palette, 3D renderer, inspector,
   command bar, minimap and YAML export.
 - **S2I builds & ImageStreams** — `oc new-app`, BuildConfig → Build → ImageStream lifecycle, image
-  change triggers and rollouts, internal registry image references.
+  change triggers and rollouts, internal registry image references. In the paused pre-start sandbox
+  the `oc new-app` ScalingReplicaSet event already prints the full deterministic
+  `<name>-<10-char pod-template-hash>` ReplicaSet name, and starting the simulation creates exactly
+  that ReplicaSet (the `oc get rs` / `oc describe rs` output matches the event).
 - **Routes & networking** — `oc expose svc/...`, edge/passthrough/reencrypt TLS Routes, Route
   admission state, Services, NetworkPolicies, MetalLB `LoadBalancer` services with EXTERNAL-IP.
   Route admission follows the real 4.22 router rules: host/path ownership (`HostAlreadyClaimed`),
@@ -76,12 +82,26 @@ names are shown in EX280 Prep).
   The platform namespaces are populated by real controllers like a real install: `openshift-ingress`
   runs `deployment.apps/router-default` (2/2 Ready) with its ReplicaSet and two shared-hash router
   pods, and `openshift-dns` runs the `daemonset.apps/dns-default` + `daemonset.apps/node-resolver`
-  DaemonSets with one owned Pod per Node (the `dns-default` Pods report READY `2/2`). Those pods ARE
-  the `oc debug`/NetworkPolicy labs' DNS egress target, and deleting one makes the owning controller
-  heal it. The control-plane Node carries the real
-  `node-role.kubernetes.io/master:NoSchedule` taint, so application workloads schedule onto the
+  DaemonSets with one owned Pod per Node (the `dns-default` Pods report READY `2/2`). DNS pods run
+  on the pod network (`10.x`, `hostNetwork: false`) while `node-resolver` and the router stay
+  hostNetwork, both DNS DaemonSets show the real `kubernetes.io/os=linux` NODE SELECTOR in
+  `oc get ds -n openshift-dns`, and the router pods carry
+  `ingresscontroller.operator.openshift.io/deployment-ingresscontroller=default`, so the documented
+  label-selected `oc delete pod -n openshift-ingress -l …` flow finds and deletes them. Those pods
+  ARE the `oc debug`/NetworkPolicy labs' DNS egress target, and deleting one makes the owning
+  controller heal it. The real platform Services are seeded in every mode, including the paused
+  pre-start sandbox: `openshift-dns/dns-default` (ClusterIP `172.30.0.10`, ports
+  `53/UDP,53/TCP,9154/TCP`) and `openshift-ingress/router-internal-default`
+  (`80/TCP,443/TCP,1936/TCP`), so `oc get svc,endpoints -n openshift-dns` is the real
+  DNS-troubleshooting check (lab 13) and `oc exec <pod> -- cat /etc/resolv.conf` shows the cluster
+  search domains, `nameserver 172.30.0.10` and `options ndots:5`. The control-plane Node carries the
+  real `node-role.kubernetes.io/master:NoSchedule` taint, so application workloads schedule onto the
   workers while the tolerated DaemonSet pods keep running on the master — the taints/tolerations and
-  "why is my Pod on the wrong node / Pending" troubleshooting flows behave like 4.22.
+  "why is my Pod on the wrong node / Pending" troubleshooting flows behave like 4.22: an
+  unschedulable Pod reports `0/1 Pending` (`ContainerCreating` only after it is bound),
+  `oc describe pod` prints `Node: <none>`, and FailedScheduling retries follow the real scheduler
+  backoff (1 s doubling to 10 s max) so `oc describe`/`oc get events` show realistic small counts
+  like `(x4 over 7s)` instead of a zero-second burst.
 - **Declarative workflows** — a Files panel with editable YAML manifests, `oc apply -f`,
   Kustomize base/overlays (`oc apply -k`), OpenShift templates (`oc process -f … | oc apply -f -`),
   Helm charts (`helm install|upgrade|uninstall`), `--dry-run=client -o yaml` manifest skeletons,
@@ -302,11 +322,12 @@ The repo is a static site and deploys to any static host. The canonical demo is 
   apiVersions, scope, aliases, `oc get` columns, palette metadata, default specs, owner chains,
   explain text, minimap sizes and the shared manifest serializer. Adding a kind means adding one
   registry entry + a resource class + a mesh creator (+ optional controller/data changes).
-- **Simulation** — `js/engine/SimulationTick.js` runs fixed-step OpenShift controllers: scheduler,
-  Pod lifecycle, Deployments/ReplicaSets, StatefulSets, DaemonSets, Jobs/CronJobs, HPA, PVC binding,
-  Services/endpoints, Routes (admission), BuildConfig→Build→ImageStream, Subscriptions/operators,
-  MetalLB LoadBalancer IPs, SCC enforcement, LimitRange/ResourceQuota/ClusterResourceQuota,
-  OAuth/HTPasswd, ClusterOperator health.
+- **Simulation** — `js/engine/SimulationTick.js` runs fixed-step OpenShift controllers: scheduler
+  (real retry backoff + unschedulable-Pod `Pending` display), Pod lifecycle, Deployments/ReplicaSets,
+  StatefulSets, DaemonSets, Jobs/CronJobs, HPA, PVC binding, Services/endpoints (incl. the seeded
+  platform DNS/router Services), Routes (admission), BuildConfig→Build→ImageStream,
+  Subscriptions/operators, MetalLB LoadBalancer IPs, SCC enforcement,
+  LimitRange/ResourceQuota/ClusterResourceQuota, OAuth/HTPasswd, ClusterOperator health.
 - **Command layer** — `js/ui/CommandBar.js` parses `oc` commands (with pipes/redirects and tab
   completion), runs them through the RBAC authorization gate and drives the same engine APIs as the
   UI; `js/ui/ShellTools.js` is the simulated shell (heredocs, redirects, cat/echo/grep/tail/head/wc/

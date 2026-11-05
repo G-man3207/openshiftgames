@@ -240,7 +240,16 @@ Pod → ReplicaSet → Deployment owner chain) and `daemonset.apps/dns-default` 
 real `dns` + `kube-rbac-proxy` containers and reports READY `2/2`), together with the
 `router`/`dns-default`/`node-resolver` ServiceAccounts and the host-network SCC binding. The
 Deployment/DaemonSet controllers heal a deleted platform Pod; the synchronous bootstrap keeps the
-paused pre-start cluster healthy and never duplicates or churns the seeded Pods.
+paused pre-start cluster healthy and never duplicates or churns the seeded Pods. The same bootstrap
+seeds the real platform Services in every mode, including the paused pre-start sandbox:
+`openshift-dns/dns-default` (ClusterIP `172.30.0.10`, ports `53/UDP`, `53/TCP`, `9154/TCP`; the
+Service target port is `5353` on the pod network) and `openshift-ingress/router-internal-default`
+(ClusterIP, ports `80/TCP`, `443/TCP`, `1936/TCP`). `dns-default` Pods run on the pod network
+(`10.x` Pod IP, `hostNetwork: false`) while `node-resolver`/the router stay hostNetwork; both DNS
+DaemonSet templates carry the real `kubernetes.io/os=linux` nodeSelector shown by `oc get ds`, the
+router Pods carry the
+`ingresscontroller.operator.openshift.io/deployment-ingresscontroller=default` label, and every
+Pod's `/etc/resolv.conf` points at `172.30.0.10` (#58).
 Nodes follow one catalog shared by every mode: `worker-0`, `worker-1`, `master-0` (2-node clusters
 use worker-0/worker-1; the control-plane Node carries the `control-plane,master` role labels AND the
 real `node-role.kubernetes.io/master:NoSchedule` taint, so application Pods schedule onto the
@@ -282,6 +291,16 @@ GameEngine helpers):
 - Logs/events/health: `oc logs <pod|deployment/name|build/name|bc/name> [-f] [--previous] [-c container] [--tail=N]`,
   `oc adm top pods|nodes`, `oc get clusteroperators`, `oc get clusterversion`, `oc adm must-gather`
   (simulated output), `oc adm inspect ns/<project>` (simulated output).
+- Platform Services/DNS (issue #58): `oc get svc,endpoints -n openshift-dns` returns the real
+  `dns-default` Service (ClusterIP `172.30.0.10`, ports `53/UDP`, `53/TCP`, `9154/TCP`) with the
+  pod-network (`10.x:5353`) Endpoints, and `oc get svc -n openshift-ingress` returns
+  `router-internal-default` (ClusterIP, ports `80/TCP`, `443/TCP`, `1936/TCP`) with the router Pod
+  Endpoints; both Services exist in every mode, including the paused pre-start sandbox (the first
+  check when DNS breaks after a NetworkPolicy change, lab 13).
+- Exec/shell: `oc exec <pod> [-c <container>] -- <command>` (real container names), `oc rsh <pod>`,
+  `oc cp <file> <pod>:<path>` / `oc cp <pod>:<path> <file>`. Inside a Pod `cat /etc/resolv.conf`
+  prints the real cluster DNS contract — `search <project>.svc.cluster.local svc.cluster.local
+cluster.local`, `nameserver 172.30.0.10`, `options ndots:5` (issue #58).
 - Mutations: `oc create <resource> <name> [flags]`, `oc apply -f <file>`, `oc create -f <file>`,
   `oc replace -f <file>`, `oc delete -f <file>`, `oc apply -k <dir>`, `oc delete <resource> <name>`,
   `oc scale <resource> <name> --replicas=N`, `oc edit <resource> <name>` (opens editor modal),
@@ -296,6 +315,10 @@ GameEngine helpers):
   `oc new-app --template=<name> [-p KEY=VALUE] [-n project]`, `oc new-app -f <template-file> [-p ...]`,
   `oc new-build <image-stream> --name=<bc>` / `oc new-build --code=<git> --name=<bc>`,
   `oc start-build <bc> [--follow] [--from-dir=.]`, `oc cancel-build <bc>`, `oc logs -f bc/<name>`.
+  The `ScalingReplicaSet` event emitted by `oc new-app` names the full deterministic ReplicaSet
+  `<name>-<10-char pod-template-hash>` in every state, including the paused pre-start sandbox where
+  the ReplicaSet is created only after start (the same hash the Deployment controller derives then,
+  issue #58).
 - Expose/networking: `oc expose svc/<name> [--name=] [--hostname=] [--path=] [-n]`,
   `oc create route edge|passthrough|reencrypt <name> --service=<svc> [--hostname=] [--path=] [--cert=] [--key=] [--ca-cert=] [--insecure-policy=Redirect]`,
   `oc get route [-o wide]`, `oc delete route <name>`.
@@ -316,8 +339,11 @@ GameEngine helpers):
 - Builds/images: `oc get bc|builds|is|istag`, `oc start-build`, `oc tag <src> <dst> [--scheduled]`,
   `oc import-image <is>:<tag> --from=<image> --confirm`, `oc describe is|bc|build`.
 - Cluster: `oc adm cordon|uncordon|drain node/<node>`,
-  `oc adm taint nodes <node> key=value:NoSchedule` plus the real removal forms
-  `<key>-`, `<key>:<Effect>-`, `<key>=<value>:<Effect>-`,
+  `oc adm taint nodes <node> key=value:NoSchedule` — plus the kubectl-compatible empty-value form
+  `<key>=:<Effect>` (e.g. `oc adm taint node master-0 node-role.kubernetes.io/master=:NoSchedule`,
+  issue #58), the real removal forms `<key>-`, `<key>:<Effect>-`, `<key>=<value>:<Effect>-`, and the
+  real effect validation (`NoSchedule`/`PreferNoSchedule`/`NoExecute`; anything else fails with
+  `error: invalid taint effect: <effect>, unsupported taint effect`),
   `oc label node <node> key=value`, `oc debug node/<node>` (simulated shell), `oc debug deployment/<name>`.
 - Files/manifests (requires ManifestEngine, section 7): `oc apply -f`, `oc create -f`, `oc apply -k`,
   `oc process -f`, `oc get ... -o yaml > file`, `oc edit` (editor persists to cluster on Save),
@@ -340,6 +366,31 @@ mutating command emits an authorization check event for objectives/achievements.
 Extend the existing fixed-step simulation with OpenShift controllers:
 
 - `_tickProjects`: Projects become Active immediately; deletion marks Terminating.
+- `_ensurePlatformWorkloads` / `_ensurePlatformServices` (issues #53G/#55/#58): once Nodes exist, seed
+  the controller-owned platform workloads — `deployment.apps/router-default` + its ReplicaSet +
+  Pods and the `daemonset.apps/dns-default`/`node-resolver` DaemonSets with one owned Pod per Node —
+  together with the real platform Services `openshift-dns/dns-default` (ClusterIP `172.30.0.10`,
+  ports `53/UDP`, `53/TCP`, `9154/TCP`, target port `5353`, selector
+  `dns.operator.openshift.io/daemonset-dns=default`) and
+  `openshift-ingress/router-internal-default` (ClusterIP, ports `80/TCP`, `443/TCP`, `1936/TCP`,
+  selector `ingresscontroller.operator.openshift.io/deployment-ingresscontroller=default`), in every
+  mode including the paused pre-start sandbox. DNS Pods run on the pod network
+  (`hostNetwork: false`, `10.x` Pod IP) while `node-resolver`/the router stay hostNetwork; the DNS
+  DaemonSet templates carry the `kubernetes.io/os=linux` nodeSelector and the router Pods the
+  ingress-controller deployment label. The bootstrap runs synchronously from
+  `ensureOLMDefaultsSync()` (so a paused pre-start cluster already reports the router Deployment
+  `2/2` and fully-Ready DNS DaemonSets) and is
+  idempotent (no duplicates/churn over long tick runs); the Deployment/DaemonSet controllers heal
+  deleted platform Pods.
+- `_tickPodScheduling` (issue #57): an unschedulable Pod stays `Pending` with
+  `PodScheduled=False/Unschedulable`; the STATUS column shown by `oc get pod` is `Pending` (`0/1`)
+  until the Pod is bound — `ContainerCreating` is a post-binding kubelet state, never a scheduler
+  display — and `oc describe pod` prints `Node: <none>` while unscheduled. FailedScheduling retries
+  follow the real kube-scheduler backoff (`podInitialBackoffDuration` 1 s doubling to
+  `podMaxBackoffDuration` 10 s), so Event series aggregate into realistic small counts over a
+  nonzero window (e.g. `(x4 over 7s)`) instead of one event per tick (`x167 over 0s`), and each
+  series preserves its `firstTimestamp`; a successfully scheduled Pod discards its retry state, so a
+  later eviction/reschedule starts a fresh series.
 - `_tickRoutes`: router ADMISSION is a host/path-ownership + TLS/config check, never an endpoints
   check (OCP 4.22 router `UniqueHost` + external-certificate validation): a Route targeting an
   existing Service stays
@@ -386,6 +437,10 @@ Extend the existing fixed-step simulation with OpenShift controllers:
   singleton/cluster reset MUST NOT start a rollout (authentication ClusterOperator stays
   Progressing=False/AsExpected); only a real `spec.identityProviders`/`spec.tokenConfig` change or a
   data change to the referenced HTPasswd Secret triggers the rollout.
+- `TemplateHash.js`: the deterministic `<deployment>-<10-char pod-template-hash>` is derived from the
+  canonical pod-template string (the real `fnv32a` → `rand.SafeEncodeString` shape) by one shared
+  helper, so the paused pre-start `oc new-app` `ScalingReplicaSet` event and the ReplicaSet the
+  Deployment controller creates after start report the same full name (issue #58).
 - Node/Pod events follow real kubelet reasons only: Pods are `Scheduled → Pulling → Pulled →
 Created → Started` (plus real warning reasons such as `Failed`/`BackOff`/`FailedScheduling`);
   there is no synthetic `Ready` event and no `PhaseChange` event (phase readiness is status, not an

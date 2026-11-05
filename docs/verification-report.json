@@ -1,19 +1,19 @@
 {
-  "timestamp": "2026-11-05T12:40:21.719Z",
+  "timestamp": "2026-11-05T13:48:35.656Z",
   "environment": {
     "node": "v26.10.0",
     "chrome": "Chrome/156.0.8078.79",
-    "baseUrl": "http://127.0.0.1:34581",
+    "baseUrl": "http://127.0.0.1:35427",
     "viewport": {
       "width": 1600,
       "height": 900
     },
     "puppeteerCore": "/tmp/verify-tools",
-    "startedAt": "2026-11-05T12:25:28.802Z",
-    "durationSeconds": 893
+    "startedAt": "2026-11-05T13:32:38.081Z",
+    "durationSeconds": 958
   },
   "summary": {
-    "passes": 1737,
+    "passes": 1798,
     "failures": 0,
     "warnings": 0,
     "consoleErrors": 0,
@@ -191,6 +191,11 @@
       "failures": 0,
       "warnings": 0
     },
+    "qa-issue57-58": {
+      "passes": 61,
+      "failures": 0,
+      "warnings": 0
+    },
     "draw": {
       "passes": 10,
       "failures": 0,
@@ -211,74 +216,74 @@
       "path": "screenshot.png",
       "width": 1600,
       "height": 900,
-      "bytes": 975186
+      "bytes": 982048
     },
     "ogImage": {
       "path": "og-image.png",
       "width": 1200,
       "height": 630,
-      "bytes": 205060
+      "bytes": 205512
     },
     "screenshots": [
       {
         "path": "docs/screenshots/menu.png",
         "width": 1600,
         "height": 900,
-        "bytes": 331931
+        "bytes": 331273
       },
       {
         "path": "docs/screenshots/exam-prep.png",
         "width": 1600,
         "height": 900,
-        "bytes": 210650
+        "bytes": 210924
       },
       {
         "path": "docs/screenshots/sandbox.png",
         "width": 1600,
         "height": 900,
-        "bytes": 974702
+        "bytes": 980337
       },
       {
         "path": "screenshot.png",
         "width": 1600,
         "height": 900,
-        "bytes": 975186
+        "bytes": 982048
       },
       {
         "path": "docs/screenshots/files-panel.png",
         "width": 1600,
         "height": 900,
-        "bytes": 243957
+        "bytes": 243659
       },
       {
         "path": "docs/screenshots/campaign-level-1.png",
         "width": 1600,
         "height": 900,
-        "bytes": 478459
+        "bytes": 480181
       },
       {
         "path": "docs/screenshots/regressions-minimap-collapsed.png",
         "width": 1600,
         "height": 900,
-        "bytes": 955470
+        "bytes": 961355
       },
       {
         "path": "docs/screenshots/regressions-campaign-restart.png",
         "width": 1600,
         "height": 900,
-        "bytes": 488273
+        "bytes": 488461
       },
       {
         "path": "docs/screenshots/draw.png",
         "width": 1600,
         "height": 900,
-        "bytes": 484852
+        "bytes": 489149
       },
       {
         "path": "og-image.png",
         "width": 1200,
         "height": 630,
-        "bytes": 205060
+        "bytes": 205512
       }
     ]
   },
@@ -6861,7 +6866,7 @@
     },
     {
       "section": "qa-issue55-56",
-      "name": "#55A: a pod that explicitly targets the master stays Pending under the NoSchedule taint"
+      "name": "#55A/#57: a pod that explicitly targets the master stays Pending under the NoSchedule taint"
     },
     {
       "section": "qa-issue55-56",
@@ -7150,6 +7155,250 @@
     {
       "section": "qa-issue55-56",
       "name": "#56 OLM: multi-kind `oc get deploy,rs` shows the upgraded operator Deployment 1/1 and its new ReplicaSet"
+    },
+    {
+      "section": "qa-issue57-58",
+      "name": "#57: a fresh sandbox boots for the scheduler-display checks"
+    },
+    {
+      "section": "qa-issue57-58",
+      "name": "#57: `oc run big` with a 64-CPU request creates the Pod"
+    },
+    {
+      "section": "qa-issue57-58",
+      "name": "#57: `oc get pod big` reports READY 0/1 STATUS Pending (never ContainerCreating before binding)"
+    },
+    {
+      "section": "qa-issue57-58",
+      "name": "#57: `oc get pod big -o wide` shows NODE <none> for the unscheduled Pod"
+    },
+    {
+      "section": "qa-issue57-58",
+      "name": "#57: `oc describe pod big` shows Status: Pending"
+    },
+    {
+      "section": "qa-issue57-58",
+      "name": "#57: `oc describe pod big` shows `Node: <none>` (bare <none>, no derived worker/IP)"
+    },
+    {
+      "section": "qa-issue57-58",
+      "name": "#57: describe pod aggregates FailedScheduling into a small real count over a nonzero window (never x100 over 0s)"
+    },
+    {
+      "section": "qa-issue57-58",
+      "name": "#57: `oc get events` shows the same small aggregated FailedScheduling series over a nonzero window"
+    },
+    {
+      "section": "qa-issue57-58",
+      "name": "#57: the FailedScheduling Event series preserves its firstTimestamp across retries"
+    },
+    {
+      "section": "qa-issue57-58",
+      "name": "#57: `oc adm cordon worker-0` succeeds"
+    },
+    {
+      "section": "qa-issue57-58",
+      "name": "#57: `oc adm cordon worker-1` succeeds"
+    },
+    {
+      "section": "qa-issue57-58",
+      "name": "#57: `oc run p2` creates a normal Pod while both workers are cordoned"
+    },
+    {
+      "section": "qa-issue57-58",
+      "name": "#57: with both workers cordoned, p2 reports READY 0/1 STATUS Pending"
+    },
+    {
+      "section": "qa-issue57-58",
+      "name": "#57: the cordoned-workers Pod has NODE <none> in `-o wide`"
+    },
+    {
+      "section": "qa-issue57-58",
+      "name": "#57: `oc describe pod p2` shows Status Pending and Node: <none>"
+    },
+    {
+      "section": "qa-issue57-58",
+      "name": "#57: `oc adm uncordon worker-0` succeeds"
+    },
+    {
+      "section": "qa-issue57-58",
+      "name": "#57: `oc adm uncordon worker-1` succeeds"
+    },
+    {
+      "section": "qa-issue57-58",
+      "name": "#57: uncordoning lets the Pending Pod schedule and reach Running 1/1"
+    },
+    {
+      "section": "qa-issue57-58",
+      "name": "#57: the two router Pods are Running before the recreate scenario"
+    },
+    {
+      "section": "qa-issue57-58",
+      "name": "#58: the seeded router Pods stay hostNetwork and report the node IP"
+    },
+    {
+      "section": "qa-issue57-58",
+      "name": "#57: deleting a router Pod while both workers are cordoned succeeds"
+    },
+    {
+      "section": "qa-issue57-58",
+      "name": "#57: the router controller recreates the deleted Pod as an unscheduled Pending Pod"
+    },
+    {
+      "section": "qa-issue57-58",
+      "name": "#57: the recreated router Pod reports READY 0/1 STATUS Pending and NODE <none>"
+    },
+    {
+      "section": "qa-issue57-58",
+      "name": "#57: `oc describe pod` of the recreated router Pod shows Pending, Node: <none> and FailedScheduling"
+    },
+    {
+      "section": "qa-issue57-58",
+      "name": "#57: uncordoning lets the recreated router Pod schedule and the Deployment heal to 2/2"
+    },
+    {
+      "section": "qa-issue57-58",
+      "name": "#58: the recreated router Pod reports the node IP as its Pod IP (hostNetwork kubelet semantics)"
+    },
+    {
+      "section": "qa-issue57-58",
+      "name": "#57: a normally-scheduled Pod still shows STATUS ContainerCreating after binding (kubelet state preserved)"
+    },
+    {
+      "section": "qa-issue57-58",
+      "name": "#57: the normally-scheduled Pod then reaches Running 1/1"
+    },
+    {
+      "section": "qa-issue57-58",
+      "name": "#58: `oc get svc -n openshift-dns` shows dns-default ClusterIP 172.30.0.10 ports 53/UDP,53/TCP,9154/TCP"
+    },
+    {
+      "section": "qa-issue57-58",
+      "name": "#58: `oc get svc -n openshift-ingress` shows router-internal-default ClusterIP ports 80/TCP,443/TCP,1936/TCP"
+    },
+    {
+      "section": "qa-issue57-58",
+      "name": "#58: `oc get endpoints -n openshift-dns` lists dns-default pod-network 10.x addresses on 5353"
+    },
+    {
+      "section": "qa-issue57-58",
+      "name": "#58: multi-kind `oc get svc,endpoints -n openshift-dns` shows service/dns-default + endpoints/dns-default with 10.x:5353"
+    },
+    {
+      "section": "qa-issue57-58",
+      "name": "#58: dns-default Pods run on the pod network (10.x Pod IPs, `-o wide` IP column)"
+    },
+    {
+      "section": "qa-issue57-58",
+      "name": "#58: node-resolver Pods keep the node InternalIP (hostNetwork)"
+    },
+    {
+      "section": "qa-issue57-58",
+      "name": "#58: dns-default is hostNetwork:false/restricted-v2 while node-resolver and the router are hostNetwork"
+    },
+    {
+      "section": "qa-issue57-58",
+      "name": "#58: `oc get ds -n openshift-dns` shows NODE SELECTOR kubernetes.io/os=linux for both DNS DaemonSets"
+    },
+    {
+      "section": "qa-issue57-58",
+      "name": "#58: `oc get pods -n openshift-ingress -l <ingresscontroller label>` returns the 2 router Pods"
+    },
+    {
+      "section": "qa-issue57-58",
+      "name": "#58: `oc delete pod -n openshift-ingress -l <ingresscontroller label>` deletes both router Pods"
+    },
+    {
+      "section": "qa-issue57-58",
+      "name": "#58: the router Deployment controller recreates the label-deleted Pods"
+    },
+    {
+      "section": "qa-issue57-58",
+      "name": "#58: `oc get endpoints -n openshift-ingress` resolves the router Pods to node IPs on 80/443/1936"
+    },
+    {
+      "section": "qa-issue57-58",
+      "name": "#58: `oc adm taint node master-0 node-role.kubernetes.io/master=:NoSchedule` accepts the kubectl empty-value grammar"
+    },
+    {
+      "section": "qa-issue57-58",
+      "name": "#58: `oc describe node master-0` shows the empty-value taint as node-role.kubernetes.io/master:NoSchedule"
+    },
+    {
+      "section": "qa-issue57-58",
+      "name": "#58: the `key:Effect-` removal form still removes the master taint"
+    },
+    {
+      "section": "qa-issue57-58",
+      "name": "#58: the removed master taint is gone right after the removal command"
+    },
+    {
+      "section": "qa-issue57-58",
+      "name": "#58: the control-plane taint can be restored with the empty-value form"
+    },
+    {
+      "section": "qa-issue57-58",
+      "name": "#58: the `key:Effect-` removal form works for a dedicated taint"
+    },
+    {
+      "section": "qa-issue57-58",
+      "name": "#58: the `key=value:Effect-` removal form works (empty value accepted)"
+    },
+    {
+      "section": "qa-issue57-58",
+      "name": "#58: the `key-` removal form still works"
+    },
+    {
+      "section": "qa-issue57-58",
+      "name": "#58: worker-0 has no leftover taints after the removal-form checks"
+    },
+    {
+      "section": "qa-issue57-58",
+      "name": "#58: an unknown taint effect is rejected with the real oc error"
+    },
+    {
+      "section": "qa-issue57-58",
+      "name": "#58: `oc exec <running Pod> -- cat /etc/resolv.conf` shows the cluster DNS contract"
+    },
+    {
+      "section": "qa-issue57-58",
+      "name": "#58: platform Pods and Service ClusterIPs do not churn over 90 s of ticks"
+    },
+    {
+      "section": "qa-issue57-58",
+      "name": "#58: the sandbox is genuinely paused before \"Start exploring\" (platform Services seeded without ticks)"
+    },
+    {
+      "section": "qa-issue57-58",
+      "name": "#58: the dns-default Service exists in the paused pre-start sandbox"
+    },
+    {
+      "section": "qa-issue57-58",
+      "name": "#58: the router-internal-default Service exists in the paused pre-start sandbox"
+    },
+    {
+      "section": "qa-issue57-58",
+      "name": "#58: `oc new-app --name=pre` creates the Deployment in the paused sandbox"
+    },
+    {
+      "section": "qa-issue57-58",
+      "name": "#58: the paused new-app ScalingReplicaSet event prints the full deterministic pre-<10-char pod-template-hash> name"
+    },
+    {
+      "section": "qa-issue57-58",
+      "name": "#58: no ReplicaSet exists yet while the cluster is paused (the event is only a prediction)"
+    },
+    {
+      "section": "qa-issue57-58",
+      "name": "#58: \"Start exploring\" resumes the paused sandbox"
+    },
+    {
+      "section": "qa-issue57-58",
+      "name": "#58: after Start the Deployment controller creates exactly the predicted ReplicaSet name"
+    },
+    {
+      "section": "qa-issue57-58",
+      "name": "#58: `oc describe rs <predicted name>` works and shows the 1-desired ReplicaSet"
     },
     {
       "section": "draw",
