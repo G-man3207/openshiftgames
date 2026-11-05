@@ -224,7 +224,11 @@ Available=True/Progressing=False/Degraded=False and version `4.22.0`; ClusterVer
 (desired.version `4.22.0`, channel `stable-4.22`); SCCs `restricted-v2` and `nonroot-v2` (groups
 `system:authenticated`), `restricted-v3` (not granted to `system:authenticated` in the game's
 admission model), `anyuid` (no subjects) and `privileged` (platform-default admin/build subjects);
-users `kubeadmin` (cluster-admin binding) and `admin`; ImageStreams in `openshift`: `nodejs` (tags
+virtual identities `kubeadmin` (cluster-admin ClusterRoleBinding; no User resource — real 4.x
+kubeadmin is virtual and never listed by `oc get users`) and `admin` (simulator convenience
+identity, also not a User resource); the `kube-system/kubeadmin` Secret stores only a bcrypt hash of
+the installer-generated password (plain text lives only in `~/auth/kubeadmin-password`);
+ImageStreams in `openshift`: `nodejs` (tags
 `20-ubi9`, `22-ubi9`, `latest`), `python` (`3.12-ubi9`, `latest`), `nginx` (`1.26-ubi9`, `latest`);
 Nodes as specified per level/mode.
 
@@ -377,7 +381,10 @@ Also expose `gameEngine.cluster` methods:
   configured identity provider: no identity provider is configured on this cluster."; bad credentials
   with an identity provider configured → `Login failed (401 Unauthorized)` plus "Verify you have provided
   the correct credentials."; provider configured but OAuth rollout not ready → a dedicated wait message.
-  Failed logins never change the current session. Built-in seeded `kubeadmin`/`admin` accounts still log in.
+  Failed logins never change the current session. Built-in virtual `kubeadmin`/`admin` identities still
+  log in (no User resources are seeded for them, matching real 4.x); `kubeadmin` password auth validates
+  against the installer's `~/auth/kubeadmin-password` copy and is removed by deleting the
+  `kube-system/kubeadmin` Secret.
 
 ---
 

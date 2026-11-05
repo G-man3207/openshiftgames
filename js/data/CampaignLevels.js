@@ -243,7 +243,7 @@ const CAMPAIGN_LEVELS = [
     ],
     incidents: [],
     hints: [
-      'Log in first. The installer saves the kubeadmin password in its auth directory: `cat ~/auth/kubeadmin-password`, then `oc login -u kubeadmin` and type (paste) that password at the `Password:` prompt — or pass it directly with `oc login -u kubeadmin -p <password>`. On a real cluster the same value is in the kubeadmin secret: `oc extract secret/kubeadmin -n kube-system --to=-`. Check `oc whoami` afterwards.',
+      'Log in first. The installer saves the kubeadmin password in its auth directory: `cat ~/auth/kubeadmin-password`, then `oc login -u kubeadmin` and type (paste) that password at the `Password:` prompt — or pass it directly with `oc login -u kubeadmin -p <password>`. The kubeadmin secret does NOT contain the password: `oc extract secret/kubeadmin -n kube-system --to=-` prints only a bcrypt hash of it (a `$2a$10$…` hash). Check `oc whoami` afterwards.',
       'Create the project: `oc new-project first-project --display-name="First Project"`. `oc project` shows the current project.',
       'Create a Deployment: `oc create deployment hello-deploy --image=quay.io/openshift/origin-hello-openshift:latest`, then verify `oc get deployments,pods`. The level also asks for a bare Pod — `oc run hello-pod --image=quay.io/openshift/origin-hello-openshift:latest` deploys one, and the Pod view mirrors `oc describe pod`.',
       'Trap worth knowing (not required here): a bare `oc run hello-pod --image=nginx:latest` is ADMITTED by `restricted-v2` — admission only validates the pod spec, not the image USER — and then crashes, because nginx cannot write `/var/cache/nginx` under the arbitrary non-root UID it is assigned. Use a non-root image like `quay.io/openshift/origin-hello-openshift:latest` for a healthy workload.',
@@ -1056,7 +1056,7 @@ const CAMPAIGN_LEVELS = [
       'Create the Secret: `oc create secret generic htpass-secret --from-file=htpasswd -n openshift-config`. The key must be named `htpasswd`.',
       'Configure the provider: `oc edit oauth cluster` and add an HTPasswd identityProvider referencing `htpass-secret` (mappingMethod: claim).',
       'Wait for the authentication operator to roll out, then `oc login -u alice -p <password>` and confirm with `oc whoami`.',
-      'Going back to cluster-admin after logging in as alice: the installer keeps the kubeadmin password in its auth directory — `cat ~/auth/kubeadmin-password`, then `oc login -u kubeadmin -p <password>` (or log in without `-p` and type it at the `Password:` prompt). On a real cluster the value is also in the kubeadmin secret: `oc extract secret/kubeadmin -n kube-system --to=-`.',
+      'Going back to cluster-admin after logging in as alice: the installer keeps the kubeadmin password in its auth directory — `cat ~/auth/kubeadmin-password`, then `oc login -u kubeadmin -p <password>` (or log in without `-p` and type it at the `Password:` prompt). The kube-system/kubeadmin Secret stores only a bcrypt hash (`oc extract secret/kubeadmin -n kube-system --to=-` prints `$2a$10$…`), so it cannot recover the password. The exam-relevant use of that secret is removing kubeadmin once another cluster-admin exists: `oc delete secret kubeadmin -n kube-system`.',
       'Rotate the password the exam way: `oc extract secret/htpass-secret -n openshift-config --to /tmp --confirm`, then `htpasswd -bB /tmp/htpasswd alice "NewPassw0rd!"`, then `oc set data secret/htpass-secret -n openshift-config --from-file=htpasswd=/tmp/htpasswd`. The authentication operator watches the secret, restarts the oauth-openshift pods and keeps the old password until the rollout completes — logging in too early is rejected, so wait for `oc get clusteroperators authentication` and then `oc login -u alice -p "NewPassw0rd!"`.',
       'Clean up the departing user: `oc delete user bob` removes the User but leaves the Identity `htpasswd:bob` behind (a stale login mapping), so finish with `oc delete identity htpasswd:bob` and verify `oc get users` / `oc get identities` are clean.',
     ],
@@ -1364,7 +1364,7 @@ const CAMPAIGN_LEVELS = [
     chapter: 5,
     chapterName: 'Security & Operations',
     description:
-      'Operators extend the cluster API. Start with the SingleNamespace MetalLB install (OperatorGroup + Subscription), watch the InstallPlan and CSV reach Succeeded, then uninstall it cleanly: deleting the Subscription leaves the ClusterServiceVersion, deleting the CSV is the actual uninstall. Then cover the OLM variants EX280 expects: an AllNamespaces install in openshift-operators (no new OperatorGroup — the cluster-global one already exists), Manual InstallPlan approval (the install stops at RequiresApproval until you patch `spec.approved`), and pinning a version with `startingCSV` instead of taking the channel head.',
+      "Operators extend the cluster API. Start with the SingleNamespace MetalLB install (OperatorGroup + Subscription), watch the InstallPlan and CSV reach Succeeded, then uninstall it cleanly: deleting the Subscription leaves the ClusterServiceVersion, deleting the CSV is the actual uninstall. Then cover the OLM variants EX280 expects: an AllNamespaces install in openshift-operators (no new OperatorGroup — the cluster-global one already exists), Manual InstallPlan approval (the install stops at RequiresApproval until you patch `spec.approved`), and pinning one of the channel's published CSV entries with `startingCSV` instead of taking the channel head (the cert-manager package is the real Red Hat `openshift-cert-manager-operator`, channel `stable-v1`).",
     examObjectives: [
       'Manage OpenShift operators > Install an operator',
       'Manage OpenShift operators > Uninstall an operator',
@@ -1403,7 +1403,7 @@ const CAMPAIGN_LEVELS = [
       },
       {
         type: 'operator',
-        name: 'cert-manager-operator',
+        name: 'openshift-cert-manager-operator',
         namespace: 'openshift-operators',
         allNamespaces: true,
         installed: true,
@@ -1413,7 +1413,7 @@ const CAMPAIGN_LEVELS = [
       {
         type: 'installPlan',
         namespace: 'openshift-operators',
-        package: 'cert-manager-operator',
+        package: 'openshift-cert-manager-operator',
         approval: 'Manual',
         approved: true,
         label:
@@ -1421,13 +1421,16 @@ const CAMPAIGN_LEVELS = [
       },
       {
         type: 'subscription',
-        name: 'cert-manager-operator',
+        name: 'openshift-cert-manager-operator',
         namespace: 'openshift-operators',
-        package: 'cert-manager-operator',
-        channel: 'stable',
-        startingCSV: 'cert-manager-operator.v1.15.0',
+        package: 'openshift-cert-manager-operator',
+        channel: 'stable-v1',
         installPlanApproval: 'Manual',
-        label: 'Pin the install with startingCSV instead of taking the channel head',
+        // State-graded (#48.1): the installed CSV must equal the player's own
+        // startingCSV pin and must not be the channel head. Any valid older
+        // channel entry (v1.16.0, v1.15.0, …) satisfies this.
+        pinnedInstall: true,
+        label: 'Pin the install with a valid non-head startingCSV (installed CSV equals the pin)',
       },
     ],
     incidents: [],
@@ -1438,9 +1441,10 @@ const CAMPAIGN_LEVELS = [
       'Watch OLM: `oc get sub,csv,installplan -n metallb-system` — an InstallPlan appears, then the CSV `metallb-operator.v0.14.9` goes Installing → Succeeded; `oc get subscription -n metallb-system -o yaml` reports `status.installedCSV`.',
       'Uninstall (only after the install above reached Succeeded): `oc delete subscription metallb-operator -n metallb-system`, then confirm the CSV is STILL there with `oc get csv -n metallb-system` — deleting the Subscription does not remove the operator.',
       'Finish the uninstall by deleting the CSV itself: `oc delete csv metallb-operator.v0.14.9 -n metallb-system` (typing `clusterserviceversion`/`csv` is the uninstall step), then confirm with `oc get csv -n metallb-system` and `oc get subscription -A`.',
-      'AllNamespaces variant: no new OperatorGroup is needed — `openshift-operators` already ships the cluster-global `global-operators` group (`oc get operatorgroup -n openshift-operators`), and the Subscription must live in `openshift-operators` too. The installed CSV appears in that project (`oc get csv -n openshift-operators`).',
-      'Manual approval + pinned version: apply `examples/subscription-manual-pinned.yaml` (namespace `openshift-operators`, `installPlanApproval: Manual`, `startingCSV: cert-manager-operator.v1.15.0`), then approve the InstallPlan OLM creates: `oc patch installplan <name> -n openshift-operators --type=merge -p \'{"spec":{"approved":true}}\'`. Until then the Subscription stays `RequiresApproval`.',
-      'Prove the pin: `oc get sub,csv,installplan -n openshift-operators` — the CSV is `cert-manager-operator.v1.15.0` (not the channel-head v1.17.0), which only happens when `startingCSV` is honoured.',
+      'AllNamespaces variant: no new OperatorGroup is needed — `openshift-operators` already ships the cluster-global `global-operators` group (`oc get operatorgroup -n openshift-operators`), and the Subscription must live in `openshift-operators` too. The installed CSV appears in that project (`oc get csv -n openshift-operators`), and because the install is AllNamespaces OLM also creates a copied CSV of it in every other namespace: `oc get csv -A` shows the same CSV name across the cluster (the copies have the `Copied` status reason).',
+      'Discover the cert-manager package and its pinnable versions: `oc get packagemanifests -n openshift-marketplace` lists `openshift-cert-manager-operator` (channel `stable-v1`); `oc describe packagemanifest openshift-cert-manager-operator -n openshift-marketplace` lists the channel entries — the head `cert-manager-operator.v1.17.0` plus `.v1.16.0` and `.v1.15.0`. Only an entry of the channel is a valid `startingCSV`; anything else fails resolution with `ResolutionFailed` ("no operators found with name … in channel stable-v1 of package openshift-cert-manager-operator").',
+      'Manual approval + pinned version: apply `examples/subscription-manual-pinned.yaml` (namespace `openshift-operators`, `installPlanApproval: Manual`, `startingCSV: cert-manager-operator.v1.16.0`), then approve the InstallPlan OLM creates: `oc patch installplan <name> -n openshift-operators --type=merge -p \'{"spec":{"approved":true}}\'`. Until then the Subscription reports `InstallPlanPending True RequiresApproval`.',
+      'Prove the pin: `oc get sub,csv,installplan -n openshift-operators` — `status.installedCSV` and the CSV are `cert-manager-operator.v1.16.0`, not the channel-head v1.17.0. The objective is graded on exactly that: the installed CSV equals YOUR `startingCSV`, and that pin is not the channel head — pinning v1.15.0 counts too.',
     ],
     starCriteria: { time: 420, efficiency: 0.7, noFailures: true },
     nextLevel: 19,

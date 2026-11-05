@@ -409,18 +409,34 @@ export class PackageManifest extends ResourceBase {
 
   toDescribe() {
     const channels = this.status.channels || this.spec.channels || [];
+    const channelLines = [];
+    for (const channel of channels) {
+      channelLines.push(
+        `  Name:           ${channel.name}`,
+        `    Current CSV:  ${channel.currentCSV || '<none>'}`
+      );
+      // Real OLM catalogs list every pinnable CSV of a channel as
+      // `Entries` — the discovery surface for `spec.startingCSV` (issue #46).
+      const entries = Array.isArray(channel.entries) ? channel.entries : [];
+      if (entries.length > 0) {
+        channelLines.push('    Entries:');
+        for (const entry of entries) {
+          channelLines.push(
+            `      Name:       ${entry.name || '<none>'}`,
+            `      Version:    ${entry.version || '<none>'}`
+          );
+        }
+      }
+    }
     return [
-      `Name:        ${this.metadata.name}`,
-      'Package Name: ' + (this.status.packageName || this.spec.packageName),
+      `Name:           ${this.metadata.name}`,
+      `Package Name:   ${this.status.packageName || this.spec.packageName}`,
       `Default Channel:  ${this.status.defaultChannel || this.spec.defaultChannel}`,
-      `Source:      ${this.status.catalogSource || '<none>'}`,
+      `Source:         ${this.status.catalogSource || '<none>'}`,
       `Source Namespace: ${this.status.catalogSourceNamespace || '<none>'}`,
-      'Provider:    ' + (this.status.provider?.name || '<none>'),
+      `Provider:       ${this.status.provider?.name || '<none>'}`,
       'Channels:',
-      ...channels.map(
-        (channel) =>
-          `  Name:     ${channel.name}\n    Current CSV:  ${channel.currentCSV || '<none>'}`
-      ),
+      ...(channelLines.length ? channelLines : ['  <none>']),
       'Events:',
       `${
         this.events

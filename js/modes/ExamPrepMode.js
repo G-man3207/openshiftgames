@@ -18,14 +18,15 @@
  *   - tests select `#exam-prep-overlay` or `[data-testid="exam-prep"]`;
  *     `getBulletCount()` must return 55.
  *
- * Progress semantics (evidence-based, #14): a bullet is MASTERED only when
- * there is drill evidence — a quick lab linked to the bullet passed its live
- * `check` evaluation, or a linked campaign level/challenge was completed
- * through live objective evaluation AND at least one of the bullet's own example
- * commands was actually run successfully. Simply completing a level (or a
- * console shortcut that writes progress) is only "Practiced". Bullets that the
- * simulator cannot exercise (the web console) are capped at "Practiced" and
- * label themselves documentation-only. `ScoringEngine.getExamPrepProgress()` /
+ * Progress semantics (evidence-based, #14/#20/#48-2): a bullet is MASTERED only
+ * when there is drill evidence — a quick lab linked to the bullet passed its
+ * live `check` evaluation, or the bullet's own example command was run
+ * successfully in a COMPLETED campaign level or lab (any level/lab, not only the
+ * ones mapped to the bullet). Simply completing a level (or a console shortcut
+ * that writes progress) is only "Practiced", as is a matching command recorded
+ * in a drill that was never completed. Bullets that the simulator cannot
+ * exercise (the web console) are capped at "Practiced" and label themselves
+ * documentation-only. `ScoringEngine.getExamPrepProgress()` /
  * `markExamPrep()` / `getCommandEvidence()` are feature-detected; if absent we
  * fall back to `getProgress()` and a localStorage-backed local state key
  * (openshiftgames_exam_prep).
@@ -628,7 +629,7 @@ export class ExamPrepUI {
             <div class="ep-toolbar">
               <input type="search" class="ep-search" id="ep-objective-search"
                 placeholder="Search objectives, commands or topics…" autocomplete="off" spellcheck="false" aria-label="Search objectives" />
-              <span class="ep-hint">Mastered = drill evidence: a quick-lab check passed, or a linked level/challenge completed after running the bullet's own commands.</span>
+              <span class="ep-hint">Mastered = drill evidence: a quick-lab check passed, or the bullet's own command run successfully in a completed campaign level or lab.</span>
             </div>
             <div id="ep-objectives-list"></div>
           </section>
@@ -1304,14 +1305,46 @@ export class ExamPrepUI {
   }
 
   /**
-   * Evidence-based bullet status (#14 + #20 + #42-5):
-   *  - mastered: a quick lab linked to the bullet passed its live check, OR a
-   *    LINKED level/challenge was completed AND at least one of the bullet's own
-   *    commands was run *during that drill's run* (drillCommandEvidence), OR the
-   *    completed drill recorded one of the bullet's `objectiveTypes` as satisfied
-   *    through live objective evaluation (objectiveEvidence).
-   *  - practiced: a linked level/challenge is completed but no per-run command
-   *    evidence exists (e.g. console shortcut), or the bulletin was only started.
+   * Progress-map entry for a level/challenge id (numeric or string keys).
+   * @param {object} map campaignProgress / challengeProgress
+   * @param {number|string} id
+   * @returns {object|null}
+   */
+  _progressEntry(map, id) {
+    if (!map || typeof map !== 'object') return null;
+    return map[id] ?? map[String(id)] ?? null;
+  }
+
+  /**
+   * Parse a `drillCommandEvidence` key. Only campaign levels and labs
+   * (challenges) are recorded by ScoringEngine; sandbox/chaos runs have no
+   * active drill key, so anything else is ignored defensively.
+   * @param {string} key
+   * @returns {{scope: string, id: number}|null}
+   */
+  _drillEvidenceKey(key) {
+    const match = /^(campaign|challenge):(\d+)$/.exec(String(key || ''));
+    if (!match) return null;
+    return { scope: match[1], id: Number(match[2]) };
+  }
+
+  /** Has the campaign level / lab referenced by a drill key been completed? */
+  _drillKeyCompleted(scope, id, campaignProgress, challengeProgress) {
+    const progress = scope === 'challenge' ? challengeProgress : campaignProgress;
+    return Boolean(this._progressEntry(progress, id)?.completed);
+  }
+
+  /**
+   * Evidence-based bullet status (#14 + #20 + #42-5 + #48-2):
+   *  - mastered: a quick lab linked to the bullet passed its live check, OR one
+   *    of the bullet's own commands was run during a COMPLETED campaign level or
+   *    lab. The completed drill does not have to be one of the bullet's mapped
+   *    levels (#48-2: evidence follows the command, not the mapping); a
+   *    completed mapped drill can also be evidenced by the bullet's
+   *    `objectiveTypes` recorded through live objective evaluation.
+   *  - practiced: a mapped level/lab was started or completed without matching
+   *    completed-drill evidence, or the bullet's own command only appears in a
+   *    drill that was never completed.
    *  - todo: no evidence at all.
    * Commands typed in Sandbox/Chaos are never recorded against a drill, so free
    * play cannot inflate the verdict. Console-only bullets can never be
@@ -1334,51 +1367,66 @@ export class ExamPrepUI {
       }
     }
     const consoleOnly = this._isConsoleOnlyBullet(bullet);
-    // 2) Per-run evidence from a LINKED, completed drill.
-    let drillCompleted = false;
-    let hasDrillEvidence = false;
+    // 2) Evidence from the bullet's MAPPED drills: a completed linked campaign
+    // level or lab whose run recorded one of the bullet's own commands, or a
+    // live objective type it declares (#42-5).
+    let linkedDrillCompleted = false;
+    let linkedDrillEvidence = false;
     for (const levelId of bullet.levels || []) {
-      const entry = campaignProgress[levelId] ?? campaignProgress[String(levelId)];
+      const entry = this._progressEntry(campaignProgress, levelId);
       if (!entry?.completed) continue;
-      drillCompleted = true;
+      linkedDrillCompleted = true;
       const evidence = drillEvidence[`campaign:${levelId}`] || [];
       if (
         this._bulletHasCommandEvidence(bullet, evidence) ||
         this._bulletHasObjectiveEvidence(bullet, objectiveEvidence, 'level', levelId)
       ) {
-        hasDrillEvidence = true;
+        linkedDrillEvidence = true;
         break;
       }
     }
-    if (!hasDrillEvidence) {
+    if (!linkedDrillEvidence) {
       for (const challengeId of bullet.challenges || []) {
-        const entry = challengeProgress[challengeId] ?? challengeProgress[String(challengeId)];
+        const entry = this._progressEntry(challengeProgress, challengeId);
         if (!entry?.completed) continue;
-        drillCompleted = true;
+        linkedDrillCompleted = true;
         const evidence = drillEvidence[`challenge:${challengeId}`] || [];
         if (
           this._bulletHasCommandEvidence(bullet, evidence) ||
-          this._bulletHasObjectiveEvidence(
-            bullet,
-            { ...objectiveEvidence },
-            'challenge',
-            challengeId
-          )
+          this._bulletHasObjectiveEvidence(bullet, objectiveEvidence, 'challenge', challengeId)
         ) {
-          hasDrillEvidence = true;
+          linkedDrillEvidence = true;
           break;
         }
       }
     }
-    if (!consoleOnly && drillCompleted && hasDrillEvidence) return 'mastered';
+    // 3) Issue #48-2: readiness evidence follows the COMMAND, not the level
+    // mapping. One of the bullet's own successful commands counts from ANY
+    // campaign level or lab bucket; a matching command in a COMPLETED drill
+    // masters the bullet, in an unfinished drill it still counts as evidence
+    // (practiced). Sandbox/chaos commands are never recorded in this map (#20),
+    // so free play cannot inflate the verdict.
+    let anyDrillCommandEvidence = false;
+    let completedDrillCommandEvidence = false;
+    for (const [key, entries] of Object.entries(drillEvidence)) {
+      const drill = this._drillEvidenceKey(key);
+      if (!drill) continue;
+      const evidence = Array.isArray(entries) ? entries : [];
+      if (!this._bulletHasCommandEvidence(bullet, evidence)) continue;
+      anyDrillCommandEvidence = true;
+      if (this._drillKeyCompleted(drill.scope, drill.id, campaignProgress, challengeProgress)) {
+        completedDrillCommandEvidence = true;
+        break;
+      }
+    }
+    if (!consoleOnly && (linkedDrillEvidence || completedDrillCommandEvidence)) return 'mastered';
     if (examState === 'practiced') return 'practiced';
-    if (drillCompleted || hasDrillEvidence) return 'practiced';
+    if (linkedDrillCompleted || anyDrillCommandEvidence) return 'practiced';
     for (const levelId of bullet.levels || []) {
-      if (campaignProgress[levelId] ?? campaignProgress[String(levelId)]) return 'practiced';
+      if (this._progressEntry(campaignProgress, levelId)) return 'practiced';
     }
     for (const challengeId of bullet.challenges || []) {
-      if (challengeProgress[challengeId] ?? challengeProgress[String(challengeId)])
-        return 'practiced';
+      if (this._progressEntry(challengeProgress, challengeId)) return 'practiced';
     }
     return 'todo';
   }
@@ -1459,7 +1507,7 @@ export class ExamPrepUI {
         : almost
           ? 'Almost there'
           : 'Keep going';
-      this.readinessBadge.title = `Evidence threshold: ${Math.round(EX280_READINESS_THRESHOLD * 100)}% of bullets have drill evidence (a passed quick-lab check, or a completed linked drill after running the bullet's own commands). Tracked study coverage — not a Red Hat pass prediction.`;
+      this.readinessBadge.title = `Evidence threshold: ${Math.round(EX280_READINESS_THRESHOLD * 100)}% of bullets have drill evidence (a passed quick-lab check, or the bullet's own commands run in a completed campaign level or lab). Tracked study coverage — not a Red Hat pass prediction.`;
     }
     const track = this.overlay?.querySelector('.ep-progress-track');
     if (track) track.setAttribute('aria-valuenow', String(snapshot.masteredCount));
@@ -1515,7 +1563,7 @@ export class ExamPrepUI {
       hint.textContent = `${visibleCount} of ${EX280_OBJECTIVE_COUNT} objectives match “${query}”.`;
     } else if (hint) {
       hint.textContent =
-        "Mastered = drill evidence: a quick-lab check passed, or a linked level/challenge completed after running the bullet's own commands. A completed level alone only counts as Practiced.";
+        "Mastered = drill evidence: a quick-lab check passed, or the bullet's own command run successfully in a completed campaign level or lab. A completed level alone only counts as Practiced.";
     }
   }
 
@@ -1525,7 +1573,7 @@ export class ExamPrepUI {
     const meta = STATUS_META[effectiveStatus] || STATUS_META.todo;
     const statusTitle = consoleOnly
       ? 'Documentation only: the simulator has no web-console UI, so this bullet cannot be verified here — use the docs link.'
-      : "Mastered = a passed quick-lab check, or a linked drill completed after running this bullet's own commands.";
+      : "Mastered = a passed quick-lab check, or this bullet's own command run successfully in a completed campaign level or lab.";
     const commands = (bullet.commands || [])
       .map(
         (command) => `

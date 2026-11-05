@@ -583,7 +583,8 @@ metadata:
   name: ansible-automation-platform-operator
   namespace: openshift-operators
 spec:
-  channel: stable
+  # Real Red Hat catalog channel for the AAP 2.6 package.
+  channel: stable-2.6
   installPlanApproval: Automatic
   name: ansible-automation-platform-operator
   source: redhat-operators
@@ -592,22 +593,29 @@ spec:
 
   // L18 operator variants: AllNamespaces install (global OperatorGroup in
   // openshift-operators) with Manual approval and a pinned startingCSV.
+  // The catalog PACKAGE is `openshift-cert-manager-operator` (channel
+  // `stable-v1`), while its CSVs keep the historical
+  // `cert-manager-operator.v<version>` names. v1.16.0 is a real, older channel
+  // entry (the head is v1.17.0), so this demonstrates a genuine pin; discover
+  // valid entries with
+  //   oc get packagemanifest openshift-cert-manager-operator \
+  //     -n openshift-marketplace -o jsonpath='{.status.channels[0].entries[*].name}'
   // Apply it, then approve the InstallPlan by hand:
   //   oc patch installplan <name> -n openshift-operators --type=merge \
   //     -p '{"spec":{"approved":true}}'
   'examples/subscription-manual-pinned.yaml': `apiVersion: operators.coreos.com/v1alpha1
 kind: Subscription
 metadata:
-  name: cert-manager-operator
+  name: openshift-cert-manager-operator
   namespace: openshift-operators
 spec:
-  channel: stable
+  channel: stable-v1
   installPlanApproval: Manual
-  name: cert-manager-operator
+  name: openshift-cert-manager-operator
   source: redhat-operators
   sourceNamespace: openshift-marketplace
-  # Pin a specific CSV instead of installing the channel head.
-  startingCSV: cert-manager-operator.v1.15.0
+  # Pin a specific channel entry instead of installing the channel head.
+  startingCSV: cert-manager-operator.v1.16.0
 `,
 
   // Lab 10 AllNamespaces variant: the global-operators OperatorGroup already

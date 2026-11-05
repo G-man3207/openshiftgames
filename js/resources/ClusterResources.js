@@ -52,15 +52,33 @@ const NODE_CONDITION_DEFAULTS = {
     True: ['KubeletHasInsufficientPID', 'kubelet has insufficient PID available'],
     False: ['KubeletHasSufficientPID', 'kubelet has sufficient PID available'],
   },
-  // Real OCP kubelets report NetworkUnavailable=False with the
-  // NoNetworkPlugin reason because the OpenShift network plugin does not use
-  // the kubelet network-plugin interface; the message is the kubelet's
-  // canonical text for that condition.
+  // OVN-Kubernetes (the default OCP 4.22 network plugin) clears the
+  // kubelet-set `NoRouteCreated` condition once the node's route/network is
+  // programmed: NetworkUnavailable=False with reason RouteCreated and this
+  // exact message. (The old `NoNetworkPlugin` / "network plugin is not ready"
+  // pair read as a contradiction — #49.)
   NetworkUnavailable: {
-    True: ['NoNetworkPlugin', 'network plugin is not ready'],
-    False: ['NoNetworkPlugin', 'network plugin is not ready'],
+    True: ['NoRouteCreated', 'Node created without a route'],
+    False: ['RouteCreated', 'ovn-kube cleared kubelet-set NoRouteCreated'],
   },
 };
+
+/**
+ * Node conditions the node lifecycle controller derives from the kubelet
+ * heartbeat (#49). A stopped/unreachable kubelet makes the controller rewrite
+ * all of them to `Unknown` / `NodeStatusUnknown` / this exact message; it never
+ * leaves a stale `False` behind (NetworkUnavailable is control-plane managed and
+ * is deliberately not in this set).
+ */
+const KUBELET_POSTED_CONDITIONS = new Set([
+  'Ready',
+  'MemoryPressure',
+  'DiskPressure',
+  'PIDPressure',
+]);
+
+const KUBELET_STOPPED_REASON = 'NodeStatusUnknown';
+const KUBELET_STOPPED_MESSAGE = 'Kubelet stopped posting node status.';
 
 const NODE_TIMESTAMP_DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const NODE_TIMESTAMP_MONTHS = [
@@ -215,7 +233,12 @@ export class Node extends ResourceBase {
           'KubeletHasSufficientPID',
           'kubelet has sufficient PID available'
         ),
-        condition('NetworkUnavailable', 'False', 'NoNetworkPlugin', 'network plugin is not ready'),
+        condition(
+          'NetworkUnavailable',
+          'False',
+          'RouteCreated',
+          'ovn-kube cleared kubelet-set NoRouteCreated'
+        ),
       ],
       nodeInfo: {
         kubeletVersion: metadata.kubeletVersion || KUBELET_VERSION,
@@ -245,6 +268,13 @@ export class Node extends ResourceBase {
    * the controller (IncidentEngine / SimulationTick node tick) omits them.
    * `lastHeartbeatTime` is refreshed on every call; `lastTransitionTime` only
    * moves when the condition status actually changes — real node behaviour.
+   *
+   * #49: a node whose kubelet stopped posting (`status.phase === 'NotReady'` in
+   * the simulator) has ALL kubelet-posted conditions flipped to Unknown by the
+   * node lifecycle controller. The tick keeps calling setCondition('Ready',
+   * 'False', 'KubeletNotReady'), which used to leave the stale/contradictory
+   * `Ready False` + `unreachable` taint combination; the resource enforces the
+   * controller's real output here so every caller and every tick agrees.
    * @param {string} type
    * @param {string} status
    * @param {string} [reason]
@@ -252,6 +282,15 @@ export class Node extends ResourceBase {
    * @returns {this}
    */
   setCondition(type, status, reason = '', message = '') {
+    const kubeletStopped =
+      this.status?.phase === 'NotReady' &&
+      KUBELET_POSTED_CONDITIONS.has(type) &&
+      String(status) !== 'Unknown';
+    if (kubeletStopped) {
+      status = 'Unknown';
+      reason = KUBELET_STOPPED_REASON;
+      message = KUBELET_STOPPED_MESSAGE;
+    }
     const defaults = NODE_CONDITION_DEFAULTS[type]?.[String(status)] || null;
     return super.setCondition(
       type,

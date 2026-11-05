@@ -38,9 +38,10 @@ import { parseYaml, stringifyYaml, toYamlError, YamlParseError } from './YamlPar
 // htpasswd hashing/verification helpers (shared with the engine's login flow).
 // GameEngine does not import ManifestEngine, so this is cycle-free.
 import { hashHtpasswdEntry, verifyHtpasswdPasswordHash } from './GameEngine.js';
-// Simulated kubeadmin password: the real 4.x installer writes it to
-// `auth/kubeadmin-password` in the install directory, so the workstation's
-// virtual home seeds that file from the single source of truth (#42-4).
+// Simulated kubeadmin password: the real 4.x installer writes the plain text to
+// `auth/kubeadmin-password` in the install directory and keeps only a bcrypt
+// hash in `kube-system/kubeadmin`, so the workstation's virtual home seeds that
+// file from the single source of truth (#42-4/#45).
 import { KUBEADMIN_PASSWORD } from './ClusterState.js';
 import { MANIFEST_FILES } from '../data/ManifestFiles.js';
 import {
@@ -56,8 +57,10 @@ export { parseYaml, stringifyYaml, YamlParseError };
 const KUSTOMIZATION_FILENAMES = ['kustomization.yaml', 'kustomization.yml', 'Kustomization'];
 /**
  * Real installer layout: `<install-dir>/auth/kubeadmin-password` holds the
- * generated kubeadmin password (issue #42-4: `cat ~/auth/kubeadmin-password`
- * must discover it; the `oc extract secret/kubeadmin …` path also works).
+ * generated kubeadmin password in plain text (issue #42-4: `cat
+ * ~/auth/kubeadmin-password` must discover it). The cluster-side secret holds
+ * only its bcrypt hash (#45), so this file is the only place the password can
+ * be read back from.
  */
 const KUBEADMIN_PASSWORD_FILE = 'auth/kubeadmin-password';
 const WORKLOAD_KINDS = new Set([
@@ -381,8 +384,10 @@ export class ManifestEngine {
       this.files.set(normalizePath(path), String(content ?? ''));
     }
     // The installer's auth/ directory (issue #42-4): the workstation home gets
-    // the kubeadmin password file, imported from ClusterState so it can never
-    // diverge from the password the login handler accepts.
+    // the kubeadmin password FILE, imported from ClusterState so it can never
+    // diverge from the password the login handler accepts. This is the only
+    // copy of the plain text — the in-cluster Secret has just a bcrypt hash
+    // (#45), and deleting that Secret leaves this backup readable.
     this.files.set(KUBEADMIN_PASSWORD_FILE, `${KUBEADMIN_PASSWORD}\n`);
   }
 

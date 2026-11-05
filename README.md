@@ -82,12 +82,15 @@ names are shown in EX280 Prep).
   `ServiceAccount` + `anyuid` grant + `oc set serviceaccount` flow, or an explicit non-root
   `runAsUser`, is the escape hatch. `htpasswd -B` writes real-shaped bcrypt hashes and login
   validates bcrypt and legacy `{SHA}` entries. The installer-side kubeadmin password is discoverable
-  the real way: `cat ~/auth/kubeadmin-password` (or `oc extract secret/kubeadmin -n kube-system
---to=-`), and `oc login -u kubeadmin` without `-p` prompts for it like real `oc`. The full exam
-  identity lifecycle is practised:
-  rotate the HTPasswd password through the `openshift-config/htpass-secret` (`oc extract` →
-  `htpasswd` → `oc set data`) and wait for the OAuth rollout, then delete a departing user and
-  its Identity (`oc delete user` leaves the Identity behind).
+  the real way: `cat ~/auth/kubeadmin-password`, and `oc login -u kubeadmin` without `-p` prompts for
+  it like real `oc`. As in a real install, the `kube-system/kubeadmin` Secret stores only a bcrypt
+  hash of that password (`oc extract secret/kubeadmin -n kube-system --to=-` prints `$2a$10$…`) and
+  never the plain text; kubeadmin is a virtual user (absent from `oc get users`), and the exam
+  removal step is `oc delete secret kubeadmin -n kube-system` once another cluster-admin exists.
+  The full exam identity lifecycle is practised: rotate the HTPasswd password through the
+  `openshift-config/htpass-secret` (`oc extract` → `htpasswd` → `oc set data`) and wait for the
+  OAuth rollout, then delete a departing user and its Identity (`oc delete user` leaves the Identity
+  behind).
 - **Quotas & self-service** — Namespace/Project quotas, LimitRanges, ClusterResourceQuota, project
   templates (`oc adm create-bootstrap-project-template` + `project.config.openshift.io/cluster`) and
   the real `self-provisioners` ClusterRoleBinding (remove it and `oc new-project` returns Forbidden).

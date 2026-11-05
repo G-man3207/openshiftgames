@@ -88,6 +88,9 @@ const OLM_CATALOG = [
     name: 'ansible-automation-platform-operator',
     displayName: 'Ansible Automation Platform',
     currentCSV: 'aap-operator.v2.6.0',
+    // Real AAP 2.6 catalog channel. The shipped example Subscription, the
+    // palette default and the timed-lab seed use it (issue #46 keeps channel
+    // validation strict, so the catalog advertises real channels only).
     channel: 'stable-2.6',
     provider: 'Red Hat',
     description: 'Deploys and manages Ansible Automation Platform instances.',
@@ -103,10 +106,22 @@ const OLM_CATALOG = [
     crds: [],
   },
   {
-    name: 'cert-manager-operator',
+    // The Red Hat catalog package for the cert-manager Operator is
+    // `openshift-cert-manager-operator` and its default channel is `stable-v1`;
+    // the CSVs *inside* the package keep their upstream `cert-manager-operator`
+    // name (issue #46). `entries` is the discoverable pinnable-version list that
+    // OLM exposes via `PackageManifest.status.channels[*].entries` and validates
+    // `spec.startingCSV` against — the head (v1.17.0) plus the two older
+    // z-streams a player may pin with Manual approval.
+    name: 'openshift-cert-manager-operator',
     displayName: 'cert-manager Operator for Red Hat OpenShift',
     currentCSV: 'cert-manager-operator.v1.17.0',
-    channel: 'stable',
+    channel: 'stable-v1',
+    entries: [
+      'cert-manager-operator.v1.17.0',
+      'cert-manager-operator.v1.16.0',
+      'cert-manager-operator.v1.15.0',
+    ],
     provider: 'Red Hat',
     description: 'Automates certificate management with cert-manager on OpenShift.',
     crds: [],
@@ -191,6 +206,12 @@ function base64DecodeText(value) {
     /* fall through */
   }
   return '';
+}
+
+/** Semantic version advertised by a CSV name (`pkg.v1.2.3` → `1.2.3`). */
+function csvVersion(csvName) {
+  const match = String(csvName || '').match(/\.v?(\d+\.\d+\.\d+)/);
+  return match ? match[1] : '1.0.0';
 }
 
 /** Parse an absolute/relative HTTP URL (the workstation curl front end). */
@@ -460,16 +481,36 @@ export class SimulationTick {
       };
 
       const isReady = node.status.phase !== 'NotReady' && node.status.phase !== 'Unknown';
-      node.setCondition(
-        'Ready',
-        isReady ? 'True' : 'False',
-        isReady ? 'KubeletReady' : 'KubeletNotReady'
-      );
       // Issue #43: real nodes receive node.kubernetes.io/unreachable +
       // not-ready taints (NoSchedule/NoExecute) instead of being cordoned; the
       // node lifecycle controller removes them once the kubelet is Ready again
       // (e.g. after `chroot /host systemctl restart kubelet`).
       this._syncNodeNotReadyTaints(node, !isReady);
+      if (!isReady) {
+        // Real node lifecycle controller output while the kubelet is stopped /
+        // unreachable (#49): every kubelet-posted condition becomes
+        // `Unknown / NodeStatusUnknown / "Kubelet stopped posting node status."`.
+        // Writing them here (not just in the incident damage path) keeps the
+        // controller authoritative on every tick and restores them on recovery.
+        // NetworkUnavailable is managed by the network plugin (control plane),
+        // not by the kubelet, so it keeps reporting the healthy OVN-K value.
+        for (const conditionType of ['Ready', 'MemoryPressure', 'DiskPressure', 'PIDPressure']) {
+          node.setCondition(
+            conditionType,
+            'Unknown',
+            'NodeStatusUnknown',
+            'Kubelet stopped posting node status.'
+          );
+        }
+        node.setCondition(
+          'NetworkUnavailable',
+          'False',
+          'RouteCreated',
+          'ovn-kube cleared kubelet-set NoRouteCreated'
+        );
+        continue;
+      }
+      node.setCondition('Ready', 'True', 'KubeletReady');
       const freeMemory = alloc.memory.capacity - alloc.memory.used;
       const memoryEvictionThreshold = Math.min(
         RESERVED_MEMORY_MIB,
@@ -484,7 +525,13 @@ export class SimulationTick {
       );
       // PID exhaustion is not modelled; never derive it from CPU pressure.
       node.setCondition('PIDPressure', 'False', 'KubeletHasSufficientPID');
-      if (isReady) node.setCondition('DiskPressure', 'False', 'KubeletHasNoDiskPressure');
+      node.setCondition('DiskPressure', 'False', 'KubeletHasNoDiskPressure');
+      node.setCondition(
+        'NetworkUnavailable',
+        'False',
+        'RouteCreated',
+        'ovn-kube cleared kubelet-set NoRouteCreated'
+      );
     }
   }
 
@@ -3839,36 +3886,57 @@ export class SimulationTick {
    * OperatorGroup that a real cluster ships in openshift-operators.
    * Runs every tick but only creates missing objects (a level change/reset
    * re-seeds them; players cannot permanently remove the catalog).
+   *
+   * Each package advertises its channels AND every channel's CSV `entries`
+   * (`status.channels[*].entries`), the way real OLM catalogs do: that list is
+   * how a player discovers the valid versions to pin with `startingCSV`
+   * (issue #46).
    */
   _ensureOLMDefaults() {
     if (this.cluster.getByKind('PackageManifest').length === 0) {
       for (const entry of OLM_CATALOG) {
+        const channels = this._catalogChannels(entry);
+        const defaultChannel =
+          (channels.find((channel) => channel.name === entry.channel) || channels[0])?.name ||
+          'stable';
         this.cluster.addResource({
           kind: 'PackageManifest',
-          metadata: { name: entry.name, labels: { 'olm.catalogSource': 'redhat-operators' } },
+          metadata: {
+            name: entry.name,
+            labels: {
+              catalog: 'redhat-operators',
+              'catalog-namespace': 'openshift-marketplace',
+              provider: entry.provider,
+            },
+          },
           spec: {
             packageName: entry.name,
-            defaultChannel: entry.channel,
-            channels: [{ name: entry.channel, currentCSV: entry.currentCSV }],
+            defaultChannel,
+            channels: channels.map((channel) => ({
+              name: channel.name,
+              currentCSV: channel.currentCSV,
+            })),
           },
           status: {
             catalogSource: 'redhat-operators',
             catalogSourceNamespace: 'openshift-marketplace',
             packageName: entry.name,
-            defaultChannel: entry.channel,
+            defaultChannel,
             provider: { name: entry.provider },
-            channels: [
-              {
-                name: entry.channel,
-                currentCSV: entry.currentCSV,
-                currentCSVDesc: {
-                  displayName: entry.displayName,
-                  version: (entry.currentCSV.match(/\.v?(\d+\.\d+\.\d+)/) || [])[1] || '1.0.0',
-                  description: entry.description,
-                  provider: { name: entry.provider },
-                },
+            channels: channels.map((channel) => ({
+              name: channel.name,
+              currentCSV: channel.currentCSV,
+              currentCSVDesc: {
+                displayName: entry.displayName,
+                version: csvVersion(channel.currentCSV),
+                description: entry.description,
+                provider: { name: entry.provider },
               },
-            ],
+              entries: channel.entries.map((csvName) => ({
+                name: csvName,
+                version: csvVersion(csvName),
+              })),
+            })),
           },
         });
       }
@@ -3886,23 +3954,139 @@ export class SimulationTick {
     }
   }
 
-  /** Target CSV name for a package (PackageManifest currentCSV), otherwise a
-   * package-derived name (never the Subscription name — issue #9).
+  /**
+   * Normalise the static OLM catalog entry into its channel list, each channel
+   * carrying its ordered pinnable CSV `entries` (head first). Real catalogs
+   * always expose `entries`, even for single-version packages.
    *
-   * Real OLM honours `Subscription.spec.startingCSV`: the pinned CSV is
-   * installed instead of the channel head when it belongs to the package
-   * (issue #34 — "picking a channel or startingCSV"). Unknown/foreign pins fall
-   * back to the catalog's current CSV, like OLM's dependency resolver. */
-  _csvNameForPackage(packageName, subscription = null) {
-    const pinned = subscription?.spec?.startingCSV;
-    if (typeof pinned === 'string' && pinned.startsWith(`${packageName}.v`)) return pinned;
+   * @param {{channel?: string, currentCSV: string, entries?: string[],
+   *   channels?: {name: string, currentCSV: string, entries?: string[]}[]}} entry
+   * @returns {{name: string, currentCSV: string, entries: string[]}[]}
+   */
+  _catalogChannels(entry) {
+    if (Array.isArray(entry.channels) && entry.channels.length > 0) {
+      return entry.channels.map((channel) => {
+        const currentCSV = String(channel.currentCSV || '');
+        const entries =
+          Array.isArray(channel.entries) && channel.entries.length > 0
+            ? channel.entries
+            : [currentCSV];
+        return {
+          name: String(channel.name || entry.channel || 'stable'),
+          currentCSV,
+          entries: entries.filter((csvName) => typeof csvName === 'string' && csvName),
+        };
+      });
+    }
+    const currentCSV = entry.currentCSV;
+    const entries =
+      Array.isArray(entry.entries) && entry.entries.length > 0 ? entry.entries : [currentCSV];
+    return [
+      {
+        name: entry.channel || 'stable',
+        currentCSV,
+        entries: entries.filter((csvName) => typeof csvName === 'string' && csvName),
+      },
+    ];
+  }
+
+  /**
+   * Channels advertised by a PackageManifest resource (status first, then spec,
+   * exactly what `oc get packagemanifest -o yaml` exposes). Each channel's
+   * `currentCSV` is the channel head; `entries` lists every pinnable CSV.
+   *
+   * @param {string} packageName
+   * @returns {{name: string, currentCSV: string, entries: {name: string, version: string}[]}[]}
+   */
+  _packageChannels(packageName) {
     const manifest = this.cluster.getByName('PackageManifest', packageName, '');
-    if (manifest && typeof manifest.currentCSV === 'string' && manifest.currentCSV)
-      return manifest.currentCSV;
-    const channels = manifest?.spec?.channels || manifest?.status?.channels || [];
-    const channel = channels.find((entry) => entry.currentCSV) || null;
-    if (channel?.currentCSV) return channel.currentCSV;
-    return `${packageName}.v1.0.0`;
+    const channels = Array.isArray(manifest?.status?.channels)
+      ? manifest.status.channels
+      : Array.isArray(manifest?.spec?.channels)
+        ? manifest.spec.channels
+        : [];
+    return channels.map((channel) => {
+      const currentCSV = String(channel.currentCSV || '');
+      const rawEntries =
+        Array.isArray(channel.entries) && channel.entries.length > 0
+          ? channel.entries
+          : currentCSV
+            ? [currentCSV]
+            : [];
+      return {
+        name: String(channel.name || ''),
+        currentCSV,
+        entries: rawEntries
+          .map((entry) =>
+            typeof entry === 'string'
+              ? { name: entry, version: csvVersion(entry) }
+              : {
+                  name: String(entry?.name || ''),
+                  version: entry?.version || csvVersion(entry?.name),
+                }
+          )
+          .filter((entry) => entry.name),
+      };
+    });
+  }
+
+  /**
+   * Resolve which CSV an OLM Subscription installs, validating its channel and
+   * `startingCSV` against the catalog (issue #46, real OLM semantics):
+   *  - the channel must exist on the package's PackageManifest;
+   *  - `startingCSV`, when set, MUST be one of that channel's `entries`;
+   *  - otherwise the channel head (`currentCSV`) is installed.
+   *
+   * @param {object} subscription
+   * @returns {{packageName: string, csvName?: string, version?: string,
+   *   error?: {kind: 'package'|'channel'|'startingCSV', message: string}}}
+   */
+  _resolveSubscriptionTarget(subscription) {
+    const packageName = this._packageNameForSubscription(subscription);
+    const subscriptionName = subscription?.metadata?.name || packageName;
+    if (!this.cluster.getByName('PackageManifest', packageName, '')) {
+      return {
+        packageName,
+        error: {
+          kind: 'package',
+          message: `no operators found in package ${packageName} in the catalog referenced by subscription ${subscriptionName}`,
+        },
+      };
+    }
+    const channels = this._packageChannels(packageName);
+    const requestedChannel = String(subscription?.spec?.channel || '');
+    const manifest = this.cluster.getByName('PackageManifest', packageName, '');
+    const defaultChannel = String(
+      manifest?.status?.defaultChannel || manifest?.spec?.defaultChannel || ''
+    );
+    const channel = requestedChannel
+      ? channels.find((candidate) => candidate.name === requestedChannel) || null
+      : channels.find((candidate) => candidate.name === defaultChannel) || channels[0] || null;
+    if (!channel) {
+      return {
+        packageName,
+        error: {
+          kind: 'channel',
+          message: `no operators found in channel ${requestedChannel} of package ${packageName} in the catalog referenced by subscription ${subscriptionName}`,
+        },
+      };
+    }
+    const pinned = String(subscription?.spec?.startingCSV || '');
+    if (pinned) {
+      const entry = channel.entries.find((candidate) => candidate.name === pinned);
+      if (!entry) {
+        return {
+          packageName,
+          error: {
+            kind: 'startingCSV',
+            message: `no operators found with name ${pinned} in channel ${channel.name} of package ${packageName} in the catalog referenced by subscription ${subscriptionName}`,
+          },
+        };
+      }
+      return { packageName, csvName: pinned, version: entry.version, channel: channel.name };
+    }
+    const csvName = channel.currentCSV || channel.entries[0]?.name || `${packageName}.v1.0.0`;
+    return { packageName, csvName, version: csvVersion(csvName), channel: channel.name };
   }
 
   /** `oc rollout`-independent helper: package name a Subscription tracks. */
@@ -3913,12 +4097,6 @@ export class SimulationTick {
       subscription?.metadata?.name ||
       'operator'
     );
-  }
-
-  _csvVersionForPackage(packageName, subscription = null) {
-    const csvName = this._csvNameForPackage(packageName, subscription);
-    const match = String(csvName).match(/\.v?(\d+\.\d+\.\d+)/);
-    return match ? match[1] : '1.0.0';
   }
 
   /** InstallPlan owned by a Subscription (created by this controller). */
@@ -4022,6 +4200,24 @@ export class SimulationTick {
     if (!csv) return;
     const namespace = csv.metadata?.namespace || '';
     const csvName = csv.metadata?.name || '';
+    // A copied CSV (AllNamespaces shim) has no operator of its own: the source
+    // CSV reconciliation recreates it, so it must not trigger uninstall effects.
+    if (this._isCopiedCSV(csv)) {
+      this._knownCSVs.delete(csv.uid);
+      return;
+    }
+    // Deleting the source CSV uninstalls the operator everywhere: drop its
+    // copied CSVs from the other namespaces as well (real OLM GCs copies).
+    for (const candidate of this.cluster.getByKind('ClusterServiceVersion')) {
+      if (
+        this._isCopiedCSV(candidate) &&
+        candidate.metadata?.labels?.['olm.copiedFrom'] === namespace &&
+        candidate.metadata?.name === csvName
+      ) {
+        this._knownCSVs.delete(candidate.uid);
+        this.cluster.remove(candidate.uid);
+      }
+    }
     const removed = [];
     for (const deployment of this.cluster.getByKindAndNamespace('Deployment', namespace)) {
       const owner = deployment.metadata?.labels?.['olm.owner'];
@@ -4680,7 +4876,16 @@ export class SimulationTick {
 
   /** Latch ResolutionFailed on a Subscription (idempotent, event + bus hook). */
   _failSubscriptionResolution(subscription, packageName, resolutionMessage) {
-    if (subscription.status.reason === 'ConstraintsNotSatisfiable') return;
+    const previous = (subscription.status.conditions || []).find(
+      (condition) => condition.type === 'ResolutionFailed'
+    );
+    if (
+      subscription.status.reason === 'ConstraintsNotSatisfiable' &&
+      previous?.status === 'True' &&
+      previous?.message === resolutionMessage
+    ) {
+      return;
+    }
     subscription.status.phase = 'UpgradePending';
     subscription.status.reason = 'ConstraintsNotSatisfiable';
     subscription.status.message = resolutionMessage;
@@ -4737,8 +4942,6 @@ export class SimulationTick {
         subscription.spec.installPlanApproval = 'Automatic';
         this.cluster.update(subscription.uid, subscription);
       }
-      const csvName = this._csvNameForPackage(packageName, subscription);
-      const version = this._csvVersionForPackage(packageName, subscription);
       const setStatus = (reason, message, phase = subscription.status.phase || 'Installing') => {
         if (subscription.status.phase === phase && subscription.status.reason === reason) return;
         subscription.status.phase = phase;
@@ -4810,8 +5013,8 @@ export class SimulationTick {
       if (resolutionFailure) {
         const ownPackageMissing = resolutionFailure.subscriptionName === subscription.metadata.name;
         const resolutionMessage = ownPackageMissing
-          ? `constraints not satisfiable: no operators found in package "${resolutionFailure.packageName}" in the catalog referenced by the subscription`
-          : `constraints not satisfiable: no operators found in package "${resolutionFailure.packageName}" in the catalog referenced by the namespace; OLM resolves namespace "${namespace}" as a unit`;
+          ? `constraints not satisfiable: no operators found in package ${resolutionFailure.packageName} in the catalog referenced by subscription ${subscription.metadata.name}`
+          : `constraints not satisfiable: no operators found in package ${resolutionFailure.packageName} in the catalog referenced by the namespace; OLM resolves namespace "${namespace}" as a unit`;
         this._failSubscriptionResolution(subscription, packageName, resolutionMessage);
         continue;
       }
@@ -4822,16 +5025,9 @@ export class SimulationTick {
         this._failSubscriptionResolution(
           subscription,
           packageName,
-          `constraints not satisfiable: no operators found in package "${packageName}" in the catalog referenced by the subscription`
+          `constraints not satisfiable: no operators found in package ${packageName} in the catalog referenced by subscription ${subscription.metadata.name}`
         );
         continue;
-      }
-      if (subscription.status.reason === 'ConstraintsNotSatisfiable') {
-        // Package appeared later (e.g. catalog refreshed) → retry resolution.
-        subscription.status.phase = 'Installing';
-        subscription.status.reason = 'Installing';
-        subscription._installElapsed = 0;
-        this.cluster.update(subscription.uid, subscription);
       }
 
       // OperatorGroup: openshift-operators has the cluster-global group, other
@@ -4867,6 +5063,40 @@ export class SimulationTick {
       }
       subscription._noOperatorGroupLogged = false;
 
+      // Catalog resolution of the Subscription's channel + startingCSV (#46).
+      // OLM resolves against the catalog's PackageManifest: an unknown channel
+      // or a startingCSV that is not one of the channel's `entries` is a
+      // terminal resolution failure — it never silently installs the channel
+      // head instead. The messages are the real resolver's wording.
+      const target = this._resolveSubscriptionTarget(subscription);
+      if (target.error) {
+        this._failSubscriptionResolution(
+          subscription,
+          packageName,
+          `constraints not satisfiable: ${target.error.message}`
+        );
+        continue;
+      }
+      if (subscription.status.reason === 'ConstraintsNotSatisfiable') {
+        // Channel/pin fixed (or package appeared later) → retry resolution.
+        // Real OLM REMOVES the abnormal-true ResolutionFailed condition (and the
+        // stale install-plan conditions) once resolution succeeds, so the fixed
+        // Subscription must stop reporting the old failure.
+        subscription.status.phase = 'Installing';
+        subscription.status.reason = 'Installing';
+        subscription.status.message = '';
+        subscription.status.conditions = (subscription.status.conditions || []).filter(
+          (condition) =>
+            !['ResolutionFailed', 'InstallPlanPending', 'InstallPlanMissing'].includes(
+              condition.type
+            )
+        );
+        subscription._installElapsed = 0;
+        this.cluster.update(subscription.uid, subscription);
+      }
+      const csvName = target.csvName;
+      const version = target.version;
+
       // A Subscription whose CSV was deleted re-installs it (OLM keeps the
       // operator installed while the Subscription exists). Only deleting the
       // Subscription too makes the CSV deletion the real uninstall.
@@ -4880,7 +5110,14 @@ export class SimulationTick {
         subscription.status.reason = 'Installing';
         subscription.status.installedCSV = '';
         subscription.status.currentCSV = '';
+        subscription.status.installPlanComplete = false;
+        subscription.status.installPlanRef = null;
+        subscription._installedEmitted = false;
         subscription._installElapsed = 0;
+        // The old plan already completed; OLM resolves a NEW install plan for
+        // the reinstall (a Manual subscription must approve it again).
+        const stalePlan = this._installPlanForSubscription(subscription, namespace);
+        if (stalePlan) this.cluster.remove(stalePlan.uid);
         this.cluster.update(subscription.uid, subscription);
         continue;
       }
@@ -4944,13 +5181,17 @@ export class SimulationTick {
         this.cluster.update(plan.uid, plan);
       }
       if (plan.spec.approved !== true) {
+        // Real OLM (issue #46): a Subscription whose InstallPlan is pending on
+        // Manual approval reports `InstallPlanPending True RequiresApproval`
+        // (an "abnormal-true" condition), never False.
         subscription.setCondition(
           'InstallPlanPending',
-          'False',
+          'True',
           'RequiresApproval',
           `install plan ${plan.metadata.name} requires approval`
         );
         setStatus('RequiresApproval', `install plan ${plan.metadata.name} requires approval`);
+        this.cluster.update(subscription.uid, subscription);
         continue;
       }
       if (typeof plan._approvedAtGameSeconds !== 'number')
@@ -5071,7 +5312,10 @@ export class SimulationTick {
 
     // Keep track of CSVs created by earlier ticks so deleting them (including
     // during level teardown) performs the uninstall cleanup exactly once.
+    // Copied CSVs (AllNamespaces shims, issue #46) are projections of a source
+    // CSV and are reconciled by _syncCopiedCSVs, never tracked as operators.
     for (const csv of this.cluster.getByKind('ClusterServiceVersion')) {
+      if (this._isCopiedCSV(csv)) continue;
       if (!this._knownCSVs.has(csv.uid)) {
         const packageName =
           csv.metadata?.labels?.['olm.package'] ||
@@ -5094,6 +5338,101 @@ export class SimulationTick {
           },
         });
         this._knownCSVs.delete(uid);
+      }
+    }
+
+    // Real OLM copies an AllNamespaces CSV into every other namespace so that
+    // `oc get csv -A` shows the operator watching that namespace (#46 P4).
+    this._syncCopiedCSVs();
+  }
+
+  /** Is this CSV an OLM copy of an AllNamespaces CSV installed elsewhere? */
+  _isCopiedCSV(csv) {
+    return Boolean(csv?.metadata?.labels?.['olm.copiedFrom']);
+  }
+
+  /**
+   * Project every active AllNamespaces CSV into the cluster's other namespaces,
+   * exactly like OLM's "copied CSVs" (issue #46 P4):
+   *  - same name, spec and (almost all) annotations as the source CSV;
+   *  - label `olm.copiedFrom: <source namespace>` (how OLM identifies a copy);
+   *  - `olm.targetNamespaces` annotation stripped;
+   *  - status matches the source CSV's status, with reason `Copied` and OLM's
+   *    "The operator is running in <ns> but is managing this namespace" message.
+   *
+   * Copies are deleted when their source CSV or project disappears (or when the
+   * OperatorGroup stops being cluster-global), and are recreated if a player
+   * deletes them by hand — the source CSV continuously reconciles them.
+   */
+  _syncCopiedCSVs() {
+    const projects = this.cluster
+      .getByKind('Project')
+      .filter(
+        (project) => project.status?.phase !== 'Terminating' && !project.metadata?.deletionTimestamp
+      )
+      .map((project) => project.metadata.name);
+    const projectSet = new Set(projects);
+    const wanted = new Set();
+    for (const source of this.cluster.getByKind('ClusterServiceVersion')) {
+      if (this._isCopiedCSV(source)) continue;
+      const sourceNamespace = source.metadata.namespace;
+      const phase = source.status?.phase;
+      if (phase !== 'Installing' && phase !== 'Succeeded') continue;
+      const operatorGroup = this.cluster.getByKindAndNamespace('OperatorGroup', sourceNamespace)[0];
+      const allNamespaces =
+        operatorGroup &&
+        Array.isArray(operatorGroup.spec?.targetNamespaces) &&
+        operatorGroup.spec.targetNamespaces.length === 0;
+      if (!allNamespaces) continue;
+      for (const namespace of projects) {
+        if (namespace === sourceNamespace) continue;
+        const key = `${namespace}/${source.metadata.name}`;
+        wanted.add(key);
+        const existing = this.cluster.getByName(
+          'ClusterServiceVersion',
+          source.metadata.name,
+          namespace
+        );
+        if (existing && !this._isCopiedCSV(existing)) continue;
+        if (existing) {
+          // Keep a copy's status in lockstep with its source while preserving
+          // the Copied reason (real OLM updates copies on source status change).
+          if (existing.status?.phase !== phase) {
+            existing.status.phase = phase;
+            this.cluster.update(existing.uid, existing);
+          }
+          continue;
+        }
+        const annotations = { ...(source.metadata.annotations || {}) };
+        delete annotations['olm.targetNamespaces'];
+        annotations['olm.operatorNamespace'] =
+          annotations['olm.operatorNamespace'] || sourceNamespace;
+        this.cluster.addResource({
+          kind: 'ClusterServiceVersion',
+          metadata: {
+            name: source.metadata.name,
+            namespace,
+            labels: {
+              ...(source.metadata.labels || {}),
+              'olm.copiedFrom': sourceNamespace,
+            },
+            annotations,
+          },
+          spec: deepClone(source.spec || {}),
+          status: {
+            phase,
+            reason: 'Copied',
+            message: `The operator is running in ${sourceNamespace} but is managing this namespace`,
+          },
+        });
+      }
+    }
+    // Prune copies whose source CSV/project/install mode no longer applies.
+    for (const csv of this.cluster.getByKind('ClusterServiceVersion')) {
+      if (!this._isCopiedCSV(csv)) continue;
+      const key = `${csv.metadata.namespace}/${csv.metadata.name}`;
+      if (!wanted.has(key) || !projectSet.has(csv.metadata.namespace)) {
+        this.cluster.remove(csv.uid);
       }
     }
   }

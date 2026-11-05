@@ -24,6 +24,31 @@ function normalizeContainers(containers) {
   return deepClone(list);
 }
 
+/**
+ * Simulation-time runtime hint for a Job created without an explicit
+ * `estimatedDurationSeconds`. A real batch Pod that just prints/echoes/prints a
+ * date finishes in about a second, while the controller previously assumed 30 s
+ * for every Job (#49: `perl -e "print 42"` "took" half a minute). Returns null
+ * when the command cannot be classified, so the caller keeps the generic
+ * default.
+ * @param {object[]} containers
+ * @returns {number|null}
+ */
+export function estimateJobRuntimeSeconds(containers) {
+  const container = Array.isArray(containers) ? containers[0] : null;
+  if (!container) return null;
+  const argv = [...(container.command || []), ...(container.args || [])].map(String);
+  const joined = argv.join(' ').trim();
+  if (!joined) return null;
+  // `sleep <n>` (optionally followed by more commands) dominates the runtime.
+  const sleep = joined.match(/\bsleep\s+(\d+(?:\.\d+)?)\b/);
+  if (sleep) return Math.max(1, Math.ceil(Number(sleep[1])));
+  // One-shot commands that produce output and exit immediately on a real node.
+  const quickOneShot =
+    /\bprint\b|\bprintf\b|\becho\b|\bdate\b|\btrue\b|\bhostname\b|\buname\b|\bid\b|\bpwd\b|\bcat\b/;
+  return quickOneShot.test(joined) ? 2 : null;
+}
+
 function parseCpuToMillis(cpu) {
   if (typeof cpu === 'number') return cpu;
   const str = String(cpu || '');
@@ -1110,6 +1135,13 @@ export class Job extends ResourceBase {
       },
     };
     this._initSpec(defaults, metadata.spec);
+    // #49: derive a realistic runtime hint for trivial one-shot commands so the
+    // build controller does not report every Job as taking ~30 s. Explicit
+    // `estimatedDurationSeconds` from data-authored Jobs always wins.
+    if (this.spec.estimatedDurationSeconds === undefined) {
+      const estimate = estimateJobRuntimeSeconds(this.spec.template?.spec?.containers);
+      if (Number.isFinite(estimate)) this.spec.estimatedDurationSeconds = estimate;
+    }
     this.pods = [];
     this._setInitialStatus({
       phase: 'Pending',

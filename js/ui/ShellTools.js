@@ -957,6 +957,26 @@ export function formatDistinguishedName(name) {
   return parts.join(', ') || '(empty)';
 }
 
+/**
+ * Public hosts the simulation's internet-connected workstation can reach (#49).
+ * The IANA example domains are modelled because their content is stable; they
+ * are the normal way to prove a machine has outbound connectivity. This keeps
+ * the sandbox honest: the cluster network is fully simulated, other internet
+ * hosts remain unknown to the sandbox DNS.
+ */
+const SIMULATED_INTERNET_HOSTS = new Set([
+  'example.com',
+  'www.example.com',
+  'example.org',
+  'www.example.org',
+  'example.net',
+  'www.example.net',
+]);
+
+/** The real https://example.com body (fetched 2026-11-05). */
+const SIMULATED_INTERNET_HTML =
+  '<!doctype html><html lang=en><head><meta charset=utf-8><link rel=icon href=data:,><meta name=viewport content="width=device-width,initial-scale=1"><title>Example Domain</title><style>html{color-scheme:light dark;background:light-dark(#eee,#222)}body{font:16px/1.6 system-ui,sans-serif;max-width:26em;margin:auto;padding:25vh 2em 2em;text-align:center}</style></head><body><p>This domain is for use in documentation examples without needing permission. This is not a service; avoid relying on it for testing and monitoring purposes.</p><script src=/s.js></script></body></html>';
+
 export class ShellTools {
   /**
    * @param {import('./CommandBar.js').default} bar the owning CommandBar
@@ -2418,6 +2438,57 @@ export class ShellTools {
     return sim.trafficForWorkstationCurl(rawUrl, options);
   }
 
+  /**
+   * The exam workstation is an internet-connected machine, so well-known public
+   * hosts answer like the real internet instead of failing with a DNS error
+   * (#49). Only the IANA example domains are modelled — their content is stable
+   * and `curl https://example.com` is the canonical connectivity smoke test —
+   * while every other external host stays outside the sandbox's DNS and reports
+   * the real `curl: (6) Could not resolve host: …` failure.
+   * @param {{scheme: string, hostname: string, port: (number|null), path: string}} parsed
+   * @returns {object|null} a `trafficForWorkstationCurl`-shaped response
+   */
+  _simulatedInternetCurl(parsed) {
+    const host = String(parsed?.hostname || '').toLowerCase();
+    if (!SIMULATED_INTERNET_HOSTS.has(host)) return null;
+    // A Route that actually claims this host in the simulated cluster wins over
+    // the canned internet reply (the router must answer for its own hosts).
+    const cluster = this.bar?.gameEngine?.cluster;
+    if (cluster && typeof cluster.getRouteHost === 'function') {
+      const claimed = (cluster.getByKind?.('Route') || []).some(
+        (route) => String(cluster.getRouteHost(route) || '').toLowerCase() === host
+      );
+      if (claimed) return null;
+    }
+    return {
+      scheme: parsed.scheme,
+      host,
+      port: parsed.port || (parsed.scheme === 'https' ? 443 : 80),
+      path: parsed.path || '/',
+      status: 200,
+      statusText: 'OK',
+      serverIp: '93.184.216.34',
+      headers: {
+        'content-type': 'text/html; charset=utf-8',
+        server: 'cloudflare',
+        'last-modified': 'Wed, 04 Nov 2026 18:12:44 GMT',
+        'cache-control': 'max-age=86000',
+      },
+      body: SIMULATED_INTERNET_HTML,
+      serverCert:
+        parsed.scheme === 'https'
+          ? {
+              trusted: true,
+              selfSigned: false,
+              commonName: 'example.com',
+              sans: ['example.com', '*.example.com'],
+              subject: { commonName: 'example.com' },
+              issuer: { commonName: 'DigiCert Global G3 TLS RSA SHA256 2020 CA1' },
+            }
+          : null,
+    };
+  }
+
   _certificateMatchesHost(certificate, host) {
     const target = String(host || '')
       .toLowerCase()
@@ -2703,7 +2774,11 @@ export class ShellTools {
       size_download: '0',
     });
     const text = allLines.join('\n') + (allLines.length && writeOut ? '\n' : '') + writeOut;
-    return this._err(text);
+    const result = this._err(text);
+    // A silent failure (`curl -s`) has no output at all; the shell must not
+    // replace it with the generic `error: command failed` fallback (#49).
+    result.silentFailure = text === '';
+    return result;
   }
 
   /**
@@ -2734,10 +2809,12 @@ export class ShellTools {
       if (!parsed.hostname) {
         return this._err('curl: (3) URL rejected: Malformed input to a URL function');
       }
-      result = this._workstationCurl(url, {
-        method: options.head ? 'HEAD' : options.method || 'GET',
-        insecure: options.insecure,
-      });
+      result =
+        this._simulatedInternetCurl(parsed) ||
+        this._workstationCurl(url, {
+          method: options.head ? 'HEAD' : options.method || 'GET',
+          insecure: options.insecure,
+        });
       if (!result || result.error) break;
       const status = Number(result.status || 0);
       const location = result.location;

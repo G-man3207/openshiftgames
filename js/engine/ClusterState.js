@@ -12,8 +12,9 @@
  *    Legacy callers that still pass `Namespace` are transparently mapped to
  *    `Project` so old level data keeps working.
  *  - The cluster seeds an OpenShift-like default state: default Projects,
- *    SCCs, kubeadmin/admin users, a cluster-admin binding, ClusterOperators,
- *    ClusterVersion, an OAuth singleton and the ImageStreams in `openshift`.
+ *    SCCs, virtual kubeadmin/admin identities (no User resources), a
+ *    cluster-admin binding, ClusterOperators, ClusterVersion, an OAuth
+ *    singleton and the ImageStreams in `openshift`.
  *  - `addResource()` honours a supplied `metadata.uid` (needed by draw mode)
  *    and never downgrades rich resource class instances to plain ResourceBase.
  *
@@ -67,13 +68,28 @@ export const APPS_DOMAIN = `apps.${CLUSTER_DOMAIN}`;
 export const IMAGE_REGISTRY_HOST = 'image-registry.openshift-image-registry.svc:5000';
 
 /**
- * Simulated kubeadmin password stored in the real 4.x location,
- * `kube-system/kubeadmin` Secret (key `kubeadmin`). Real installs generate a
- * random password; the simulator uses the readable default so players can
- * exercise `oc login -u kubeadmin -p ...` and the documented secret recovery
- * flow.
+ * Simulated kubeadmin password in the real installer's generated format
+ * (`xxxxx-xxxxx-xxxxx-xxxxx`). Real installs generate a random password and
+ * keep the plain text only OUTSIDE the cluster, in the installer's
+ * `<install-dir>/auth/kubeadmin-password` file — modelled by ManifestEngine as
+ * the workstation's `~/auth/kubeadmin-password`. The in-cluster
+ * `kube-system/kubeadmin` Secret stores only a bcrypt hash of it (see
+ * {@link KUBEADMIN_PASSWORD_HASH}). The simulator uses this fixed value so
+ * players can exercise `oc login -u kubeadmin` (interactive `Password:` prompt
+ * or `-p`) and the installer-file discovery flow.
  */
-export const KUBEADMIN_PASSWORD = 'kubeadmin';
+export const KUBEADMIN_PASSWORD = 'k4t7m-q2w9x-r5n8z-p3j6v';
+
+/**
+ * Bcrypt hash of {@link KUBEADMIN_PASSWORD}, exactly what a real 4.x install
+ * keeps in `kube-system/kubeadmin` (key `kubeadmin`, base64-encoded). The plain
+ * text is never stored in the cluster. Real OpenShift hashes with Go's bcrypt
+ * (`$2a$` prefix, cost 10); this value is a genuine bcrypt hash of the
+ * simulated password so `oc extract secret/kubeadmin -n kube-system --to=-`
+ * prints the same shape a learner sees on a real cluster.
+ */
+export const KUBEADMIN_PASSWORD_HASH =
+  '$2a$10$d1JQ7szFOuVsywgejzm/WepKaJyJ9SmdlEvP9/kEhgA2eJ.19Fcvm';
 
 /** Base64-encode text in browsers and Node (no dependency). */
 function encodeBase64Text(text) {
@@ -692,22 +708,15 @@ export class ClusterState {
       });
     }
 
-    // Identity: kubeadmin + admin users and the cluster-admin binding.
+    // Identity: kubeadmin/admin are VIRTUAL identities, exactly like a real
+    // 4.x cluster (kubeadmin is the bootstrap OAuth user and is never listed by
+    // `oc get users`; the simulator's `admin` convenience account likewise has
+    // no User resource). The cluster-admin ClusterRoleBinding keeps its
+    // subject semantics, so RBAC treats kubeadmin as cluster-admin without a
+    // User object (RBACEngine also short-circuits system:masters users).
     this._seed('ClusterRole', 'cluster-admin', {
       uid: 'seed-clusterrole-cluster-admin',
       spec: { rules: [{ apiGroups: ['*'], resources: ['*'], verbs: ['*'] }] },
-    });
-    this._seed('User', 'kubeadmin', {
-      uid: 'seed-user-kubeadmin',
-      spec: {
-        fullName: 'Cluster administrator',
-        groups: ['system:authenticated', 'system:masters'],
-        identities: [],
-      },
-    });
-    this._seed('User', 'admin', {
-      uid: 'seed-user-admin',
-      spec: { fullName: 'Administrator', groups: ['system:authenticated'], identities: [] },
     });
     this._seed('ClusterRoleBinding', 'kubeadmin-cluster-admin', {
       uid: 'seed-crb-kubeadmin',
@@ -720,20 +729,19 @@ export class ClusterState {
         subjects: [{ kind: 'User', apiGroup: 'rbac.authorization.k8s.io', name: 'kubeadmin' }],
       },
     });
-    // Real 4.x installs store the generated kubeadmin password in the
-    // `kube-system/kubeadmin` Secret (key `kubeadmin`, base64-encoded). The
-    // simulated installer uses the readable default password so
-    // `oc login -u kubeadmin -p <password>` is validated like a real cluster,
-    // and `oc get secret kubeadmin -n kube-system -o jsonpath=...` is a usable
-    // recovery flow. Deleting the Secret removes password auth (the documented
-    // kubeadmin removal procedure) while the passwordless simulated prompt and
-    // `system:admin` fallbacks keep working.
+    // Real 4.x installs store only a bcrypt HASH of the generated kubeadmin
+    // password in the `kube-system/kubeadmin` Secret (key `kubeadmin`,
+    // base64-encoded) — the plain text exists only in the installer's
+    // `auth/kubeadmin-password` file (ManifestEngine models it as
+    // `~/auth/kubeadmin-password`), which is what `oc login -u kubeadmin`
+    // validates against. Deleting this Secret disables kubeadmin password
+    // authentication — the documented "remove kubeadmin" procedure.
     this._seed('Secret', 'kubeadmin', {
       namespace: 'kube-system',
       uid: 'seed-secret-kube-system-kubeadmin',
       spec: {
         type: 'Opaque',
-        data: { kubeadmin: encodeBase64Text(KUBEADMIN_PASSWORD) },
+        data: { kubeadmin: encodeBase64Text(KUBEADMIN_PASSWORD_HASH) },
       },
     });
     // Real OpenShift 4.x bootstrap policy: the `self-provisioners`
@@ -2749,8 +2757,15 @@ export class ClusterState {
     return serviceAccount;
   }
 
-  /** The simulated kubeadmin password from `kube-system/kubeadmin` (or null). */
-  getKubeadminPassword() {
+  /**
+   * The bcrypt hash stored in `kube-system/kubeadmin` (or null when the Secret
+   * is missing). A real 4.x install keeps only this hash in the cluster; the
+   * plain password lives in the installer's `auth/kubeadmin-password` file.
+   * `null` means kubeadmin password authentication is unavailable — real OCP
+   * removes the kubeadmin account by deleting this Secret.
+   * @returns {string|null}
+   */
+  getKubeadminPasswordHash() {
     const secret = this.getByName('Secret', 'kubeadmin', 'kube-system');
     if (!secret) return null;
     const data = secret.spec?.data || secret.data || {};

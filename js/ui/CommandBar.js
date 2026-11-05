@@ -69,6 +69,7 @@ import {
   visibleFinalizers,
   isInternalMetadataKey,
   describeEventLines,
+  estimateJobRuntimeSeconds,
 } from '../resources/WorkloadResources.js';
 import { ShellTools, SHELL_COMMANDS, SHELL_FILE_COMMANDS } from './ShellTools.js';
 
@@ -817,6 +818,9 @@ const COLUMN_OVERRIDES = {
   CronJob: 'NAME      SCHEDULE      TIMEZONE   SUSPEND   ACTIVE   LAST SCHEDULE   AGE',
   RoleBinding: 'NAME      ROLE      AGE',
   ClusterRoleBinding: 'NAME      ROLE      AGE',
+  // Real `oc get packagemanifests` printer columns (issue #46): the catalog
+  // source and the object age, not the OLM-spec DISPLAY/VERSION/SOURCE extras.
+  PackageManifest: 'NAME      CATALOG   AGE',
 };
 
 /** Long flags the simulated `oc` implements somewhere (typo rejection). */
@@ -3430,7 +3434,9 @@ export class CommandBar {
       }
       if (result.error) {
         failed = true;
-        failureMessage = result.message || 'error: command failed';
+        // Silent shell commands (`curl -s` on a failed request) print nothing at
+        // all — never substitute the generic fallback line for them (#49).
+        failureMessage = result.message || (result.silentFailure ? '' : 'error: command failed');
         break;
       }
       const text = result.message || '';
@@ -3452,7 +3458,7 @@ export class CommandBar {
       }
     }
 
-    if (failed) this._appendOutput(failureMessage, 'text-red-400');
+    if (failed && failureMessage) this._appendOutput(failureMessage, 'text-red-400');
 
     const message = failed ? failureMessage : outputs.filter(Boolean).join('\n');
     const success = !failed;
@@ -5688,6 +5694,37 @@ Object.assign(CommandBar.prototype, {
     return false;
   },
 
+  /**
+   * The ReplicaSet the deployment controller currently scales — the owner-linked
+   * RS carrying the deployment's pod-template hash, newest first for rolling
+   * updates. Used by the synthetic ScalingReplicaSet event so it prints the real
+   * RS name instead of a truncated hash (#49).
+   * @param {object} deployment
+   * @returns {string|null}
+   */
+  _deploymentReplicaSetName(deployment) {
+    const name = deployment?.metadata?.name;
+    const namespace = deployment?.metadata?.namespace || '';
+    if (!name) return null;
+    const candidates = this._getKindList('ReplicaSet').filter((replicaSet) => {
+      const rsMeta = replicaSet.metadata || {};
+      if ((rsMeta.namespace || '') !== namespace) return false;
+      const ownerNames = (rsMeta.ownerReferences || [])
+        .filter((reference) => reference.kind === 'Deployment')
+        .map((reference) => reference.name);
+      if (ownerNames.length) return ownerNames.includes(name);
+      return String(rsMeta.name || '').startsWith(`${name}-`);
+    });
+    if (!candidates.length) return null;
+    const newestFirst = [...candidates].sort((left, right) => {
+      const leftTime = Date.parse(left.metadata?.creationTimestamp || '') || 0;
+      const rightTime = Date.parse(right.metadata?.creationTimestamp || '') || 0;
+      if (leftTime !== rightTime) return rightTime - leftTime;
+      return String(right.metadata?.name || '').localeCompare(String(left.metadata?.name || ''));
+    });
+    return newestFirst[0].metadata?.name || null;
+  },
+
   _buildDuration(resource) {
     const status = resource.status || {};
     const start = status.startTimestamp || status.startTime;
@@ -6185,20 +6222,11 @@ Object.assign(CommandBar.prototype, {
         };
       }
       case 'PackageManifest': {
-        const channel = (resource.status?.channels || resource.spec?.channels || [])[0] || {};
-        const description = channel.currentCSVDesc || {};
-        const displayName = description.displayName || resource.spec?.packageName || name;
-        const version =
-          description.version ||
-          (String(channel.currentCSV || '').match(/\.v?(\d+\.\d+\.\d+)/) || [])[1] ||
-          '<none>';
+        // Real `oc get packagemanifests` columns are NAME, CATALOG, AGE (#46).
         return {
           NAME: name,
-          DISPLAY: displayName,
-          VERSION: version,
-          CATALOG: resource.status?.catalogSource || channel.catalogSource || '<none>',
-          SOURCE:
-            resource.status?.catalogSourceNamespace || channel.catalogSourceNamespace || '<none>',
+          CATALOG: resource.status?.catalogSource || '<none>',
+          AGE: age,
         };
       }
       case 'MetalLB': {
@@ -6557,6 +6585,12 @@ Object.assign(CommandBar.prototype, {
       const created = deployment.metadata?.creationTimestamp
         ? new Date(deployment.metadata.creationTimestamp).getTime()
         : Date.now() - 240000;
+      // The deployment controller scales the *new* ReplicaSet and records its
+      // real name (`Scaled up replica set web-5d8f7c9b6 to 2`); the old
+      // synthetic event truncated it to a short numeric hash (#49).
+      const replicaSetName =
+        this._deploymentReplicaSetName(deployment) || `${name}-${stableHash(name, 900) + 100}`;
+      const replicas = deployment.spec?.replicas ?? 1;
       push({
         lastTimestamp: created + 3000,
         type: 'Normal',
@@ -6564,7 +6598,7 @@ Object.assign(CommandBar.prototype, {
         object: `deployment/${name}`,
         subobject: '',
         source: 'deployment-controller',
-        message: `Scaled up replica set ${name}-${stableHash(name, 900) + 100} to ${deployment.spec?.replicas ?? 1}`,
+        message: `Scaled ${replicas <= 0 ? 'down' : 'up'} replica set ${replicaSetName} to ${replicas}`,
         namespace: deployment.metadata?.namespace || 'default',
       });
     }
@@ -6619,17 +6653,27 @@ Object.assign(CommandBar.prototype, {
       const created = route.metadata?.creationTimestamp
         ? new Date(route.metadata.creationTimestamp).getTime()
         : Date.now() - 180000;
-      const admitted = this._routeAdmitted(route);
+      // The router records the admission event with the same reason/message as
+      // the Admitted condition it sets on the Route (#49): a route rejected for
+      // an unreadable externalCertificate reports ExternalCertificateValidationFailed
+      // instead of the generic no-endpoints ServiceUnavailable.
+      const condition =
+        (route.status?.ingress?.[0]?.conditions || []).find(
+          (candidate) => candidate.type === 'Admitted'
+        ) || null;
+      const admitted = condition ? condition.status === 'True' : this._routeAdmitted(route);
+      const rejectionReason = condition?.reason || 'ServiceUnavailable';
+      const rejectionMessage = condition?.message || 'no endpoints available';
       push({
         lastTimestamp: created + 2000,
         type: admitted ? 'Normal' : 'Warning',
-        reason: admitted ? 'Admitted' : 'ServiceUnavailable',
+        reason: admitted ? 'Admitted' : rejectionReason,
         object: `route/${name}`,
         subobject: '',
         source: 'router',
         message: admitted
           ? `Route ${name} admitted by router default`
-          : `Route ${name} not admitted: no endpoints available`,
+          : `Route ${name} not admitted: ${rejectionMessage}`,
         namespace: route.metadata?.namespace || 'default',
       });
     }
@@ -9162,7 +9206,8 @@ Object.assign(CommandBar.prototype, {
 
     // #42: real oc prompts for the password interactively when neither `-p` nor
     // `--token` was given. Prompt only for users whose password the simulated
-    // cluster actually knows (kubeadmin/HTPasswd identities); switching to
+    // cluster actually knows (kubeadmin via the installer's
+    // auth/kubeadmin-password copy, and HTPasswd identities); switching to
     // scripted simulator users without a password keeps working and gets a
     // clearly marked simulator hint instead of a misleading silent login.
     if (password === null && !token && this._loginPasswordKnown(user)) {
@@ -9180,7 +9225,9 @@ Object.assign(CommandBar.prototype, {
   /** True when the simulated cluster can verify this user's password (#42). */
   _loginPasswordKnown(user) {
     const normalized = String(user || '');
-    // Only kubeadmin has a real password (the kube-system/kubeadmin Secret).
+    // Only kubeadmin has a real password, and its plain text comes from the
+    // installer's auth/kubeadmin-password file — the in-cluster
+    // kube-system/kubeadmin Secret holds just a bcrypt hash (#45).
     // `admin`/`system:admin` are simulator convenience accounts used for user
     // switching; prompting for them would break those flows (see the simulator
     // hint branch in _cmdLogin).
@@ -10588,6 +10635,14 @@ Object.assign(CommandBar.prototype, {
         spec[key] = value;
       }
     }
+    // #49: a quick one-shot command (`perl -e "print 42"`, `sh -c date`, …)
+    // finishes in ~1 s on a real cluster; give the controller an honest runtime
+    // hint instead of the generic 30 s Job duration. The hint is a simulation
+    // field (like the level-authored Jobs' estimatedDurationSeconds).
+    if (spec.estimatedDurationSeconds === undefined) {
+      const estimate = estimateJobRuntimeSeconds(spec.template?.spec?.containers);
+      if (Number.isFinite(estimate)) spec.estimatedDurationSeconds = estimate;
+    }
     return this._finishCreateObject(
       { apiVersion: 'batch/v1', kind: 'Job', metadata: { name, namespace }, spec },
       flags
@@ -10636,6 +10691,12 @@ Object.assign(CommandBar.prototype, {
     if (completions !== undefined) jobSpec.completions = completions;
     const parallelism = this._intFlag(flags, 'parallelism');
     if (parallelism !== undefined) jobSpec.parallelism = parallelism;
+    // #49: carry the honest one-shot runtime hint into the Jobs this CronJob
+    // spawns (the CronJob controller copies jobTemplate.spec verbatim).
+    if (jobSpec.estimatedDurationSeconds === undefined) {
+      const estimate = estimateJobRuntimeSeconds(jobSpec.template?.spec?.containers);
+      if (Number.isFinite(estimate)) jobSpec.estimatedDurationSeconds = estimate;
+    }
     return this._finishCreateObject(
       { apiVersion: 'batch/v1', kind: 'CronJob', metadata: { name, namespace }, spec },
       flags
@@ -11039,6 +11100,24 @@ Object.assign(CommandBar.prototype, {
     if (ge && typeof ge.scale === 'function') {
       const result = ge.scale(kind, name, replicas, { namespace });
       if (result.success === false) return this._err(result.message);
+      // #49: the deployment controller records the ScalingReplicaSet event with
+      // the real (never truncated) ReplicaSet name, and scales it up or down.
+      const deployment =
+        kind === 'Deployment'
+          ? this._findResource('Deployment', name, {
+              namespace,
+              explicitNamespace: Boolean(flags.namespace),
+              allowPrefix: false,
+            })
+          : null;
+      const replicaSetName = deployment ? this._deploymentReplicaSetName(deployment) : null;
+      if (deployment && replicaSetName) {
+        deployment.addEvent(
+          'Normal',
+          'ScalingReplicaSet',
+          `Scaled ${replicas < (result.oldReplicas ?? replicas) ? 'down' : 'up'} replica set ${replicaSetName} to ${replicas}`
+        );
+      }
       return this._ok(`${this._resourceRef(kind)}/${name} scaled`);
     }
     const result = this._updateResource(
@@ -11421,41 +11500,60 @@ Object.assign(CommandBar.prototype, {
         .replace(/[^A-Za-z0-9_]/g, '_')
         .toUpperCase()}`;
 
-    /** `--list` block for one resource, real oc's `# kind/name, container x`. */
+    /** Append one container's env entries in real `oc set env --list` format. */
+    const renderEnvEntries = (lines, envArray) => {
+      for (const entry of envArray || []) {
+        const valueFrom = entry.valueFrom || {};
+        if (valueFrom.secretKeyRef) {
+          lines.push(
+            `# ${entry.name} from secret ${valueFrom.secretKeyRef.name}, key ${valueFrom.secretKeyRef.key}`
+          );
+        } else if (valueFrom.configMapKeyRef) {
+          lines.push(
+            `# ${entry.name} from configmap ${valueFrom.configMapKeyRef.name}, key ${valueFrom.configMapKeyRef.key}`
+          );
+        } else if (valueFrom.fieldRef) {
+          lines.push(`# ${entry.name} from field ${valueFrom.fieldRef.fieldPath}`);
+        } else {
+          lines.push(`${entry.name}=${entry.value}`);
+        }
+      }
+    };
+
+    /**
+     * `--list` output for one resource: real oc prints one
+     * `# <kind>/<name>, container <c>` header per selected container followed by
+     * that container's env entries. A container without env vars prints ONLY its
+     * header — never a `<none>` placeholder (#49).
+     */
     const renderEnvList = (resource) => {
       const resourceName = resource.metadata?.name || '';
       const spec = JSON.parse(JSON.stringify(resource.spec || {}));
-      const arrays = envArraysForSpec(spec);
-      const resourceContainers =
-        kind === 'BuildConfig' ? [] : spec.template?.spec?.containers || spec.containers || [];
-      const containerName =
-        flags.container && flags.container !== true
-          ? String(flags.container)
-          : kind === 'BuildConfig'
-            ? spec.strategy?.sourceStrategy?.from?.name || 'main'
-            : resourceContainers[0]?.name || this._containerList(resource)[0]?.name || 'main';
-      const lines = [`# ${this._resourceRef(kind)}/${resourceName}, container ${containerName}`];
-      let count = 0;
-      for (const envArray of arrays) {
-        for (const entry of envArray) {
-          count += 1;
-          const valueFrom = entry.valueFrom || {};
-          if (valueFrom.secretKeyRef) {
-            lines.push(
-              `# ${entry.name} from secret ${valueFrom.secretKeyRef.name}, key ${valueFrom.secretKeyRef.key}`
-            );
-          } else if (valueFrom.configMapKeyRef) {
-            lines.push(
-              `# ${entry.name} from configmap ${valueFrom.configMapKeyRef.name}, key ${valueFrom.configMapKeyRef.key}`
-            );
-          } else if (valueFrom.fieldRef) {
-            lines.push(`# ${entry.name} from field ${valueFrom.fieldRef.fieldPath}`);
-          } else {
-            lines.push(`${entry.name}=${entry.value}`);
-          }
-        }
+      const lines = [];
+      if (kind === 'BuildConfig') {
+        const strategy = spec.strategy || {};
+        const containerStrategy =
+          strategy.sourceStrategy || strategy.dockerStrategy || strategy.customStrategy || {};
+        const builderName =
+          flags.container && flags.container !== true
+            ? String(flags.container)
+            : containerStrategy.from?.name || 'main';
+        lines.push(`# ${this._resourceRef(kind)}/${resourceName}, container ${builderName}`);
+        renderEnvEntries(lines, containerStrategy.env || []);
+        return lines;
       }
-      if (count === 0) lines.push('<none>');
+      const containers = spec.template?.spec?.containers || spec.containers || [];
+      const selected =
+        flags.container && flags.container !== true
+          ? containers.filter((container) => container.name === flags.container)
+          : containers;
+      const targets = selected.length
+        ? selected
+        : [{ name: this._containerList(resource)[0]?.name || 'main' }];
+      for (const container of targets) {
+        lines.push(`# ${this._resourceRef(kind)}/${resourceName}, container ${container.name}`);
+        renderEnvEntries(lines, container.env || []);
+      }
       return lines;
     };
 
@@ -14644,6 +14742,15 @@ Object.assign(CommandBar.prototype, {
         );
       if (buildConfig)
         lines.push(`    buildconfig.build.openshift.io "${buildConfigName}" created`);
+      // #49: on a real cluster the BuildConfig's ConfigChange trigger starts the
+      // first build immediately — `oc get builds` right after `oc new-build`
+      // already shows `<name>-1`, no `oc start-build` needed. Create it
+      // synchronously (after the output ImageStream exists) instead of letting
+      // the controller pick it up on a later tick.
+      if (buildConfig && buildConfigName && typeof ge.startBuild === 'function') {
+        // A failed trigger start is retried by the controller on the next tick.
+        ge.startBuild(buildConfigName, { namespace });
+      }
       lines.push(
         '--> Success',
         `    Build scheduled, use 'oc logs -f bc/${buildConfigName}' to track its progress.`,
@@ -15755,6 +15862,8 @@ Object.assign(CommandBar.prototype, {
           `Creating debug namespace/openshift-debug-node-${nodeName} ...`,
           `Starting pod/${nodeName}-debug ...`,
           `To use host binaries, run \`chroot /host\``,
+          `Pod IP: ${node.status?.addresses?.find((address) => address.type === 'InternalIP')?.address || '10.0.0.2'}`,
+          `If you don't see a command prompt, try pressing enter.`,
           '',
           `${this._debugPrompt()} `,
         ].join('\n')
@@ -15803,13 +15912,17 @@ Object.assign(CommandBar.prototype, {
     return null;
   },
 
-  /** The prompt shown for the active debug shell. */
+  /**
+   * The prompt shown for the active debug shell. Real `oc debug node/x` drops
+   * you into the RHCOS 9 toolbox container's bash 5.1 shell, whose root prompt
+   * is `sh-5.1#`; `chroot /host` enters the host's identical bash 5.1 shell, so
+   * the prompt does not change (#49 — it used to show `(node/x) $` instead).
+   * @returns {string}
+   */
   _debugPrompt() {
     const session = this._debugSession;
     if (!session) return '$';
-    // After `chroot /host` you are in the RHCOS 9 host's bash 5.1 shell, whose
-    // root prompt is `sh-5.1#` (real `oc debug node/… -- chroot /host`) (#43).
-    return session.chroot ? 'sh-5.1#' : `(node/${session.name}) $`;
+    return 'sh-5.1#';
   },
 
   /** Split `cmd1; cmd2 && cmd3` into individual debug-shell commands. */
@@ -15831,7 +15944,7 @@ Object.assign(CommandBar.prototype, {
     ];
     const parts = this._splitDebugCommands(commandLine);
     if (parts.length === 0) {
-      return this._ok([...header, `(node/${nodeName}) $ `].join('\n'));
+      return this._ok([...header, 'sh-5.1# '].join('\n'));
     }
     // `-- chroot /host` with no trailing command opens the interactive host
     // shell, like `oc debug node/x -- chroot /host` on a real cluster.

@@ -1296,7 +1296,10 @@ const INCIDENT_DEFS = [
     affectedResourceTypes: ['Node', 'Pod'],
     investigationSteps: [
       S('oc get nodes', 'Check STATUS=NotReady / scheduling disabled.'),
-      S('oc describe node <node>', 'Conditions show why (KubeletNotReady, NetworkUnavailable...).'),
+      S(
+        'oc describe node <node>',
+        'Conditions show why (Ready=Unknown NodeStatusUnknown "Kubelet stopped posting node status." when the kubelet is down; NetworkUnavailable...).'
+      ),
       S('oc get pods -A --field-selector spec.nodeName=<node>', 'Pods on the failed node.'),
       S('oc adm top node <node>', 'Check resource pressure on the node.'),
     ],

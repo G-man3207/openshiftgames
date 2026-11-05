@@ -1935,18 +1935,60 @@ function evaluateInstallPlan(obj, c) {
 }
 
 /**
+ * Head CSV of the catalog channel a Subscription tracks, read from the
+ * cluster's PackageManifest (`status.channels[*].currentCSV`). Used to grade the
+ * L18 "pin the install" objective on state: a valid pin installs a CSV that is
+ * an older channel entry, never the channel head itself (issue #48.1).
+ *
+ * @param {object} cluster
+ * @param {object} spec Subscription spec
+ * @returns {string} channel-head CSV name ('' when the catalog is unavailable)
+ */
+function packageChannelHead(cluster, spec) {
+  const packageName = String(spec?.name || spec?.packageName || '');
+  if (!packageName) return '';
+  const manifest = listKind(cluster, 'PackageManifest').find(
+    (candidate) =>
+      resourceName(candidate) === packageName ||
+      String(resourceSpec(candidate).packageName || '') === packageName
+  );
+  if (!manifest) return '';
+  const status = resourceStatus(manifest);
+  const channels = asArray(status.channels).length
+    ? asArray(status.channels)
+    : asArray(resourceSpec(manifest).channels);
+  const channelName = String(spec?.channel || status.defaultChannel || '');
+  const channel =
+    channels.find((candidate) => String(candidate.name || '') === channelName) ||
+    channels[0] ||
+    null;
+  const entries = asArray(channel?.entries);
+  return String(channel?.currentCSV || entries[0]?.name || '');
+}
+
+/**
  * OLM Subscription declaration (issue #34): all supplied spec fields
  * (channel/startingCSV/installPlanApproval, …) must match a real Subscription.
  * Latched once observed because the L18 flow can uninstall it afterwards.
+ *
+ * State-based pin grading (issue #48.1): `pinnedInstall: true` grades the
+ * out*come* instead of hard-coded values — the Subscription must have installed
+ * exactly the CSV named by its own `spec.startingCSV`, and that pin must be an
+ * older (non-head) entry of the channel it tracks. Any valid channel entry the
+ * player pins therefore satisfies the objective (e.g. v1.16.0 with Manual
+ * approval), while installing the channel head or leaving the pin unresolved
+ * does not.
  */
 function evaluateSubscription(obj, c) {
   const namespace = obj.namespace || levelProjectNamespace(c) || '';
   const wantedName = obj.name ? String(obj.name) : '';
   const packageName = String(obj.package || obj.name || '');
+  const requiresPinnedInstall = obj.pinnedInstall === true;
   const fields = ['channel', 'startingCSV', 'installPlanApproval', 'source', 'sourceNamespace'];
   const matching = listKind(c.clusterState, 'Subscription').filter((subscription) => {
     if (namespace && resourceNamespace(subscription) !== namespace) return false;
     const spec = resourceSpec(subscription);
+    const status = resourceStatus(subscription);
     const haystack =
       `${resourceName(subscription)} ${spec.name || ''} ${spec.packageName || ''}`.toLowerCase();
     if (packageName && !haystack.includes(packageName.toLowerCase())) return false;
@@ -1961,6 +2003,15 @@ function evaluateSubscription(obj, c) {
     for (const field of fields) {
       if (obj[field] === undefined || obj[field] === null) continue;
       if (String(spec[field] ?? '') !== String(obj[field])) return false;
+    }
+    if (requiresPinnedInstall) {
+      // The installed CSV must BE the pinned CSV, and the pin must not be the
+      // channel head (pinning the head is just a normal install, not a pin).
+      const pinned = String(spec.startingCSV || '');
+      const installed = String(status.installedCSV || '');
+      if (!pinned || !installed || installed !== pinned) return false;
+      const channelHead = packageChannelHead(c.clusterState, spec);
+      if (channelHead && pinned === channelHead) return false;
     }
     if (
       obj.statusPhase &&

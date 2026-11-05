@@ -22,6 +22,7 @@
 import {
   ClusterState,
   IMAGE_REGISTRY_HOST,
+  KUBEADMIN_PASSWORD,
   OPENSHIFT_VERSION,
   deepClone,
   deepMerge,
@@ -2314,9 +2315,13 @@ export class GameEngine {
    *
    * kubeadmin (and the simulator's built-in `admin` account) can always log in:
    * on a real cluster they authenticate with bootstrap kubeconfig credentials
-   * rather than an identity provider. Any other user needs a ready HTPasswd
-   * identity provider plus a matching entry in the virtual htpasswd file
-   * (CONVERSION-SPEC §6).
+   * rather than an identity provider. Their plain-text password exists only
+   * outside the cluster, in the installer's `auth/kubeadmin-password` file
+   * (modelled as `~/auth/kubeadmin-password`); the in-cluster
+   * `kube-system/kubeadmin` Secret holds just a bcrypt hash, so login
+   * validation uses the installer-side copy. Any other user needs a ready
+   * HTPasswd identity provider plus a matching entry in the virtual htpasswd
+   * file (CONVERSION-SPEC §6).
    *
    * Failure messages mirror real `oc`:
    *  - wrong credentials / unknown user with a working IdP:
@@ -2335,15 +2340,19 @@ export class GameEngine {
 
     if (user === 'kubeadmin' || user === 'system:admin' || user === 'admin') {
       // Real `oc login -u kubeadmin -p <password>` is validated against the
-      // generated password stored in the kube-system/kubeadmin Secret. The
-      // simulator's CLI cannot prompt interactively, so a *passwordless*
+      // generated password, whose plain text exists only in the installer's
+      // `auth/kubeadmin-password` file — NOT in the cluster: the
+      // kube-system/kubeadmin Secret stores only a bcrypt hash. The simulator's
+      // CLI cannot prompt interactively at this layer, so a *passwordless*
       // `oc login -u kubeadmin` keeps working (it stands in for the password
-      // prompt); an explicitly supplied password must match.
+      // prompt); an explicitly supplied password must match. Deleting the
+      // Secret disables kubeadmin password authentication (the documented
+      // "remove kubeadmin" procedure), so treat that as unavailable credentials.
       if (password !== undefined && password !== null && String(password) !== '') {
-        const expected = this.cluster.getKubeadminPassword
-          ? this.cluster.getKubeadminPassword()
+        const hash = this.cluster.getKubeadminPasswordHash
+          ? this.cluster.getKubeadminPasswordHash()
           : null;
-        if (expected === null) {
+        if (hash === null) {
           return {
             success: false,
             reason: 'kubeadmin-secret-missing',
@@ -2351,7 +2360,7 @@ export class GameEngine {
               'Login failed (401 Unauthorized)\nThe kubeadmin password Secret "kubeadmin" in project "kube-system" is missing: kubeadmin password authentication is not available.',
           };
         }
-        if (String(password) !== String(expected)) {
+        if (String(password) !== String(KUBEADMIN_PASSWORD)) {
           return {
             success: false,
             reason: 'invalid-credentials',
@@ -2361,7 +2370,8 @@ export class GameEngine {
         }
       }
       this.currentUser = user === 'admin' ? 'admin' : 'kubeadmin';
-      this._ensureUserResource(this.currentUser, null);
+      // kubeadmin/admin are virtual users: no User resource is created (a real
+      // 4.x `oc get users` never lists kubeadmin).
       this.ensureCurrentProject();
       this._recordLogin(this.currentUser, 'kubeadmin');
       this.eventBus.emit('login', {
@@ -2468,13 +2478,6 @@ export class GameEngine {
    */
   getLoginHistory() {
     return Array.isArray(this.loginHistory) ? [...this.loginHistory] : [];
-  }
-
-  /** Ensure a User resource exists for kubeadmin-style logins. */
-  _ensureUserResource(username, provider) {
-    if (!this.cluster.getUser(username))
-      this.cluster.createUser(username, { fullName: 'Cluster administrator' });
-    if (provider) this.cluster.createIdentity(provider.name, username, username);
   }
 
   /**
@@ -3413,7 +3416,9 @@ export class GameEngine {
       value: String(value),
     }));
     const container = {
-      name: 'main',
+      // `oc new-app` names the container after the application (e.g. `database`
+      // for `oc new-app --image=… --name=database`), not a generic "main".
+      name: options.containerName || name,
       image: options.image,
       ports: [{ containerPort, protocol: 'TCP' }],
       resources: {
@@ -3603,7 +3608,7 @@ export class GameEngine {
             type: 'ImageChange',
             imageChangeParams: {
               automatic: true,
-              containerNames: ['main'],
+              containerNames: [name],
               from: { kind: 'ImageStreamTag', name: `${name}:latest` },
             },
           },
@@ -4998,7 +5003,9 @@ export class GameEngine {
 
   /**
    * `oc delete user <name>` — removes the user, identities, group membership and
-   * RBAC/SCC references (CONVERSION-SPEC §6).
+   * RBAC/SCC references (CONVERSION-SPEC §6). kubeadmin is a virtual user with
+   * no User resource, so `oc delete user kubeadmin` is NotFound like real `oc`;
+   * the documented removal path is `oc delete secret kubeadmin -n kube-system`.
    * @returns {{success: boolean, message: string}}
    */
   deleteUserResource(name) {

@@ -46,12 +46,19 @@ export function attachAlertSource(alertmanager, cluster) {
   return alertmanager;
 }
 
-/** `oc describe`-style `Labels`/`Annotations` block (first pair on the header line). */
+/**
+ * `oc describe`-style `Labels`/`Annotations` block (first pair on the header
+ * line). The generic CR describer aligns every level-0 value to the widest
+ * field plus tabwriter padding: `Annotations:`/`API Version:` are 12 chars, so
+ * values start at column 14 (`Labels:` + 7 spaces) and continuation label lines
+ * are indented 14 spaces (#49).
+ */
 function describeMap(heading, values) {
   const entries = Object.entries(values || {}).filter(([, value]) => value !== '');
-  const header = `${heading}${' '.repeat(Math.max(0, 13 - heading.length))}`;
+  const column = 14;
+  const header = `${heading}${' '.repeat(Math.max(0, column - heading.length))}`;
   if (!entries.length) return [`${header}<none>`];
-  const pad = ' '.repeat(13);
+  const pad = ' '.repeat(column);
   const [first, ...rest] = entries.map(([key, value]) => `${key}=${value}`);
   return [`${header}${first}`, ...rest.map((line) => `${pad}${line}`)];
 }

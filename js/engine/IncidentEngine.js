@@ -2679,13 +2679,20 @@ class IncidentEngine {
       });
     }
     this._setPhase(node, 'NotReady');
-    this._setCondition(
-      node,
-      'Ready',
-      'False',
-      'KubeletNotReady',
-      'kubelet stopped posting node status'
-    );
+    // #49: a stopped kubelet stops posting a heartbeat. The node lifecycle
+    // controller then marks EVERY kubelet-posted condition (Ready plus the three
+    // pressure conditions) Unknown with reason NodeStatusUnknown and the real
+    // "Kubelet stopped posting node status." message — it does not report
+    // `Ready False KubeletNotReady` while the node is unreachable.
+    for (const conditionType of ['Ready', 'MemoryPressure', 'DiskPressure', 'PIDPressure']) {
+      this._setCondition(
+        node,
+        conditionType,
+        'Unknown',
+        'NodeStatusUnknown',
+        'Kubelet stopped posting node status.'
+      );
+    }
     // Issue #43: a real NotReady node is NOT cordoned. The node lifecycle
     // controller adds node.kubernetes.io/unreachable / not-ready taints
     // (NoSchedule + NoExecute) and `oc get nodes` STATUS stays plain NotReady.
@@ -3601,15 +3608,15 @@ class IncidentEngine {
       'KubeletHasSufficientPID',
       'kubelet has sufficient PID available'
     );
-    // Real OCP nodes report NetworkUnavailable=False with reason
-    // NoNetworkPlugin (the kubelet has no network-plugin interface); the 4.22
-    // message is the kubelet's canonical "network plugin is not ready" text.
+    // Real OCP 4.22 nodes (OVN-Kubernetes) report NetworkUnavailable=False with
+    // reason RouteCreated and the "ovn-kube cleared kubelet-set NoRouteCreated"
+    // message once the node network is programmed (#49).
     this._setCondition(
       node,
       'NetworkUnavailable',
       'False',
-      'NoNetworkPlugin',
-      'network plugin is not ready'
+      'RouteCreated',
+      'ovn-kube cleared kubelet-set NoRouteCreated'
     );
     this._clearAnnotation(node, INCIDENT_ANNOTATION);
     this._recordEvent(node, 'Normal', 'NodeReady', `Node ${node.name} status is now: NodeReady`);

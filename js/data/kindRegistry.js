@@ -823,7 +823,8 @@ K.Subscription = {
   defaultNamespace: 'openshift-operators',
   defaultSpec: () => ({
     name: 'ansible-automation-platform-operator',
-    channel: 'stable',
+    // Real Red Hat catalog channel for the AAP 2.6 package (issue #46).
+    channel: 'stable-2.6',
     source: 'redhat-operators',
     sourceNamespace: 'openshift-marketplace',
     installPlanApproval: 'Automatic',

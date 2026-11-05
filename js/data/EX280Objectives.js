@@ -1519,7 +1519,7 @@ export const EX280_CHEATSHEET = [
     items: [
       {
         cmd: `oc login -u <user> -p '<password>'`,
-        note: 'Log in. Omit -p and oc prompts for the password; the installer stores the kubeadmin password in ~/auth/kubeadmin-password (or oc extract secret/kubeadmin -n kube-system --to=-).',
+        note: 'Log in. Omit -p and oc prompts for the password; the installer stores the kubeadmin password in ~/auth/kubeadmin-password. The kube-system/kubeadmin secret holds only a bcrypt hash (oc extract prints $2a$10$…), so it cannot recover the password — its exam use is removing kubeadmin once another cluster-admin exists: oc delete secret kubeadmin -n kube-system.',
       },
       { cmd: `oc whoami`, note: 'Current user.' },
       { cmd: `oc status`, note: 'Quick overview of the current project.' },

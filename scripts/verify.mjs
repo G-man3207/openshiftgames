@@ -592,9 +592,15 @@ if (seedMod?.ClusterState) {
       }
     }
 
+    // Issue #48.3: kubeadmin is a virtual user on real 4.x and is never listed
+    // by `oc get users`; the simulator's `admin` convenience account is virtual
+    // too. Keep only the cluster-admin ClusterRoleBinding subject semantics.
     const users = byKind('User').map((u) => u.metadata?.name);
-    for (const name of ['kubeadmin', 'admin'])
-      if (!users.includes(name)) fail('seed', `User "${name}" missing`);
+    if (users.length)
+      fail(
+        'seed',
+        `fresh 4.22 cluster must not seed User resources (kubeadmin/admin are virtual): found ${users.join(', ')}`
+      );
     const crbs = byKind('ClusterRoleBinding');
     const kubeadminBinding = crbs.find((b) => {
       const ref = b.roleRef || b.spec?.roleRef || {};

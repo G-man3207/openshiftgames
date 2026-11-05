@@ -972,12 +972,13 @@ const CHALLENGES = [
         spec: {
           name: 'ansible-automation-platform-operator',
           packageName: 'ansible-automation-platform-operator',
-          channel: 'stable',
+          // Real Red Hat catalog channel for the AAP 2.6 package (issue #46).
+          channel: 'stable-2.6',
           source: 'redhat-operators',
           sourceNamespace: 'openshift-marketplace',
           installPlanApproval: 'Automatic',
         },
-        status: { phase: 'Succeeded', installedCSV: 'ansible-automation-platform-operator.v1.0.0' },
+        status: { phase: 'Succeeded', installedCSV: 'aap-operator.v2.6.0' },
       },
     ],
     manifestFiles: [
@@ -1239,7 +1240,7 @@ const CHALLENGES = [
     hints: [
       'Start from the seeded default-deny: oc apply -f challenges/payments-networkpolicy.yaml — NetworkPolicies are additive, so the deny isolates the project and each allow rule re-opens exactly one path.',
       'DNS: allow egress to the openshift-dns namespace on BOTH UDP and TCP port 5353 (the dns-default Pods listen on 5353, not 53). Without it, gateway cannot resolve ledger and every call fails.',
-      'Direction matters: gateway → ledger needs an ingress rule on ledger (or an egress rule on gateway). Do not mirror that rule for ledger → gateway — the deny objective proves the path stays closed.',
+      'Direction matters: with default-deny in both directions you need an egress rule on gateway AND an ingress rule on ledger. Do not mirror those rules for ledger → gateway — the deny objective proves the path stays closed.',
       'Verify as the workloads: oc exec deploy/gateway -n payments -- curl -sv http://ledger:8080 (allowed), oc exec deploy/ledger -n payments -- curl -sv http://gateway:8080 (blocked), and oc get networkpolicy -n payments.',
       'The check probes the traffic evaluator: hand-written policies with any names/selectors are fine as long as the resulting traffic behaviour matches.',
     ],
