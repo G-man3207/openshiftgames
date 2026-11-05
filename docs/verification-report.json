@@ -1,19 +1,19 @@
 {
-  "timestamp": "2026-11-05T20:23:08.701Z",
+  "timestamp": "2026-11-05T21:37:07.100Z",
   "environment": {
     "node": "v26.10.0",
     "chrome": "Chrome/156.0.8078.79",
-    "baseUrl": "http://127.0.0.1:33703",
+    "baseUrl": "http://127.0.0.1:36371",
     "viewport": {
       "width": 1600,
       "height": 900
     },
     "puppeteerCore": "/tmp/verify-tools",
-    "startedAt": "2026-11-05T20:06:08.002Z",
-    "durationSeconds": 1021
+    "startedAt": "2026-11-05T21:15:47.053Z",
+    "durationSeconds": 1280
   },
   "summary": {
-    "passes": 2019,
+    "passes": 2069,
     "failures": 0,
     "warnings": 0,
     "consoleErrors": 0,
@@ -231,6 +231,16 @@
       "failures": 0,
       "warnings": 0
     },
+    "qa-issue68": {
+      "passes": 26,
+      "failures": 0,
+      "warnings": 0
+    },
+    "qa-issue69": {
+      "passes": 24,
+      "failures": 0,
+      "warnings": 0
+    },
     "draw": {
       "passes": 10,
       "failures": 0,
@@ -251,74 +261,74 @@
       "path": "screenshot.png",
       "width": 1600,
       "height": 900,
-      "bytes": 981055
+      "bytes": 981234
     },
     "ogImage": {
       "path": "og-image.png",
       "width": 1200,
       "height": 630,
-      "bytes": 205625
+      "bytes": 205653
     },
     "screenshots": [
       {
         "path": "docs/screenshots/menu.png",
         "width": 1600,
         "height": 900,
-        "bytes": 332017
+        "bytes": 332154
       },
       {
         "path": "docs/screenshots/exam-prep.png",
         "width": 1600,
         "height": 900,
-        "bytes": 211025
+        "bytes": 210616
       },
       {
         "path": "docs/screenshots/sandbox.png",
         "width": 1600,
         "height": 900,
-        "bytes": 981606
+        "bytes": 981999
       },
       {
         "path": "screenshot.png",
         "width": 1600,
         "height": 900,
-        "bytes": 981055
+        "bytes": 981234
       },
       {
         "path": "docs/screenshots/files-panel.png",
         "width": 1600,
         "height": 900,
-        "bytes": 243981
+        "bytes": 244194
       },
       {
         "path": "docs/screenshots/campaign-level-1.png",
         "width": 1600,
         "height": 900,
-        "bytes": 479853
+        "bytes": 478882
       },
       {
         "path": "docs/screenshots/regressions-minimap-collapsed.png",
         "width": 1600,
         "height": 900,
-        "bytes": 963538
+        "bytes": 963436
       },
       {
         "path": "docs/screenshots/regressions-campaign-restart.png",
         "width": 1600,
         "height": 900,
-        "bytes": 488419
+        "bytes": 488719
       },
       {
         "path": "docs/screenshots/draw.png",
         "width": 1600,
         "height": 900,
-        "bytes": 489597
+        "bytes": 488698
       },
       {
         "path": "og-image.png",
         "width": 1200,
         "height": 630,
-        "bytes": 205625
+        "bytes": 205653
       }
     ]
   },
@@ -7737,7 +7747,7 @@
     },
     {
       "section": "qa-issue61-62",
-      "name": "#62F: `oc describe svc web` Events placeholder aligns like kubectl (exactly 12 spaces after `Events:`)"
+      "name": "#62F/#69P4: `oc describe svc web` Events placeholder aligns like kubectl (exactly 19 spaces after `Events:` — column 27 after `Internal Traffic Policy:`)"
     },
     {
       "section": "qa-issue61-62",
@@ -8318,6 +8328,206 @@
     {
       "section": "qa-issue66",
       "name": "#66: no stale-while-revalidate/s-maxage can keep a returning visitor on an old release"
+    },
+    {
+      "section": "qa-issue68",
+      "name": "#68: GET /v/1.13.0/js/engine/GameEngine.js returns 200 with the exact file body and `Cache-Control: public, max-age=31536000, immutable`"
+    },
+    {
+      "section": "qa-issue68",
+      "name": "#68: the versioned module response carries an ETag (Vercel static file header)"
+    },
+    {
+      "section": "qa-issue68",
+      "name": "#68: GET /v/<version>/js/ui/CommandBar.js is rewritten to the real file and served immutable with an ETag"
+    },
+    {
+      "section": "qa-issue68",
+      "name": "#68: the unversioned /js/engine/GameEngine.js still revalidates (max-age=0, must-revalidate) — #66 behaviour kept"
+    },
+    {
+      "section": "qa-issue68",
+      "name": "#68: the served index.html import map maps \"./js/\" to \"./v/1.13.0/js/\""
+    },
+    {
+      "section": "qa-issue68",
+      "name": "#68: the served OpenShift Draw page maps \"./js/\" to the same \"./v/1.13.0/js/\" prefix"
+    },
+    {
+      "section": "qa-issue68",
+      "name": "#68: a fresh browser context boots the menu with the versioned import map"
+    },
+    {
+      "section": "qa-issue68",
+      "name": "#68: the / never sends fewer than 40 module requests through /v/<version>/js/"
+    },
+    {
+      "section": "qa-issue68",
+      "name": "#68: a fresh / visit makes ZERO unversioned /js/ module requests (no stale-code path)"
+    },
+    {
+      "section": "qa-issue68",
+      "name": "#68: the versioned / load produces no console/page errors"
+    },
+    {
+      "section": "qa-issue68",
+      "name": "#68: OpenShift Draw boots from the served /draw entry document"
+    },
+    {
+      "section": "qa-issue68",
+      "name": "#68: the Draw page loads its modules from /v/<version>/js/"
+    },
+    {
+      "section": "qa-issue68",
+      "name": "#68: the Draw page makes ZERO unversioned /js/ module requests"
+    },
+    {
+      "section": "qa-issue68",
+      "name": "#68: the versioned /draw load produces no console/page errors"
+    },
+    {
+      "section": "qa-issue68",
+      "name": "#68: the returning-visitor scenario first caches the shipped release"
+    },
+    {
+      "section": "qa-issue68",
+      "name": "#68: after a release the returning visitor reloads and boots the new release"
+    },
+    {
+      "section": "qa-issue68",
+      "name": "#68: after a release the returning visitor EXECUTES the new module (the old immutable URL was not reused)"
+    },
+    {
+      "section": "qa-issue68",
+      "name": "#68: the reload requested the new release module through /v/1.13.0-qa68/js/engine/GameEngine.js"
+    },
+    {
+      "section": "qa-issue68",
+      "name": "#68: the negative control first caches the shipped release"
+    },
+    {
+      "section": "qa-issue68",
+      "name": "#68: the negative control still boots on the old versioned module URLs"
+    },
+    {
+      "section": "qa-issue68",
+      "name": "#68: negative control — WITHOUT a version bump the changed module is NOT executed (immutable cache wins)"
+    },
+    {
+      "section": "qa-issue68",
+      "name": "#68: negative control — the old versioned module was answered from the HTTP cache (zero server hits)"
+    },
+    {
+      "section": "qa-issue68",
+      "name": "#68: negative control — response.fromCache() confirms the reload was served from the immutable HTTP cache"
+    },
+    {
+      "section": "qa-issue68",
+      "name": "#68: the lazily-required Files/Manifests panel still loads after the import-map change"
+    },
+    {
+      "section": "qa-issue68",
+      "name": "#68: _moduleExists() HEAD-probes the versioned URL /v/1.13.0/js/ui/ManifestPanel.js"
+    },
+    {
+      "section": "qa-issue68",
+      "name": "#68: _moduleExists() never probes the unversioned /js/ui/ManifestPanel.js path"
+    },
+    {
+      "section": "qa-issue69",
+      "name": "#69: a fresh sandbox boots for the Service-describe and init-error checks"
+    },
+    {
+      "section": "qa-issue69",
+      "name": "#69 P4: `oc describe svc dns-default` prints `Internal Traffic Policy:  Cluster` (API-server default)"
+    },
+    {
+      "section": "qa-issue69",
+      "name": "#69 P4: `oc describe svc dns-default` prints `Traffic Distribution:     PreferSameNode` (dns-operator 4.22 asset)"
+    },
+    {
+      "section": "qa-issue69",
+      "name": "#69 P4: `Session Affinity:`/`Internal Traffic Policy:`/`Traffic Distribution:` share the tabwriter column"
+    },
+    {
+      "section": "qa-issue69",
+      "name": "#69 P4: the `Events:` placeholder aligns with the 24-char `Internal Traffic Policy:` label (19 spaces)"
+    },
+    {
+      "section": "qa-issue69",
+      "name": "#69 P4: describe order is Session Affinity < Internal Traffic Policy < Traffic Distribution < Events"
+    },
+    {
+      "section": "qa-issue69",
+      "name": "#69 P4: EVERY top-level describe field value starts at column 27 (0-based 26, kubectl tabwriter)"
+    },
+    {
+      "section": "qa-issue69",
+      "name": "#69 P4: the new describe fields never print a literal `undefined`"
+    },
+    {
+      "section": "qa-issue69",
+      "name": "#69 P4: `oc get svc dns-default -o jsonpath={.spec.trafficDistribution}` is PreferSameNode"
+    },
+    {
+      "section": "qa-issue69",
+      "name": "#69 P4: `oc new-project qa69` creates the ClusterIP describe fixture project"
+    },
+    {
+      "section": "qa-issue69",
+      "name": "#69 P4: the qa69 Deployment + exposed ClusterIP Service fixture is created"
+    },
+    {
+      "section": "qa-issue69",
+      "name": "#69 P4: an ordinary ClusterIP Service describe prints `Internal Traffic Policy:  Cluster`"
+    },
+    {
+      "section": "qa-issue69",
+      "name": "#69 P4: the player Service keeps the kubectl `Events:` column (19 spaces after `Events:`)"
+    },
+    {
+      "section": "qa-issue69",
+      "name": "#69 P4: a Service WITHOUT spec.trafficDistribution prints NO `Traffic Distribution:` line"
+    },
+    {
+      "section": "qa-issue69",
+      "name": "#69 P4: an ExternalName Service describe still prints `External Name:     example.com`"
+    },
+    {
+      "section": "qa-issue69",
+      "name": "#69 P4: an ExternalName Service describe prints NEITHER Internal Traffic Policy NOR Traffic Distribution"
+    },
+    {
+      "section": "qa-issue69",
+      "name": "#69 P3: a JavaScript boot failure shows the #init-error overlay"
+    },
+    {
+      "section": "qa-issue69",
+      "name": "#69 P3: the init-error overlay is titled `The game failed to load`"
+    },
+    {
+      "section": "qa-issue69",
+      "name": "#69 P3: #init-error-message shows the REAL thrown error message (textContent, not HTML)"
+    },
+    {
+      "section": "qa-issue69",
+      "name": "#69 P3: the init-error overlay offers BOTH hard-reload hints (Ctrl+Shift+R / Cmd+Shift+R)"
+    },
+    {
+      "section": "qa-issue69",
+      "name": "#69 P3: a non-WebGL boot failure NEVER shows the #webgl-error GPU panel"
+    },
+    {
+      "section": "qa-issue69",
+      "name": "#69 P3: a failed WebGL capability probe still shows the #webgl-error overlay"
+    },
+    {
+      "section": "qa-issue69",
+      "name": "#69 P3: the WebGL panel keeps its `WebGL Not Available` headline"
+    },
+    {
+      "section": "qa-issue69",
+      "name": "#69 P3: a real WebGL capability failure never shows the generic #init-error panel"
     },
     {
       "section": "draw",

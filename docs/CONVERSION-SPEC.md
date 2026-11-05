@@ -423,14 +423,21 @@ these are the output contracts every command surface must keep:
   contains only `loadBalancer: {}` in YAML/JSON; no `phase`, `conditions`, `observedGeneration`,
   `readyEndpoints`, `totalEndpoints` or `endpoints[]`. Endpoint bookkeeping lives in the instance
   (`service.endpoints`) and is fed only by `ClusterState.getServiceEndpoints()`.
-- **`oc describe svc` matches kubectl v1.30 (issue #59).** Header fields `IP Family Policy:`,
-  `IP Families:`, `IP:`, `IPs:`, optional `External IPs:`, `External Name:`,
+- **`oc describe svc` matches kubectl 1.35 / OCP 4.22 (issues #59/#69 P4).** Header fields
+  `IP Family Policy:`, `IP Families:`, `IP:`, `IPs:`, optional `External IPs:`, `External Name:`,
   `LoadBalancer Ingress:`, `Desired LoadBalancer IP:`; one block per Service port with `Port:`,
   `TargetPort:`, optional `AppProtocol:`/`NodePort:` and `Endpoints:` lines
   (`Port: <unset> 8080/TCP` for a port without a name); then `Session Affinity:`, the optional
-  `External Traffic Policy:`, `HealthCheck NodePort:`, `LoadBalancer Source Ranges:` and the
-  `Events:` block last. Values are tabwriter-aligned; unimplemented defaults are omitted rather
-  than printed as `<none>`/`undefined`.
+  `External Traffic Policy:`, the API-server-defaulted `Internal Traffic Policy:` (Cluster for
+  non-ExternalName Services), `HealthCheck NodePort:`, `LoadBalancer Source Ranges:`, the optional
+  operator-set `Traffic Distribution:` and the `Events:` block last. Values are tabwriter-aligned:
+  `Internal Traffic Policy:` is the longest top-level label for a ClusterIP Service (24 chars), so
+  labels are padded to 26 chars and every value starts at column 27
+  (`Session Affinity:         None`, `Internal Traffic Policy:  Cluster`,
+  `Traffic Distribution:     PreferSameNode`); the `Events: <none>` placeholder therefore carries 19
+  spaces. ExternalName Services print neither `Internal Traffic Policy:` nor
+  `Traffic Distribution:` (the API server strips both), and unimplemented defaults are omitted
+  rather than printed as `<none>`/`undefined`.
 - **One endpoint renderer + kubectl truncation (issues #59/#60).**
   `formatEndpointAddresses()` renders ready endpoints as `ip:port` pairs: up to 3 pairs then
   ` + N more...`, `<none>` when empty. `oc get endpoints` (ENDPOINTS cell) and `oc describe svc`
@@ -506,11 +513,13 @@ simulation contract; these are the invariants every surface must keep:
   `oc get rolebinding|clusterrolebinding -o wide` prints `<subject.namespace>/<subject.name>`
   (`qa8/deployer`) like `rbac.SubjectsStrings`, falls back to the binding namespace and never
   emits a leading `/`; USERS/GROUPS are unchanged.
-- **Describe Events alignment (issue #62).** kubectl's describe uses one text/tabwriter for the
-  whole output, so the `Events: <none>` placeholder starts in the same column as the widest
+- **Describe Events alignment (issues #62/#69 P4).** kubectl's describe uses one text/tabwriter for
+  the whole output, so the `Events: <none>` placeholder starts in the same column as the widest
   top-level `Label:` value printed above it. The command layer derives that column from the output
-  (Service: `Events:            <none>`, 12 spaces) instead of using a fixed 10-space placeholder;
-  the non-empty Events table format is unchanged.
+  instead of using a fixed placeholder (Service: the 24-char `Internal Traffic Policy:` label pads
+  the column to 26, so values start at column 27 and the placeholder is
+  `Events:                   <none>` — 19 spaces; before #69 P4 the widest label was
+  `Session Affinity:`, giving 12 spaces); the non-empty Events table format is unchanged.
 - **dns-default named targetPorts (issue #62).** `openshift-dns/dns-default` `spec.ports` carry
   targetPort names `dns`, `dns-tcp` and `metrics` (ports unchanged 53/UDP, 53/TCP, 9154/TCP).
   `oc describe svc` prints `TargetPort: dns/UDP`, `dns-tcp/TCP`, `metrics/TCP` while the ready
@@ -607,21 +616,34 @@ probes; these are the output contracts every command surface must keep:
   the busiest (≥2000m CPU, 8–12 Gi resident control-plane components, greatest CPU%), and the worker
   rows carry deterministic per-node variance (never two identical workers).
 
-### 4.5 Release-safe caching and evaluated player probes (issues #66–#67)
+### 4.5 Release-safe module delivery and evaluated player probes (issues #66–#69)
 
-The site has no build step, so module URLs are unversioned; the hosting config and the kubelet tick
-are the two surfaces that must keep players on the current release and make probes real:
+The site has no build step, so the hosting config carries the release-delivery contract: the entry
+document is revalidated on every navigation and the ES-module graph is addressed by release-scoped
+immutable URLs. Together with the kubelet tick, these are the surfaces that must keep players on the
+current release and make probes real:
 
-- **No stale/mixed-version modules after a release (issue #66).** `vercel.json` must let Vercel's
-  ETag revalidate unversioned app code on every navigation instead of caching it for a day/month:
-  `/js/(.*)`, `*.css`, `*.html`, `/` and `/draw` send
-  `Cache-Control: public, max-age=0, must-revalidate` (no `s-maxage`/`stale-while-revalidate`),
-  while images/fonts keep the long-lived
-  `public, max-age=86400, s-maxage=604800, stale-while-revalidate=2592000`. The browser harness serves
-  this same policy plus ETag/304 from the real `vercel.json`, so `qa-issue66` proves a returning
-  visitor's next navigation revalidates a changed module and executes the new code; `verify.mjs` §4i
-  locks the header contract (including "no stale-while-revalidate" for app code and long cache for
-  images).
+- **No stale/mixed-version modules after a release (issues #66/#68).** Release delivery of the
+  module graph is versioned, not revalidating: every release changes the import-map prefix in BOTH
+  entry documents — `"./js/": "./v/<package.json version>/js/"` in `index.html` and `draw.html` —
+  so the browser resolves every `./js/` specifier and every relative import written inside the
+  module graph under that prefix; `vercel.json` rewrites `/v/:version/js/:path*` to `/js/:path*`
+  and serves `/v/(.*)` with `Cache-Control: public, max-age=31536000, immutable`. A returning
+  visitor's old cache entries live under the previous version prefix, which the new entry document
+  never requests, so a release can never mix the new HTML with old modules. The **release rule**:
+  `package.json` and both import maps are bumped together, and `scripts/verify.mjs` fails the fast
+  gate when they drift (`§4j`); it applies to EVERY deploy that changes `js/` or the entry
+  documents, because the immutable `/v/<version>/` URLs of an unchanged version keep serving the
+  previously cached modules (a changed file under the same prefix would resurrect the #68 mix).
+  The unversioned app code remains the revalidating fallback for direct access — `/js/(.*)`, `*.css`,
+  `*.html`, `/` and `/draw` send `Cache-Control: public, max-age=0, must-revalidate` (no
+  `s-maxage`/`stale-while-revalidate`), so a direct unversioned request always sees the current
+  release (the #66 behaviour, kept) — while images/fonts keep the long-lived
+  `public, max-age=86400, s-maxage=604800, stale-while-revalidate=2592000`. The browser harness
+  serves this same rule set from the real `vercel.json` — it compiles the rewrites generically and
+  computes headers from the original request path — so `qa-issue66` (revalidation fallback) and
+  `qa-issue68` (versioned delivery) exercise the production cache path; `verify.mjs` §4i/§4j lock
+  the header and version/import-map contracts statically.
 - **Player-set probes are evaluated by the kubelet tick (issue #67).**
   `oc set probe <kind>/<name> --liveness|--readiness|--startup -- <command> [args…]` stores
   `exec: {command: argv}` plus the API-server timing defaults, replacing any previous handler;
@@ -654,6 +676,34 @@ are the two surfaces that must keep players on the current release and make prob
   therefore intentionally lists all old ReplicaSets (including 0/0 ones); filtering them to
   `<none>` would match pre-1.27 kubectl, not the 4.22 target. A regression lock keeps the behavior.
 
+### 4.6 Versioned module delivery, honest boot errors and kubectl 1.35 describe-svc (issues #68–#69)
+
+Versioned module delivery and its release rule are defined in §4.5; these are the boot-error and
+describe output contracts added in 1.13.0:
+
+- **Boot failures are honest about what failed (issue #69 P3).** Only a failed WebGL capability
+  probe may show the `#webgl-error` panel ("WebGL Not Available", enable hardware
+  acceleration/update drivers). Every other failure — a renderer-constructor exception or a JS
+  error thrown from `init()` — shows `_showInitError(err)` instead: overlay
+  `#init-error` with `role="alert"`, the title **The game failed to load**, the real error message
+  in `#init-error-message` written with `textContent` (never interpolated as HTML), a hard-reload
+  hint (`Ctrl+Shift+R` / `Cmd+Shift+R`) and a link to open a GitHub issue with the message.
+  `_webglFailed` is set only by the WebGL capability branch; the renderer catch calls
+  `_showInitError` directly and the top-level `init().catch` branches to it unless `_webglFailed` is
+  set. `qa-issue69` injects both paths and
+  asserts the two panels never appear together; `verify.mjs` §4j locks the wiring statically.
+- **kubectl 1.35 `oc describe svc` fields and `dns-default` trafficDistribution (issue #69 P4).**
+  `Service.toDescribe()` prints the API-server-defaulted `Internal Traffic Policy:` line after the
+  external traffic policy (Cluster for non-ExternalName Services) and the operator-set
+  `Traffic Distribution:` line after the LoadBalancer source ranges, in kubectl 1.35's order and at
+  the shared tabwriter column (see §4.1: labels padded to 26 chars, values at column 27, so
+  `Events:` carries 19 spaces for a ClusterIP Service and ExternalName Services print neither new
+  line). `SimulationTick` seeds the platform `openshift-dns/dns-default` Service with
+  `spec.trafficDistribution: PreferSameNode` (the cluster-dns-operator's release-4.22 asset) when
+  it seeds the platform Service, visible in `oc describe svc dns-default -n openshift-dns` and in
+  `oc get svc dns-default -n openshift-dns -o jsonpath={.spec.trafficDistribution}`; the existing
+  #58 platform-Service lock and the new `§4j`/`qa-issue69` checks cover it.
+
 ---
 
 ## 5. Controllers / simulation (SimulationTick.js)
@@ -661,13 +711,15 @@ are the two surfaces that must keep players on the current release and make prob
 Extend the existing fixed-step simulation with OpenShift controllers:
 
 - `_tickProjects`: Projects become Active immediately; deletion marks Terminating.
-- `_ensurePlatformWorkloads` / `_ensurePlatformServices` (issues #53G/#55/#58): once Nodes exist, seed
-  the controller-owned platform workloads — `deployment.apps/router-default` + its ReplicaSet +
-  Pods and the `daemonset.apps/dns-default`/`node-resolver` DaemonSets with one owned Pod per Node —
-  together with the real platform Services `openshift-dns/dns-default` (ClusterIP `172.30.0.10`,
-  ports `53/UDP`, `53/TCP`, `9154/TCP`, named target ports `dns`/`dns-tcp`/`metrics` resolving to
-  5353/5353/9154, selector `dns.operator.openshift.io/daemonset-dns=default`) and
-  `openshift-ingress/router-internal-default` (ClusterIP, ports `80/TCP`, `443/TCP`, `1936/TCP`,
+- `_ensurePlatformWorkloads` / `_ensurePlatformServices` (issues #53G/#55/#58/#69 P4): once Nodes
+  exist, seed the controller-owned platform workloads — `deployment.apps/router-default` + its
+  ReplicaSet + Pods and the `daemonset.apps/dns-default`/`node-resolver` DaemonSets with one owned
+  Pod per Node — together with the real platform Services `openshift-dns/dns-default` (ClusterIP
+  `172.30.0.10`, ports `53/UDP`, `53/TCP`, `9154/TCP`, named target ports
+  `dns`/`dns-tcp`/`metrics` resolving to 5353/5353/9154, selector
+  `dns.operator.openshift.io/daemonset-dns=default`, and
+  `spec.trafficDistribution: PreferSameNode` from the cluster-dns-operator's release-4.22 asset)
+  and `openshift-ingress/router-internal-default` (ClusterIP, ports `80/TCP`, `443/TCP`, `1936/TCP`,
   selector `ingresscontroller.operator.openshift.io/deployment-ingresscontroller=default`), in every
   mode including the paused pre-start sandbox. DNS Pods run on the pod network
   (`hostNetwork: false`, 10.128–10.131 Pod IP from the Node's `spec.podCIDR`) while

@@ -152,15 +152,20 @@ names are shown in EX280 Prep).
   and that one field drives `oc get svc`, `-o yaml/json`, `-o jsonpath={.spec.clusterIP}`,
   `oc describe svc`, cluster DNS `nslookup` and `oc exec … curl http://<ClusterIP>:<port>` alike.
   Status is the real `{loadBalancer: {}}` subresource (no invented phase/conditions/endpoint
-  counters), `oc describe svc` prints the kubectl v1.30 shape (`IP Family Policy: SingleStack`,
-  `IP:`/`IPs:`, one `Port:`/`TargetPort:`/`Endpoints:` block per port, `Session Affinity: None`),
-  `oc get endpoints` truncates the ENDPOINTS cell like kubectl
+  counters), `oc describe svc` prints the kubectl 1.35 / OCP 4.22 shape (`IP Family Policy:
+SingleStack`, `IP:`/`IPs:`, one `Port:`/`TargetPort:`/`Endpoints:` block per port,
+  `Session Affinity: None`, `Internal Traffic Policy:  Cluster`, and — when the operator sets it —
+  `Traffic Distribution:` at the shared tabwriter column), `oc get endpoints` truncates the
+  ENDPOINTS cell like kubectl
   (`ip:port,ip:port,ip:port + N more...`), and `nslookup` answers a Service name with its own
   ClusterIP (headless → ready pod IPs, ExternalName → its target) and an unknown name with the real
   `NXDOMAIN` line. The `dns-default` Service carries the real 4.22 named targetPorts
   (`TargetPort: dns/UDP`, `dns-tcp/TCP`, `metrics/TCP`) while its ready endpoints stay
-  5353/5353/9154, `oc describe` aligns its `Events: <none>` placeholder like kubectl's single
-  tabwriter, and each Pod's `/etc/hosts` is the kubelet-managed file
+  5353/5353/9154, and its `spec.trafficDistribution: PreferSameNode` (the cluster-dns-operator's
+  4.22 asset) shows up in `oc describe` and in
+  `oc get svc dns-default -n openshift-dns -o jsonpath={.spec.trafficDistribution}`; `oc describe`
+  aligns its `Events: <none>` placeholder like kubectl's single tabwriter (column 27 for ClusterIP
+  Services), and each Pod's `/etc/hosts` is the kubelet-managed file
   (`# Kubernetes-managed hosts file.`, the loopback/localnet lines and `<podIP>\t<podName>` — no
   Service entry), so `oc exec … cat /etc/hosts` matches a real Pod. The control-plane Node carries
   the real
@@ -327,12 +332,18 @@ install is the dev-only formatting/linting toolchain — see
 ```bash
 git clone https://github.com/G-man3207/openshiftgames.git
 cd openshiftgames
-python3 -m http.server 8080
+node scripts/dev-server.mjs
 # open http://localhost:8080 for the game and http://localhost:8080/draw for the whiteboard
 ```
 
+`npm run dev` is the same zero-dependency server (Node built-ins only; port `8080`, or pass
+`--port 9000`). It emulates the production Vercel rewrites — the `/draw` page and the versioned
+`/v/<version>/js/*` module prefix — with `Cache-Control: no-store`, so the ES-module graph loads
+exactly as deployed and local edits are never stale.
+
 > Serve over HTTP (not `file://`) — ES modules, import maps and the optional Files/EX280 Prep panels
-> rely on HTTP semantics (`/draw` is served by a static rewrite in production).
+> rely on HTTP semantics. A plain `python3 -m http.server` cannot resolve the import-map URLs:
+> `/v/<version>/js/*` is a production rewrite, not a directory on disk, so the module requests would 404.
 
 ## Development tooling
 
@@ -342,11 +353,16 @@ or deploy the app, and `node_modules/` is gitignored.
 
 ```bash
 npm install          # dev tooling only — no runtime dependencies
+npm run dev          # zero-dependency local server: /draw + versioned /v/ module rewrite (no-store)
 npm run format       # Prettier: rewrite all text files
 npm run format:check # Prettier: strict check (same as the pre-commit gate)
 npm run knip         # Knip: dead files, unused/unlisted deps, unresolved imports, binaries
 npm run lint         # both gates
 ```
+
+- **Release bump rule** — a release bumps `package.json` and the import-map module prefixes in
+  `index.html` + `draw.html` together (`"./js/": "./v/<pkg.version>/js/"`). `scripts/verify.mjs`
+  fails the fast gate when the three drift, and the browser sections prove the versioned URLs load.
 
 - **Prettier is strict and repo-wide** (`.prettierrc`: single quotes, semicolons, print width 100,
   ES5 trailing commas). `.prettierignore` skips `node_modules/`, binary assets, `docs/screenshots/`,
@@ -373,12 +389,20 @@ The repo is a static site and deploys to any static host. The canonical demo is 
 
 - Canonical URL: `https://shifting.pro` (used in `og:url` / `og:image` / canonical tags;
   update `index.html`, `draw.html`, `og-image.html` and README if the domain changes).
-- `vercel.json` keeps the `/draw` → `/draw.html` rewrite, cache headers and bot policy. No server
-  code and no environment variables are required. Because the site has no build step (module URLs are
-  unversioned), every release must not be pinned by intermediary caches: `/js/*`, CSS, HTML, `/` and
-  `/draw` are served `Cache-Control: public, max-age=0, must-revalidate`, so Vercel's ETag revalidation
-  picks up the new module graph on the next navigation; only images/fonts keep the long-lived
-  `max-age=86400, s-maxage=604800, stale-while-revalidate=2592000` cache.
+- `vercel.json` keeps the `/draw` → `/draw.html` rewrite, the `/v/:version/js/:path*` → `/js/:path*`
+  rewrite, cache headers and bot policy. No server code and no environment variables are required.
+  Because the site has no build step, release delivery of the module graph uses versioned URLs: every
+  release bumps the import-map module prefix in `index.html` and `draw.html`
+  (`"./js/": "./v/<package.json version>/js/"`) together with `package.json`, and the whole ES-module
+  graph then loads from `/v/<version>/js/...` served
+  `Cache-Control: public, max-age=31536000, immutable` — a returning visitor's old cache entries are
+  never requested by the new entry document. `index.html`, the import map, CSS, `/` and `/draw` still
+  revalidate (`public, max-age=0, must-revalidate`), so a direct unversioned request always sees the
+  current release; only images/fonts keep the long-lived
+  `max-age=86400, s-maxage=604800, stale-while-revalidate=2592000` cache. `scripts/verify.mjs` fails
+  when `package.json` and either import map drift. **Any deploy that changes a file under `js/` or
+  the entry documents must bump the version (and both import maps) in the same commit** — an
+  unchanged `/v/<version>/` prefix can keep serving a whole year of old cached modules.
 - Deploy with the Vercel dashboard (import the repo), add `shifting.pro` as the project domain, or use
   `vercel deploy` (Vercel CLI, optional).
 
@@ -387,9 +411,13 @@ The repo is a static site and deploys to any static host. The canonical demo is 
 ## Architecture & tech
 
 - **No build step** — vanilla ES modules + import maps. No bundler, no framework, no npm runtime
-  dependencies. Tailwind is loaded from the CDN for utility classes; custom styling lives in
-  `style.css` (in-game shell) and `start.css` (start page). Type is set in Schibsted Grotesk with
-  JetBrains Mono reserved for real terminal/YAML code. An optional Prettier + Knip + husky dev
+  dependencies. Each entry page's import map resolves `./js/` to a versioned
+  `/v/<package.json version>/js/` prefix that `vercel.json` rewrites to the real `/js/` tree and
+  serves `immutable`, so a release changes every module URL without a build step (and the
+  revalidated entry document can never boot a module graph cached from an older release). Tailwind
+  is loaded from the CDN for utility classes; custom styling lives in `style.css` (in-game shell)
+  and `start.css` (start page). Type is set in Schibsted Grotesk with JetBrains Mono reserved for
+  real terminal/YAML code. An optional Prettier + Knip + husky dev
   toolchain guards repo hygiene — see [Development tooling](#development-tooling).
 - **Three.js r152** (`https://unpkg.com/three@0.152.0/...`, pinned in the import map) powers the 3D
   cluster view and the whiteboard; WebGL is required.
@@ -441,10 +469,10 @@ js/rendering/         Three.js renderer, meshes, connection lines, particles, la
 js/ui/                CommandBar, ShellTools, HUD, Inspector, ContextMenu, Metrics, IncidentPanel,
                       Minimap, Settings, ManifestPanel, StartMenu
 js/modes/             CampaignMode, ChallengeMode, ChaosMode, SandboxMode, ExamPrepMode
-scripts/              verify / browser-test / visual-qa harnesses + Knip entry mirror
-vercel.json           static hosting: /draw rewrite + cache/bot headers
+scripts/              verify / browser-test / visual-qa harnesses, local dev server, Knip entry mirror
+vercel.json           static hosting: /draw + versioned /v/ module rewrites, cache/bot headers
 og-image.html         OpenGraph card source (1200×630) — PNG regenerated by the verifier
-package.json          dev-only toolchain (Prettier/Knip/husky); no runtime dependencies
+package.json          dev-only toolchain (Prettier/Knip/husky) + dev server script; no runtime deps
 knip.jsonc            Knip "real garbage only" configuration (documented rules)
 .husky/pre-commit     pre-commit gate: prettier --check + knip
 ```

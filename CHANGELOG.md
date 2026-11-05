@@ -4,6 +4,118 @@ All notable changes to OpenShift Games are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 aims to follow [Semantic Versioning](https://semver.org/).
 
+## [1.13.0] — 2026-11-05
+
+Fifteenth QA pass on 1.12.0: closes both open issues of the 1.12.0 live retest (#68–#69) — the P1
+returning-visitor crash caused by a mixed-release JavaScript graph (#68) and the P3/P4 boot-error
+overlay + kubectl 1.35 `oc describe svc` gaps (#69). 1.12.0's revalidating unversioned app code is
+kept as the direct-access fallback, but release delivery of the ES-module graph now uses immutable
+versioned URLs: each release points the import maps in `index.html` and `draw.html` at
+`./v/<package.json version>/js/`, `vercel.json` rewrites `/v/:version/js/:path*` to `/js/:path*`,
+and that prefix is served `public, max-age=31536000, immutable`, so a returning visitor can never
+mix a new entry document with modules cached from a previous release. Boot failures are honest
+now: only a failed WebGL capability probe shows the "WebGL Not Available" panel; every other
+init/renderer error shows a new `init-error` panel with the real message, a hard-reload hint and a
+GitHub report link. `oc describe svc` matches kubectl 1.35 / OCP 4.22: it prints the
+API-server-defaulted `Internal Traffic Policy:  Cluster` after `Session Affinity` and the
+operator-set `Traffic Distribution:` after the LoadBalancer source ranges, the seeded
+`openshift-dns/dns-default` Service carries `spec.trafficDistribution: PreferSameNode`, and the
+`Events:` placeholder moved to the shared tabwriter column (19 spaces after `Events:`). The game
+stays no-build and dependency-free.
+
+### Added
+
+- **Versioned module URLs for release-safe caching (issue #68).** Both entry pages' import maps map
+  `"./js/"` to `"./v/1.13.0/js/"`, so the browser resolves the whole ES-module graph — every
+  static/dynamic `import` of a `./js/` specifier and every relative import written inside a module
+  — under the versioned prefix. `vercel.json` rewrites `/v/:version/js/:path*` to `/js/:path*` and
+  serves `/v/(.*)` with `Cache-Control: public, max-age=31536000, immutable`; `package.json` is the
+  version single source and `scripts/verify.mjs` fails when either import-map value drifts from
+  it. The new permanent `qa-issue68` browser-regression section proves the served versioned
+  rewrite/immutable header, that a fresh game/draw load requests only versioned module URLs, the
+  import-map-driven `fetch()` probe, and the returning-visitor release simulation in which a module
+  replaced under the new version prefix really executes.
+- **Generic boot-failure overlay (issue #69 P3).** `index.html` gains `_showInitError(err)`: a
+  `#init-error` overlay (`role="alert"`) titled **The game failed to load**, showing the real
+  error message in `#init-error-message` (written with `textContent`, never interpolated as HTML),
+  a hard-reload hint (`Ctrl+Shift+R` / `Cmd+Shift+R`) and a link to open a GitHub issue with the
+  message. The WebGL capability panel (`#webgl-error`, "WebGL Not Available") is now reserved for a
+  failed `webgl`/`webgl2` context probe; the renderer-constructor catch calls
+  `_showInitError` directly, and the top-level `init().catch` branches to it unless
+  `_webglFailed` is set. The new permanent
+  `qa-issue69` browser-regression section injects an init failure (generic panel, exact message, no
+  WebGL panel) and forces a real WebGL capability failure (WebGL panel, no generic panel).
+- **kubectl 1.35 describe-svc lines and `dns-default` `trafficDistribution` (issue #69 P4).**
+  `Service.toDescribe()` prints `Internal Traffic Policy:` after the external traffic policy when
+  `spec.internalTrafficPolicy` is set (the API server defaults it to `Cluster` for every
+  non-ExternalName Service) and `Traffic Distribution:` after the LoadBalancer source ranges when
+  `spec.trafficDistribution` is set. `SimulationTick` seeds the platform
+  `openshift-dns/dns-default` Service with `spec.trafficDistribution: PreferSameNode` (the
+  cluster-dns-operator's release-4.22 asset) when it seeds the platform Service, so
+  `oc describe svc dns-default -n openshift-dns` prints it and
+  `oc get svc dns-default -n openshift-dns -o jsonpath={.spec.trafficDistribution}` answers it.
+  Because `Internal Traffic Policy:` (24 chars) is the longest top-level label, tabwriter pads
+  labels of ClusterIP Services to 26 chars, so every describe value starts at column 27 — e.g.
+  `Session Affinity:         None`, `Internal Traffic Policy:  Cluster`,
+  `Traffic Distribution:     PreferSameNode` — while an ExternalName Service prints neither new
+  line (the API server strips both fields there).
+- **Permanent QA coverage and release-rule locks (issues #68–#69).** The browser harness now
+  emulates the real `vercel.json` rewrites (compiling `:param`/`:path*` sources to regexes and
+  substituting captures into the destination) and computes cache headers from the original request
+  path plus ETags from the resolved file, so the immutable versioned path is exercised exactly as
+  on Vercel; new `qa-issue68` and `qa-issue69` sections sit next to `qa-issue66`/`qa-issue67`.
+  `scripts/verify.mjs` grew the matching `§4j` static-fidelity locks: `package.json` and both
+  import maps must agree on the version, `index.html` and `draw.html` must keep `./js/` specifiers
+  while the import map supplies the versioned prefix, `vercel.json` must keep the `/v/` rewrite and
+  immutable header, `_showInitError`/`_webglFailed` gating must stay split between generic and
+  WebGL failures, and the describe-svc/trafficDistribution contract is instantiated headlessly.
+
+### Changed
+
+- **`vercel.json` release-delivery rules (issue #68).** New rewrite
+  `/v/:version/js/:path*` → `/js/:path*`, and a new `/v/(.*)` header rule serving
+  `public, max-age=31536000, immutable`, placed ahead of the unversioned `/js/(.*)` revalidation
+  rule. `/js/(.*)`, CSS, HTML, `/` and `/draw` keep
+  `Cache-Control: public, max-age=0, must-revalidate` as the fallback that still revalidates
+  direct/unversioned access; images/fonts keep the long-lived cache, and the `/draw` rewrite,
+  `ignoreCommand` and bot redirect are unchanged. Release rule: bump `package.json` and both
+  import-map prefixes (`index.html`, `draw.html`) together — `scripts/verify.mjs` fails when they
+  drift — and do it on EVERY deploy that changes `js/` or the entry documents, because an unchanged
+  `/v/<version>/` prefix keeps old cached modules for a year.
+- **`_moduleExists()` probes resolve through the import map (issue #68).** `fetch()` bypasses import
+  maps, so a plain `./js/...` HEAD probe would have hit the unversioned URL while `import()` loaded
+  the versioned one. `index.html` now parses the import map into `MODULE_IMPORT_MAP`, derives
+  `JS_MODULE_BASE`/`resolveModulePath()` and calls `fetch(resolveModulePath(path))`, so optional
+  panels (Files panel etc.) probe the same URL the module graph loads.
+- README, CONVERSION-SPEC §4.5, the architecture-map hosting/import-map rows (including G19) and
+  the verification report describe the versioned immutable module URLs with their revalidating
+  entry-document fallback, the release bump rule, the `init-error` panel and the kubectl 1.35
+  describe-svc contract (issues #68–#69); the verification report records the fifteenth QA pass.
+
+### Fixed
+
+- **Returning visitors crashed on start with "WebGL Not Available" after a release (issue #68
+  P1).** The revalidated entry document could still boot against a module graph cached from a
+  previous release, because module URLs did not change between releases; the mixed graph failed
+  during boot and the old overlay blamed the player's GPU/driver. Every module URL now
+  carries the release version, so a new `index.html` imports URLs the old cached graph never
+  populated — a release changes every module URL and can never mix two versions — while the
+  entry document/import map and the unversioned `/js/*` path keep revalidating as the
+  direct-access fallback. The returning-visitor scenario is reproduced end-to-end in `qa-issue68`.
+- **Any `init()`/renderer exception showed the hardware-acceleration panel (issue #69 P3).** A
+  JavaScript/release error told the player to enable hardware acceleration or update drivers even
+  though the graphics stack was fine. Only a failed WebGL capability probe may show that panel now;
+  every other boot failure shows the real error message plus a hard-reload hint, and the renderer
+  catch no longer sets `_webglFailed`.
+- **`oc describe svc` lagged kubectl 1.35 and the `Events:` placeholder was one tabwriter column
+  short (issue #69 P4).** Describe omitted the API-server-defaulted
+  `Internal Traffic Policy:  Cluster` and the operator-set `Traffic Distribution:` line (the
+  seeded `dns-default` carried no `spec.trafficDistribution`), and the `Events:` placeholder had
+  12 spaces (aligned to the old 17-char widest label `Session Affinity:`). Both lines now print
+  in kubectl 1.35's order and the shared tabwriter column moved to 27 (26-char padding), so an
+  unversioned ClusterIP Service describe ends with `Events:` + 19 spaces and ExternalName
+  Services correctly print neither of the new lines.
+
 ## [1.12.0] — 2026-11-05
 
 Fourteenth QA pass on 1.11.0: closes both open issues of the live 1.11.0 retest (#66–#67) — the P2
