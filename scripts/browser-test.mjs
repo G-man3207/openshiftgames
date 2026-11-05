@@ -21,6 +21,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { extname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
+import { createHash } from 'node:crypto';
 
 const ROOT = resolve(fileURLToPath(new URL('.', import.meta.url)), '..');
 const SHOTS = join(ROOT, 'docs', 'screenshots');
@@ -41,6 +42,75 @@ try {
 }
 const CHROME = process.env.CHROME_BIN || '/usr/bin/google-chrome';
 
+// ── Production cache policy (issue #66) ────────────────────────────────────
+// Serve the repo with the SAME Cache-Control rules as vercel.json plus the
+// ETag/304 revalidation Vercel provides for static files. The browser suite
+// must exercise the real "returning visitor after a release" cache path: a
+// cache-free harness (the previous behavior) could never catch a regression
+// back to `max-age=86400` on unversioned module URLs.
+
+/** Translate a Vercel header `source` pattern to an anchored RegExp. */
+function vercelSourceMatcher(source) {
+  let pattern = String(source)
+    // `\.` is a literal dot in path-to-regexp; `(.*)` is the wildcard group.
+    .replace(/\\\./g, '\u0000DOT')
+    .replace(/\(\.\*\)/g, '\u0000STAR')
+    // Escape everything that is regex-special in the remaining literal text.
+    .replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  pattern = pattern
+    .replace(/\u0000STAR/g, '.*')
+    .replace(/\u0000DOT/g, '\\.')
+    // Remaining parenthesised groups are alternations: `(css|png|...)`.
+    .replace(/\\\(([^)]*)\\\)/g, (match, inner) =>
+      inner.includes('\\|') ? `(?:${inner.replace(/\\\|/g, '|')})` : match
+    );
+  try {
+    return new RegExp(`^${pattern}$`);
+  } catch {
+    return null;
+  }
+}
+
+const VERCEL_CACHE_RULES = (() => {
+  try {
+    const config = JSON.parse(readFileSync(join(ROOT, 'vercel.json'), 'utf8'));
+    const rules = [];
+    for (const rule of config.headers || []) {
+      const matcher = vercelSourceMatcher(rule.source);
+      if (!matcher) continue;
+      for (const header of rule.headers || []) {
+        if (String(header.key).toLowerCase() === 'cache-control') {
+          rules.push({ matcher, value: String(header.value) });
+        }
+      }
+    }
+    return rules;
+  } catch {
+    return [];
+  }
+})();
+
+/** The Cache-Control Vercel would send for a request path (last match wins). */
+function cacheControlFor(pathname) {
+  let value = null;
+  for (const rule of VERCEL_CACHE_RULES) if (rule.matcher.test(pathname)) value = rule.value;
+  return value;
+}
+
+/**
+ * Test hooks for the `qa-issue66` section: a mutable per-path module override
+ * (repo-relative key) standing in for "a new release replaced this file", and
+ * per-path request counters proving the browser revalidated instead of reusing
+ * its cached module.
+ */
+const serverOverrides = new Map();
+const serverRequests = new Map();
+const countServerRequest = (pathname) => {
+  serverRequests.set(pathname, (serverRequests.get(pathname) || 0) + 1);
+};
+const resetServerRequestCount = (pathname) => serverRequests.delete(pathname);
+const serverRequestCount = (pathname) => serverRequests.get(pathname) || 0;
+
 // ── Static server ──────────────────────────────────────────────────────────
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -60,7 +130,8 @@ const MIME = {
 const server = createServer(async (req, res) => {
   try {
     const url = new URL(req.url, 'http://localhost');
-    let file = decodeURIComponent(url.pathname);
+    const requestPath = url.pathname;
+    let file = decodeURIComponent(requestPath);
     if (file === '/') file = '/index.html';
     if (file === '/favicon.ico') {
       res.writeHead(204);
@@ -74,8 +145,27 @@ const server = createServer(async (req, res) => {
       res.end('not found');
       return;
     }
-    const data = await readFile(full);
-    res.writeHead(200, { 'content-type': MIME[extname(full)] || 'application/octet-stream' });
+    countServerRequest(requestPath);
+    const overrideKey = requestPath.replace(/^\/+/, '');
+    const data = Buffer.isBuffer(serverOverrides.get(overrideKey))
+      ? serverOverrides.get(overrideKey)
+      : serverOverrides.has(overrideKey)
+        ? Buffer.from(serverOverrides.get(overrideKey))
+        : await readFile(full);
+    const etag = `"${createHash('sha1').update(data).digest('hex')}"`;
+    const cacheControl = cacheControlFor(requestPath);
+    const headers = {
+      'content-type': MIME[extname(full)] || 'application/octet-stream',
+      etag,
+    };
+    if (cacheControl) headers['cache-control'] = cacheControl;
+    // Vercel answers `If-None-Match` with a 304 for unchanged static files.
+    if (req.headers['if-none-match'] === etag) {
+      res.writeHead(304, headers);
+      res.end();
+      return;
+    }
+    res.writeHead(200, headers);
     res.end(data);
   } catch (err) {
     res.writeHead(500);
@@ -17526,7 +17616,7 @@ await runSection('qa-issue64', async () => {
     '#64: the readiness-probe rollout settles before the liveness probe change'
   );
   result = await runCmd(
-    `oc set probe deploy/web --liveness --get-url=http://:8080/healthz --initial-delay-seconds=3 -n ${projectName}`
+    `oc set probe deploy/web --liveness --get-url=http://:8080/ --initial-delay-seconds=3 -n ${projectName}`
   );
   assert(
     !result.error && /web liveness probe updated/.test(result.message),
@@ -17600,8 +17690,8 @@ await runSection('qa-issue64', async () => {
       .join(' | ')
   );
   assert(
-    /Liveness:\s+http-get\s+http:\/\/:8080\/healthz\s+delay=3s/.test(webDescribe),
-    '#64: describe deploy prints the real Liveness probe line with delay=3s',
+    /Liveness:\s+http-get\s+http:\/\/:8080\/\s+delay=3s/.test(webDescribe),
+    '#64: describe deploy prints the real Liveness probe line with delay=3s (path /)',
     webDescribe
       .split('\n')
       .filter((line) => /Liveness:/.test(line))
@@ -18059,6 +18149,539 @@ await runSection('qa-issue65', async () => {
     '#65: the two worker rows differ from each other in at least one of CPU/MEMORY',
     JSON.stringify(workerRows)
   );
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 10g. QA ROUND #67 — player-set probes are evaluated by the kubelet tick:
+//      a failing readiness probe removes the Pod from Service endpoints (Route
+//      503), a failing liveness probe restarts/crashloops the container, and
+//      `oc set probe … -- <cmd>` stores exec.command instead of httpGet.
+// ═══════════════════════════════════════════════════════════════════════════
+await runSection('qa-issue67', async () => {
+  let result;
+  const projectName = 'qa67';
+  /** Split a multi-line CLI message into its non-empty, trimmed lines. */
+  const messageLines = (message) =>
+    String(message ?? '')
+      .split('\n')
+      .map((line) => line.trim())
+      .filter(Boolean);
+  /** Advance the simulation clock deterministically (0.05 s fixed steps). */
+  const advanceBy = async (seconds) =>
+    evaluate((secs) => {
+      const sim = window.game?.gameEngine?.simulation;
+      if (!sim || typeof sim.tick !== 'function') return false;
+      const steps = Math.ceil(secs / 0.05);
+      for (let index = 0; index < steps; index += 1) sim.tick(0.05);
+      return true;
+    }, seconds);
+  /** Advance the simulation until predicate() is true, or exhaust maxSeconds. */
+  const advanceUntil = async (predicate, maxSeconds = 60, step = 1) => {
+    for (let played = 0; played < maxSeconds; played += step) {
+      await advanceBy(step);
+      if (await predicate()) return true;
+    }
+    return false;
+  };
+  /** Split an oc tabwriter table into header cells + rows (2+ space columns). */
+  const tableParts = (message) => {
+    const lines = String(message ?? '')
+      .split('\n')
+      .filter((line) => line.trim() !== '');
+    return {
+      headers: (lines[0] || '').split(/\s{2,}/).map((cell) => cell.trim()),
+      rows: lines.slice(1).map((line) => line.split(/\s{2,}/).map((cell) => cell.trim())),
+    };
+  };
+  const podRows = async (namespace = projectName) => {
+    const out = await runCmd(`oc get pods -n ${namespace}`);
+    return tableParts(out.message)
+      .rows.map((cells) => ({
+        name: cells[0] || '',
+        ready: cells[1] || '',
+        status: cells[2] || '',
+        restarts: cells[3] || '',
+      }))
+      .filter((row) => row.name);
+  };
+  /** Newest Pod of a name prefix + its kubelet status (rollout-order-safe). */
+  const latestPodState = async (prefix) =>
+    evaluate(
+      ({ namespace, prefix }) => {
+        const pods = (window.game.cluster.getByKindAndNamespace('Pod', namespace) || []).filter(
+          (pod) => String(pod.metadata?.name || '').startsWith(prefix)
+        );
+        // Stable ascending sort: on equal creation timestamps (1 s resolution)
+        // the LAST inserted Pod is the newest, not the first-created one.
+        const latest = pods
+          .sort((left, right) =>
+            String(left.metadata?.creationTimestamp || '').localeCompare(
+              String(right.metadata?.creationTimestamp || '')
+            )
+          )
+          .pop();
+        if (!latest) return null;
+        const status = latest.status?.containerStatuses?.[0] || {};
+        return {
+          name: latest.metadata?.name || '',
+          phase: latest.status?.phase || null,
+          ready: Boolean(latest.isConditionTrue?.('Ready')),
+          restartCount: Number(status.restartCount || 0),
+          waiting: status.state?.waiting?.reason || null,
+          podIP: latest.status?.podIP || null,
+          started: Boolean(status.started),
+        };
+      },
+      { namespace: projectName, prefix }
+    );
+  const deploymentProbe = async (name, probeName) =>
+    evaluate(
+      ({ namespace, name, probeName }) => {
+        const deployment = window.game.cluster.getByName('Deployment', name, namespace);
+        const container = deployment?.spec?.template?.spec?.containers?.[0] || {};
+        return container[probeName] || null;
+      },
+      { namespace: projectName, name, probeName }
+    );
+  const routeHost = async (name) =>
+    (
+      await runCmd(`oc get route ${name} -n ${projectName} -o jsonpath='{.spec.host}'`)
+    ).message.trim();
+  const curlStatus = async (url) =>
+    (await runCmd(`curl -s -o /dev/null -w "%{http_code}" ${url}`)).message.trim();
+  const describePod = async (name) =>
+    (await runCmd(`oc describe pod/${name} -n ${projectName}`)).message;
+  /**
+   * Execute several CLI commands in ONE page.evaluate (no await/sleep between
+   * them), so the live game loop cannot tick between `oc create deployment` and
+   * the probe change. This is the game equivalent of "create the workload, set
+   * the probe, THEN the controller starts the first Pod": without it a Ready
+   * old-ReplicaSet Pod exists, and a stalled RollingUpdate correctly keeps
+   * serving traffic (k8s fidelity), which would mask the probe failure.
+   */
+  const runCmdsSync = async (commands) =>
+    evaluate(
+      (cmds) =>
+        cmds.map((command) => {
+          try {
+            const out = window.game?.app?.commandBar?.executeCommand(command);
+            return { error: Boolean(out?.error), message: String(out?.message ?? '') };
+          } catch (err) {
+            return { error: true, message: `THROW ${err?.message || err}` };
+          }
+        }),
+      commands
+    );
+  const endpointCount = async (serviceName) =>
+    evaluate(
+      ({ namespace, serviceName }) => {
+        const cluster = window.game.cluster;
+        const service = cluster.getByName('Service', serviceName, namespace);
+        return service ? cluster.getServiceEndpoints(service).length : 0;
+      },
+      { namespace: projectName, serviceName }
+    );
+
+  // Disable the sandbox's random container failures so restart counts and the
+  // exact kubelet events below cannot flake on a transiently restarted Pod.
+  const booted = await bootSandbox();
+  const randomFailuresOff =
+    booted &&
+    (await evaluate(() => {
+      const sim = window.game?.gameEngine?.simulation;
+      if (!sim) return false;
+      sim.randomFailureRate = 0;
+      return sim.randomFailureRate === 0;
+    }));
+  assert(
+    booted && randomFailuresOff,
+    '#67: a fresh sandbox boots for the probe-evaluation checks (random failures disabled)'
+  );
+  result = await runCmd(`oc new-project ${projectName}`);
+  assert(
+    !result.error && /Now using project "qa67"/.test(result.message),
+    '#67: `oc new-project qa67` creates the fixture project',
+    result.message.slice(0, 300)
+  );
+
+  // ═══ Round 1: #67A — `oc set probe … -- cat /tmp/healthy` stores exec ════
+  // The probe is installed BEFORE the first controller tick: the Deployment's
+  // only Pod is then created with the failing probe (a stalled RollingUpdate of
+  // an already-Ready Pod must keep that old Pod in the endpoints, so the single
+  // initial Pod keeps the readiness evidence unambiguous).
+  const webFixture = await runCmdsSync([
+    `oc create deployment web --image=registry.access.redhat.com/ubi9/httpd-24 --replicas=1 -n ${projectName}`,
+    `oc set probe deploy/web -n ${projectName} --liveness -- cat /tmp/healthy`,
+  ]);
+  result = webFixture[0];
+  assert(
+    !result.error && /deployment\.apps\/web created/.test(result.message),
+    '#67: `oc create deployment web` creates the one-replica liveness fixture',
+    result.message.slice(0, 300)
+  );
+  result = webFixture[1];
+  assert(
+    !result.error && /web liveness probe updated/.test(result.message),
+    '#67: `oc set probe deploy/web --liveness -- cat /tmp/healthy` succeeds (real oc flag order: -n before --)',
+    result.message.slice(0, 300)
+  );
+  const storedLiveness = await deploymentProbe('web', 'livenessProbe');
+  const storedExecCommand = Array.isArray(storedLiveness?.exec?.command)
+    ? storedLiveness.exec.command.map(String)
+    : [];
+  assert(
+    storedExecCommand.join(' ') === 'cat /tmp/healthy' &&
+      !storedLiveness?.httpGet &&
+      !storedLiveness?.tcpSocket &&
+      storedLiveness?.initialDelaySeconds === 0 &&
+      storedLiveness?.periodSeconds === 10 &&
+      storedLiveness?.timeoutSeconds === 1 &&
+      storedLiveness?.successThreshold === 1 &&
+      storedLiveness?.failureThreshold === 3,
+    '#67: the template stores `exec: {command: [cat, /tmp/healthy]}` with the API-server defaults, never httpGet /healthz',
+    JSON.stringify(storedLiveness)
+  );
+  result = await runCmd(`oc describe deploy/web -n ${projectName}`);
+  assert(
+    /Liveness:\s+exec \[cat \/tmp\/healthy\] delay=0s timeout=1s period=10s #success=1 #failure=3/.test(
+      result.message
+    ),
+    '#67: describe deploy prints `Liveness:  exec [cat /tmp/healthy] delay=0s timeout=1s period=10s #success=1 #failure=3`',
+    JSON.stringify(messageLines(result.message).filter((line) => /Liveness:/.test(line)))
+  );
+
+  // The failing liveness probe (default 10 s period, #failure=3) must restart
+  // the container after failureThreshold, with the real kubelet events.
+  const livenessRestarted = await advanceUntil(async () => {
+    const state = await latestPodState('web-');
+    return Boolean(state && (state.restartCount > 0 || state.waiting === 'CrashLoopBackOff'));
+  }, 90);
+  assert(
+    livenessRestarted,
+    '#67: the failing exec liveness probe restarts the container after failureThreshold (RESTARTS > 0 / CrashLoopBackOff)'
+  );
+  const livenessPodState = await latestPodState('web-');
+  const livenessDescribe = livenessPodState?.name ? await describePod(livenessPodState.name) : '';
+  assert(
+    livenessDescribe.includes(
+      'Liveness probe failed: cat: /tmp/healthy: No such file or directory'
+    ),
+    '#67: describe pod shows the real `Liveness probe failed: cat: /tmp/healthy: No such file or directory` event',
+    JSON.stringify(messageLines(livenessDescribe).filter((line) => /Liveness probe/.test(line)))
+  );
+  assert(
+    /Container \S+ failed liveness probe, will be restarted/.test(livenessDescribe),
+    '#67: describe pod shows the real kubelet `Container <name> failed liveness probe, will be restarted` event',
+    JSON.stringify(
+      messageLines(livenessDescribe).filter((line) => /failed liveness probe/.test(line))
+    )
+  );
+  const webRows = await podRows();
+  const restartedRow = webRows.find(
+    (row) =>
+      row.name.startsWith('web-') && (row.restarts !== '0' || row.status === 'CrashLoopBackOff')
+  );
+  assert(
+    Boolean(restartedRow),
+    '#67: `oc get pods` shows the restarted container (RESTARTS > 0 or CrashLoopBackOff)',
+    JSON.stringify(webRows.filter((row) => row.name.startsWith('web-')))
+  );
+
+  // A succeeding exec liveness probe keeps a fresh Deployment healthy with 0
+  // restarts (probe installed before the first tick).
+  const webokFixture = await runCmdsSync([
+    `oc create deployment webok --image=registry.access.redhat.com/ubi9/httpd-24 --replicas=1 -n ${projectName}`,
+    `oc set probe deploy/webok -n ${projectName} --liveness --period-seconds=1 --failure-threshold=1 -- cat /etc/os-release`,
+  ]);
+  const healthyWebokDeploy =
+    !webokFixture[0].error && /deployment\.apps\/webok created/.test(webokFixture[0].message);
+  const healthyProbeSet =
+    !webokFixture[1].error && /webok liveness probe updated/.test(webokFixture[1].message);
+  const healthyExec = await advanceUntil(async () => {
+    const state = await latestPodState('webok-');
+    return Boolean(state && state.ready && state.restartCount === 0);
+  }, 60);
+  assert(
+    healthyWebokDeploy && healthyProbeSet && healthyExec,
+    '#67: a succeeding exec probe (`cat /etc/os-release`) keeps a Ready Pod with 0 restarts'
+  );
+
+  // ═══ Round 2: #67B — failing readiness gates endpoints and the Route ═════
+  // Create the Deployment + Service + Route and install the broken readiness
+  // probe BEFORE any tick, so the only Pod is the one whose readiness fails.
+  const p2Fixture = await runCmdsSync([
+    `oc create deployment p2 --image=registry.access.redhat.com/ubi9/httpd-24 --replicas=1 -n ${projectName}`,
+    `oc expose deployment p2 -n ${projectName}`,
+    `oc expose service p2 -n ${projectName}`,
+    `oc set probe deploy/p2 -n ${projectName} --readiness --get-url=http://:9999/nope`,
+  ]);
+  const p2Created =
+    !p2Fixture[0].error && /deployment\.apps\/p2 created/.test(p2Fixture[0].message);
+  const p2Exposed = !p2Fixture[1].error && /service\/p2 exposed/.test(p2Fixture[1].message);
+  const p2RouteCreated =
+    !p2Fixture[2].error && /route\.route\.openshift\.io\/p2 exposed/.test(p2Fixture[2].message);
+  const readinessProbeSet =
+    !p2Fixture[3].error && /p2 readiness probe updated/.test(p2Fixture[3].message);
+  assert(
+    p2Created && p2Exposed && p2RouteCreated && readinessProbeSet,
+    '#67: the p2 readiness fixture (Deployment/Service/Route + closed-port probe) is created',
+    JSON.stringify({
+      create: p2Created,
+      expose: p2Exposed,
+      route: p2RouteCreated,
+      probe: readinessProbeSet,
+    })
+  );
+  const readinessFailed = await advanceUntil(async () => {
+    const state = await latestPodState('p2-');
+    return Boolean(state && state.phase === 'Running' && !state.ready && state.started);
+  }, 90);
+  const p2State = await latestPodState('p2-');
+  const p2Row = (await podRows()).find((row) => row.name.startsWith('p2-'));
+  assert(
+    readinessFailed && p2Row?.ready === '0/1' && p2Row?.status === 'Running',
+    '#67: a readiness probe on a closed port turns the Pod into `0/1 Running` after failureThreshold',
+    JSON.stringify({ readinessFailed, row: p2Row })
+  );
+  const readinessDescribe = p2State?.name ? await describePod(p2State.name) : '';
+  assert(
+    /Readiness probe failed: Get "http:\/\/\d{1,3}(?:\.\d{1,3}){3}:9999\/nope": dial tcp \d{1,3}(?:\.\d{1,3}){3}:9999: connect: connection refused/.test(
+      readinessDescribe
+    ),
+    '#67: describe pod shows `Readiness probe failed: Get "http://<podIP>:9999/nope": dial tcp <podIP>:9999: connect: connection refused`',
+    JSON.stringify(messageLines(readinessDescribe).filter((line) => /Readiness probe/.test(line)))
+  );
+  const endpointsDuringFailure = await endpointCount('p2');
+  assert(
+    endpointsDuringFailure === 0,
+    '#67: the NotReady p2 Pod is removed from the Service endpoints',
+    String(endpointsDuringFailure)
+  );
+  const p2Host = await routeHost('p2');
+  assert(Boolean(p2Host), '#67: the p2 Route has a generated host', p2Host);
+  const curlDuringFailure = await curlStatus(`http://${p2Host}`);
+  assert(
+    curlDuringFailure === '503',
+    '#67: while the only endpoint is NotReady the Route returns 503 (no endpoints)',
+    curlDuringFailure
+  );
+
+  // ═══ Round 3: #67C — correcting the readiness probe restores the Service ══
+  result = await runCmd(
+    `oc set probe deploy/p2 -n ${projectName} --readiness --get-url=http://:8080/ --period-seconds=1 --failure-threshold=1`
+  );
+  const readinessCorrected = !result.error && /p2 readiness probe updated/.test(result.message);
+  const readinessRecovered = await advanceUntil(async () => {
+    const state = await latestPodState('p2-');
+    return Boolean(state && state.ready) && (await endpointCount('p2')) > 0;
+  }, 60);
+  const curlRecovered = await curlStatus(`http://${p2Host}`);
+  assert(
+    readinessCorrected && readinessRecovered && curlRecovered === '200',
+    '#67: a corrected readiness probe brings the Pod back to Ready, repopulates the endpoints and the Route returns 200',
+    JSON.stringify({ readinessCorrected, readinessRecovered, curlRecovered })
+  );
+
+  // ═══ Round 4: #67D — tcpSocket probes evaluate the container ports ═══════
+  const p3Fixture = await runCmdsSync([
+    `oc create deployment p3 --image=registry.access.redhat.com/ubi9/httpd-24 --replicas=1 -n ${projectName}`,
+    `oc set probe deploy/p3 -n ${projectName} --readiness --open-tcp=9999 --period-seconds=1 --failure-threshold=1`,
+  ]);
+  const p3Created =
+    !p3Fixture[0].error && /deployment\.apps\/p3 created/.test(p3Fixture[0].message);
+  const tcpClosedSet =
+    !p3Fixture[1].error && /p3 readiness probe updated/.test(p3Fixture[1].message);
+  const tcpClosedFailed = await advanceUntil(async () => {
+    const state = await latestPodState('p3-');
+    return Boolean(state && state.phase === 'Running' && !state.ready && state.started);
+  }, 60);
+  assert(
+    p3Created && tcpClosedSet && tcpClosedFailed,
+    '#67: a tcpSocket readiness probe on a closed port (9999) fails and the Pod becomes 0/1',
+    JSON.stringify({ p3Created, tcpClosedSet, tcpClosedFailed })
+  );
+  const p4Fixture = await runCmdsSync([
+    `oc create deployment p4 --image=registry.access.redhat.com/ubi9/httpd-24 --replicas=1 -n ${projectName}`,
+    `oc set probe deploy/p4 -n ${projectName} --readiness --open-tcp=8080 --period-seconds=1 --failure-threshold=1`,
+  ]);
+  const p4Created =
+    !p4Fixture[0].error && /deployment\.apps\/p4 created/.test(p4Fixture[0].message);
+  const tcpOpenSet = !p4Fixture[1].error && /p4 readiness probe updated/.test(p4Fixture[1].message);
+  const tcpOpenSucceeded = await advanceUntil(async () => {
+    const state = await latestPodState('p4-');
+    return Boolean(state && state.ready);
+  }, 60);
+  assert(
+    p4Created && tcpOpenSet && tcpOpenSucceeded,
+    '#67: a tcpSocket readiness probe on the declared port (8080) passes and the Pod becomes 1/1'
+  );
+  // ═══ Round 5: #67E — a wrong path on the open port is a real 404 failure ══
+  const p5Fixture = await runCmdsSync([
+    `oc create deployment p5 --image=registry.access.redhat.com/ubi9/httpd-24 --replicas=1 -n ${projectName}`,
+    `oc set probe deploy/p5 -n ${projectName} --readiness --get-url=http://:8080/nope`,
+  ]);
+  const p5Created =
+    !p5Fixture[0].error && /deployment\.apps\/p5 created/.test(p5Fixture[0].message);
+  const p5ProbeSet = !p5Fixture[1].error && /p5 readiness probe updated/.test(p5Fixture[1].message);
+  const wrongPathFailed = await advanceUntil(async () => {
+    const state = await latestPodState('p5-');
+    return Boolean(state && state.phase === 'Running' && !state.ready && state.started);
+  }, 90);
+  const p5State = await latestPodState('p5-');
+  const p5Describe = p5State?.name ? await describePod(p5State.name) : '';
+  assert(
+    p5Created &&
+      p5ProbeSet &&
+      wrongPathFailed &&
+      p5Describe.includes('Readiness probe failed: HTTP probe failed with statuscode: 404'),
+    '#67: a readiness probe on a wrong path of the open port fails with `HTTP probe failed with statuscode: 404`',
+    JSON.stringify({
+      p5Created,
+      p5ProbeSet,
+      wrongPathFailed,
+      lines: messageLines(p5Describe).filter((line) => /Readiness probe/.test(line)),
+    })
+  );
+  result = await runCmd(
+    `oc set probe deploy/p5 -n ${projectName} --readiness --get-url=http://:8080/ --period-seconds=1 --failure-threshold=1`
+  );
+  const p5Corrected = !result.error && /p5 readiness probe updated/.test(result.message);
+  const wrongPathRecovered = await advanceUntil(async () => {
+    const state = await latestPodState('p5-');
+    return Boolean(state && state.ready);
+  }, 60);
+  assert(
+    p5Corrected && wrongPathRecovered,
+    '#67: correcting the readiness probe path brings the Pod back to Ready'
+  );
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 10h. QA ROUND #66 — unversioned /js modules carry Vercel-ETag revalidation,
+//      so a returning visitor's navigation after a release executes the NEW
+//      module instead of the stale one held in the HTTP cache.
+// ═══════════════════════════════════════════════════════════════════════════
+await runSection('qa-issue66', async () => {
+  // ── Round 1: the harness serves the production vercel.json headers + ETag ──
+  const headerOf = async (pathname) => {
+    const response = await fetch(`${BASE}${pathname}`);
+    return {
+      status: response.status,
+      cacheControl: response.headers.get('cache-control') || '',
+      etag: response.headers.get('etag') || '',
+    };
+  };
+  const moduleHeaders = await headerOf('/js/engine/GameEngine.js');
+  assert(
+    moduleHeaders.status === 200 &&
+      moduleHeaders.cacheControl === 'public, max-age=0, must-revalidate',
+    '#66: unversioned /js modules are served with `Cache-Control: public, max-age=0, must-revalidate` (Vercel revalidates them via ETag)',
+    JSON.stringify(moduleHeaders)
+  );
+  assert(
+    /^"[\w-]+"$/.test(moduleHeaders.etag),
+    '#66: the module response carries an ETag so revalidation can answer 304',
+    JSON.stringify(moduleHeaders)
+  );
+  const cssHeaders = await headerOf('/style.css');
+  assert(
+    cssHeaders.cacheControl === 'public, max-age=0, must-revalidate',
+    '#66: unversioned CSS is served with the same revalidation policy',
+    JSON.stringify(cssHeaders)
+  );
+  const htmlHeaders = await headerOf('/');
+  assert(
+    htmlHeaders.cacheControl === 'public, max-age=0, must-revalidate',
+    '#66: the entry document revalidates as well (it must not pin an old inline module graph)',
+    JSON.stringify(htmlHeaders)
+  );
+  const imageHeaders = await headerOf('/screenshot.png');
+  assert(
+    /max-age=\d{5,}/.test(imageHeaders.cacheControl) &&
+      !/must-revalidate/.test(imageHeaders.cacheControl),
+    '#66: images keep their long-lived cache (only unversioned app code changes policy)',
+    JSON.stringify(imageHeaders)
+  );
+  const conditional = await fetch(`${BASE}/js/engine/GameEngine.js`, {
+    headers: { 'If-None-Match': moduleHeaders.etag },
+  });
+  assert(
+    conditional.status === 304,
+    '#66: a conditional module request with the current ETag answers 304 (unchanged modules cost one revalidation)',
+    String(conditional.status)
+  );
+
+  // ── Round 2: end-to-end "returning visitor after a release" ───────────────
+  // Lightweight, app-boot-free proof: the first navigation caches the shipped
+  // GameEngine module (dynamic import on a static page), we then swap the file
+  // on the server (a release), and a second navigation in the SAME browser
+  // context must revalidate and execute the new module. With the old
+  // `max-age=86400` headers the second navigation would keep running cached
+  // code (the exact issue #66 report).
+  const modulePath = 'js/engine/GameEngine.js';
+  const servedPath = '/js/engine/GameEngine.js';
+  const visitorPage = await browser.newPage();
+  const moduleResponses = [];
+  try {
+    visitorPage.on('response', (response) => {
+      if (response.url() === `${BASE}${servedPath}`) {
+        moduleResponses.push({
+          status: response.status(),
+          cacheControl: response.headers()['cache-control'] || '',
+        });
+      }
+    });
+    const visit = async (tag) => {
+      await visitorPage.goto(`${BASE}/robots.txt?qa66=${tag}`, {
+        waitUntil: 'domcontentloaded',
+        timeout: 30000,
+      });
+      return visitorPage.evaluate(async () => {
+        await import('/js/engine/GameEngine.js');
+        return globalThis.__qa66Release ?? null;
+      });
+    };
+    const firstRelease = await visit('first');
+    assert(
+      firstRelease === null,
+      '#66: the first visit executes the shipped GameEngine module (no release marker)',
+      JSON.stringify({ firstRelease })
+    );
+
+    const original = readFileSync(join(ROOT, modulePath), 'utf8');
+    serverOverrides.set(modulePath, `${original}\nglobalThis.__qa66Release = 'v2';\n`);
+    resetServerRequestCount(servedPath);
+    const secondRelease = await visit('second');
+    const revalidated = serverRequestCount(servedPath) > 0;
+    assert(
+      secondRelease === 'v2',
+      '#66: after a release, a returning visitor navigating again revalidates the unversioned module and runs the NEW code',
+      JSON.stringify({ secondRelease })
+    );
+    assert(
+      revalidated,
+      '#66: the cached module was revalidated against the server (must-revalidate/ETag), not served from the HTTP cache',
+      JSON.stringify({ requests: serverRequestCount(servedPath) })
+    );
+    assert(
+      moduleResponses.some(
+        (response) =>
+          response.status === 200 && response.cacheControl === 'public, max-age=0, must-revalidate'
+      ),
+      '#66: the release-changed module came back as a 200 with the revalidation Cache-Control',
+      JSON.stringify(moduleResponses)
+    );
+    assert(
+      !moduleResponses.some((response) =>
+        /stale-while-revalidate|s-maxage/.test(response.cacheControl)
+      ),
+      '#66: no stale-while-revalidate/s-maxage can keep a returning visitor on an old release',
+      JSON.stringify(moduleResponses)
+    );
+  } finally {
+    serverOverrides.delete(modulePath);
+    await visitorPage.close().catch(() => {});
+  }
 });
 
 // ═══════════════════════════════════════════════════════════════════════════

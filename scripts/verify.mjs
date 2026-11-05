@@ -3344,7 +3344,7 @@ if (seedMod?.ClusterState) {
         );
         tickUntil(() => deploymentSettled('qa64lock'));
         run(
-          'oc set probe deploy/web --liveness --get-url=http://:8080/healthz --initial-delay-seconds=3 -n qa64lock'
+          'oc set probe deploy/web --liveness --get-url=http://:8080/ --initial-delay-seconds=3 -n qa64lock'
         );
         tickUntil(() => deploymentSettled('qa64lock'));
         run('oc create configmap cfg --from-literal=APP_LOG=debug -n qa64lock');
@@ -3409,10 +3409,7 @@ if (seedMod?.ClusterState) {
         }
 
         // #64A: liveness probes get the same treatment.
-        if (
-          fixture64Ok &&
-          /Liveness:\s+http-get\s+http:\/\/:8080\/healthz\s+delay=3s/.test(describe64)
-        ) {
+        if (fixture64Ok && /Liveness:\s+http-get\s+http:\/\/:8080\/\s+delay=3s/.test(describe64)) {
           passed();
         } else {
           fail(
@@ -3685,6 +3682,723 @@ if (seedMod?.ClusterState) {
       }
     } catch (err) {
       fail('fidelity', `#64/#65 dynamic fidelity lock threw: ${err.message}`);
+    }
+  }
+}
+
+// ── 4i. Issue #66–#67 cache policy and player-set probe evaluation locks ──
+// The browser suite sections `qa-issue66` / `qa-issue67` prove these end-to-end.
+// These Node locks fail the fast static gate if a refactor silently reintroduces
+// the #66 stale-module cache policy (unversioned /js served with max-age=86400
+// + stale-while-revalidate) or the #67 "player probes are never evaluated / an
+// exec probe is stored as httpGet /healthz" bugs (no browser, no long sleeps).
+{
+  // ── #66 — unversioned app assets must revalidate; images/fonts stay cached ─
+  try {
+    const config = JSON.parse(read('vercel.json'));
+    /** Translate a Vercel header `source` pattern to an anchored RegExp. */
+    const sourceMatches = (source, pathname) => {
+      let pattern = String(source)
+        .replace(/\\\./g, '\u0000DOT')
+        .replace(/\(\.\*\)/g, '\u0000STAR')
+        .replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      pattern = pattern
+        .replace(/\u0000STAR/g, '.*')
+        .replace(/\u0000DOT/g, '\\.')
+        .replace(/\\\(([^)]*)\\\)/g, (match, inner) =>
+          inner.includes('\\|') ? `(?:${inner.replace(/\\\|/g, '|')})` : match
+        );
+      try {
+        return new RegExp(`^${pattern}$`).test(pathname);
+      } catch {
+        return false;
+      }
+    };
+    const cacheRules = [];
+    for (const rule of config.headers || []) {
+      for (const header of rule.headers || []) {
+        if (String(header.key).toLowerCase() === 'cache-control') {
+          cacheRules.push({ source: String(rule.source), value: String(header.value) });
+        }
+      }
+    }
+    const matchingRules = (pathname) =>
+      cacheRules.filter((rule) => sourceMatches(rule.source, pathname));
+    const revalidates = (value) =>
+      /(?:^|[,\s])max-age=0(?:[,\s]|$)/.test(value) && /must-revalidate/.test(value);
+    const longLived = (value) => {
+      const maxAge = String(value).match(/(?:^|[,\s])max-age=(\d+)/);
+      return Boolean(maxAge) && Number(maxAge[1]) >= 86400;
+    };
+    const expectRevalidates = (pathname, label) => {
+      const hits = matchingRules(pathname);
+      if (hits.length > 0 && hits.every((hit) => revalidates(hit.value))) {
+        passed();
+      } else {
+        fail(
+          'fidelity',
+          `#66: ${label} — Cache-Control for ${pathname} must be the Vercel-ETag revalidation policy \`public, max-age=0, must-revalidate\` (got ${JSON.stringify(hits.map((hit) => `${hit.source} => ${hit.value}`))})`
+        );
+      }
+    };
+    expectRevalidates(
+      '/js/engine/GameEngine.js',
+      'unversioned ES modules must revalidate after a release'
+    );
+    expectRevalidates(
+      '/js/ui/CommandBar.js',
+      'every unversioned /js module path must revalidate after a release'
+    );
+    expectRevalidates('/style.css', 'unversioned CSS must revalidate with the modules');
+    expectRevalidates('/start.css', 'the start-page CSS must revalidate with the modules');
+    expectRevalidates('/', 'the entry document must revalidate');
+    expectRevalidates('/index.html', 'index.html must revalidate');
+    expectRevalidates('/draw', 'the /draw entry must revalidate');
+    expectRevalidates('/draw.html', 'draw.html must revalidate');
+    const appCodeHits = [
+      '/js/engine/GameEngine.js',
+      '/js/ui/CommandBar.js',
+      '/style.css',
+      '/index.html',
+      '/',
+    ].flatMap((pathname) => matchingRules(pathname));
+    const staleHits = appCodeHits.filter((hit) =>
+      /stale-while-revalidate|s-maxage/.test(hit.value)
+    );
+    if (staleHits.length === 0) {
+      passed();
+    } else {
+      fail(
+        'fidelity',
+        `#66: unversioned app code must not keep stale-while-revalidate/s-maxage (a returning visitor could run a stale release for days): ${JSON.stringify(staleHits)}`
+      );
+    }
+    const imageHits = [
+      '/screenshot.png',
+      '/og-image.png',
+      '/img/start/levels.png',
+      '/favicon.ico',
+    ].flatMap((pathname) => matchingRules(pathname));
+    if (imageHits.length > 0 && imageHits.every((hit) => longLived(hit.value))) {
+      passed();
+    } else {
+      fail(
+        'fidelity',
+        `#66: images/fonts must keep their long-lived cache (max-age >= 86400) — got ${JSON.stringify(imageHits)}`
+      );
+    }
+  } catch (err) {
+    fail('fidelity', `#66: vercel.json cache-policy lock could not run: ${err.message}`);
+  }
+
+  // ── #67 — player-set probes are parsed into a real handler and evaluated ──
+  const engineMod = await tryImport('js/engine/GameEngine.js');
+  const sandboxMod = await tryImport('js/modes/SandboxMode.js');
+  const commandBarMod = await tryImport('js/ui/CommandBar.js');
+  if (!engineMod?.GameEngine || !sandboxMod?.SandboxMode || !commandBarMod?.CommandBar) {
+    fail('fidelity', '#67: GameEngine/SandboxMode/CommandBar are not importable for the locks');
+  } else {
+    try {
+      const engine = new engineMod.GameEngine({ mode: 'sandbox' });
+      new sandboxMod.SandboxMode(engine, null).setupCluster(3);
+      const simulation = engine.simulation;
+      simulation.ensureOLMDefaultsSync();
+      // The sandbox seeds random container failures (0.002) that could restart
+      // the fixture Pods mid-lock; these locks assert fixed probe semantics.
+      simulation.randomFailureRate = 0;
+      const cluster = engine.cluster;
+      const windowShim = {
+        game: {
+          cluster,
+          gameEngine: engine,
+          engine: { emit() {}, on() {}, off() {} },
+          manifestEngine: null,
+        },
+      };
+      globalThis.window = windowShim;
+      try {
+        const cliBar = new commandBarMod.CommandBar();
+        windowShim.game.commandBar = cliBar;
+        const run = (command) => cliBar.executeCommand(command);
+        const messageOf = (result) => String(result?.message ?? '');
+        const tickBy = (seconds) => {
+          const steps = Math.ceil(seconds / 0.05);
+          for (let step = 0; step < steps; step += 1) simulation.tick(0.05);
+        };
+        const tickUntil = (predicate, maxSeconds = 90) => {
+          for (let elapsed = 0; elapsed < maxSeconds; elapsed += 0.05) {
+            if (predicate()) return true;
+            simulation.tick(0.05);
+          }
+          return predicate();
+        };
+        const podsIn = (namespace) => cluster.getByKindAndNamespace('Pod', namespace) || [];
+        const podRows = (namespace) => {
+          const out = messageOf(run(`oc get pods -n ${namespace}`));
+          const lines = out.split('\n').filter((line) => line.trim() !== '');
+          return lines.slice(1).map((line) => line.split(/\s{2,}/).map((cell) => cell.trim()));
+        };
+        const podRow = (namespace, prefix) =>
+          podRows(namespace).find((cells) => String(cells[0] || '').startsWith(prefix)) || null;
+        const runningPod = (namespace, prefix) =>
+          podsIn(namespace).find(
+            (pod) =>
+              String(pod.metadata?.name || '').startsWith(prefix) && pod.status?.phase === 'Running'
+          ) || null;
+        const hostOf = (kind, name, namespace) =>
+          messageOf(
+            run(`oc get ${kind} ${name} -n ${namespace} -o jsonpath='{.spec.host}'`)
+          ).trim();
+        const curlStatus = (url) =>
+          messageOf(run(`curl -s -o /dev/null -w "%{http_code}" ${url}`)).trim();
+        const deploymentSettled = (namespace, name) => {
+          const deployment = cluster.getByName('Deployment', name, namespace);
+          if (!deployment) return false;
+          const generation = Number(deployment.metadata?.generation) || 0;
+          const desired = Number(deployment.spec?.replicas ?? 1) || 0;
+          const status = deployment.status || {};
+          const progressing = (status.conditions || []).find(
+            (condition) => condition.type === 'Progressing'
+          );
+          return (
+            Number(status.observedGeneration) >= generation &&
+            status.replicas === desired &&
+            status.updatedReplicas === desired &&
+            status.availableReplicas === desired &&
+            Number(status.unavailableReplicas || 0) === 0 &&
+            progressing?.reason === 'NewReplicaSetAvailable'
+          );
+        };
+        // Wire the container exec simulator exactly like index.html does: an
+        // exec probe runs against the same simulated Pod filesystem as
+        // `oc exec`, so `cat /tmp/healthy` really fails with ENOENT.
+        simulation.setContainerExecEvaluator((pod, containerName, argv) =>
+          cliBar._simulateExecCommand(argv, pod, containerName)
+        );
+
+        const project = run('oc new-project qa67lock');
+        /** Newest Pod of a name prefix (a stalled RollingUpdate can keep an old Ready Pod). */
+        const latestPod = (namespace, prefix) =>
+          podsIn(namespace)
+            .filter((pod) => String(pod.metadata?.name || '').startsWith(prefix))
+            .sort((left, right) =>
+              String(left.metadata?.creationTimestamp || '').localeCompare(
+                String(right.metadata?.creationTimestamp || '')
+              )
+            )
+            .pop() || null;
+
+        // #67A: the issue's exact command must store an exec handler (not the
+        // old fallback `httpGet /healthz`) with the API-server timing defaults.
+        const webCreate = run(
+          'oc create deployment web --image=registry.access.redhat.com/ubi9/httpd-24 --replicas=1 -n qa67lock'
+        );
+        const probeSet = run('oc set probe deploy/web -n qa67lock --liveness -- cat /tmp/healthy');
+        const webDeployment = cluster.getByName('Deployment', 'web', 'qa67lock');
+        const livenessProbe = webDeployment?.spec?.template?.spec?.containers?.[0]?.livenessProbe;
+        const execCommand = Array.isArray(livenessProbe?.exec?.command)
+          ? livenessProbe.exec.command.map(String)
+          : [];
+        const fixtureOk = Boolean(
+          project && !project.error && webCreate && !webCreate.error && probeSet && !probeSet.error
+        );
+        if (
+          fixtureOk &&
+          execCommand.join(' ') === 'cat /tmp/healthy' &&
+          !livenessProbe?.httpGet &&
+          !livenessProbe?.tcpSocket &&
+          livenessProbe?.initialDelaySeconds === 0 &&
+          livenessProbe?.periodSeconds === 10 &&
+          livenessProbe?.timeoutSeconds === 1 &&
+          livenessProbe?.successThreshold === 1 &&
+          livenessProbe?.failureThreshold === 3
+        ) {
+          passed();
+        } else {
+          fail(
+            'fidelity',
+            `#67: \`oc set probe deploy/web -n qa67lock --liveness -- cat /tmp/healthy\` must store livenessProbe.exec.command ['cat','/tmp/healthy'] with the API defaults and no httpGet (#67A): ${JSON.stringify(livenessProbe)}`
+          );
+        }
+        const describeWeb = messageOf(run('oc describe deploy/web -n qa67lock'));
+        if (
+          /Liveness:\s+exec \[cat \/tmp\/healthy\] delay=0s timeout=1s period=10s #success=1 #failure=3/.test(
+            describeWeb
+          )
+        ) {
+          passed();
+        } else {
+          fail(
+            'fidelity',
+            `#67: describe deploy must print the exec probe line \`Liveness:  exec [cat /tmp/healthy] delay=0s timeout=1s period=10s #success=1 #failure=3\` (#67A): ${JSON.stringify(describeWeb.split('\n').filter((line) => /Liveness:/.test(line)))}`
+          );
+        }
+
+        // #67D: the failing exec liveness probe (API default 10 s period,
+        // #failure=3) must restart the container after failureThreshold with
+        // kubectl's real kubelet events and reach CrashLoopBackOff.
+        const livenessRestarted = tickUntil(() => {
+          const pod = latestPod('qa67lock', 'web-');
+          const status = pod?.status?.containerStatuses?.[0];
+          return Boolean(
+            status &&
+            (Number(status.restartCount || 0) > 0 ||
+              status.state?.waiting?.reason === 'CrashLoopBackOff')
+          );
+        }, 120);
+        const livenessPod = latestPod('qa67lock', 'web-');
+        const describeLiveness = livenessPod
+          ? messageOf(run(`oc describe pod/${livenessPod.metadata.name} -n qa67lock`))
+          : '';
+        if (livenessRestarted) {
+          passed();
+        } else {
+          fail(
+            'fidelity',
+            '#67: a failing liveness probe must restart the container after failureThreshold (RESTARTS/CrashLoopBackOff) (#67D)'
+          );
+        }
+        if (
+          describeLiveness.includes(
+            'Liveness probe failed: cat: /tmp/healthy: No such file or directory'
+          )
+        ) {
+          passed();
+        } else {
+          fail(
+            'fidelity',
+            `#67: describe pod must contain \`Liveness probe failed: cat: /tmp/healthy: No such file or directory\` (#67D): ${JSON.stringify(describeLiveness.split('\n').filter((line) => /Liveness probe/.test(line)))}`
+          );
+        }
+        if (/Container \S+ failed liveness probe, will be restarted/.test(describeLiveness)) {
+          passed();
+        } else {
+          fail(
+            'fidelity',
+            '#67: describe pod must contain the real kubelet `Container <name> failed liveness probe, will be restarted` event (#67D)'
+          );
+        }
+        const livenessRow = podRows('qa67lock').find((cells) =>
+          String(cells[0] || '').startsWith('web-')
+        );
+        if (
+          livenessRow &&
+          ((livenessRow[3] && livenessRow[3] !== '0') ||
+            /CrashLoopBackOff/.test(livenessRow[2] || ''))
+        ) {
+          passed();
+        } else {
+          fail(
+            'fidelity',
+            `#67: \`oc get pods\` must show the restarted container (RESTARTS > 0 or CrashLoopBackOff) (#67D): ${JSON.stringify(livenessRow)}`
+          );
+        }
+
+        // #67E: a liveness exec probe whose command succeeds never restarts.
+        const webokCreate = run(
+          'oc create deployment webok --image=registry.access.redhat.com/ubi9/httpd-24 --replicas=1 -n qa67lock'
+        );
+        const webokProbe = run(
+          'oc set probe deploy/webok -n qa67lock --liveness --period-seconds=1 --failure-threshold=1 -- cat /etc/os-release'
+        );
+        const healthyExec = tickUntil(() => {
+          const pod = latestPod('qa67lock', 'webok-');
+          return Boolean(
+            pod?.isConditionTrue('Ready') &&
+            Number(pod.status?.containerStatuses?.[0]?.restartCount || 0) === 0
+          );
+        }, 120);
+        const healthyPod = latestPod('qa67lock', 'webok-');
+        const healthyRestarts = Number(
+          healthyPod?.status?.containerStatuses?.[0]?.restartCount || 0
+        );
+        if (
+          webokCreate &&
+          !webokCreate.error &&
+          webokProbe &&
+          !webokProbe.error &&
+          healthyExec &&
+          healthyRestarts === 0
+        ) {
+          passed();
+        } else {
+          fail(
+            'fidelity',
+            `#67: a succeeding exec liveness probe (\`cat /etc/os-release\`) must keep the Pod Ready with 0 restarts (#67E): ${JSON.stringify({ healthyExec, healthyRestarts })}`
+          );
+        }
+
+        // #67B: a readiness probe on a closed port fails after failureThreshold —
+        // Ready=False, kubectl's exact Unhealthy message, no Service endpoint and
+        // a 503 from the Route. The probe is installed BEFORE the first tick so
+        // the single initial Pod is the one that fails; a stalled RollingUpdate
+        // of an already-Ready Pod would keep that old Pod in the endpoints (real
+        // k8s behavior that must not be faked).
+        const p2Create = run(
+          'oc create deployment p2 --image=registry.access.redhat.com/ubi9/httpd-24 --replicas=1 -n qa67lock'
+        );
+        const p2Expose = run('oc expose deployment p2 -n qa67lock');
+        const p2RouteCreate = run('oc expose service p2 -n qa67lock');
+        const readinessSet = run(
+          'oc set probe deploy/p2 -n qa67lock --readiness --get-url=http://:9999/nope'
+        );
+        tickBy(3);
+        const p2Host = hostOf('route', 'p2', 'qa67lock');
+        const readinessFailed = tickUntil(() => {
+          const pod = latestPod('qa67lock', 'p2-');
+          return Boolean(
+            pod &&
+            pod.status?.phase === 'Running' &&
+            pod.isConditionTrue('Ready') === false &&
+            pod.status?.containerStatuses?.[0]?.started
+          );
+        }, 120);
+        const p2Pod = latestPod('qa67lock', 'p2-');
+        const p2Ip = String(p2Pod?.status?.podIP || '');
+        const p2Row = podRows('qa67lock').find((cells) => String(cells[0] || '').startsWith('p2-'));
+        const describeP2 = p2Pod
+          ? messageOf(run(`oc describe pod/${p2Pod.metadata.name} -n qa67lock`))
+          : '';
+        const p2Service = cluster.getByName('Service', 'p2', 'qa67lock');
+        const p2Endpoints = p2Service ? cluster.getServiceEndpoints(p2Service) : [];
+        const curlDuringFailure = p2Host ? curlStatus(`http://${p2Host}`) : '';
+        if (
+          p2Create &&
+          !p2Create.error &&
+          p2Expose &&
+          !p2Expose.error &&
+          p2RouteCreate &&
+          !p2RouteCreate.error &&
+          readinessSet &&
+          !readinessSet.error &&
+          Boolean(p2Host)
+        ) {
+          passed();
+        } else {
+          fail(
+            'fidelity',
+            `#67: the #67B readiness fixture (deployment p2, Service, Route, closed-port probe) must be created (#67B): ${JSON.stringify({ create: p2Create?.message, expose: p2Expose?.message, route: p2RouteCreate?.message, probe: readinessSet?.message })}`
+          );
+        }
+        if (readinessFailed && /^0\/1$/.test(String(p2Row?.[1] || ''))) {
+          passed();
+        } else {
+          fail(
+            'fidelity',
+            `#67: a failing readiness probe must show the Pod as \`0/1 Running\` after failureThreshold (#67B): ${JSON.stringify({ failed: readinessFailed, row: p2Row })}`
+          );
+        }
+        const readinessRefusal = `Readiness probe failed: Get "http://${p2Ip}:9999/nope": dial tcp ${p2Ip}:9999: connect: connection refused`;
+        if (p2Ip && describeP2.includes(readinessRefusal)) {
+          passed();
+        } else {
+          fail(
+            'fidelity',
+            `#67: describe pod must contain kubectl's real readiness message \`${readinessRefusal}\` (#67B): ${JSON.stringify(describeP2.split('\n').filter((line) => /Readiness probe/.test(line)))}`
+          );
+        }
+        if (p2Endpoints.length === 0) {
+          passed();
+        } else {
+          fail(
+            'fidelity',
+            `#67: a NotReady Pod must be removed from the Service endpoints (#67B): ${JSON.stringify(p2Endpoints.map((pod) => pod.metadata?.name))}`
+          );
+        }
+        if (curlDuringFailure === '503') {
+          passed();
+        } else {
+          fail(
+            'fidelity',
+            `#67: while the only endpoint is NotReady the Route must return 503 (got ${JSON.stringify(curlDuringFailure)}) (#67B)`
+          );
+        }
+
+        // #67C: fixing the readiness probe restores Ready, endpoints and the Route.
+        run(
+          'oc set probe deploy/p2 -n qa67lock --readiness --get-url=http://:8080/ --period-seconds=1 --failure-threshold=1'
+        );
+        const readinessRecovered = tickUntil(() => {
+          const pod = latestPod('qa67lock', 'p2-');
+          const endpoints = p2Service ? cluster.getServiceEndpoints(p2Service) : [];
+          return Boolean(pod?.isConditionTrue('Ready')) && endpoints.length > 0;
+        }, 120);
+        const curlRecovered = p2Host ? curlStatus(`http://${p2Host}`) : '';
+        if (readinessRecovered && curlRecovered === '200') {
+          passed();
+        } else {
+          fail(
+            'fidelity',
+            `#67: a corrected readiness probe must bring the Pod back to Ready, repopulate the Service endpoints and make the Route return 200 (#67C): ${JSON.stringify({ readinessRecovered, curlRecovered })}`
+          );
+        }
+
+        // #67D2: the simulated app HTTP model — a wrong path on the OPEN port
+        // fails with kubelet's `HTTP probe failed with statuscode: 404`, and a
+        // corrected path recovers (the issue's "fix the path" troubleshooting flow).
+        const p5Create = run(
+          'oc create deployment p5 --image=registry.access.redhat.com/ubi9/httpd-24 --replicas=1 -n qa67lock'
+        );
+        const p5Probe = run(
+          'oc set probe deploy/p5 -n qa67lock --readiness --get-url=http://:8080/nope'
+        );
+        const wrongPathFailed = tickUntil(() => {
+          const pod = latestPod('qa67lock', 'p5-');
+          return Boolean(
+            pod &&
+            pod.status?.phase === 'Running' &&
+            pod.isConditionTrue('Ready') === false &&
+            pod.status?.containerStatuses?.[0]?.started
+          );
+        }, 120);
+        const p5Pod = latestPod('qa67lock', 'p5-');
+        const describeP5 = p5Pod
+          ? messageOf(run(`oc describe pod/${p5Pod.metadata.name} -n qa67lock`))
+          : '';
+        if (
+          p5Create &&
+          !p5Create.error &&
+          p5Probe &&
+          !p5Probe.error &&
+          wrongPathFailed &&
+          describeP5.includes('Readiness probe failed: HTTP probe failed with statuscode: 404')
+        ) {
+          passed();
+        } else {
+          fail(
+            'fidelity',
+            `#67: a readiness probe on a wrong path of the OPEN port must fail with \`HTTP probe failed with statuscode: 404\` (#67D2): ${JSON.stringify({ wrongPathFailed, lines: describeP5.split('\n').filter((line) => /Readiness probe/.test(line)) })}`
+          );
+        }
+        run(
+          'oc set probe deploy/p5 -n qa67lock --readiness --get-url=http://:8080/ --period-seconds=1 --failure-threshold=1'
+        );
+        const wrongPathRecovered = tickUntil(
+          () => Boolean(latestPod('qa67lock', 'p5-')?.isConditionTrue('Ready')),
+          120
+        );
+        if (wrongPathRecovered) {
+          passed();
+        } else {
+          fail(
+            'fidelity',
+            '#67: correcting the readiness probe path must bring the Pod back to Ready (#67D2)'
+          );
+        }
+
+        // #67F: startup probes gate liveness/readiness, support named ports and
+        // restart the container on failure; exec argv stays verbatim; a bare
+        // engine falls back to the deterministic container command model.
+        const webapp = engine.applyManifestObject({
+          apiVersion: 'apps/v1',
+          kind: 'Deployment',
+          metadata: { name: 'webapp', namespace: 'qa67lock' },
+          spec: {
+            replicas: 2,
+            selector: { matchLabels: { app: 'webapp' } },
+            template: {
+              metadata: { labels: { app: 'webapp' } },
+              spec: {
+                containers: [
+                  {
+                    name: 'webapp',
+                    image: 'quay.io/openshift/origin-hello-openshift:latest',
+                    ports: [{ name: 'http', containerPort: 8080 }],
+                    readinessProbe: {
+                      httpGet: { path: '/', port: 8080 },
+                      periodSeconds: 1,
+                      failureThreshold: 1,
+                    },
+                    startupProbe: {
+                      httpGet: { path: '/', port: 'http' },
+                      periodSeconds: 1,
+                      failureThreshold: 1,
+                    },
+                  },
+                ],
+              },
+            },
+          },
+        });
+        const webappStartupSet = tickUntil(() => {
+          const pods = podsIn('qa67lock').filter((pod) =>
+            String(pod.metadata?.name || '').startsWith('webapp-')
+          );
+          return (
+            pods.length > 0 &&
+            pods.every((pod) => pod.isConditionTrue('Ready')) &&
+            pods.every((pod) => pod.status?.containerStatuses?.[0]?._startupComplete === true)
+          );
+        }, 120);
+        const webappProbe = cluster.getByName('Deployment', 'webapp', 'qa67lock')?.spec?.template
+          ?.spec?.containers?.[0]?.startupProbe;
+        if (webapp && webappStartupSet && webappProbe?.httpGet?.port === 'http') {
+          passed();
+        } else {
+          fail(
+            'fidelity',
+            `#67: a startup probe on the named port \`http\` must resolve to the container's 8080 and gate the Pod to Ready (#67F): ${JSON.stringify({ webapp: Boolean(webapp), webappStartupSet, webappProbe })}`
+          );
+        }
+
+        const bootCreate = run(
+          'oc create deployment boot --image=registry.access.redhat.com/ubi9/httpd-24 --replicas=1 -n qa67lock'
+        );
+        const bootProbe = run(
+          'oc set probe deploy/boot -n qa67lock --startup --get-url=http://:9999/nope --period-seconds=1 --failure-threshold=1'
+        );
+        const bootRestarted = tickUntil(() => {
+          const pod = latestPod('qa67lock', 'boot-');
+          const status = pod?.status?.containerStatuses?.[0];
+          return Boolean(
+            status &&
+            (Number(status.restartCount || 0) > 0 ||
+              status.state?.waiting?.reason === 'CrashLoopBackOff')
+          );
+        }, 120);
+        const bootPod = latestPod('qa67lock', 'boot-');
+        const describeBoot = bootPod
+          ? messageOf(run(`oc describe pod/${bootPod.metadata.name} -n qa67lock`))
+          : '';
+        if (
+          bootCreate &&
+          !bootCreate.error &&
+          bootProbe &&
+          !bootProbe.error &&
+          bootRestarted &&
+          /Startup probe failed: Get "http:\/\/\d{1,3}(?:\.\d{1,3}){3}:9999\/nope": dial tcp \d{1,3}(?:\.\d{1,3}){3}:9999: connect: connection refused/.test(
+            describeBoot
+          ) &&
+          /Container \S+ failed startup probe, will be restarted/.test(describeBoot)
+        ) {
+          passed();
+        } else {
+          fail(
+            'fidelity',
+            `#67: a failing startup probe must restart the container with the real \`Startup probe failed: …\` + \`Container <name> failed startup probe, will be restarted\` events (#67F): ${JSON.stringify(describeBoot.split('\n').filter((line) => /probe/.test(line)))}`
+          );
+        }
+
+        // One handler per probe: an exec argv plus --get-url is rejected.
+        const conflict = run(
+          'oc set probe deploy/webapp -n qa67lock --liveness --get-url=http://:8080/ -- cat /tmp/healthy'
+        );
+        if (conflict?.error && /only one handler/.test(messageOf(conflict))) {
+          passed();
+        } else {
+          fail(
+            'fidelity',
+            `#67: \`oc set probe … --get-url=… -- <command>\` must be rejected with an oc-style one-handler error (#67F): ${JSON.stringify(messageOf(conflict))}`
+          );
+        }
+        // `--remove` deletes the probe from the template.
+        run('oc set probe deploy/webapp -n qa67lock --remove --startup');
+        const removedProbe = cluster.getByName('Deployment', 'webapp', 'qa67lock')?.spec?.template
+          ?.spec?.containers?.[0]?.startupProbe;
+        if (removedProbe === undefined) {
+          passed();
+        } else {
+          fail(
+            'fidelity',
+            `#67: \`oc set probe … --remove\` must delete the probe from the pod template (#67F): ${JSON.stringify(removedProbe)}`
+          );
+        }
+
+        // Bare Node engine (no CommandBar evaluator) keeps exec probes safe.
+        simulation.setContainerExecEvaluator(null);
+        const fbCreate = run(
+          'oc create deployment fb --image=registry.access.redhat.com/ubi9/httpd-24 --replicas=1 -n qa67lock'
+        );
+        const fbProbe = run(
+          'oc set probe deploy/fb -n qa67lock --liveness -- cat /tmp/healthy --period-seconds=1 --failure-threshold=1'
+        );
+        const fbRestarted = tickUntil(() => {
+          const pod = latestPod('qa67lock', 'fb-');
+          const status = pod?.status?.containerStatuses?.[0];
+          return Boolean(
+            status &&
+            (Number(status.restartCount || 0) > 0 ||
+              status.state?.waiting?.reason === 'CrashLoopBackOff')
+          );
+        }, 120);
+        const fbPod = latestPod('qa67lock', 'fb-');
+        const describeFb = fbPod
+          ? messageOf(run(`oc describe pod/${fbPod.metadata.name} -n qa67lock`))
+          : '';
+        if (
+          fbCreate &&
+          !fbCreate.error &&
+          fbProbe &&
+          !fbProbe.error &&
+          fbRestarted &&
+          describeFb.includes('Liveness probe failed: cat: /tmp/healthy: No such file or directory')
+        ) {
+          passed();
+        } else {
+          fail(
+            'fidelity',
+            `#67: without a CommandBar evaluator the bare engine must still fail \`cat /tmp/healthy\` deterministically (no exception) (#67F): ${JSON.stringify(describeFb.split('\n').filter((line) => /probe/.test(line)))}`
+          );
+        }
+        // Restore the browser wiring for the remaining locks.
+        simulation.setContainerExecEvaluator((pod, containerName, argv) =>
+          cliBar._simulateExecCommand(argv, pod, containerName)
+        );
+        // Exec-probe argv is pre-tokenized: `sh -c '<script with spaces>'` must
+        // not be re-split when the kubelet runs it.
+        const webokPod = latestPod('qa67lock', 'webok-');
+        const webokContainer = webokPod?.spec?.containers?.[0];
+        const argvShell = webokPod
+          ? cliBar._simulateExecCommand(
+              ['sh', '-c', 'echo "a b"'],
+              webokPod,
+              webokContainer?.name || 'webok'
+            )
+          : null;
+        if (argvShell && argvShell.exitCode === 0 && argvShell.lines.join('\n').trim() === 'a b') {
+          passed();
+        } else {
+          fail(
+            'fidelity',
+            `#67: \`_simulateExecCommand(['sh','-c','echo "a b"'])\` must keep the script as one argv element (#67F): ${JSON.stringify(argvShell)}`
+          );
+        }
+
+        // #67 P4: kubectl 1.35 (OCP 4.22) prints ALL old ReplicaSets, including
+        // the 0/0 ones a finished rollout leaves behind — not `<none>` (checked
+        // against kubectl release-1.35 describe_test.go). Lock that behavior.
+        run(
+          'oc create deployment roll --image=registry.access.redhat.com/ubi9/httpd-24 --replicas=1 -n qa67lock'
+        );
+        const rollRunning = tickUntil(
+          () => Boolean(runningPod('qa67lock', 'roll-')?.isConditionTrue('Ready')),
+          60
+        );
+        let rolloutsSettled = rollRunning;
+        for (let rollout = 0; rollout < 3 && rolloutsSettled; rollout += 1) {
+          run(`oc set env deploy/roll ITER=${rollout} -n qa67lock`);
+          rolloutsSettled = tickUntil(() => deploymentSettled('qa67lock', 'roll'), 120);
+        }
+        const describeRoll = messageOf(run('oc describe deploy/roll -n qa67lock'));
+        const oldReplicaSetLine =
+          describeRoll.split('\n').find((line) => /^OldReplicaSets:/.test(line)) || '';
+        if (
+          rolloutsSettled &&
+          /OldReplicaSets:\s+roll-[a-z0-9]+ \(0\/0 replicas created\)/.test(oldReplicaSetLine) &&
+          !/<none>/.test(oldReplicaSetLine)
+        ) {
+          passed();
+        } else {
+          fail(
+            'fidelity',
+            `#67 P4: after finished rollouts kubectl 1.35 lists the old ReplicaSets as \`roll-… (0/0 replicas created)\` (it does NOT print <none>); keep that behavior (#67 P4): ${JSON.stringify(oldReplicaSetLine)}`
+          );
+        }
+      } finally {
+        delete globalThis.window;
+      }
+    } catch (err) {
+      fail('fidelity', `#67 dynamic probe-fidelity lock threw: ${err.message}`);
     }
   }
 }
