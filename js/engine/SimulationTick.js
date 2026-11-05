@@ -732,6 +732,10 @@ export class SimulationTick {
       clusterIP: DNS_DEFAULT_SERVICE_IP,
       labels: { 'dns.operator.openshift.io/owning-dns': 'default' },
       selector: { 'dns.operator.openshift.io/daemonset-dns': 'default' },
+      // The cluster-dns-operator's release-4.22 asset
+      // (pkg/manifests/assets/dns/service.yaml) sets spec.trafficDistribution:
+      // PreferSameNode on dns-default; `oc describe svc` prints it (issue #69 P4).
+      trafficDistribution: 'PreferSameNode',
       // Real 4.22 spec (issue #62E): the Service ports use NAMED targetPorts
       // (`dns`/`dns-tcp` on the CoreDNS container, `metrics` on the
       // kube-rbac-proxy sidecar), not the 5353/9154 numbers `oc describe`
@@ -770,7 +774,7 @@ export class SimulationTick {
   /**
    * Create one platform-owned ClusterIP Service when it is missing.
    * @param {{name: string, namespace: string, labels?: object, selector: object,
-   *   ports: object[], clusterIP?: string}} definition
+   *   ports: object[], clusterIP?: string, trafficDistribution?: string}} definition
    * @returns {object|null} the Service resource
    */
   _ensurePlatformService(definition) {
@@ -786,6 +790,9 @@ export class SimulationTick {
     if (definition.clusterIP) {
       spec.clusterIP = definition.clusterIP;
       spec.clusterIPs = [definition.clusterIP];
+    }
+    if (definition.trafficDistribution) {
+      spec.trafficDistribution = definition.trafficDistribution;
     }
     const service = createResource('Service', {
       apiVersion: 'v1',
@@ -807,6 +814,9 @@ export class SimulationTick {
     if (definition.clusterIP) {
       service.spec.clusterIP = definition.clusterIP;
       service.spec.clusterIPs = [definition.clusterIP];
+    }
+    if (definition.trafficDistribution) {
+      service.spec.trafficDistribution = definition.trafficDistribution;
     }
     return this.cluster.addResource(service);
   }

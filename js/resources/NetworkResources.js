@@ -400,8 +400,12 @@ export class Service extends ResourceBase {
     if (this.spec.externalTrafficPolicy) {
       rows.push(['External Traffic Policy:', this.spec.externalTrafficPolicy]);
     }
-    // kubectl v1.30's describeService does not print Internal Traffic Policy
-    // even though the API server defaults spec.internalTrafficPolicy: Cluster.
+    // kubectl 1.35's describeService (the OCP 4.22 `oc`) prints the API-server
+    // defaulted internalTrafficPolicy (issue #69 P4). The 24-char label is the
+    // longest top-level one here, so tabwriter starts every value at column 27.
+    if (this.spec.internalTrafficPolicy) {
+      rows.push(['Internal Traffic Policy:', this.spec.internalTrafficPolicy]);
+    }
     if (this.spec.healthCheckNodePort) {
       rows.push(['HealthCheck NodePort:', String(this.spec.healthCheckNodePort)]);
     }
@@ -410,6 +414,12 @@ export class Service extends ResourceBase {
       this.spec.loadBalancerSourceRanges.length
     ) {
       rows.push(['LoadBalancer Source Ranges:', this.spec.loadBalancerSourceRanges.join(',')]);
+    }
+    // kubectl 1.35 prints the operator-set trafficDistribution last, after the
+    // LoadBalancer source ranges — the cluster-dns-operator's 4.22 dns-default
+    // asset sets PreferSameNode (issue #69 P4).
+    if (this.spec.trafficDistribution) {
+      rows.push(['Traffic Distribution:', this.spec.trafficDistribution]);
     }
     // CommandBar._describeResource replaces everything from this header with
     // the live aggregated Events table; the bare section keeps InspectorPanel

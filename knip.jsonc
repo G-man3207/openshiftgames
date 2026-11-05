@@ -18,6 +18,9 @@
     "scripts/verify.mjs",
     "scripts/browser-test.mjs",
     "scripts/visual-qa.mjs",
+    // scripts/dev-server.mjs is picked up automatically as the package.json
+    // `dev` script, so it must not be duplicated here (Knip reports it as a
+    // redundant entry pattern).
   ],
   // Only first-party code is project code; do not scan docs/assets/configs.
   "project": ["js/**/*.js", "scripts/**/*.mjs"],

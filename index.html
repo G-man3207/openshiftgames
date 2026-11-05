@@ -70,6 +70,7 @@
     <script type="importmap">
       {
         "imports": {
+          "./js/": "./v/1.13.0/js/",
           "three": "https://unpkg.com/three@0.152.0/build/three.module.js",
           "three/addons/": "https://unpkg.com/three@0.152.0/examples/jsm/"
         }
@@ -1409,6 +1410,39 @@
         'https://www.redhat.com/en/services/training/red-hat-certified-openshift-administrator-exam';
       const YAML_FILENAME = 'openshiftgames-cluster.yaml';
 
+      // ── Versioned module URLs (issue #68) ─────────────────────────────────────
+      // `index.html` itself is revalidated on every navigation, but modules are
+      // cached under their URL. `/v/<version>/js/...` is served by the Vercel
+      // rewrite in vercel.json with `Cache-Control: public, max-age=31536000,
+      // immutable`, so a browser that visited an older release keeps that
+      // release's modules under the OLD versioned URL forever — and the new
+      // index.html imports the NEW URL prefix, so a returning visitor can never
+      // mix a new entry document with a stale module graph. The single source of
+      // truth is the import-map value below: bump it to the package.json version
+      // on every release (scripts/verify.mjs fails when the two drift).
+      const MODULE_IMPORT_MAP = (() => {
+        try {
+          const node = document.querySelector('script[type="importmap"]');
+          return JSON.parse(node?.textContent || '{}');
+        } catch (err) {
+          console.warn(`${APP_NAME}: could not parse the import map`, err);
+          return {};
+        }
+      })();
+      const JS_SPECIFIER_PREFIX = './js/';
+      const JS_MODULE_BASE =
+        MODULE_IMPORT_MAP.imports?.[JS_SPECIFIER_PREFIX] || JS_SPECIFIER_PREFIX;
+      /**
+       * Resolve a `./js/...` specifier through the import map. Static/dynamic
+       * `import` statements get this mapping from the browser; plain `fetch()`
+       * probes do not, so `_moduleExists()` must apply the same prefix itself.
+       */
+      const resolveModulePath = (specifier) => {
+        const text = String(specifier ?? '');
+        if (!text.startsWith(JS_SPECIFIER_PREFIX)) return text;
+        return `${JS_MODULE_BASE}${text.slice(JS_SPECIFIER_PREFIX.length)}`;
+      };
+
       // ── Post-campaign handover (issue #34) ────────────────────────────────────
       /** Browser-local persistence key for the handover checklist ticks. */
       const HANDOVER_CHECKLIST_KEY = 'openshiftgames_handover_checklist';
@@ -1603,8 +1637,11 @@
             window.game.renderer = this.renderer;
           } catch (err) {
             console.error(`${APP_NAME}: renderer init failed`, err);
-            this._webglFailed = true;
-            this._showWebGLError();
+            // Issue #69 P3: only a failed WebGL *capability* check may blame the
+            // player's GPU/driver. Any other boot failure (a JS error, a broken
+            // release, a renderer library exception) shows the generic
+            // "failed to load" panel with the real message and a hard-reload hint.
+            this._showInitError(err);
             return;
           }
 
@@ -1698,6 +1735,42 @@
               4. Disable browser extensions that block WebGL
             </div>
           </div>`;
+          document.body.appendChild(overlay);
+        }
+
+        /**
+         * Generic boot-failure overlay (issue #69 P3). A JavaScript/release
+         * error must never tell the player to enable hardware acceleration: the
+         * WebGL panel is reserved for a failed WebGL capability probe. The error
+         * text is rendered with textContent (never interpolated as HTML).
+         */
+        _showInitError(err) {
+          if (document.getElementById('init-error')) return;
+          const message = String(err?.message || err || 'Unknown error');
+          const overlay = document.createElement('div');
+          overlay.id = 'init-error';
+          overlay.setAttribute('role', 'alert');
+          overlay.style.cssText =
+            'position:fixed;inset:0;z-index:200;display:flex;align-items:center;justify-content:center;background:rgba(13,17,23,0.95);padding:1rem;';
+          overlay.innerHTML = `
+          <div style="text-align:center;max-width:520px;padding:2rem;">
+            <div style="font-size:3rem;margin-bottom:1rem;">&#x26A0;&#xFE0F;</div>
+            <h2 style="color:#f85149;font-size:1.3rem;margin-bottom:0.75rem;">The game failed to load</h2>
+            <p style="color:rgba(255,255,255,0.6);font-size:0.85rem;line-height:1.6;margin-bottom:1rem;">
+              ${APP_NAME} hit an unexpected error while starting. This is not a graphics problem.
+            </p>
+            <div id="init-error-message" style="color:rgba(255,255,255,0.78);font-family:'JetBrains Mono',monospace;font-size:0.78rem;line-height:1.6;text-align:left;background:rgba(255,255,255,0.03);padding:0.75rem 1rem;border-radius:8px;border:1px solid rgba(255,255,255,0.06);margin-bottom:1rem;word-break:break-word;"></div>
+            <p style="color:rgba(255,255,255,0.4);font-size:0.75rem;line-height:1.8;">
+              Try a hard reload: <strong style="color:rgba(255,255,255,0.7);">Ctrl+Shift+R</strong>
+              (Windows/Linux) or <strong style="color:rgba(255,255,255,0.7);">Cmd+Shift+R</strong>
+              (macOS).<br />
+              If it persists, please
+              <a href="${REPO_URL}/issues" target="_blank" rel="noopener noreferrer" style="color:#58a6ff;">report it</a>
+              with the message above.
+            </p>
+          </div>`;
+          const messageNode = overlay.querySelector('#init-error-message');
+          if (messageNode) messageNode.textContent = message;
           document.body.appendChild(overlay);
         }
 
@@ -3193,7 +3266,13 @@
          */
         async _moduleExists(path) {
           try {
-            const response = await fetch(path, { method: 'HEAD', cache: 'no-store' });
+            // Issue #68: fetch() bypasses the import map, so a plain './js/...'
+            // probe would hit the unversioned URL while `import()` loads the
+            // versioned one. Resolve through the same prefix the import map uses.
+            const response = await fetch(resolveModulePath(path), {
+              method: 'HEAD',
+              cache: 'no-store',
+            });
             return response.ok;
           } catch {
             return false;
@@ -4857,7 +4936,10 @@
         })
         .catch((err) => {
           console.error(`${APP_NAME} init error:`, err);
-          if (!document.getElementById('webgl-error')) app._showWebGLError();
+          // Issue #69 P3: only a real WebGL capability failure may show the
+          // graphics-advice panel; any other boot error shows the real message.
+          if (app._webglFailed) app._showWebGLError();
+          else app._showInitError(err);
         });
 
       // GitHub stars (optional; fails silently offline / rate-limited)

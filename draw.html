@@ -63,9 +63,13 @@
       };
     </script>
     <link rel="stylesheet" href="style.css?v=1.2.1" />
+    <!-- Versioned app-module prefix (issue #68; keep in sync with index.html and
+         package.json). vercel.json rewrites /v/<version>/js/* to /js/* and serves
+         it with an immutable one-year cache, so a release changes every module URL. -->
     <script type="importmap">
       {
         "imports": {
+          "./js/": "./v/1.13.0/js/",
           "three": "https://unpkg.com/three@0.152.0/build/three.module.js",
           "three/addons/": "https://unpkg.com/three@0.152.0/examples/jsm/"
         }
