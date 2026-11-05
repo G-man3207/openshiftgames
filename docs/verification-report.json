@@ -1,19 +1,19 @@
 {
-  "timestamp": "2026-11-04T23:22:16.176Z",
+  "timestamp": "2026-11-05T09:35:28.584Z",
   "environment": {
     "node": "v26.10.0",
     "chrome": "Chrome/156.0.8078.79",
-    "baseUrl": "http://127.0.0.1:35731",
+    "baseUrl": "http://127.0.0.1:45635",
     "viewport": {
       "width": 1600,
       "height": 900
     },
     "puppeteerCore": "/tmp/verify-tools",
-    "startedAt": "2026-11-04T23:10:53.971Z",
-    "durationSeconds": 682
+    "startedAt": "2026-11-05T09:23:07.537Z",
+    "durationSeconds": 741
   },
   "summary": {
-    "passes": 1399,
+    "passes": 1500,
     "failures": 0,
     "warnings": 0,
     "consoleErrors": 0,
@@ -122,7 +122,7 @@
       "warnings": 0
     },
     "qa-cli": {
-      "passes": 77,
+      "passes": 78,
       "failures": 0,
       "warnings": 0
     },
@@ -142,7 +142,7 @@
       "warnings": 0
     },
     "qa-coverage": {
-      "passes": 91,
+      "passes": 92,
       "failures": 0,
       "warnings": 0
     },
@@ -176,6 +176,11 @@
       "failures": 0,
       "warnings": 0
     },
+    "qa-issue44-49": {
+      "passes": 99,
+      "failures": 0,
+      "warnings": 0
+    },
     "draw": {
       "passes": 10,
       "failures": 0,
@@ -196,74 +201,74 @@
       "path": "screenshot.png",
       "width": 1600,
       "height": 900,
-      "bytes": 934363
+      "bytes": 928119
     },
     "ogImage": {
       "path": "og-image.png",
       "width": 1200,
       "height": 630,
-      "bytes": 201742
+      "bytes": 200574
     },
     "screenshots": [
       {
         "path": "docs/screenshots/menu.png",
         "width": 1600,
         "height": 900,
-        "bytes": 331369
+        "bytes": 331482
       },
       {
         "path": "docs/screenshots/exam-prep.png",
         "width": 1600,
         "height": 900,
-        "bytes": 203329
+        "bytes": 203111
       },
       {
         "path": "docs/screenshots/sandbox.png",
         "width": 1600,
         "height": 900,
-        "bytes": 933384
+        "bytes": 928093
       },
       {
         "path": "screenshot.png",
         "width": 1600,
         "height": 900,
-        "bytes": 934363
+        "bytes": 928119
       },
       {
         "path": "docs/screenshots/files-panel.png",
         "width": 1600,
         "height": 900,
-        "bytes": 243565
+        "bytes": 243285
       },
       {
         "path": "docs/screenshots/campaign-level-1.png",
         "width": 1600,
         "height": 900,
-        "bytes": 474533
+        "bytes": 474581
       },
       {
         "path": "docs/screenshots/regressions-minimap-collapsed.png",
         "width": 1600,
         "height": 900,
-        "bytes": 909694
+        "bytes": 905066
       },
       {
         "path": "docs/screenshots/regressions-campaign-restart.png",
         "width": 1600,
         "height": 900,
-        "bytes": 483155
+        "bytes": 482169
       },
       {
         "path": "docs/screenshots/draw.png",
         "width": 1600,
         "height": 900,
-        "bytes": 488798
+        "bytes": 488894
       },
       {
         "path": "og-image.png",
         "width": 1200,
         "height": 630,
-        "bytes": 201742
+        "bytes": 200574
       }
     ]
   },
@@ -3202,7 +3207,7 @@
     },
     {
       "section": "incidents: L20 NodeNotReady recovered via oc debug/systemctl",
-      "name": "qa-incidents: oc debug node/<n> opens a debug shell"
+      "name": "qa-incidents: oc debug node/<n> opens the real sh-5.1# debug shell (#49-3)"
     },
     {
       "section": "incidents: L20 NodeNotReady recovered via oc debug/systemctl",
@@ -3791,6 +3796,10 @@
     {
       "section": "qa-cli",
       "name": "qa-cli #36: start the build"
+    },
+    {
+      "section": "qa-cli",
+      "name": "qa-cli #36: start-build reports the started build name"
     },
     {
       "section": "qa-cli",
@@ -4430,7 +4439,7 @@
     },
     {
       "section": "qa-openshift",
-      "name": "openshift: kube-system/kubeadmin Secret seeds the kubeadmin password"
+      "name": "openshift: kube-system/kubeadmin Secret seeds only the bcrypt hash, not the password"
     },
     {
       "section": "qa-openshift",
@@ -5046,6 +5055,10 @@
     },
     {
       "section": "qa-coverage",
+      "name": "coverage: L18 example pins a valid non-head stable-v1 channel entry"
+    },
+    {
+      "section": "qa-coverage",
       "name": "coverage: L18 creates an InstallPlan for the pinned AllNamespaces install"
     },
     {
@@ -5058,7 +5071,7 @@
     },
     {
       "section": "qa-coverage",
-      "name": "coverage: L18 startingCSV pins the installed CSV to v1.15.0 and it reaches Succeeded"
+      "name": "coverage: L18 installs the pinned startingCSV instead of the channel head and it reaches Succeeded"
     },
     {
       "section": "qa-coverage",
@@ -5454,7 +5467,7 @@
     },
     {
       "section": "qa-issue42",
-      "name": "#42: oc extract secret/kubeadmin remains the documented discovery path"
+      "name": "#42: oc extract secret/kubeadmin prints the bcrypt hash, never the plain password"
     },
     {
       "section": "qa-issue42",
@@ -5674,11 +5687,11 @@
     },
     {
       "section": "qa-issue43",
-      "name": "#43: NetworkUnavailable renders the NoNetworkPlugin reason/message"
+      "name": "#43: NetworkUnavailable renders the real OVN-Kubernetes route reason/message (#49)"
     },
     {
       "section": "qa-issue43",
-      "name": "#43: oc debug node opens a node session"
+      "name": "#43: oc debug node opens the real sh-5.1# node session (#49-3)"
     },
     {
       "section": "qa-issue43",
@@ -5783,6 +5796,402 @@
     {
       "section": "qa-issue43",
       "name": "#43: describe node renders the NotReady lifecycle taints"
+    },
+    {
+      "section": "qa-issue44-49",
+      "name": "#44: sandbox boots for the leading-global-flag checks"
+    },
+    {
+      "section": "qa-issue44-49",
+      "name": "#44: `oc -n qa2 get pods` succeeds with the global flag before the verb"
+    },
+    {
+      "section": "qa-issue44-49",
+      "name": "#44: `oc --namespace=qa2 get pods` succeeds with the global flag before the verb"
+    },
+    {
+      "section": "qa-issue44-49",
+      "name": "#44: `oc -n qa2 patch deploy web -p …` applies the patch"
+    },
+    {
+      "section": "qa-issue44-49",
+      "name": "#44: the leading-flag patch really applies (Deployment shows 2/2 replicas)"
+    },
+    {
+      "section": "qa-issue44-49",
+      "name": "#44: `oc -n <ns> exec … -- amtool …` runs the container command"
+    },
+    {
+      "section": "qa-issue44-49",
+      "name": "#44: the trailing `-n` form still works"
+    },
+    {
+      "section": "qa-issue44-49",
+      "name": "#45: KUBEADMIN_PASSWORD uses the real xxxxx-xxxxx-xxxxx-xxxxx installer format"
+    },
+    {
+      "section": "qa-issue44-49",
+      "name": "#45: ~/auth/kubeadmin-password holds the installer-side kubeadmin password"
+    },
+    {
+      "section": "qa-issue44-49",
+      "name": "#45: ls ~/auth lists kubeadmin-password like a real install directory"
+    },
+    {
+      "section": "qa-issue44-49",
+      "name": "#45: oc extract secret/kubeadmin prints the bcrypt hash, never the plain password"
+    },
+    {
+      "section": "qa-issue44-49",
+      "name": "#45: oc login -u kubeadmin -p <installer password> succeeds"
+    },
+    {
+      "section": "qa-issue44-49",
+      "name": "#45: a wrong kubeadmin password is rejected with the real 401 wording"
+    },
+    {
+      "section": "qa-issue44-49",
+      "name": "#45: oc login -u kubeadmin still prompts for the installer password"
+    },
+    {
+      "section": "qa-issue44-49",
+      "name": "#45: typing the installer password at the Password: prompt logs in"
+    },
+    {
+      "section": "qa-issue44-49",
+      "name": "#45: L1 and L13 hints point at ~/auth/kubeadmin-password"
+    },
+    {
+      "section": "qa-issue44-49",
+      "name": "#45: hints that mention the kubeadmin Secret explain it only holds a bcrypt hash"
+    },
+    {
+      "section": "qa-issue44-49",
+      "name": "#45: hints teach deleting the kubeadmin Secret as the removal path"
+    },
+    {
+      "section": "qa-issue44-49",
+      "name": "#45: README documents the installer password and the Secret-removal path"
+    },
+    {
+      "section": "qa-issue44-49",
+      "name": "#48: oc get users does not list kubeadmin or admin as User objects"
+    },
+    {
+      "section": "qa-issue44-49",
+      "name": "#48: oc create user still creates a real User object"
+    },
+    {
+      "section": "qa-issue44-49",
+      "name": "#48: oc get users lists only real User objects"
+    },
+    {
+      "section": "qa-issue44-49",
+      "name": "#48: oc delete user kubeadmin is NotFound like real oc"
+    },
+    {
+      "section": "qa-issue44-49",
+      "name": "#48: oc delete user admin is NotFound too"
+    },
+    {
+      "section": "qa-issue44-49",
+      "name": "#48: the kubeadmin-cluster-admin ClusterRoleBinding still grants cluster-admin"
+    },
+    {
+      "section": "qa-issue44-49",
+      "name": "#49: describe route shows the admission event with the condition reason/message"
+    },
+    {
+      "section": "qa-issue44-49",
+      "name": "#49: get events shows the Route admission failure with the condition reason/message"
+    },
+    {
+      "section": "qa-issue44-49",
+      "name": "#49: oc new-build creates the BuildConfig"
+    },
+    {
+      "section": "qa-issue44-49",
+      "name": "#49: the ConfigChange trigger creates qa-build-1 immediately (no oc start-build)"
+    },
+    {
+      "section": "qa-issue44-49",
+      "name": "#49: the ConfigChange-triggered qa-build-1 exists immediately in phase New"
+    },
+    {
+      "section": "qa-issue44-49",
+      "name": "#49: the trigger-started build really runs to Complete"
+    },
+    {
+      "section": "qa-issue44-49",
+      "name": "#49: the cluster has nodes for the debug checks"
+    },
+    {
+      "section": "qa-issue44-49",
+      "name": "#49: oc debug node starts a debug pod"
+    },
+    {
+      "section": "qa-issue44-49",
+      "name": "#49: oc debug node opens the real sh-5.1# node shell prompt"
+    },
+    {
+      "section": "qa-issue44-49",
+      "name": "#49: chroot /host renders the real host prompt sh-5.1#"
+    },
+    {
+      "section": "qa-issue44-49",
+      "name": "#49: the NodeNotReady incident spawns for the stopped-kubelet check"
+    },
+    {
+      "section": "qa-issue44-49",
+      "name": "#49: a stopped kubelet reports Ready Unknown/NodeStatusUnknown"
+    },
+    {
+      "section": "qa-issue44-49",
+      "name": "#49: a stopped kubelet reports MemoryPressure Unknown/NodeStatusUnknown"
+    },
+    {
+      "section": "qa-issue44-49",
+      "name": "#49: a stopped kubelet reports DiskPressure Unknown/NodeStatusUnknown"
+    },
+    {
+      "section": "qa-issue44-49",
+      "name": "#49: a stopped kubelet reports PIDPressure Unknown/NodeStatusUnknown"
+    },
+    {
+      "section": "qa-issue44-49",
+      "name": "#49: NetworkUnavailable reports the real OVN-Kubernetes route value instead of contradicting itself"
+    },
+    {
+      "section": "qa-issue44-49",
+      "name": "#49: describe node renders the stopped-kubelet conditions"
+    },
+    {
+      "section": "qa-issue44-49",
+      "name": "#49: workstation curl https://example.com downloads the Example Domain page"
+    },
+    {
+      "section": "qa-issue44-49",
+      "name": "#49: curl -s https://example.com prints the page body only"
+    },
+    {
+      "section": "qa-issue44-49",
+      "name": "#49: a silent curl failure prints nothing (no \"error: command failed\" fallback)"
+    },
+    {
+      "section": "qa-issue44-49",
+      "name": "#49: oc new-app --name=database creates the database Deployment"
+    },
+    {
+      "section": "qa-issue44-49",
+      "name": "#49: oc new-app --image … --name=database names the container database"
+    },
+    {
+      "section": "qa-issue44-49",
+      "name": "#49: jsonpath reports the database container name on the Deployment"
+    },
+    {
+      "section": "qa-issue44-49",
+      "name": "#49: set env --all --list prints only the header for env-less containers"
+    },
+    {
+      "section": "qa-issue44-49",
+      "name": "#49: the ScalingReplicaSet event shows the full, untruncated ReplicaSet name"
+    },
+    {
+      "section": "qa-issue44-49",
+      "name": "#49: oc create job with a perl command is accepted"
+    },
+    {
+      "section": "qa-issue44-49",
+      "name": "#49: the quick perl -e \"print 42\" Job reaches Complete within 5 simulated seconds"
+    },
+    {
+      "section": "qa-issue44-49",
+      "name": "#49: oc get job reports Complete for the quick perl Job"
+    },
+    {
+      "section": "qa-issue44-49",
+      "name": "#49: the perl Job logs print 42"
+    },
+    {
+      "section": "qa-issue44-49",
+      "name": "#49: describe alertmanager Labels values align exactly with the other keys"
+    },
+    {
+      "section": "qa-issue44-49",
+      "name": "#46: oc get packagemanifests header is NAME CATALOG AGE"
+    },
+    {
+      "section": "qa-issue44-49",
+      "name": "#46: the real Red Hat package openshift-cert-manager-operator is listed with its catalog"
+    },
+    {
+      "section": "qa-issue44-49",
+      "name": "#46: oc get packagemanifests -A keeps the same NAME CATALOG AGE columns"
+    },
+    {
+      "section": "qa-issue44-49",
+      "name": "#46: describe packagemanifest shows channel stable-v1 and its channel entries"
+    },
+    {
+      "section": "qa-issue44-49",
+      "name": "#46: the channel entries are discoverable via -o jsonpath (the docs way to find a pin)"
+    },
+    {
+      "section": "qa-issue44-49",
+      "name": "#46: the issue repro jsonpath path to the channel entries shows the pinnable versions"
+    },
+    {
+      "section": "qa-issue44-49",
+      "name": "#46: the unknown-channel Subscription applies"
+    },
+    {
+      "section": "qa-issue44-49",
+      "name": "#46: an unknown channel fails resolution with the real channel/package wording"
+    },
+    {
+      "section": "qa-issue44-49",
+      "name": "#46: an unresolvable channel installs no CSV/InstallPlan"
+    },
+    {
+      "section": "qa-issue44-49",
+      "name": "#46: oc describe subscription shows the ResolutionFailed condition"
+    },
+    {
+      "section": "qa-issue44-49",
+      "name": "#46: the unknown-startingCSV Subscription applies"
+    },
+    {
+      "section": "qa-issue44-49",
+      "name": "#46: an unknown startingCSV fails resolution against the channel entries"
+    },
+    {
+      "section": "qa-issue44-49",
+      "name": "#46: the pinned Subscription creates an InstallPlan for the pinned CSV"
+    },
+    {
+      "section": "qa-issue44-49",
+      "name": "#46: the pinned InstallPlan waits at Manual approval"
+    },
+    {
+      "section": "qa-issue44-49",
+      "name": "#46: the Manual Subscription reports InstallPlanPending True RequiresApproval before approval"
+    },
+    {
+      "section": "qa-issue44-49",
+      "name": "#46: approving the pinned InstallPlan succeeds"
+    },
+    {
+      "section": "qa-issue44-49",
+      "name": "#46: the valid older channel entry installs instead of the channel head"
+    },
+    {
+      "section": "qa-issue44-49",
+      "name": "#46: the Subscription status.installedCSV equals the startingCSV pin"
+    },
+    {
+      "section": "qa-issue44-49",
+      "name": "#46: oc get csv -A has the real NAMESPACE … PHASE columns"
+    },
+    {
+      "section": "qa-issue44-49",
+      "name": "#46: oc get csv -A shows the AllNamespaces CSV in the source and other namespaces"
+    },
+    {
+      "section": "qa-issue44-49",
+      "name": "#46: copied CSVs mirror the source phase and carry status.reason Copied"
+    },
+    {
+      "section": "qa-issue44-49",
+      "name": "#46: copied CSVs point back at openshift-operators and drop olm.targetNamespaces"
+    },
+    {
+      "section": "qa-issue44-49",
+      "name": "#46: copied CSVs are cluster-wide (a project with its own OperatorGroup also gets one)"
+    },
+    {
+      "section": "qa-issue44-49",
+      "name": "#46: copied CSVs are deleted when the source CSV is deleted"
+    },
+    {
+      "section": "qa-issue44-49",
+      "name": "#48: campaign boots for the L18 pin grading check"
+    },
+    {
+      "section": "qa-issue44-49",
+      "name": "#48: campaign L18 starts for the pin grading check"
+    },
+    {
+      "section": "qa-issue44-49",
+      "name": "#48: the L18 pin objective grades state (pinnedInstall), not hard-coded v1.15.0/channel stable"
+    },
+    {
+      "section": "qa-issue44-49",
+      "name": "#48: the L18 scenario applies a subscription pinned to the valid non-head v1.16.0 entry"
+    },
+    {
+      "section": "qa-issue44-49",
+      "name": "#48: the pinned L18 Subscription creates a Manual InstallPlan"
+    },
+    {
+      "section": "qa-issue44-49",
+      "name": "#48: the L18 Manual InstallPlan reports RequiresApproval before approval"
+    },
+    {
+      "section": "qa-issue44-49",
+      "name": "#48: the pin objective stays unticked until the pinned CSV is actually installed"
+    },
+    {
+      "section": "qa-issue44-49",
+      "name": "#48: approving the L18 Manual InstallPlan succeeds"
+    },
+    {
+      "section": "qa-issue44-49",
+      "name": "#48: the L18 pin objective ticks when installedCSV equals a valid non-head startingCSV"
+    },
+    {
+      "section": "qa-issue44-49",
+      "name": "#48: start page boots for the cross-level readiness-evidence check"
+    },
+    {
+      "section": "qa-issue44-49",
+      "name": "#48: a matching command from another completed level credits the readiness bullet"
+    },
+    {
+      "section": "qa-issue44-49",
+      "name": "#48: a matching command from an incomplete drill is evidence, not mastery"
+    },
+    {
+      "section": "qa-issue44-49",
+      "name": "#48: no drill evidence leaves the readiness bullets as todo"
+    },
+    {
+      "section": "qa-issue44-49",
+      "name": "#47: the Lab 13 hint says default-deny in both directions needs an egress rule on gateway AND an ingress rule on ledger"
+    },
+    {
+      "section": "qa-issue44-49",
+      "name": "#45: fresh sandbox boots for the kubeadmin removal flow"
+    },
+    {
+      "section": "qa-issue44-49",
+      "name": "#45: the installer password logs in while the Secret exists"
+    },
+    {
+      "section": "qa-issue44-49",
+      "name": "#45: oc delete secret kubeadmin -n kube-system succeeds (the exam removal step)"
+    },
+    {
+      "section": "qa-issue44-49",
+      "name": "#45: after the Secret is deleted kubeadmin password auth is unavailable"
+    },
+    {
+      "section": "qa-issue44-49",
+      "name": "#45: the installer-side kubeadmin-password backup survives Secret removal"
+    },
+    {
+      "section": "qa-issue44-49",
+      "name": "#45: deleting the already-removed kubeadmin Secret is NotFound"
     },
     {
       "section": "draw",

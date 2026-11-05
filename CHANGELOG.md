@@ -4,6 +4,97 @@ All notable changes to OpenShift Games are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 aims to follow [Semantic Versioning](https://semver.org/).
 
+## [1.4.0] — 2026-11-05
+
+Sixth QA pass on 1.3.0: closes the six open report items (#44–#49) from the 1.3.0 CLI playthrough.
+The release restores the `oc -n <ns> <verb>` argument order that crashed every command (P1), makes
+`kube-system/kubeadmin` store only a bcrypt hash the way a real install does, hardens OLM catalog
+resolution (channel/`startingCSV` validation, the real Red Hat package name/channel, the Manual
+approval condition, discoverable channel entries and AllNamespaces copied CSVs) and grades the L18
+pin objective on state, and fixes the collected CLI output/behavior differences (new-build
+ConfigChange builds, node-debug prompts and stopped-kubelet conditions, workstation internet/silent
+`curl`, `oc new-app` container naming, ScalingReplicaSet events, `set env --list`, Job runtime,
+describe indentation). The game stays no-build and dependency-free.
+
+### Added
+
+- **OLM channel entries and copied CSVs (issue #46).** `PackageManifest.status.channels[*].entries`
+  now lists every pinnable CSV of a channel, so `oc describe packagemanifest` (new `Entries` block)
+  and `oc get packagemanifest … -o jsonpath='{.status.channels[*].entries}'` are how a player
+  discovers a valid `startingCSV`. AllNamespaces CSVs are projected into the other namespaces as
+  real copied CSVs (status reason `Copied`, source phase mirrored, `olm.targetNamespaces`
+  annotation stripped) and GC'd with their source, so `oc get csv -A` shows the operator watching
+  every namespace.
+- **Cross-level readiness evidence (issue #48).** EX280 Prep now credits a bullet from a matching
+  successful command recorded in _any_ completed campaign level or timed lab, not only the level a
+  bullet is mapped to; a matching command in an unfinished drill still counts as Practiced, and
+  Sandbox/Chaos runs never inflate the verdict. The L20 secrets/networking bullets from the report
+  are now evidenced by L20's own commands.
+- **Workstation internet smoke test (issue #49).** `curl https://example.com` (and the other IANA
+  example domains) now answers with the real Example Domain page and a trusted certificate, like an
+  exam workstation with outbound connectivity; every other external host keeps the real
+  `curl: (6) Could not resolve host` failure. Routes always win when a Route claims the host.
+
+### Changed
+
+- **L18 grades the pin on platform state (issue #48).** The "Pin the install with startingCSV"
+  objective no longer demands the hard-coded `cert-manager-operator.v1.15.0`/`channel: stable`
+  values: it ticks when the installed CSV equals the player's own `startingCSV` pin and that pin is
+  a valid older entry of the channel rather than the channel head. Pinning v1.16.0 or v1.15.0 both
+  count; pinning the head does not. The shipped `examples/subscription-manual-pinned.yaml` and the
+  L18 hints use the real Red Hat package (`openshift-cert-manager-operator`, channel `stable-v1`,
+  pinned v1.16.0).
+- **kubeadmin is virtual and hash-only in-cluster (issues #45, #48).** The installer-side plain-text
+  password (real `xxxxx-xxxxx-xxxxx-xxxxx` format) lives only in `~/auth/kubeadmin-password`;
+  `kube-system/kubeadmin` stores just a genuine `$2a$10$…` bcrypt hash, so `oc extract
+secret/kubeadmin -n kube-system --to=-` prints the hash and can no longer recover the password.
+  kubeadmin and the simulator's `admin` are virtual identities with no User resources (a real 4.x
+  `oc get users` never lists them; `oc delete user kubeadmin` is NotFound), and the docs/hints now
+  teach the exam-relevant removal step, `oc delete secret kubeadmin -n kube-system` once another
+  cluster-admin exists.
+- **L1/L13/EX280/README copy and CONVERSION-SPEC** describe the hash-only Secret, the installer
+  password file as the only recovery path, and the kubeadmin removal procedure.
+
+### Fixed
+
+- **Global flags before the `oc` verb (issue #44, P1).** `oc -n <ns> <verb>`, `oc --namespace=<ns>
+<verb>` and every command copied from the Red Hat docs no longer fail with `error: internal command
+failure: Assignment to constant variable.` — the global-flag hoisting now rewrites a mutable token
+  array, and both flag positions work.
+- **OLM resolution fidelity (issue #46).** A Subscription with a channel the catalog does not publish
+  now fails resolution with the real `ResolutionFailed` condition/message (instead of silently doing
+  nothing); `startingCSV` is validated against the channel entries and an unknown pin fails with
+  "no operators found with name … in channel … of package …"; a Manual `installPlanApproval`
+  reports `InstallPlanPending True RequiresApproval` (was inverted `False`); the catalog package is
+  the real `openshift-cert-manager-operator` channel `stable-v1`; `oc get packagemanifests` prints
+  the real `NAME CATALOG AGE` columns.
+- **Lab 13 hint (issue #47).** With default-deny seeded in both directions, the hint now says the
+  path needs **both** an egress rule on gateway **and** an ingress rule on ledger (it said "or"),
+  which matches the behaviour the lab grades.
+- **Collected CLI output/behavior differences (issue #49).** Route admission events now use the
+  Route's `Admitted` condition reason/message (`ExternalCertificateValidationFailed` etc.) instead of
+  a generic `no endpoints available`; `oc new-build` lets the ConfigChange trigger start `<name>-1`
+  immediately (serial `start-build` queue unchanged); `oc debug node/x` shows the real `sh-5.1#`
+  toolbox/host prompt (before and after `chroot /host`, plus `Pod IP:` and the "press enter" hint);
+  a stopped kubelet makes Ready/MemoryPressure/DiskPressure/PIDPressure `Unknown` /
+  `NodeStatusUnknown` / "Kubelet stopped posting node status." and NetworkUnavailable no longer
+  contradicts itself (`False` / `RouteCreated` / "ovn-kube cleared kubelet-set NoRouteCreated");
+  silent `curl` failures print nothing instead of `error: command failed`; `oc new-app
+--image=… --name=database` names the container `database`; ScalingReplicaSet events carry the full
+  ReplicaSet name and scale direction; `oc set env deploy --all --list` prints one header per
+  container and no `<none>` placeholders; trivial one-shot Jobs (`perl -e "print 42"`, `sleep N`)
+  complete with honest simulation runtimes instead of ~30 s; `oc describe alertmanager` aligns the
+  Labels/Annotations value column at 14 like the real tabwriter output.
+
+### Tooling
+
+- Permanent `qa-issue44-49` browser-regression section covering every report item, plus updated
+  assertions for the changed platform behaviour (new-build auto-start, node-debug prompts,
+  hash-only kubeadmin secret, virtual users, OLM package naming/columns, copied CSVs,
+  state-graded L18 pin, node conditions).
+- `scripts/verify.mjs` seed checks now assert a fresh 4.22 cluster seeds **no** User resources
+  (kubeadmin/admin are virtual) while keeping the cluster-admin ClusterRoleBinding subject check.
+
 ## [1.3.0] — 2026-11-04
 
 Fifth QA pass on 1.2.0: closes the seven open report items (#37–#43) from the 1.2.0 CLI playthrough.
