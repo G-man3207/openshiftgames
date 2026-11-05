@@ -4,6 +4,99 @@ All notable changes to OpenShift Games are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 aims to follow [Semantic Versioning](https://semver.org/).
 
+## [1.12.0] — 2026-11-05
+
+Fourteenth QA pass on 1.11.0: closes both open issues of the live 1.11.0 retest (#66–#67) — the P2
+stale/mixed-release JavaScript cache (#66) and the P2 player-set probes that `describe` displayed but
+the kubelet tick never evaluated (#67), plus the P4 `OldReplicaSets` check against the kubectl 1.35
+sources. Returning visitors now revalidate the unversioned app code through Vercel's ETags instead of
+running a day/month-old module graph, and every Pod probe is genuinely evaluated: a failing readiness
+probe turns the Pod `0/1 Running`, emits kubectl's `Readiness probe failed: …` event and removes it
+from the Service endpoints (the Route answers 503 until the probe is fixed and recovers on the same
+tick); a failing liveness/startup probe restarts the container with the real
+`Container <name> failed liveness probe, will be restarted` event, RESTARTS climbing into
+CrashLoopBackOff; `oc set probe … -- <command>` stores a real `exec` handler that runs in the same
+simulated container filesystem as `oc exec`. `OldReplicaSets` was verified against kubectl 1.35 (all
+old ReplicaSets, including `(0/0 replicas created)` ones — not `<none>`) and locked. The game stays
+no-build and dependency-free.
+
+### Added
+
+- **Kubelet evaluation of player-set probes (issue #67).** The simulation tick now evaluates every
+  running Pod's `httpGet`, `tcpSocket` and `exec` probes against the simulated container.
+  `initialDelaySeconds` is measured from the container's (re)start, later attempts run every
+  `periodSeconds` of simulated time, and consecutive `failureThreshold`/`successThreshold` results
+  decide the probe state. httpGet/tcpSocket resolve numeric or named ports across the Pod's
+  containers (one shared network namespace; a Pod that declares no ports keeps the permissive legacy
+  behaviour) and report kubelet's exact text — `Get "http://<podIP>:<port><path>": dial tcp
+<podIP>:<port>: connect: connection refused` / `dial tcp <podIP>:<port>: connect: connection
+refused`. The simulated app serves `/` plus the conventional health endpoints (`/healthz`,
+  `/health`, `/readyz`, `/ready`, `/livez`, `/live`); hello-openshift is a Go catch-all that answers
+  every path; any other path is `HTTP probe failed with statuscode: 404`. Exec probes run through the
+  same container executor as `oc exec`, so `/tmp/healthy` really fails with `cat: /tmp/healthy: No
+such file or directory` while a present file succeeds (a bare Node engine falls back to the
+  deterministic container-command model). A failed readiness probe sets Ready/ContainersReady False,
+  records a throttled `Warning Unhealthy` event with the handler's real message and drops the Pod
+  from Service endpoints (recovery repopulates them in the same tick, keeping `_readyAt`). A failed
+  liveness/startup probe restarts the container (exit 137, last state reason `Error`, `Normal Killing
+Container <name> failed liveness probe, will be restarted`), increments RESTARTS and backs off into
+  CrashLoopBackOff; startup probes gate liveness/readiness until they pass. The CPU/memory-overload
+  chaos failure source is preserved as an additional thresholded failure.
+- **Exec probes on `oc set probe` (issue #67).** `oc set probe <kind>/<name>
+--liveness|--readiness|--startup -- <command> [args…]` stores `exec: {command: argv}` plus the
+  API-server timing defaults (delay 0s, timeout 1s, period 10s, #success 1, #failure 3), replacing any
+  previous handler. Everything after `--` is argv verbatim (pflag-faithful: flags after `--` belong to
+  the command), `--remove` still wins, and mixing a handler flag (`--get-url`/`--open-tcp`) with a
+  command fails with an oc-style one-handler usage error.
+- **Production cache policy + ETag revalidation coverage (issue #66).** The browser harness now
+  serves the repository with the real `vercel.json` `Cache-Control` rules plus ETag/`If-None-Match`
+  304 handling (and a mutable module override), so the suite exercises the real "returning visitor
+  after a release" HTTP-cache path; a new `qa-issue66` section proves a changed unversioned module is
+  revalidated and executed on the next navigation. `verify.mjs` §4i additionally locks the header
+  contract statically.
+
+### Changed
+
+- **`vercel.json` cache policy (issue #66).** `/js/(.*)`, CSS, HTML, `/` and `/draw` are served
+  `Cache-Control: public, max-age=0, must-revalidate` (the old `max-age=86400, s-maxage=604800,
+stale-while-revalidate=2592000` is gone for app code), so Vercel's ETag answers one `304` per
+  unchanged module and a `200` whenever a release changed it. Only images/fonts keep the long-lived
+  cache; `/draw` rewrite, `ignoreCommand` and the bot redirect are unchanged.
+- **Container exec simulation accepts argv (issue #67).** `CommandBar._simulateExecCommand` accepts
+  the exec probe's pre-tokenized argv array as well as the existing raw command string (so
+  `sh -c '<script with spaces>'` is never re-split), and `index.html` wires the executor into
+  `SimulationTick.setContainerExecEvaluator` so probes and `oc exec` share one simulated container
+  filesystem, environment and exit statuses.
+- README, CONVERSION-SPEC (§4.5), the architecture-map `vercel.json` notes and the verification
+  report describe the release-safe cache policy, the evaluated probes and the kubectl 1.35
+  `OldReplicaSets` finding (issues #66–#67); the verification report records the fourteenth QA pass.
+
+### Fixed
+
+- **Returning visitors ran stale (or mixed-version) JavaScript after a release (issue #66).**
+  Unversioned `/js/*` modules were cached for 24 h (CDN 7 days, `stale-while-revalidate` 30 days) and
+  `index.html` never changed between releases, so nothing busted the module cache: a browser kept
+  executing the previous release (and could mix modules from two releases). App code now revalidates
+  on every navigation via ETag (`public, max-age=0, must-revalidate`); the browser suite reproduces
+  the report and proves the next navigation runs the new module.
+- **Player-set probes were displayed but never evaluated (issue #67).** A wrong readiness probe left
+  the Pod `1/1 Ready` and kept it in Service endpoints, so the player learned that a broken probe was
+  harmless. The tick now evaluates the template's own probes: failing readiness flips the Pod to
+  `0/1 Running`, `oc describe pod` shows kubectl's `Readiness probe failed: Get "http://<podIP>:9999/nope":
+dial tcp <podIP>:9999: connect: connection refused`, the endpoints drop the Pod and the Route
+  returns 503; a failing liveness probe produces `Liveness probe failed: cat: /tmp/healthy: No such
+file or directory` + `Container <name> failed liveness probe, will be restarted`, RESTARTS climbs
+  and the Pod reaches CrashLoopBackOff.
+- **`oc set probe … -- <cmd>` stored `httpGet /healthz` instead of `exec.command` (issue #67).** The
+  command after `--` was silently ignored and the probe fell back to an HTTP handler; it now stores
+  `exec: {command: ['cat', '/tmp/healthy']}` and `oc describe deploy` prints `Liveness:  exec [cat
+/tmp/healthy] delay=0s timeout=1s period=10s #success=1 #failure=3`.
+- **`OldReplicaSets` P4 note verified as correct for OCP 4.22 (issue #67 P4).** The report expected a
+  finished rollout to show `OldReplicaSets: <none>`. kubectl 1.35 (`GetAllReplicaSetsInChunks` +
+  `describe_test.go`) prints ALL old ReplicaSets, including `bar-001 (0/0 replicas created)`; the
+  game already matches the target platform, so the behavior is kept (with a source comment and a
+  permanent regression lock) instead of being changed to the pre-1.27 output.
+
 ## [1.11.0] — 2026-11-05
 
 Thirteenth QA pass on 1.10.0: closes both open issues of the 1.10.0 CLI retest (#64–#65) — the P3

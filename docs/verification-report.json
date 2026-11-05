@@ -1,19 +1,19 @@
 {
-  "timestamp": "2026-11-05T19:19:46.434Z",
+  "timestamp": "2026-11-05T20:23:08.701Z",
   "environment": {
     "node": "v26.10.0",
     "chrome": "Chrome/156.0.8078.79",
-    "baseUrl": "http://127.0.0.1:46165",
+    "baseUrl": "http://127.0.0.1:33703",
     "viewport": {
       "width": 1600,
       "height": 900
     },
     "puppeteerCore": "/tmp/verify-tools",
-    "startedAt": "2026-11-05T19:02:24.442Z",
-    "durationSeconds": 1042
+    "startedAt": "2026-11-05T20:06:08.002Z",
+    "durationSeconds": 1021
   },
   "summary": {
-    "passes": 1986,
+    "passes": 2019,
     "failures": 0,
     "warnings": 0,
     "consoleErrors": 0,
@@ -221,6 +221,16 @@
       "failures": 0,
       "warnings": 0
     },
+    "qa-issue67": {
+      "passes": 22,
+      "failures": 0,
+      "warnings": 0
+    },
+    "qa-issue66": {
+      "passes": 11,
+      "failures": 0,
+      "warnings": 0
+    },
     "draw": {
       "passes": 10,
       "failures": 0,
@@ -241,74 +251,74 @@
       "path": "screenshot.png",
       "width": 1600,
       "height": 900,
-      "bytes": 981960
+      "bytes": 981055
     },
     "ogImage": {
       "path": "og-image.png",
       "width": 1200,
       "height": 630,
-      "bytes": 205982
+      "bytes": 205625
     },
     "screenshots": [
       {
         "path": "docs/screenshots/menu.png",
         "width": 1600,
         "height": 900,
-        "bytes": 331861
+        "bytes": 332017
       },
       {
         "path": "docs/screenshots/exam-prep.png",
         "width": 1600,
         "height": 900,
-        "bytes": 210980
+        "bytes": 211025
       },
       {
         "path": "docs/screenshots/sandbox.png",
         "width": 1600,
         "height": 900,
-        "bytes": 983218
+        "bytes": 981606
       },
       {
         "path": "screenshot.png",
         "width": 1600,
         "height": 900,
-        "bytes": 981960
+        "bytes": 981055
       },
       {
         "path": "docs/screenshots/files-panel.png",
         "width": 1600,
         "height": 900,
-        "bytes": 243959
+        "bytes": 243981
       },
       {
         "path": "docs/screenshots/campaign-level-1.png",
         "width": 1600,
         "height": 900,
-        "bytes": 479302
+        "bytes": 479853
       },
       {
         "path": "docs/screenshots/regressions-minimap-collapsed.png",
         "width": 1600,
         "height": 900,
-        "bytes": 961121
+        "bytes": 963538
       },
       {
         "path": "docs/screenshots/regressions-campaign-restart.png",
         "width": 1600,
         "height": 900,
-        "bytes": 489321
+        "bytes": 488419
       },
       {
         "path": "docs/screenshots/draw.png",
         "width": 1600,
         "height": 900,
-        "bytes": 488499
+        "bytes": 489597
       },
       {
         "path": "og-image.png",
         "width": 1200,
         "height": 630,
-        "bytes": 205982
+        "bytes": 205625
       }
     ]
   },
@@ -8027,7 +8037,7 @@
     },
     {
       "section": "qa-issue64",
-      "name": "#64: describe deploy prints the real Liveness probe line with delay=3s"
+      "name": "#64: describe deploy prints the real Liveness probe line with delay=3s (path /)"
     },
     {
       "section": "qa-issue64",
@@ -8176,6 +8186,138 @@
     {
       "section": "qa-issue65",
       "name": "#65: the two worker rows differ from each other in at least one of CPU/MEMORY"
+    },
+    {
+      "section": "qa-issue67",
+      "name": "#67: a fresh sandbox boots for the probe-evaluation checks (random failures disabled)"
+    },
+    {
+      "section": "qa-issue67",
+      "name": "#67: `oc new-project qa67` creates the fixture project"
+    },
+    {
+      "section": "qa-issue67",
+      "name": "#67: `oc create deployment web` creates the one-replica liveness fixture"
+    },
+    {
+      "section": "qa-issue67",
+      "name": "#67: `oc set probe deploy/web --liveness -- cat /tmp/healthy` succeeds (real oc flag order: -n before --)"
+    },
+    {
+      "section": "qa-issue67",
+      "name": "#67: the template stores `exec: {command: [cat, /tmp/healthy]}` with the API-server defaults, never httpGet /healthz"
+    },
+    {
+      "section": "qa-issue67",
+      "name": "#67: describe deploy prints `Liveness:  exec [cat /tmp/healthy] delay=0s timeout=1s period=10s #success=1 #failure=3`"
+    },
+    {
+      "section": "qa-issue67",
+      "name": "#67: the failing exec liveness probe restarts the container after failureThreshold (RESTARTS > 0 / CrashLoopBackOff)"
+    },
+    {
+      "section": "qa-issue67",
+      "name": "#67: describe pod shows the real `Liveness probe failed: cat: /tmp/healthy: No such file or directory` event"
+    },
+    {
+      "section": "qa-issue67",
+      "name": "#67: describe pod shows the real kubelet `Container <name> failed liveness probe, will be restarted` event"
+    },
+    {
+      "section": "qa-issue67",
+      "name": "#67: `oc get pods` shows the restarted container (RESTARTS > 0 or CrashLoopBackOff)"
+    },
+    {
+      "section": "qa-issue67",
+      "name": "#67: a succeeding exec probe (`cat /etc/os-release`) keeps a Ready Pod with 0 restarts"
+    },
+    {
+      "section": "qa-issue67",
+      "name": "#67: the p2 readiness fixture (Deployment/Service/Route + closed-port probe) is created"
+    },
+    {
+      "section": "qa-issue67",
+      "name": "#67: a readiness probe on a closed port turns the Pod into `0/1 Running` after failureThreshold"
+    },
+    {
+      "section": "qa-issue67",
+      "name": "#67: describe pod shows `Readiness probe failed: Get \"http://<podIP>:9999/nope\": dial tcp <podIP>:9999: connect: connection refused`"
+    },
+    {
+      "section": "qa-issue67",
+      "name": "#67: the NotReady p2 Pod is removed from the Service endpoints"
+    },
+    {
+      "section": "qa-issue67",
+      "name": "#67: the p2 Route has a generated host"
+    },
+    {
+      "section": "qa-issue67",
+      "name": "#67: while the only endpoint is NotReady the Route returns 503 (no endpoints)"
+    },
+    {
+      "section": "qa-issue67",
+      "name": "#67: a corrected readiness probe brings the Pod back to Ready, repopulates the endpoints and the Route returns 200"
+    },
+    {
+      "section": "qa-issue67",
+      "name": "#67: a tcpSocket readiness probe on a closed port (9999) fails and the Pod becomes 0/1"
+    },
+    {
+      "section": "qa-issue67",
+      "name": "#67: a tcpSocket readiness probe on the declared port (8080) passes and the Pod becomes 1/1"
+    },
+    {
+      "section": "qa-issue67",
+      "name": "#67: a readiness probe on a wrong path of the open port fails with `HTTP probe failed with statuscode: 404`"
+    },
+    {
+      "section": "qa-issue67",
+      "name": "#67: correcting the readiness probe path brings the Pod back to Ready"
+    },
+    {
+      "section": "qa-issue66",
+      "name": "#66: unversioned /js modules are served with `Cache-Control: public, max-age=0, must-revalidate` (Vercel revalidates them via ETag)"
+    },
+    {
+      "section": "qa-issue66",
+      "name": "#66: the module response carries an ETag so revalidation can answer 304"
+    },
+    {
+      "section": "qa-issue66",
+      "name": "#66: unversioned CSS is served with the same revalidation policy"
+    },
+    {
+      "section": "qa-issue66",
+      "name": "#66: the entry document revalidates as well (it must not pin an old inline module graph)"
+    },
+    {
+      "section": "qa-issue66",
+      "name": "#66: images keep their long-lived cache (only unversioned app code changes policy)"
+    },
+    {
+      "section": "qa-issue66",
+      "name": "#66: a conditional module request with the current ETag answers 304 (unchanged modules cost one revalidation)"
+    },
+    {
+      "section": "qa-issue66",
+      "name": "#66: the first visit executes the shipped GameEngine module (no release marker)"
+    },
+    {
+      "section": "qa-issue66",
+      "name": "#66: after a release, a returning visitor navigating again revalidates the unversioned module and runs the NEW code"
+    },
+    {
+      "section": "qa-issue66",
+      "name": "#66: the cached module was revalidated against the server (must-revalidate/ETag), not served from the HTTP cache"
+    },
+    {
+      "section": "qa-issue66",
+      "name": "#66: the release-changed module came back as a 200 with the revalidation Cache-Control"
+    },
+    {
+      "section": "qa-issue66",
+      "name": "#66: no stale-while-revalidate/s-maxage can keep a returning visitor on an old release"
     },
     {
       "section": "draw",

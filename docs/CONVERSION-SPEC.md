@@ -607,6 +607,53 @@ probes; these are the output contracts every command surface must keep:
   the busiest (≥2000m CPU, 8–12 Gi resident control-plane components, greatest CPU%), and the worker
   rows carry deterministic per-node variance (never two identical workers).
 
+### 4.5 Release-safe caching and evaluated player probes (issues #66–#67)
+
+The site has no build step, so module URLs are unversioned; the hosting config and the kubelet tick
+are the two surfaces that must keep players on the current release and make probes real:
+
+- **No stale/mixed-version modules after a release (issue #66).** `vercel.json` must let Vercel's
+  ETag revalidate unversioned app code on every navigation instead of caching it for a day/month:
+  `/js/(.*)`, `*.css`, `*.html`, `/` and `/draw` send
+  `Cache-Control: public, max-age=0, must-revalidate` (no `s-maxage`/`stale-while-revalidate`),
+  while images/fonts keep the long-lived
+  `public, max-age=86400, s-maxage=604800, stale-while-revalidate=2592000`. The browser harness serves
+  this same policy plus ETag/304 from the real `vercel.json`, so `qa-issue66` proves a returning
+  visitor's next navigation revalidates a changed module and executes the new code; `verify.mjs` §4i
+  locks the header contract (including "no stale-while-revalidate" for app code and long cache for
+  images).
+- **Player-set probes are evaluated by the kubelet tick (issue #67).**
+  `oc set probe <kind>/<name> --liveness|--readiness|--startup -- <command> [args…]` stores
+  `exec: {command: argv}` plus the API-server timing defaults, replacing any previous handler;
+  everything after `--` is argv verbatim (pflag-faithful — flags after `--` are NOT parsed), mixing a
+  handler flag with a command is an oc-style one-handler usage error, and `--remove` still wins.
+  `--get-url`/`--open-tcp`/numeric flags keep their #64 semantics. Each tick (simulated
+  `gameSeconds`) evaluates every running Pod's probes against the simulated container:
+  `initialDelaySeconds` is measured from the container's (re)start, later evaluations run every
+  `periodSeconds`, and consecutive `failureThreshold`/`successThreshold` failures/successes decide
+  the state. httpGet/tcpSocket resolve the port across the Pod's containers (numeric or named; the
+  Pod shares one network namespace) — a declared-but-unmatched port refuses with
+  `Get "http://<podIP>:<port><path>": dial tcp <podIP>:<port>: connect: connection refused` or
+  `dial tcp <podIP>:<port>: connect: connection refused`; a Pod that declares no ports is the
+  permissive legacy fallback. The simulated app serves `/` plus the conventional health endpoints
+  (`/healthz`, `/health`, `/readyz`, `/ready`, `/livez`, `/live`), hello-openshift answers every path,
+  and any other path is `HTTP probe failed with statuscode: 404`. Exec probes run through the SAME
+  container executor as `oc exec` (injected by `index.html` into
+  `SimulationTick.setContainerExecEvaluator`), so `cat /tmp/healthy` really fails with
+  `cat: /tmp/healthy: No such file or directory` and a present file succeeds; a bare Node engine
+  falls back to the deterministic container-command model. Failures surface as kubelet events:
+  `Warning Unhealthy <Readiness|Liveness|Startup> probe failed: <detail>`. A failed readiness probe
+  sets Ready/ContainersReady False, removes the Pod from Service endpoints (a Route then answers 503) and repopulates them on recovery in the same tick. A failed liveness/startup probe restarts
+  the container (`Normal Killing Container <name> failed liveness probe, will be restarted`, exit
+  137, last state reason `Error`), increments RESTARTS and backs off into CrashLoopBackOff.
+  CPU/memory-overload chaos remains an additional thresholded probe-failure reason.
+- **OldReplicaSets after finished rollouts (issue #67 P4).** Verified against the kubectl 1.35
+  sources vendored by OCP 4.22: `kubectl describe deployment` consumes the "all old ReplicaSets"
+  list from `GetAllReplicaSetsInChunks`, and `describe_test.go` expects
+  `OldReplicaSets: bar-001 (0/0 replicas created)` after a successful rollout. The simulator
+  therefore intentionally lists all old ReplicaSets (including 0/0 ones); filtering them to
+  `<none>` would match pre-1.27 kubectl, not the 4.22 target. A regression lock keeps the behavior.
+
 ---
 
 ## 5. Controllers / simulation (SimulationTick.js)
@@ -708,7 +755,9 @@ Created → Started` (plus real warning reasons such as `Failed`/`BackOff`/`Fail
   there is no synthetic `Ready` event and no `PhaseChange` event (phase readiness is status, not an
   event). Platform Pods (`router-default`, `dns-default`, `node-resolver`) carry the same stream.
 - `_tickClusterHealth`: recalc ClusterOperator conditions; emit periodic cluster state tick as today.
-- Keep all existing controllers (Deployment/RS/STS/DS/Job/CronJob/HPA/probes/PVC/quota/chaos).
+- Keep all existing controllers (Deployment/RS/STS/DS/Job/CronJob/HPA/PVC/quota/chaos); the
+  kubelet probe controller now evaluates player-set httpGet/tcpSocket/exec probes as specified in
+  §4.5 (issues #66–#67).
 - Events (in addition to existing): `build:started`, `build:complete`, `build:failed`,
   `route:admitted`, `route:not-admitted`, `operator:installed`, `operator:uninstalled`,
   `scc:granted`, `scc:denied`, `login`, `logout`, `project:switched`, `manifest:applied`,

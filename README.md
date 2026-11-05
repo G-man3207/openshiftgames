@@ -51,7 +51,14 @@ names are shown in EX280 Prep).
   volume) aligned per volume, and annotations print as sorted multiline `key: value` (labels stay
   `key=value`). `oc set probe` honours `--initial-delay-seconds`, `--period-seconds`,
   `--timeout-seconds`, `--success-threshold` and `--failure-threshold` (only the supplied fields
-  change; the handler and API-server defaults are preserved), and `oc describe deployment` lists only
+  change; the handler and API-server defaults are preserved), `oc set probe … -- <command>` stores a
+  real `exec` handler (verbatim argv), and the kubelet tick actually evaluates every player-set
+  probe: a readiness probe on a closed port/wrong path flips the Pod to `0/1 Running` with kubectl's
+  `Readiness probe failed: Get "http://<podIP>:<port><path>": dial tcp …` event, removes it from the
+  Service endpoints (the Route answers 503) and restores it when fixed; a failing liveness/startup
+  probe restarts the container (`Container <name> failed liveness probe, will be restarted`, RESTARTS
+  climbs, then CrashLoopBackOff); exec probes run in the same simulated container filesystem as
+  `oc exec` (`cat /tmp/healthy` → `No such file or directory`), and `oc describe deployment` lists only
   the Deployment's own `ScalingReplicaSet` events — `Scaled up replica set <rs> to <n>` per rollout
   and `Scaled down replica set <old> to 0 from <n>` when one is retired, at their real rollout times
   (ReplicaSet-controller events stay on `oc describe rs`). `oc adm top nodes` is sorted by NAME with
@@ -367,7 +374,11 @@ The repo is a static site and deploys to any static host. The canonical demo is 
 - Canonical URL: `https://shifting.pro` (used in `og:url` / `og:image` / canonical tags;
   update `index.html`, `draw.html`, `og-image.html` and README if the domain changes).
 - `vercel.json` keeps the `/draw` → `/draw.html` rewrite, cache headers and bot policy. No server
-  code and no environment variables are required.
+  code and no environment variables are required. Because the site has no build step (module URLs are
+  unversioned), every release must not be pinned by intermediary caches: `/js/*`, CSS, HTML, `/` and
+  `/draw` are served `Cache-Control: public, max-age=0, must-revalidate`, so Vercel's ETag revalidation
+  picks up the new module graph on the next navigation; only images/fonts keep the long-lived
+  `max-age=86400, s-maxage=604800, stale-while-revalidate=2592000` cache.
 - Deploy with the Vercel dashboard (import the repo), add `shifting.pro` as the project domain, or use
   `vercel deploy` (Vercel CLI, optional).
 
