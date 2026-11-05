@@ -97,6 +97,70 @@ function cacheControlFor(pathname) {
   return value;
 }
 
+// ── Production rewrite policy (issue #68) ──────────────────────────────────
+// vercel.json rewrites `/v/:version/js/:path*` to `/js/:path*` so a release can
+// serve the SAME files under a new, one-year-immutable URL prefix. A static
+// file server that ignores `rewrites` would 404 every versioned module (and the
+// app could not boot), so emulate the production rewrite engine: compile
+// path-to-regexp-style `:param` / `:param*` sources to anchored RegExps and
+// substitute the captures into the destination, exactly like Vercel.
+/**
+ * Compile one Vercel `rewrites` entry:
+ *  - `source: '/v/:version/js/:path*'` → `/^\/v\/([^/]+)\/js\/(.*)$/` + params
+ *  - `source: '/draw'` → `/^\/draw$/` (no params)
+ * @param {{source: string, destination: string}} rule
+ * @returns {{matcher: RegExp, params: {name: string, rest: boolean}[], destination: string}}
+ */
+function compileVercelRewrite(rule) {
+  const params = [];
+  let pattern = String(rule.source || '')
+    .replace(/\\\./g, '\u0000DOT')
+    .replace(/:([A-Za-z_][A-Za-z0-9_]*)(\*)?/g, (match, name, star) => {
+      params.push({ name, rest: Boolean(star) });
+      return `\u0000P${params.length - 1}`;
+    })
+    .replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    .replace(/\u0000DOT/g, '\\.');
+  for (let index = params.length - 1; index >= 0; index -= 1) {
+    pattern = pattern.replace(`\u0000P${index}`, params[index].rest ? '(.*)' : '([^/]+)');
+  }
+  return {
+    matcher: new RegExp(`^${pattern}$`),
+    params,
+    destination: String(rule.destination || ''),
+  };
+}
+
+const VERCEL_REWRITES = (() => {
+  try {
+    const config = JSON.parse(readFileSync(join(ROOT, 'vercel.json'), 'utf8'));
+    return (config.rewrites || []).map((rule) => compileVercelRewrite(rule));
+  } catch {
+    return [];
+  }
+})();
+
+/**
+ * Apply the first matching vercel.json rewrite to an incoming request path.
+ * Returns the rewritten absolute path (e.g. `/v/1.13.0/js/ui/HUD.js` →
+ * `/js/ui/HUD.js`), or null when no rewrite matches.
+ * @param {string} pathname original request path
+ * @returns {string|null}
+ */
+function resolveVercelRewrite(pathname) {
+  for (const rule of VERCEL_REWRITES) {
+    const match = rule.matcher.exec(pathname);
+    if (!match) continue;
+    let destination = rule.destination;
+    rule.params.forEach((param, index) => {
+      const value = match[index + 1] ?? '';
+      destination = destination.replace(param.rest ? `:${param.name}*` : `:${param.name}`, value);
+    });
+    return destination;
+  }
+  return null;
+}
+
 /**
  * Test hooks for the `qa-issue66` section: a mutable per-path module override
  * (repo-relative key) standing in for "a new release replaced this file", and
@@ -131,7 +195,11 @@ const server = createServer(async (req, res) => {
   try {
     const url = new URL(req.url, 'http://localhost');
     const requestPath = url.pathname;
-    let file = decodeURIComponent(requestPath);
+    // Vercel applies `rewrites` before static serving, but the response headers
+    // (Cache-Control) and the HTTP cache entry are keyed by the ORIGINAL request
+    // path: `/v/<version>/js/*` is immutable while `/js/*` must revalidate.
+    const rewrittenPath = resolveVercelRewrite(requestPath);
+    let file = decodeURIComponent(rewrittenPath || requestPath);
     if (file === '/') file = '/index.html';
     if (file === '/favicon.ico') {
       res.writeHead(204);
@@ -146,7 +214,13 @@ const server = createServer(async (req, res) => {
       return;
     }
     countServerRequest(requestPath);
-    const overrideKey = requestPath.replace(/^\/+/, '');
+    // Count the resolved path as well, so a test can ask "did the browser fetch
+    // this module?" without hard-coding which version prefix it came through.
+    if (rewrittenPath && rewrittenPath !== requestPath) countServerRequest(rewrittenPath);
+    // Overrides are keyed by the RESOLVED repo-relative path (e.g.
+    // `js/engine/GameEngine.js`), whoever requested it: a versioned URL must
+    // see the same "new release replaced this file" override as its origin.
+    const overrideKey = file.replace(/^\/+/, '');
     const data = Buffer.isBuffer(serverOverrides.get(overrideKey))
       ? serverOverrides.get(overrideKey)
       : serverOverrides.has(overrideKey)
@@ -310,6 +384,55 @@ async function evaluate(fn, ...args) {
 async function goto(path) {
   await page.goto(`${BASE}${path}`, { waitUntil: 'domcontentloaded', timeout: 30000 });
   await sleep(400);
+}
+/**
+ * Open an ISOLATED browser context with its own HTTP cache/localStorage (#68).
+ * Cache behaviour is the point of the versioned-URL contract (a returning
+ * visitor must never mix releases), so these tests must not share storage with
+ * the long-lived suite page. Always close it in a `finally`.
+ * @returns {Promise<{context: import('puppeteer-core').BrowserContext, tab: import('puppeteer-core').Page}>}
+ */
+async function openIsolatedPage() {
+  const context = await browser.createBrowserContext();
+  const tab = await context.newPage();
+  await tab.setViewport({ ...VIEWPORT, deviceScaleFactor: 1 });
+  return { context, tab };
+}
+/** Close an isolated context opened by openIsolatedPage() without throwing. */
+async function closeIsolatedPage(handle) {
+  if (!handle) return;
+  await handle.tab.close().catch(() => {});
+  await handle.context.close().catch(() => {});
+}
+/**
+ * Navigate an isolated page. A cold context re-downloads the whole module graph
+ * (three.js included), so this uses a far more generous timeout than the warm
+ * suite page. `domcontentloaded` waits for the deferred module script, which is
+ * exactly the app boot we care about.
+ * @param {{tab: import('puppeteer-core').Page}} handle openIsolatedPage() result
+ * @param {string} path app-relative path such as `/` or `/draw`
+ * @param {number} [timeout]
+ */
+async function gotoIsolated(handle, path, timeout = 60000) {
+  await handle.tab.goto(`${BASE}${path}`, { waitUntil: 'domcontentloaded', timeout });
+  await sleep(300);
+}
+/**
+ * Record console/page errors on an isolated page, filtered with the suite's
+ * ignorable-noise rules. The suite-level listeners only observe the main page,
+ * so injected-failure pages (#69) cannot pollute the global error arrays.
+ * @param {import('puppeteer-core').Page} tab
+ * @returns {{console: string[], page: string[]}}
+ */
+function collectIsolatedErrors(tab) {
+  const errors = { console: [], page: [] };
+  tab.on('console', (msg) => {
+    if (msg.type() !== 'error') return;
+    const text = msg.text();
+    if (!isIgnorableConsole(text)) errors.console.push(text);
+  });
+  tab.on('pageerror', (err) => errors.page.push(String(err)));
+  return errors;
 }
 async function bootMenu() {
   if (!page.url().startsWith(BASE)) await goto('/');
@@ -16763,13 +16886,17 @@ await runSection('qa-issue61-62', async () => {
   );
 
   // ═══ Round 6: #62F — describe Events placeholder tabwriter alignment ═════
+  // #69 P4 added `Internal Traffic Policy:` (24 chars incl. colon), the widest
+  // top-level label in a Service describe, so kubectl's tabwriter now starts
+  // every value at column 27 (0-based 26) and the bare `Events:` placeholder
+  // is padded to 26 characters: `Events:` + 19 spaces.
   result = await runCmd(`oc describe svc web -n ${projectName}`);
   const describeWebMessage = result.message;
   const eventsLine = (describeWebMessage.match(/^Events:.*$/m) || [''])[0];
   const eventsSpaces = (eventsLine.match(/^Events:( +)<none>$/) || [])[1] || '';
   assert(
-    !result.error && eventsSpaces.length === 12,
-    '#62F: `oc describe svc web` Events placeholder aligns like kubectl (exactly 12 spaces after `Events:`)',
+    !result.error && eventsSpaces.length === 19,
+    '#62F/#69P4: `oc describe svc web` Events placeholder aligns like kubectl (exactly 19 spaces after `Events:` — column 27 after `Internal Traffic Policy:`)',
     JSON.stringify({ eventsLine, spaces: eventsSpaces.length })
   );
 
@@ -18681,6 +18808,622 @@ await runSection('qa-issue66', async () => {
   } finally {
     serverOverrides.delete(modulePath);
     await visitorPage.close().catch(() => {});
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 10i. QA ROUND #68 — versioned module URLs: every app module is requested under
+//      /v/<package-version>/js/… (rewritten to /js/… by vercel.json) and served
+//      with a one-year immutable cache, so a release changes every module URL
+//      and a returning visitor can never mix a new entry document with an old
+//      module graph. Unversioned /js/ keeps ETag revalidation (issue #66).
+// ═══════════════════════════════════════════════════════════════════════════
+await runSection('qa-issue68', async () => {
+  const version = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')).version;
+  const versionedPrefix = `/v/${version}/js/`;
+  const modulePath = 'js/engine/GameEngine.js';
+  const servedModulePath = `/${modulePath}`;
+  const releasedPrefix = `/v/${version}-qa68/js/`;
+  const immutableCacheControl = 'public, max-age=31536000, immutable';
+  const revalidatingCacheControl = 'public, max-age=0, must-revalidate';
+
+  /** Fetch a served path and capture status/headers/body. */
+  const fetchServed = async (pathname) => {
+    const response = await fetch(`${BASE}${pathname}`);
+    return {
+      status: response.status,
+      cacheControl: response.headers.get('cache-control') || '',
+      etag: response.headers.get('etag') || '',
+      body: await response.text(),
+    };
+  };
+  /** The JSON import map embedded in a served HTML document. */
+  const importMapOf = (html) => {
+    const match = String(html ?? '').match(/<script type="importmap">([\s\S]*?)<\/script>/);
+    if (!match) return null;
+    try {
+      return JSON.parse(match[1]);
+    } catch {
+      return null;
+    }
+  };
+  /** Requests whose pathname contains `/js/`, split into versioned/unversioned. */
+  const recordModuleRequests = (tab) => {
+    const record = { versioned: [], unversioned: [] };
+    tab.on('request', (request) => {
+      let pathname = '';
+      try {
+        pathname = new URL(request.url()).pathname;
+      } catch {
+        return;
+      }
+      if (!pathname.includes('/js/')) return;
+      if (pathname.startsWith('/v/')) record.versioned.push(pathname);
+      else if (pathname.startsWith('/js/')) record.unversioned.push(pathname);
+    });
+    return record;
+  };
+  /** Reload an isolated page; returns the error text instead of throwing. */
+  const reloadIsolated = async (handle) => {
+    try {
+      await handle.tab.reload({ waitUntil: 'domcontentloaded', timeout: 60000 });
+      await sleep(300);
+      return null;
+    } catch (err) {
+      return String(err?.message || err);
+    }
+  };
+  /** Wait for the app engine on an isolated page. */
+  const waitForIsolatedBoot = (handle, timeout = 45000) =>
+    waitFor(() => handle.tab.evaluate(() => !!window.game?.app?.engine), timeout);
+
+  // ── Round 1: production fetch-level contract + import map ─────────────────
+  const versionedEngine = await fetchServed(`${versionedPrefix}engine/GameEngine.js`);
+  const shippedEngine = readFileSync(join(ROOT, modulePath), 'utf8');
+  assert(
+    versionedEngine.status === 200 &&
+      versionedEngine.body === shippedEngine &&
+      versionedEngine.cacheControl === immutableCacheControl,
+    `#68: GET /v/${version}/js/engine/GameEngine.js returns 200 with the exact file body and \`Cache-Control: ${immutableCacheControl}\``,
+    JSON.stringify({
+      status: versionedEngine.status,
+      cacheControl: versionedEngine.cacheControl,
+      bodyMatches: versionedEngine.body === shippedEngine,
+    })
+  );
+  assert(
+    /^"[\w-]+"$/.test(versionedEngine.etag),
+    '#68: the versioned module response carries an ETag (Vercel static file header)',
+    JSON.stringify({ etag: versionedEngine.etag })
+  );
+  const versionedCommandBar = await fetchServed(`${versionedPrefix}ui/CommandBar.js`);
+  assert(
+    versionedCommandBar.status === 200 &&
+      versionedCommandBar.body === readFileSync(join(ROOT, 'js/ui/CommandBar.js'), 'utf8') &&
+      versionedCommandBar.cacheControl === immutableCacheControl &&
+      /^"[\w-]+"$/.test(versionedCommandBar.etag),
+    '#68: GET /v/<version>/js/ui/CommandBar.js is rewritten to the real file and served immutable with an ETag',
+    JSON.stringify({
+      status: versionedCommandBar.status,
+      cacheControl: versionedCommandBar.cacheControl,
+      etag: versionedCommandBar.etag,
+    })
+  );
+  const unversionedEngine = await fetchServed(servedModulePath);
+  assert(
+    unversionedEngine.status === 200 &&
+      unversionedEngine.cacheControl === revalidatingCacheControl &&
+      unversionedEngine.body === shippedEngine,
+    '#68: the unversioned /js/engine/GameEngine.js still revalidates (max-age=0, must-revalidate) — #66 behaviour kept',
+    JSON.stringify({
+      status: unversionedEngine.status,
+      cacheControl: unversionedEngine.cacheControl,
+    })
+  );
+  const indexHtml = await fetchServed('/');
+  const indexImportMap = importMapOf(indexHtml.body);
+  assert(
+    indexImportMap?.imports?.['./js/'] === `./v/${version}/js/`,
+    `#68: the served index.html import map maps "./js/" to "./v/${version}/js/"`,
+    JSON.stringify({ imports: indexImportMap?.imports, version })
+  );
+  const drawHtml = await fetchServed('/draw');
+  const drawImportMap = importMapOf(drawHtml.body);
+  assert(
+    drawHtml.status === 200 && drawImportMap?.imports?.['./js/'] === `./v/${version}/js/`,
+    `#68: the served OpenShift Draw page maps "./js/" to the same "./v/${version}/js/" prefix`,
+    JSON.stringify({ status: drawHtml.status, imports: drawImportMap?.imports })
+  );
+
+  // ── Round 2: a fresh-context visitor of `/` loads ONLY versioned modules ──
+  const rootVisitor = await openIsolatedPage();
+  try {
+    const errors = collectIsolatedErrors(rootVisitor.tab);
+    const requests = recordModuleRequests(rootVisitor.tab);
+    await gotoIsolated(rootVisitor, '/');
+    const booted = await waitForIsolatedBoot(rootVisitor);
+    await sleep(800);
+    assert(booted, '#68: a fresh browser context boots the menu with the versioned import map');
+    assert(
+      requests.versioned.length > 40,
+      '#68: the / never sends fewer than 40 module requests through /v/<version>/js/',
+      JSON.stringify({ count: requests.versioned.length })
+    );
+    assert(
+      requests.unversioned.length === 0,
+      '#68: a fresh / visit makes ZERO unversioned /js/ module requests (no stale-code path)',
+      JSON.stringify({ unversioned: requests.unversioned.slice(0, 10) })
+    );
+    assert(
+      errors.console.length === 0 && errors.page.length === 0,
+      '#68: the versioned / load produces no console/page errors',
+      JSON.stringify(errors)
+    );
+  } finally {
+    await closeIsolatedPage(rootVisitor);
+  }
+
+  // ── Round 3: same versioned-only contract for the Draw page ───────────────
+  const drawVisitor = await openIsolatedPage();
+  try {
+    const errors = collectIsolatedErrors(drawVisitor.tab);
+    const requests = recordModuleRequests(drawVisitor.tab);
+    await gotoIsolated(drawVisitor, '/draw');
+    const booted = await waitFor(
+      () => drawVisitor.tab.evaluate(() => !!window.openshiftDraw),
+      45000
+    );
+    await sleep(800);
+    assert(booted, '#68: OpenShift Draw boots from the served /draw entry document');
+    assert(
+      requests.versioned.length > 0,
+      '#68: the Draw page loads its modules from /v/<version>/js/',
+      JSON.stringify({ versioned: requests.versioned.slice(0, 5) })
+    );
+    assert(
+      requests.unversioned.length === 0,
+      '#68: the Draw page makes ZERO unversioned /js/ module requests',
+      JSON.stringify({ unversioned: requests.unversioned.slice(0, 10) })
+    );
+    assert(
+      errors.console.length === 0 && errors.page.length === 0,
+      '#68: the versioned /draw load produces no console/page errors',
+      JSON.stringify(errors)
+    );
+  } finally {
+    await closeIsolatedPage(drawVisitor);
+  }
+
+  // ── Round 4: returning visitor after a release (new prefix = new modules) ─
+  // First visit populates the immutable HTTP cache for /v/<old-version>/js/…;
+  // the server then behaves like a new release: index.html advertises the next
+  // version prefix and the file bytes changed. Reloading in the SAME context
+  // must boot and run the NEW module (the old immutable URL is never reused).
+  const returningVisitor = await openIsolatedPage();
+  try {
+    await gotoIsolated(returningVisitor, '/');
+    const firstBoot = await waitForIsolatedBoot(returningVisitor);
+    await sleep(1500);
+    assert(firstBoot, '#68: the returning-visitor scenario first caches the shipped release');
+    const shippedHtml = readFileSync(join(ROOT, 'index.html'), 'utf8');
+    serverOverrides.set('index.html', shippedHtml.replaceAll(`./v/${version}/js/`, releasedPrefix));
+    serverOverrides.set(modulePath, `${shippedEngine}\nglobalThis.__qa68Release = 'v2';\n`);
+    resetServerRequestCount(`${releasedPrefix}engine/GameEngine.js`);
+    try {
+      const reloadError = await reloadIsolated(returningVisitor);
+      const rebooted = await waitForIsolatedBoot(returningVisitor);
+      await sleep(800);
+      const release = await returningVisitor.tab.evaluate(() => globalThis.__qa68Release ?? null);
+      const newPrefixRequests = serverRequestCount(`${releasedPrefix}engine/GameEngine.js`);
+      assert(
+        !reloadError && rebooted,
+        '#68: after a release the returning visitor reloads and boots the new release',
+        JSON.stringify({ reloadError, rebooted })
+      );
+      assert(
+        release === 'v2',
+        '#68: after a release the returning visitor EXECUTES the new module (the old immutable URL was not reused)',
+        JSON.stringify({ release })
+      );
+      assert(
+        newPrefixRequests > 0,
+        `#68: the reload requested the new release module through ${releasedPrefix}engine/GameEngine.js`,
+        JSON.stringify({
+          newPrefixRequests,
+          requests: serverRequestCount(`${releasedPrefix}engine/GameEngine.js`),
+        })
+      );
+    } finally {
+      serverOverrides.delete('index.html');
+      serverOverrides.delete(modulePath);
+    }
+  } finally {
+    await closeIsolatedPage(returningVisitor);
+  }
+
+  // ── Round 5: negative control — without a version bump the old module wins ─
+  // Only the file bytes change (index.html keeps advertising the SAME version).
+  // The one-year immutable cache entry for the old URL must be reused, so the
+  // release marker must NOT execute: version bumps, not ETags, protect returning
+  // visitors of versioned URLs. This is the exact regression lock for #68.
+  const negativeControl = await openIsolatedPage();
+  try {
+    const versionedEnginePath = `${versionedPrefix}engine/GameEngine.js`;
+    const cachedResponses = [];
+    negativeControl.tab.on('response', (response) => {
+      try {
+        if (new URL(response.url()).pathname === versionedEnginePath) {
+          cachedResponses.push({
+            status: response.status(),
+            fromCache: Boolean(response.fromCache?.()),
+          });
+        }
+      } catch {
+        /* ignore malformed URLs */
+      }
+    });
+    await gotoIsolated(negativeControl, '/');
+    const firstBoot = await waitForIsolatedBoot(negativeControl);
+    await sleep(1500);
+    assert(firstBoot, '#68: the negative control first caches the shipped release');
+    resetServerRequestCount(versionedEnginePath);
+    serverOverrides.set(modulePath, `${shippedEngine}\nglobalThis.__qa68Release = 'v2';\n`);
+    try {
+      const reloadError = await reloadIsolated(negativeControl);
+      const rebooted = await waitForIsolatedBoot(negativeControl);
+      await sleep(1000);
+      const release = await negativeControl.tab.evaluate(() => globalThis.__qa68Release ?? null);
+      const serverHits = serverRequestCount(versionedEnginePath);
+      assert(
+        !reloadError && rebooted,
+        '#68: the negative control still boots on the old versioned module URLs',
+        JSON.stringify({ reloadError, rebooted })
+      );
+      assert(
+        release === null,
+        '#68: negative control — WITHOUT a version bump the changed module is NOT executed (immutable cache wins)',
+        JSON.stringify({ release })
+      );
+      assert(
+        serverHits === 0,
+        '#68: negative control — the old versioned module was answered from the HTTP cache (zero server hits)',
+        JSON.stringify({ serverHits })
+      );
+      assert(
+        cachedResponses.some((entry) => entry.status === 200 && entry.fromCache === true),
+        '#68: negative control — response.fromCache() confirms the reload was served from the immutable HTTP cache',
+        JSON.stringify(cachedResponses)
+      );
+    } finally {
+      serverOverrides.delete(modulePath);
+    }
+  } finally {
+    await closeIsolatedPage(negativeControl);
+  }
+
+  // ── Round 6: the lazy `_moduleExists()` probe hits the versioned URL ──────
+  // fetch() bypasses the import map, so _moduleExists() must apply the prefix
+  // itself; a probe to the unversioned path would 404 in production where only
+  // /v/<version>/js/* is immutable (and the optional panel would never load).
+  const probeVisitor = await openIsolatedPage();
+  try {
+    await gotoIsolated(probeVisitor, '/');
+    const booted = await waitForIsolatedBoot(probeVisitor);
+    await probeVisitor.tab.setCacheEnabled(false);
+    const manifestRequests = [];
+    probeVisitor.tab.on('request', (request) => {
+      let pathname = '';
+      try {
+        pathname = new URL(request.url()).pathname;
+      } catch {
+        return;
+      }
+      if (pathname.endsWith('/js/ui/ManifestPanel.js')) {
+        manifestRequests.push({ pathname, method: request.method() });
+      }
+    });
+    const panelReady = await probeVisitor.tab.evaluate(async () => {
+      try {
+        return Boolean(await window.game?.app?._ensureManifestPanel?.());
+      } catch {
+        return false;
+      }
+    });
+    await sleep(500);
+    const versionedManifestPath = `${versionedPrefix}ui/ManifestPanel.js`;
+    const headProbe = manifestRequests.find(
+      (entry) => entry.pathname === versionedManifestPath && entry.method === 'HEAD'
+    );
+    assert(
+      booted && panelReady,
+      '#68: the lazily-required Files/Manifests panel still loads after the import-map change',
+      JSON.stringify({ booted, panelReady })
+    );
+    assert(
+      Boolean(headProbe),
+      `#68: _moduleExists() HEAD-probes the versioned URL ${versionedManifestPath}`,
+      JSON.stringify({ manifestRequests })
+    );
+    assert(
+      !manifestRequests.some((entry) => entry.pathname === '/js/ui/ManifestPanel.js'),
+      '#68: _moduleExists() never probes the unversioned /js/ui/ManifestPanel.js path',
+      JSON.stringify({ manifestRequests })
+    );
+  } finally {
+    await closeIsolatedPage(probeVisitor);
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 10j. QA ROUND #69 — P3: boot failures that are NOT a WebGL capability problem
+//      show the generic "game failed to load" panel with the real error message
+//      and a hard-reload hint (#webgl-error stays reserved for a failed WebGL
+//      probe). P4: `oc describe svc` prints the API-server-defaulted
+//      Internal Traffic Policy and the operator-set Traffic Distribution with
+//      kubectl 1.35 tabwriter alignment (column 27).
+// ═══════════════════════════════════════════════════════════════════════════
+await runSection('qa-issue69', async () => {
+  let result;
+  const projectName = 'qa69';
+  /** Non-empty response lines. */
+  const messageLines = (message) =>
+    String(message ?? '')
+      .split('\n')
+      .filter((line) => line.trim() !== '');
+  /** The first top-level `<label>:` line of a describe output. */
+  const fieldLine = (message, label) =>
+    messageLines(message).find((line) => line.startsWith(`${label}:`)) || '';
+  /** Index of the first top-level `<label>:` line (`-1` when absent). */
+  const fieldIndex = (message, label) =>
+    messageLines(message).findIndex((line) => line.startsWith(`${label}:`));
+  /** 0-based column where a top-level describe field's value starts (-1 if none). */
+  const valueColumn = (line) => {
+    const match = String(line ?? '').match(/^([A-Za-z][A-Za-z ]*):( +)(\S.*)$/);
+    return match ? line.indexOf(match[3]) : -1;
+  };
+
+  const booted = await bootSandbox();
+  assert(booted, '#69: a fresh sandbox boots for the Service-describe and init-error checks');
+
+  // ── Round 1: #69 P4 — dns-default prints both new traffic fields ──────────
+  result = await runCmd('oc describe svc dns-default -n openshift-dns');
+  const dnsDescribe = result.message;
+  assert(
+    !result.error &&
+      /^Internal Traffic Policy: {2}Cluster$/.test(
+        fieldLine(dnsDescribe, 'Internal Traffic Policy')
+      ),
+    '#69 P4: `oc describe svc dns-default` prints `Internal Traffic Policy:  Cluster` (API-server default)',
+    JSON.stringify({ line: fieldLine(dnsDescribe, 'Internal Traffic Policy') })
+  );
+  assert(
+    !result.error &&
+      /^Traffic Distribution: {5}PreferSameNode$/.test(
+        fieldLine(dnsDescribe, 'Traffic Distribution')
+      ),
+    '#69 P4: `oc describe svc dns-default` prints `Traffic Distribution:     PreferSameNode` (dns-operator 4.22 asset)',
+    JSON.stringify({ line: fieldLine(dnsDescribe, 'Traffic Distribution') })
+  );
+  assert(
+    !result.error && /^Session Affinity: {9}None$/.test(fieldLine(dnsDescribe, 'Session Affinity')),
+    '#69 P4: `Session Affinity:`/`Internal Traffic Policy:`/`Traffic Distribution:` share the tabwriter column',
+    JSON.stringify({ line: fieldLine(dnsDescribe, 'Session Affinity') })
+  );
+  assert(
+    !result.error && /^Events: {19}<none>$/.test(fieldLine(dnsDescribe, 'Events')),
+    '#69 P4: the `Events:` placeholder aligns with the 24-char `Internal Traffic Policy:` label (19 spaces)',
+    JSON.stringify({ line: fieldLine(dnsDescribe, 'Events') })
+  );
+  const dnsTrafficOrder = [
+    'Session Affinity',
+    'Internal Traffic Policy',
+    'Traffic Distribution',
+    'Events',
+  ].map((label) => fieldIndex(dnsDescribe, label));
+  assert(
+    !result.error &&
+      dnsTrafficOrder.every((index) => index >= 0) &&
+      dnsTrafficOrder.every(
+        (index, position) => position === 0 || index > dnsTrafficOrder[position - 1]
+      ),
+    '#69 P4: describe order is Session Affinity < Internal Traffic Policy < Traffic Distribution < Events',
+    JSON.stringify(dnsTrafficOrder)
+  );
+  const dnsTopLevel = messageLines(dnsDescribe).filter((line) => !/^\s/.test(line));
+  const dnsColumns = dnsTopLevel.map((line) => ({ line, column: valueColumn(line) }));
+  assert(
+    !result.error && dnsColumns.length >= 20 && dnsColumns.every((entry) => entry.column === 26),
+    '#69 P4: EVERY top-level describe field value starts at column 27 (0-based 26, kubectl tabwriter)',
+    JSON.stringify(dnsColumns.filter((entry) => entry.column !== 26).slice(0, 6))
+  );
+  assert(
+    !result.error && !/\bundefined\b/.test(dnsDescribe),
+    '#69 P4: the new describe fields never print a literal `undefined`',
+    dnsDescribe.slice(0, 600)
+  );
+  result = await runCmd(
+    'oc get svc dns-default -n openshift-dns -o jsonpath={.spec.trafficDistribution}'
+  );
+  assert(
+    !result.error && result.message.trim() === 'PreferSameNode',
+    '#69 P4: `oc get svc dns-default -o jsonpath={.spec.trafficDistribution}` is PreferSameNode',
+    JSON.stringify({ output: result.message.trim() })
+  );
+
+  // ── Round 2: #69 P4 — a player-created ClusterIP Service ─────────────────
+  result = await runCmd(`oc new-project ${projectName}`);
+  assert(
+    !result.error && new RegExp(`Now using project "${projectName}"`).test(result.message),
+    '#69 P4: `oc new-project qa69` creates the ClusterIP describe fixture project',
+    result.message.slice(0, 300)
+  );
+  result = await runCmd(
+    `oc create deployment web --image=registry.access.redhat.com/ubi9/httpd-24 --replicas=1 -n ${projectName}`
+  );
+  const deploymentCreated = !result.error && /deployment\.apps\/web created/.test(result.message);
+  result = await runCmd(`oc expose deployment web -n ${projectName}`);
+  const serviceExposed = !result.error && /service\/web exposed/.test(result.message);
+  assert(
+    deploymentCreated && serviceExposed,
+    '#69 P4: the qa69 Deployment + exposed ClusterIP Service fixture is created',
+    JSON.stringify({ deploymentCreated, serviceExposed })
+  );
+  result = await runCmd(`oc describe svc web -n ${projectName}`);
+  const webDescribe = result.message;
+  assert(
+    !result.error &&
+      /^Internal Traffic Policy: {2}Cluster$/.test(
+        fieldLine(webDescribe, 'Internal Traffic Policy')
+      ),
+    '#69 P4: an ordinary ClusterIP Service describe prints `Internal Traffic Policy:  Cluster`',
+    JSON.stringify({ line: fieldLine(webDescribe, 'Internal Traffic Policy') })
+  );
+  assert(
+    !result.error && /^Events: {19}<none>$/.test(fieldLine(webDescribe, 'Events')),
+    '#69 P4: the player Service keeps the kubectl `Events:` column (19 spaces after `Events:`)',
+    JSON.stringify({ line: fieldLine(webDescribe, 'Events') })
+  );
+  assert(
+    !result.error && fieldIndex(webDescribe, 'Traffic Distribution') === -1,
+    '#69 P4: a Service WITHOUT spec.trafficDistribution prints NO `Traffic Distribution:` line',
+    JSON.stringify({ lines: messageLines(webDescribe).filter((line) => /Traffic/.test(line)) })
+  );
+
+  // ── Round 3: #69 P4 — an ExternalName Service prints neither field ───────
+  const manifestEngineReady = await waitFor(
+    () => evaluate(() => !!window.game?.manifestEngine),
+    8000
+  );
+  if (manifestEngineReady) {
+    await evaluate(({ file, content }) => window.game.manifestEngine.writeFile(file, content), {
+      file: 'qa/qa69-external.yaml',
+      content: [
+        'apiVersion: v1',
+        'kind: Service',
+        'metadata:',
+        '  name: web-external',
+        `  namespace: ${projectName}`,
+        'spec:',
+        '  type: ExternalName',
+        '  externalName: example.com',
+      ].join('\n'),
+    });
+  }
+  result = await runCmd('oc apply -f qa/qa69-external.yaml', 300);
+  const externalCreated =
+    manifestEngineReady && !result.error && /service\/web-external created/.test(result.message);
+  result = await runCmd(`oc describe svc web-external -n ${projectName}`);
+  const externalDescribe = result.message;
+  assert(
+    externalCreated && /^External Name:\s+example\.com\s*$/m.test(externalDescribe),
+    '#69 P4: an ExternalName Service describe still prints `External Name:     example.com`',
+    JSON.stringify({ externalCreated, output: externalDescribe.slice(0, 400) })
+  );
+  assert(
+    !result.error &&
+      fieldIndex(externalDescribe, 'Internal Traffic Policy') === -1 &&
+      fieldIndex(externalDescribe, 'Traffic Distribution') === -1 &&
+      !/\bundefined\b/.test(externalDescribe),
+    '#69 P4: an ExternalName Service describe prints NEITHER Internal Traffic Policy NOR Traffic Distribution',
+    JSON.stringify({
+      lines: messageLines(externalDescribe).filter((line) => /Traffic|Internal/.test(line)),
+    })
+  );
+
+  // ── Round 4: #69 P3 — a JS init failure shows the generic init-error panel ─
+  // A HUD constructor throws inside App.init(); the boot catch must show the
+  // real error message and a hard-reload hint — NOT the GPU/driver advice.
+  const initFailure = await openIsolatedPage();
+  try {
+    serverOverrides.set(
+      'js/ui/HUD.js',
+      "export class HUD { constructor() { throw new Error('QA-injected init failure'); } }\n"
+    );
+    await gotoIsolated(initFailure, '/');
+    const appeared = await waitFor(
+      () => initFailure.tab.evaluate(() => !!document.getElementById('init-error')),
+      30000
+    );
+    const initState = await initFailure.tab.evaluate(() => {
+      const overlay = document.getElementById('init-error');
+      return {
+        present: Boolean(overlay),
+        text: overlay?.innerText || '',
+        message: document.getElementById('init-error-message')?.textContent || '',
+        webglPresent: Boolean(document.getElementById('webgl-error')),
+      };
+    });
+    assert(
+      appeared && initState.present,
+      '#69 P3: a JavaScript boot failure shows the #init-error overlay',
+      JSON.stringify({ appeared, present: initState.present })
+    );
+    assert(
+      initState.text.includes('The game failed to load'),
+      '#69 P3: the init-error overlay is titled `The game failed to load`',
+      initState.text.slice(0, 300)
+    );
+    assert(
+      initState.message === 'QA-injected init failure',
+      '#69 P3: #init-error-message shows the REAL thrown error message (textContent, not HTML)',
+      JSON.stringify({ message: initState.message })
+    );
+    assert(
+      /Ctrl\+Shift\+R/.test(initState.text) && /Cmd\+Shift\+R/.test(initState.text),
+      '#69 P3: the init-error overlay offers BOTH hard-reload hints (Ctrl+Shift+R / Cmd+Shift+R)',
+      initState.text.slice(0, 300)
+    );
+    assert(
+      !initState.webglPresent,
+      '#69 P3: a non-WebGL boot failure NEVER shows the #webgl-error GPU panel',
+      JSON.stringify({ webglPresent: initState.webglPresent })
+    );
+  } finally {
+    serverOverrides.delete('js/ui/HUD.js');
+    await closeIsolatedPage(initFailure);
+  }
+
+  // ── Round 5: #69 P3 — real WebGL capability failure keeps #webgl-error ───
+  const webglFailure = await openIsolatedPage();
+  try {
+    await webglFailure.tab.evaluateOnNewDocument(() => {
+      const originalGetContext = HTMLCanvasElement.prototype.getContext;
+      HTMLCanvasElement.prototype.getContext = function getContext(type, ...args) {
+        const kind = String(type || '').toLowerCase();
+        if (kind === 'webgl' || kind === 'webgl2' || kind === 'experimental-webgl') return null;
+        return originalGetContext.call(this, type, ...args);
+      };
+    });
+    await gotoIsolated(webglFailure, '/');
+    const appeared = await waitFor(
+      () => webglFailure.tab.evaluate(() => !!document.getElementById('webgl-error')),
+      30000
+    );
+    const webglState = await webglFailure.tab.evaluate(() => {
+      const overlay = document.getElementById('webgl-error');
+      return {
+        present: Boolean(overlay),
+        text: overlay?.innerText || '',
+        initPresent: Boolean(document.getElementById('init-error')),
+      };
+    });
+    assert(
+      appeared && webglState.present,
+      '#69 P3: a failed WebGL capability probe still shows the #webgl-error overlay',
+      JSON.stringify({ appeared, present: webglState.present })
+    );
+    assert(
+      webglState.text.includes('WebGL Not Available'),
+      '#69 P3: the WebGL panel keeps its `WebGL Not Available` headline',
+      webglState.text.slice(0, 300)
+    );
+    assert(
+      !webglState.initPresent,
+      '#69 P3: a real WebGL capability failure never shows the generic #init-error panel',
+      JSON.stringify({ initPresent: webglState.initPresent })
+    );
+  } finally {
+    await closeIsolatedPage(webglFailure);
   }
 });
 

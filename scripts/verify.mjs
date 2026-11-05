@@ -1240,18 +1240,22 @@ if (seedMod?.ClusterState) {
         { name: 'https', port: 443, protocol: 'TCP', targetPort: 443 },
         { name: 'metrics', port: 1936, protocol: 'TCP', targetPort: 1936 },
       ];
+      // #69 P4: the cluster-dns-operator's 4.22 dns-default asset additionally
+      // carries spec.trafficDistribution: PreferSameNode (`oc describe svc`
+      // prints it, and `-o jsonpath={.spec.trafficDistribution}` returns it).
       if (
         dnsService?.spec?.type === 'ClusterIP' &&
         dnsService.spec.clusterIP === '172.30.0.10' &&
         JSON.stringify(dnsService.spec.ports) === JSON.stringify(expectedDnsPorts) &&
         JSON.stringify(dnsService.spec.selector) ===
-          JSON.stringify({ 'dns.operator.openshift.io/daemonset-dns': 'default' })
+          JSON.stringify({ 'dns.operator.openshift.io/daemonset-dns': 'default' }) &&
+        dnsService.spec.trafficDistribution === 'PreferSameNode'
       ) {
         passed();
       } else {
         fail(
           'fidelity',
-          `openshift-dns/dns-default Service contract missing (#58): ${JSON.stringify({ type: dnsService?.spec?.type, clusterIP: dnsService?.spec?.clusterIP, ports: dnsService?.spec?.ports, selector: dnsService?.spec?.selector })}`
+          `openshift-dns/dns-default Service contract missing (#58): ${JSON.stringify({ type: dnsService?.spec?.type, clusterIP: dnsService?.spec?.clusterIP, ports: dnsService?.spec?.ports, selector: dnsService?.spec?.selector, trafficDistribution: dnsService?.spec?.trafficDistribution })}`
         );
       }
       if (
@@ -2693,20 +2697,23 @@ if (seedMod?.ClusterState) {
           );
         }
 
-        // #62F: `oc describe svc web`'s empty Events placeholder is aligned with
-        // the widest top-level label (`Session Affinity:` → column 19), i.e.
-        // exactly 12 spaces after `Events:` (the old fixed 10-space placeholder
-        // is one tabwriter column short).
+        // #62F / #69 P4: `oc describe svc web`'s empty Events placeholder is
+        // aligned with the widest top-level label. kubectl 1.35 (OCP 4.22)
+        // prints the API-server-defaulted `Internal Traffic Policy:` row
+        // (24-char label → value column 27), so `Events:` is followed by
+        // exactly 19 spaces (the old 12-space column only accounted for
+        // `Session Affinity:`; the pre-#69 fixed 10-space placeholder was two
+        // tabwriter columns short).
         const describeWebResult = cliBar.executeCommand('oc describe svc web -n qa61-locks');
         const describeWebMessage = String(describeWebResult?.message || '');
         const eventsLine = (describeWebMessage.match(/^Events:.*$/m) || [''])[0];
         const eventsSpaces = (eventsLine.match(/^Events:( +)<none>$/) || [])[1] || '';
-        if (!describeWebResult?.error && eventsSpaces.length === 12) {
+        if (!describeWebResult?.error && eventsSpaces.length === 19) {
           passed();
         } else {
           fail(
             'fidelity',
-            `oc describe svc web Events placeholder must align at the tabwriter column (exactly 12 spaces after "Events:", got ${eventsSpaces.length}) (#62F): ${JSON.stringify(eventsLine)}`
+            `oc describe svc web Events placeholder must align at the tabwriter column (exactly 19 spaces after "Events:" with the kubectl 1.35 Internal Traffic Policy row, got ${eventsSpaces.length}) (#62F/#69 P4): ${JSON.stringify(eventsLine)}`
           );
         }
 
@@ -4403,6 +4410,482 @@ if (seedMod?.ClusterState) {
   }
 }
 
+// ── 4j. Issue #68–#69 versioned-module cache/boot/describe fidelity locks ──
+// The browser suite sections `qa-issue68` / `qa-issue69` prove these end-to-end.
+// These static/dynamic locks fail the fast static gate if a refactor silently
+// reintroduces the #68 stale-module graph (a returning browser pinned to an old
+// module URL by the one-year immutable cache, fetch probes that bypass the
+// import map, or a local dev server that cannot emulate the /v/ rewrite) or the
+// #69 P3 "blame the GPU for a JavaScript crash" panel and the #69 P4 missing
+// Internal Traffic Policy/Traffic Distribution describe rows (no browser, no
+// ticks needed).
+{
+  // ── #68 — import-map versioning + Vercel rewrite/immutable header ─────────
+  try {
+    const packageJson = JSON.parse(read('package.json'));
+    const version = String(packageJson.version ?? '');
+    const indexHtml = read('index.html');
+    const drawHtml = read('draw.html');
+    const vercelConfig = JSON.parse(read('vercel.json'));
+    /**
+     * Translate a Vercel path pattern (`:param`, `:path*`, `(.*)`) to a RegExp
+     * and test it against a pathname.
+     */
+    const vercelPatternMatches = (source, pathname) => {
+      const pattern = String(source)
+        .split('/')
+        .map((segment) => {
+          if (!segment) return '';
+          if (segment === '(.*)' || /^:\w+\*$/.test(segment)) return '.*';
+          if (/^:\w+$/.test(segment)) return '[^/]+';
+          return segment.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        })
+        .join('/');
+      try {
+        return new RegExp(`^${pattern}$`).test(pathname);
+      } catch {
+        return false;
+      }
+    };
+    const importMapOf = (html) => {
+      const match = String(html).match(
+        /<script\s+type=["']importmap["'][^>]*>([\s\S]*?)<\/script>/
+      );
+      if (!match) return null;
+      try {
+        return JSON.parse(match[1]);
+      } catch {
+        return null;
+      }
+    };
+
+    // #68 (a): package.json is the single source of truth for the version.
+    if (/^\d+\.\d+\.\d+$/.test(version)) {
+      passed();
+    } else {
+      fail(
+        'fidelity',
+        `#68: package.json version must be plain semver (got ${JSON.stringify(version)})`
+      );
+    }
+
+    // #68 (b)/(c): both entry documents map "./js/" to the SAME versioned prefix.
+    const expectedJsBase = `./v/${version}/js/`;
+    for (const [rel, html] of [
+      ['index.html', indexHtml],
+      ['draw.html', drawHtml],
+    ]) {
+      const jsBase = importMapOf(html)?.imports?.['./js/'];
+      if (jsBase === expectedJsBase) {
+        passed();
+      } else {
+        fail(
+          'fidelity',
+          `#68: ${rel} import map must version app modules ("./js/" => ${JSON.stringify(expectedJsBase)} from package.json), got ${JSON.stringify(jsBase)}`
+        );
+      }
+    }
+
+    // #68 (d): the inline index module keeps plain './js/...' specifiers (so
+    // the import map is what versions the graph) and the import map precedes
+    // the module script in the document.
+    const inlineImports = inlineModules('index.html').flatMap((mod) => {
+      const clean = stripComments(mod.src);
+      return [
+        ...[...clean.matchAll(IMPORT_FROM_RE)].map((match) => match[1]),
+        ...[...clean.matchAll(DYNAMIC_IMPORT_RE)].map((match) => match[1]),
+      ];
+    });
+    const relativeImports = inlineImports.filter((spec) => spec.startsWith('.'));
+    const plainJsImports = relativeImports.filter((spec) => spec.startsWith('./js/'));
+    const directVersionedImports = relativeImports.filter((spec) => spec.startsWith('./v/'));
+    const importMapAt = indexHtml.indexOf('<script type="importmap"');
+    const moduleScriptAt = indexHtml.indexOf('<script type="module"');
+    if (
+      relativeImports.length >= 10 &&
+      plainJsImports.length === relativeImports.length &&
+      directVersionedImports.length === 0 &&
+      importMapAt >= 0 &&
+      moduleScriptAt > importMapAt
+    ) {
+      passed();
+    } else {
+      fail(
+        'fidelity',
+        `#68: index.html inline module must import plain './js/...' specifiers (plain=${plainJsImports.length}/${relativeImports.length}, direct-versioned=${JSON.stringify(directVersionedImports)}) and the import map must precede the module script (importMap@${importMapAt}, moduleScript@${moduleScriptAt})`
+      );
+    }
+
+    // #68 (e): Vercel rewrites the versioned URL prefix back onto the real files.
+    const versionedModulePath = `/v/${version}/js/engine/GameEngine.js`;
+    const versionRewrite = (vercelConfig.rewrites || []).find(
+      (rewrite) =>
+        vercelPatternMatches(rewrite.source, versionedModulePath) &&
+        /^\/js\/(?::path\*|\(\.\*\)|\$1)$/.test(String(rewrite.destination))
+    );
+    if (versionRewrite) {
+      passed();
+    } else {
+      fail(
+        'fidelity',
+        `#68: vercel.json must rewrite /v/:version/js/:path* onto /js/:path* (tested ${JSON.stringify(versionedModulePath)}; rewrites=${JSON.stringify((vercelConfig.rewrites || []).map((rewrite) => `${rewrite.source} -> ${rewrite.destination}`))})`
+      );
+    }
+
+    // #68 (f): the versioned prefix is immutable for at least a year so a
+    // release changes every module URL; unversioned /js keeps revalidating (#66).
+    const versionedCacheValues = (vercelConfig.headers || [])
+      .filter((rule) => vercelPatternMatches(rule.source, versionedModulePath))
+      .flatMap((rule) => rule.headers || [])
+      .filter((header) => String(header.key).toLowerCase() === 'cache-control')
+      .map((header) => String(header.value));
+    const versionedImmutable =
+      versionedCacheValues.length > 0 &&
+      versionedCacheValues.every((value) => {
+        const maxAge = Number((value.match(/max-age=(\d+)/) || [])[1] || 0);
+        return maxAge >= 31536000 && /(?:^|[,\s])immutable(?:[,\s]|$)/.test(value);
+      });
+    if (versionedImmutable) {
+      passed();
+    } else {
+      fail(
+        'fidelity',
+        `#68: /v/<version>/js/* must be served with Cache-Control max-age >= 31536000 and immutable (got ${JSON.stringify(versionedCacheValues)})`
+      );
+    }
+
+    // #68 (g): no entry document may load an unversioned /js module, and the
+    // `_moduleExists()` fetch probe must resolve through the import map (a
+    // bare `fetch(path)` probe would hit /js while `import()` hits /v/…).
+    const moduleProbeAt = indexHtml.indexOf('async _moduleExists(path) {');
+    const moduleProbeEnd = moduleProbeAt < 0 ? -1 : indexHtml.indexOf('\n        }', moduleProbeAt);
+    const moduleProbe =
+      moduleProbeAt < 0
+        ? ''
+        : indexHtml.slice(moduleProbeAt, moduleProbeEnd > 0 ? moduleProbeEnd : moduleProbeAt + 900);
+    const unversionedEntryRefs = [];
+    for (const [rel, html] of [
+      ['index.html', indexHtml],
+      ['draw.html', drawHtml],
+    ]) {
+      if (/<script\b[^>]*\bsrc\s*=\s*["']\.\/js\//i.test(html)) {
+        unversionedEntryRefs.push(`${rel}: <script src="./js/...">`);
+      }
+      for (const mod of inlineModules(rel)) {
+        for (const match of stripComments(mod.src).matchAll(
+          /(?:\bfrom\s*|\bimport\s*\(?\s*)["']\/js\//g
+        )) {
+          unversionedEntryRefs.push(`${rel}: ${match[0]}`);
+        }
+      }
+    }
+    const moduleProbeResolves =
+      /const resolveModulePath\s*=\s*\(specifier\)\s*=>/.test(indexHtml) &&
+      /fetch\(\s*resolveModulePath\(path\)/.test(moduleProbe) &&
+      !/fetch\(\s*path\b/.test(moduleProbe);
+    if (moduleProbeResolves && unversionedEntryRefs.length === 0) {
+      passed();
+    } else {
+      fail(
+        'fidelity',
+        `#68: index.html must probe modules with fetch(resolveModulePath(path)) (never fetch(path)) and the entry documents must not load unversioned /js modules: ${JSON.stringify({ moduleProbeResolves, unversionedEntryRefs, moduleProbe })}`
+      );
+    }
+
+    // #68 local-dev: `/v/<version>/js/*` only exists as a production rewrite, so
+    // a plain `python3 -m http.server` can no longer load the app locally. The
+    // zero-dependency dev server must exist, be non-trivial, compile the
+    // vercel.json rewrites (including the `/v/:version/js/:path*` rule) and never
+    // cache locally (an edit must show up on the next reload). It is the
+    // canonical `npm run dev` / README local command.
+    const devServerRel = 'scripts/dev-server.mjs';
+    const devServerExists = has(devServerRel);
+    const devServerSrc = devServerExists ? read(devServerRel) : '';
+    const devServerEmulatesRewrites =
+      /vercel\.json/.test(devServerSrc) &&
+      /compile(?:Source|Rewrites)/.test(devServerSrc) &&
+      /applyRewrites|rewrite\.destination/.test(devServerSrc) &&
+      /\/v\//.test(devServerSrc);
+    const devServerNoStore = /'cache-control'\s*:\s*'no-store'/.test(devServerSrc);
+    if (
+      devServerExists &&
+      devServerSrc.split('\n').length >= 60 &&
+      devServerEmulatesRewrites &&
+      devServerNoStore
+    ) {
+      passed();
+    } else {
+      fail(
+        'fidelity',
+        `#68: ${devServerRel} must emulate the vercel.json /v/:version/js/:path* rewrites locally and serve Cache-Control: no-store: ${JSON.stringify({ exists: devServerExists, lines: devServerSrc.split('\n').length, emulatesRewrites: devServerEmulatesRewrites, noStore: devServerNoStore })}`
+      );
+    }
+    const devScript = String(packageJson.scripts?.dev ?? '');
+    if (devScript === 'node scripts/dev-server.mjs') {
+      passed();
+    } else {
+      fail(
+        'fidelity',
+        `#68: package.json scripts.dev must be "node scripts/dev-server.mjs" (got ${JSON.stringify(devScript)})`
+      );
+    }
+    // The dev server is reachable as the package.json `dev` script (Knip adds
+    // script-referenced files as entries automatically), and scripts/**/*.mjs
+    // is project code, so dead-file detection covers it without a duplicate
+    // `entry` pattern (Knip rejects a redundant one with a configuration hint).
+    const knipProject = (read('knip.jsonc').match(/"project"\s*:\s*\[([\s\S]*?)\]/) || [])[1] || '';
+    if (/"scripts\/\*\*\/\*\.mjs"/.test(knipProject)) {
+      passed();
+    } else {
+      fail(
+        'fidelity',
+        `#68: knip.jsonc "project" must keep scripts/**/*.mjs so the dev server is checked (got ${JSON.stringify(knipProject)})`
+      );
+    }
+  } catch (err) {
+    fail('fidelity', `#68: versioned-module cache lock could not run: ${err.message}`);
+  }
+
+  // ── #69 P3 — boot failures show the generic panel, never GPU advice ───────
+  try {
+    const indexHtml = read('index.html');
+    /** Slice a class method body: from its signature to the next 8-space `}`. */
+    const methodBodyOf = (needle, fallbackLength = 2600) => {
+      const start = indexHtml.indexOf(needle);
+      if (start < 0) return '';
+      const end = indexHtml.indexOf('\n        }', start);
+      return indexHtml.slice(start, end > start ? end : start + fallbackLength);
+    };
+
+    // #69 P3 (h): the generic overlay: id=init-error, role=alert, the message
+    // filled through textContent (never innerHTML), and the hard-reload hints.
+    const showInitError = methodBodyOf('_showInitError(err) {');
+    const showInitErrorOk =
+      showInitError.length > 0 &&
+      /overlay\.id\s*=\s*'init-error'/.test(showInitError) &&
+      /setAttribute\('role',\s*'alert'\)/.test(showInitError) &&
+      /#init-error-message/.test(showInitError) &&
+      /\.textContent\s*=\s*message/.test(showInitError) &&
+      showInitError.includes('The game failed to load') &&
+      showInitError.includes('Ctrl+Shift+R') &&
+      showInitError.includes('Cmd+Shift+R') &&
+      showInitError.includes('${REPO_URL}/issues');
+    if (showInitErrorOk) {
+      passed();
+    } else {
+      fail(
+        'fidelity',
+        `#69 P3: _showInitError must render the generic panel (id=init-error, role=alert, message via textContent, "The game failed to load", Ctrl+Shift+R / Cmd+Shift+R, REPO_URL/issues link): ${JSON.stringify({ hasMethod: showInitError.length > 0, hasOverlayId: /overlay\.id\s*=\s*'init-error'/.test(showInitError), hasRole: /setAttribute\('role',\s*'alert'\)/.test(showInitError), hasMessageNode: /#init-error-message/.test(showInitError), fillsTextContent: /\.textContent\s*=\s*message/.test(showInitError), hasTitle: showInitError.includes('The game failed to load'), hasHardReloadHints: showInitError.includes('Ctrl+Shift+R') && showInitError.includes('Cmd+Shift+R'), hasReportLink: showInitError.includes('${REPO_URL}/issues') })}`
+      );
+    }
+
+    // #69 P3 (i): init().catch routes non-WebGL failures to _showInitError(err)
+    // and calls _showWebGLError() only behind `app._webglFailed`.
+    const initCatchAt = indexHtml.indexOf(' init error:');
+    const initCatch = initCatchAt < 0 ? '' : indexHtml.slice(initCatchAt, initCatchAt + 600);
+    const initCatchOk =
+      /_showInitError\(err\)/.test(initCatch) &&
+      /if \(app\._webglFailed\) app\._showWebGLError\(\);/.test(initCatch) &&
+      (initCatch.match(/_showWebGLError\(\)/g) || []).length === 1;
+    if (initCatchOk) {
+      passed();
+    } else {
+      fail(
+        'fidelity',
+        `#69 P3: init().catch must show _showInitError(err) for non-WebGL failures and gate _showWebGLError() behind app._webglFailed: ${JSON.stringify(initCatch)}`
+      );
+    }
+
+    // #69 P3 (j): the renderer-constructor catch is a boot failure (not a
+    // missing GPU) — it must show the generic panel and never blame WebGL.
+    const rendererCatchAt = indexHtml.indexOf('renderer init failed');
+    const rendererCatchEnd =
+      rendererCatchAt < 0 ? -1 : indexHtml.indexOf('\n          }', rendererCatchAt);
+    const rendererCatch =
+      rendererCatchAt < 0
+        ? ''
+        : indexHtml.slice(
+            rendererCatchAt,
+            rendererCatchEnd > rendererCatchAt ? rendererCatchEnd : rendererCatchAt + 600
+          );
+    if (/_showInitError\(err\)/.test(rendererCatch) && !/_showWebGLError\(\)/.test(rendererCatch)) {
+      passed();
+    } else {
+      fail(
+        'fidelity',
+        `#69 P3: the renderer-constructor catch must call _showInitError(err) and never _showWebGLError() (or set _webglFailed): ${JSON.stringify(rendererCatch)}`
+      );
+    }
+
+    // #69 P3 (k): `_webglFailed = true` may only be set in the WebGL capability
+    // branch of init(); the renderer catch must not mark the GPU as missing.
+    const webglProbeAt = indexHtml.indexOf("const gl = testCanvas.getContext('webgl2')");
+    const webglProbe = webglProbeAt < 0 ? '' : indexHtml.slice(webglProbeAt, webglProbeAt + 400);
+    const webglFailedAssignments = (indexHtml.match(/_webglFailed = true/g) || []).length;
+    if (
+      webglFailedAssignments === 1 &&
+      /if \(!gl\) \{\s*this\._webglFailed = true;\s*this\._showWebGLError\(\);/.test(webglProbe)
+    ) {
+      passed();
+    } else {
+      fail(
+        'fidelity',
+        `#69 P3: _webglFailed = true must occur exactly once, inside the WebGL capability branch of init() (count=${webglFailedAssignments}, capability branch=${JSON.stringify(webglProbe)})`
+      );
+    }
+  } catch (err) {
+    fail('fidelity', `#69 P3: boot-failure panel lock could not run: ${err.message}`);
+  }
+
+  // ── #69 P4 — Internal Traffic Policy / Traffic Distribution describe rows ─
+  const engineMod = await tryImport('js/engine/GameEngine.js');
+  const sandboxMod = await tryImport('js/modes/SandboxMode.js');
+  const commandBarMod = await tryImport('js/ui/CommandBar.js');
+  if (!engineMod?.GameEngine || !sandboxMod?.SandboxMode || !commandBarMod?.CommandBar) {
+    fail(
+      'fidelity',
+      '#69 P4: GameEngine/SandboxMode/CommandBar are not importable for the traffic-policy locks'
+    );
+  } else {
+    try {
+      const engine = new engineMod.GameEngine({ mode: 'sandbox' });
+      new sandboxMod.SandboxMode(engine, null).setupCluster(3);
+      engine.simulation.ensureOLMDefaultsSync();
+      const cluster = engine.cluster;
+
+      // #69 P4 (l): the cluster-dns-operator's 4.22 dns-default asset sets
+      // spec.trafficDistribution: PreferSameNode.
+      const dnsService = cluster.getByName('Service', 'dns-default', 'openshift-dns');
+      if (dnsService?.spec?.trafficDistribution === 'PreferSameNode') {
+        passed();
+      } else {
+        fail(
+          'fidelity',
+          `#69 P4: openshift-dns/dns-default must carry spec.trafficDistribution="PreferSameNode": ${JSON.stringify({ trafficDistribution: dnsService?.spec?.trafficDistribution, spec: dnsService?.spec })}`
+        );
+      }
+
+      // #69 P4 (m): `oc describe svc dns-default` prints Internal Traffic Policy
+      // right after Session Affinity and Traffic Distribution last, before
+      // Events; kubectl 1.35's tabwriter aligns EVERY top-level value in column
+      // 27 (the 24-char `Internal Traffic Policy:` label is the widest).
+      const dnsDescribe = dnsService?.toDescribe?.({ cluster }) || '';
+      const dnsDescribeLines = dnsDescribe.split('\n').filter((line) => line.trim() !== '');
+      const misalignedDnsLabels = dnsDescribeLines
+        .map((line) => {
+          const match = line.match(/^([A-Za-z][^:]*:)(\s*)(\S.*)$/);
+          return { line, column: match ? match[1].length + match[2].length + 1 : null };
+        })
+        .filter((entry) => entry.column !== 27);
+      const sessionAffinityAt = dnsDescribe.indexOf('Session Affinity:');
+      const internalTrafficAt = dnsDescribe.indexOf('Internal Traffic Policy:');
+      const trafficDistributionAt = dnsDescribe.indexOf('Traffic Distribution:');
+      const eventsHeaderAt = dnsDescribe.indexOf('Events:');
+      if (
+        /^Internal Traffic Policy: {2}Cluster$/m.test(dnsDescribe) &&
+        /^Traffic Distribution: {5}PreferSameNode$/m.test(dnsDescribe) &&
+        sessionAffinityAt >= 0 &&
+        sessionAffinityAt < internalTrafficAt &&
+        internalTrafficAt < trafficDistributionAt &&
+        trafficDistributionAt < eventsHeaderAt &&
+        misalignedDnsLabels.length === 0
+      ) {
+        passed();
+      } else {
+        fail(
+          'fidelity',
+          `#69 P4: describe dns-default must print Internal Traffic Policy (after Session Affinity) and Traffic Distribution (before Events) with every value in column 27: ${JSON.stringify({ order: { sessionAffinityAt, internalTrafficAt, trafficDistributionAt, eventsHeaderAt }, misalignedDnsLabels, excerpt: dnsDescribe.slice(0, 900) })}`
+        );
+      }
+
+      // #69 P4 (n): any other ClusterIP Service now prints the defaulted
+      // Internal Traffic Policy row (widening the value column from 19 to 27),
+      // so its empty Events placeholder carries 19 spaces; it has no operator
+      // traffic distribution.
+      const appliedWeb = engine.applyManifestObject({
+        apiVersion: 'v1',
+        kind: 'Service',
+        metadata: { name: 'qa69-web', namespace: 'default' },
+        spec: { selector: { app: 'qa69-web' }, ports: [{ port: 8080 }] },
+      });
+      const appliedWebDescribe = appliedWeb?.toDescribe?.({ cluster }) || '';
+      const appliedWebEventsLine = (appliedWebDescribe.match(/^Events:.*$/m) || [''])[0];
+      const appliedWebEventsSpaces =
+        (appliedWebEventsLine.match(/^Events:( +)<none>$/) || [])[1] || '';
+      const appliedWebOk =
+        appliedWeb?._applyAction === 'created' &&
+        /^Internal Traffic Policy: {2}Cluster$/m.test(appliedWebDescribe) &&
+        appliedWebEventsSpaces.length === 19 &&
+        !/^Traffic Distribution:/m.test(appliedWebDescribe);
+      if (appliedWebOk) {
+        passed();
+      } else {
+        fail(
+          'fidelity',
+          `#69 P4: an applied ClusterIP Service must describe with Internal Traffic Policy: Cluster, 19 spaces after "Events:" and no Traffic Distribution line: ${JSON.stringify({ action: appliedWeb?._applyAction, eventsLine: appliedWebEventsLine, eventsSpaces: appliedWebEventsSpaces.length, hasInternal: /^Internal Traffic Policy: {2}Cluster$/m.test(appliedWebDescribe), hasTrafficDistribution: /^Traffic Distribution:/m.test(appliedWebDescribe), excerpt: appliedWebDescribe.slice(0, 900) })}`
+        );
+      }
+
+      // #69 P4 (o): ExternalName Services have no cluster traffic fields
+      // (`oc describe svc` prints neither Internal Traffic Policy nor Traffic
+      // Distribution for them).
+      const appliedExternal = engine.applyManifestObject({
+        apiVersion: 'v1',
+        kind: 'Service',
+        metadata: { name: 'qa69-external', namespace: 'default' },
+        spec: { type: 'ExternalName', externalName: 'example.com' },
+      });
+      const appliedExternalDescribe = appliedExternal?.toDescribe?.({ cluster }) || '';
+      if (
+        appliedExternal?._applyAction === 'created' &&
+        /^Type: +ExternalName$/m.test(appliedExternalDescribe) &&
+        !/^Internal Traffic Policy:/m.test(appliedExternalDescribe) &&
+        !/^Traffic Distribution:/m.test(appliedExternalDescribe)
+      ) {
+        passed();
+      } else {
+        fail(
+          'fidelity',
+          `#69 P4: an ExternalName Service describe must not print Internal Traffic Policy/Traffic Distribution: ${JSON.stringify({ action: appliedExternal?._applyAction, excerpt: appliedExternalDescribe.slice(0, 700) })}`
+        );
+      }
+
+      // #69 P4 (p): the operator-set field is addressable through the CLI
+      // jsonpath machinery, exactly like `oc get svc -o jsonpath`.
+      const windowShim = {
+        game: {
+          cluster,
+          gameEngine: engine,
+          engine: { emit() {}, on() {}, off() {} },
+          manifestEngine: null,
+        },
+      };
+      globalThis.window = windowShim;
+      try {
+        const cliBar = new commandBarMod.CommandBar();
+        const jsonpathResult = cliBar.executeCommand(
+          'oc get svc dns-default -n openshift-dns -o jsonpath={.spec.trafficDistribution}'
+        );
+        if (
+          !jsonpathResult?.error &&
+          String(jsonpathResult?.message ?? '').trim() === 'PreferSameNode'
+        ) {
+          passed();
+        } else {
+          fail(
+            'fidelity',
+            `#69 P4: \`oc get svc dns-default -n openshift-dns -o jsonpath={.spec.trafficDistribution}\` must print PreferSameNode: ${JSON.stringify(jsonpathResult)}`
+          );
+        }
+      } finally {
+        delete globalThis.window;
+      }
+    } catch (err) {
+      fail('fidelity', `#69 P4 dynamic traffic-policy lock threw: ${err.message}`);
+    }
+  }
+}
+
 // ── 5. Campaign, challenges, incidents and EX280 content ──────────────────
 const levelsMod = await tryImport('js/data/CampaignLevels.js');
 const challengesMod = await tryImport('js/modes/ChallengeMode.js');
@@ -5493,7 +5976,10 @@ const readmeChecks = [
   [/not affiliated/i, 'README non-affiliation disclaimer'],
   [/## Deploy/i, 'README deploy section'],
   [/vercel\.json/, 'README vercel.json instructions'],
-  [/python3 -m http\.server/, 'README local static-server instructions'],
+  // #68: the versioned /v/ prefix only exists as a production rewrite, so the
+  // canonical local command is the zero-dependency dev server (a plain
+  // `python3 -m http.server` cannot resolve those URLs any more).
+  [/node scripts\/dev-server\.mjs/, 'README local dev-server instructions'],
   [/EX280V422/, 'README EX280V422 coverage'],
   [/github\.com\/G-man3207\/openshiftgames\/wiki/, 'README GitHub wiki link'],
   [/wiki\/EX280-Study-Guide/, 'README wiki study-guide link'],

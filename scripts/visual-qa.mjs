@@ -87,6 +87,10 @@ const VIEWPORTS = [
 const GAME_VIEWPORT = { width: 1600, height: 900 };
 
 // ── Static server (same contract as scripts/browser-test.mjs) ─────────────
+// Emulates the production vercel.json `rewrites` before static serving: the app
+// imports every module through its import map as `/v/<version>/js/…`, which
+// Vercel rewrites to `/js/…`. Serving the repo as a plain directory would 404
+// every versioned module and the pages could not boot (issue #68).
 const MIME = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
@@ -102,10 +106,62 @@ const MIME = {
   '.woff2': 'font/woff2',
   '.woff': 'font/woff',
 };
+/**
+ * Compile a Vercel rewrite `source` (path-to-regexp subset: `:name` one segment,
+ * `:name*` catch-all) to an anchored RegExp and remember the destination.
+ * @param {{source: string, destination: string}} rule
+ */
+function compileVercelRewrite(rule) {
+  const params = [];
+  let pattern = String(rule.source || '')
+    .replace(/\\\./g, '\u0000DOT')
+    .replace(/:([A-Za-z_][A-Za-z0-9_]*)(\*)?/g, (match, name, star) => {
+      params.push({ name, rest: Boolean(star) });
+      return `\u0000P${params.length - 1}`;
+    })
+    .replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    .replace(/\u0000DOT/g, '\\.');
+  for (let index = params.length - 1; index >= 0; index -= 1) {
+    pattern = pattern.replace(`\u0000P${index}`, params[index].rest ? '(.*)' : '([^/]+)');
+  }
+  return {
+    matcher: new RegExp(`^${pattern}$`),
+    params,
+    destination: String(rule.destination || ''),
+  };
+}
+const VERCEL_REWRITES = (() => {
+  try {
+    const config = JSON.parse(readFileSync(join(ROOT, 'vercel.json'), 'utf8'));
+    return (config.rewrites || []).map((rule) => compileVercelRewrite(rule));
+  } catch {
+    return [];
+  }
+})();
+/**
+ * The first matching vercel.json rewrite destination for a request path, e.g.
+ * `/v/1.13.0/js/ui/HUD.js` → `/js/ui/HUD.js`; null when no rewrite matches.
+ * @param {string} pathname
+ * @returns {string|null}
+ */
+function resolveVercelRewrite(pathname) {
+  for (const rule of VERCEL_REWRITES) {
+    const match = rule.matcher.exec(pathname);
+    if (!match) continue;
+    let destination = rule.destination;
+    rule.params.forEach((param, index) => {
+      const value = match[index + 1] ?? '';
+      destination = destination.replace(param.rest ? `:${param.name}*` : `:${param.name}`, value);
+    });
+    return destination;
+  }
+  return null;
+}
 const server = createServer(async (req, res) => {
   try {
     const url = new URL(req.url, 'http://localhost');
-    let file = decodeURIComponent(url.pathname);
+    const rewritten = resolveVercelRewrite(url.pathname);
+    let file = decodeURIComponent(rewritten || url.pathname);
     if (file === '/') file = '/index.html';
     if (file === '/favicon.ico') {
       res.writeHead(204);
