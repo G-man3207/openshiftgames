@@ -10916,14 +10916,16 @@ await runSection('qa-issue44-49', async () => {
     '#44: the leading-flag patch really applies (Deployment shows 2/2 replicas)',
     result.message
   );
-  result = await runCmd(
-    'oc -n openshift-monitoring exec alertmanager-main-0 -- amtool alert --alertmanager.url=http://localhost:9093'
-  );
+  // #62A: an unmodelled container binary must be a real not-found failure, so
+  // the leading-global-flag proof uses a genuinely modelled binary (`hostname`)
+  // instead of asserting the old fake `(command executed in …)` / `exit code 0`
+  // fallback that the amtool call used to hit.
+  result = await runCmd('oc -n qa2 exec deploy/web -- hostname');
   assert(
     !result.error &&
       !/internal command failure/i.test(result.message) &&
-      /exit code 0/.test(result.message),
-    '#44: `oc -n <ns> exec … -- amtool …` runs the container command',
+      /^web-[a-z0-9]+-[a-z0-9]+$/.test(result.message.trim()),
+    '#44: `oc -n <ns> exec deploy/web -- hostname` runs the modelled container command with the leading global flag',
     result.message.slice(0, 320)
   );
   // Acceptance: the trailing `-n` placement keeps working.
@@ -15721,10 +15723,13 @@ await runSection('qa-issue59-60', async () => {
   result = await runCmd('oc describe svc dns-default -n openshift-dns');
   const describeDns = result.message;
   const dnsBlocks = describePortBlocks(describeDns);
+  // #62E: the 4.22 dns-default Service keeps NAMED targetPorts (`dns`,
+  // `dns-tcp`, `metrics`); `oc describe` prints TargetPort: <name>/<protocol>
+  // while the EndpointSlice ports stay the resolved 5353/5353/9154 numbers.
   const dnsExpectedPorts = [
-    { header: 'Port: dns 53/UDP', target: '5353', endpointPort: '5353' },
-    { header: 'Port: dns-tcp 53/TCP', target: '5353', endpointPort: '5353' },
-    { header: 'Port: metrics 9154/TCP', target: '9154', endpointPort: '9154' },
+    { header: 'Port: dns 53/UDP', target: 'dns', endpointPort: '5353' },
+    { header: 'Port: dns-tcp 53/TCP', target: 'dns-tcp', endpointPort: '5353' },
+    { header: 'Port: metrics 9154/TCP', target: 'metrics', endpointPort: '9154' },
   ];
   const dnsPodIPs = await evaluate(() =>
     (window.game?.cluster?.getByKindAndNamespace?.('Pod', 'openshift-dns') || [])
@@ -16052,6 +16057,888 @@ await runSection('qa-issue59-60', async () => {
       /error: timed out waiting for the condition/.test(result.message),
     '#60: an unchained `; echo AFTER` still runs after the timed-out rollout status (real shell exit-status semantics)',
     JSON.stringify({ error: result.error, message: result.message.slice(0, 900) })
+  );
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 10c. QA ROUND #61–#62 — NetworkPolicy-aware DNS, honest exec exit codes,
+//      OpenShift pod network / kubelet hosts / RBAC / describe fidelity
+// ═══════════════════════════════════════════════════════════════════════════
+await runSection('qa-issue61-62', async () => {
+  let result;
+  let row;
+  const projectName = 'qa8';
+  const canonicalWeb = `web.${projectName}.svc.cluster.local`;
+  const expectedDnsServiceIp = '172.30.0.10';
+
+  /** Advance the simulation AND incident clocks deterministically (0.05 s). */
+  const advanceBoth = async (seconds) =>
+    evaluate((secs) => {
+      const sim = window.game?.gameEngine?.simulation;
+      const engine = window.game?.incidentEngine;
+      if (!sim || typeof sim.tick !== 'function') return false;
+      const steps = Math.ceil(secs / 0.05);
+      for (let index = 0; index < steps; index += 1) {
+        sim.tick(0.05);
+        if (engine && typeof engine.tick === 'function') engine.tick(0.05);
+      }
+      return true;
+    }, seconds);
+  /** Advance both clocks until predicate() is true, or exhaust maxSeconds. */
+  const advanceUntil = async (predicate, maxSeconds = 60, step = 2) => {
+    for (let played = 0; played < maxSeconds; played += step) {
+      await advanceBoth(step);
+      if (await predicate()) return true;
+    }
+    return false;
+  };
+  /** Split an oc tabwriter table into header cells + rows (2+ space columns). */
+  const tableParts = (message) => {
+    const lines = String(message ?? '')
+      .split('\n')
+      .filter((line) => line.trim() !== '');
+    return {
+      headers: (lines[0] || '').split(/\s{2,}/).map((cell) => cell.trim()),
+      rows: lines.slice(1).map((line) => line.split(/\s{2,}/).map((cell) => cell.trim())),
+    };
+  };
+  const columnIndex = (section, header) => (section ? section.headers.indexOf(header) : -1);
+  const escapeRe = (text) => String(text).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  /** Position-aware tabwriter table that preserves EMPTY columns (`-o wide`). */
+  const tabwriterTable = (message) => {
+    const lines = String(message ?? '')
+      .split('\n')
+      .filter((line) => line.trim() !== '');
+    const headerLine = lines[0] || '';
+    const headers = headerLine
+      .split(/\s{2,}/)
+      .map((cell) => cell.trim())
+      .filter(Boolean);
+    const starts = [];
+    let searchFrom = 0;
+    for (const header of headers) {
+      const at = headerLine.indexOf(header, searchFrom);
+      starts.push(at < 0 ? searchFrom : at);
+      searchFrom = (at < 0 ? searchFrom : at) + header.length;
+    }
+    const rows = lines
+      .slice(1)
+      .map((line) =>
+        headers.map((header, index) =>
+          line
+            .slice(starts[index], index + 1 < starts.length ? starts[index + 1] : line.length)
+            .trim()
+        )
+      );
+    return { headers, rows };
+  };
+  const rowNamed = (section, name) => section.rows.find((cells) => cells[0] === name) || [];
+  const cellOf = (section, cells, header) => {
+    const at = columnIndex(section, header);
+    return at >= 0 ? cells[at] || '' : '';
+  };
+  const ipToInt = (value) =>
+    String(value)
+      .split('.')
+      .reduce((accumulator, octet) => accumulator * 256 + Number(octet), 0);
+  const ipInCidr = (ip, cidr) => {
+    const [network, prefixRaw] = String(cidr || '').split('/');
+    const prefix = Number(prefixRaw);
+    if (!ip || !network || !Number.isFinite(prefix)) return false;
+    const block = 2 ** (32 - prefix);
+    return Math.floor(ipToInt(ip) / block) === Math.floor(ipToInt(network) / block);
+  };
+  const isPodNetworkIp = (ip) => /^10\.(?:12[89]|13[01])\.\d{1,3}\.\d{1,3}$/.test(String(ip ?? ''));
+  /** Per-port blocks of `oc describe svc` (Port:/TargetPort:/Endpoints: groups). */
+  const describePortBlocks = (message) => {
+    const blocks = [];
+    let current = null;
+    for (const line of String(message ?? '').split('\n')) {
+      if (/^Port:\s/.test(line)) {
+        current = { header: line, lines: [] };
+        blocks.push(current);
+        continue;
+      }
+      if (current) current.lines.push(line);
+    }
+    return blocks;
+  };
+  const describeField = (block, field) => {
+    const prefix = new RegExp(`^\\s*${field}:\\s*`);
+    const line = (block?.lines || []).find((candidate) => prefix.test(candidate));
+    return line ? line.replace(prefix, '').trim() : '';
+  };
+  const normalizeDescribeLine = (line) =>
+    String(line ?? '')
+      .replace(/\s+/g, ' ')
+      .trim();
+  const podRows = async (namespace) => {
+    const out = await runCmd(`oc get pods -n ${namespace}`);
+    return tableParts(out.message).rows.map((cells) => ({
+      name: cells[0] || '',
+      ready: cells[1] || '',
+      status: cells[2] || '',
+    }));
+  };
+  /** `oc get pods -o wide` rows keyed by header (position-aware). */
+  const podWide = async (namespace) =>
+    tabwriterTable((await runCmd(`oc get pods -o wide -n ${namespace}`)).message);
+  /** Write a manifest into the simulator filesystem and `oc apply` it. */
+  const applyManifest = async (fileName, lines, namespace = projectName) => {
+    const content = Array.isArray(lines) ? lines.join('\n') : String(lines);
+    await evaluate(({ name, text }) => window.game.manifestEngine.writeFile(name, text), {
+      name: fileName,
+      text: content,
+    });
+    return runCmd(`oc apply -f ${fileName}${namespace ? ` -n ${namespace}` : ''}`);
+  };
+
+  // ═══ Fixture: fresh sandbox → qa8 web Deployment + ClusterIP Service ═════
+  // The sandbox seeds random container failures (randomFailureRate 0.002, i.e.
+  // ~0.65 failures per 90 s of ticks). This section asserts EXACT output
+  // fidelity (e.g. the dns-default EndpointSlice has one pair per DNS Pod), so
+  // disable random failures for its duration: one transiently failed platform
+  // Pod must not turn a real contract into a flake. Nothing after this section
+  // depends on random failures (only draw/shots follow, and they reload).
+  const booted = await bootSandbox();
+  const randomFailuresOff =
+    booted &&
+    (await evaluate(() => {
+      const sim = window.game?.gameEngine?.simulation;
+      if (!sim) return false;
+      sim.randomFailureRate = 0;
+      return sim.randomFailureRate === 0;
+    }));
+  assert(
+    booted && randomFailuresOff,
+    '#61/#62: a fresh sandbox boots for the DNS/exec/pod-network fidelity checks (random failures disabled for deterministic output)'
+  );
+  result = await runCmd(`oc new-project ${projectName}`);
+  assert(
+    !result.error && /Now using project "qa8"/.test(result.message),
+    '#61/#62: `oc new-project qa8` creates the project used by every #61/#62 check',
+    result.message.slice(0, 300)
+  );
+  result = await runCmd(
+    `oc create deployment web --image=registry.access.redhat.com/ubi9/httpd-24 --replicas=2 -n ${projectName}`
+  );
+  assert(
+    !result.error && /deployment\.apps\/web created/.test(result.message),
+    '#61/#62: `oc create deployment web` creates the two-replica fixture',
+    result.message.slice(0, 300)
+  );
+  const webPodsRunning = await advanceUntil(async () => {
+    const pods = await podRows(projectName);
+    return (
+      pods.filter((pod) => /^web-/.test(pod.name)).length === 2 &&
+      pods.every(
+        (pod) => !/^web-/.test(pod.name) || (pod.ready === '1/1' && pod.status === 'Running')
+      )
+    );
+  }, 40);
+  assert(webPodsRunning, '#61/#62: the two qa8 web Pods reach Running 1/1');
+  result = await runCmd(`oc expose deploy/web --port=8080 -n ${projectName}`);
+  assert(
+    !result.error && /service\/web exposed/.test(result.message),
+    '#61/#62: `oc expose deploy/web --port=8080` creates the ClusterIP Service',
+    result.message.slice(0, 300)
+  );
+  await advanceBoth(3);
+
+  result = await runCmd(`oc get svc web -n ${projectName}`);
+  const serviceTable = tableParts(result.message);
+  row = rowNamed(serviceTable, 'web');
+  const webClusterIP = cellOf(serviceTable, row, 'CLUSTER-IP');
+  assert(
+    !result.error && /^172\.30\.\d+\.\d+$/.test(webClusterIP),
+    '#61/#62: the fixture Service has a real 172.30.x.y ClusterIP',
+    JSON.stringify({ headers: serviceTable.headers, row })
+  );
+
+  // ═══ Round 1: #62B — OpenShift pod network (10.128.0.0/14, /23 podCIDRs) ══
+  result = await runCmd('oc get nodes -o json');
+  let nodeCidrs = new Map();
+  try {
+    const nodesJson = JSON.parse(result.message);
+    nodeCidrs = new Map(
+      (nodesJson.items || []).map((node) => [node.metadata?.name, node.spec?.podCIDR || ''])
+    );
+  } catch {
+    nodeCidrs = new Map();
+  }
+  const nodeCidrCount = [...nodeCidrs.values()].filter(Boolean).length;
+
+  let webWide = await podWide(projectName);
+  let webWideRows = webWide.rows.filter((cells) => /^web-/.test(cells[0] || ''));
+  const webPodNames = webWideRows.map((cells) => cells[0]);
+  const webPodIps = webWideRows.map((cells) => cellOf(webWide, cells, 'IP'));
+  assert(
+    !result.error &&
+      nodeCidrCount === 3 &&
+      webWideRows.length === 2 &&
+      webPodIps.every((ip) => isPodNetworkIp(ip)) &&
+      webWideRows.every((cells) => {
+        const node = cellOf(webWide, cells, 'NODE');
+        return ipInCidr(cellOf(webWide, cells, 'IP'), nodeCidrs.get(node));
+      }),
+    '#62B: every qa8 web Pod IP is in 10.128–10.131 and inside its Node spec.podCIDR',
+    JSON.stringify({ nodeCidrs: [...nodeCidrs.entries()], rows: webWideRows })
+  );
+
+  let dnsWide = await podWide('openshift-dns');
+  let dnsWideRows = dnsWide.rows.filter((cells) => /^dns-default-/.test(cells[0] || ''));
+  const dnsPodIps = dnsWideRows.map((cells) => cellOf(dnsWide, cells, 'IP'));
+  assert(
+    dnsWideRows.length === 3 &&
+      dnsPodIps.every((ip) => isPodNetworkIp(ip)) &&
+      dnsWideRows.every((cells) => {
+        const node = cellOf(dnsWide, cells, 'NODE');
+        return ipInCidr(cellOf(dnsWide, cells, 'IP'), nodeCidrs.get(node));
+      }),
+    '#62B: the dns-default Pod IPs are in 10.128–10.131 and inside their Node spec.podCIDR',
+    JSON.stringify({ dnsPodIps, rows: dnsWideRows })
+  );
+
+  result = await runCmd('oc get pods -o wide --all-namespaces');
+  const allPodsWide = tabwriterTable(result.message);
+  const visiblePodIps = allPodsWide.rows
+    .map((cells) => cellOf(allPodsWide, cells, 'IP'))
+    .filter((ip) => /^10\.\d+\.\d+\.\d+$/.test(ip));
+  assert(
+    !result.error && visiblePodIps.length > 0 && visiblePodIps.every((ip) => isPodNetworkIp(ip)),
+    '#62B: no visible Pod IP uses the old 10.244.x.x pod range (`oc get pods -o wide --all-namespaces`)',
+    JSON.stringify(visiblePodIps)
+  );
+
+  const generatedIps = await evaluate(() => {
+    const sim = window.game?.gameEngine?.simulation;
+    if (!sim || typeof sim._generatePodIP !== 'function') return null;
+    return {
+      noNode: sim._generatePodIP(),
+      unknownNode: sim._generatePodIP('node-that-does-not-exist'),
+      byNodeName: (window.game.cluster.getByKind('Node') || []).slice(0, 1).map((node) => ({
+        name: node.metadata?.name,
+        cidr: node.spec?.podCIDR || '',
+        ip: sim._generatePodIP(node.metadata?.name),
+      })),
+    };
+  });
+  assert(
+    generatedIps &&
+      isPodNetworkIp(generatedIps.noNode) &&
+      isPodNetworkIp(generatedIps.unknownNode) &&
+      generatedIps.byNodeName.every(
+        (entry) => isPodNetworkIp(entry.ip) && ipInCidr(entry.ip, entry.cidr)
+      ),
+    '#62B: `_generatePodIP` without Node/CIDR info falls back to 10.128–10.131 (never 10.244), and a Node name resolves inside its podCIDR',
+    JSON.stringify(generatedIps)
+  );
+
+  // ═══ Round 2: #62A — honest `oc exec` / `oc rsh` exit codes ══════════════
+  result = await runCmd(`oc exec deploy/web -n ${projectName} -- foobar --x`);
+  const notFoundMessage = result.message;
+  assert(
+    result.error === true &&
+      /error: Internal error occurred:/.test(notFoundMessage) &&
+      /exec: "foobar": executable file not found in \$PATH/.test(notFoundMessage) &&
+      /command terminated with exit code 127\s*$/.test(notFoundMessage) &&
+      !/\(command executed in /.test(notFoundMessage) &&
+      !/exit code 0/.test(notFoundMessage),
+    '#62A: `oc exec … -- foobar` fails with the OCI-runtime not-found wording + exit 127 (no fake `exit code 0` lines)',
+    notFoundMessage.slice(0, 600)
+  );
+  result = await runCmd(`oc exec deploy/web -n ${projectName} -- foobar && echo AFTER`);
+  assert(
+    result.error === true && !/AFTER/.test(result.message),
+    '#62A: the not-found exec exits non-zero, so a chained `&& echo AFTER` never runs',
+    JSON.stringify({ error: result.error, message: result.message.slice(0, 500) })
+  );
+  result = await runCmd(`oc exec deploy/web -n ${projectName} -- foobar || echo RECOVERED`);
+  assert(
+    !result.error && /RECOVERED/.test(result.message),
+    '#62A: the not-found exec failure runs a following `|| echo RECOVERED` branch (shell exit-status semantics)',
+    JSON.stringify({ error: result.error, message: result.message.slice(0, 500) })
+  );
+  result = await runCmd(`oc exec deploy/web -n ${projectName} -- amtool alert`);
+  assert(
+    result.error === true &&
+      /command terminated with exit code 127\s*$/.test(result.message) &&
+      /executable file not found in \$PATH/.test(result.message) &&
+      !/exit code 0/.test(result.message),
+    '#62A: any other unmodelled container binary (amtool) is also a real not-found failure, not a fake success',
+    result.message.slice(0, 600)
+  );
+  result = await runCmd(`oc rsh -n ${projectName} deploy/web foobar`);
+  assert(
+    result.error === true &&
+      /error: Internal error occurred:/.test(result.message) &&
+      /command terminated with exit code 127\s*$/.test(result.message),
+    '#62A: `oc rsh` shares the remote exit-status contract for an unmodelled binary',
+    result.message.slice(0, 600)
+  );
+  result = await runCmd(`oc rsh -n ${projectName} deploy/web foobar || echo RSH_RECOVERED`);
+  assert(
+    !result.error && /RSH_RECOVERED/.test(result.message),
+    '#62A: the failed `oc rsh` runs a following `||` recovery branch',
+    JSON.stringify({ error: result.error, message: result.message.slice(0, 500) })
+  );
+  result = await runCmd(`oc exec deploy/web -n ${projectName} -- hostname`);
+  const chosenWebPod = result.message.trim();
+  assert(
+    !result.error && webPodNames.includes(chosenWebPod),
+    '#62A: modelled `hostname` still runs and prints the exec Pod name',
+    JSON.stringify({ chosenWebPod, webPodNames })
+  );
+  const chosenWebRow = webWide.rows.find((cells) => cells[0] === chosenWebPod) || [];
+  const chosenWebIp = cellOf(webWide, chosenWebRow, 'IP');
+  result = await runCmd(`oc exec pod/${chosenWebPod} -n ${projectName} -- /bin/cat /etc/hostname`);
+  assert(
+    !result.error && result.message.trim() === chosenWebPod,
+    '#62A: a basename-matched modelled binary (`/bin/cat`) still works',
+    result.message.slice(0, 300)
+  );
+  result = await runCmd(`oc exec deploy/web -n ${projectName} -- sh -c "echo SHELL_OK"`);
+  assert(
+    !result.error && /SHELL_OK/.test(result.message),
+    '#62A: `sh -c "…"` unwraps and runs like the real container shell no-op',
+    result.message.slice(0, 300)
+  );
+
+  // ═══ Round 3: #62C — kubelet-managed /etc/hosts ══════════════════════════
+  result = await runCmd(`oc exec pod/${chosenWebPod} -n ${projectName} -- cat /etc/hosts`);
+  const expectedHostsFile = [
+    '# Kubernetes-managed hosts file.',
+    '127.0.0.1\tlocalhost',
+    '::1\tlocalhost ip6-localhost ip6-loopback',
+    'fe00::0\tip6-localnet',
+    'fe00::0\tip6-mcastprefix',
+    'fe00::1\tip6-allnodes',
+    'fe00::2\tip6-allrouters',
+    `${chosenWebIp}\t${chosenWebPod}`,
+  ].join('\n');
+  assert(
+    !result.error && result.message.replace(/\n$/, '') === expectedHostsFile,
+    '#62C: Pod /etc/hosts is the exact kubelet-managed file (header + loopback lines + own podIP/pod name)',
+    JSON.stringify(result.message)
+  );
+  assert(
+    !/172\.30\.0\.1/.test(result.message) && !/kubernetes\.default\.svc/.test(result.message),
+    '#62C: /etc/hosts carries no `172.30.0.1 kubernetes.default.svc` (or other) Service entry',
+    result.message.slice(0, 600)
+  );
+
+  // ═══ Round 4: #62D — rolebinding -o wide SERVICEACCOUNTS namespace/name ══
+  result = await runCmd(`oc get rolebinding -o wide -n ${projectName}`);
+  const roleBindingWide = tabwriterTable(result.message);
+  const serviceAccountsAt = columnIndex(roleBindingWide, 'SERVICEACCOUNTS');
+  const deployersRow = rowNamed(roleBindingWide, 'system:deployers');
+  const buildersRow = rowNamed(roleBindingWide, 'system:image-builders');
+  const allServiceAccountCells = roleBindingWide.rows
+    .map((cells) => cellOf(roleBindingWide, cells, 'SERVICEACCOUNTS'))
+    .filter(Boolean);
+  assert(
+    !result.error &&
+      serviceAccountsAt >= 0 &&
+      cellOf(roleBindingWide, deployersRow, 'SERVICEACCOUNTS') === 'qa8/deployer' &&
+      cellOf(roleBindingWide, buildersRow, 'SERVICEACCOUNTS') === 'qa8/builder' &&
+      allServiceAccountCells.every(
+        (cell) => /^[a-z0-9][a-z0-9-]*\/[A-Za-z0-9:._-]+$/.test(cell) && !cell.startsWith('/')
+      ),
+    '#62D: `oc get rolebinding -o wide` prints SERVICEACCOUNTS as `namespace/name` (qa8/deployer, qa8/builder, no leading `/`)',
+    JSON.stringify({
+      headers: roleBindingWide.headers,
+      deployers: deployersRow,
+      builders: buildersRow,
+    })
+  );
+  const adminRow = rowNamed(roleBindingWide, 'admin');
+  const pullersRow = rowNamed(roleBindingWide, 'system:image-pullers');
+  assert(
+    cellOf(roleBindingWide, adminRow, 'USERS') === 'kubeadmin' &&
+      cellOf(roleBindingWide, pullersRow, 'GROUPS') === 'system:serviceaccounts:qa8' &&
+      cellOf(roleBindingWide, deployersRow, 'USERS') === '' &&
+      cellOf(roleBindingWide, deployersRow, 'GROUPS') === '',
+    '#62D: the USERS/GROUPS columns stay unchanged while only ServiceAccount subjects get the namespace prefix',
+    JSON.stringify({
+      admin: adminRow,
+      pullers: pullersRow,
+      deployers: deployersRow,
+    })
+  );
+
+  // ═══ Round 5: #62E — named dns-default targetPorts, unchanged endpoints ══
+  result = await runCmd('oc get svc dns-default -n openshift-dns -o json');
+  let dnsServicePorts = [];
+  try {
+    dnsServicePorts = JSON.parse(result.message).spec?.ports || [];
+  } catch {
+    dnsServicePorts = [];
+  }
+  assert(
+    !result.error &&
+      JSON.stringify(
+        dnsServicePorts.map((port) => ({
+          name: port.name,
+          port: port.port,
+          protocol: port.protocol,
+          targetPort: port.targetPort,
+        }))
+      ) ===
+        JSON.stringify([
+          { name: 'dns', port: 53, protocol: 'UDP', targetPort: 'dns' },
+          { name: 'dns-tcp', port: 53, protocol: 'TCP', targetPort: 'dns-tcp' },
+          { name: 'metrics', port: 9154, protocol: 'TCP', targetPort: 'metrics' },
+        ]),
+    '#62E: dns-default Service spec ports keep the real NAMED targetPorts (dns/dns-tcp/metrics) with 53/UDP, 53/TCP, 9154/TCP',
+    JSON.stringify(dnsServicePorts)
+  );
+  result = await runCmd('oc describe svc dns-default -n openshift-dns');
+  const dnsDescribeBlocks = describePortBlocks(result.message);
+  const dnsDescribeTargetPorts = dnsDescribeBlocks.map((block) =>
+    normalizeDescribeLine(describeField(block, 'TargetPort'))
+  );
+  assert(
+    !result.error &&
+      dnsDescribeBlocks.length === 3 &&
+      JSON.stringify(dnsDescribeTargetPorts) ===
+        JSON.stringify(['dns/UDP', 'dns-tcp/TCP', 'metrics/TCP']),
+    '#62E: `oc describe svc dns-default` prints TargetPort dns/UDP, dns-tcp/TCP, metrics/TCP',
+    JSON.stringify({
+      blocks: dnsDescribeBlocks.map((block) => normalizeDescribeLine(block.header)),
+      targetPorts: dnsDescribeTargetPorts,
+    })
+  );
+  const expectedDnsEndpointPorts = ['5353', '5353', '9154'];
+  assert(
+    !result.error &&
+      dnsDescribeBlocks.length === 3 &&
+      dnsDescribeBlocks.every((block, index) => {
+        const pairs = (describeField(block, 'Endpoints') || '')
+          .split(',')
+          .map((entry) => entry.trim())
+          .filter(Boolean);
+        return (
+          pairs.length === dnsPodIps.length &&
+          pairs.every((pair) => {
+            const match = pair.match(/^(10\.(?:12[89]|13[01])\.\d+\.\d+):(\d+)$/);
+            return (
+              Boolean(match) &&
+              dnsPodIps.includes(match[1]) &&
+              match[2] === expectedDnsEndpointPorts[index]
+            );
+          })
+        );
+      }),
+    '#62E: named dns-default targetPorts resolve to the real endpoint ports 5353/5353/9154 (never the sidecar 9153 mismatch)',
+    JSON.stringify({
+      endpoints: dnsDescribeBlocks.map((block) => describeField(block, 'Endpoints')),
+      dnsPodIps,
+    })
+  );
+  result = await runCmd('oc get endpoints dns-default -n openshift-dns -o json');
+  let dnsEndpointSubsets = [];
+  try {
+    dnsEndpointSubsets = JSON.parse(result.message).subsets || [];
+  } catch {
+    dnsEndpointSubsets = [];
+  }
+  const dnsEndpointIpSet = [
+    ...new Set(
+      dnsEndpointSubsets.flatMap((subset) => (subset.addresses || []).map((address) => address.ip))
+    ),
+  ];
+  assert(
+    !result.error &&
+      JSON.stringify(
+        dnsEndpointSubsets.map((subset) => ({
+          port: subset.ports?.[0]?.port,
+          protocol: subset.ports?.[0]?.protocol,
+        }))
+      ) ===
+        JSON.stringify([
+          { port: 5353, protocol: 'UDP' },
+          { port: 5353, protocol: 'TCP' },
+          { port: 9154, protocol: 'TCP' },
+        ]) &&
+      dnsEndpointIpSet.length === dnsPodIps.length &&
+      dnsEndpointIpSet.every((ip) => dnsPodIps.includes(ip) && isPodNetworkIp(ip)),
+    '#62E: the Endpoints object keeps 5353/UDP, 5353/TCP, 9154/TCP with the 10.128–10.131 dns-default Pod IPs',
+    JSON.stringify({
+      subsets: dnsEndpointSubsets.map((subset) => ({
+        port: subset.ports,
+        addresses: (subset.addresses || []).map((address) => address.ip),
+      })),
+    })
+  );
+  result = await runCmd('oc get endpoints -n openshift-dns');
+  const dnsEndpointsTable = tabwriterTable(result.message);
+  const dnsEndpointsCell = cellOf(
+    dnsEndpointsTable,
+    rowNamed(dnsEndpointsTable, 'dns-default'),
+    'ENDPOINTS'
+  );
+  assert(
+    !result.error &&
+      /^(?:10\.(?:12[89]|13[01])\.\d+\.\d+:5353,){2}10\.(?:12[89]|13[01])\.\d+\.\d+:5353 \+ \d+ more\.\.\.$/.test(
+        dnsEndpointsCell
+      ),
+    '#62E: `oc get endpoints -n openshift-dns` lists three 10.128–10.131 :5353 pairs then " + N more..."',
+    JSON.stringify(dnsEndpointsCell)
+  );
+
+  // ═══ Round 6: #62F — describe Events placeholder tabwriter alignment ═════
+  result = await runCmd(`oc describe svc web -n ${projectName}`);
+  const describeWebMessage = result.message;
+  const eventsLine = (describeWebMessage.match(/^Events:.*$/m) || [''])[0];
+  const eventsSpaces = (eventsLine.match(/^Events:( +)<none>$/) || [])[1] || '';
+  assert(
+    !result.error && eventsSpaces.length === 12,
+    '#62F: `oc describe svc web` Events placeholder aligns like kubectl (exactly 12 spaces after `Events:`)',
+    JSON.stringify({ eventsLine, spaces: eventsSpaces.length })
+  );
+
+  // ═══ Round 7: #61 — baseline cluster DNS + dig/nslookup/getent formats ═════
+  result = await runCmd(`oc exec deploy/web -n ${projectName} -- nslookup ${canonicalWeb}`);
+  assert(
+    !result.error &&
+      new RegExp(`^Name:\\t${escapeRe(canonicalWeb)}\\s*$`, 'm').test(result.message) &&
+      new RegExp(`^Address:\\s+${escapeRe(webClusterIP)}\\s*$`, 'm').test(result.message) &&
+      !/172\.30\.43\.12/.test(result.message),
+    '#61: `nslookup <fqdn>` resolves to the Service ClusterIP (never the fabricated 172.30.43.12)',
+    result.message.slice(0, 500)
+  );
+  result = await runCmd(`oc exec deploy/web -n ${projectName} -- nslookup web`);
+  assert(
+    !result.error &&
+      new RegExp(`^Name:\\t${escapeRe(canonicalWeb)}\\s*$`, 'm').test(result.message) &&
+      new RegExp(`^Address:\\s+${escapeRe(webClusterIP)}\\s*$`, 'm').test(result.message),
+    '#61 #62-1: `nslookup web` resolves through the Pod search list and prints the canonical FQDN in Name:',
+    result.message.slice(0, 500)
+  );
+  result = await runCmd(`oc exec deploy/web -n ${projectName} -- dig +short ${canonicalWeb}`);
+  assert(
+    !result.error && result.message.trim() === webClusterIP,
+    '#61: `dig +short <fqdn>` prints just the real Service ClusterIP',
+    result.message.replace(/\n/g, ' ⏎ ').slice(0, 300)
+  );
+  result = await runCmd(`oc exec deploy/web -n ${projectName} -- dig ${canonicalWeb}`);
+  const digPlainMessage = result.message;
+  assert(
+    !result.error &&
+      /^; <<>> DiG 9\.18\.28 <<>>/m.test(digPlainMessage) &&
+      /^;; ->>HEADER<<- opcode: QUERY, status: NOERROR/m.test(digPlainMessage) &&
+      /^;; QUESTION SECTION:/m.test(digPlainMessage) &&
+      /^;; ANSWER SECTION:/m.test(digPlainMessage) &&
+      new RegExp(
+        `^${escapeRe(canonicalWeb)}\\.\\s+30\\s+IN\\s+A\\s+${escapeRe(webClusterIP)}\\s*$`,
+        'm'
+      ).test(digPlainMessage) &&
+      new RegExp(
+        `^;; SERVER: ${escapeRe(expectedDnsServiceIp)}#53\\(${escapeRe(expectedDnsServiceIp)}\\) \\(UDP\\)\\s*$`,
+        'm'
+      ).test(digPlainMessage) &&
+      !/172\.30\.43\.12/.test(digPlainMessage) &&
+      !/^Name:\t/m.test(digPlainMessage),
+    '#61: plain `dig` prints its own DiG format (header/HEADER/QUESTION/ANSWER/SERVER) with the real answer',
+    digPlainMessage.slice(0, 900)
+  );
+  result = await runCmd(`oc exec deploy/web -n ${projectName} -- dig web`);
+  assert(
+    !result.error &&
+      /status:\s*NXDOMAIN/.test(result.message) &&
+      !result.message.includes(webClusterIP),
+    '#61: `dig web` does not apply the resolv.conf search list by default (NXDOMAIN, exit 0)',
+    result.message.slice(0, 900)
+  );
+  result = await runCmd(`oc exec deploy/web -n ${projectName} -- dig +search web`);
+  assert(
+    !result.error &&
+      /status:\s*NOERROR/.test(result.message) &&
+      new RegExp(`IN\\s+A\\s+${escapeRe(webClusterIP)}`).test(result.message),
+    '#61: `dig +search web` applies the Pod search list and answers the Service ClusterIP',
+    result.message.slice(0, 900)
+  );
+  result = await runCmd(`oc exec deploy/web -n ${projectName} -- getent hosts ${canonicalWeb}`);
+  const getentLine = result.message.trim();
+  const getentMatch = getentLine.match(/^(\S+)( +)(\S+)$/);
+  assert(
+    !result.error &&
+      Boolean(getentMatch) &&
+      getentMatch[1] === webClusterIP &&
+      getentMatch[2].length === 16 - webClusterIP.length &&
+      getentMatch[3] === canonicalWeb,
+    '#61: `getent hosts <fqdn>` prints glibc’s `%-15s %s` line (IP padded + one space + canonical name)',
+    JSON.stringify({ getentLine, expectedSpaces: 16 - webClusterIP.length })
+  );
+  result = await runCmd(`oc exec deploy/web -n ${projectName} -- getent hosts web`);
+  assert(
+    !result.error && result.message.trim().split(/\s+/).pop() === canonicalWeb,
+    '#61: `getent hosts web` resolves through the same search list and prints the canonical FQDN',
+    result.message.slice(0, 300)
+  );
+  result = await runCmd(
+    `oc exec deploy/web -n ${projectName} -- getent hosts does-not-exist.qa8.svc.cluster.local`
+  );
+  assert(
+    result.error === true &&
+      /command terminated with exit code 2\s*$/.test(result.message) &&
+      !result.message.includes(webClusterIP) &&
+      !/^Name:/m.test(result.message),
+    '#61: `getent hosts <unknown>` prints no answer and exits 2',
+    result.message.slice(0, 500)
+  );
+  result = await runCmd(
+    `oc exec deploy/web -n ${projectName} -- nslookup does-not-exist.qa8.svc.cluster.local`
+  );
+  assert(
+    result.error === true &&
+      /^\*\* server can't find does-not-exist\.qa8\.svc\.cluster\.local: NXDOMAIN\s*$/m.test(
+        result.message
+      ) &&
+      /command terminated with exit code 1\s*$/.test(result.message),
+    '#61: an unknown DNS name is NXDOMAIN and nslookup exits 1 (real nslookup status)',
+    result.message.slice(0, 500)
+  );
+
+  // ═══ Round 8: #61 item 9 — headless + ExternalName contracts ═════════════
+  result = await applyManifest('qa8-headless.yaml', [
+    'apiVersion: v1',
+    'kind: Service',
+    'metadata:',
+    '  name: web-headless',
+    '  namespace: qa8',
+    'spec:',
+    '  clusterIP: None',
+    '  selector:',
+    '    app: web',
+    '  ports:',
+    '    - port: 8080',
+    '      targetPort: 8080',
+  ]);
+  assert(
+    !result.error && /service\/web-headless created/.test(result.message),
+    '#61: applying a headless Service manifest (`clusterIP: None`) succeeds',
+    result.message.slice(0, 400)
+  );
+  result = await runCmd(
+    `oc exec deploy/web -n ${projectName} -- nslookup web-headless.qa8.svc.cluster.local`
+  );
+  const headlessAddresses = result.message
+    .split('\n')
+    .map((line) => line.trim())
+    // The server line `Address:\t172.30.0.10#53` is not an answer record.
+    .filter((line) => /^Address:\s+\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\s*$/.test(line))
+    .map((line) => line.replace(/^Address:\s*/, ''))
+    .filter(Boolean);
+  assert(
+    !result.error &&
+      headlessAddresses.length === 2 &&
+      JSON.stringify([...headlessAddresses].sort()) === JSON.stringify([...webPodIps].sort()) &&
+      headlessAddresses.every((ip) => isPodNetworkIp(ip)),
+    '#61: a headless Service answers every ready Pod IP as its own Address line',
+    JSON.stringify({ headlessAddresses, webPodIps })
+  );
+  result = await applyManifest('qa8-external.yaml', [
+    'apiVersion: v1',
+    'kind: Service',
+    'metadata:',
+    '  name: web-external',
+    '  namespace: qa8',
+    'spec:',
+    '  type: ExternalName',
+    '  externalName: example.com',
+  ]);
+  assert(
+    !result.error && /service\/web-external created/.test(result.message),
+    '#61: applying an ExternalName Service manifest succeeds',
+    result.message.slice(0, 400)
+  );
+  result = await runCmd(
+    `oc exec deploy/web -n ${projectName} -- nslookup web-external.qa8.svc.cluster.local`
+  );
+  assert(
+    !result.error &&
+      /^Name:\tweb-external\.qa8\.svc\.cluster\.local\s*$/m.test(result.message) &&
+      /^Address: example\.com\s*$/m.test(result.message),
+    '#61: an ExternalName Service answers the CNAME target',
+    result.message.slice(0, 500)
+  );
+
+  // ═══ Round 9: #61 items 1–4 — DNS blocked by the issue’s NetworkPolicies ═
+  result = await applyManifest('qa8-deny-egress.yaml', [
+    'apiVersion: networking.k8s.io/v1',
+    'kind: NetworkPolicy',
+    'metadata:',
+    '  name: deny-egress',
+    '  namespace: qa8',
+    'spec:',
+    '  podSelector: {}',
+    '  policyTypes:',
+    '    - Egress',
+  ]);
+  const denyResult = result;
+  result = await applyManifest('qa8-allow-same-ns.yaml', [
+    'apiVersion: networking.k8s.io/v1',
+    'kind: NetworkPolicy',
+    'metadata:',
+    '  name: allow-same-ns',
+    '  namespace: qa8',
+    'spec:',
+    '  podSelector: {}',
+    '  policyTypes:',
+    '    - Egress',
+    '  egress:',
+    '    - to:',
+    '        - podSelector: {}',
+  ]);
+  assert(
+    !denyResult.error &&
+      /networkpolicy\.networking\.k8s\.io\/deny-egress created/.test(denyResult.message) &&
+      !result.error &&
+      /networkpolicy\.networking\.k8s\.io\/allow-same-ns created/.test(result.message),
+    '#61: the issue’s deny-egress + allow-same-ns policies apply in qa8',
+    JSON.stringify({ deny: denyResult.message, sameNs: result.message })
+  );
+  await advanceBoth(5);
+
+  result = await runCmd(`oc exec deploy/web -n ${projectName} -- curl -sv -m 3 http://web:8080`);
+  assert(
+    !/\*   Trying/.test(result.message) &&
+      !/\* Connected/.test(result.message) &&
+      /^\* Could not resolve host: web\s*$/m.test(result.message) &&
+      /^curl: \(6\) Could not resolve host: web\s*$/m.test(result.message),
+    '#61: with DNS egress blocked, `curl -sv` has no Trying/Connected lines and reports the real (6) resolve failure',
+    result.message.slice(0, 600)
+  );
+  result = await runCmd(
+    `oc exec deploy/web -n ${projectName} -- curl -s -o /dev/null -w "%{http_code}" http://${webClusterIP}:8080`
+  );
+  assert(
+    !result.error && result.message.trim() === '200',
+    '#61: an in-namespace curl to the numeric ClusterIP still reaches the Service (200) while DNS is blocked',
+    result.message.replace(/\n/g, ' ⏎ ').slice(0, 300)
+  );
+  result = await runCmd(`oc get svc router-internal-default -n openshift-ingress`);
+  const routerTable = tableParts(result.message);
+  const routerClusterIP = cellOf(
+    routerTable,
+    rowNamed(routerTable, 'router-internal-default'),
+    'CLUSTER-IP'
+  );
+  result = await runCmd(
+    `oc exec deploy/web -n ${projectName} -- curl -sv -m 3 http://${routerClusterIP}:80`
+  );
+  assert(
+    /^172\.30\.\d+\.\d+$/.test(routerClusterIP) &&
+      new RegExp(`^\\*   Trying ${escapeRe(routerClusterIP)}:80\\.\\.\\.$`, 'm').test(
+        result.message
+      ) &&
+      !/\* Connected/.test(result.message) &&
+      /curl: \(28\) Connection timed out/.test(result.message),
+    '#61: a blocked connection after a resolved numeric address keeps curl’s real order (Trying then (28), never Connected)',
+    result.message.slice(0, 600)
+  );
+  result = await runCmd(`oc exec deploy/web -n ${projectName} -- nslookup ${canonicalWeb}`);
+  assert(
+    result.error === true &&
+      /^;; connection timed out; no servers could be reached\s*$/m.test(result.message) &&
+      /command terminated with exit code 1\s*$/.test(result.message) &&
+      !/^Server:/m.test(result.message) &&
+      !/^Address:/m.test(result.message) &&
+      !/^Name:/m.test(result.message),
+    '#61: a DNS-blocked `nslookup` prints the real timeout line only and exits 1',
+    result.message.slice(0, 600)
+  );
+  result = await runCmd(`oc exec deploy/web -n ${projectName} -- dig +short ${canonicalWeb}`);
+  assert(
+    result.error === true &&
+      /^;; connection timed out; no servers could be reached\s*$/m.test(result.message) &&
+      /command terminated with exit code 9\s*$/.test(result.message) &&
+      !result.message.includes(webClusterIP),
+    '#61: a DNS-blocked `dig +short` prints the same timeout line, no answer, and exits 9',
+    result.message.slice(0, 600)
+  );
+  result = await runCmd(`oc exec deploy/web -n ${projectName} -- dig ${canonicalWeb}`);
+  assert(
+    result.error === true &&
+      /^;; connection timed out; no servers could be reached\s*$/m.test(result.message) &&
+      /command terminated with exit code 9\s*$/.test(result.message),
+    '#61: a DNS-blocked plain `dig` also exits 9 with the timeout line (no fabricated answer section)',
+    result.message.slice(0, 600)
+  );
+  result = await runCmd(`oc exec deploy/web -n ${projectName} -- getent hosts ${canonicalWeb}`);
+  assert(
+    result.error === true &&
+      /command terminated with exit code 2\s*$/.test(result.message) &&
+      !result.message.includes(webClusterIP) &&
+      !result.message.includes(canonicalWeb),
+    '#61: a DNS-blocked `getent hosts` is silent and exits 2',
+    result.message.slice(0, 500)
+  );
+
+  // ═══ Round 10: #61 item 5 — allow-dns-egress on 5353 restores all four ═══
+  result = await applyManifest('qa8-allow-dns-egress.yaml', [
+    'apiVersion: networking.k8s.io/v1',
+    'kind: NetworkPolicy',
+    'metadata:',
+    '  name: allow-dns-egress',
+    '  namespace: qa8',
+    'spec:',
+    '  podSelector: {}',
+    '  policyTypes:',
+    '    - Egress',
+    '  egress:',
+    '    - to:',
+    '        - namespaceSelector:',
+    '            matchLabels:',
+    '              kubernetes.io/metadata.name: openshift-dns',
+    '      ports:',
+    '        - protocol: UDP',
+    '          port: 5353',
+    '        - protocol: TCP',
+    '          port: 5353',
+  ]);
+  assert(
+    !result.error &&
+      /networkpolicy\.networking\.k8s\.io\/allow-dns-egress created/.test(result.message),
+    '#61: the allow-dns-egress policy opens UDP/TCP 5353 to openshift-dns (the lab-13 lesson)',
+    result.message.slice(0, 400)
+  );
+  await advanceBoth(5);
+  result = await runCmd(`oc exec deploy/web -n ${projectName} -- nslookup ${canonicalWeb}`);
+  const restoredNs = result;
+  result = await runCmd(`oc exec deploy/web -n ${projectName} -- dig +short ${canonicalWeb}`);
+  const restoredDig = result;
+  result = await runCmd(`oc exec deploy/web -n ${projectName} -- getent hosts ${canonicalWeb}`);
+  const restoredGetent = result;
+  assert(
+    !restoredNs.error &&
+      new RegExp(`^Name:\\t${escapeRe(canonicalWeb)}\\s*$`, 'm').test(restoredNs.message) &&
+      new RegExp(`^Address:\\s+${escapeRe(webClusterIP)}\\s*$`, 'm').test(restoredNs.message) &&
+      !restoredDig.error &&
+      restoredDig.message.trim() === webClusterIP &&
+      !restoredGetent.error &&
+      restoredGetent.message.trim().split(/\s+/).pop() === canonicalWeb,
+    '#61: allow-dns-egress restores nslookup/dig/getent together',
+    JSON.stringify({
+      nslookup: restoredNs.message.slice(0, 300),
+      dig: restoredDig.message,
+      getent: restoredGetent.message,
+    })
+  );
+  result = await runCmd(`oc exec deploy/web -n ${projectName} -- curl -sv http://web:8080`);
+  const restoredCurlMessage = result.message;
+  const curlOrder = [
+    restoredCurlMessage.indexOf('*   Trying web:8080...'),
+    restoredCurlMessage.indexOf('* Connected to web port 8080'),
+    restoredCurlMessage.indexOf('HTTP/1.1 200 OK'),
+  ];
+  assert(
+    !result.error &&
+      curlOrder.every((at, index) => at >= 0 && (index === 0 || at > curlOrder[index - 1])) &&
+      /Hello from web/.test(restoredCurlMessage),
+    '#61: allow-dns-egress restores name-based curl with the real order Trying → Connected → 200 body',
+    restoredCurlMessage.slice(0, 900)
   );
 });
 

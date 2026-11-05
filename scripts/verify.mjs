@@ -1226,10 +1226,14 @@ if (seedMod?.ClusterState) {
         'router-internal-default',
         'openshift-ingress'
       );
+      // #62E: the 4.22 dns-default Service carries NAMED targetPorts
+      // (`dns`/`dns-tcp` on the CoreDNS container, `metrics` on the
+      // kube-rbac-proxy sidecar); the Service *ports* stay 53/UDP, 53/TCP,
+      // 9154/TCP while EndpointSlice ports resolve to 5353/5353/9154.
       const expectedDnsPorts = [
-        { name: 'dns', port: 53, protocol: 'UDP', targetPort: 5353 },
-        { name: 'dns-tcp', port: 53, protocol: 'TCP', targetPort: 5353 },
-        { name: 'metrics', port: 9154, protocol: 'TCP', targetPort: 9154 },
+        { name: 'dns', port: 53, protocol: 'UDP', targetPort: 'dns' },
+        { name: 'dns-tcp', port: 53, protocol: 'TCP', targetPort: 'dns-tcp' },
+        { name: 'metrics', port: 9154, protocol: 'TCP', targetPort: 'metrics' },
       ];
       const expectedRouterPorts = [
         { name: 'http', port: 80, protocol: 'TCP', targetPort: 80 },
@@ -1280,7 +1284,8 @@ if (seedMod?.ClusterState) {
         dnsPods.every(
           (pod) =>
             pod.spec?.hostNetwork !== true &&
-            /^10\.\d+\.\d+\.\d+$/.test(String(pod.status?.podIP || '')) &&
+            // #62B: the OpenShift pod network is 10.128.0.0/14 (10.128–10.131).
+            /^10\.(?:12[89]|13[01])\.\d+\.\d+$/.test(String(pod.status?.podIP || '')) &&
             pod.spec?.nodeSelector?.['kubernetes.io/os'] === 'linux' &&
             pod.metadata?.annotations?.['openshift.io/scc'] === 'restricted-v2'
         )
@@ -1849,9 +1854,9 @@ if (seedMod?.ClusterState) {
       const dnsDescribe = dnsService?.toDescribe({ cluster }) || '';
       const dnsPortRows = describeServicePorts(dnsDescribe);
       const dnsExpectedPorts = [
-        { portLine: 'Port: dns 53/UDP', targetPrefix: '5353', endpointPort: '5353' },
-        { portLine: 'Port: dns-tcp 53/TCP', targetPrefix: '5353', endpointPort: '5353' },
-        { portLine: 'Port: metrics 9154/TCP', targetPrefix: '9154', endpointPort: '9154' },
+        { portLine: 'Port: dns 53/UDP', targetPrefix: 'dns/UDP', endpointPort: '5353' },
+        { portLine: 'Port: dns-tcp 53/TCP', targetPrefix: 'dns-tcp/TCP', endpointPort: '5353' },
+        { portLine: 'Port: metrics 9154/TCP', targetPrefix: 'metrics/TCP', endpointPort: '9154' },
       ];
       const dnsPodIPs = (cluster.getByKindAndNamespace('Pod', 'openshift-dns') || [])
         .filter((pod) => /^dns-default-/.test(pod.metadata?.name || ''))
@@ -2103,7 +2108,7 @@ if (seedMod?.ClusterState) {
           },
           status: {
             phase: 'Running',
-            podIP: '10.244.250.10',
+            podIP: '10.128.250.10',
             hostIP: '192.168.1.10',
             conditions: [{ type: 'Ready', status: 'True' }],
           },
@@ -2226,6 +2231,719 @@ if (seedMod?.ClusterState) {
       }
     } catch (err) {
       fail('fidelity', `#59/#60 dynamic fidelity lock threw: ${err.message}`);
+    }
+  }
+}
+
+// ── 4f. Issue #61–#62 DNS/exec/pod-network fidelity locks (static) ────────
+// The browser suite section `qa-issue61-62` proves the behaviour end-to-end.
+// These module/source locks fail the fast static gate if a future refactor
+// silently reintroduces the #61/#62 bugs (no browser, no long sleeps):
+// NetworkPolicy-aware DNS, honest `oc exec` exit codes, the 10.128.0.0/14 pod
+// network, the kubelet `/etc/hosts`, rolebinding-wide ServiceAccounts, the
+// tabwriter Events alignment and the named dns-default targetPorts.
+{
+  const engineMod = await tryImport('js/engine/GameEngine.js');
+  const sandboxMod = await tryImport('js/modes/SandboxMode.js');
+  const commandBarMod = await tryImport('js/ui/CommandBar.js');
+  const netMod = await tryImport('js/resources/NetworkResources.js');
+  const manifestMod = await tryImport('js/engine/ManifestEngine.js');
+  if (
+    !engineMod?.GameEngine ||
+    !sandboxMod?.SandboxMode ||
+    !commandBarMod?.CommandBar ||
+    !netMod?.Service ||
+    !manifestMod?.ManifestEngine
+  ) {
+    fail(
+      'fidelity',
+      '#61/#62: GameEngine/SandboxMode/CommandBar/NetworkResources/ManifestEngine are not importable for the locks'
+    );
+  } else {
+    try {
+      const engine = new engineMod.GameEngine({ mode: 'sandbox' });
+      new sandboxMod.SandboxMode(engine, null).setupCluster(3);
+      const simulation = engine.simulation;
+      simulation.ensureOLMDefaultsSync();
+      // This lock ticks the cluster for ~20 s of game time; the sandbox seeds
+      // random container failures (0.002), which could transiently restart a
+      // dns-default container and make the exact EndpointSlice assertions
+      // flaky. The lock proves deterministic output fidelity, so disable them.
+      simulation.randomFailureRate = 0;
+      const cluster = engine.cluster;
+      const nodes = cluster.getByKind('Node') || [];
+      /** OCP 4.22 clusterNetwork 10.128.0.0/14 → 10.128–10.131 in the 2nd octet. */
+      const POD_NETWORK_RE = /^10\.(?:12[89]|13[01])\.\d{1,3}\.\d{1,3}$/;
+      const ipToInt = (value) =>
+        String(value)
+          .split('.')
+          .reduce((accumulator, octet) => accumulator * 256 + Number(octet), 0);
+      const ipInCidr = (ip, cidr) => {
+        const [network, prefixRaw] = String(cidr || '').split('/');
+        const prefix = Number(prefixRaw);
+        if (!ip || !network || !Number.isFinite(prefix)) return false;
+        const block = 2 ** (32 - prefix);
+        return Math.floor(ipToInt(ip) / block) === Math.floor(ipToInt(network) / block);
+      };
+      const nodeCidrs = new Map(nodes.map((node) => [node.metadata?.name, node.spec?.podCIDR]));
+
+      // #62B: `_generatePodIP(node)` allocates inside the Pod's Node
+      // `spec.podCIDR` (/23, OVN-Kubernetes hostPrefix) and accepts both the
+      // Node object and the Node name call shapes used by the platform seeders.
+      const generated = nodes.map((node) => ({
+        name: node.metadata?.name,
+        cidr: node.spec?.podCIDR || '',
+        byObject: simulation._generatePodIP(node),
+        byName: simulation._generatePodIP(node.metadata?.name),
+      }));
+      if (
+        nodes.length === 3 &&
+        generated.every(
+          (entry) =>
+            String(entry.cidr).endsWith('/23') &&
+            ipInCidr(entry.byObject, entry.cidr) &&
+            ipInCidr(entry.byName, entry.cidr) &&
+            POD_NETWORK_RE.test(entry.byObject) &&
+            POD_NETWORK_RE.test(entry.byName)
+        )
+      ) {
+        passed();
+      } else {
+        fail(
+          'fidelity',
+          `_generatePodIP must allocate the host part inside the Node spec.podCIDR (/23) for both a Node object and a Node name (#62B): ${JSON.stringify(generated)}`
+        );
+      }
+
+      // #62B: with no Node/CIDR info `_generatePodIP` falls back to the
+      // clusterNetwork range (10.128–10.131, never 10.244), and the seeded
+      // dns-default Pods (IPs generated by the platform seeder) are in range and
+      // inside their Node's podCIDR.
+      const fallbackIps = [
+        simulation._generatePodIP(),
+        simulation._generatePodIP(null),
+        simulation._generatePodIP('node-that-does-not-exist'),
+      ];
+      const dnsPods = (cluster.getByKindAndNamespace('Pod', 'openshift-dns') || []).filter((pod) =>
+        /^dns-default-/.test(pod.metadata?.name || '')
+      );
+      if (
+        fallbackIps.every((ip) => POD_NETWORK_RE.test(ip) && !String(ip).startsWith('10.244.')) &&
+        dnsPods.length === nodes.length &&
+        dnsPods.every(
+          (pod) =>
+            POD_NETWORK_RE.test(String(pod.status?.podIP || '')) &&
+            ipInCidr(pod.status?.podIP, nodeCidrs.get(pod.spec?.nodeName))
+        )
+      ) {
+        passed();
+      } else {
+        fail(
+          'fidelity',
+          `the pod-network fallback must stay in 10.128–10.131 (not 10.244) and dns-default Pod IPs must come from the Node podCIDR (#62B): ${JSON.stringify({ fallbackIps, dnsPods: dnsPods.map((pod) => ({ name: pod.metadata?.name, ip: pod.status?.podIP, node: pod.spec?.nodeName, cidr: nodeCidrs.get(pod.spec?.nodeName) })) })}`
+        );
+      }
+
+      // #62B: no runtime source still carries the old kubeadm 10.244 range; the
+      // platform seeder and incident paths pass the Node into _generatePodIP and
+      // IncidentEngine's last-resort literal is the 10.128.0.10 pod-network IP.
+      const stalePodRangeFiles = jsFiles.filter((rel) => read(rel).includes('10.244.'));
+      const simulationSrc = read('js/engine/SimulationTick.js');
+      const incidentSrc = read('js/engine/IncidentEngine.js');
+      const generateCallSitesOk =
+        /_generatePodIP\(\s*seed\.node\s*\)/.test(simulationSrc) &&
+        /_generatePodIP\(\s*node\s*\)/.test(simulationSrc) &&
+        /_generatePodIP\(\s*nodeName\s*\)/.test(incidentSrc) &&
+        /'10\.128\.0\.10'/.test(incidentSrc);
+      if (stalePodRangeFiles.length === 0 && generateCallSitesOk) {
+        passed();
+      } else {
+        fail(
+          'fidelity',
+          `runtime code must not contain the old 10.244 pod range and _generatePodIP call sites must pass the Node (#62B): stale=${JSON.stringify(stalePodRangeFiles)} callSites=${generateCallSitesOk}`
+        );
+      }
+
+      // CommandBar locks need the `window.game` integration surface the app
+      // wires in the browser; provide the minimum shim around the real engine
+      // (mirrors the #57/#58 and #59/#60 locks above).
+      const windowShim = {
+        game: {
+          cluster,
+          gameEngine: engine,
+          engine: { emit() {}, on() {}, off() {} },
+          manifestEngine: null,
+        },
+      };
+      globalThis.window = windowShim;
+      try {
+        const manifestEngine = new manifestMod.ManifestEngine();
+        windowShim.game.manifestEngine = manifestEngine;
+        const cliBar = new commandBarMod.CommandBar();
+        /** Split an oc/kubectl tabwriter table into header cells + positioned rows. */
+        const parseTabwriter = (message) => {
+          const lines = String(message ?? '')
+            .split('\n')
+            .filter((line) => line.trim() !== '');
+          const headerLine = lines[0] || '';
+          const headers = headerLine
+            .split(/\s{2,}/)
+            .map((cell) => cell.trim())
+            .filter(Boolean);
+          const starts = [];
+          let searchFrom = 0;
+          for (const header of headers) {
+            const at = headerLine.indexOf(header, searchFrom);
+            starts.push(at < 0 ? searchFrom : at);
+            searchFrom = (at < 0 ? searchFrom : at) + header.length;
+          }
+          const rows = lines
+            .slice(1)
+            .map((line) =>
+              headers.map((_, index) =>
+                line
+                  .slice(starts[index], index + 1 < starts.length ? starts[index + 1] : line.length)
+                  .trim()
+              )
+            );
+          return { headers, rows };
+        };
+
+        // A real project + Deployment + exposed Service fixture: `oc exec` and
+        // `oc describe svc` need a Running Pod and a ClusterIP Service.
+        const projectResult = cliBar.executeCommand('oc new-project qa61-locks');
+        const deploymentResult = cliBar.executeCommand(
+          'oc create deployment web --image=registry.access.redhat.com/ubi9/httpd-24 --replicas=1 -n qa61-locks'
+        );
+        for (let tickIndex = 0; tickIndex < 400; tickIndex += 1) simulation.tick(0.05);
+        const exposeResult = cliBar.executeCommand(
+          'oc expose deploy/web --port=8080 -n qa61-locks'
+        );
+        for (let tickIndex = 0; tickIndex < 20; tickIndex += 1) simulation.tick(0.05);
+        const webService = cluster.getByName('Service', 'web', 'qa61-locks');
+        const clusterIP = String(webService?.spec?.clusterIP || '');
+        const webPods = (cluster.getByKindAndNamespace('Pod', 'qa61-locks') || []).filter((pod) =>
+          /^web-/.test(String(pod.metadata?.name || ''))
+        );
+        const runningWebPod =
+          webPods.find((pod) => pod.status?.phase === 'Running') || webPods[0] || null;
+        const fixtureOk =
+          !projectResult?.error &&
+          !deploymentResult?.error &&
+          !exposeResult?.error &&
+          /^172\.30\.\d+\.\d+$/.test(clusterIP) &&
+          Boolean(runningWebPod);
+
+        // #62A: an unmodelled container binary is a real OCI exec failure (exit
+        // 127, no fake `(command executed in …)`/`exit code 0`), so `&&` stops
+        // and `||` recovers — the shell exit-status contract real oc has.
+        const foobarResult = cliBar.executeCommand(
+          'oc exec deploy/web -n qa61-locks -- foobar --x'
+        );
+        const chainedResult = cliBar.executeCommand(
+          'oc exec deploy/web -n qa61-locks -- foobar && echo AFTER'
+        );
+        const recoveredResult = cliBar.executeCommand(
+          'oc exec deploy/web -n qa61-locks -- foobar || echo RECOVERED'
+        );
+        const foobarMessage = String(foobarResult?.message || '');
+        if (
+          fixtureOk &&
+          foobarResult?.error === true &&
+          /error: Internal error occurred:/.test(foobarMessage) &&
+          /exec: "foobar": executable file not found in \$PATH/.test(foobarMessage) &&
+          /command terminated with exit code 127\s*$/.test(foobarMessage) &&
+          !/\(command executed in /.test(foobarMessage) &&
+          !/exit code 0/.test(foobarMessage) &&
+          chainedResult?.error === true &&
+          !/AFTER/.test(String(chainedResult?.message || '')) &&
+          recoveredResult?.error === false &&
+          /RECOVERED/.test(String(recoveredResult?.message || ''))
+        ) {
+          passed();
+        } else {
+          fail(
+            'fidelity',
+            `unknown exec binaries must fail with the OCI not-found wording + exit 127 and honour && / || (#62A): ${JSON.stringify({ fixtureOk, foobar: foobarResult, chained: chainedResult, recovered: recoveredResult })}`
+          );
+        }
+
+        // #62A: `oc rsh` shares the exit-status contract; modelled binaries are
+        // matched by basename (`/bin/cat`) and `sh -c` still unwraps.
+        const rshResult = cliBar.executeCommand('oc rsh -n qa61-locks deploy/web foobar');
+        const hostnameResult = cliBar.executeCommand(
+          'oc exec deploy/web -n qa61-locks -- hostname'
+        );
+        const binCatResult = cliBar.executeCommand(
+          'oc exec deploy/web -n qa61-locks -- /bin/cat /etc/hostname'
+        );
+        const shellResult = cliBar.executeCommand(
+          'oc exec deploy/web -n qa61-locks -- sh -c "echo SHELL_OK"'
+        );
+        const podName = String(runningWebPod?.metadata?.name || '');
+        if (
+          rshResult?.error === true &&
+          /command terminated with exit code 127\s*$/.test(String(rshResult?.message || '')) &&
+          hostnameResult?.error === false &&
+          String(hostnameResult?.message || '').trim() === podName &&
+          binCatResult?.error === false &&
+          String(binCatResult?.message || '').trim() === podName &&
+          shellResult?.error === false &&
+          /SHELL_OK/.test(String(shellResult?.message || ''))
+        ) {
+          passed();
+        } else {
+          fail(
+            'fidelity',
+            `oc rsh must share the exit-status contract and modelled binaries (hostname, /bin/cat, sh -c) must keep working (#62A): ${JSON.stringify({ rsh: rshResult, hostname: hostnameResult, binCat: binCatResult, shell: shellResult })}`
+          );
+        }
+
+        // #62C: `_podExecContext` builds the kubelet-managed /etc/hosts — the
+        // standard header/loopback lines plus the Pod's own IP + name, and no
+        // Service entry (`172.30.0.1 kubernetes.default.svc` must stay gone).
+        const execContext = runningWebPod
+          ? cliBar._podExecContext(runningWebPod, 'httpd-24')
+          : null;
+        const hostsFile = String(execContext?.files?.get?.('/etc/hosts') || '');
+        const expectedHosts = [
+          '# Kubernetes-managed hosts file.',
+          '127.0.0.1\tlocalhost',
+          '::1\tlocalhost ip6-localhost ip6-loopback',
+          'fe00::0\tip6-localnet',
+          'fe00::0\tip6-mcastprefix',
+          'fe00::1\tip6-allnodes',
+          'fe00::2\tip6-allrouters',
+          `${runningWebPod?.status?.podIP}\t${runningWebPod?.metadata?.name}`,
+        ].join('\n');
+        if (
+          hostsFile === `${expectedHosts}\n` &&
+          !/172\.30\.0\.1/.test(hostsFile) &&
+          !/kubernetes\.default\.svc/.test(hostsFile)
+        ) {
+          passed();
+        } else {
+          fail(
+            'fidelity',
+            `Pod /etc/hosts must be the kubelet-managed file (own podIP+name, no Service entry) (#62C): ${JSON.stringify(hostsFile)}`
+          );
+        }
+
+        // #62C/#61: a legacy Pod without podIP omits only the final line, and an
+        // empty/none `_podExecContext` fallback must not throw (item 9).
+        const legacyPod = {
+          metadata: { name: 'qa61-legacy', namespace: 'default' },
+          spec: { containers: [{ name: 'ubi', image: 'registry.access.redhat.com/ubi9/ubi' }] },
+          status: { phase: 'Running' },
+        };
+        const legacyHosts = String(
+          cliBar._podExecContext(legacyPod, 'ubi')?.files?.get?.('/etc/hosts') || ''
+        );
+        const legacyLines = legacyHosts.replace(/\n$/, '').split('\n');
+        let emptyExecContextOk = false;
+        try {
+          const emptyContext = cliBar._podExecContext({}, 'main');
+          emptyExecContextOk = typeof emptyContext?.files?.get?.('/etc/hosts') === 'string';
+        } catch {
+          emptyExecContextOk = false;
+        }
+        if (
+          legacyLines.length === 7 &&
+          legacyLines[0] === '# Kubernetes-managed hosts file.' &&
+          legacyLines[6] === 'fe00::2\tip6-allrouters' &&
+          !legacyHosts.includes('qa61-legacy') &&
+          emptyExecContextOk
+        ) {
+          passed();
+        } else {
+          fail(
+            'fidelity',
+            `a Pod without podIP must omit only the /etc/hosts final line and empty _podExecContext must not throw (#62C/#61): ${JSON.stringify({ legacyLines, emptyExecContextOk })}`
+          );
+        }
+
+        // #62E: the dns-default Service keeps NAMED targetPorts in its spec
+        // (`dns`/`dns-tcp` → 5353 on the dns container, `metrics` → the
+        // kube-rbac-proxy sidecar's 9154); the Service ports stay 53/UDP,
+        // 53/TCP, 9154/TCP.
+        const dnsService = cluster.getByName('Service', 'dns-default', 'openshift-dns');
+        const dnsPortSpecs = (dnsService?.spec?.ports || []).map((port) => ({
+          name: port.name,
+          port: port.port,
+          protocol: port.protocol,
+          targetPort: port.targetPort,
+        }));
+        if (
+          JSON.stringify(dnsPortSpecs) ===
+          JSON.stringify([
+            { name: 'dns', port: 53, protocol: 'UDP', targetPort: 'dns' },
+            { name: 'dns-tcp', port: 53, protocol: 'TCP', targetPort: 'dns-tcp' },
+            { name: 'metrics', port: 9154, protocol: 'TCP', targetPort: 'metrics' },
+          ])
+        ) {
+          passed();
+        } else {
+          fail(
+            'fidelity',
+            `openshift-dns/dns-default must keep the real NAMED targetPorts dns/dns-tcp/metrics (#62E): ${JSON.stringify(dnsPortSpecs)}`
+          );
+        }
+
+        // #62E: `oc describe svc dns-default` prints the named TargetPorts while
+        // the Endpoints (and `oc get endpoints`) resolve to the real pod ports
+        // 5353/5353/9154 — the `metrics` name must pick the sidecar's 9154, not
+        // CoreDNS' 9153.
+        const dnsDescribeResult = cliBar.executeCommand(
+          'oc describe svc dns-default -n openshift-dns'
+        );
+        const dnsTargetPorts = String(dnsDescribeResult?.message || '')
+          .split('\n')
+          .filter((line) => /^TargetPort:/.test(line))
+          .map((line) => line.replace(/^TargetPort:\s*/, '').trim());
+        const dnsEndpointsResult = cliBar.executeCommand(
+          'oc get endpoints dns-default -n openshift-dns -o json'
+        );
+        let dnsEndpointPorts = [];
+        let dnsEndpointIPs = [];
+        try {
+          const endpointsJson = JSON.parse(String(dnsEndpointsResult?.message || '{}'));
+          dnsEndpointPorts = (endpointsJson.subsets || []).map((subset) => ({
+            port: subset.ports?.[0]?.port,
+            protocol: subset.ports?.[0]?.protocol,
+          }));
+          dnsEndpointIPs = [
+            ...new Set(
+              (endpointsJson.subsets || []).flatMap((subset) =>
+                (subset.addresses || []).map((address) => address.ip)
+              )
+            ),
+          ];
+        } catch {
+          dnsEndpointPorts = [];
+          dnsEndpointIPs = [];
+        }
+        const expectedDnsPodIPs = dnsPods.map((pod) => pod.status?.podIP).filter(Boolean);
+        const dnsEndpointsText = cliBar.executeCommand('oc get endpoints -n openshift-dns');
+        const dnsEndpointsTable = parseTabwriter(dnsEndpointsText?.message);
+        const dnsEndpointsRow =
+          dnsEndpointsTable.rows.find(
+            (cells) => cells[dnsEndpointsTable.headers.indexOf('NAME')] === 'dns-default'
+          ) || [];
+        const dnsEndpointsCell =
+          dnsEndpointsRow[dnsEndpointsTable.headers.indexOf('ENDPOINTS')] || '';
+        if (
+          !dnsDescribeResult?.error &&
+          JSON.stringify(dnsTargetPorts) ===
+            JSON.stringify(['dns/UDP', 'dns-tcp/TCP', 'metrics/TCP']) &&
+          !dnsEndpointsResult?.error &&
+          JSON.stringify(dnsEndpointPorts) ===
+            JSON.stringify([
+              { port: 5353, protocol: 'UDP' },
+              { port: 5353, protocol: 'TCP' },
+              { port: 9154, protocol: 'TCP' },
+            ]) &&
+          dnsEndpointIPs.length === expectedDnsPodIPs.length &&
+          dnsEndpointIPs.every((ip) => expectedDnsPodIPs.includes(ip) && POD_NETWORK_RE.test(ip)) &&
+          !dnsEndpointsText?.error &&
+          /^(?:10\.(?:12[89]|13[01])\.\d+\.\d+:5353,){2}10\.(?:12[89]|13[01])\.\d+\.\d+:5353 \+ \d+ more\.\.\.$/.test(
+            dnsEndpointsCell
+          )
+        ) {
+          passed();
+        } else {
+          fail(
+            'fidelity',
+            `named dns-default targetPorts must still resolve to the real endpoint ports 5353/5353/9154 (never 9153) (#62E): ${JSON.stringify({ dnsTargetPorts, dnsEndpointPorts, dnsEndpointIPs, expectedDnsPodIPs, dnsEndpointsCell })}`
+          );
+        }
+
+        // #62D: `oc get rolebinding -o wide` prints a ServiceAccount subject as
+        // `<namespace>/<name>` (rbac.SubjectsStrings), never the bare name and
+        // never a leading `/`.
+        const roleBindingWideResult = cliBar.executeCommand(
+          'oc get rolebinding -o wide -n qa61-locks'
+        );
+        const roleBindingTable = parseTabwriter(roleBindingWideResult?.message);
+        const roleBindingNameAt = roleBindingTable.headers.indexOf('NAME');
+        const serviceAccountsAt = roleBindingTable.headers.indexOf('SERVICEACCOUNTS');
+        const deployersRow =
+          roleBindingTable.rows.find((cells) => cells[roleBindingNameAt] === 'system:deployers') ||
+          [];
+        const buildersRow =
+          roleBindingTable.rows.find(
+            (cells) => cells[roleBindingNameAt] === 'system:image-builders'
+          ) || [];
+        const serviceAccountCells = roleBindingTable.rows
+          .map((cells) => cells[serviceAccountsAt] || '')
+          .filter(Boolean);
+        if (
+          !roleBindingWideResult?.error &&
+          serviceAccountsAt >= 0 &&
+          deployersRow[serviceAccountsAt] === 'qa61-locks/deployer' &&
+          buildersRow[serviceAccountsAt] === 'qa61-locks/builder' &&
+          serviceAccountCells.every(
+            (cell) => /^[a-z0-9][a-z0-9-]*\/[A-Za-z0-9:._-]+$/.test(cell) && !cell.startsWith('/')
+          )
+        ) {
+          passed();
+        } else {
+          fail(
+            'fidelity',
+            `rolebinding -o wide SERVICEACCOUNTS must print <namespace>/<name> (#62D): ${JSON.stringify({ headers: roleBindingTable.headers, deployers: deployersRow, builders: buildersRow, serviceAccountCells })}`
+          );
+        }
+
+        // #62F: `oc describe svc web`'s empty Events placeholder is aligned with
+        // the widest top-level label (`Session Affinity:` → column 19), i.e.
+        // exactly 12 spaces after `Events:` (the old fixed 10-space placeholder
+        // is one tabwriter column short).
+        const describeWebResult = cliBar.executeCommand('oc describe svc web -n qa61-locks');
+        const describeWebMessage = String(describeWebResult?.message || '');
+        const eventsLine = (describeWebMessage.match(/^Events:.*$/m) || [''])[0];
+        const eventsSpaces = (eventsLine.match(/^Events:( +)<none>$/) || [])[1] || '';
+        if (!describeWebResult?.error && eventsSpaces.length === 12) {
+          passed();
+        } else {
+          fail(
+            'fidelity',
+            `oc describe svc web Events placeholder must align at the tabwriter column (exactly 12 spaces after "Events:", got ${eventsSpaces.length}) (#62F): ${JSON.stringify(eventsLine)}`
+          );
+        }
+
+        const shortName = 'web';
+        const canonicalName = `web.qa61-locks.svc.cluster.local`;
+        const escapedCanonical = canonicalName.replace(/\./g, '\\.');
+        const escapedClusterIP = clusterIP.replace(/\./g, '\\.');
+
+        // #61 item 7 / #62 item 1: `nslookup web` resolves through the Pod's
+        // resolv.conf search list and prints the CANONICAL FQDN in the Name line.
+        const nslookupFqdnResult = cliBar.executeCommand(
+          `oc exec deploy/web -n qa61-locks -- nslookup ${canonicalName}`
+        );
+        const nslookupShortResult = cliBar.executeCommand(
+          `oc exec deploy/web -n qa61-locks -- nslookup ${shortName}`
+        );
+        const nslookupFqdnMessage = String(nslookupFqdnResult?.message || '');
+        const nslookupShortMessage = String(nslookupShortResult?.message || '');
+        if (
+          fixtureOk &&
+          !nslookupFqdnResult?.error &&
+          new RegExp(`^Name:\\t${escapedCanonical}$`, 'm').test(nslookupFqdnMessage) &&
+          nslookupFqdnMessage.includes(`Address: ${clusterIP}`) &&
+          !nslookupFqdnMessage.includes('172.30.43.12') &&
+          !nslookupShortResult?.error &&
+          new RegExp(`^Name:\\t${escapedCanonical}$`, 'm').test(nslookupShortMessage) &&
+          nslookupShortMessage.includes(`Address: ${clusterIP}`)
+        ) {
+          passed();
+        } else {
+          fail(
+            'fidelity',
+            `nslookup must resolve FQDN + short names through the search list and print the canonical FQDN in Name: (#61 item 7): ${JSON.stringify({ fqdn: nslookupFqdnMessage, short: nslookupShortMessage, clusterIP })}`
+          );
+        }
+
+        // #61 item 6: `dig` uses the real cluster-DNS answer (the Service's own
+        // spec.clusterIP, never the fabricated 172.30.43.12) and its own DiG
+        // output format; `+short` is only the IP.
+        const digShortResult = cliBar.executeCommand(
+          `oc exec deploy/web -n qa61-locks -- dig +short ${canonicalName}`
+        );
+        const digPlainResult = cliBar.executeCommand(
+          `oc exec deploy/web -n qa61-locks -- dig ${canonicalName}`
+        );
+        const digPlainMessage = String(digPlainResult?.message || '');
+        if (
+          !digShortResult?.error &&
+          String(digShortResult?.message || '').trim() === clusterIP &&
+          !digPlainResult?.error &&
+          /^; <<>> DiG 9\.18\.28 <<>>/m.test(digPlainMessage) &&
+          /^;; ->>HEADER<<- opcode: QUERY, status: NOERROR/m.test(digPlainMessage) &&
+          /^;; QUESTION SECTION:/m.test(digPlainMessage) &&
+          /^;; ANSWER SECTION:/m.test(digPlainMessage) &&
+          new RegExp(`^${escapedCanonical}\\. 30 IN A ${escapedClusterIP}$`, 'm').test(
+            digPlainMessage
+          ) &&
+          /^;; SERVER: 172\.30\.0\.10#53\(172\.30\.0\.10\) \(UDP\)$/m.test(digPlainMessage) &&
+          !digPlainMessage.includes('172.30.43.12') &&
+          !/^Name:\t/m.test(digPlainMessage)
+        ) {
+          passed();
+        } else {
+          fail(
+            'fidelity',
+            `dig must answer from the real Service ClusterIP with its own DiG format (never 172.30.43.12) (#61 item 6): ${JSON.stringify({ short: digShortResult?.message, plain: digPlainMessage, clusterIP })}`
+          );
+        }
+
+        // #61 item 8: `getent hosts` prints glibc's `%-15s %s` format (IP padded
+        // to 15 + one space + canonical name) and an unknown name is a silent
+        // exit 2.
+        const getentResult = cliBar.executeCommand(
+          `oc exec deploy/web -n qa61-locks -- getent hosts ${canonicalName}`
+        );
+        const getentLine = String(getentResult?.message || '').trim();
+        const getentMatch = getentLine.match(/^(\S+)( +)(\S+)$/);
+        const getentUnknownResult = cliBar.executeCommand(
+          'oc exec deploy/web -n qa61-locks -- getent hosts does-not-exist.qa61-locks.svc.cluster.local'
+        );
+        const getentUnknownMessage = String(getentUnknownResult?.message || '');
+        if (
+          !getentResult?.error &&
+          getentMatch &&
+          getentMatch[1] === clusterIP &&
+          getentMatch[2].length === 16 - clusterIP.length &&
+          getentMatch[3] === canonicalName &&
+          getentUnknownResult?.error === true &&
+          /command terminated with exit code 2\s*$/.test(getentUnknownMessage) &&
+          !getentUnknownMessage.includes(clusterIP)
+        ) {
+          passed();
+        } else {
+          fail(
+            'fidelity',
+            `getent hosts must print the glibc %-15s %s line and fail silently with exit 2 for unknown names (#61 item 8): ${JSON.stringify({ line: getentLine, expectedSpaces: 16 - clusterIP.length, unknown: getentUnknownMessage })}`
+          );
+        }
+
+        // #61 items 1–5: a NetworkPolicy that isolates the Pod for Egress and
+        // only allows same-namespace traffic blocks DNS (the dns-default pods
+        // live in openshift-dns): nslookup times out (exit 1), dig times out
+        // (exit 9) and getent is silent (exit 2). The allow-dns-egress policy on
+        // UDP/TCP 5353 then restores all three together.
+        const denyPolicyYaml = [
+          'apiVersion: networking.k8s.io/v1',
+          'kind: NetworkPolicy',
+          'metadata:',
+          '  name: deny-egress',
+          '  namespace: qa61-locks',
+          'spec:',
+          '  podSelector: {}',
+          '  policyTypes:',
+          '    - Egress',
+        ].join('\n');
+        const sameNamespacePolicyYaml = [
+          'apiVersion: networking.k8s.io/v1',
+          'kind: NetworkPolicy',
+          'metadata:',
+          '  name: allow-same-ns',
+          '  namespace: qa61-locks',
+          'spec:',
+          '  podSelector: {}',
+          '  policyTypes:',
+          '    - Egress',
+          '  egress:',
+          '    - to:',
+          '        - podSelector: {}',
+        ].join('\n');
+        manifestEngine.writeFile('qa61-deny-egress.yaml', denyPolicyYaml);
+        manifestEngine.writeFile('qa61-allow-same-ns.yaml', sameNamespacePolicyYaml);
+        const denyApplyResult = cliBar.executeCommand(
+          'oc apply -f qa61-deny-egress.yaml -n qa61-locks'
+        );
+        const sameNamespaceApplyResult = cliBar.executeCommand(
+          'oc apply -f qa61-allow-same-ns.yaml -n qa61-locks'
+        );
+        for (let tickIndex = 0; tickIndex < 10; tickIndex += 1) simulation.tick(0.05);
+        const blockedNslookupResult = cliBar.executeCommand(
+          `oc exec deploy/web -n qa61-locks -- nslookup ${canonicalName}`
+        );
+        const blockedDigResult = cliBar.executeCommand(
+          `oc exec deploy/web -n qa61-locks -- dig +short ${canonicalName}`
+        );
+        const blockedGetentResult = cliBar.executeCommand(
+          `oc exec deploy/web -n qa61-locks -- getent hosts ${canonicalName}`
+        );
+        const blockedNslookupMessage = String(blockedNslookupResult?.message || '');
+        const blockedDigMessage = String(blockedDigResult?.message || '');
+        const blockedGetentMessage = String(blockedGetentResult?.message || '');
+        const timeoutLine = /^;; connection timed out; no servers could be reached$/m;
+        if (
+          !denyApplyResult?.error &&
+          !sameNamespaceApplyResult?.error &&
+          blockedNslookupResult?.error === true &&
+          timeoutLine.test(blockedNslookupMessage) &&
+          /command terminated with exit code 1\s*$/.test(blockedNslookupMessage) &&
+          !/^Server:/m.test(blockedNslookupMessage) &&
+          !/^Address:/m.test(blockedNslookupMessage) &&
+          !/^Name:/m.test(blockedNslookupMessage) &&
+          blockedDigResult?.error === true &&
+          timeoutLine.test(blockedDigMessage) &&
+          /command terminated with exit code 9\s*$/.test(blockedDigMessage) &&
+          !blockedDigMessage.includes(clusterIP) &&
+          blockedGetentResult?.error === true &&
+          /command terminated with exit code 2\s*$/.test(blockedGetentMessage) &&
+          !blockedGetentMessage.includes(clusterIP) &&
+          !blockedGetentMessage.includes(canonicalName)
+        ) {
+          passed();
+        } else {
+          fail(
+            'fidelity',
+            `a DNS-blocking NetworkPolicy must fail nslookup (exit 1), dig (exit 9) and getent (silent exit 2) (#61 items 1–3): ${JSON.stringify({ apply: denyApplyResult?.message, nslookup: blockedNslookupMessage, dig: blockedDigMessage, getent: blockedGetentMessage })}`
+          );
+        }
+
+        const allowDnsPolicyYaml = [
+          'apiVersion: networking.k8s.io/v1',
+          'kind: NetworkPolicy',
+          'metadata:',
+          '  name: allow-dns-egress',
+          '  namespace: qa61-locks',
+          'spec:',
+          '  podSelector: {}',
+          '  policyTypes:',
+          '    - Egress',
+          '  egress:',
+          '    - to:',
+          '        - namespaceSelector:',
+          '            matchLabels:',
+          '              kubernetes.io/metadata.name: openshift-dns',
+          '      ports:',
+          '        - protocol: UDP',
+          '          port: 5353',
+          '        - protocol: TCP',
+          '          port: 5353',
+        ].join('\n');
+        manifestEngine.writeFile('qa61-allow-dns-egress.yaml', allowDnsPolicyYaml);
+        const allowDnsApplyResult = cliBar.executeCommand(
+          'oc apply -f qa61-allow-dns-egress.yaml -n qa61-locks'
+        );
+        for (let tickIndex = 0; tickIndex < 10; tickIndex += 1) simulation.tick(0.05);
+        const restoredNslookupResult = cliBar.executeCommand(
+          `oc exec deploy/web -n qa61-locks -- nslookup ${canonicalName}`
+        );
+        const restoredDigResult = cliBar.executeCommand(
+          `oc exec deploy/web -n qa61-locks -- dig +short ${canonicalName}`
+        );
+        const restoredGetentResult = cliBar.executeCommand(
+          `oc exec deploy/web -n qa61-locks -- getent hosts ${canonicalName}`
+        );
+        const restoredNslookupMessage = String(restoredNslookupResult?.message || '');
+        if (
+          !allowDnsApplyResult?.error &&
+          !restoredNslookupResult?.error &&
+          new RegExp(`^Name:\\t${escapedCanonical}$`, 'm').test(restoredNslookupMessage) &&
+          restoredNslookupMessage.includes(`Address: ${clusterIP}`) &&
+          !restoredDigResult?.error &&
+          String(restoredDigResult?.message || '').trim() === clusterIP &&
+          !restoredGetentResult?.error &&
+          String(restoredGetentResult?.message || '')
+            .trim()
+            .endsWith(canonicalName)
+        ) {
+          passed();
+        } else {
+          fail(
+            'fidelity',
+            `the allow-dns-egress policy (UDP/TCP 5353 to openshift-dns) must restore nslookup/dig/getent together (#61 item 5): ${JSON.stringify({ apply: allowDnsApplyResult?.message, nslookup: restoredNslookupMessage, dig: restoredDigResult?.message, getent: restoredGetentResult?.message })}`
+          );
+        }
+      } finally {
+        delete globalThis.window;
+      }
+    } catch (err) {
+      fail('fidelity', `#61/#62 dynamic fidelity lock threw: ${err.message}`);
     }
   }
 }
