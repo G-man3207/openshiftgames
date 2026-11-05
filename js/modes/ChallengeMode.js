@@ -1198,7 +1198,7 @@ const CHALLENGES = [
     id: 13,
     title: 'Production Network Policies',
     description:
-      'Make the payments project zero-trust: deny all ingress and egress by default, then re-open only the DNS egress and the gateway → ledger API path on port 8080 — while keeping the reverse direction blocked. You start from a seeded default-deny policy and write the allow rules yourself; the lab grades traffic behaviour, not NetworkPolicy object names.',
+      'Make the payments project zero-trust: deny all ingress and egress by default, then re-open only the DNS egress and the gateway → ledger API path on port 8080 — while keeping the reverse direction blocked. A default-deny policy is provided in challenges/payments-networkpolicy.yaml; apply it (or write your own), then add the allow rules. The lab grades traffic behaviour, not NetworkPolicy object names.',
     timeLimit: 300,
     docsLinks: [DOCS.network],
     objectives: [
@@ -1246,7 +1246,7 @@ const CHALLENGES = [
     focusFiles: ['challenges/payments-networkpolicy.yaml'],
     availableResources: ['Project', 'NetworkPolicy', 'Deployment', 'Service', 'Pod'],
     hints: [
-      'Start from the seeded default-deny: oc apply -f challenges/payments-networkpolicy.yaml — NetworkPolicies are additive, so the deny isolates the project and each allow rule re-opens exactly one path.',
+      'Isolate the project first with the provided default-deny policy: oc apply -f challenges/payments-networkpolicy.yaml (or write your own equivalent) — NetworkPolicies are additive, so the deny isolates the project and each allow rule re-opens exactly one path. No policy is applied to payments at start.',
       'DNS: allow egress to the openshift-dns namespace on BOTH UDP and TCP port 5353 (the dns-default Pods listen on 5353, not 53). Without it, gateway cannot resolve ledger and every call fails.',
       'Direction matters: with default-deny in both directions you need an egress rule on gateway AND an ingress rule on ledger. Do not mirror those rules for ledger → gateway — the deny objective proves the path stays closed.',
       'Verify as the workloads: oc exec deploy/gateway -n payments -- curl -sv http://ledger:8080 (allowed), oc exec deploy/ledger -n payments -- curl -sv http://gateway:8080 (blocked), and oc get networkpolicy -n payments.',

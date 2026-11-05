@@ -229,11 +229,13 @@ export function splitShellSegments(input) {
 }
 
 /**
- * Expand `$NAME` / `${NAME}` in a shell word list, bash-style (issue #50).
- * Single quotes protect the literal; double quotes and unquoted words expand;
- * a backslash escapes `$`; undefined variables expand to the empty string.
- * The replacement text is never re-parsed for `;`/`&&` (bash expands after
- * parsing), which is why the CommandBar calls this per segment.
+ * Expand `$NAME` / `${NAME}` / `$?` / `${?}` in a shell word list, bash-style
+ * (issues #50/#63). Single quotes protect the literal; double quotes and
+ * unquoted words expand; a backslash escapes `$`; undefined variables expand to
+ * the empty string. `$?` is the exit status of the last executed command (0
+ * when the caller supplies no status). The replacement text is never re-parsed
+ * for `;`/`&&` (bash expands after parsing), which is why the CommandBar calls
+ * this per segment.
  * @param {string} text
  * @param {Record<string, string>} [env]
  * @returns {string}
@@ -242,12 +244,17 @@ export function expandShellVariables(text, env = {}) {
   const source = String(text ?? '');
   const lookup = (name) =>
     Object.prototype.hasOwnProperty.call(env, name) ? String(env[name] ?? '') : '';
-  // `$NAME` / `${NAME}` at position `start` (source[start] === '$').
+  /** bash's `$?`: the last command's exit status, 0 for a fresh shell. */
+  const lastStatus = () =>
+    Object.prototype.hasOwnProperty.call(env, '?') ? String(env['?'] ?? '') : '0';
+  // `$NAME` / `${NAME}` / `$?` / `${?}` at position `start` (source[start] === '$').
   const expansionAt = (start) => {
+    if (source[start + 1] === '?') return { value: lastStatus(), end: start + 2 };
     if (source[start + 1] === '{') {
       const close = source.indexOf('}', start + 2);
       if (close < 0) return null;
       const name = source.slice(start + 2, close);
+      if (name === '?') return { value: lastStatus(), end: close + 1 };
       if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) return null;
       return { value: lookup(name), end: close + 1 };
     }
@@ -1253,16 +1260,20 @@ export class ShellTools {
 
   /**
    * Variables visible to `$NAME`/`${NAME}` expansion: the workstation
-   * environment plus exported and plain shell variables (later wins).
+   * environment plus exported and plain shell variables (later wins), and bash's
+   * special `$?` status parameter (issue #63).
    * @returns {Record<string, string>}
    */
   sessionEnvironment() {
     const environment = this.exportedEnvironment();
     for (const [name, value] of this.vars) environment[name] = String(value ?? '');
+    // `$?` is a shell special parameter, not an environment variable: expose it
+    // for expansion but never for `env`/`printenv`/`export` output (#63).
+    environment['?'] = String(this.lastExitCode ?? 0);
     return environment;
   }
 
-  /** Expand `$NAME`/`${NAME}` for one shell segment (issue #50). */
+  /** Expand `$NAME`/`${NAME}`/`$?` for one shell segment (issues #50/#63). */
   expandVariables(text) {
     return expandShellVariables(text, this.sessionEnvironment());
   }
@@ -1482,7 +1493,7 @@ export class ShellTools {
    * Execute one shell pipeline stage.
    * @param {string[]} tokens argv (command included)
    * @param {string|null} stdin piped/heredoc input
-   * @returns {{error: boolean, message: string, clear?: boolean}}
+   * @returns {{error: boolean, message: string, exitCode: number, clear?: boolean}}
    */
   runTokens(tokens, stdin) {
     const name = String(tokens[0] || '').toLowerCase();
@@ -1490,7 +1501,7 @@ export class ShellTools {
     const handler = this[`_cmd_${name}`];
     if (!handler) {
       this.lastExitCode = 127;
-      return { error: true, message: `bash: ${name}: command not found` };
+      return { error: true, message: `bash: ${name}: command not found`, exitCode: 127 };
     }
     try {
       const result = handler.call(
@@ -1498,11 +1509,18 @@ export class ShellTools {
         args,
         stdin === null || stdin === undefined ? null : String(stdin)
       ) || { error: false, message: '' };
-      this.lastExitCode = result.error ? 1 : 0;
+      // A handler can report its real status (`grep` exits 1 on no match);
+      // otherwise any failed command is status 1 and a successful one 0 (#63).
+      if (!Number.isFinite(result.exitCode)) result.exitCode = result.error ? 1 : 0;
+      this.lastExitCode = result.exitCode;
       return result;
     } catch (error) {
       this.lastExitCode = 1;
-      return { error: true, message: `${name}: ${error && error.message ? error.message : error}` };
+      return {
+        error: true,
+        message: `${name}: ${error && error.message ? error.message : error}`,
+        exitCode: 1,
+      };
     }
   }
 
@@ -1749,10 +1767,11 @@ export class ShellTools {
         previous = index;
       }
     }
-    if ((flags.count || flags.filesWithMatches) && output.length)
-      return this._ok(output.join('\n'));
-    if (!matchedAny) this.lastExitCode = 1;
-    return this._ok(output.join('\n'));
+    const text = output.join('\n');
+    // Real grep exits 1 when nothing matched; `-c`/`-l` still print "0"/nothing,
+    // so this is a failed shell status without an error message (#63).
+    if (!matchedAny) return { error: false, message: text, exitCode: 1 };
+    return this._ok(text);
   }
 
   _cmd_head(args, stdin) {

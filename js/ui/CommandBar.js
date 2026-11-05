@@ -3361,6 +3361,8 @@ export class CommandBar {
     } catch (error) {
       const message = `error: internal command failure: ${error && error.message ? error.message : error}`;
       this._appendOutput(message, 'text-red-400');
+      // The shell still sees a failed command; the next line's `$?` is 1 (#63).
+      this._setShellExitCode(1);
       result = {
         error: true,
         message,
@@ -3386,6 +3388,19 @@ export class CommandBar {
     if (!bus || typeof bus.on !== 'function') return;
     this._boundEngineReset = () => this.shellTools?.resetSession?.();
     bus.on('engine:reset', this._boundEngineReset);
+  }
+
+  /**
+   * Record the shell exit status read by `$?` expansion (#63). Real bash keeps
+   * the status of the last executed command across `;`/`&&`/`||` segments and
+   * terminal lines; a skipped segment leaves it unchanged.
+   * @param {number} code
+   * @returns {number}
+   */
+  _setShellExitCode(code) {
+    const value = Number.isFinite(code) ? code : 0;
+    if (this.shellTools) this.shellTools.lastExitCode = value;
+    return value;
   }
 
   _runCommandLine(rawInput) {
@@ -3429,6 +3444,8 @@ export class CommandBar {
         success: false,
         timestamp: Date.now(),
       });
+      // bash exits 2 on a syntax error; the next line's `$?` sees it (#63).
+      this._setShellExitCode(2);
       return { error: true, message: syntaxError, raw, normalized, baseCommand, success: false };
     }
 
@@ -3449,6 +3466,7 @@ export class CommandBar {
           success: true,
           timestamp: Date.now(),
         });
+        this._setShellExitCode(0);
         return {
           error: false,
           message: easterEgg.message,
@@ -3464,7 +3482,10 @@ export class CommandBar {
     // per command line, before any dispatch/mutation; exempt client/session
     // commands (login/logout/whoami/project/help/auth can-i/…) pass through.
     const gateBlocked = this._authorizationGate(normalized, raw, baseCommand);
-    if (gateBlocked) return gateBlocked;
+    if (gateBlocked) {
+      this._setShellExitCode(Number.isFinite(gateBlocked.exitCode) ? gateBlocked.exitCode : 1);
+      return gateBlocked;
+    }
 
     const lineOutputs = [];
     let lastStatus = true;
@@ -3485,25 +3506,33 @@ export class CommandBar {
       const segment = String(plan.segments[index] ?? '').trim();
       if (!segment) continue;
       // Variables expand per segment (bash expands after parsing), so a value
-      // containing `;` is never re-parsed as an operator.
+      // containing `;` is never re-parsed as an operator. `$?` reads the status
+      // recorded by the previous executed segment (#63).
       const expanded = this.shellTools?.expandVariables
         ? this.shellTools.expandVariables(segment)
         : segment;
       // Bare shell variable assignment (`HOST=$(oc get route … -o …)`, the L20
       // hint form): silent, session-persistent, and visible to `$VAR` in later
-      // segments of the same line (#50).
+      // segments of the same line (#50). A successful assignment exits 0.
       const assignment = this.shellTools?.parseShellAssignment?.(expanded);
       if (assignment) {
         this.shellTools.setSessionVariable(assignment.name, assignment.value);
         stdinPending = null;
         ranSegment = true;
         lastStatus = true;
+        this._setShellExitCode(0);
         continue;
       }
       const result = this._runSegment(expanded, stdinPending, !ranSegment && prefixed);
       stdinPending = null;
       ranSegment = true;
-      lastStatus = !result.error;
+      // The segment's exit status drives both `&&`/`||` and the `$?` value the
+      // next segment expands (#63). A silent-failure shell command (`grep` with
+      // no match) has a failed status without a printed error message.
+      const lastExitCode = this._setShellExitCode(
+        Number.isFinite(result.exitCode) ? result.exitCode : result.error ? 1 : 0
+      );
+      lastStatus = lastExitCode === 0;
       if (result.clear) {
         this._outputLines = [];
         if (this.output) this.output.innerHTML = '';
@@ -3543,10 +3572,12 @@ export class CommandBar {
    * Run one shell sequencing segment (#50): its own pipeline stages plus a
    * trailing output redirect. Pipes feed stdout to the next stage inside the
    * segment only; output of every executed segment is appended by the caller.
+   * The segment's exit status is the last executed pipeline stage's status and
+   * is surfaced for `$?` / `&&` / `||` (#63).
    * @param {string} segment
    * @param {string|null} stdin piped/heredoc stdin (first executed segment only)
    * @param {boolean} linePrefixed true when the original line started with `oc`
-   * @returns {{error:boolean,message:string,output:string,clear?:boolean,exit?:boolean}}
+   * @returns {{error:boolean,message:string,output:string,exitCode:number,clear?:boolean,exit?:boolean}}
    */
   _runSegment(segment, stdin, linePrefixed = false) {
     const { stages, redirect } = splitPipeline(segment);
@@ -3554,36 +3585,44 @@ export class CommandBar {
     let failed = false;
     let failureMessage = '';
     let output = '';
+    let exitCode = 0;
     for (let index = 0; index < stages.length; index += 1) {
       const isLast = index === stages.length - 1;
       const result = this._runStage(stages[index], stageStdin, index === 0 && linePrefixed);
-      if (result.clear) return { error: false, message: '', output: '', clear: true };
-      if (result.exit) return { error: false, message: '', output: '', exit: true };
+      if (result.clear) return { error: false, message: '', output: '', clear: true, exitCode: 0 };
+      if (result.exit) return { error: false, message: '', output: '', exit: true, exitCode: 0 };
       if (result.error) {
         failed = true;
+        exitCode = Number.isFinite(result.exitCode) ? result.exitCode : 1;
         // Silent shell commands (`curl -s` on a failed request) print nothing at
         // all — never substitute the generic fallback line for them (#49).
         failureMessage = result.message || (result.silentFailure ? '' : 'error: command failed');
         break;
       }
       const text = result.message || '';
+      // A pipeline's exit status is its LAST stage's status: `grep` with no
+      // match succeeds as a pipe stage but exits 1, so `$?`/`&&` must see 1 (#63).
+      const lastStageStatus = Number.isFinite(result.exitCode) ? result.exitCode : 0;
       if (isLast && redirect) {
         const written = this._writeRedirect(redirect, text);
         if (written.error) {
           failed = true;
+          exitCode = 1;
           failureMessage = written.message;
         } else {
           // Shell redirection is silent on success (`cmd > file` prints nothing).
           output = '';
+          exitCode = lastStageStatus;
         }
       } else if (isLast) {
         output = text;
+        exitCode = lastStageStatus;
       } else {
         // Pipes: stdout feeds the next stage and is not echoed by the shell.
         stageStdin = text;
       }
     }
-    return { error: failed, message: failureMessage, output };
+    return { error: failed, message: failureMessage, output, exitCode };
   }
 
   _runStage(stage, stdin, linePrefixed = false) {
@@ -13667,7 +13706,11 @@ Object.assign(CommandBar.prototype, {
     const execLines = [...lines, ...output];
     if (exitCode) execLines.push(`command terminated with exit code ${exitCode}`);
     const message = execLines.join('\n');
-    return exitCode ? this._err(message) : this._ok(message);
+    // Real `oc exec` exits with the remote command's status; surface it so
+    // `$?` and `&&`/`||` see it exactly like the 127 case (#63).
+    const result = exitCode ? this._err(message) : this._ok(message);
+    result.exitCode = exitCode || 0;
+    return result;
   },
 
   _simulateExecCommand(command, pod, containerName) {
@@ -13756,6 +13799,10 @@ Object.assign(CommandBar.prototype, {
       return ok(entries.map(([key, value]) => `${key}=${value}`));
     }
     if (name === 'pwd') return ok(['/']);
+    // Coreutils ship in every UBI image, so `true`/`false` are real container
+    // binaries: `true` is a silent success, `false` a silent exit 1 (#63).
+    if (name === 'true') return ok([]);
+    if (name === 'false') return { ok: false, exitCode: 1, lines: [] };
     if (name === 'ls' || name === 'll') {
       const flags = args.filter((arg) => arg.startsWith('-'));
       const targetArg = args.find((arg) => !arg.startsWith('-')) || '/';
@@ -13772,7 +13819,13 @@ Object.assign(CommandBar.prototype, {
         return ok([target.split('/').pop()]);
       }
       if (!context.dirs.has(target)) {
-        return ok([`ls: cannot access '${targetArg}': No such file or directory`]);
+        // Real coreutils `ls` reports a failed path on stderr and exits 2; the
+        // exec surface turns that into `command terminated with exit code 2` (#63).
+        return {
+          ok: false,
+          exitCode: 2,
+          lines: [`ls: cannot access '${targetArg}': No such file or directory`],
+        };
       }
       const entries = [...context.dirs.get(target)].sort();
       const shown = all ? entries : entries.filter((entry) => !entry.startsWith('.'));
@@ -13804,7 +13857,8 @@ Object.assign(CommandBar.prototype, {
         }
         lines.push(...String(context.files.get(target)).replace(/\n$/, '').split('\n'));
       }
-      return { ok: !failed, lines };
+      // Real `cat` exits 1 after printing the missing-file errors (#63).
+      return failed ? { ok: false, exitCode: 1, lines } : ok(lines);
     }
     if (name === 'echo') {
       const text = args.filter((arg) => !/^-[neE]+$/.test(arg)).join(' ');
@@ -13823,7 +13877,9 @@ Object.assign(CommandBar.prototype, {
         matcher = new RegExp(pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), ignoreCase ? 'i' : '');
       }
       const lines = pipeLines().filter((line) => matcher.test(line) !== invert);
-      return { ok: lines.length > 0, lines };
+      // grep exits 1 when nothing matched; the exec surface prints the real
+      // `command terminated with exit code 1` with no stdout (#63).
+      return lines.length > 0 ? { ok: true, lines } : { ok: false, exitCode: 1, lines };
     }
     if (name === 'head' || name === 'tail') {
       const match = args.join(' ').match(/-n?\s*(\d+)/);
@@ -18875,7 +18931,10 @@ Object.assign(CommandBar.prototype, {
       const execLines = [...lines, ...output];
       if (exitCode) execLines.push(`command terminated with exit code ${exitCode}`);
       const message = execLines.join('\n');
-      return exitCode ? this._err(message) : this._ok(message);
+      // Like `oc exec`, `oc rsh` returns the remote command's exit status (#63).
+      const result = exitCode ? this._err(message) : this._ok(message);
+      result.exitCode = exitCode || 0;
+      return result;
     }
     return this._ok(
       [
