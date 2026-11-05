@@ -1,19 +1,19 @@
 {
-  "timestamp": "2026-11-05T10:55:00.318Z",
+  "timestamp": "2026-11-05T12:40:21.719Z",
   "environment": {
     "node": "v26.10.0",
     "chrome": "Chrome/156.0.8078.79",
-    "baseUrl": "http://127.0.0.1:45335",
+    "baseUrl": "http://127.0.0.1:34581",
     "viewport": {
       "width": 1600,
       "height": 900
     },
     "puppeteerCore": "/tmp/verify-tools",
-    "startedAt": "2026-11-05T10:39:31.440Z",
-    "durationSeconds": 929
+    "startedAt": "2026-11-05T12:25:28.802Z",
+    "durationSeconds": 893
   },
   "summary": {
-    "passes": 1651,
+    "passes": 1737,
     "failures": 0,
     "warnings": 0,
     "consoleErrors": 0,
@@ -186,6 +186,11 @@
       "failures": 0,
       "warnings": 0
     },
+    "qa-issue55-56": {
+      "passes": 86,
+      "failures": 0,
+      "warnings": 0
+    },
     "draw": {
       "passes": 10,
       "failures": 0,
@@ -206,74 +211,74 @@
       "path": "screenshot.png",
       "width": 1600,
       "height": 900,
-      "bytes": 955833
+      "bytes": 975186
     },
     "ogImage": {
       "path": "og-image.png",
       "width": 1200,
       "height": 630,
-      "bytes": 203979
+      "bytes": 205060
     },
     "screenshots": [
       {
         "path": "docs/screenshots/menu.png",
         "width": 1600,
         "height": 900,
-        "bytes": 331401
+        "bytes": 331931
       },
       {
         "path": "docs/screenshots/exam-prep.png",
         "width": 1600,
         "height": 900,
-        "bytes": 204311
+        "bytes": 210650
       },
       {
         "path": "docs/screenshots/sandbox.png",
         "width": 1600,
         "height": 900,
-        "bytes": 955362
+        "bytes": 974702
       },
       {
         "path": "screenshot.png",
         "width": 1600,
         "height": 900,
-        "bytes": 955833
+        "bytes": 975186
       },
       {
         "path": "docs/screenshots/files-panel.png",
         "width": 1600,
         "height": 900,
-        "bytes": 245755
+        "bytes": 243957
       },
       {
         "path": "docs/screenshots/campaign-level-1.png",
         "width": 1600,
         "height": 900,
-        "bytes": 476015
+        "bytes": 478459
       },
       {
         "path": "docs/screenshots/regressions-minimap-collapsed.png",
         "width": 1600,
         "height": 900,
-        "bytes": 930072
+        "bytes": 955470
       },
       {
         "path": "docs/screenshots/regressions-campaign-restart.png",
         "width": 1600,
         "height": 900,
-        "bytes": 484414
+        "bytes": 488273
       },
       {
         "path": "docs/screenshots/draw.png",
         "width": 1600,
         "height": 900,
-        "bytes": 488730
+        "bytes": 484852
       },
       {
         "path": "og-image.png",
         "width": 1200,
         "height": 630,
-        "bytes": 203979
+        "bytes": 205060
       }
     ]
   },
@@ -6801,6 +6806,350 @@
     {
       "section": "qa-issue50-54",
       "name": "#53D: the L18 pin objective still ticks while the Manual upgrade plan is pending"
+    },
+    {
+      "section": "qa-issue55-56",
+      "name": "#55A: a fresh sandbox boots for the control-plane checks"
+    },
+    {
+      "section": "qa-issue55-56",
+      "name": "#55A: `oc describe node master-0` shows the dedicated NoSchedule control-plane taint"
+    },
+    {
+      "section": "qa-issue55-56",
+      "name": "#55A: `oc describe node worker-0` has no taints"
+    },
+    {
+      "section": "qa-issue55-56",
+      "name": "#55A: `oc describe node worker-1` has no taints"
+    },
+    {
+      "section": "qa-issue55-56",
+      "name": "#55A: dns-default/node-resolver pods on master-0 tolerate node-role.kubernetes.io/master:NoSchedule"
+    },
+    {
+      "section": "qa-issue55-56",
+      "name": "#55A: the platform pods on the tainted master-0 keep Running/Ready"
+    },
+    {
+      "section": "qa-issue55-56",
+      "name": "#55A: the webapp Deployment reaches two Running pods"
+    },
+    {
+      "section": "qa-issue55-56",
+      "name": "#55A: user workload pods never land on the tainted master-0"
+    },
+    {
+      "section": "qa-issue55-56",
+      "name": "#55A: the two user replicas spread over worker-0 and worker-1"
+    },
+    {
+      "section": "qa-issue55-56",
+      "name": "#55A: `oc new-app --image=… --name=web` creates the workload"
+    },
+    {
+      "section": "qa-issue55-56",
+      "name": "#55A: an `oc new-app` pod is scheduled on a worker, never master-0"
+    },
+    {
+      "section": "qa-issue55-56",
+      "name": "#55A: the master-nodeSelector Deployment applies"
+    },
+    {
+      "section": "qa-issue55-56",
+      "name": "#55A: the master-nodeSelector pod is created"
+    },
+    {
+      "section": "qa-issue55-56",
+      "name": "#55A: a pod that explicitly targets the master stays Pending under the NoSchedule taint"
+    },
+    {
+      "section": "qa-issue55-56",
+      "name": "#55A: the Pending pod reports FailedScheduling naming the untolerated master taint"
+    },
+    {
+      "section": "qa-issue55-56",
+      "name": "#55B: `oc get deploy,rs -n openshift-ingress` shows deployment.apps/router-default 2/2"
+    },
+    {
+      "section": "qa-issue55-56",
+      "name": "#55B: openshift-ingress has exactly one router-default ReplicaSet"
+    },
+    {
+      "section": "qa-issue55-56",
+      "name": "#55B: the router-default Deployment object is 2/2 ready/available"
+    },
+    {
+      "section": "qa-issue55-56",
+      "name": "#55B: the router ReplicaSet carries the Deployment ownerReference and the pod-template-hash"
+    },
+    {
+      "section": "qa-issue55-56",
+      "name": "#55B: exactly two router-default pods are Running/Ready"
+    },
+    {
+      "section": "qa-issue55-56",
+      "name": "#55B: both router pods share the ReplicaSet pod-template-hash prefix"
+    },
+    {
+      "section": "qa-issue55-56",
+      "name": "#55B: every router pod is owned by the router ReplicaSet (pod → ReplicaSet → Deployment)"
+    },
+    {
+      "section": "qa-issue55-56",
+      "name": "#55B: `oc get pod … -o jsonpath=ownerReferences` shows the ReplicaSet owner"
+    },
+    {
+      "section": "qa-issue55-56",
+      "name": "#55B: the router ReplicaSet ownerReference points at deployment.apps/router-default"
+    },
+    {
+      "section": "qa-issue55-56",
+      "name": "#55B: `oc describe deploy router-default -n openshift-ingress` works"
+    },
+    {
+      "section": "qa-issue55-56",
+      "name": "#55B: `oc rollout status deployment/router-default -n openshift-ingress` reports the rollout complete"
+    },
+    {
+      "section": "qa-issue55-56",
+      "name": "#55B: `oc get ds -n openshift-dns` lists dns-default and node-resolver"
+    },
+    {
+      "section": "qa-issue55-56",
+      "name": "#55B: DaemonSet dns-default is DESIRED/CURRENT/READY 3/3/3"
+    },
+    {
+      "section": "qa-issue55-56",
+      "name": "#55B: DaemonSet node-resolver is DESIRED/CURRENT/READY 3/3/3"
+    },
+    {
+      "section": "qa-issue55-56",
+      "name": "#55B: the dns-default and node-resolver DaemonSet objects exist"
+    },
+    {
+      "section": "qa-issue55-56",
+      "name": "#56: dns-default pods are READY 2/2 (dns + kube-rbac-proxy) and Running"
+    },
+    {
+      "section": "qa-issue55-56",
+      "name": "#55B: node-resolver pods stay READY 1/1 and Running"
+    },
+    {
+      "section": "qa-issue55-56",
+      "name": "#56: dns-default pod spec has the dns + kube-rbac-proxy containers, both ready"
+    },
+    {
+      "section": "qa-issue55-56",
+      "name": "#55B: every DNS pod is owned by its DaemonSet"
+    },
+    {
+      "section": "qa-issue55-56",
+      "name": "#56: `oc get pod … -o jsonpath` lists the dns and kube-rbac-proxy containers"
+    },
+    {
+      "section": "qa-issue55-56",
+      "name": "#55B: `oc get pod … -o jsonpath=ownerReferences` shows the dns-default DaemonSet owner"
+    },
+    {
+      "section": "qa-issue55-56",
+      "name": "#55B: platform pods do not churn or duplicate over 120 s of ticks"
+    },
+    {
+      "section": "qa-issue55-56",
+      "name": "#55B: the router Deployment stays 2/2 with one ReplicaSet after the long tick run"
+    },
+    {
+      "section": "qa-issue55-56",
+      "name": "#55B: the router controller recreates a deleted router pod"
+    },
+    {
+      "section": "qa-issue55-56",
+      "name": "#55B: the DNS DaemonSet controller recreates a deleted dns-default pod"
+    },
+    {
+      "section": "qa-issue55-56",
+      "name": "#55A: `oc adm taint node master-0 node-role.kubernetes.io/master:NoSchedule-` removes the taint"
+    },
+    {
+      "section": "qa-issue55-56",
+      "name": "#55A: the master taint is gone right after `oc adm taint …-`"
+    },
+    {
+      "section": "qa-issue55-56",
+      "name": "#55A: the controller loop does not re-add the removed master taint"
+    },
+    {
+      "section": "qa-issue55-56",
+      "name": "#55A: removing the taint lets the master-pinned pod actually schedule (real taint semantics)"
+    },
+    {
+      "section": "qa-issue55-56",
+      "name": "#56 CLI: the qa-cli56 workload is Running before the output checks"
+    },
+    {
+      "section": "qa-issue55-56",
+      "name": "#56 CLI: multi-kind `oc get pods,endpoints,route` prints the endpoints NAME as endpoints/webapp"
+    },
+    {
+      "section": "qa-issue55-56",
+      "name": "#56 CLI: multi-kind pod rows keep the pod/ NAME prefix"
+    },
+    {
+      "section": "qa-issue55-56",
+      "name": "#56 CLI: multi-kind route rows keep the route.route.openshift.io/ NAME prefix"
+    },
+    {
+      "section": "qa-issue55-56",
+      "name": "#56 CLI: single-kind `oc get endpoints` keeps the plain NAME"
+    },
+    {
+      "section": "qa-issue55-56",
+      "name": "#56 CLI: mixing endpoints with another kind keeps both kinds’ NAME prefixes"
+    },
+    {
+      "section": "qa-issue55-56",
+      "name": "#55B: the sandbox is genuinely paused before \"Start exploring\" (zero ticks)"
+    },
+    {
+      "section": "qa-issue55-56",
+      "name": "#55B: the router Deployment/ReplicaSet exist synchronously in a paused pre-start sandbox"
+    },
+    {
+      "section": "qa-issue55-56",
+      "name": "#55B: the DNS DaemonSets exist synchronously in a paused pre-start sandbox"
+    },
+    {
+      "section": "qa-issue55-56",
+      "name": "#55B: platform router pods are present in a paused pre-start sandbox"
+    },
+    {
+      "section": "qa-issue55-56",
+      "name": "#56 CLI: `oc expose svc/webapp` creates the Route in a paused pre-start sandbox"
+    },
+    {
+      "section": "qa-issue55-56",
+      "name": "#56 CLI: a pre-tick Route publishes no fabricated route admission event"
+    },
+    {
+      "section": "qa-issue55-56",
+      "name": "#56 CLI: `oc get events` has no \"Warning/ServiceUnavailable … not admitted: no endpoints available\" row before the router evaluates the Route"
+    },
+    {
+      "section": "qa-issue55-56",
+      "name": "#56 CLI: `oc status` does not claim missing endpoints block Route admission"
+    },
+    {
+      "section": "qa-issue55-56",
+      "name": "#56 CLI: \"Start exploring\" resumes the paused sandbox"
+    },
+    {
+      "section": "qa-issue55-56",
+      "name": "#56 CLI: the Route is Admitted after the router ticks"
+    },
+    {
+      "section": "qa-issue55-56",
+      "name": "#56 CLI: after ticking, the Route event is the real Normal Admitted event"
+    },
+    {
+      "section": "qa-issue55-56",
+      "name": "#56 CLI: no bogus warning admission event remains after the router admits the Route"
+    },
+    {
+      "section": "qa-issue55-56",
+      "name": "#56 CLI: `oc status` reports the admitted Route"
+    },
+    {
+      "section": "qa-issue55-56",
+      "name": "#56 OLM: a fresh sandbox boots for the pin→upgrade checks"
+    },
+    {
+      "section": "qa-issue55-56",
+      "name": "#56 OLM: a fresh cluster has no installed ClusterServiceVersion yet"
+    },
+    {
+      "section": "qa-issue55-56",
+      "name": "#56 OLM: the Manual pinned v1.16.0 Subscription manifest applies"
+    },
+    {
+      "section": "qa-issue55-56",
+      "name": "#56 OLM: the pinned v1.16.0 InstallPlan waits for Manual approval"
+    },
+    {
+      "section": "qa-issue55-56",
+      "name": "#56 OLM: approving the pinned InstallPlan succeeds"
+    },
+    {
+      "section": "qa-issue55-56",
+      "name": "#56 OLM: the pinned v1.16.0 CSV reaches Succeeded"
+    },
+    {
+      "section": "qa-issue55-56",
+      "name": "#56 OLM: the pinned v1.16.0 CSV carries the real chain value spec.replaces=v1.15.0"
+    },
+    {
+      "section": "qa-issue55-56",
+      "name": "#56 OLM: the v1.16.0 operator Deployment is installed and Ready"
+    },
+    {
+      "section": "qa-issue55-56",
+      "name": "#56 OLM: OLM creates a second Manual, unapproved v1.17.0 upgrade InstallPlan"
+    },
+    {
+      "section": "qa-issue55-56",
+      "name": "#56 OLM: approving the v1.17.0 upgrade InstallPlan succeeds"
+    },
+    {
+      "section": "qa-issue55-56",
+      "name": "#56 OLM: approving the upgrade installs v1.17.0 (installedCSV=currentCSV=head, Succeeded)"
+    },
+    {
+      "section": "qa-issue55-56",
+      "name": "#56 OLM: `oc get csv` prints REPLACES cert-manager-operator.v1.16.0 on the v1.17.0 row"
+    },
+    {
+      "section": "qa-issue55-56",
+      "name": "#56 OLM: the superseded v1.16.0 CSV is gone from `oc get csv` after the upgrade"
+    },
+    {
+      "section": "qa-issue55-56",
+      "name": "#56 OLM: the v1.17.0 CSV spec.replaces is cert-manager-operator.v1.16.0"
+    },
+    {
+      "section": "qa-issue55-56",
+      "name": "#56 OLM: `oc describe csv` shows the Replaces chain"
+    },
+    {
+      "section": "qa-issue55-56",
+      "name": "#56 OLM: the upgraded operator Deployment is Ready after the rollout"
+    },
+    {
+      "section": "qa-issue55-56",
+      "name": "#56 OLM: the upgrade changes the operator Deployment pod template/image (v1.16.0 → v1.17.0)"
+    },
+    {
+      "section": "qa-issue55-56",
+      "name": "#56 OLM: the Deployment controller rolls a NEW operator ReplicaSet with a new pod-template-hash"
+    },
+    {
+      "section": "qa-issue55-56",
+      "name": "#56 OLM: the old operator ReplicaSet is scaled to 0 and kept for rollout history"
+    },
+    {
+      "section": "qa-issue55-56",
+      "name": "#56 OLM: the operator pod has the new hash and is owned by the new ReplicaSet"
+    },
+    {
+      "section": "qa-issue55-56",
+      "name": "#56 OLM: `oc get rs` lists the new operator ReplicaSet with desired replicas"
+    },
+    {
+      "section": "qa-issue55-56",
+      "name": "#56 OLM: `oc get rs` shows the old operator ReplicaSet scaled to 0"
+    },
+    {
+      "section": "qa-issue55-56",
+      "name": "#56 OLM: multi-kind `oc get deploy,rs` shows the upgraded operator Deployment 1/1 and its new ReplicaSet"
     },
     {
       "section": "draw",

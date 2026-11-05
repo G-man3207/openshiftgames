@@ -73,9 +73,15 @@ names are shown in EX280 Prep).
   (`service.beta.openshift.io/serving-cert-secret-name`) and injects CA bundles
   (`inject-cabundle`) for reencrypt Routes; a default-deny policy really blocks a project's Route
   until an ingress NetworkPolicy admits the router namespace (the L20 capstone teaches the fix).
-  The platform namespaces are populated like a real install: `openshift-ingress` runs
-  `router-default` pods and `openshift-dns` runs the `dns-default`/`node-resolver` pods that ARE
-  the `oc debug`/NetworkPolicy labs' DNS egress target.
+  The platform namespaces are populated by real controllers like a real install: `openshift-ingress`
+  runs `deployment.apps/router-default` (2/2 Ready) with its ReplicaSet and two shared-hash router
+  pods, and `openshift-dns` runs the `daemonset.apps/dns-default` + `daemonset.apps/node-resolver`
+  DaemonSets with one owned Pod per Node (the `dns-default` Pods report READY `2/2`). Those pods ARE
+  the `oc debug`/NetworkPolicy labs' DNS egress target, and deleting one makes the owning controller
+  heal it. The control-plane Node carries the real
+  `node-role.kubernetes.io/master:NoSchedule` taint, so application workloads schedule onto the
+  workers while the tolerated DaemonSet pods keep running on the master — the taints/tolerations and
+  "why is my Pod on the wrong node / Pending" troubleshooting flows behave like 4.22.
 - **Declarative workflows** — a Files panel with editable YAML manifests, `oc apply -f`,
   Kustomize base/overlays (`oc apply -k`), OpenShift templates (`oc process -f … | oc apply -f -`),
   Helm charts (`helm install|upgrade|uninstall`), `--dry-run=client -o yaml` manifest skeletons,

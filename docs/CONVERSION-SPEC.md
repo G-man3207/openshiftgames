@@ -232,12 +232,20 @@ the installer-generated password (plain text lives only in `~/auth/kubeadmin-pas
 `kubernetes.io/dockerconfigjson` and `initial-service-account-private-key` type Opaque — real 4.22
 never seeds the HTPasswd secret, the identity labs create it); ImageStreams in `openshift`: `nodejs`
 (tags `20-ubi9`, `22-ubi9`, `latest`), `python` (`3.12-ubi9`, `latest`), `nginx` (`1.26-ubi9`,
-`latest`); platform workload Pods the routers/DNS operators own on a real 4.22 install:
-`openshift-ingress/router-default-*` (2, Running/Ready) and `openshift-dns/dns-default-*` +
-`node-resolver-*` (one of each per Node), seeded lazily by `SimulationTick` once Nodes exist.
+`latest`); platform workloads the routers/DNS operators own on a real 4.22 install are seeded as
+real controllers by `SimulationTick` once Nodes exist: `deployment.apps/router-default` in
+`openshift-ingress` (2/2 Ready, one ReplicaSet and two shared-`pod-template-hash` Pods with the
+Pod → ReplicaSet → Deployment owner chain) and `daemonset.apps/dns-default` +
+`daemonset.apps/node-resolver` in `openshift-dns` (one owned Pod per Node; `dns-default` runs the
+real `dns` + `kube-rbac-proxy` containers and reports READY `2/2`), together with the
+`router`/`dns-default`/`node-resolver` ServiceAccounts and the host-network SCC binding. The
+Deployment/DaemonSet controllers heal a deleted platform Pod; the synchronous bootstrap keeps the
+paused pre-start cluster healthy and never duplicates or churns the seeded Pods.
 Nodes follow one catalog shared by every mode: `worker-0`, `worker-1`, `master-0` (2-node clusters
-use worker-0/worker-1; the control-plane Node carries the `control-plane,master` role labels and is
-left schedulable so small-cluster capacity is unchanged).
+use worker-0/worker-1; the control-plane Node carries the `control-plane,master` role labels AND the
+real `node-role.kubernetes.io/master:NoSchedule` taint, so application Pods schedule onto the
+workers while the platform DaemonSet Pods tolerate the taint and keep running on the master —
+#55).
 
 ---
 
@@ -307,7 +315,9 @@ GameEngine helpers):
   `oc delete subscription <name> -n openshift-operators` (uninstall), `oc delete csv <name>` (delete operator).
 - Builds/images: `oc get bc|builds|is|istag`, `oc start-build`, `oc tag <src> <dst> [--scheduled]`,
   `oc import-image <is>:<tag> --from=<image> --confirm`, `oc describe is|bc|build`.
-- Cluster: `oc adm cordon|uncordon|drain node/<node>`, `oc adm taint nodes <node> key=value:NoSchedule`,
+- Cluster: `oc adm cordon|uncordon|drain node/<node>`,
+  `oc adm taint nodes <node> key=value:NoSchedule` plus the real removal forms
+  `<key>-`, `<key>:<Effect>-`, `<key>=<value>:<Effect>-`,
   `oc label node <node> key=value`, `oc debug node/<node>` (simulated shell), `oc debug deployment/<name>`.
 - Files/manifests (requires ManifestEngine, section 7): `oc apply -f`, `oc create -f`, `oc apply -k`,
   `oc process -f`, `oc get ... -o yaml > file`, `oc edit` (editor persists to cluster on Save),

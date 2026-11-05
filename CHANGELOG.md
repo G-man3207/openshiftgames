@@ -4,6 +4,71 @@ All notable changes to OpenShift Games are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 aims to follow [Semantic Versioning](https://semver.org/).
 
+## [1.6.0] — 2026-11-05
+
+Eighth QA pass on 1.5.0: closes the two open report items (#55–#56) from the 1.5.0 CLI playthrough.
+The release makes the simulated platform behave like a real 4.22 install: the control-plane Node
+carries its `node-role.kubernetes.io/master:NoSchedule` taint (application Pods spread over the
+workers, DaemonSet Pods tolerate the taint and keep running on the master), and the platform
+workloads are now owned by real controllers (`deployment.apps/router-default` + its ReplicaSet,
+`daemonset.apps/dns-default`/`node-resolver` with one owned Pod per Node) instead of static objects.
+It also fixes the collected output differences: OLM Manual upgrades show the real CSV `REPLACES`
+chain and roll the operator Deployment's pod template into a new ReplicaSet, multi-kind `oc get`
+prefixes virtual Endpoints (`endpoints/<svc>`), `dns-default` reports the real two-container
+`2/2` READY, and the stale "no endpoints available" Route-admission event/wording left over from
+the #52 fix is gone. The game stays no-build and dependency-free.
+
+### Added
+
+- **Real control-plane taint and scheduler contract (issue #55A).** Every mode and campaign level
+  seeds the control-plane Node with the real `node-role.kubernetes.io/master:NoSchedule` taint
+  (derived from the machine's control-plane/master role labels when the Node object is created), so
+  application workloads created with `oc new-app`, Deployments, Jobs and bare Pods schedule onto
+  `worker-0`/`worker-1` and never onto `master-0`. The existing taint/toleration scheduler surfaces
+  the real `FailedScheduling` message (`0/N nodes are available: N node(s) had untolerated
+taint {node-role.kubernetes.io/master: …}`) when a workload cannot tolerate it, and the platform
+  DaemonSet Pods (`dns-default`, `node-resolver`) carry the master/control-plane plus
+  not-ready/unreachable tolerations so they keep running on the master. `Nodes` also register the
+  real `kubernetes.io/os`/`kubernetes.io/arch` kubelet labels that platform workloads select on.
+- **Controller-owned platform workloads (issue #55B).** `openshift-ingress` now contains a real
+  `deployment.apps/router-default` (2/2 Ready) with one ReplicaSet and two router Pods that share
+  its `pod-template-hash` and owner chain (Pod → ReplicaSet → Deployment). `openshift-dns` contains
+  the real `daemonset.apps/dns-default` and `daemonset.apps/node-resolver`, each owning exactly one
+  Pod per Node; the `dns-default` Pods run the real `dns` + `kube-rbac-proxy` containers and report
+  READY `2/2`. `oc get deploy,rs -n openshift-ingress`, `oc get ds -n openshift-dns`,
+  `oc describe deploy router-default` and `oc rollout status deployment/router-default` all work,
+  Pod deletion is healed by the actual Deployment/DaemonSet controllers, the platform
+  ServiceAccounts (`router`, `dns-default`, `node-resolver`) and the host-network SCC binding exist
+  as on a real install, and the synchronous bootstrap keeps the platform healthy in the paused
+  pre-start sandbox with no Pod churn or duplicates over long tick runs.
+- **Real `oc adm taint` removal grammar (#55).** `oc adm taint node <node> <key>:<Effect>-`,
+  `<key>=<value>:<Effect>-` and `<key>-` now remove the matching taint (the effect/value are parsed
+  before matching); previously the effect stayed glued to the key comparison, so the command
+  printed "untainted" without changing anything. The control-plane taint is never re-added by the
+  tick loop.
+
+### Changed
+
+- **OLM Manual upgrades roll a new operator ReplicaSet (issue #56A/B).** A channel upgrade installs
+  the new ClusterServiceVersion with the correct `spec.replaces` chain derived from the catalog
+  channel's ordered entries (v1.17.0 replaces v1.16.0; a pinned v1.16.0 install records it replaces
+  v1.15.0), so `oc get csv` shows the `REPLACES` column and `oc describe csv` prints the Replaces
+  line. The upgrade also applies the new CSV's install strategy to the existing operator Deployment:
+  the image moves to the new version, the immutable selector is preserved, and the Deployment
+  controller rolls a NEW ReplicaSet/`pod-template-hash`/Pod while the old ReplicaSet is scaled to
+  zero and kept for history.
+- **Multi-kind `oc get` Endpoints prefix (issue #56).** `oc get pods,endpoints,route` (and any
+  multi-type request that includes the virtual Endpoints view) prints the NAME cell as
+  `endpoints/<service>` like the other kinds; the single-kind `oc get endpoints` table keeps the
+  plain name, and `-A`, `-o name|yaml|json|jsonpath|custom-columns` and empty-section omission are
+  unchanged.
+- **Truthful Route admission output (issue #56).** A Route the router has not evaluated yet (e.g.
+  after `oc expose` in the paused pre-start sandbox) no longer fabricates the removed #52
+  `Warning ServiceUnavailable … not admitted: no endpoints available` event: the synthetic event
+  table only prints the real `Admitted` condition, so the event appears as `Normal Admitted` once
+  the simulation ticks. `oc status` reports `router default (not yet evaluated)` / `(Admitted)` /
+  `(NOT admitted: <condition reason>)` instead of claiming missing endpoints block admission.
+
 ## [1.5.0] — 2026-11-05
 
 Seventh QA pass on 1.4.0: closes the five open report items (#50–#54) from the 1.4.0 CLI playthrough.
