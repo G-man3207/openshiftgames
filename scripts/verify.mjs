@@ -493,6 +493,7 @@ const DEFAULT_PROJECTS = [
   'openshift-config',
   'openshift-operators',
   'openshift-ingress',
+  'openshift-dns',
   'openshift-monitoring',
   'openshift-console',
   'openshift-authentication',
@@ -530,12 +531,71 @@ if (seedMod?.ClusterState) {
       if (!projects.includes(name)) fail('seed', `default Project "${name}" is not seeded`);
     }
     if (projects.length < 10)
-      fail('seed', `expected 10 default Projects, found ${projects.length}`);
+      fail('seed', `expected 11 default Projects, found ${projects.length}`);
     const activeProjects = byKind('Project').filter(
       (p) => (p.status?.phase || p.phase) === 'Active'
     ).length;
     if (activeProjects < DEFAULT_PROJECTS.length)
       fail('seed', `default Projects not Active (${activeProjects}/${DEFAULT_PROJECTS.length})`);
+
+    // #53F: one machine-name catalog shared by every mode (worker-0/worker-1/
+    // master-0); campaign levels, timed labs, sandbox and chaos all build Nodes
+    // from it so `oc debug node/worker-0` muscle memory transfers.
+    const hasLabel = (labels, key) => Object.prototype.hasOwnProperty.call(labels || {}, key);
+    if (!Array.isArray(seedMod.NODE_CATALOG)) {
+      fail('seed', 'ClusterState must export NODE_CATALOG (shared node naming, #53F)');
+    } else {
+      const catalogNames = seedMod.NODE_CATALOG.map((entry) => entry?.name);
+      if (catalogNames.join(',') !== 'worker-0,worker-1,master-0') {
+        fail(
+          'seed',
+          `NODE_CATALOG names ${catalogNames.join(',')} != worker-0,worker-1,master-0 (#53F)`
+        );
+      } else if (typeof seedMod.catalogNode !== 'function') {
+        fail('seed', 'ClusterState must export catalogNode(index) (#53F)');
+      } else {
+        const worker0 = seedMod.catalogNode(0);
+        const master0 = seedMod.catalogNode(2);
+        const problems = [];
+        if (worker0?.name !== 'worker-0') problems.push(`catalogNode(0)=${worker0?.name}`);
+        if (!hasLabel(worker0?.labels, 'node-role.kubernetes.io/worker'))
+          problems.push('worker-0 lacks node-role.kubernetes.io/worker');
+        if (master0?.name !== 'master-0') problems.push(`catalogNode(2)=${master0?.name}`);
+        if (!hasLabel(master0?.labels, 'node-role.kubernetes.io/control-plane'))
+          problems.push('master-0 lacks node-role.kubernetes.io/control-plane');
+        if (!hasLabel(master0?.labels, 'node-role.kubernetes.io/master'))
+          problems.push('master-0 lacks the legacy node-role.kubernetes.io/master label');
+        if (problems.length) fail('seed', `NODE_CATALOG contract: ${problems.join('; ')} (#53F)`);
+        else passed();
+      }
+    }
+
+    // #53G: openshift-config carries the real platform bootstrap Secrets, and
+    // identity-provider Secrets stay absent until the labs create them.
+    const configSecrets = byKind('Secret').filter(
+      (secret) => (secret.metadata?.namespace || '') === 'openshift-config'
+    );
+    const configSecretNames = configSecrets.map((secret) => secret.metadata?.name);
+    const pullSecret = configSecrets.find((secret) => secret.metadata?.name === 'pull-secret');
+    const saKey = configSecrets.find(
+      (secret) => secret.metadata?.name === 'initial-service-account-private-key'
+    );
+    const secretProblems = [];
+    if (!pullSecret) secretProblems.push('openshift-config/pull-secret is not seeded');
+    else if ((pullSecret.type || pullSecret.spec?.type) !== 'kubernetes.io/dockerconfigjson')
+      secretProblems.push(
+        `pull-secret type ${pullSecret.type || pullSecret.spec?.type} != kubernetes.io/dockerconfigjson`
+      );
+    if (!saKey) secretProblems.push('openshift-config/initial-service-account-private-key missing');
+    else if ((saKey.type || saKey.spec?.type) !== 'Opaque')
+      secretProblems.push(
+        `initial-service-account-private-key type ${saKey.type || saKey.spec?.type} != Opaque`
+      );
+    if (configSecretNames.includes('htpass-secret'))
+      secretProblems.push('htpass-secret must not be seeded (identity labs create it)');
+    if (secretProblems.length)
+      fail('seed', `openshift-config bootstrap Secrets: ${secretProblems.join('; ')} (#53G)`);
+    else passed();
 
     const cos = byKind('ClusterOperator');
     if (cos.length < 13) fail('seed', `expected 13 ClusterOperators, found ${cos.length}`);
@@ -682,6 +742,89 @@ if (seedMod?.ClusterState) {
   }
 } else {
   fail('seed', 'js/engine/ClusterState.js is missing or not importable');
+}
+
+// ── 4b. Issue #50–#54 platform-fidelity locks (static) ────────────────────
+// These lock the contracts the 1.4.0 QA fixes rely on so a future refactor
+// cannot silently reintroduce the reported bugs. Behaviour is asserted in the
+// browser suite section `qa-issue50-54`; these are cheap source/shape locks.
+{
+  const indexHtml = read('index.html');
+  // #54: the landing stats copy must agree with the 13 timed labs everywhere
+  // else (mode card, "Thirteen timed labs" copy, CHALLENGES length).
+  if (/<strong>12<\/strong>\s*timed labs/.test(indexHtml))
+    fail('fidelity', 'index.html landing stats still say 12 timed labs (#54)');
+  else if (!/<strong>13<\/strong>\s*timed labs/.test(indexHtml))
+    fail('fidelity', 'index.html landing stats do not say 13 timed labs (#54)');
+  else passed();
+
+  // #53F: no mode may invent its own legacy node names again.
+  const legacyNodeOwners = [];
+  for (const rel of [
+    'js/modes/SandboxMode.js',
+    'js/modes/ChaosMode.js',
+    'js/modes/ChallengeMode.js',
+  ]) {
+    const src = read(rel);
+    if (/sandbox-node-|chaos-node-|['"`]node-\$\{/.test(src)) legacyNodeOwners.push(rel);
+  }
+  if (legacyNodeOwners.length)
+    fail('fidelity', `legacy node-name literals returned in ${legacyNodeOwners.join(', ')} (#53F)`);
+  else passed();
+  const challengeSrc = read('js/modes/ChallengeMode.js');
+  const sandboxSrc = read('js/modes/SandboxMode.js');
+  const chaosSrc = read('js/modes/ChaosMode.js');
+  if (
+    !/catalogNode/.test(challengeSrc) ||
+    !/catalogNode/.test(sandboxSrc) ||
+    !/catalogNode/.test(chaosSrc)
+  )
+    fail('fidelity', 'a mode stopped building Nodes from the shared catalogNode() (#53F)');
+  else passed();
+
+  // #54e: the kubelet event stream is engine-owned; no synthetic duplicate in
+  // CommandBar and no Ready/PhaseChange kubelet reasons anywhere in the stream.
+  const commandBarSrc = read('js/ui/CommandBar.js');
+  const syntheticPodLifecycle = [
+    /Successfully assigned \$\{podNamespace\}/,
+    /reason:\s*'Pulling'/,
+    /reason:\s*'Pulled'/,
+    /reason:\s*'Ready'/,
+  ].filter((pattern) => pattern.test(commandBarSrc));
+  if (syntheticPodLifecycle.length)
+    fail(
+      'fidelity',
+      `CommandBar still synthesizes pod lifecycle events (${syntheticPodLifecycle.join(', ')}) (#54e)`
+    );
+  else passed();
+  for (const rel of ['js/engine/ClusterState.js', 'js/engine/SimulationTick.js']) {
+    const src = read(rel);
+    if (/recordEvent\([^)]*'PhaseChange'/.test(src))
+      fail('fidelity', `${rel} still records a PhaseChange event (#54e)`);
+    else passed();
+  }
+  const simulationTickSrc = read('js/engine/SimulationTick.js');
+  if (/recordEvent\(\s*'Normal',\s*'Ready'/.test(simulationTickSrc))
+    fail('fidelity', 'SimulationTick still records a Ready pod event (#54e)');
+  else passed();
+  for (const reason of ['Scheduled', 'Pulling', 'Pulled', 'Created', 'Started']) {
+    if (!new RegExp(`['"]${reason}['"]`).test(simulationTickSrc))
+      fail('fidelity', `SimulationTick no longer records the kubelet ${reason} event (#54e)`);
+    else passed();
+  }
+
+  // #53G: platform workload pods are seeded by the simulation engine in every
+  // mode (the namespace/Secret seeds live in ClusterState, checked above).
+  for (const literal of [
+    'openshift-dns',
+    'openshift-ingress',
+    'dns-default',
+    'node-resolver',
+    'router-default',
+  ])
+    if (!simulationTickSrc.includes(literal))
+      fail('fidelity', `SimulationTick no longer seeds platform pods: missing "${literal}" (#53G)`);
+    else passed();
 }
 
 // ── 5. Campaign, challenges, incidents and EX280 content ──────────────────

@@ -2745,7 +2745,8 @@ spec:
   await expectCmd('cli: oc get jobs', `oc get jobs -n ${project}`, /hello/);
   await expectCmd('cli: oc get cronjobs', `oc get cronjobs -n ${project}`, /hello-cron/);
   const nodeName = await evaluate(
-    () => window.game.cluster.getByKind?.('Node')?.[0]?.metadata?.name || 'sandbox-node-1'
+    // #53F: shared worker-0/worker-1/master-0 node catalog (no sandbox-node-N).
+    () => window.game.cluster.getByKind?.('Node')?.[0]?.metadata?.name || 'worker-0'
   );
   await expectCmd('cli: oc adm cordon', `oc adm cordon ${nodeName}`, /cordoned|node/i);
   await expectCmd('cli: oc adm uncordon', `oc adm uncordon ${nodeName}`, /uncordoned|node/i);
@@ -6370,14 +6371,22 @@ await runSection('qa-cli', async () => {
   );
 
   // Node cordon keeps SchedulingDisabled in the STATUS column.
-  await runCmd('oc adm cordon sandbox-node-2');
+  // #53F: every mode uses the shared worker-0/worker-1/master-0 catalog now, so
+  // resolve a real worker from the cluster instead of hard-coding sandbox-node-2.
+  const cordonNodeName = await evaluate(
+    () =>
+      (window.game.cluster.getByKind?.('Node') || [])
+        .map((node) => node.metadata?.name)
+        .find((name) => /^worker-\d+$/.test(name)) || 'worker-1'
+  );
+  await runCmd(`oc adm cordon ${cordonNodeName}`);
   out = await runCmd('oc get nodes');
   assert(
-    /sandbox-node-2\s+Ready,SchedulingDisabled/.test(out.message),
+    new RegExp(`${cordonNodeName}\\s+Ready,SchedulingDisabled`).test(out.message),
     'qa-cli #36: cordoned node STATUS is Ready,SchedulingDisabled',
     out.message
   );
-  await runCmd('oc adm uncordon sandbox-node-2');
+  await runCmd(`oc adm uncordon ${cordonNodeName}`);
 
   await returnToMenu();
 });
@@ -10572,7 +10581,9 @@ await runSection('qa-issue43', async () => {
   );
   assert(
     new RegExp(`\\d{2}:\\d{2}:\\d{2} ${nodes[0]} `).test(result.message) &&
-      !/\bworker\b/.test(result.message),
+      // #53F: node names are worker-0/worker-1/master-0 now, so reject only the
+      // old generic "worker" hostname — worker-N inside the node name is correct.
+      !/\bworker\b(?!-\d)/.test(result.message),
     '#43: journalctl lines use the real node hostname, not "worker"',
     result.message.split('\n').slice(0, 3).join(' | ')
   );
@@ -11611,9 +11622,13 @@ await runSection('qa-issue44-49', async () => {
     JSON.stringify(installedCsvs)
   );
   const pinnedSub = await subscriptionState(olmPackage, 'openshift-operators');
+  // #53D: once the pinned startingCSV reaches Succeeded, real OLM immediately
+  // resolves the next step and creates a Manual upgrade InstallPlan for the
+  // channel head: status.currentCSV moves to v1.17.0 while installedCSV stays
+  // the player's v1.16.0 pin until that plan is approved.
   assert(
-    pinnedSub?.installedCSV === olmPinCsv && pinnedSub?.currentCSV === olmPinCsv,
-    '#46: the Subscription status.installedCSV equals the startingCSV pin',
+    pinnedSub?.installedCSV === olmPinCsv && pinnedSub?.currentCSV === olmHeadCsv,
+    '#46: the Subscription keeps installedCSV=startingCSV while the v1.17.0 upgrade plan waits',
     JSON.stringify(pinnedSub)
   );
 
@@ -11976,6 +11991,1358 @@ await runSection('qa-issue44-49', async () => {
       /Error from server \(NotFound\): secrets "kubeadmin" not found/.test(result.message),
     '#45: deleting the already-removed kubeadmin Secret is NotFound',
     result.message
+  );
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// QA ROUND 1.4.0 — open issues #50–#54
+//   #50 shell chaining (;, &&, ||) + export/$VAR expansion and loud rejection
+//       of unsupported shell grammar, #51 L20 CrashLoop revision isolation +
+//       rollout-undo healing, #52 Route admission independent of Service
+//       endpoints (HostAlreadyClaimed is a real admission failure), #53D OLM
+//       Manual pinned-upgrade InstallPlan, #53E multi-name Subscription
+//       delete, #53F consistent worker-N/master-N node naming + exact debug
+//       node resolution, #53G platform namespaces/pods/secrets, #54 CLI/UI
+//       output fidelity (flag errors, curl -sI, ResolutionFailed conditions,
+//       kubelet pod-event stream, exec localhost app body, landing stats,
+//       fresh-cluster OAuth CO progress).
+// ═══════════════════════════════════════════════════════════════════════════
+await runSection('qa-issue50-54', async () => {
+  const olmPackage = 'openshift-cert-manager-operator';
+  const olmChannel = 'stable-v1';
+  const olmHeadCsv = 'cert-manager-operator.v1.17.0';
+  const olmPinCsv = 'cert-manager-operator.v1.16.0';
+
+  /** Advance the simulation AND incident clocks deterministically (0.05 s). */
+  const advanceBoth = async (seconds) =>
+    evaluate((secs) => {
+      const sim = window.game?.gameEngine?.simulation;
+      const engine = window.game?.incidentEngine;
+      if (!sim || typeof sim.tick !== 'function') return false;
+      const steps = Math.ceil(secs / 0.05);
+      for (let index = 0; index < steps; index += 1) {
+        sim.tick(0.05);
+        if (engine && typeof engine.tick === 'function') engine.tick(0.05);
+      }
+      return true;
+    }, seconds);
+  /** Advance both clocks until predicate() is true, or exhaust maxSeconds. */
+  const advanceUntil = async (predicate, maxSeconds = 60, step = 2) => {
+    for (let played = 0; played < maxSeconds; played += step) {
+      await advanceBoth(step);
+      if (await predicate()) return true;
+    }
+    return false;
+  };
+  const activeIncidentNames = () =>
+    evaluate(() =>
+      [...(window.game?.incidentEngine?.activeIncidents?.values?.() || [])].map(
+        (incident) => incident.name
+      )
+    );
+  /** Write a virtual manifest file then apply it like the player would. */
+  const applyManifest = async (name, yaml) => {
+    await evaluate(({ file, content }) => window.game.manifestEngine.writeFile(file, content), {
+      file: `qa/${name}.yaml`,
+      content: yaml,
+    });
+    return runCmd(`oc apply -f qa/${name}.yaml`, 300);
+  };
+  const operatorGroupYaml = (namespace) =>
+    [
+      'apiVersion: operators.coreos.com/v1',
+      'kind: OperatorGroup',
+      'metadata:',
+      `  name: ${namespace}-og`,
+      `  namespace: ${namespace}`,
+      'spec:',
+      '  targetNamespaces:',
+      `    - ${namespace}`,
+    ].join('\n');
+  const subscriptionYaml = ({ name, namespace, packageName, channel, startingCSV, approval }) =>
+    [
+      'apiVersion: operators.coreos.com/v1alpha1',
+      'kind: Subscription',
+      'metadata:',
+      `  name: ${name}`,
+      `  namespace: ${namespace}`,
+      'spec:',
+      `  channel: ${channel}`,
+      `  name: ${packageName}`,
+      '  source: redhat-operators',
+      '  sourceNamespace: openshift-marketplace',
+      ...(approval ? [`  installPlanApproval: ${approval}`] : []),
+      ...(startingCSV ? [`  startingCSV: ${startingCSV}`] : []),
+    ].join('\n');
+  const subscriptionState = (name, namespace) =>
+    evaluate(
+      ({ subName, ns }) => {
+        const sub = window.game.cluster.getByName('Subscription', subName, ns);
+        if (!sub) return null;
+        return {
+          phase: sub.status?.phase || null,
+          state: sub.status?.state || null,
+          installedCSV: sub.status?.installedCSV || null,
+          currentCSV: sub.status?.currentCSV || null,
+          startingCSV: sub.spec?.startingCSV || null,
+          conditions: (sub.status?.conditions || []).map((condition) => ({
+            type: condition.type,
+            status: condition.status,
+            reason: condition.reason,
+            message: condition.message || '',
+          })),
+        };
+      },
+      { subName: name, ns: namespace }
+    );
+  const conditionOf = (state, type) =>
+    (state?.conditions || []).find((condition) => condition.type === type) || null;
+  const installPlanFor = (namespace, csvName) =>
+    evaluate(
+      ({ ns, csv }) => {
+        const plan = (window.game.cluster.getByKindAndNamespace('InstallPlan', ns) || []).find(
+          (candidate) => (candidate.spec?.clusterServiceVersionNames || []).includes(csv)
+        );
+        return plan
+          ? {
+              name: plan.metadata?.name || null,
+              csvs: plan.spec?.clusterServiceVersionNames || [],
+              approval: plan.spec?.approval || null,
+              approved: plan.spec?.approved === true,
+            }
+          : null;
+      },
+      { ns: namespace, csv: csvName }
+    );
+  const csvPhase = (namespace, csvName) =>
+    evaluate(
+      ({ ns, csv }) =>
+        window.game.cluster.getByName('ClusterServiceVersion', csv, ns)?.status?.phase || null,
+      { ns: namespace, csv: csvName }
+    );
+  const csvsIn = (namespace) =>
+    evaluate(
+      (ns) =>
+        (window.game.cluster.getByKindAndNamespace('ClusterServiceVersion', ns) || []).map(
+          (csv) => ({ name: csv.metadata?.name || null, phase: csv.status?.phase || null })
+        ),
+      namespace
+    );
+  const endpointsCell = (message, name) => {
+    const row = parseTable(message).rows.find((cells) => cells[0] === name) || [];
+    return row[1] || '';
+  };
+  /** Event reasons inside the `Events:` block of `oc describe pod`, in order. */
+  const describedEventReasons = (message) => {
+    const lines = String(message ?? '').split('\n');
+    const start = lines.findIndex((line) => line.trim() === 'Events:');
+    if (start < 0) return [];
+    const reasons = [];
+    for (const line of lines.slice(start + 1)) {
+      const match = line.match(/^\s+(\S+)\s{2,}(\S+)\s{2,}/);
+      if (!match || match[1] === 'Type' || /^-+$/.test(match[1])) continue;
+      reasons.push(match[2]);
+    }
+    return reasons;
+  };
+  /** Rows of `oc get events` as { type, reason, object }. */
+  const getEventRows = (message) =>
+    String(message ?? '')
+      .split('\n')
+      .slice(1)
+      .map((line) =>
+        line
+          .split(/\s{2,}/)
+          .map((cell) => cell.trim())
+          .filter(Boolean)
+      )
+      .filter((cells) => cells.length >= 4)
+      .map((cells) => ({ type: cells[1], reason: cells[2], object: cells[3] }));
+  const podRows = (namespace) =>
+    evaluate(
+      (ns) =>
+        (window.game.cluster.getByKindAndNamespace('Pod', ns) || []).map((pod) => ({
+          name: pod.metadata?.name || null,
+          phase: pod.status?.phase || null,
+          ready: (pod.status?.conditions || []).some(
+            (condition) => condition.type === 'Ready' && condition.status === 'True'
+          ),
+        })),
+      namespace
+    );
+  const routeAdmission = (namespace, name) =>
+    evaluate(
+      ({ ns, routeName }) => {
+        const route = window.game.cluster.getByName('Route', routeName, ns);
+        const condition = (route?.status?.ingress?.[0]?.conditions || []).find(
+          (entry) => entry.type === 'Admitted'
+        );
+        return {
+          host: route?.spec?.host || null,
+          status: condition?.status || null,
+          reason: condition?.reason || null,
+          message: condition?.message || '',
+        };
+      },
+      { ns: namespace, routeName: name }
+    );
+  let result;
+
+  // ── #54: landing-page stats copy (UI says 13 timed labs, not 12) ─────────
+  await bootMenu();
+  const landingSpecs = await evaluate(() => document.querySelector('.sp-specs')?.innerText || '');
+  assert(
+    /(^|\n)13 timed labs(\n|$)/.test(landingSpecs) &&
+      !/(^|\n)12 timed labs(\n|$)/.test(landingSpecs),
+    '#54: the landing-page stats line reports 13 timed labs',
+    JSON.stringify(landingSpecs)
+  );
+
+  // ═══ Sandbox round A: fresh-cluster state, shell, CLI output, platform ═══
+  assert(await bootSandbox(), '#50: sandbox boots for the CLI/platform checks');
+
+  // ── #54f: a fresh cluster is settled — no phantom OAuth rollout ──────────
+  // Must be the FIRST command after boot: an unchanged OAuth config must not
+  // schedule a rollout, so authentication is Progressing=False straight away.
+  result = await runCmd('oc get co');
+  const coTable = parseTable(result.message);
+  assert(
+    coTable.header.replace(/\s+/g, ' ').trim() ===
+      'NAME VERSION AVAILABLE PROGRESSING DEGRADED SINCE',
+    '#54: `oc get co` keeps the real ClusterOperator columns',
+    coTable.header
+  );
+  const authenticationRow = coTable.rows.find((cells) => cells[0] === 'authentication') || [];
+  assert(
+    authenticationRow[2] === 'True' &&
+      authenticationRow[3] === 'False' &&
+      authenticationRow[4] === 'False',
+    '#54: a fresh sandbox authentication ClusterOperator is settled (Progressing False), not rolling out',
+    JSON.stringify(authenticationRow)
+  );
+  const unsettledOperators = coTable.rows.filter(
+    (cells) => cells[2] !== 'True' || cells[3] !== 'False' || cells[4] !== 'False'
+  );
+  assert(
+    coTable.rows.length >= 13 && unsettledOperators.length === 0,
+    '#54: every fresh-sandbox ClusterOperator is Available and not progressing/degraded',
+    JSON.stringify(unsettledOperators)
+  );
+
+  // ── #50: real shell chaining, export/$VAR expansion, loud rejection of
+  //    unsupported shell grammar (no silent partial execution) ─────────────
+  result = await runCmd('echo a; echo b');
+  assert(
+    !result.error && result.message.trim() === 'a\nb',
+    '#50: `echo a; echo b` runs both commands in order',
+    JSON.stringify(result.message)
+  );
+  result = await runCmd('echo a && echo b');
+  assert(
+    !result.error && result.message.trim() === 'a\nb',
+    '#50: `echo a && echo b` runs both commands in order',
+    JSON.stringify(result.message)
+  );
+  result = await runCmd('echo one && echo two && echo three');
+  assert(
+    !result.error && result.message.trim() === 'one\ntwo\nthree',
+    '#50: a three-command && chain keeps every segment',
+    JSON.stringify(result.message)
+  );
+  result = await runCmd('oc project default && oc get svc');
+  assert(
+    !result.error &&
+      /Now using project "default"/.test(result.message) &&
+      (/^NAME\s/m.test(result.message) ||
+        /No resources found in default namespace/.test(result.message)),
+    '#50: `oc project default && oc get svc` runs both commands (the svc output follows)',
+    result.message.slice(0, 320)
+  );
+  result = await runCmd('oc get nonexistent-resource; echo after-semicolon');
+  assert(
+    !result.error && result.message.includes('after-semicolon'),
+    '#50: `;` continues after a failing command and reports the last exit status',
+    result.message.slice(0, 320)
+  );
+  result = await runCmd('oc get nonexistent-resource && echo after-and');
+  assert(
+    result.error && !result.message.includes('after-and'),
+    '#50: `&&` short-circuits when the previous command fails',
+    result.message.slice(0, 320)
+  );
+  result = await runCmd('oc get nonexistent-resource || echo after-or');
+  assert(
+    !result.error && result.message.includes('after-or'),
+    '#50: `||` runs the fallback when the previous command fails',
+    result.message.slice(0, 320)
+  );
+  result = await runCmd('echo before-next; oc get nodes');
+  assert(
+    !result.error && result.message.includes('before-next') && /^NAME\s/m.test(result.message),
+    '#50: no silent partial execution — every segment output is kept',
+    result.message.slice(0, 320)
+  );
+  result = await runCmd('export NS=default');
+  assert(
+    !result.error && result.message.trim() === '',
+    '#50: `export NS=default` is silent like a real shell',
+    JSON.stringify(result.message)
+  );
+  result = await runCmd('echo $NS');
+  assert(
+    !result.error && result.message.trim() === 'default',
+    '#50: `echo $NS` expands an exported variable',
+    JSON.stringify(result.message)
+  );
+  result = await runCmd('echo ${NS}');
+  assert(
+    !result.error && result.message.trim() === 'default',
+    '#50: `${NS}` braces expand the same variable',
+    JSON.stringify(result.message)
+  );
+  result = await runCmd('echo "prefix-$NS-suffix"');
+  assert(
+    !result.error && result.message.trim() === 'prefix-default-suffix',
+    '#50: $NS expands inside double quotes',
+    JSON.stringify(result.message)
+  );
+  result = await runCmd("echo '$NS'");
+  assert(
+    !result.error && result.message.trim() === '$NS',
+    '#50: single-quoted $NS does not expand',
+    JSON.stringify(result.message)
+  );
+  result = await runCmd('echo $QA_UNDEFINED_VAR_5054');
+  assert(
+    !result.error && result.message.trim() === '',
+    '#50: an undefined variable expands to empty',
+    JSON.stringify(result.message)
+  );
+  await runCmd('export QA_SESSION_VAR=persisted');
+  result = await runCmd('echo $QA_SESSION_VAR');
+  assert(
+    !result.error && result.message.trim() === 'persisted',
+    '#50: exported variables persist for the session (separate command lines)',
+    JSON.stringify(result.message)
+  );
+  result = await runCmd('for i in 1 2; do echo QA_LOOP_BODY; done');
+  assert(
+    result.error &&
+      /simulator:/i.test(result.message) &&
+      /not supported/i.test(result.message) &&
+      !/unknown command "for"/i.test(result.message) &&
+      !/QA_LOOP_BODY/.test(result.message),
+    '#50: `for …; do …; done` fails loudly with the simulator unsupported-shell message (and never runs part of it)',
+    result.message.slice(0, 320)
+  );
+  result = await runCmd('while true; do echo QA_WHILE_BODY; done');
+  assert(
+    result.error &&
+      /simulator:/i.test(result.message) &&
+      /not supported/i.test(result.message) &&
+      !/QA_WHILE_BODY/.test(result.message),
+    '#50: `while …; do …; done` is rejected with the same clear simulator message',
+    result.message.slice(0, 320)
+  );
+  result = await runCmd('echo recovered-after-reject');
+  assert(
+    !result.error && result.message.trim() === 'recovered-after-reject',
+    '#50: the shell keeps working after a rejected unsupported line',
+    JSON.stringify(result.message)
+  );
+
+  // ── #54a: missing global-flag values are real oc flag errors ─────────────
+  result = await expectCmdError(
+    '#54: `oc -n` with no value reports the real shorthand flag error',
+    'oc -n',
+    /(?:^|\n)error: flag needs an argument: 'n' in -n/
+  );
+  assert(
+    !/Error: flag needs an argument/.test(result.message),
+    "#54: the `oc -n` flag error uses lowercase `error:` like real oc (not cobra's `Error:`)",
+    result.message.slice(0, 240)
+  );
+  result = await expectCmdError(
+    '#54: `oc --namespace` with no value reports the real long flag error',
+    'oc --namespace',
+    /(?:^|\n)error: flag needs an argument: --namespace/
+  );
+  assert(
+    !/Error: flag needs an argument/.test(result.message),
+    '#54: the `oc --namespace` flag error uses lowercase `error:` like real oc',
+    result.message.slice(0, 240)
+  );
+
+  // ── #54c: curl -I/-i print plain header lines (no verbose "< " prefix) ──
+  result = await runCmd('curl -sI https://example.com');
+  let headerLines = result.message
+    .split('\n')
+    .map((line) => line.trimEnd())
+    .filter(Boolean);
+  assert(
+    !result.error && headerLines[0] === 'HTTP/1.1 200 OK',
+    '#54: `curl -sI` starts with the plain HTTP status line',
+    JSON.stringify(headerLines.slice(0, 3))
+  );
+  assert(
+    headerLines.some((line) => /^content-type:/i.test(line)) &&
+      !headerLines.some((line) => /^<\s/.test(line)) &&
+      !/<html/i.test(result.message) &&
+      !/<!doctype/i.test(result.message),
+    '#54: `curl -sI` prints headers only — no verbose "< " prefix and no body',
+    result.message.slice(0, 320)
+  );
+  result = await runCmd('curl -I https://example.com');
+  headerLines = result.message
+    .split('\n')
+    .map((line) => line.trimEnd())
+    .filter(Boolean);
+  assert(
+    !result.error &&
+      headerLines[0] === 'HTTP/1.1 200 OK' &&
+      !headerLines.some((line) => /^<\s/.test(line)),
+    '#54: `curl -I` uses the same plain header format',
+    result.message.slice(0, 320)
+  );
+  result = await runCmd('curl -si https://example.com');
+  headerLines = result.message
+    .split('\n')
+    .map((line) => line.trimEnd())
+    .filter(Boolean);
+  assert(
+    !result.error &&
+      headerLines[0] === 'HTTP/1.1 200 OK' &&
+      !headerLines.some((line) => /^<\s/.test(line)) &&
+      /<!doctype html>/i.test(result.message) &&
+      /Example Domain/.test(result.message),
+    '#54: `curl -si` keeps plain headers and still includes the body',
+    result.message.slice(0, 320)
+  );
+  result = await runCmd('curl -v https://example.com');
+  assert(
+    !result.error && /^<\s/m.test(result.message),
+    '#54: `curl -v` keeps the verbose "< " response-header format',
+    result.message.slice(0, 320)
+  );
+
+  // ── #53F: sandbox nodes use the shared catalog names (no ghosts) ────────
+  result = await runCmd('oc get nodes');
+  const sandboxNodeTable = parseTable(result.message);
+  const sandboxNodeNames = sandboxNodeTable.rows.map((cells) => cells[0]).sort();
+  assert(
+    JSON.stringify(sandboxNodeNames) === JSON.stringify(['master-0', 'worker-0', 'worker-1']),
+    '#53F: sandbox nodes use the shared worker-0/worker-1/master-0 names (no sandbox-node-N)',
+    JSON.stringify(sandboxNodeNames)
+  );
+  const sandboxRoles = Object.fromEntries(
+    sandboxNodeTable.rows.map((cells) => [cells[0], cells[2] || ''])
+  );
+  assert(
+    /worker/.test(sandboxRoles['worker-0']) &&
+      /worker/.test(sandboxRoles['worker-1']) &&
+      /master/.test(sandboxRoles['master-0']),
+    '#53F: sandbox node roles flag the 2 workers and the control-plane master',
+    JSON.stringify(sandboxRoles)
+  );
+
+  // ── #53G: platform namespaces, pods and Secrets exist in every mode ─────
+  result = await runCmd('oc get pods -n openshift-dns');
+  assert(
+    !result.error && !/NotFound/.test(result.message),
+    '#53G: the openshift-dns namespace exists on a fresh cluster',
+    result.message.slice(0, 240)
+  );
+  const sandboxDnsPods = parseTable(result.message).rows.map((cells) => cells[0]);
+  assert(
+    sandboxDnsPods.filter((name) => /^dns-default-/.test(name)).length ===
+      sandboxNodeNames.length &&
+      sandboxDnsPods.filter((name) => /^node-resolver-/.test(name)).length ===
+        sandboxNodeNames.length,
+    '#53G: openshift-dns runs one dns-default and one node-resolver pod per node',
+    JSON.stringify(sandboxDnsPods)
+  );
+  const sandboxDnsTable = parseTable(result.message);
+  assert(
+    sandboxDnsTable.rows.every((cells) => cells[1] === '1/1' && cells[2] === 'Running'),
+    '#53G: the sandbox DNS pods are Running/Ready',
+    JSON.stringify(sandboxDnsTable.rows)
+  );
+  result = await runCmd('oc get pods -n openshift-ingress');
+  assert(
+    !result.error && !/No resources found/.test(result.message),
+    '#53G: openshift-ingress has router-default pods on a fresh cluster',
+    result.message.slice(0, 240)
+  );
+  const routerPods = parseTable(result.message).rows.filter((cells) =>
+    /^router-default-/.test(cells[0])
+  );
+  assert(
+    routerPods.length >= 2 &&
+      routerPods.every((cells) => cells[1] === '1/1' && cells[2] === 'Running'),
+    '#53G: at least two router-default pods are Running/Ready',
+    JSON.stringify(routerPods)
+  );
+  const platformPodLabels = await evaluate(() => {
+    const summarize = (namespace) =>
+      (window.game.cluster.getByKindAndNamespace('Pod', namespace) || []).map((pod) => ({
+        name: pod.metadata?.name || null,
+        labels: pod.metadata?.labels || {},
+      }));
+    return { dns: summarize('openshift-dns'), ingress: summarize('openshift-ingress') };
+  });
+  assert(
+    platformPodLabels.dns
+      .filter((pod) => /^dns-default-/.test(pod.name || ''))
+      .every((pod) => pod.labels['dns.operator.openshift.io/daemonset-dns'] === 'default'),
+    '#53G: dns-default pods carry the real daemonset-dns label',
+    JSON.stringify(platformPodLabels.dns.slice(0, 3))
+  );
+  assert(
+    platformPodLabels.ingress
+      .filter((pod) => /^router-default-/.test(pod.name || ''))
+      .every((pod) => pod.labels.app === 'router'),
+    '#53G: router-default pods carry the real app=router label',
+    JSON.stringify(platformPodLabels.ingress.slice(0, 3))
+  );
+  result = await runCmd('oc get secrets -n openshift-config');
+  const configSecretNames = parseTable(result.message).rows.map((cells) => cells[0]);
+  assert(
+    configSecretNames.includes('pull-secret') &&
+      configSecretNames.includes('initial-service-account-private-key'),
+    '#53G: openshift-config seeds the documented platform Secrets',
+    JSON.stringify(configSecretNames)
+  );
+  assert(
+    !configSecretNames.includes('htpass-secret'),
+    '#53G: htpass-secret is NOT seeded (identity labs create it themselves)',
+    JSON.stringify(configSecretNames)
+  );
+  result = await runCmd("oc get secret pull-secret -n openshift-config -o jsonpath='{.type}'");
+  assert(
+    !result.error && result.message.trim() === 'kubernetes.io/dockerconfigjson',
+    '#53G: pull-secret has the real kubernetes.io/dockerconfigjson type',
+    JSON.stringify(result.message)
+  );
+  result = await runCmd(
+    'oc extract secret/initial-service-account-private-key -n openshift-config --to=-'
+  );
+  assert(
+    !result.error && result.message.trim() !== '',
+    '#53G: oc extract works on the seeded openshift-config Secrets',
+    result.message.slice(0, 180)
+  );
+
+  // ── #53F: debug node resolves exactly; wrong names are NotFound ────────
+  result = await runCmd('oc debug node/worker-0');
+  assert(
+    !result.error && /Starting pod\/worker-0-debug/.test(result.message),
+    '#53F: `oc debug node/worker-0` resolves the real sandbox node',
+    result.message.slice(0, 300)
+  );
+  await runCmd('exit');
+  const debugSessionClosed = await evaluate(
+    () => window.game.app.commandBar._debugSession === null
+  );
+  assert(debugSessionClosed, '#53F: `exit` leaves the node debug session cleanly');
+  await expectCmdError(
+    '#53F: `oc debug node/worker-9` is a real NotFound, never an alias onto another node',
+    'oc debug node/worker-9',
+    /Error from server \(NotFound\): nodes "worker-9" not found/
+  );
+  await expectCmdError(
+    '#53F: the retired sandbox-node-N names are NotFound too',
+    'oc debug node/sandbox-node-1',
+    /Error from server \(NotFound\): nodes "sandbox-node-1" not found/
+  );
+
+  // ── #52: Route admission must not depend on Service endpoints ───────────
+  await runCmd('oc new-project qa-route5054');
+  await runCmd('oc apply -f manifests/deployment.yaml -n qa-route5054');
+  await runCmd('oc apply -f manifests/service.yaml -n qa-route5054');
+  const routePodsReady = await advanceUntil(async () => {
+    const pods = await podRows('qa-route5054');
+    return pods.filter((pod) => pod.phase === 'Running' && pod.ready).length >= 2;
+  }, 30);
+  assert(routePodsReady, '#52: the route-test Deployment reaches 2 Ready pods');
+  await expectCmd(
+    '#52: a plain edge Route is created',
+    'oc create route edge webapp --service=webapp -n qa-route5054',
+    /route\.route\.openshift\.io\/webapp created/
+  );
+  await advanceBoth(8);
+  const admittedRoute = await routeAdmission('qa-route5054', 'webapp');
+  const routeHost = admittedRoute.host;
+  assert(
+    admittedRoute.status === 'True' && Boolean(routeHost),
+    '#52: the Route is admitted while its Service has endpoints',
+    JSON.stringify(admittedRoute)
+  );
+  result = await runCmd(`curl -k -s https://${routeHost}`);
+  assert(
+    /Hello OpenShift/.test(result.message),
+    '#52: the admitted Route answers curl with the app body',
+    result.message.slice(0, 240)
+  );
+  await expectCmd(
+    '#52: breaking the Service selector applies the patch',
+    'oc patch svc/webapp -n qa-route5054 -p \'{"spec":{"selector":{"app":"no-match"}}}\'',
+    /service\/webapp patched/
+  );
+  await advanceBoth(8);
+  const admittedWithoutEndpoints = await routeAdmission('qa-route5054', 'webapp');
+  assert(
+    admittedWithoutEndpoints.status === 'True' && admittedWithoutEndpoints.reason === 'Accepted',
+    '#52: a Route whose Service has no endpoints stays Admitted=True (the router returns 503)',
+    JSON.stringify(admittedWithoutEndpoints)
+  );
+  result = await runCmd(
+    "oc get route webapp -n qa-route5054 -o jsonpath='{.status.ingress[0].conditions}'"
+  );
+  assert(
+    !result.error &&
+      /"status":"True"/.test(result.message) &&
+      !/"status":"False"/.test(result.message),
+    '#52: jsonpath still reports the Admitted True condition with no endpoints',
+    result.message.slice(0, 320)
+  );
+  result = await runCmd('oc describe route webapp -n qa-route5054');
+  assert(
+    /Endpoints:\s+<none>/.test(result.message) && !/rejected by router/.test(result.message),
+    '#52: oc describe route shows Endpoints: <none> without rejecting the Route',
+    result.message.slice(0, 800)
+  );
+  result = await runCmd(`curl -k -s -o /dev/null -w '%{http_code}' https://${routeHost}`);
+  assert(
+    !result.error && result.message.trim() === '503',
+    '#52: curl to the Route with no endpoints returns 503',
+    JSON.stringify(result.message)
+  );
+  result = await runCmd(`curl -k -s https://${routeHost}`);
+  assert(
+    /503 Service Unavailable/.test(result.message),
+    '#52: the 503 body is the real router response',
+    result.message.slice(0, 240)
+  );
+  await runCmd('oc patch svc/webapp -n qa-route5054 -p \'{"spec":{"selector":{"app":"webapp"}}}\'');
+  await advanceBoth(8);
+  result = await runCmd(`curl -k -s -o /dev/null -w '%{http_code}' https://${routeHost}`);
+  assert(
+    !result.error && result.message.trim() === '200',
+    '#52: restoring the selector restores the 200 response',
+    JSON.stringify(result.message)
+  );
+
+  // #52: HostAlreadyClaimed is a real admission failure (not ServiceUnavailable).
+  await runCmd('oc new-project qa-route5054b');
+  await runCmd('oc apply -f manifests/deployment.yaml -n qa-route5054b');
+  await runCmd('oc apply -f manifests/service.yaml -n qa-route5054b');
+  await advanceBoth(8);
+  result = await runCmd(
+    `oc create route edge webapp --service=webapp --hostname=${routeHost} -n qa-route5054b`
+  );
+  assert(
+    !result.error,
+    '#52: the second Route claiming the same host is accepted by the API',
+    result.message.slice(0, 240)
+  );
+  await advanceBoth(8);
+  const hostConflict = await routeAdmission('qa-route5054b', 'webapp');
+  assert(
+    hostConflict.status === 'False' && hostConflict.reason === 'HostAlreadyClaimed',
+    '#52: a Route whose host is already claimed is Admitted=False HostAlreadyClaimed',
+    JSON.stringify(hostConflict)
+  );
+  result = await runCmd('oc describe route webapp -n qa-route5054b');
+  assert(
+    /HostAlreadyClaimed/.test(result.message),
+    '#52: oc describe route explains the admission failure with HostAlreadyClaimed',
+    result.message.slice(0, 800)
+  );
+  const winningRoute = await routeAdmission('qa-route5054', 'webapp');
+  assert(
+    winningRoute.status === 'True',
+    '#52: the first Route keeps the host and stays admitted',
+    JSON.stringify(winningRoute)
+  );
+  await runCmd('oc delete route webapp -n qa-route5054');
+  const reAdmitted = await advanceUntil(
+    async () => (await routeAdmission('qa-route5054b', 'webapp')).status === 'True',
+    30
+  );
+  assert(
+    reAdmitted,
+    '#52: deleting the winning Route admits the waiting Route',
+    JSON.stringify(await routeAdmission('qa-route5054b', 'webapp'))
+  );
+  result = await runCmd(`curl -k -s https://${routeHost}`);
+  assert(
+    /Hello OpenShift/.test(result.message),
+    '#52: the newly admitted Route starts serving',
+    result.message.slice(0, 240)
+  );
+
+  // ── #54d: `oc exec … -- curl -s localhost:8080` hits the pod's own app ──
+  result = await runCmd('oc exec deploy/webapp -n qa-route5054 -- curl -s localhost:8080');
+  assert(
+    !result.error && result.message.trim() === '<html><body>Hello OpenShift!</body></html>',
+    "#54: `oc exec deploy/webapp -- curl -s localhost:8080` returns the pod app's real body",
+    result.message.slice(0, 240)
+  );
+  assert(
+    !/container main/i.test(result.message) && !/Hello from the Internet/i.test(result.message),
+    "#54: the exec body never names a fabricated 'container main'",
+    result.message.slice(0, 240)
+  );
+  result = await runCmd('oc exec deploy/webapp -n qa-route5054 -- curl -s 127.0.0.1:8080');
+  assert(
+    !result.error && /Hello OpenShift/.test(result.message),
+    '#54: 127.0.0.1 resolves to the same pod app as localhost',
+    result.message.slice(0, 240)
+  );
+
+  // ── #54e: describe pod shows the real kubelet event stream ─────────────
+  const routePods = await podRows('qa-route5054');
+  const describedPodName = (routePods[0] || {}).name;
+  assert(Boolean(describedPodName), '#54: the route-test namespace has a pod to describe');
+  await advanceBoth(4);
+  result = await runCmd(`oc describe pod ${describedPodName} -n qa-route5054`);
+  const describedReasons = describedEventReasons(result.message);
+  assert(
+    JSON.stringify(describedReasons) ===
+      JSON.stringify(['Scheduled', 'Pulling', 'Pulled', 'Created', 'Started']),
+    '#54: oc describe pod events run Scheduled → Pulling → Pulled → Created → Started',
+    JSON.stringify(describedReasons)
+  );
+  assert(
+    !describedReasons.includes('Ready') && !describedReasons.includes('PhaseChange'),
+    '#54: oc describe pod has no Ready/PhaseChange events',
+    JSON.stringify(describedReasons)
+  );
+  result = await runCmd('oc get events -n qa-route5054');
+  const podEventRows = getEventRows(result.message).filter(
+    (row) => row.object === `pod/${describedPodName}`
+  );
+  assert(
+    JSON.stringify(podEventRows.map((row) => row.reason).sort()) ===
+      JSON.stringify(['Created', 'Pulled', 'Pulling', 'Scheduled', 'Started'].sort()),
+    '#54: oc get events records each kubelet lifecycle reason exactly once for the pod',
+    JSON.stringify(podEventRows.map((row) => row.reason))
+  );
+  assert(
+    !podEventRows.some((row) => row.reason === 'Ready' || row.reason === 'PhaseChange'),
+    '#54: oc get events has no Ready/PhaseChange reasons for pods',
+    JSON.stringify(podEventRows.filter((row) => /Ready|PhaseChange/.test(row.reason)))
+  );
+
+  // ═══ Sandbox round B: OLM manual pinned upgrade (#53D), multi-name
+  //     Subscription delete (#53E) and ResolutionFailed conditions (#54) ═══
+  assert(await bootSandbox(), '#53D: fresh sandbox boots for the OLM checks');
+  await expectCmd(
+    '#53D: the pinned Manual Subscription manifest applies',
+    'oc apply -f examples/subscription-manual-pinned.yaml',
+    /subscription\.operators\.coreos\.com\/openshift-cert-manager-operator created/
+  );
+  await advanceBoth(6);
+  const preApprovalSub = await subscriptionState(olmPackage, 'openshift-operators');
+  assert(
+    preApprovalSub?.currentCSV === olmPinCsv && !preApprovalSub?.installedCSV,
+    '#53D: before approval status.currentCSV already shows the resolved startingCSV (installedCSV empty)',
+    JSON.stringify(preApprovalSub)
+  );
+  const preApprovalPending = conditionOf(preApprovalSub, 'InstallPlanPending');
+  assert(
+    preApprovalPending?.status === 'True' && preApprovalPending?.reason === 'RequiresApproval',
+    '#53D: the pinned Manual InstallPlan reports InstallPlanPending True RequiresApproval',
+    JSON.stringify(preApprovalPending)
+  );
+  result = await runCmd(
+    'oc describe subscription openshift-cert-manager-operator -n openshift-operators'
+  );
+  assert(
+    /Current CSV:\s+cert-manager-operator\.v1\.16\.0/.test(result.message) &&
+      /Installed CSV:\s+<none>/.test(result.message),
+    '#53D: describe subscription shows Current CSV v1.16.0 and no Installed CSV before approval',
+    result.message.slice(0, 600)
+  );
+  const pinnedPlan = await installPlanFor('openshift-operators', olmPinCsv);
+  assert(
+    pinnedPlan?.approval === 'Manual' && pinnedPlan?.approved === false,
+    '#53D: the pinned InstallPlan waits at Manual approval',
+    JSON.stringify(pinnedPlan)
+  );
+  if (pinnedPlan) {
+    result = await runCmd(
+      `oc patch installplan ${pinnedPlan.name} -n openshift-operators --type=merge -p '{"spec":{"approved":true}}'`
+    );
+    assert(
+      !result.error && /patched/.test(result.message),
+      '#53D: approving the pinned InstallPlan succeeds',
+      result.message.slice(0, 240)
+    );
+  }
+  let pinCsvPhase = null;
+  for (let elapsed = 0; elapsed < 40 && pinCsvPhase !== 'Succeeded'; elapsed += 2) {
+    await advanceBoth(2);
+    pinCsvPhase = await csvPhase('openshift-operators', olmPinCsv);
+  }
+  assert(
+    pinCsvPhase === 'Succeeded',
+    '#53D: the pinned v1.16.0 CSV reaches Succeeded',
+    JSON.stringify(pinCsvPhase)
+  );
+  let upgradePlan = null;
+  for (let elapsed = 0; elapsed < 30 && !upgradePlan; elapsed += 2) {
+    await advanceBoth(2);
+    upgradePlan = await installPlanFor('openshift-operators', olmHeadCsv);
+  }
+  assert(
+    upgradePlan?.approval === 'Manual' && upgradePlan?.approved === false,
+    '#53D: real OLM immediately creates a SECOND Manual, unapproved InstallPlan for v1.17.0',
+    JSON.stringify(upgradePlan)
+  );
+  const upgradePendingSub = await subscriptionState(olmPackage, 'openshift-operators');
+  assert(
+    upgradePendingSub?.currentCSV === olmHeadCsv &&
+      upgradePendingSub?.installedCSV === olmPinCsv &&
+      upgradePendingSub?.phase === 'UpgradePending',
+    '#53D: upgrade pending → currentCSV v1.17.0, installedCSV stays the pinned v1.16.0, phase UpgradePending',
+    JSON.stringify(upgradePendingSub)
+  );
+  const upgradePendingCondition = conditionOf(upgradePendingSub, 'InstallPlanPending');
+  assert(
+    upgradePendingCondition?.status === 'True' &&
+      upgradePendingCondition?.reason === 'RequiresApproval' &&
+      /requires approval/.test(upgradePendingCondition?.message || ''),
+    '#53D: the pending upgrade reports InstallPlanPending True RequiresApproval',
+    JSON.stringify(upgradePendingCondition)
+  );
+  result = await runCmd(
+    'oc describe subscription openshift-cert-manager-operator -n openshift-operators'
+  );
+  assert(
+    /Current CSV:\s+cert-manager-operator\.v1\.17\.0/.test(result.message) &&
+      /Installed CSV:\s+cert-manager-operator\.v1\.16\.0/.test(result.message) &&
+      /State:\s+UpgradePending/.test(result.message) &&
+      /InstallPlanPending\s+True\s+RequiresApproval/.test(result.message),
+    '#53D: describe subscription shows the pending v1.17.0 upgrade with the pinned v1.16.0 installed',
+    result.message.slice(0, 900)
+  );
+  if (upgradePlan) {
+    result = await runCmd(
+      `oc patch installplan ${upgradePlan.name} -n openshift-operators --type=merge -p '{"spec":{"approved":true}}'`
+    );
+    assert(
+      !result.error && /patched/.test(result.message),
+      '#53D: approving the upgrade InstallPlan succeeds',
+      result.message.slice(0, 240)
+    );
+  }
+  let upgradedSub = await subscriptionState(olmPackage, 'openshift-operators');
+  for (let elapsed = 0; elapsed < 60 && upgradedSub?.installedCSV !== olmHeadCsv; elapsed += 2) {
+    await advanceBoth(2);
+    upgradedSub = await subscriptionState(olmPackage, 'openshift-operators');
+  }
+  assert(
+    upgradedSub?.currentCSV === olmHeadCsv &&
+      upgradedSub?.installedCSV === olmHeadCsv &&
+      upgradedSub?.phase === 'Succeeded',
+    '#53D: approving the upgrade installs v1.17.0 (currentCSV = installedCSV = head, phase Succeeded)',
+    JSON.stringify(upgradedSub)
+  );
+  const completedPending = conditionOf(upgradedSub, 'InstallPlanPending');
+  assert(
+    completedPending?.status === 'False' && completedPending?.reason === 'InstallPlanComplete',
+    '#53D: after the upgrade InstallPlanPending reports False InstallPlanComplete',
+    JSON.stringify(completedPending)
+  );
+  const finalCsvs = await csvsIn('openshift-operators');
+  assert(
+    finalCsvs.some((csv) => csv.name === olmHeadCsv && csv.phase === 'Succeeded') &&
+      !finalCsvs.some((csv) => csv.name === olmPinCsv && csv.phase === 'Succeeded'),
+    '#53D: the upgraded head CSV replaces the pinned v1.16.0 CSV (old one no longer Succeeded)',
+    JSON.stringify(finalCsvs)
+  );
+  result = await runCmd('oc get ip -n openshift-operators');
+  const installPlanRows = parseTable(result.message).rows;
+  assert(
+    installPlanRows.length >= 2 &&
+      installPlanRows.some(
+        (cells) => cells.some((cell) => cell.includes(olmHeadCsv)) && cells.includes('True')
+      ),
+    '#53D: oc get ip lists both the pinned install plan and the approved upgrade plan',
+    result.message.slice(0, 400)
+  );
+
+  // #53E: deleting a Subscription must keep the CSV (real OLM uninstall).
+  result = await runCmd(
+    'oc delete subscription openshift-cert-manager-operator -n openshift-operators'
+  );
+  assert(
+    !result.error && /"openshift-cert-manager-operator" deleted/.test(result.message),
+    '#53E: deleting the Subscription succeeds',
+    result.message.slice(0, 240)
+  );
+  const csvsAfterUninstall = await csvsIn('openshift-operators');
+  assert(
+    csvsAfterUninstall.some((csv) => csv.name === olmHeadCsv),
+    '#53E: deleting a Subscription keeps its ClusterServiceVersion (real OLM uninstall semantics)',
+    JSON.stringify(csvsAfterUninstall)
+  );
+
+  // #53E: a single `oc delete sub a b` deletes every requested name.
+  const bogusSub = (name) =>
+    subscriptionYaml({
+      name,
+      namespace: 'openshift-operators',
+      packageName: `qa-missing-pkg-${name}`,
+      channel: 'stable',
+    });
+  let applied = await applyManifest('qa-sub-a', bogusSub('qa-sub-a'));
+  assert(!applied.error, '#53E: the first disposable Subscription applies', applied.message);
+  applied = await applyManifest('qa-sub-b', bogusSub('qa-sub-b'));
+  assert(!applied.error, '#53E: the second disposable Subscription applies', applied.message);
+  result = await runCmd('oc get sub -n openshift-operators');
+  const disposableSubRows = parseTable(result.message).rows.map((cells) => cells[0]);
+  assert(
+    disposableSubRows.includes('qa-sub-a') && disposableSubRows.includes('qa-sub-b'),
+    '#53E: both disposable Subscriptions are listed before the multi-name delete',
+    JSON.stringify(disposableSubRows)
+  );
+  result = await runCmd('oc delete sub qa-sub-a qa-sub-b -n openshift-operators');
+  assert(
+    !result.error &&
+      /subscription\.operators\.coreos\.com "qa-sub-a" deleted/.test(result.message) &&
+      /subscription\.operators\.coreos\.com "qa-sub-b" deleted/.test(result.message),
+    '#53E: `oc delete sub a b` deletes every requested Subscription and prints one deleted line per name',
+    result.message.slice(0, 320)
+  );
+  result = await runCmd('oc get sub -n openshift-operators');
+  const subsAfterMultiDelete = parseTable(result.message).rows.map((cells) => cells[0]);
+  assert(
+    !subsAfterMultiDelete.includes('qa-sub-a') && !subsAfterMultiDelete.includes('qa-sub-b'),
+    '#53E: both requested Subscriptions are really gone',
+    JSON.stringify(subsAfterMultiDelete)
+  );
+  await expectCmdError(
+    '#53E: deleting a missing Subscription is a real NotFound error',
+    'oc delete sub qa-sub-missing -n openshift-operators',
+    /Error from server \(NotFound\): subscriptions\.operators\.coreos\.com "qa-sub-missing" not found/
+  );
+  result = await runCmd('oc delete sub qa-sub-missing -n openshift-operators --ignore-not-found');
+  assert(
+    !result.error && result.message.trim() === '',
+    '#53E: --ignore-not-found keeps a missing-name delete quiet and successful',
+    JSON.stringify(result.message)
+  );
+
+  // ── #54: ResolutionFailed must not also report InstallPlanPending ───────
+  await runCmd('oc new-project qa-op-rf');
+  applied = await applyManifest('qa-op-rf-og', operatorGroupYaml('qa-op-rf'));
+  assert(
+    !applied.error,
+    '#54: the ResolutionFailed project OperatorGroup applies',
+    applied.message
+  );
+  applied = await applyManifest(
+    'qa-op-rf-sub',
+    subscriptionYaml({
+      name: 'bogus-channel',
+      namespace: 'qa-op-rf',
+      packageName: olmPackage,
+      channel: 'does-not-exist',
+    })
+  );
+  assert(!applied.error, '#54: the bogus-channel Subscription applies', applied.message);
+  await advanceBoth(30);
+  const resolutionFailedSub = await subscriptionState('bogus-channel', 'qa-op-rf');
+  const resolutionFailed = conditionOf(resolutionFailedSub, 'ResolutionFailed');
+  assert(
+    resolutionFailed?.status === 'True' &&
+      /no operators found in channel does-not-exist/.test(resolutionFailed?.message || ''),
+    '#54: an unresolvable channel still reports ResolutionFailed with the real wording',
+    JSON.stringify(resolutionFailed)
+  );
+  assert(
+    !conditionOf(resolutionFailedSub, 'InstallPlanPending'),
+    '#54: ResolutionFailed must NOT also report InstallPlanPending False NoInstallPlan',
+    JSON.stringify(resolutionFailedSub?.conditions)
+  );
+  result = await runCmd('oc describe subscription bogus-channel -n qa-op-rf');
+  assert(
+    /ResolutionFailed/.test(result.message) && !/InstallPlanPending/.test(result.message),
+    '#54: describe subscription shows ResolutionFailed without a bogus InstallPlanPending line',
+    result.message.slice(0, 600)
+  );
+
+  // ═══ Campaign round: #51 L20 crash-revision isolation + rollout-undo
+  //     healing, #52 L20 Route objective stability, #54 exec body ═════════
+  const l20Snapshot = () =>
+    evaluate(() => {
+      const cluster = window.game.cluster;
+      const containersEnv = (templateSpec) =>
+        (templateSpec?.containers || []).flatMap((container) =>
+          (container.env || []).map((entry) => `${entry.name}=${entry.value}`)
+        );
+      const deployment = cluster.getByName('Deployment', 'webapp', 'prod-platform');
+      const replicaSets = cluster.getByKindAndNamespace('ReplicaSet', 'prod-platform') || [];
+      const pods = cluster.getByKindAndNamespace('Pod', 'prod-platform') || [];
+      return {
+        templateEnv: containersEnv(deployment?.spec?.template?.spec),
+        replicas: replicaSets.map((replicaSet) => ({
+          name: replicaSet.metadata?.name || null,
+          hash: replicaSet.metadata?.labels?.['pod-template-hash'] || null,
+          desired: replicaSet.spec?.replicas ?? null,
+          ready: replicaSet.status?.readyReplicas ?? 0,
+          templateEnv: containersEnv(replicaSet.spec?.template?.spec),
+        })),
+        pods: pods.map((pod) => ({
+          name: pod.metadata?.name || null,
+          hash: pod.metadata?.labels?.['pod-template-hash'] || null,
+          phase: pod.status?.phase || null,
+          ready: (pod.status?.conditions || []).some(
+            (condition) => condition.type === 'Ready' && condition.status === 'True'
+          ),
+          env: containersEnv({ containers: pod.spec?.containers || [] }),
+          waiting: (pod.status?.containerStatuses || [])
+            .map((status) => status.state?.waiting?.reason)
+            .filter(Boolean),
+        })),
+      };
+    });
+  const setupL20 = async (label) => {
+    await returnToMenu();
+    await sleep(300);
+    assert(await launch('campaign', 20), `${label}: campaign L20 starts`);
+    await closeOverlays();
+    await evaluate(() => {
+      window.game.app.hideTutorial?.();
+      window.game.gameEngine.pause?.();
+    });
+    await runCmd('oc new-project prod-platform');
+    await runCmd('oc apply -f examples/quota.yaml -n prod-platform');
+    await runCmd('oc apply -f examples/limitrange.yaml -n prod-platform');
+    await runCmd('oc apply -f manifests/deployment.yaml -n prod-platform');
+    await runCmd('oc apply -f manifests/service.yaml -n prod-platform');
+    const workloadReady = await advanceUntil(async () => {
+      const pods = await podRows('prod-platform');
+      return pods.filter((pod) => pod.phase === 'Running' && pod.ready).length >= 2;
+    }, 30);
+    assert(
+      workloadReady,
+      `${label}: the webapp Deployment is 2/2 Ready before the scheduled incident`
+    );
+  };
+  const l20RouteObjective = () =>
+    evaluate(() => {
+      const mode = window.game.app.modeInstance;
+      if (typeof mode?.updateObjectives !== 'function') return null;
+      mode.updateObjectives();
+      const index = (mode.currentLevelDef?.objectives || []).findIndex(
+        (objective) => objective.type === 'route'
+      );
+      if (index < 0) return null;
+      const entry = mode.objectiveProgress?.[index] || null;
+      return entry ? { label: entry.label || '', completed: entry.completed === true } : null;
+    });
+  const runL20CrashScenario = async (undoCommand, label, options = {}) => {
+    await setupL20(label);
+    const fired = await advanceUntil(
+      async () => (await activeIncidentNames()).includes('CrashLoopBackOff'),
+      80
+    );
+    assert(fired, `${label}: the scheduled CrashLoopBackOff incident fires on webapp`);
+    const crashed = await l20Snapshot();
+    const badReplicaSet = crashed.replicas.find((replicaSet) =>
+      replicaSet.templateEnv.some((entry) => entry.startsWith('APP_MODE=debug-invalid'))
+    );
+    const oldReplicaSet = crashed.replicas.find(
+      (replicaSet) => !replicaSet.templateEnv.some((entry) => entry.startsWith('APP_MODE='))
+    );
+    assert(
+      Boolean(badReplicaSet && oldReplicaSet),
+      `${label}: the crash seed creates a new revision whose template carries the faulty APP_MODE`,
+      JSON.stringify(crashed.replicas)
+    );
+    assert(
+      oldReplicaSet?.desired === 2,
+      `${label}: the old revision keeps its 2 desired replicas while the rollout stalls`,
+      JSON.stringify(oldReplicaSet)
+    );
+    assert(
+      badReplicaSet?.desired <= 1,
+      `${label}: the new revision respects maxSurge (25% of 2 → one surged pod, not 2)`,
+      JSON.stringify(badReplicaSet)
+    );
+    const oldPods = crashed.pods.filter((pod) => pod.hash === oldReplicaSet?.hash);
+    const badPods = crashed.pods.filter((pod) => pod.hash === badReplicaSet?.hash);
+    assert(
+      oldPods.length === 2 &&
+        oldPods.every(
+          (pod) =>
+            pod.phase === 'Running' &&
+            pod.ready &&
+            !pod.waiting.includes('CrashLoopBackOff') &&
+            !pod.env.some((entry) => entry.startsWith('APP_MODE='))
+        ),
+      `${label}: old-revision pods keep Running/Ready and never crash (their template has no APP_MODE)`,
+      JSON.stringify(oldPods)
+    );
+    assert(
+      badPods.length >= 1 &&
+        badPods.every(
+          (pod) =>
+            !pod.ready &&
+            (pod.phase === 'CrashLoopBackOff' || pod.waiting.includes('CrashLoopBackOff'))
+        ),
+      `${label}: only the new-revision pods crash`,
+      JSON.stringify(badPods)
+    );
+    result = await runCmd('oc get endpoints webapp -n prod-platform');
+    const servingEndpoints = endpointsCell(result.message, 'webapp');
+    assert(
+      !/<none>/.test(servingEndpoints) && servingEndpoints.split(',').filter(Boolean).length >= 2,
+      `${label}: the Service keeps serving the old pods while the rollout is broken`,
+      servingEndpoints
+    );
+    if (options.checkPlatform) {
+      result = await runCmd('oc get pods -n openshift-ingress');
+      const campaignRouters = parseTable(result.message).rows.filter((cells) =>
+        /^router-default-/.test(cells[0])
+      );
+      assert(
+        campaignRouters.length >= 2 &&
+          campaignRouters.every((cells) => cells[1] === '1/1' && cells[2] === 'Running'),
+        `${label}: campaign mode also runs the openshift-ingress router-default pods`,
+        JSON.stringify(campaignRouters)
+      );
+      result = await runCmd('oc get nodes');
+      const campaignNodeCount = parseTable(result.message).rows.length;
+      result = await runCmd('oc get pods -n openshift-dns');
+      const campaignDnsPods = parseTable(result.message).rows.map((cells) => cells[0]);
+      assert(
+        campaignDnsPods.filter((name) => /^dns-default-/.test(name)).length === campaignNodeCount &&
+          campaignDnsPods.filter((name) => /^node-resolver-/.test(name)).length ===
+            campaignNodeCount,
+        `${label}: campaign mode seeds one dns-default and one node-resolver pod per node`,
+        JSON.stringify(campaignDnsPods)
+      );
+      result = await runCmd('oc debug node/node-2');
+      assert(
+        !result.error && /Starting pod\/worker-1-debug/.test(result.message),
+        `${label}: legacy campaign node-N aliases still map forward (node-2 → worker-1)`,
+        result.message.slice(0, 280)
+      );
+      await runCmd('exit');
+    }
+    const undo = await runCmd(undoCommand, 300);
+    assert(
+      !undo.error && /rolled back/.test(undo.message),
+      `${label}: \`${undoCommand}\` rolls the Deployment back`,
+      undo.message.slice(0, 280)
+    );
+    const healed = await advanceUntil(async () => {
+      const names = await activeIncidentNames();
+      const state = await l20Snapshot();
+      const badReplicaSetAfter = state.replicas.find(
+        (replicaSet) => replicaSet.hash === badReplicaSet?.hash
+      );
+      return (
+        !names.includes('CrashLoopBackOff') &&
+        !state.templateEnv.some((entry) => entry.startsWith('APP_MODE=')) &&
+        (!badReplicaSetAfter || badReplicaSetAfter.desired === 0) &&
+        state.pods.filter((pod) => pod.phase === 'Running' && pod.ready).length >= 2 &&
+        !state.pods.some((pod) => pod.waiting.includes('CrashLoopBackOff'))
+      );
+    }, 60);
+    assert(
+      healed,
+      `${label}: rollout undo heals the Deployment and resolves the CrashLoopBackOff incident`
+    );
+    const healedState = await l20Snapshot();
+    assert(
+      !healedState.templateEnv.some((entry) => entry.startsWith('APP_MODE=')),
+      `${label}: the revision-1 template is restored (no APP_MODE)`,
+      JSON.stringify(healedState.templateEnv)
+    );
+    const healedOldReplicaSet = healedState.replicas.find(
+      (replicaSet) => replicaSet.hash === oldReplicaSet?.hash
+    );
+    const healedBadReplicaSet = healedState.replicas.find(
+      (replicaSet) => replicaSet.hash === badReplicaSet?.hash
+    );
+    assert(
+      healedOldReplicaSet?.desired === 2 &&
+        (!healedBadReplicaSet || healedBadReplicaSet.desired === 0),
+      `${label}: the good ReplicaSet scales back to 2 while the bad ReplicaSet scales to 0`,
+      JSON.stringify(healedState.replicas)
+    );
+    assert(
+      healedState.pods.filter((pod) => pod.phase === 'Running' && pod.ready).length === 2 &&
+        !healedState.pods.some((pod) => pod.waiting.includes('CrashLoopBackOff')),
+      `${label}: both webapp pods are Running/Ready after the undo`,
+      JSON.stringify(healedState.pods)
+    );
+    result = await runCmd('oc get deployment webapp -n prod-platform');
+    assert(
+      /webapp\s+2\/2/.test(result.message),
+      `${label}: oc get deployment shows 2/2 available after the heal`,
+      result.message.slice(0, 240)
+    );
+    if (options.checkExec) {
+      result = await runCmd('oc exec deploy/webapp -n prod-platform -- curl -s localhost:8080');
+      assert(
+        !result.error && result.message.trim() === '<html><body>Hello OpenShift!</body></html>',
+        `${label}: L20 exec localhost returns the pod app's real body (no "container main")`,
+        result.message.slice(0, 240)
+      );
+    }
+    if (options.checkRouteObjective) {
+      await runCmd('oc create route edge webapp --service=webapp -n prod-platform', 300);
+      await advanceBoth(8);
+      let routeObjective = await l20RouteObjective();
+      assert(
+        routeObjective?.completed === true,
+        `${label}: the L20 "Create an external Route (Admitted)" objective ticks`,
+        JSON.stringify(routeObjective)
+      );
+      await runCmd(
+        'oc patch svc/webapp -n prod-platform -p \'{"spec":{"selector":{"app":"no-match"}}}\''
+      );
+      await advanceBoth(8);
+      const admittedWithBrokenSelector = await routeAdmission('prod-platform', 'webapp');
+      assert(
+        admittedWithBrokenSelector.status === 'True',
+        `${label}: the L20 Route stays Admitted when the Service selector matches no pods`,
+        JSON.stringify(admittedWithBrokenSelector)
+      );
+      routeObjective = await l20RouteObjective();
+      assert(
+        routeObjective?.completed === true,
+        `${label}: the L20 Route Admitted objective does not flip while endpoints are missing`,
+        JSON.stringify(routeObjective)
+      );
+      await runCmd(
+        'oc patch svc/webapp -n prod-platform -p \'{"spec":{"selector":{"app":"webapp"}}}\''
+      );
+      await advanceBoth(6);
+    }
+  };
+  await runL20CrashScenario('oc rollout undo deployment/webapp -n prod-platform', '#51', {
+    checkPlatform: true,
+    checkRouteObjective: true,
+    checkExec: true,
+  });
+  await runL20CrashScenario(
+    'oc rollout undo deployment/webapp --to-revision=1',
+    '#51 --to-revision=1'
+  );
+
+  // ═══ Timed lab: consistent node naming + platform DNS pods (#53F/#53G) ═══
+  await returnToMenu();
+  await sleep(300);
+  assert(await launch('challenge', 13), '#53F: timed Lab 13 starts');
+  await closeOverlays();
+  await evaluate(() => {
+    window.game.app.hideTutorial?.();
+    window.game.gameEngine.pause?.();
+  });
+  result = await runCmd('oc get nodes');
+  const labNodeNames = parseTable(result.message)
+    .rows.map((cells) => cells[0])
+    .sort();
+  assert(
+    JSON.stringify(labNodeNames) === JSON.stringify(['master-0', 'worker-0', 'worker-1']),
+    '#53F: three-node labs use the shared worker-0/worker-1/master-0 names (no node-N ghosts)',
+    JSON.stringify(labNodeNames)
+  );
+  result = await runCmd('oc get pods -n openshift-dns');
+  const labDnsPods = parseTable(result.message).rows.map((cells) => cells[0]);
+  assert(
+    !result.error &&
+      labDnsPods.filter((name) => /^dns-default-/.test(name)).length === labNodeNames.length &&
+      labDnsPods.filter((name) => /^node-resolver-/.test(name)).length === labNodeNames.length,
+    '#53G: Lab 13 has the dns-default/node-resolver pods its DNS egress objective teaches',
+    JSON.stringify(labDnsPods)
+  );
+  result = await runCmd('oc debug node/worker-0');
+  assert(
+    !result.error && /Starting pod\/worker-0-debug/.test(result.message),
+    '#53F: `oc debug node/worker-0` resolves the real lab node instead of silently aliasing node-1',
+    result.message.slice(0, 280)
+  );
+  await runCmd('exit');
+
+  // ═══ Campaign L18: the pinned-install objective survives a pending
+  //     Manual upgrade plan (#53D regression contract) ════════════════════
+  await returnToMenu();
+  await sleep(300);
+  assert(
+    await launch('campaign', 18),
+    '#53D: campaign L18 starts for the pin/upgrade grading check'
+  );
+  await closeOverlays();
+  await evaluate(() => {
+    window.game.app.hideTutorial?.();
+    window.game.gameEngine.pause?.();
+  });
+  applied = await applyManifest(
+    'l18-pinned-sub',
+    subscriptionYaml({
+      name: olmPackage,
+      namespace: 'openshift-operators',
+      packageName: olmPackage,
+      channel: olmChannel,
+      startingCSV: olmPinCsv,
+      approval: 'Manual',
+    })
+  );
+  assert(
+    !applied.error,
+    '#53D: the L18 pinned Manual Subscription applies',
+    applied.message.slice(0, 240)
+  );
+  await advanceBoth(6);
+  const l18PinnedPlan = await installPlanFor('openshift-operators', olmPinCsv);
+  assert(Boolean(l18PinnedPlan), '#53D: the L18 pinned Subscription creates its InstallPlan');
+  if (l18PinnedPlan) {
+    await runCmd(
+      `oc patch installplan ${l18PinnedPlan.name} -n openshift-operators --type=merge -p '{"spec":{"approved":true}}'`
+    );
+  }
+  let l18PinPhase = null;
+  for (let elapsed = 0; elapsed < 40 && l18PinPhase !== 'Succeeded'; elapsed += 2) {
+    await advanceBoth(2);
+    l18PinPhase = await csvPhase('openshift-operators', olmPinCsv);
+  }
+  let l18UpgradePlan = null;
+  for (let elapsed = 0; elapsed < 30 && !l18UpgradePlan; elapsed += 2) {
+    await advanceBoth(2);
+    l18UpgradePlan = await installPlanFor('openshift-operators', olmHeadCsv);
+  }
+  const l18Sub = await subscriptionState(olmPackage, 'openshift-operators');
+  assert(
+    l18PinPhase === 'Succeeded' &&
+      Boolean(l18UpgradePlan) &&
+      l18Sub?.installedCSV === olmPinCsv &&
+      l18Sub?.currentCSV === olmHeadCsv,
+    '#53D: while the L18 Manual upgrade is pending installedCSV stays the pinned v1.16.0',
+    JSON.stringify({ phase: l18PinPhase, upgradePlan: l18UpgradePlan, sub: l18Sub })
+  );
+  const l18Objective = await evaluate(() => {
+    const mode = window.game.app.modeInstance;
+    if (typeof mode?.updateObjectives !== 'function') return null;
+    mode.updateObjectives();
+    const index = (mode.currentLevelDef?.objectives || []).findIndex(
+      (objective) => objective.type === 'subscription'
+    );
+    if (index < 0) return null;
+    const entry = mode.objectiveProgress?.[index] || null;
+    return entry ? { label: entry.label || '', completed: entry.completed === true } : null;
+  });
+  assert(
+    l18Objective?.completed === true,
+    '#53D: the L18 pin objective still ticks while the Manual upgrade plan is pending',
+    JSON.stringify(l18Objective)
   );
 });
 
