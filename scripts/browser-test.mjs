@@ -6277,17 +6277,50 @@ await runSection('qa-cli', async () => {
     JSON.stringify({ cronHeader, cronRow })
   );
 
-  // describe deploy surfaces controller events during FailedCreate.
+  // #65: real `oc describe deploy` shows only the Deployment controller's own
+  // ScalingReplicaSet events. The ReplicaSet-controller FailedCreate belongs to
+  // the ReplicaSet and must be read with `oc describe rs` (it used to leak into
+  // the Deployment describe, which is not what real oc prints).
   await runCmd('oc create deploy priv --image=nginx:latest');
   await runCmd(
     'oc patch deploy/priv -p \'{"spec":{"template":{"spec":{"containers":[{"name":"nginx","image":"nginx:latest","securityContext":{"privileged":true}}]}}}}\''
   );
   await advanceSimulation(6);
   out = await runCmd('oc describe deploy priv');
+  const privDescribe = out.message;
+  const privEventsAt = privDescribe.search(/^Events:/m);
+  const privEventsBlock = privEventsAt >= 0 ? privDescribe.slice(privEventsAt) : '';
+  const privNewReplicaSet = (privDescribe.match(/^NewReplicaSet:\s+(\S+)/m) || [])[1] || '';
   assert(
-    /^Events:/m.test(out.message) && /FailedCreate/.test(out.message),
-    'qa-cli #36: describe deploy shows Events during FailedCreate',
+    privEventsAt >= 0 &&
+      /Scaled up replica set/.test(privEventsBlock) &&
+      !/FailedCreate/.test(privEventsBlock) &&
+      !/SuccessfulCreate/.test(privEventsBlock) &&
+      !/replicaset-controller/.test(privEventsBlock),
+    'qa-cli #36: describe deploy shows only Deployment-controller events during FailedCreate (no RS FailedCreate)',
+    privDescribe.slice(-600)
+  );
+  assert(
+    Boolean(privNewReplicaSet),
+    'qa-cli #36: describe deploy priv names its NewReplicaSet so the FailedCreate can be read there',
+    privDescribe
+      .split('\n')
+      .filter((line) => /NewReplicaSet/.test(line))
+      .join(' | ')
+  );
+  out = await runCmd(`oc describe rs ${privNewReplicaSet}`);
+  assert(
+    /Warning\s+FailedCreate/.test(out.message) &&
+      /Error creating:/.test(out.message) &&
+      /unable to validate against any security context constraint/.test(out.message),
+    'qa-cli #36: describe rs <newRS> shows the privileged SCC FailedCreate with the real Error creating: wording',
     out.message.slice(-600)
+  );
+  out = await runCmd('oc get events --field-selector reason=FailedCreate');
+  assert(
+    /FailedCreate/.test(out.message) && /Error creating:/.test(out.message),
+    'qa-cli #36: oc get events --field-selector reason=FailedCreate keeps surfacing the ReplicaSet FailedCreate',
+    out.message.slice(0, 600)
   );
 
   // Kustomize: no leading `---`, commonLabels reach selectors, v5 semantics kept.
@@ -10312,6 +10345,20 @@ await runSection('qa-issue42-evidence', async () => {
 // ═══════════════════════════════════════════════════════════════════════════
 await runSection('qa-issue43', async () => {
   assert(await bootSandbox(), '#43: sandbox boots for CLI fidelity checks');
+  // The sandbox seeds random container failures (0.002); this section asserts
+  // exact CLI/describe/exec output, so a transiently restarted fixture Pod must
+  // not turn a real contract into a flake. Same determinism guard as the
+  // #61/#62 and #63 sections (it only disables spontaneous failures — the
+  // explicit incidents spawned below still work).
+  assert(
+    await evaluate(() => {
+      const sim = window.game?.gameEngine?.simulation;
+      if (!sim) return false;
+      sim.randomFailureRate = 0;
+      return sim.randomFailureRate === 0;
+    }),
+    '#43: sandbox random container failures are disabled for deterministic CLI output'
+  );
 
   // ── get output: multi-type name prefixes + empty-type omission ──────────
   await runCmd('oc new-project demo');
@@ -10402,20 +10449,59 @@ await runSection('qa-issue43', async () => {
   await runCmd('oc scale deploy/limited --replicas=2 -n quota-lab', 400);
   await advanceSimulation(6);
   result = await runCmd('oc describe deploy/limited -n quota-lab');
-  const failedCreateRows = result.message
+  const limitedEventsAt = result.message.search(/^Events:/m);
+  const limitedEventsBlock = limitedEventsAt >= 0 ? result.message.slice(limitedEventsAt) : '';
+  const limitedReplicaSet = await evaluate(() => {
+    const cluster = window.game?.cluster;
+    if (!cluster?.getByKindAndNamespace) return null;
+    const sets = cluster.getByKindAndNamespace('ReplicaSet', 'quota-lab') || [];
+    const blocked = sets.find((set) => {
+      if (!/^limited-/.test(set.metadata?.name || '')) return false;
+      return (set.status?.conditions || []).some(
+        (condition) =>
+          /FailedCreate/i.test(String(condition.reason || '')) ||
+          (condition.type === 'ReplicaFailure' && condition.status === 'True')
+      );
+    });
+    return blocked?.metadata?.name || null;
+  });
+  assert(
+    limitedEventsAt >= 0 &&
+      !/FailedCreate/.test(limitedEventsBlock) &&
+      !/SuccessfulCreate/.test(limitedEventsBlock) &&
+      !/replicaset-controller/.test(limitedEventsBlock),
+    '#43: describe deploy/limited does not list ReplicaSet-controller events (FailedCreate lives on the RS)',
+    result.message.slice(-600)
+  );
+  assert(
+    Boolean(limitedReplicaSet),
+    '#43: quota-lab keeps the quota FailedCreate on a ReplicaSet (never on the Deployment describe)',
+    JSON.stringify({
+      limitedReplicaSet,
+      eventsBlock: limitedEventsBlock.slice(0, 400),
+    })
+  );
+  // The real FailedCreate wording is read from the ReplicaSet, exactly like real
+  // `oc describe rs`; the Deployment describe above must stay free of it (#65).
+  const limitedRsDescribe = limitedReplicaSet
+    ? await runCmd(`oc describe rs ${limitedReplicaSet} -n quota-lab`)
+    : { error: true, message: 'quota-lab has no ReplicaSet with a FailedCreate condition' };
+  const failedCreateRows = limitedRsDescribe.message
     .split('\n')
     .filter((line) => /Warning\s+FailedCreate/.test(line));
   assert(
-    failedCreateRows.length === 1 && failedCreateRows.every((line) => /Error creating:/.test(line)),
-    '#43: describe deployment shows the quota FailedCreate exactly once with real wording',
+    !limitedRsDescribe.error &&
+      failedCreateRows.length === 1 &&
+      failedCreateRows.every((line) => /Error creating:/.test(line)),
+    '#43: describe rs shows the quota FailedCreate exactly once with real wording',
     JSON.stringify(failedCreateRows)
   );
   assert(
     /exceeded quota: compute-quota, requested: pods=1, used: pods=1, limited: pods=1/.test(
-      result.message
+      limitedRsDescribe.message
     ),
     '#43: quota admission failure uses the keyed limited: pods=1 wording',
-    result.message.slice(0, 500)
+    limitedRsDescribe.message.slice(0, 500)
   );
   result = await runCmd('oc describe quota compute-quota -n quota-lab');
   assert(
@@ -17276,6 +17362,702 @@ await runSection('qa-issue63', async () => {
       title: lab13Panel.title,
       description: lab13Panel.description.slice(0, 700),
     })
+  );
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 10e. QA ROUND #64 — `oc describe deploy` env placeholders / probe lines and
+//      `oc exec -- sh -c '<script>'` container-environment expansion
+// ═══════════════════════════════════════════════════════════════════════════
+await runSection('qa-issue64', async () => {
+  let result;
+  const projectName = 'qa64';
+  /** Split a multi-line CLI message into its non-empty, trimmed lines. */
+  const messageLines = (message) =>
+    String(message ?? '')
+      .split('\n')
+      .map((line) => line.trim())
+      .filter(Boolean);
+  /** Advance the simulation clock deterministically (0.05 s fixed steps). */
+  const advanceBy = async (seconds) =>
+    evaluate((secs) => {
+      const sim = window.game?.gameEngine?.simulation;
+      if (!sim || typeof sim.tick !== 'function') return false;
+      const steps = Math.ceil(secs / 0.05);
+      for (let index = 0; index < steps; index += 1) sim.tick(0.05);
+      return true;
+    }, seconds);
+  /** Advance the simulation until predicate() is true, or exhaust maxSeconds. */
+  const advanceUntil = async (predicate, maxSeconds = 60, step = 2) => {
+    for (let played = 0; played < maxSeconds; played += step) {
+      await advanceBy(step);
+      if (await predicate()) return true;
+    }
+    return false;
+  };
+  /** Split an oc tabwriter table into header cells + rows (2+ space columns). */
+  const tableParts = (message) => {
+    const lines = String(message ?? '')
+      .split('\n')
+      .filter((line) => line.trim() !== '');
+    return {
+      headers: (lines[0] || '').split(/\s{2,}/).map((cell) => cell.trim()),
+      rows: lines.slice(1).map((line) => line.split(/\s{2,}/).map((cell) => cell.trim())),
+    };
+  };
+  const podRows = async (namespace) => {
+    const out = await runCmd(`oc get pods -n ${namespace}`);
+    return tableParts(out.message).rows.map((cells) => ({
+      name: cells[0] || '',
+      ready: cells[1] || '',
+      status: cells[2] || '',
+    }));
+  };
+  /** True once the Deployment controller has finished its current rollout. */
+  const deploymentSettled = (namespace, deploymentName = 'web') =>
+    evaluate(
+      ({ namespace, deploymentName }) => {
+        const cluster = window.game?.cluster;
+        if (!cluster?.getByKindAndNamespace) return false;
+        const deployment = (cluster.getByKindAndNamespace('Deployment', namespace) || []).find(
+          (entry) => entry.metadata?.name === deploymentName
+        );
+        if (!deployment) return false;
+        const generation = Number(deployment.metadata?.generation) || 0;
+        const desired = Number(deployment.spec?.replicas ?? 1) || 0;
+        const status = deployment.status || {};
+        const progressing = (status.conditions || []).find(
+          (condition) => condition.type === 'Progressing'
+        );
+        return (
+          Number(status.observedGeneration) >= generation &&
+          status.replicas === desired &&
+          status.updatedReplicas === desired &&
+          status.availableReplicas === desired &&
+          Number(status.unavailableReplicas || 0) === 0 &&
+          progressing?.reason === 'NewReplicaSetAvailable'
+        );
+      },
+      { namespace, deploymentName }
+    );
+  const runningWebPod = async () => {
+    const pods = await podRows(projectName);
+    return (
+      pods.find((pod) => /^web-/.test(pod.name) && pod.ready === '1/1' && pod.status === 'Running')
+        ?.name || ''
+    );
+  };
+
+  // ═══ Fixture: fresh sandbox → qa64 web Deployment + secret/configmap env ═══
+  // Disable the sandbox's random container failures so the exact describe/exec
+  // output below cannot flake on a transiently restarted Pod.
+  const booted = await bootSandbox();
+  const randomFailuresOff =
+    booted &&
+    (await evaluate(() => {
+      const sim = window.game?.gameEngine?.simulation;
+      if (!sim) return false;
+      sim.randomFailureRate = 0;
+      return sim.randomFailureRate === 0;
+    }));
+  assert(
+    booted && randomFailuresOff,
+    '#64: a fresh sandbox boots for the describe env/probe and `sh -c` exec checks (random failures disabled)'
+  );
+  result = await runCmd(`oc new-project ${projectName}`);
+  assert(
+    !result.error && /Now using project "qa64"/.test(result.message),
+    '#64: `oc new-project qa64` creates the fixture project',
+    result.message.slice(0, 300)
+  );
+  result = await runCmd(
+    `oc create deployment web --image=registry.access.redhat.com/ubi9/httpd-24 --replicas=1 -n ${projectName}`
+  );
+  assert(
+    !result.error && /deployment\.apps\/web created/.test(result.message),
+    '#64: `oc create deployment web` creates the one-replica fixture',
+    result.message.slice(0, 300)
+  );
+  assert(
+    await advanceUntil(async () => Boolean(await runningWebPod())),
+    '#64: the qa64 web Pod reaches Running 1/1'
+  );
+
+  // The issue's exact sequence: secret env rollout, plain-env rollout, then the
+  // readiness probe with an explicit initial-delay-seconds flag.
+  result = await runCmd(
+    `oc create secret generic db --from-literal=DB_PASS=s3cr3t -n ${projectName}`
+  );
+  assert(
+    !result.error && /secret\/db created/.test(result.message),
+    '#64: `oc create secret generic db` creates the DB_PASS fixture secret',
+    result.message.slice(0, 300)
+  );
+  result = await runCmd(`oc set env deploy/web --from=secret/db -n ${projectName}`);
+  assert(
+    !result.error && /deployment\.apps\/web updated/.test(result.message),
+    '#64: `oc set env deploy/web --from=secret/db` adds the DB_PASS secretRef env',
+    result.message.slice(0, 300)
+  );
+  assert(
+    await advanceUntil(() => deploymentSettled(projectName)),
+    '#64: the secret-env rollout settles before the next template change'
+  );
+  result = await runCmd(`oc set env deploy/web APP_MODE=prod -n ${projectName}`);
+  assert(
+    !result.error && /deployment\.apps\/web updated/.test(result.message),
+    '#64: `oc set env deploy/web APP_MODE=prod` adds the plain env value',
+    result.message.slice(0, 300)
+  );
+  assert(
+    await advanceUntil(() => deploymentSettled(projectName)),
+    '#64: the APP_MODE rollout settles before the probe change'
+  );
+  result = await runCmd(
+    `oc set probe deploy/web --readiness --get-url=http://:8080/ --initial-delay-seconds=2 -n ${projectName}`
+  );
+  assert(
+    !result.error && /web readiness probe updated/.test(result.message),
+    '#64: `oc set probe deploy/web --readiness … --initial-delay-seconds=2` updates the readiness probe',
+    result.message.slice(0, 300)
+  );
+  assert(
+    await advanceUntil(() => deploymentSettled(projectName)),
+    '#64: the readiness-probe rollout settles before the liveness probe change'
+  );
+  result = await runCmd(
+    `oc set probe deploy/web --liveness --get-url=http://:8080/healthz --initial-delay-seconds=3 -n ${projectName}`
+  );
+  assert(
+    !result.error && /web liveness probe updated/.test(result.message),
+    '#64: `oc set probe deploy/web --liveness …` updates the liveness probe too',
+    result.message.slice(0, 300)
+  );
+  assert(
+    await advanceUntil(() => deploymentSettled(projectName)),
+    '#64: the liveness-probe rollout settles before the configmap env change'
+  );
+  result = await runCmd(`oc create configmap cfg --from-literal=APP_LOG=debug -n ${projectName}`);
+  assert(
+    !result.error && /configmap\/cfg created/.test(result.message),
+    '#64: `oc create configmap cfg` creates the APP_LOG fixture ConfigMap',
+    result.message.slice(0, 300)
+  );
+  result = await runCmd(`oc set env deploy/web --from=configmap/cfg -n ${projectName}`);
+  assert(
+    !result.error && /deployment\.apps\/web updated/.test(result.message),
+    '#64: `oc set env deploy/web --from=configmap/cfg` adds the APP_LOG configMapRef env',
+    result.message.slice(0, 300)
+  );
+  assert(
+    await advanceUntil(() => deploymentSettled(projectName)),
+    '#64: the configmap-env rollout settles before the describe/exec assertions'
+  );
+
+  // ═══ Round 1: #64A — describe deploy env placeholders + probe lines ═══════
+  // The probe command's numeric flag must reach the API object (it used to be
+  // dropped, leaving the API-server default initialDelaySeconds=5).
+  result = await runCmd(
+    `oc get deploy web -o jsonpath={.spec.template.spec.containers[0].readinessProbe.initialDelaySeconds} -n ${projectName}`
+  );
+  assert(
+    !result.error && result.message.trim() === '2',
+    '#64: `-o jsonpath={.spec.template.spec.containers[0].readinessProbe.initialDelaySeconds}` is 2 (flag not ignored)',
+    JSON.stringify({ error: result.error, message: result.message })
+  );
+  result = await runCmd(`oc describe deploy/web -n ${projectName}`);
+  const webDescribe = result.message;
+  assert(
+    !result.error &&
+      /DB_PASS:\s+<set to the key 'DB_PASS' in secret 'db'>\s+Optional: false/.test(webDescribe),
+    "#64: describe deploy renders the secret env as `<set to the key 'DB_PASS' in secret 'db'> Optional: false`",
+    webDescribe
+      .split('\n')
+      .filter((line) => /DB_PASS/.test(line))
+      .join(' | ')
+  );
+  assert(
+    /APP_LOG:\s+<set to the key 'APP_LOG' of config map 'cfg'>\s+Optional: false/.test(webDescribe),
+    "#64: describe deploy renders the configmap env as `<set to the key 'APP_LOG' of config map 'cfg'> Optional: false`",
+    webDescribe
+      .split('\n')
+      .filter((line) => /APP_LOG/.test(line))
+      .join(' | ')
+  );
+  assert(
+    !/\{"secretKeyRef"|\{"configMapKeyRef"/.test(webDescribe),
+    '#64: describe deploy never prints the raw JSON valueFrom object for env entries',
+    webDescribe.slice(0, 800)
+  );
+  assert(
+    /Readiness:\s+http-get\s+http:\/\/:8080\/\s+delay=2s\s+timeout=1s\s+period=10s\s+#success=1\s+#failure=3/.test(
+      webDescribe
+    ),
+    '#64: describe deploy prints the real Readiness probe line (http-get :8080/ delay=2s timeout=1s period=10s #success=1 #failure=3)',
+    webDescribe
+      .split('\n')
+      .filter((line) => /Readiness:/.test(line))
+      .join(' | ')
+  );
+  assert(
+    /Liveness:\s+http-get\s+http:\/\/:8080\/healthz\s+delay=3s/.test(webDescribe),
+    '#64: describe deploy prints the real Liveness probe line with delay=3s',
+    webDescribe
+      .split('\n')
+      .filter((line) => /Liveness:/.test(line))
+      .join(' | ')
+  );
+
+  // ═══ Round 2: #64B — `oc exec … -- sh -c '<script>'` runs a container shell ═
+  const webPodName = await runningWebPod();
+  assert(Boolean(webPodName), '#64: the running qa64 web Pod is resolvable before the exec checks');
+  result = await runCmd(`oc exec deploy/web -n ${projectName} -- sh -c 'echo $DB_PASS $APP_MODE'`);
+  assert(
+    !result.error && result.message.trim() === 's3cr3t prod',
+    "#64: `oc exec … -- sh -c 'echo $DB_PASS $APP_MODE'` expands the container env to `s3cr3t prod`",
+    JSON.stringify({ error: result.error, message: result.message })
+  );
+  result = await runCmd(`oc exec deploy/web -n ${projectName} -- sh -c 'echo $HOSTNAME'`);
+  assert(
+    !result.error && result.message.trim() === webPodName,
+    "#64: `oc exec … -- sh -c 'echo $HOSTNAME'` prints the exec Pod’s real name",
+    JSON.stringify({ expected: webPodName, message: result.message })
+  );
+  result = await runCmd(`oc exec deploy/web -n ${projectName} -- sh -c "echo $APP_MODE"`);
+  assert(
+    !result.error && result.message.trim() === '',
+    '#64: `oc exec … -- sh -c "echo $APP_MODE"` prints an empty line (the workstation shell expands $APP_MODE before oc)',
+    JSON.stringify({ error: result.error, message: result.message })
+  );
+  result = await runCmd(`oc exec deploy/web -n ${projectName} -- printenv DB_PASS`);
+  assert(
+    !result.error && result.message.trim() === 's3cr3t',
+    '#64: `oc exec … -- printenv DB_PASS` still resolves the secret to s3cr3t',
+    JSON.stringify({ error: result.error, message: result.message })
+  );
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 10f. QA ROUND #65 — describe volumes/annotations, Deployment-only events with
+//      per-rollout scaling rows, `sh -c` exit/id builtins, and top nodes
+// ═══════════════════════════════════════════════════════════════════════════
+await runSection('qa-issue65', async () => {
+  let result;
+  const projectName = 'qa65';
+  /** Split a multi-line CLI message into its non-empty, trimmed lines. */
+  const messageLines = (message) =>
+    String(message ?? '')
+      .split('\n')
+      .map((line) => line.trim())
+      .filter(Boolean);
+  /** Advance the simulation clock deterministically (0.05 s fixed steps). */
+  const advanceBy = async (seconds) =>
+    evaluate((secs) => {
+      const sim = window.game?.gameEngine?.simulation;
+      if (!sim || typeof sim.tick !== 'function') return false;
+      const steps = Math.ceil(secs / 0.05);
+      for (let index = 0; index < steps; index += 1) sim.tick(0.05);
+      return true;
+    }, seconds);
+  /** Advance the simulation until predicate() is true, or exhaust maxSeconds. */
+  const advanceUntil = async (predicate, maxSeconds = 60, step = 2) => {
+    for (let played = 0; played < maxSeconds; played += step) {
+      await advanceBy(step);
+      if (await predicate()) return true;
+    }
+    return false;
+  };
+  /** Split an oc tabwriter table into header cells + rows (2+ space columns). */
+  const tableParts = (message) => {
+    const lines = String(message ?? '')
+      .split('\n')
+      .filter((line) => line.trim() !== '');
+    return {
+      headers: (lines[0] || '').split(/\s{2,}/).map((cell) => cell.trim()),
+      rows: lines.slice(1).map((line) => line.split(/\s{2,}/).map((cell) => cell.trim())),
+    };
+  };
+  const podRows = async (namespace) => {
+    const out = await runCmd(`oc get pods -n ${namespace}`);
+    return tableParts(out.message).rows.map((cells) => ({
+      name: cells[0] || '',
+      ready: cells[1] || '',
+      status: cells[2] || '',
+    }));
+  };
+  /** True once the Deployment controller has finished its current rollout. */
+  const deploymentSettled = (namespace, deploymentName = 'web') =>
+    evaluate(
+      ({ namespace, deploymentName }) => {
+        const cluster = window.game?.cluster;
+        if (!cluster?.getByKindAndNamespace) return false;
+        const deployment = (cluster.getByKindAndNamespace('Deployment', namespace) || []).find(
+          (entry) => entry.metadata?.name === deploymentName
+        );
+        if (!deployment) return false;
+        const generation = Number(deployment.metadata?.generation) || 0;
+        const desired = Number(deployment.spec?.replicas ?? 1) || 0;
+        const status = deployment.status || {};
+        const progressing = (status.conditions || []).find(
+          (condition) => condition.type === 'Progressing'
+        );
+        return (
+          Number(status.observedGeneration) >= generation &&
+          status.replicas === desired &&
+          status.updatedReplicas === desired &&
+          status.availableReplicas === desired &&
+          Number(status.unavailableReplicas || 0) === 0 &&
+          progressing?.reason === 'NewReplicaSetAvailable'
+        );
+      },
+      { namespace, deploymentName }
+    );
+  const runningWebPod = async () => {
+    const pods = await podRows(projectName);
+    return (
+      pods.find((pod) => /^web-/.test(pod.name) && pod.ready === '1/1' && pod.status === 'Running')
+        ?.name || ''
+    );
+  };
+  /** `oc`/kubectl age forms: `0s`, `25s`, `3m`, `2m10s`, `1h`, `2d`. */
+  const parseAgeSeconds = (raw) => {
+    const text = String(raw ?? '').trim();
+    const match = text.match(/^(?:(\d+)d)?(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s)?$/);
+    if (!match || !text) return Number.NaN;
+    const [, days, hours, minutes, seconds] = match;
+    if (!days && !hours && !minutes && !seconds) return Number.NaN;
+    return (
+      Number(days || 0) * 86400 +
+      Number(hours || 0) * 3600 +
+      Number(minutes || 0) * 60 +
+      Number(seconds || 0)
+    );
+  };
+  const parseCpuMillis = (raw) => {
+    const text = String(raw ?? '').trim();
+    if (/m$/.test(text)) return Number.parseFloat(text) || 0;
+    const cores = Number.parseFloat(text);
+    return Number.isFinite(cores) ? cores * 1000 : 0;
+  };
+  const parseMemoryBytes = (raw) => {
+    const text = String(raw ?? '').trim();
+    const match = text.match(/^([\d.]+)([KMGT]i)?$/);
+    if (!match) return Number.NaN;
+    const value = Number.parseFloat(match[1]);
+    const unit = { Ki: 1024, Mi: 1024 ** 2, Gi: 1024 ** 3, Ti: 1024 ** 4 }[match[2]];
+    return unit ? value * unit : value;
+  };
+  /** The value column (0-based index of the first value char) of a `Key:  value` line. */
+  const valueColumn = (line) => {
+    const match = String(line ?? '').match(/^(\s*[A-Za-z]+:)(\s+)/);
+    return match ? match[0].length : -1;
+  };
+
+  // ═══ Fixture: fresh sandbox → qa65 web Deployment + cfg ConfigMap ═════════
+  const booted = await bootSandbox();
+  const randomFailuresOff =
+    booted &&
+    (await evaluate(() => {
+      const sim = window.game?.gameEngine?.simulation;
+      if (!sim) return false;
+      sim.randomFailureRate = 0;
+      return sim.randomFailureRate === 0;
+    }));
+  assert(
+    booted && randomFailuresOff,
+    '#65: a fresh sandbox boots for the describe/events/exec/top checks (random failures disabled)'
+  );
+  result = await runCmd(`oc new-project ${projectName}`);
+  assert(
+    !result.error && /Now using project "qa65"/.test(result.message),
+    '#65: `oc new-project qa65` creates the fixture project',
+    result.message.slice(0, 300)
+  );
+  result = await runCmd(`oc create configmap cfg --from-literal=APP_LOG=debug -n ${projectName}`);
+  assert(
+    !result.error && /configmap\/cfg created/.test(result.message),
+    '#65: `oc create configmap cfg` creates the ConfigMap used by the volume fixture',
+    result.message.slice(0, 300)
+  );
+  result = await runCmd(
+    `oc create deployment web --image=registry.access.redhat.com/ubi9/httpd-24 --replicas=1 -n ${projectName}`
+  );
+  assert(
+    !result.error && /deployment\.apps\/web created/.test(result.message),
+    '#65: `oc create deployment web` creates the one-replica rollout fixture',
+    result.message.slice(0, 300)
+  );
+  assert(
+    await advanceUntil(() => deploymentSettled(projectName)),
+    '#65: the initial qa65 web rollout settles before the three template rollouts'
+  );
+
+  // ═══ Round 1: #65A — three rollouts leave four ReplicaSets ════════════════
+  for (let rollout = 1; rollout <= 3; rollout += 1) {
+    result = await runCmd(`oc set env deploy/web ROLLOUT=${rollout} -n ${projectName}`);
+    assert(
+      !result.error && /deployment\.apps\/web updated/.test(result.message),
+      `#65: rollout ${rollout}/3 \`oc set env deploy/web ROLLOUT=${rollout}\` updates the deployment`,
+      result.message.slice(0, 300)
+    );
+    assert(
+      await advanceUntil(() => deploymentSettled(projectName)),
+      `#65: rollout ${rollout}/3 settles before the next template change`
+    );
+  }
+  result = await runCmd(`oc get rs -n ${projectName}`);
+  const replicaSetTable = tableParts(result.message);
+  const ageColumn = replicaSetTable.headers.indexOf('AGE');
+  const replicaSets = replicaSetTable.rows
+    .map((cells) => ({ name: cells[0] || '', age: cells[ageColumn] || '' }))
+    .filter((entry) => /^web-/.test(entry.name));
+  const replicaSetNames = replicaSets.map((entry) => entry.name);
+  assert(
+    replicaSetNames.length === 4,
+    '#65: three rollouts leave four ReplicaSets (initial + one per rollout)',
+    JSON.stringify({ headers: replicaSetTable.headers, replicaSets })
+  );
+
+  // ═══ Round 2: #65B — describe deploy shows only Deployment-own events ═════
+  result = await runCmd(`oc describe deploy/web -n ${projectName}`);
+  const webDescribe = result.message;
+  const eventsAt = webDescribe.search(/^Events:/m);
+  const eventsBlock = eventsAt >= 0 ? webDescribe.slice(eventsAt) : '';
+  const eventLines = messageLines(eventsBlock);
+  const upRows = eventLines
+    .map((line) =>
+      line.match(
+        /^Normal\s+ScalingReplicaSet\s+(\S+)\s+deployment-controller\s+Scaled up replica set (\S+) to (\d+)$/
+      )
+    )
+    .filter(Boolean)
+    .map((match) => ({ age: match[1], replicaSet: match[2], replicas: Number(match[3]) }));
+  const downRows = eventLines
+    .map((line) =>
+      line.match(
+        /^Normal\s+ScalingReplicaSet\s+(\S+)\s+deployment-controller\s+Scaled down replica set (\S+) to 0 from (\d+)$/
+      )
+    )
+    .filter(Boolean)
+    .map((match) => ({ age: match[1], replicaSet: match[2], from: Number(match[3]) }));
+  const eventHeaderLine =
+    eventLines.find((line) => /^Type\s+Reason\s+Age\s+From\s+Message$/.test(line)) || '';
+  assert(
+    eventsAt >= 0 &&
+      Boolean(eventHeaderLine) &&
+      !/SuccessfulCreate/.test(eventsBlock) &&
+      !/replicaset-controller/.test(eventsBlock),
+    '#65: describe deploy events are the Deployment controller’s own series — no SuccessfulCreate and no replicaset-controller FROM rows',
+    eventsBlock.slice(0, 600)
+  );
+  assert(
+    upRows.length === replicaSetNames.length &&
+      upRows.every((row) => replicaSetNames.includes(row.replicaSet)) &&
+      upRows.every((row) => row.replicas === 1),
+    '#65: describe deploy has one `Scaled up replica set <rs> to 1` row per ReplicaSet/rollout',
+    JSON.stringify({ upRows, replicaSetNames })
+  );
+  assert(
+    downRows.length >= 1 &&
+      downRows.every((row) => replicaSetNames.includes(row.replicaSet)) &&
+      downRows.every((row) => row.from === 1),
+    '#65: retired ReplicaSets get `Scaled down replica set <rs> to 0 from 1` rows',
+    JSON.stringify({ downRows })
+  );
+  const newReplicaSet = (webDescribe.match(/^NewReplicaSet:\s+(\S+)/m) || [])[1] || '';
+  const newestUp = upRows.find((row) => row.replicaSet === newReplicaSet) || null;
+  const newestSet = replicaSets.find((entry) => entry.name === newReplicaSet) || null;
+  const eventAge = newestUp ? parseAgeSeconds(newestUp.age) : Number.NaN;
+  const replicaSetAge = newestSet ? parseAgeSeconds(newestSet.age) : Number.NaN;
+  assert(
+    Boolean(newestUp) &&
+      Number.isFinite(eventAge) &&
+      Number.isFinite(replicaSetAge) &&
+      Math.abs(eventAge - replicaSetAge) <= 10,
+    '#65: the newest `Scaled up` event age matches the newest ReplicaSet AGE (within 10s)',
+    JSON.stringify({ newReplicaSet, newestUp, newestSet, eventAge, replicaSetAge })
+  );
+
+  // ═══ Round 3: #65C — annotations use `key: value`; labels stay key=value ═══
+  const deployAnnotationBlock = (() => {
+    const at = webDescribe.search(/^Annotations:/m);
+    if (at < 0) return '';
+    const rest = webDescribe.slice(at);
+    const end = rest.search(/^(?:Selector:|Replicas:)/m);
+    return end >= 0 ? rest.slice(0, end) : rest;
+  })();
+  assert(
+    /deployment\.kubernetes\.io\/revision: \d+/.test(deployAnnotationBlock) &&
+      !/deployment\.kubernetes\.io\/revision=/.test(webDescribe) &&
+      /^Selector:\s+app=web/m.test(webDescribe),
+    '#65: describe deploy prints annotations as `key: value` (revision) and the selector stays `key=value`',
+    JSON.stringify({ annotations: deployAnnotationBlock, describe: webDescribe.slice(0, 700) })
+  );
+  const webPodName = await runningWebPod();
+  result = await runCmd(`oc describe pod ${webPodName} -n ${projectName}`);
+  const podDescribe = result.message;
+  const podAnnotationBlock = (() => {
+    const at = podDescribe.search(/^Annotations:/m);
+    if (at < 0) return '';
+    const rest = podDescribe.slice(at);
+    const end = rest.search(/^Status:/m);
+    return end >= 0 ? rest.slice(0, end) : rest;
+  })();
+  assert(
+    !result.error &&
+      /openshift\.io\/scc: restricted-v2/.test(podAnnotationBlock) &&
+      !/openshift\.io\/scc=/.test(podDescribe) &&
+      /^Labels:\s+.*app=web.*pod-template-hash=/m.test(podDescribe),
+    '#65: describe pod prints annotations as `key: value` (openshift.io/scc: restricted-v2) and labels stay `key=value`',
+    JSON.stringify({ pod: webPodName, annotations: podAnnotationBlock.slice(0, 500) })
+  );
+
+  // ═══ Round 4: #65D — ConfigMap volume describe block ═════════════════════
+  result = await runCmd(
+    `oc create deployment volweb --image=registry.access.redhat.com/ubi9/httpd-24 --replicas=1 -n ${projectName}`
+  );
+  assert(
+    !result.error && /deployment\.apps\/volweb created/.test(result.message),
+    '#65: `oc create deployment volweb` creates the volume fixture',
+    result.message.slice(0, 300)
+  );
+  result = await runCmd(
+    `oc patch deployment/volweb -n ${projectName} -p '{"spec":{"template":{"spec":{"containers":[{"name":"httpd-24","image":"registry.access.redhat.com/ubi9/httpd-24","volumeMounts":[{"name":"cfg","mountPath":"/etc/cfg"}]}],"volumes":[{"name":"cfg","configMap":{"name":"cfg"}}]}}}}'`
+  );
+  assert(
+    !result.error && /deployment\.apps\/volweb patched/.test(result.message),
+    '#65: the volweb Deployment is patched with a cfg ConfigMap volume and mount',
+    result.message.slice(0, 300)
+  );
+  assert(
+    await advanceUntil(() => deploymentSettled(projectName, 'volweb')),
+    '#65: the volweb rollout with the ConfigMap volume settles'
+  );
+  result = await runCmd(`oc describe deploy volweb -n ${projectName}`);
+  const volumeDescribe = result.message;
+  const volumeLines = messageLines(volumeDescribe);
+  const volumeNameLine = volumeLines.find((line) => /^cfg:$/.test(line)) || '';
+  const volumeTypeLine =
+    volumeLines.find((line) =>
+      /^Type:\s+ConfigMap \(a volume populated by a ConfigMap\)$/.test(line)
+    ) || '';
+  const volumeKeyNameLine = volumeLines.find((line) => /^Name:\s+cfg$/.test(line)) || '';
+  const volumeOptionalLine = volumeLines.find((line) => /^Optional:\s+false$/.test(line)) || '';
+  assert(
+    !result.error &&
+      Boolean(volumeNameLine) &&
+      Boolean(volumeTypeLine) &&
+      Boolean(volumeKeyNameLine) &&
+      Boolean(volumeOptionalLine) &&
+      !/Type:\s+configMap\b/.test(volumeDescribe),
+    '#65: describe deploy renders the ConfigMap volume block (cfg: Type/Name/Optional), never the old bare `Type:  configMap`',
+    (() => {
+      const at = volumeDescribe.search(/^  Volumes:/m);
+      const end = volumeDescribe.search(/^Conditions:/m);
+      return at >= 0 && end > at ? volumeDescribe.slice(at, end) : volumeDescribe.slice(-600);
+    })()
+  );
+  assert(
+    Boolean(volumeTypeLine) &&
+      valueColumn(volumeTypeLine) === valueColumn(volumeKeyNameLine) &&
+      valueColumn(volumeTypeLine) === valueColumn(volumeOptionalLine),
+    '#65: volume Type/Name/Optional values align on a single column like kubectl',
+    JSON.stringify({
+      type: volumeTypeLine,
+      name: volumeKeyNameLine,
+      optional: volumeOptionalLine,
+      columns: [
+        valueColumn(volumeTypeLine),
+        valueColumn(volumeKeyNameLine),
+        valueColumn(volumeOptionalLine),
+      ],
+    })
+  );
+
+  // ═══ Round 5: #65E — `sh -c "exit 3"` and the container `id` builtins ═════
+  result = await runCmd(`oc exec deploy/web -n ${projectName} -- sh -c "exit 3"; echo rc=$?`);
+  assert(
+    !result.error &&
+      /command terminated with exit code 3/.test(result.message) &&
+      messageLines(result.message).pop() === 'rc=3',
+    '#65: `oc exec … -- sh -c "exit 3"; echo rc=$?` reports exit 3 and the same line sees rc=3',
+    JSON.stringify({ error: result.error, message: result.message })
+  );
+  result = await runCmd(`oc exec deploy/web -n ${projectName} -- id`);
+  const idMessage = result.message.trim();
+  const idUid = (idMessage.match(/^uid=(\d+)\b/) || [])[1] || '';
+  assert(
+    !result.error && /^uid=\d+ gid=0\(root\) groups=/.test(idMessage),
+    '#65: `oc exec … -- id` keeps the full uid=N gid=0(root) groups=… output line',
+    JSON.stringify({ error: result.error, message: result.message })
+  );
+  result = await runCmd(`oc exec deploy/web -n ${projectName} -- sh -c "id -u"`);
+  assert(
+    !result.error && /^\d+$/.test(result.message.trim()) && result.message.trim() === idUid,
+    '#65: `sh -c "id -u"` prints the bare numeric UID that matches `id`',
+    JSON.stringify({ id: idMessage, message: result.message })
+  );
+  result = await runCmd(`oc exec deploy/web -n ${projectName} -- sh -c "id -g"`);
+  assert(
+    !result.error && result.message.trim() === '0',
+    '#65: `sh -c "id -g"` prints the container root gid 0',
+    JSON.stringify({ error: result.error, message: result.message })
+  );
+  result = await runCmd(`oc exec deploy/web -n ${projectName} -- sh -c "id -un"`);
+  assert(
+    !result.error &&
+      /^\d+$/.test(result.message.trim()) &&
+      result.message.trim() === idUid &&
+      !/uid=/.test(result.message),
+    '#65: `sh -c "id -un"` prints the bare numeric user (no uid= prefix)',
+    JSON.stringify({ message: result.message })
+  );
+
+  // ═══ Round 6: #65F — `oc adm top nodes` sorted, control plane busiest ═════
+  result = await runCmd('oc adm top nodes');
+  const topHeader = String(result.message).split('\n')[0].trim();
+  assert(
+    !result.error && /^NAME\s+CPU\(cores\)\s+CPU%\s+MEMORY\(bytes\)\s+MEMORY%$/.test(topHeader),
+    '#65: `oc adm top nodes` keeps the NAME/CPU(cores)/CPU%/MEMORY(bytes)/MEMORY% header',
+    JSON.stringify({ error: result.error, header: topHeader })
+  );
+  const topTable = tableParts(result.message);
+  const cpuColumn = topTable.headers.indexOf('CPU(cores)');
+  const cpuPercentColumn = topTable.headers.indexOf('CPU%');
+  const memoryColumn = topTable.headers.indexOf('MEMORY(bytes)');
+  const topRows = topTable.rows
+    .map((cells) => ({
+      name: cells[0] || '',
+      cpu: cells[cpuColumn] || '',
+      cpuPercent: cells[cpuPercentColumn] || '',
+      memory: cells[memoryColumn] || '',
+    }))
+    .filter((row) => row.name);
+  assert(
+    JSON.stringify(topRows.map((row) => row.name)) ===
+      JSON.stringify(['master-0', 'worker-0', 'worker-1']),
+    '#65: `oc adm top nodes` rows are sorted by NAME (master-0, worker-0, worker-1)',
+    JSON.stringify(topRows)
+  );
+  const masterRow = topRows.find((row) => row.name === 'master-0') || {};
+  const workerRows = topRows.filter((row) => /^worker-/.test(row.name));
+  const masterCpu = parseCpuMillis(masterRow.cpu);
+  const masterMemory = parseMemoryBytes(masterRow.memory);
+  assert(
+    masterCpu >= 2000 &&
+      masterMemory >= 8 * 1024 ** 3 &&
+      masterMemory <= 12 * 1024 ** 3 &&
+      workerRows.every(
+        (row) => Number.parseInt(masterRow.cpuPercent, 10) > Number.parseInt(row.cpuPercent, 10)
+      ),
+    '#65: the control-plane node is the busiest — CPU(cores) >= 2000m, MEMORY between 8Gi and 12Gi and the greatest CPU%',
+    JSON.stringify({ master: masterRow, masterCpu, masterMemory, workers: workerRows })
+  );
+  assert(
+    workerRows.length === 2 &&
+      (workerRows[0].cpu !== workerRows[1].cpu || workerRows[0].memory !== workerRows[1].memory),
+    '#65: the two worker rows differ from each other in at least one of CPU/MEMORY',
+    JSON.stringify(workerRows)
   );
 });
 

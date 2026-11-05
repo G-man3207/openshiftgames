@@ -3231,6 +3231,464 @@ if (seedMod?.ClusterState) {
   }
 }
 
+// ── 4h. Issue #64–#65 describe/exec/events/metrics fidelity locks (static) ─
+// The browser suite sections `qa-issue64` / `qa-issue65` prove the behaviour
+// end-to-end. These Node locks fail the fast static gate if a refactor silently
+// reintroduces the #64/#65 bugs (no browser, no long sleeps): kubectl-style
+// `oc describe` output (secret/configmap env placeholders, probe lines with the
+// `--initial-delay-seconds` value, `key: value` annotations, ConfigMap volume
+// blocks), the `oc exec -- sh -c '<script>'` container-shell contract (env
+// expansion, `exit` builtin, `id`), Deployment-only describe events with the
+// per-rollout `ScalingReplicaSet` up/down series, and sorted `oc adm top nodes`.
+{
+  const engineMod = await tryImport('js/engine/GameEngine.js');
+  const sandboxMod = await tryImport('js/modes/SandboxMode.js');
+  const commandBarMod = await tryImport('js/ui/CommandBar.js');
+  if (!engineMod?.GameEngine || !sandboxMod?.SandboxMode || !commandBarMod?.CommandBar) {
+    fail('fidelity', '#64/#65: GameEngine/SandboxMode/CommandBar are not importable for the locks');
+  } else {
+    try {
+      const engine = new engineMod.GameEngine({ mode: 'sandbox' });
+      new sandboxMod.SandboxMode(engine, null).setupCluster(3);
+      const simulation = engine.simulation;
+      simulation.ensureOLMDefaultsSync();
+      // The sandbox seeds random container failures (0.002) that could restart
+      // the fixture Pods mid-lock; these locks assert fixed describe/exec
+      // semantics, so disable them for deterministic output (#63 lock precedent).
+      simulation.randomFailureRate = 0;
+      const cluster = engine.cluster;
+      const windowShim = {
+        game: {
+          cluster,
+          gameEngine: engine,
+          engine: { emit() {}, on() {}, off() {} },
+          manifestEngine: null,
+        },
+      };
+      globalThis.window = windowShim;
+      try {
+        const cliBar = new commandBarMod.CommandBar();
+        const run = (command) => cliBar.executeCommand(command);
+        const messageOf = (result) => String(result?.message ?? '');
+        /** True once the Deployment controller has finished its current rollout. */
+        const deploymentSettled = (namespace, deploymentName = 'web') => {
+          const deployment = (cluster.getByKindAndNamespace('Deployment', namespace) || []).find(
+            (entry) => entry.metadata?.name === deploymentName
+          );
+          if (!deployment) return false;
+          const generation = Number(deployment.metadata?.generation) || 0;
+          const desired = Number(deployment.spec?.replicas ?? 1) || 0;
+          const status = deployment.status || {};
+          const progressing = (status.conditions || []).find(
+            (condition) => condition.type === 'Progressing'
+          );
+          return (
+            Number(status.observedGeneration) >= generation &&
+            status.replicas === desired &&
+            status.updatedReplicas === desired &&
+            status.availableReplicas === desired &&
+            Number(status.unavailableReplicas || 0) === 0 &&
+            progressing?.reason === 'NewReplicaSetAvailable'
+          );
+        };
+        /** Tick until predicate() is true, or exhaust maxTicks (0.05 s steps). */
+        const tickUntil = (predicate, maxTicks = 1200) => {
+          for (let index = 0; index < maxTicks; index += 1) {
+            if (predicate()) return true;
+            simulation.tick(0.05);
+          }
+          return predicate();
+        };
+        const runningPodName = (namespace, prefix) => {
+          const pod = (cluster.getByKindAndNamespace('Pod', namespace) || []).find(
+            (entry) =>
+              new RegExp(`^${prefix}-`).test(String(entry.metadata?.name || '')) &&
+              entry.status?.phase === 'Running'
+          );
+          return pod?.metadata?.name || null;
+        };
+        /** `oc`/kubectl age forms: `0s`, `25s`, `3m`, `2m10s`, `1h`, `2d`. */
+        const parseAgeSeconds = (raw) => {
+          const text = String(raw ?? '').trim();
+          const match = text.match(/^(?:(\d+)d)?(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s)?$/);
+          if (!match || !text) return Number.NaN;
+          const [, days, hours, minutes, seconds] = match;
+          if (!days && !hours && !minutes && !seconds) return Number.NaN;
+          return (
+            Number(days || 0) * 86400 +
+            Number(hours || 0) * 3600 +
+            Number(minutes || 0) * 60 +
+            Number(seconds || 0)
+          );
+        };
+        /** The value column (0-based index of the first value char) of a `Key:  value` line. */
+        const valueColumn = (line) => {
+          const match = String(line ?? '').match(/^(\s*[A-Za-z]+:)(\s+)/);
+          return match ? match[0].length : -1;
+        };
+
+        // Fixture A: the issue #64 command sequence (secret/configmap env,
+        // readiness probe with an explicit 2 s initial delay, liveness probe).
+        const project64 = run('oc new-project qa64lock');
+        const deployment64 = run(
+          'oc create deployment web --image=registry.access.redhat.com/ubi9/httpd-24 --replicas=1 -n qa64lock'
+        );
+        const podCreated64 = tickUntil(() => runningPodName('qa64lock', 'web') !== null);
+        run('oc create secret generic db --from-literal=DB_PASS=s3cr3t -n qa64lock');
+        run('oc set env deploy/web --from=secret/db -n qa64lock');
+        tickUntil(() => deploymentSettled('qa64lock'));
+        run('oc set env deploy/web APP_MODE=prod -n qa64lock');
+        tickUntil(() => deploymentSettled('qa64lock'));
+        run(
+          'oc set probe deploy/web --readiness --get-url=http://:8080/ --initial-delay-seconds=2 -n qa64lock'
+        );
+        tickUntil(() => deploymentSettled('qa64lock'));
+        run(
+          'oc set probe deploy/web --liveness --get-url=http://:8080/healthz --initial-delay-seconds=3 -n qa64lock'
+        );
+        tickUntil(() => deploymentSettled('qa64lock'));
+        run('oc create configmap cfg --from-literal=APP_LOG=debug -n qa64lock');
+        run('oc set env deploy/web --from=configmap/cfg -n qa64lock');
+        tickUntil(() => deploymentSettled('qa64lock'));
+        const pod64 = runningPodName('qa64lock', 'web');
+        const fixture64Ok =
+          !project64?.error && !deployment64?.error && podCreated64 && Boolean(pod64);
+        const describe64 = messageOf(run('oc describe deploy/web -n qa64lock'));
+        const readinessJson = messageOf(
+          run(
+            'oc get deploy web -o jsonpath={.spec.template.spec.containers[0].readinessProbe.initialDelaySeconds} -n qa64lock'
+          )
+        ).trim();
+
+        // #64A: secret env must render the kubectl placeholder, never raw JSON.
+        if (
+          fixture64Ok &&
+          /DB_PASS:\s+<set to the key 'DB_PASS' in secret 'db'>\s+Optional: false/.test(
+            describe64
+          ) &&
+          !/\{"secretKeyRef"|\{"configMapKeyRef"/.test(describe64)
+        ) {
+          passed();
+        } else {
+          fail(
+            'fidelity',
+            `#64: describe deploy must render the secret env as \`<set to the key 'DB_PASS' in secret 'db'>  Optional: false\` and never the raw JSON valueFrom (#64A): ${JSON.stringify(describe64.split('\n').filter((line) => /DB_PASS/.test(line)))}`
+          );
+        }
+
+        // #64A: configmap env uses the `of config map` wording.
+        if (
+          fixture64Ok &&
+          /APP_LOG:\s+<set to the key 'APP_LOG' of config map 'cfg'>\s+Optional: false/.test(
+            describe64
+          )
+        ) {
+          passed();
+        } else {
+          fail(
+            'fidelity',
+            `#64: describe deploy must render the configmap env as \`<set to the key 'APP_LOG' of config map 'cfg'>  Optional: false\` (#64A): ${JSON.stringify(describe64.split('\n').filter((line) => /APP_LOG/.test(line)))}`
+          );
+        }
+
+        // #64A: the probe line carries the real kubectl tokens, and the
+        // `--initial-delay-seconds` flag reaches the API object.
+        if (
+          fixture64Ok &&
+          readinessJson === '2' &&
+          /Readiness:\s+http-get\s+http:\/\/:8080\/\s+delay=2s\s+timeout=1s\s+period=10s\s+#success=1\s+#failure=3/.test(
+            describe64
+          )
+        ) {
+          passed();
+        } else {
+          fail(
+            'fidelity',
+            `#64: describe deploy must print \`Readiness:  http-get http://:8080/ delay=2s timeout=1s period=10s #success=1 #failure=3\` and jsonpath readinessProbe.initialDelaySeconds must be 2 (#64A): ${JSON.stringify({ readinessJson, lines: describe64.split('\n').filter((line) => /Readiness:/.test(line)) })}`
+          );
+        }
+
+        // #64A: liveness probes get the same treatment.
+        if (
+          fixture64Ok &&
+          /Liveness:\s+http-get\s+http:\/\/:8080\/healthz\s+delay=3s/.test(describe64)
+        ) {
+          passed();
+        } else {
+          fail(
+            'fidelity',
+            `#64: describe deploy must print the Liveness probe line with delay=3s (#64A): ${JSON.stringify(describe64.split('\n').filter((line) => /Liveness:/.test(line)))}`
+          );
+        }
+
+        // #64B: `oc exec -- sh -c '<script>'` runs a container shell — single
+        // quotes reach the shell, double quotes expand on the workstation.
+        const execEnv = messageOf(
+          run("oc exec deploy/web -n qa64lock -- sh -c 'echo $DB_PASS $APP_MODE'")
+        );
+        const execHostname = messageOf(
+          run("oc exec deploy/web -n qa64lock -- sh -c 'echo $HOSTNAME'")
+        );
+        const execEmpty = messageOf(
+          run('oc exec deploy/web -n qa64lock -- sh -c "echo $APP_MODE"')
+        );
+        const execPrintenv = messageOf(run('oc exec deploy/web -n qa64lock -- printenv DB_PASS'));
+        if (
+          fixture64Ok &&
+          execEnv.trim() === 's3cr3t prod' &&
+          execHostname.trim() === pod64 &&
+          execEmpty.trim() === '' &&
+          execPrintenv.trim() === 's3cr3t'
+        ) {
+          passed();
+        } else {
+          fail(
+            'fidelity',
+            `#64: \`oc exec -- sh -c '<script>'\` must run a container shell ($DB_PASS/$APP_MODE -> \`s3cr3t prod\`, $HOSTNAME -> pod name, double-quoted $APP_MODE -> empty) and printenv must keep resolving (#64B): ${JSON.stringify({ execEnv, execHostname, pod64, execEmpty, execPrintenv })}`
+          );
+        }
+
+        // Fixture B: the issue #65 command sequence (three rollouts, a ConfigMap
+        // volume Deployment, exec builtins and node metrics).
+        run('oc new-project qa65lock');
+        run('oc create configmap cfg --from-literal=APP_LOG=debug -n qa65lock');
+        const deployment65 = run(
+          'oc create deployment web --image=registry.access.redhat.com/ubi9/httpd-24 --replicas=1 -n qa65lock'
+        );
+        const initialSettled65 = tickUntil(() => deploymentSettled('qa65lock'));
+        for (let rollout = 1; rollout <= 3; rollout += 1) {
+          run(`oc set env deploy/web ROLLOUT=${rollout} -n qa65lock`);
+          tickUntil(() => deploymentSettled('qa65lock'));
+        }
+        const pod65 = runningPodName('qa65lock', 'web');
+        const fixture65Ok = !deployment65?.error && initialSettled65 && Boolean(pod65);
+        const describe65 = messageOf(run('oc describe deploy/web -n qa65lock'));
+        const podDescribe65 = messageOf(run(`oc describe pod ${pod65} -n qa65lock`));
+        const replicaSets65 = (
+          cluster.getByKindAndNamespace('ReplicaSet', 'qa65lock') || []
+        ).filter((entry) => /^web-/.test(String(entry.metadata?.name || '')));
+
+        // #65A: annotations print as `key: value`; labels keep `key=value`.
+        const deployAnnotationBlock = (() => {
+          const at = describe65.search(/^Annotations:/m);
+          if (at < 0) return '';
+          const rest = describe65.slice(at);
+          const end = rest.search(/^(?:Selector:|Replicas:)/m);
+          return end >= 0 ? rest.slice(0, end) : rest;
+        })();
+        const podAnnotationBlock = (() => {
+          const at = podDescribe65.search(/^Annotations:/m);
+          if (at < 0) return '';
+          const rest = podDescribe65.slice(at);
+          const end = rest.search(/^Status:/m);
+          return end >= 0 ? rest.slice(0, end) : rest;
+        })();
+        if (
+          fixture64Ok &&
+          fixture65Ok &&
+          /deployment\.kubernetes\.io\/revision: \d+/.test(deployAnnotationBlock) &&
+          !/deployment\.kubernetes\.io\/revision=/.test(describe65) &&
+          /^Selector:\s+app=web/m.test(describe65) &&
+          /openshift\.io\/scc: restricted-v2/.test(podAnnotationBlock) &&
+          !/openshift\.io\/scc=/.test(podDescribe65) &&
+          /^Labels:\s+.*app=web.*pod-template-hash=/m.test(podDescribe65)
+        ) {
+          passed();
+        } else {
+          fail(
+            'fidelity',
+            `#65: describe must print annotations as \`key: value\` (deployment.kubernetes.io/revision / openshift.io/scc) and labels as \`key=value\` (#65A): ${JSON.stringify({ deployAnnotations: deployAnnotationBlock, podAnnotations: podAnnotationBlock.slice(0, 400), deploySelector: describe65.split('\n').filter((line) => /^Selector:/.test(line)), podLabels: podDescribe65.split('\n').filter((line) => /^Labels:/.test(line)) })}`
+          );
+        }
+
+        // #65B: describe deploy lists only the Deployment controller's own
+        // ScalingReplicaSet series — no ReplicaSet SuccessfulCreate rows, one
+        // `Scaled up … to 1` per ReplicaSet, and `Scaled down … to 0 from 1`
+        // rows for retired ReplicaSets with ages consistent with `oc get rs`.
+        const eventsAt65 = describe65.search(/^Events:/m);
+        const eventsBlock65 = eventsAt65 >= 0 ? describe65.slice(eventsAt65) : '';
+        const eventLines65 = eventsBlock65
+          .split('\n')
+          .map((line) => line.trim())
+          .filter(Boolean);
+        const upRows65 = eventLines65
+          .map((line) =>
+            line.match(
+              /^Normal\s+ScalingReplicaSet\s+(\S+)\s+deployment-controller\s+Scaled up replica set (\S+) to (\d+)$/
+            )
+          )
+          .filter(Boolean);
+        const downRows65 = eventLines65
+          .map((line) =>
+            line.match(
+              /^Normal\s+ScalingReplicaSet\s+(\S+)\s+deployment-controller\s+Scaled down replica set (\S+) to 0 from (\d+)$/
+            )
+          )
+          .filter(Boolean);
+        const replicaSetNames65 = new Set(replicaSets65.map((entry) => entry.metadata.name));
+        const newestReplicaSet65 = (describe65.match(/^NewReplicaSet:\s+(\S+)/m) || [])[1] || '';
+        const newestSet65 =
+          replicaSets65.find((entry) => entry.metadata.name === newestReplicaSet65) || null;
+        const newestUp65 = upRows65.find((match) => match[2] === newestReplicaSet65) || null;
+        const eventAge65 = newestUp65 ? parseAgeSeconds(newestUp65[1]) : Number.NaN;
+        const replicaSetAge65 = newestSet65
+          ? (Date.now() - Date.parse(newestSet65.metadata.creationTimestamp)) / 1000
+          : Number.NaN;
+        const eventsOk65 =
+          eventsAt65 >= 0 &&
+          !/SuccessfulCreate/.test(eventsBlock65) &&
+          !/replicaset-controller/.test(eventsBlock65) &&
+          replicaSetNames65.size === 4 &&
+          upRows65.length === replicaSetNames65.size &&
+          upRows65.every((match) => replicaSetNames65.has(match[2]) && match[3] === '1') &&
+          downRows65.length >= 1 &&
+          downRows65.every((match) => replicaSetNames65.has(match[2]) && match[3] === '1') &&
+          Boolean(newestUp65) &&
+          Number.isFinite(eventAge65) &&
+          Number.isFinite(replicaSetAge65) &&
+          Math.abs(eventAge65 - replicaSetAge65) <= 10;
+        if (fixture65Ok && eventsOk65) {
+          passed();
+        } else {
+          fail(
+            'fidelity',
+            `#65: describe deploy events must be the Deployment's own ScalingReplicaSet series (no SuccessfulCreate / replicaset-controller, one Scaled up … to 1 per ReplicaSet, Scaled down … to 0 from 1 rows for retired sets, newest age within 10s of oc get rs AGE) (#65B): ${JSON.stringify({ events: eventsBlock65.slice(0, 800), replicaSetNames: [...replicaSetNames65], newestReplicaSet65, eventAge65, replicaSetAge65 })}`
+          );
+        }
+
+        // #65C: a DEployment with a ConfigMap volume renders the kubectl
+        // Type/Name/Optional block (never the old bare `Type:  configMap`).
+        run(
+          'oc create deployment volweb --image=registry.access.redhat.com/ubi9/httpd-24 --replicas=1 -n qa65lock'
+        );
+        run(
+          `oc patch deployment/volweb -n qa65lock -p '{"spec":{"template":{"spec":{"containers":[{"name":"httpd-24","image":"registry.access.redhat.com/ubi9/httpd-24","volumeMounts":[{"name":"cfg","mountPath":"/etc/cfg"}]}],"volumes":[{"name":"cfg","configMap":{"name":"cfg"}}]}}}}'`
+        );
+        tickUntil(() => deploymentSettled('qa65lock', 'volweb'));
+        const volumeDescribe = messageOf(run('oc describe deploy volweb -n qa65lock'));
+        const volumeLines = volumeDescribe
+          .split('\n')
+          .map((line) => line.trim())
+          .filter(Boolean);
+        const volumeNameLine = volumeLines.find((line) => /^cfg:$/.test(line)) || '';
+        const volumeTypeLine =
+          volumeLines.find((line) =>
+            /^Type:\s+ConfigMap \(a volume populated by a ConfigMap\)$/.test(line)
+          ) || '';
+        const volumeKeyNameLine = volumeLines.find((line) => /^Name:\s+cfg$/.test(line)) || '';
+        const volumeOptionalLine =
+          volumeLines.find((line) => /^Optional:\s+false$/.test(line)) || '';
+        if (
+          fixture65Ok &&
+          Boolean(volumeNameLine) &&
+          Boolean(volumeTypeLine) &&
+          Boolean(volumeKeyNameLine) &&
+          Boolean(volumeOptionalLine) &&
+          !/Type:\s+configMap\b/.test(volumeDescribe) &&
+          valueColumn(volumeTypeLine) === valueColumn(volumeKeyNameLine) &&
+          valueColumn(volumeTypeLine) === valueColumn(volumeOptionalLine)
+        ) {
+          passed();
+        } else {
+          fail(
+            'fidelity',
+            `#65: describe deploy must render the ConfigMap volume block (cfg: Type: ConfigMap (a volume populated by a ConfigMap) / Name: cfg / Optional: false, aligned), never the old bare \`Type:  configMap\` (#65C): ${JSON.stringify(volumeDescribe.slice(volumeDescribe.search(/^  Volumes:/m) >= 0 ? volumeDescribe.search(/^  Volumes:/m) : -600))}`
+          );
+        }
+
+        // #65D: shell builtins inside `sh -c` — `exit N` status, bare `id -u`
+        // / `id -g` / `id -un` values, while `oc exec -- id` keeps the full line.
+        const exitResult = run('oc exec deploy/web -n qa65lock -- sh -c "exit 3"; echo rc=$?');
+        const idResult = messageOf(run('oc exec deploy/web -n qa65lock -- id')).trim();
+        const idUid = (idResult.match(/^uid=(\d+)\b/) || [])[1] || '';
+        const idUser = messageOf(run('oc exec deploy/web -n qa65lock -- sh -c "id -u"')).trim();
+        const idGroup = messageOf(run('oc exec deploy/web -n qa65lock -- sh -c "id -g"')).trim();
+        const idUserName = messageOf(
+          run('oc exec deploy/web -n qa65lock -- sh -c "id -un"')
+        ).trim();
+        if (
+          fixture65Ok &&
+          exitResult?.error === false &&
+          /command terminated with exit code 3/.test(messageOf(exitResult)) &&
+          /^rc=3$/m.test(messageOf(exitResult)) &&
+          /^uid=\d+ gid=0\(root\) groups=/.test(idResult) &&
+          /^\d+$/.test(idUser) &&
+          idUser === idUid &&
+          idGroup === '0' &&
+          idUserName === idUid &&
+          !/uid=/.test(idUserName)
+        ) {
+          passed();
+        } else {
+          fail(
+            'fidelity',
+            `#65: container-shell builtins must behave like bash ('exit 3' -> \`command terminated with exit code 3\` + \`rc=3\`; \`id -u\`/\`id -g\`/\`id -un\` bare values; \`oc exec -- id\` full uid/gid/groups line) (#65D): ${JSON.stringify({ exit: messageOf(exitResult), error: exitResult?.error, idResult, idUser, idGroup, idUserName })}`
+          );
+        }
+
+        // #65E: `oc adm top nodes` is sorted by NAME, the control plane is the
+        // busiest node, and the two workers report distinct usage.
+        const topNodesMessage = messageOf(run('oc adm top nodes'));
+        const topNodeLines = topNodesMessage
+          .split('\n')
+          .map((line) => line.trim())
+          .filter(Boolean);
+        const parseCpuMillis = (raw) => {
+          const text = String(raw ?? '').trim();
+          if (/m$/.test(text)) return Number.parseFloat(text) || 0;
+          const cores = Number.parseFloat(text);
+          return Number.isFinite(cores) ? cores * 1000 : 0;
+        };
+        const parseMemoryBytes = (raw) => {
+          const text = String(raw ?? '').trim();
+          const match = text.match(/^([\d.]+)([KMGT]i)?$/);
+          if (!match) return Number.NaN;
+          const value = Number.parseFloat(match[1]);
+          const unit = { Ki: 1024, Mi: 1024 ** 2, Gi: 1024 ** 3, Ti: 1024 ** 4 }[match[2]];
+          return unit ? value * unit : value;
+        };
+        const topNodeRows = topNodeLines
+          .slice(1)
+          .map((line) => line.split(/\s{2,}/).map((cell) => cell.trim()))
+          .map((cells) => ({
+            name: cells[0] || '',
+            cpu: cells[1] || '',
+            cpuPercent: cells[2] || '',
+            memory: cells[3] || '',
+          }))
+          .filter((row) => row.name);
+        const masterRow = topNodeRows.find((row) => row.name === 'master-0') || {};
+        const workerRows = topNodeRows.filter((row) => /^worker-/.test(row.name));
+        if (
+          fixture65Ok &&
+          /^NAME\s+CPU\(cores\)\s+CPU%\s+MEMORY\(bytes\)\s+MEMORY%$/.test(topNodeLines[0] || '') &&
+          JSON.stringify(topNodeRows.map((row) => row.name)) ===
+            JSON.stringify(['master-0', 'worker-0', 'worker-1']) &&
+          parseCpuMillis(masterRow.cpu) >= 2000 &&
+          parseMemoryBytes(masterRow.memory) >= 8 * 1024 ** 3 &&
+          parseMemoryBytes(masterRow.memory) <= 12 * 1024 ** 3 &&
+          workerRows.every(
+            (row) => Number.parseInt(masterRow.cpuPercent, 10) > Number.parseInt(row.cpuPercent, 10)
+          ) &&
+          workerRows.length === 2 &&
+          (workerRows[0].cpu !== workerRows[1].cpu || workerRows[0].memory !== workerRows[1].memory)
+        ) {
+          passed();
+        } else {
+          fail(
+            'fidelity',
+            `#65: \`oc adm top nodes\` must keep the real header, sort rows by NAME, make the control plane the busiest (CPU >= 2000m, MEMORY 8–12Gi, greatest CPU%) and keep the worker rows distinct (#65E): ${JSON.stringify({ header: topNodeLines[0], rows: topNodeRows })}`
+          );
+        }
+      } finally {
+        delete globalThis.window;
+      }
+    } catch (err) {
+      fail('fidelity', `#64/#65 dynamic fidelity lock threw: ${err.message}`);
+    }
+  }
+}
+
 // ── 5. Campaign, challenges, incidents and EX280 content ──────────────────
 const levelsMod = await tryImport('js/data/CampaignLevels.js');
 const challengesMod = await tryImport('js/modes/ChallengeMode.js');
