@@ -291,6 +291,339 @@ export function describePodStatus(pod) {
   return phase;
 }
 
+// ─── `oc describe` container/volume renderers (issues #64A / #65B) ─────────
+//
+// Real kubectl/oc describe output (kubectl/pkg/describe/describe.go) expands
+// `valueFrom` environment references, probe actions, volume sources and
+// multiline annotations instead of printing raw JSON. Pod and Deployment share
+// the renderers below.
+
+/** kubectl's `maxAnnotationLen` (printAnnotationsMultiline). */
+const MAX_ANNOTATION_LENGTH = 140;
+
+/** Annotations real kubectl hides from every describe (`skipAnnotations`). */
+const SKIPPED_ANNOTATION_KEYS = new Set(['kubectl.kubernetes.io/last-applied-configuration']);
+
+/** Top-level Pod describe value column (`Service Account:` + tabwriter padding). */
+const POD_TOP_LEVEL_VALUE_COLUMN = 18;
+
+/** Top-level Deployment describe value column (`RollingUpdateStrategy:` + padding). */
+const DEPLOY_TOP_LEVEL_VALUE_COLUMN = 24;
+
+/** Container block value column: Pod `Container ID:` / Deployment `Image:` blocks. */
+const POD_CONTAINER_VALUE_COLUMN = 20;
+const DEPLOY_CONTAINER_VALUE_COLUMN = 18;
+
+const CONTAINER_VALUE_INDENT = '    ';
+const ENV_VALUE_INDENT = '      ';
+const VOLUME_FIELD_INDENT = '    ';
+
+/**
+ * Render the `Annotations:` block like kubectl's `printAnnotationsMultiline`:
+ * sorted `key: value` pairs, the first entry on the `Annotations:` line and
+ * every later entry aligned to the same value column. Values that are too long
+ * (or contain newlines) move to indented continuation lines, and the
+ * last-applied-configuration annotation is hidden.
+ * @param {object} annotations
+ * @param {number} valueColumn
+ * @returns {string[]}
+ */
+function describeAnnotationLines(annotations, valueColumn) {
+  const continuation = ' '.repeat(valueColumn);
+  const title = 'Annotations:'.padEnd(valueColumn);
+  const keys = Object.keys(visibleAnnotations(annotations))
+    .filter((key) => !SKIPPED_ANNOTATION_KEYS.has(key))
+    .sort();
+  if (!keys.length) return [`${title}<none>`];
+  const lines = [];
+  keys.forEach((key, index) => {
+    const value = String(annotations[key] ?? '').replace(/\n$/, '');
+    const multiline = value.includes('\n') || value.length + key.length + 2 > MAX_ANNOTATION_LENGTH;
+    const indent = index === 0 ? title : continuation;
+    if (!multiline) {
+      lines.push(`${indent}${key}: ${value}`);
+      return;
+    }
+    lines.push(`${indent}${key}:`);
+    for (const part of value.split('\n')) lines.push(`${continuation}  ${part}`);
+  });
+  return lines;
+}
+
+/**
+ * Resolve a Pod `fieldRef` env source the way kubectl's EnvValueRetriever does.
+ * Unsupported/absent fields resolve to the empty string (real kubectl hides the
+ * extraction error and prints the empty value).
+ * @param {object} pod
+ * @param {object} fieldRef
+ * @returns {string}
+ */
+function resolvePodFieldRef(pod, fieldRef) {
+  const fieldPath = String(fieldRef?.fieldPath || '');
+  const listMatch = fieldPath.match(/^(metadata\.(?:labels|annotations))\['(.+)'\]$/);
+  if (listMatch) {
+    const [, root, key] = listMatch;
+    const source = root === 'metadata.labels' ? pod?.metadata?.labels : pod?.metadata?.annotations;
+    const value = source?.[key];
+    return value === undefined || value === null ? '' : String(value);
+  }
+  const values = {
+    'metadata.name': pod?.metadata?.name,
+    'metadata.namespace': pod?.metadata?.namespace,
+    'metadata.uid': pod?.metadata?.uid,
+    'spec.nodeName': pod?.spec?.nodeName,
+    'spec.serviceAccountName': pod?.spec?.serviceAccountName,
+    'status.hostIP': pod?.status?.hostIP,
+    'status.podIP': pod?.status?.podIP,
+  };
+  const value = values[fieldPath];
+  return value === undefined || value === null ? '' : String(value);
+}
+
+/**
+ * `describeContainerEnvVars`: one `NAME:  value` line per container env entry,
+ * expanding `valueFrom` references into kubectl's placeholder text. Pod
+ * describes resolve `fieldRef` values from the live Pod; Deployment pod
+ * templates have no Pod, so kubectl prints an empty resolved value.
+ * @param {object} entry env var (`{name, value}` or `{name, valueFrom}`)
+ * @param {((fieldRef: object) => string)|null} [fieldRefResolver]
+ * @returns {string[]}
+ */
+function describeEnvEntryLines(entry, fieldRefResolver = null) {
+  const prefix = `${ENV_VALUE_INDENT}${String(entry?.name ?? '')}:  `;
+  const valueFrom = entry?.valueFrom;
+  if (!valueFrom || typeof valueFrom !== 'object') {
+    const [first = '', ...rest] = String(entry?.value ?? '').split('\n');
+    return [prefix + first, ...rest.map((line) => ' '.repeat(prefix.length) + line)];
+  }
+  if (valueFrom.fieldRef) {
+    const fieldRef = valueFrom.fieldRef;
+    const resolved = typeof fieldRefResolver === 'function' ? fieldRefResolver(fieldRef) : '';
+    return [`${prefix}${resolved} (${fieldRef.apiVersion || 'v1'}:${fieldRef.fieldPath || ''})`];
+  }
+  if (valueFrom.resourceFieldRef) {
+    return [`${prefix} (${valueFrom.resourceFieldRef.resource || ''})`];
+  }
+  if (valueFrom.secretKeyRef) {
+    const reference = valueFrom.secretKeyRef;
+    return [
+      `${prefix}<set to the key '${reference.key}' in secret '${reference.name}'>  Optional: ${Boolean(reference.optional)}`,
+    ];
+  }
+  if (valueFrom.configMapKeyRef) {
+    const reference = valueFrom.configMapKeyRef;
+    return [
+      `${prefix}<set to the key '${reference.key}' of config map '${reference.name}'>  Optional: ${Boolean(reference.optional)}`,
+    ];
+  }
+  // kubectl's switch prints nothing for an unrecognised valueFrom source.
+  return [];
+}
+
+/**
+ * kubectl's `DescribeProbe` text: the action followed by the fixed
+ * `delay=/timeout=/period=/#success=/#failure=` suffix. Missing timing fields
+ * fall back to the API-server defaults.
+ * @param {object} probe
+ * @returns {string}
+ */
+function describeProbeText(probe) {
+  const attrs = `delay=${probe?.initialDelaySeconds ?? 0}s timeout=${probe?.timeoutSeconds ?? 1}s period=${probe?.periodSeconds ?? 10}s #success=${probe?.successThreshold ?? 1} #failure=${probe?.failureThreshold ?? 3}`;
+  if (probe?.exec) {
+    const command = Array.isArray(probe.exec.command) ? probe.exec.command.join(' ') : '';
+    return `exec [${command}] ${attrs}`;
+  }
+  if (probe?.httpGet) {
+    const action = probe.httpGet;
+    const scheme = String(action.scheme || 'HTTP').toLowerCase();
+    const host = action.host ? String(action.host) : '';
+    const port = action.port === undefined || action.port === null ? '' : String(action.port);
+    const authority = port ? `${host}:${port}` : host;
+    return `http-get ${scheme}://${authority}${action.path ? String(action.path) : ''} ${attrs}`;
+  }
+  if (probe?.tcpSocket) {
+    const host = probe.tcpSocket.host ? String(probe.tcpSocket.host) : '';
+    const port =
+      probe.tcpSocket.port === undefined || probe.tcpSocket.port === null
+        ? ''
+        : String(probe.tcpSocket.port);
+    return `tcp-socket ${host}:${port} ${attrs}`;
+  }
+  if (probe?.grpc) {
+    const service = probe.grpc.service ? String(probe.grpc.service) : '';
+    return `grpc <pod>:${probe.grpc.port ?? 0} ${service} ${attrs}`;
+  }
+  return `unknown ${attrs}`;
+}
+
+/**
+ * Liveness/Readiness/Startup lines of one container block. Real order is
+ * Limits, Requests, probes, then Environment.
+ * @param {object} container
+ * @param {number} valueColumn
+ * @returns {string[]}
+ */
+function describeProbeLines(container, valueColumn) {
+  return [
+    ['Liveness:', container?.livenessProbe],
+    ['Readiness:', container?.readinessProbe],
+    ['Startup:', container?.startupProbe],
+  ]
+    .filter(([, probe]) => Boolean(probe))
+    .map(
+      ([label, probe]) =>
+        `${CONTAINER_VALUE_INDENT}${label.padEnd(valueColumn - CONTAINER_VALUE_INDENT.length)}${describeProbeText(probe)}`
+    );
+}
+
+/**
+ * Fields rendered for one volume source, mirroring the `print*VolumeSource`
+ * helpers of kubectl's `describeVolumes`. A field is either `{key, value}`
+ * (tab-aligned), `{continuation}` (value column, no key) or `{raw}` (verbatim
+ * line such as the DownwardAPI `Items:` list).
+ * @param {object} volume
+ * @returns {Array<{key?: string, value?: string, continuation?: string, raw?: string}>}
+ */
+function describeVolumeSourceFields(volume) {
+  const source = volume || {};
+  const fields = [];
+  const bool = (value) => String(Boolean(value));
+  if (source.hostPath) {
+    fields.push({ key: 'Type:', value: 'HostPath (bare host directory volume)' });
+    fields.push({ key: 'Path:', value: source.hostPath.path || '' });
+    fields.push({
+      key: 'HostPathType:',
+      value: source.hostPath.type ? String(source.hostPath.type) : '<none>',
+    });
+  } else if (source.emptyDir) {
+    fields.push({
+      key: 'Type:',
+      value: "EmptyDir (a temporary directory that shares a pod's lifetime)",
+    });
+    fields.push({
+      key: 'Medium:',
+      value: source.emptyDir.medium ? String(source.emptyDir.medium) : '',
+    });
+    const sizeLimit = source.emptyDir.sizeLimit;
+    fields.push({
+      key: 'SizeLimit:',
+      value: sizeLimit && String(sizeLimit) !== '0' ? String(sizeLimit) : '<unset>',
+    });
+  } else if (source.secret) {
+    fields.push({ key: 'Type:', value: 'Secret (a volume populated by a Secret)' });
+    fields.push({ key: 'SecretName:', value: source.secret.secretName || '' });
+    fields.push({ key: 'Optional:', value: bool(source.secret.optional) });
+  } else if (source.configMap) {
+    fields.push({ key: 'Type:', value: 'ConfigMap (a volume populated by a ConfigMap)' });
+    fields.push({ key: 'Name:', value: source.configMap.name || '' });
+    fields.push({ key: 'Optional:', value: bool(source.configMap.optional) });
+  } else if (source.nfs) {
+    fields.push({ key: 'Type:', value: 'NFS (an NFS mount that lasts the lifetime of a pod)' });
+    fields.push({ key: 'Server:', value: source.nfs.server || '' });
+    fields.push({ key: 'Path:', value: source.nfs.path || '' });
+    fields.push({ key: 'ReadOnly:', value: bool(source.nfs.readOnly) });
+  } else if (source.persistentVolumeClaim) {
+    fields.push({
+      key: 'Type:',
+      value: 'PersistentVolumeClaim (a reference to a PersistentVolumeClaim in the same namespace)',
+    });
+    fields.push({ key: 'ClaimName:', value: source.persistentVolumeClaim.claimName || '' });
+    fields.push({ key: 'ReadOnly:', value: bool(source.persistentVolumeClaim.readOnly) });
+  } else if (source.downwardAPI) {
+    fields.push({
+      key: 'Type:',
+      value: 'DownwardAPI (a volume populated by information about the pod)',
+    });
+    fields.push({ raw: `${VOLUME_FIELD_INDENT}Items:` });
+    for (const item of source.downwardAPI.items || []) {
+      const fieldPath = item?.fieldRef?.fieldPath ?? item?.resourceFieldRef?.resource ?? '';
+      fields.push({ raw: `${VOLUME_FIELD_INDENT}  ${fieldPath} -> ${item?.path ?? ''}` });
+    }
+  } else if (source.projected) {
+    fields.push({
+      key: 'Type:',
+      value: 'Projected (a volume that contains injected data from multiple sources)',
+    });
+    for (const projectedSource of source.projected.sources || []) {
+      if (projectedSource?.serviceAccountToken) {
+        fields.push({
+          key: 'TokenExpirationSeconds:',
+          value: String(projectedSource.serviceAccountToken.expirationSeconds ?? 3607),
+        });
+      } else if (projectedSource?.configMap) {
+        fields.push({ key: 'ConfigMapName:', value: projectedSource.configMap.name || '' });
+        fields.push({ key: 'Optional:', value: bool(projectedSource.configMap.optional) });
+      } else if (projectedSource?.secret) {
+        fields.push({ key: 'SecretName:', value: projectedSource.secret.name || '' });
+        fields.push({ key: 'Optional:', value: bool(projectedSource.secret.optional) });
+      } else if (projectedSource?.downwardAPI) {
+        fields.push({ key: 'DownwardAPI:', value: 'true' });
+      }
+    }
+  } else if (source.csi) {
+    fields.push({
+      key: 'Type:',
+      value: 'CSI (a Container Storage Interface (CSI) volume source)',
+    });
+    fields.push({ key: 'Driver:', value: source.csi.driver || '' });
+    if (source.csi.fsType) fields.push({ key: 'FSType:', value: String(source.csi.fsType) });
+    fields.push({ key: 'ReadOnly:', value: bool(source.csi.readOnly) });
+    const attributes = Object.entries(source.csi.volumeAttributes || {}).sort(([left], [right]) =>
+      left < right ? -1 : left > right ? 1 : 0
+    );
+    attributes.forEach(([key, value], index) => {
+      const attribute = `${key}=${value}`;
+      if (index === 0) fields.push({ key: 'VolumeAttributes:', value: attribute });
+      else fields.push({ continuation: attribute });
+    });
+  } else {
+    // kubectl's describeVolumes default branch.
+    fields.push({ raw: '  <unknown>' });
+  }
+  return fields;
+}
+
+/**
+ * Render the `Volumes:` entries the way kubectl's `describeVolumes` does: the
+ * volume name line (no tab, so it terminates the tabwriter column block)
+ * followed by its source fields, whose keys are padded to the longest key of
+ * that volume's own block + two spaces. Verified against the reference
+ * `tabbedString` (Init(buf, 0, 8, 2, ' ', 0)): a real tabwriter aligns each
+ * volume block independently.
+ * @param {object[]} volumes
+ * @param {string} nameIndent `'  '` for Pods, `'   '` for Deployment pod templates
+ * @returns {string[]}
+ */
+function describeVolumeLines(volumes, nameIndent) {
+  const blocks = (Array.isArray(volumes) ? volumes : []).map((volume) => {
+    const fields = describeVolumeSourceFields(volume);
+    let maxKeyLength = 0;
+    for (const field of fields) {
+      if (typeof field.key === 'string') maxKeyLength = Math.max(maxKeyLength, field.key.length);
+    }
+    return {
+      name: String(volume?.name ?? ''),
+      fields,
+      valueColumn: VOLUME_FIELD_INDENT.length + maxKeyLength + 2,
+    };
+  });
+  const lines = [];
+  for (const block of blocks) {
+    lines.push(`${nameIndent}${block.name}:`);
+    const keyWidth = block.valueColumn - VOLUME_FIELD_INDENT.length;
+    for (const field of block.fields) {
+      if (field.raw !== undefined) {
+        lines.push(field.raw);
+      } else if (field.continuation !== undefined) {
+        lines.push(`${' '.repeat(block.valueColumn)}${field.continuation}`);
+      } else {
+        lines.push(`${VOLUME_FIELD_INDENT}${field.key.padEnd(keyWidth)}${field.value}`);
+      }
+    }
+  }
+  return lines;
+}
+
 // ─── Pod ────────────────────────────────────────────────────────────────────
 
 export class Pod extends ResourceBase {
@@ -437,11 +770,11 @@ export class Pod extends ResourceBase {
     // Real `oc describe pod` prints a bare `Node: <none>` for an unscheduled
     // Pod (no fake `name/ip` pair, #57).
     const nodeLine = node.name ? `${node.name}/${node.ip || '<none>'}` : '<none>';
-    const annotations = visibleAnnotations(this.metadata.annotations);
-    const annotationText =
-      Object.entries(annotations)
-        .map(([key, value]) => `${key}=${value}`)
-        .join(', ') || '<none>';
+    // Annotations use kubectl's multiline `key: value` form (labels stay k=v).
+    const annotationLines = describeAnnotationLines(
+      this.metadata.annotations,
+      POD_TOP_LEVEL_VALUE_COLUMN
+    );
     const labelsText =
       Object.entries(this.metadata.labels || {})
         .map(([key, value]) => `${key}=${value}`)
@@ -460,7 +793,7 @@ export class Pod extends ResourceBase {
       `Node:             ${nodeLine}`,
       `Start Time:       ${formatDescribeTime(this.status.startTime)}`,
       `Labels:           ${labelsText}`,
-      `Annotations:      ${annotationText}`,
+      ...annotationLines,
       `Status:           ${describePodStatus(this)}`,
       `IP:               ${podIp || '<none>'}`,
     ];
@@ -532,13 +865,15 @@ export class Pod extends ResourceBase {
         for (const [resource, value] of requestEntries)
           lines.push(`      ${`${resource}:`.padEnd(9)} ${value}`);
       }
+      // Real kubectl order: Limits, Requests, Liveness/Readiness/Startup, Environment.
+      lines.push(...describeProbeLines(container, POD_CONTAINER_VALUE_COLUMN));
       const envEntries = Array.isArray(container.env) ? container.env : [];
       if (envEntries.length) {
         lines.push('    Environment:');
-        for (const entry of envEntries) {
-          const value = entry.valueFrom ? JSON.stringify(entry.valueFrom) : entry.value;
-          lines.push(`      ${entry.name}:  ${value ?? ''}`);
-        }
+        for (const entry of envEntries)
+          lines.push(
+            ...describeEnvEntryLines(entry, (fieldRef) => resolvePodFieldRef(this, fieldRef))
+          );
       } else {
         lines.push('    Environment:    <none>');
       }
@@ -557,12 +892,7 @@ export class Pod extends ResourceBase {
     }
     const volumes = this.spec.volumes || [];
     lines.push(`Volumes:${volumes.length ? '' : '            <none>'}`);
-    for (const volume of volumes) {
-      lines.push(
-        `  ${volume.name}:`,
-        `    Type:  ${Object.keys(volume).find((key) => key !== 'name') || 'Unknown'}`
-      );
-    }
+    lines.push(...describeVolumeLines(volumes, '  '));
     lines.push(`QoS Class:          ${this.status.qosClass || 'BestEffort'}`);
     const nodeSelector = Object.entries(this.spec.nodeSelector || {})
       .map(([key, value]) => `${key}=${value}`)
@@ -734,11 +1064,11 @@ export class Deployment extends ResourceBase {
       Object.entries(this.metadata.labels || {})
         .map(([key, value]) => `${key}=${value}`)
         .join(', ') || '<none>';
-    const annotations = visibleAnnotations(this.metadata.annotations);
-    const annotationText =
-      Object.entries(annotations)
-        .map(([key, value]) => `${key}=${value}`)
-        .join(', ') || '<none>';
+    // Annotations use kubectl's multiline `key: value` form (labels stay k=v).
+    const annotationLines = describeAnnotationLines(
+      this.metadata.annotations,
+      DEPLOY_TOP_LEVEL_VALUE_COLUMN
+    );
 
     const replicaSets = (cluster?.getChildren?.(this.uid) || []).filter(
       (child) => child?.kind === 'ReplicaSet'
@@ -763,7 +1093,7 @@ export class Deployment extends ResourceBase {
       `Namespace:              ${this.metadata.namespace}`,
       `CreationTimestamp:      ${formatDescribeTime(this.metadata.creationTimestamp)}`,
       `Labels:                 ${labelsText}`,
-      `Annotations:            ${annotationText}`,
+      ...annotationLines,
       `Selector:               ${Object.entries(selector)
         .map(([key, value]) => `${key}=${value}`)
         .join(',')}`,
@@ -804,13 +1134,12 @@ export class Deployment extends ResourceBase {
         for (const [resource, value] of requestEntries)
           lines.push(`      ${`${resource}:`.padEnd(9)} ${value}`);
       }
+      // Real kubectl order: Limits, Requests, Liveness/Readiness/Startup, Environment.
+      lines.push(...describeProbeLines(container, DEPLOY_CONTAINER_VALUE_COLUMN));
       const envEntries = Array.isArray(container.env) ? container.env : [];
       if (envEntries.length) {
         lines.push('    Environment:');
-        for (const entry of envEntries) {
-          const value = entry.valueFrom ? JSON.stringify(entry.valueFrom) : entry.value;
-          lines.push(`      ${entry.name}:  ${value ?? ''}`);
-        }
+        for (const entry of envEntries) lines.push(...describeEnvEntryLines(entry));
       } else {
         lines.push('    Environment:  <none>');
       }
@@ -828,12 +1157,7 @@ export class Deployment extends ResourceBase {
     const volumes = templateSpec.volumes || [];
     if (volumes.length) {
       lines.push('  Volumes:');
-      for (const volume of volumes) {
-        lines.push(
-          `   ${volume.name}:`,
-          `    Type:  ${Object.keys(volume).find((key) => key !== 'name') || 'Unknown'}`
-        );
-      }
+      lines.push(...describeVolumeLines(volumes, '   '));
     } else {
       lines.push('  Volumes:        <none>');
     }

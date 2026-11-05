@@ -4142,8 +4142,38 @@ export class GameEngine {
   }
 
   /**
-   * `oc set probe <kind>/<name> --liveness|--readiness --get-url=... | --remove`.
-   * @param {{namespace?: string, probe?: 'liveness'|'readiness'|'startup', getUrl?: string, httpGet?: object, remove?: boolean, container?: string}} [options]
+   * Parse an `oc set probe --get-url` value the way real oc does (the host is
+   * optional, the port may be numeric or a named port, and the scheme defaults
+   * to http). Returns the core/v1 `httpGet` action or null for invalid URLs.
+   * @param {string} value
+   * @returns {{path: string, port: number|string, scheme: string, host?: string}|null}
+   */
+  _probeHttpGetFromUrl(value) {
+    const text = String(value ?? '').trim();
+    if (!text) return null;
+    const match = text.match(/^(?:([A-Za-z][A-Za-z0-9+.-]*):\/\/)?([^/:]+)?(?::([^/]+))?(\/.*)?$/);
+    if (!match) return null;
+    const scheme = match[1] ? match[1].toUpperCase() : 'HTTP';
+    const host = match[2] || '';
+    const rawPort = match[3];
+    const port = rawPort ? (/^\d+$/.test(rawPort) ? Number(rawPort) : rawPort) : 8080;
+    const action = {
+      path: match[4] || '/',
+      port,
+      scheme: scheme === 'HTTPS' ? 'HTTPS' : 'HTTP',
+    };
+    if (host) action.host = host;
+    return action;
+  }
+
+  /**
+   * `oc set probe <kind>/<name> --liveness|--readiness|--startup --get-url=... |
+   * --open-tcp=... | --initial-delay-seconds=... | --remove`.
+   *
+   * Real oc only updates the fields whose flags were supplied (it preserves an
+   * existing probe's handler/fields otherwise), and the API server defaults the
+   * unset threshold fields — see oc `pkg/cli/set/probe.go` (#64).
+   * @param {{namespace?: string, probe?: 'liveness'|'readiness'|'startup', getUrl?: string, openTcp?: number|string, httpGet?: object, remove?: boolean, container?: string, initialDelaySeconds?: number, periodSeconds?: number, timeoutSeconds?: number, successThreshold?: number, failureThreshold?: number}} [options]
    */
   setProbe(kind, name, options = {}) {
     const probeType = options.probe || 'liveness';
@@ -4161,23 +4191,56 @@ export class GameEngine {
           delete container[probeKey];
           continue;
         }
-        let httpGet = options.httpGet || null;
-        if (!httpGet && options.getUrl) {
-          const match = String(options.getUrl).match(/^(?:https?:\/\/)?(?::?(\d+))?(\/.*)?$/);
-          httpGet = {
-            path: match?.[2] || '/',
-            port: match?.[1] ? Number(match[1]) : 8080,
-            scheme: String(options.getUrl).startsWith('https') ? 'HTTPS' : 'HTTP',
+        const existing =
+          container[probeKey] && typeof container[probeKey] === 'object'
+            ? deepClone(container[probeKey])
+            : null;
+        const probe = existing || {};
+        // The handler is replaced only when a handler flag is supplied; real oc
+        // keeps the existing exec/httpGet/tcpSocket otherwise (#64).
+        const httpGet =
+          options.httpGet || (options.getUrl ? this._probeHttpGetFromUrl(options.getUrl) : null);
+        const openTcp =
+          options.openTcp !== undefined &&
+          options.openTcp !== null &&
+          options.openTcp !== true &&
+          options.openTcp !== ''
+            ? options.openTcp
+            : null;
+        if (httpGet) {
+          for (const handler of ['exec', 'httpGet', 'tcpSocket', 'grpc']) delete probe[handler];
+          probe.httpGet = deepClone(httpGet);
+        } else if (openTcp !== null) {
+          for (const handler of ['exec', 'httpGet', 'tcpSocket', 'grpc']) delete probe[handler];
+          probe.tcpSocket = {
+            port: /^\d+$/.test(String(openTcp)) ? Number(openTcp) : String(openTcp),
           };
+        } else if (!existing) {
+          // No handler flag and no existing probe: real oc creates the probe
+          // with the default handler it would otherwise leave unset.
+          probe.httpGet = { path: '/healthz', port: 8080, scheme: 'HTTP' };
         }
-        container[probeKey] = {
-          httpGet: httpGet || { path: '/healthz', port: 8080, scheme: 'HTTP' },
-          initialDelaySeconds: options.initialDelaySeconds ?? 5,
-          periodSeconds: options.periodSeconds ?? 10,
-          timeoutSeconds: 1,
-          failureThreshold: 3,
-          successThreshold: 1,
+        // Only explicitly supplied numeric flags are written; the rest keep
+        // their existing values (or get the API-server defaults below).
+        const numericFlags = {
+          initialDelaySeconds: options.initialDelaySeconds,
+          periodSeconds: options.periodSeconds,
+          timeoutSeconds: options.timeoutSeconds,
+          successThreshold: options.successThreshold,
+          failureThreshold: options.failureThreshold,
         };
+        for (const [field, rawValue] of Object.entries(numericFlags)) {
+          if (rawValue === undefined || rawValue === null || rawValue === true) continue;
+          const value = Number(rawValue);
+          if (Number.isFinite(value) && value >= 0) probe[field] = value;
+        }
+        // API-server defaulting for probe timing/threshold fields.
+        if (probe.initialDelaySeconds === undefined) probe.initialDelaySeconds = 0;
+        if (probe.timeoutSeconds === undefined) probe.timeoutSeconds = 1;
+        if (probe.periodSeconds === undefined) probe.periodSeconds = 10;
+        if (probe.successThreshold === undefined) probe.successThreshold = 1;
+        if (probe.failureThreshold === undefined) probe.failureThreshold = 3;
+        container[probeKey] = probe;
       }
     });
     resource._rollout = { reason: 'probe change', startedAt: Date.now(), remaining: null };

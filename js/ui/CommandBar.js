@@ -73,7 +73,13 @@ import {
   estimateJobRuntimeSeconds,
 } from '../resources/WorkloadResources.js';
 import { formatEndpointAddresses, resolveEndpointPort } from '../resources/NetworkResources.js';
-import { ShellTools, SHELL_COMMANDS, SHELL_FILE_COMMANDS } from './ShellTools.js';
+import {
+  ShellTools,
+  SHELL_COMMANDS,
+  SHELL_FILE_COMMANDS,
+  expandShellVariables,
+  splitShellSegments,
+} from './ShellTools.js';
 
 // ────────────────────────────────────────────────────────────────────────────
 // Constants
@@ -1047,6 +1053,9 @@ const KNOWN_LONG_FLAGS = new Set([
   'http-get',
   'ignore-not-found',
   'initial-delay-seconds',
+  'success-threshold',
+  'failure-threshold',
+  'timeout-seconds',
   'it',
   'keep-annotations',
   'keep-init-containers',
@@ -5986,6 +5995,32 @@ Object.assign(CommandBar.prototype, {
   },
 
   /**
+   * All owner-linked ReplicaSets of a Deployment, resolved through the cluster
+   * owner graph and falling back to the `<deployment>-<pod-template-hash>`
+   * naming convention for legacy/saved states (#49/#58/#65).
+   * @param {object} deployment
+   * @returns {object[]}
+   */
+  _deploymentReplicaSets(deployment) {
+    const name = deployment?.metadata?.name;
+    const namespace = deployment?.metadata?.namespace || '';
+    if (!name) return [];
+    const ownerLinked = (
+      this.cluster?.getChildren?.(deployment.uid || deployment.metadata?.uid) || []
+    ).filter((child) => child?.kind === 'ReplicaSet');
+    if (ownerLinked.length) return ownerLinked;
+    return this._getKindList('ReplicaSet').filter((replicaSet) => {
+      const rsMeta = replicaSet.metadata || {};
+      if ((rsMeta.namespace || '') !== namespace) return false;
+      const ownerNames = (rsMeta.ownerReferences || [])
+        .filter((reference) => reference.kind === 'Deployment')
+        .map((reference) => reference.name);
+      if (ownerNames.length) return ownerNames.includes(name);
+      return String(rsMeta.name || '').startsWith(`${name}-`);
+    });
+  },
+
+  /**
    * The ReplicaSet the deployment controller currently scales — the owner-linked
    * RS carrying the deployment's pod-template hash, newest first for rolling
    * updates. Used by the synthetic ScalingReplicaSet event so it prints the real
@@ -5995,17 +6030,8 @@ Object.assign(CommandBar.prototype, {
    */
   _deploymentReplicaSetName(deployment) {
     const name = deployment?.metadata?.name;
-    const namespace = deployment?.metadata?.namespace || '';
     if (!name) return null;
-    const candidates = this._getKindList('ReplicaSet').filter((replicaSet) => {
-      const rsMeta = replicaSet.metadata || {};
-      if ((rsMeta.namespace || '') !== namespace) return false;
-      const ownerNames = (rsMeta.ownerReferences || [])
-        .filter((reference) => reference.kind === 'Deployment')
-        .map((reference) => reference.name);
-      if (ownerNames.length) return ownerNames.includes(name);
-      return String(rsMeta.name || '').startsWith(`${name}-`);
-    });
+    const candidates = this._deploymentReplicaSets(deployment);
     if (!candidates.length) return null;
     const newestFirst = [...candidates].sort((left, right) => {
       const leftTime = Date.parse(left.metadata?.creationTimestamp || '') || 0;
@@ -6816,30 +6842,86 @@ Object.assign(CommandBar.prototype, {
       });
     }
 
-    // 3. Deployment scaling events.
+    // 3. Deployment scaling events. The Deployment controller records one
+    // `ScalingReplicaSet` event on the Deployment for every ReplicaSet it
+    // scales: an up event when a rollout creates the new ReplicaSet, and a
+    // `Scaled down replica set <old> to 0 from <n>` event when the retired
+    // ReplicaSet is drained (#65). Reconstruct that series from the live
+    // ReplicaSets so seeded deployments and the paused pre-start sandbox still
+    // show realistic events.
     for (const deployment of this._getKindList('Deployment')) {
       const name = deployment.metadata?.name;
       if (!name) continue;
+      const namespace = deployment.metadata?.namespace || 'default';
       const created = deployment.metadata?.creationTimestamp
         ? new Date(deployment.metadata.creationTimestamp).getTime()
         : Date.now() - 240000;
-      // The deployment controller scales the *new* ReplicaSet and records its
-      // real name (`Scaled up replica set web-5d8f7c9b6 to 2`). Before the
-      // controller has ticked (paused pre-start sandbox) there is no RS object
-      // yet, so predict the exact name it will get from the pod template hash —
-      // never a truncated numeric placeholder (#49, #58).
-      const replicaSetName =
-        this._deploymentReplicaSetName(deployment) || deploymentReplicaSetName(deployment);
-      const replicas = deployment.spec?.replicas ?? 1;
-      push({
-        lastTimestamp: created + 3000,
-        type: 'Normal',
-        reason: 'ScalingReplicaSet',
-        object: `deployment/${name}`,
-        subobject: '',
-        source: 'deployment-controller',
-        message: `Scaled ${replicas <= 0 ? 'down' : 'up'} replica set ${replicaSetName} to ${replicas}`,
-        namespace: deployment.metadata?.namespace || 'default',
+      const replicas = Math.max(0, Number(deployment.spec?.replicas ?? 1) || 0);
+      const replicaSets = this._deploymentReplicaSets(deployment);
+      const revisionOf = (replicaSet) =>
+        Number.parseInt(
+          replicaSet?.metadata?.annotations?.['deployment.kubernetes.io/revision'] || '0',
+          10
+        ) || 0;
+      const sortedSets = [...replicaSets].sort((left, right) => {
+        const revisionDelta = revisionOf(left) - revisionOf(right);
+        if (revisionDelta !== 0) return revisionDelta;
+        return String(left.metadata?.creationTimestamp || '').localeCompare(
+          String(right.metadata?.creationTimestamp || '')
+        );
+      });
+      if (!sortedSets.length) {
+        // Before the controller has ticked (paused pre-start sandbox) there is
+        // no RS object yet: predict the exact name it will get from the pod
+        // template hash — never a truncated numeric placeholder (#49, #58).
+        const replicaSetName =
+          this._deploymentReplicaSetName(deployment) || deploymentReplicaSetName(deployment);
+        push({
+          lastTimestamp: created + 3000,
+          type: 'Normal',
+          reason: 'ScalingReplicaSet',
+          object: `deployment/${name}`,
+          subobject: '',
+          source: 'deployment-controller',
+          message: `Scaled ${replicas <= 0 ? 'down' : 'up'} replica set ${replicaSetName} to ${replicas}`,
+          namespace,
+        });
+        continue;
+      }
+      sortedSets.forEach((replicaSet, index) => {
+        const replicaSetName = replicaSet.metadata?.name;
+        if (!replicaSetName) return;
+        const replicaSetCreated =
+          Date.parse(replicaSet.metadata?.creationTimestamp || '') || created;
+        if (replicas > 0) {
+          push({
+            lastTimestamp: replicaSetCreated,
+            type: 'Normal',
+            reason: 'ScalingReplicaSet',
+            object: `deployment/${name}`,
+            subobject: '',
+            source: 'deployment-controller',
+            message: `Scaled up replica set ${replicaSetName} to ${replicas}`,
+            namespace,
+          });
+        }
+        // The controller only records a down event for a ReplicaSet it actually
+        // retired (scaled to zero) when the next revision took over.
+        const nextSet = sortedSets[index + 1];
+        const retired = Number(replicaSet.spec?.replicas ?? 0) === 0;
+        if (!nextSet || !retired || replicas <= 0) return;
+        const nextCreated =
+          Date.parse(nextSet.metadata?.creationTimestamp || '') || replicaSetCreated;
+        push({
+          lastTimestamp: nextCreated + 3000,
+          type: 'Normal',
+          reason: 'ScalingReplicaSet',
+          object: `deployment/${name}`,
+          subobject: '',
+          source: 'deployment-controller',
+          message: `Scaled down replica set ${replicaSetName} to 0 from ${replicas}`,
+          namespace,
+        });
       });
     }
 
@@ -7220,17 +7302,12 @@ Object.assign(CommandBar.prototype, {
       this._syntheticEvents({ namespace }),
       this._runtimeEvents({ namespace, allNamespaces: false })
     );
-    return events.filter((event) => {
-      const eventObject = event.object || '';
-      let related = eventObject === object;
-      // A Deployment's ReplicaSet controller records FailedCreate/Scaling events
-      // on the ReplicaSet; `oc describe deployment` still surfaces them (#36).
-      if (!related && kind === 'Deployment' && eventObject.startsWith('replicaset/')) {
-        const rsName = eventObject.slice('replicaset/'.length);
-        related = Boolean(name) && rsName.startsWith(`${name}-`);
-      }
-      return related;
-    });
+    // Real `oc describe deployment` lists only events recorded on the
+    // Deployment itself (the Deployment controller's ScalingReplicaSet series).
+    // ReplicaSet-controller events (SuccessfulCreate, FailedCreate) belong to
+    // the ReplicaSet and appear in `oc describe rs`, never in describe deploy
+    // (#65).
+    return events.filter((event) => (event.object || '') === object);
   },
 
   _eventsSection(kind, resource) {
@@ -7307,9 +7384,10 @@ Object.assign(CommandBar.prototype, {
     const lines = [];
     const push = (...entries) => lines.push(...entries);
     const labels = this._labelString(resource) || '<none>';
+    // kubectl prints annotations as `key: value` (labels stay `key=value`) (#65).
     const annotations =
       Object.entries(visibleAnnotations(metadata.annotations))
-        .map(([key, value]) => `${key}=${value}`)
+        .map(([key, value]) => `${key}: ${value}`)
         .join(', ') || '<none>';
 
     switch (kind) {
@@ -11485,10 +11563,15 @@ Object.assign(CommandBar.prototype, {
         ? this._deploymentReplicaSetName(deployment) || deploymentReplicaSetName(deployment)
         : null;
       if (deployment && replicaSetName) {
+        // Real Deployment-controller wording for an explicit scale: direction,
+        // target and previous replica count (`Scaled down replica set X to 0
+        // from 1`, #65).
+        const oldReplicas = Math.max(0, Number(result.oldReplicas ?? replicas) || 0);
+        const direction = replicas < oldReplicas ? 'down' : 'up';
         deployment.addEvent(
           'Normal',
           'ScalingReplicaSet',
-          `Scaled ${replicas < (result.oldReplicas ?? replicas) ? 'down' : 'up'} replica set ${replicaSetName} to ${replicas}`
+          `Scaled ${direction} replica set ${replicaSetName} to ${replicas} from ${oldReplicas}`
         );
       }
       return this._ok(`${this._resourceRef(kind)}/${name} scaled`);
@@ -12200,6 +12283,9 @@ Object.assign(CommandBar.prototype, {
         'http-get',
         'initial-delay-seconds',
         'period-seconds',
+        'timeout-seconds',
+        'success-threshold',
+        'failure-threshold',
       ],
       longBools: ['liveness', 'readiness', 'startup', 'remove'],
     });
@@ -12213,16 +12299,52 @@ Object.assign(CommandBar.prototype, {
     const probeType = flags.readiness ? 'readiness' : flags.startup ? 'startup' : 'liveness';
     const namespace = this._namespaceFromFlags(flags);
     const ge = this.gameEngine;
+    const openTcpRaw = flags['open-tcp'];
     const openTcp =
-      flags['open-tcp'] && flags['open-tcp'] !== true ? Number(flags['open-tcp']) : null;
-    if (ge && typeof ge.setProbe === 'function' && !openTcp) {
+      openTcpRaw !== undefined && openTcpRaw !== true && openTcpRaw !== ''
+        ? /^\d+$/.test(String(openTcpRaw))
+          ? Number(openTcpRaw)
+          : String(openTcpRaw)
+        : undefined;
+    // `oc set probe` numeric flags (#64): only the flags the player passed are
+    // written; the rest keep their current value / API-server defaults.
+    const numberFlag = (flagName) => {
+      const raw = flags[flagName];
+      if (raw === undefined || raw === true) return undefined;
+      const value = Number(raw);
+      if (!Number.isFinite(value) || value < 0) return null;
+      return Math.trunc(value);
+    };
+    const numericFlags = {
+      initialDelaySeconds: numberFlag('initial-delay-seconds'),
+      periodSeconds: numberFlag('period-seconds'),
+      timeoutSeconds: numberFlag('timeout-seconds'),
+      successThreshold: numberFlag('success-threshold'),
+      failureThreshold: numberFlag('failure-threshold'),
+    };
+    const invalidNumeric = Object.entries(numericFlags).find(([, value]) => value === null);
+    if (invalidNumeric) {
+      const flagName = {
+        initialDelaySeconds: 'initial-delay-seconds',
+        periodSeconds: 'period-seconds',
+        timeoutSeconds: 'timeout-seconds',
+        successThreshold: 'success-threshold',
+        failureThreshold: 'failure-threshold',
+      }[invalidNumeric[0]];
+      return this._err(
+        `error: invalid argument "${String(flags[flagName])}" for "--${flagName}" flag: must be a non-negative integer`
+      );
+    }
+    if (ge && typeof ge.setProbe === 'function') {
       const result = ge.setProbe(kind, name, {
         namespace,
         probe: probeType,
         getUrl:
           flags['get-url'] && flags['get-url'] !== true ? String(flags['get-url']) : undefined,
+        openTcp,
         remove: Boolean(flags.remove),
         container: flags.container,
+        ...numericFlags,
       });
       if (result.success === false) return this._err(result.message);
       return this._ok(
@@ -12237,11 +12359,14 @@ Object.assign(CommandBar.prototype, {
         for (const container of containers) {
           if (flags.remove) {
             delete container[`${probeType}Probe`];
-          } else if (openTcp) {
+          } else if (openTcp !== undefined) {
             container[`${probeType}Probe`] = {
               tcpSocket: { port: openTcp },
-              initialDelaySeconds: 5,
-              periodSeconds: 10,
+              initialDelaySeconds: numericFlags.initialDelaySeconds ?? 0,
+              periodSeconds: numericFlags.periodSeconds ?? 10,
+              timeoutSeconds: numericFlags.timeoutSeconds ?? 1,
+              successThreshold: numericFlags.successThreshold ?? 1,
+              failureThreshold: numericFlags.failureThreshold ?? 3,
             };
           } else {
             const url =
@@ -12255,8 +12380,11 @@ Object.assign(CommandBar.prototype, {
                 port: match?.[3] ? Number(match[3]) : 8080,
                 scheme: (match?.[1] || 'http').toUpperCase(),
               },
-              initialDelaySeconds: 5,
-              periodSeconds: 10,
+              initialDelaySeconds: numericFlags.initialDelaySeconds ?? 0,
+              periodSeconds: numericFlags.periodSeconds ?? 10,
+              timeoutSeconds: numericFlags.timeoutSeconds ?? 1,
+              successThreshold: numericFlags.successThreshold ?? 1,
+              failureThreshold: numericFlags.failureThreshold ?? 3,
             };
           }
         }
@@ -13713,14 +13841,27 @@ Object.assign(CommandBar.prototype, {
     return result;
   },
 
+  /**
+   * Simulate one remote command (`oc exec`/`oc rsh`).
+   *
+   * Real `oc exec … -- sh -c '<script>'` runs the script in the CONTAINER's
+   * shell: single-quoted text reaches it untouched and is expanded from the
+   * container environment, and shell builtins like `exit` are available (#64,
+   * #65). Direct `oc exec -- <command>` still execs the binary without a shell.
+   * @param {string} command
+   * @param {object} pod
+   * @param {string} containerName
+   * @returns {{lines: string[], exitCode: number}}
+   */
   _simulateExecCommand(command, pod, containerName) {
     const raw = String(command ?? '').trim();
     if (!raw) return { lines: [], exitCode: 0 };
     const context = this._podExecContext(pod, containerName);
-    // `oc exec … -- sh -c "cmd"` / `/bin/bash -c "…"`: unwrap the script.
+    // `oc exec … -- sh -c "cmd"` / `/bin/bash -c "…"` / `sh -c <script>`: run
+    // the script through the container shell semantics below.
     const tokens = tokenizeCommand(raw);
-    if (tokens.length >= 3 && /(?:^|\/)(?:ba)?sh$/.test(tokens[0]) && tokens[1] === '-c') {
-      return this._simulateExecCommand(tokens.slice(2).join(' '), pod, containerName);
+    if (tokens.length >= 2 && /(?:^|\/)(?:ba)?sh$/.test(tokens[0]) && tokens[1] === '-c') {
+      return this._runContainerShellScript(tokens.slice(2).join(' '), context);
     }
     // Support simple pipelines like `cat /etc/app/APP_MODE | grep prod`.
     if (tokens.includes('|')) {
@@ -13750,12 +13891,86 @@ Object.assign(CommandBar.prototype, {
   },
 
   /**
+   * Run a `sh -c` script inside the container shell: expand `$VAR`/`${VAR}`/
+   * `$?` from the container environment (single-quoted text was not expanded by
+   * the workstation shell, so this is what makes `sh -c 'echo $DB_PASS'` work —
+   * #64), then execute `;`/`&&`/`||`/`|` segments like the real shell.
+   * @param {string} script
+   * @param {object} context `_podExecContext` result
+   * @returns {{lines: string[], exitCode: number}}
+   */
+  _runContainerShellScript(script, context) {
+    const source = String(script ?? '').trim();
+    if (!source) return { lines: [], exitCode: 0 };
+    const plan = splitShellSegments(source);
+    if (plan.error) return { lines: [plan.error], exitCode: 2 };
+    const lines = [];
+    let lastExit = 0;
+    for (let index = 0; index < plan.segments.length; index += 1) {
+      const separator = index === 0 ? null : plan.operators[index - 1];
+      const shouldRun =
+        index === 0 ||
+        separator === ';' ||
+        (separator === '&&' && lastExit === 0) ||
+        (separator === '||' && lastExit !== 0);
+      if (!shouldRun) continue;
+      const segment = String(plan.segments[index] ?? '').trim();
+      if (!segment) continue;
+      // Refresh the expansion environment per segment so `export`/assignments
+      // earlier in the script are visible to later commands, like a real shell.
+      const expanded = expandShellVariables(segment, {
+        ...Object.fromEntries(context.env.entries()),
+        '?': String(lastExit),
+      });
+      const result = this._runContainerShellSegment(expanded, context);
+      if (result.lines.length) lines.push(...result.lines);
+      lastExit = result.exitCode ?? 0;
+      if (result.exitRequested) break;
+    }
+    return { lines, exitCode: lastExit };
+  },
+
+  /**
+   * Execute one expanded command line of a container `sh -c` script, including
+   * pipelines. Builtins (`exit`) are only recognised in this shell context.
+   * @param {string} segment
+   * @param {object} context
+   * @returns {{lines: string[], exitCode: number, exitRequested?: boolean}}
+   */
+  _runContainerShellSegment(segment, context) {
+    const { stages } = splitPipeline(segment);
+    let stdin = null;
+    let lines = [];
+    let exitCode = 0;
+    for (const stage of stages) {
+      const tokens = tokenizeCommand(stage);
+      if (!tokens.length) continue;
+      const result = this._execStage(tokens, context, stdin, { shell: true });
+      lines = result.lines || [];
+      exitCode = result.exitCode || 0;
+      if (result.exitRequested) return { lines, exitCode, exitRequested: true };
+      if (!result.ok) break;
+      stdin = lines.join('\n');
+    }
+    return { lines, exitCode };
+  },
+
+  /**
    * Run one `oc exec`/`oc rsh` command against the simulated Pod filesystem.
    * The filesystem mirrors the Pod's mounted ConfigMaps/Secrets/downwardAPI
    * volumes and its environment (`env`, `envFrom`, valueFrom), so
    * `ls /etc/app` / `cat /etc/app/APP_MODE` / `env` show the real config (#32d).
+   *
+   * `options.shell` is set when the argv came from a container `sh -c` script:
+   * only then are shell builtins (`exit`, `:`, `export`, `unset`, assignment)
+   * recognised — `oc exec … -- exit 3` really execs a missing binary (#65).
+   * @param {string[]} tokens
+   * @param {object} context `_podExecContext` result
+   * @param {string|null} stdin piped stdin
+   * @param {{shell?: boolean}} [options]
+   * @returns {{ok: boolean, lines: string[], exitCode?: number, exitRequested?: boolean}}
    */
-  _execStage(tokens, context, stdin) {
+  _execStage(tokens, context, stdin, options = {}) {
     const argv = tokens.length ? tokens : ['sh'];
     // #62 A: binaries are matched by basename, so `/bin/cat` and `cat` both hit
     // the modelled `cat` (real images install coreutils in /bin or /usr/bin).
@@ -13772,6 +13987,36 @@ Object.assign(CommandBar.prototype, {
         : stdinText
             .split('\n')
             .filter((line, index, list) => !(index === list.length - 1 && line === ''));
+    // Container-shell builtins (#65): `exit N` is valid inside `sh -c '…'` and
+    // must never be reported as a missing /usr/bin/exit binary.
+    if (options.shell) {
+      if (name === 'exit') {
+        const rawCode = args.find((arg) => /^-?\d+$/.test(arg));
+        const exitCode = rawCode === undefined ? 0 : Number.parseInt(rawCode, 10);
+        const clamped = Math.max(0, Math.min(255, exitCode));
+        return { ok: clamped === 0, lines: [], exitCode: clamped, exitRequested: true };
+      }
+      if (name === ':') return ok([]);
+      if (name === 'cd') return ok([]);
+      if (name === 'export' || name === 'unset' || /^[A-Za-z_][A-Za-z0-9_]*=/.test(argv[0])) {
+        // Mutate the exec session's environment only (process-local, like a
+        // real shell): `sh -c 'export X=1; echo $X'` works, direct binaries
+        // cannot see it.
+        const assignments = name === 'export' || name === 'unset' ? args : [argv[0]];
+        for (const assignment of assignments) {
+          const equals = String(assignment).indexOf('=');
+          if (name === 'unset') {
+            context.env.delete(String(assignment));
+            continue;
+          }
+          if (equals <= 0) continue;
+          const key = String(assignment).slice(0, equals);
+          if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) continue;
+          context.env.set(key, String(assignment).slice(equals + 1));
+        }
+        return ok([]);
+      }
+    }
     if (/^(hostname)$/.test(name)) return ok([context.podName]);
     if (name === 'hostname' && args[0] === '-f') return ok([context.podName]);
     if (name === 'whoami') {
@@ -13783,13 +14028,7 @@ Object.assign(CommandBar.prototype, {
           : ['default']
       );
     }
-    if (name === 'id') {
-      return ok(
-        context.restricted
-          ? [`uid=${context.runtimeUid} gid=0(root) groups=0(root),${context.runtimeUid}`]
-          : ['uid=1000840000(default) gid=0(root) groups=0(root),1000840000']
-      );
-    }
+    if (name === 'id') return this._execId(args, context);
     if (name === 'env' || name === 'printenv') {
       const entries = [...context.env.entries()];
       if (name === 'printenv' && args[0]) {
@@ -14001,6 +14240,46 @@ Object.assign(CommandBar.prototype, {
       exitCode: 127,
       lines: [
         `error: Internal error occurred: error executing command in container: failed to exec in container: OCI runtime exec failed: exec failed: unable to start container process: exec: "${name}": executable file not found in $PATH: unknown`,
+      ],
+    };
+  },
+
+  /**
+   * `id` coreutils (#65): `id` prints the full `uid=… gid=0(root) groups=…`
+   * line, while `-u`/`-g`/`-un`/`-gn`/`-G`/`-Gn` print just the numeric (or
+   * name) IDs. restricted-v2 Pods run with an arbitrary UID that has no
+   * `/etc/passwd` entry, so `-un` is the bare numeric UID (never the full line).
+   * @param {string[]} args `id` argv (command name stripped)
+   * @param {object} context `_podExecContext(pod, containerName)`
+   * @returns {{ok: boolean, lines: string[]}}
+   */
+  _execId(args, context) {
+    const flagText = args.filter((arg) => arg.startsWith('-') && arg.length > 1).join('');
+    const wantsUser = /u/.test(flagText);
+    const wantsGroup = /g/.test(flagText);
+    const wantsGroups = /G/.test(flagText);
+    const wantsName = /n/.test(flagText);
+    const restricted = Boolean(context.restricted);
+    const uid = String(context.runtimeUid ?? 1000840000);
+    const userName = restricted ? uid : 'default';
+    const gid = '0';
+    const groupName = 'root';
+    if (wantsGroups) {
+      const ids = [gid, uid];
+      if (wantsName) return { ok: true, lines: [[groupName, uid].join(' ')] };
+      return { ok: true, lines: [ids.join(' ')] };
+    }
+    if (wantsUser && wantsGroup) {
+      return { ok: true, lines: [wantsName ? `${userName} ${groupName}` : `${uid} ${gid}`] };
+    }
+    if (wantsUser) return { ok: true, lines: [wantsName ? userName : uid] };
+    if (wantsGroup) return { ok: true, lines: [wantsName ? groupName : gid] };
+    return {
+      ok: true,
+      lines: [
+        restricted
+          ? [`uid=${uid} gid=0(root) groups=0(root),${uid}`]
+          : ['uid=1000840000(default) gid=0(root) groups=0(root),1000840000'],
       ],
     };
   },
@@ -16452,7 +16731,13 @@ Object.assign(CommandBar.prototype, {
     const target = (positionals[0] || 'pods').toLowerCase();
     const namespace = flags.namespace || this.currentProject;
     if (target === 'nodes' || target === 'node') {
-      const nodes = this._resources('Node');
+      // Real `oc adm top nodes` is served by metrics-server and sorted by NAME.
+      // A real control plane is the busiest node in the cluster (etcd,
+      // kube-apiserver, controllers and the operators run there), and no two
+      // workers report exactly identical live usage (#65).
+      const nodes = [...this._resources('Node')].sort((left, right) =>
+        String(left.metadata?.name || '').localeCompare(String(right.metadata?.name || ''))
+      );
       if (!nodes.length) return this._ok('No resources found.');
       const rows = nodes.map((node) => {
         const name = node.metadata?.name || 'unknown';
@@ -16465,14 +16750,28 @@ Object.assign(CommandBar.prototype, {
         const usage = node.status?.usage || {};
         // `Node.status.usage` is numeric millicores / MiB in the simulator; a real
         // quantity string (from metrics) is parsed normally.
-        const cpuUsed =
+        const baseCpu =
           typeof usage.cpu === 'number'
             ? usage.cpu
-            : this._parseQuantityToMilli(usage.cpu) || 300 + stableHash(name, 2500);
-        const memoryUsed =
+            : this._parseQuantityToMilli(usage.cpu) || stableHash(name, 2500);
+        const baseMemory =
           typeof usage.memory === 'number'
             ? Math.round(usage.memory)
             : this._parseQuantityToMi(usage.memory) || 1024 + stableHash(`${name}-mem`, 4096);
+        const labels = node.metadata?.labels || {};
+        const controlPlane =
+          Object.prototype.hasOwnProperty.call(labels, 'node-role.kubernetes.io/control-plane') ||
+          Object.prototype.hasOwnProperty.call(labels, 'node-role.kubernetes.io/master') ||
+          /^master/.test(name);
+        // Control plane: several cores and ~8–12 Gi of resident components.
+        // Workers: their requested usage plus a small deterministic per-node
+        // variance (real metrics-server never prints two identical workers).
+        const cpuUsed = controlPlane
+          ? Math.max(baseCpu, 2800 + stableHash(name, 1200))
+          : Math.max(0, baseCpu) + stableHash(`${name}-cpu`, 40);
+        const memoryUsed = controlPlane
+          ? Math.max(baseMemory, 9 * 1024 + stableHash(`${name}-mem`, 2800))
+          : Math.max(0, baseMemory) + stableHash(`${name}-memory`, 180);
         return [
           name,
           `${cpuUsed}m`,

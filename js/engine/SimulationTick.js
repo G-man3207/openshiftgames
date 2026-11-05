@@ -2518,7 +2518,13 @@ export class SimulationTick {
         if (rs) this._reconcileReplicaSet(rs, undefined, minReadySeconds);
     } else if (strategyType === 'Recreate') {
       if (activeOld > 0) {
-        for (const rs of oldSets) this._reconcileReplicaSet(rs, 0, minReadySeconds);
+        for (const rs of oldSets) {
+          const oldReplicas = Math.max(0, Number(rs.spec.replicas ?? 0) || 0);
+          this._reconcileReplicaSet(rs, 0, minReadySeconds);
+          if (oldReplicas > 0) {
+            this._recordDeploymentScalingEvent(deploy, 'down', rs.metadata?.name, 0, oldReplicas);
+          }
+        }
         this._reconcileReplicaSet(currentSet, 0, minReadySeconds);
       } else {
         this._reconcileReplicaSet(currentSet, desiredReplicas, minReadySeconds);
@@ -2559,14 +2565,33 @@ export class SimulationTick {
             if (remaining <= 0) break;
             const active = this._activePodsOf(victim).length;
             const remove = Math.min(remaining, active);
-            this._reconcileReplicaSet(victim, active - remove, minReadySeconds);
+            const oldReplicas = Math.max(0, Number(victim.spec.replicas ?? 0) || 0);
+            const nextReplicas = active - remove;
+            this._reconcileReplicaSet(victim, nextReplicas, minReadySeconds);
+            // The Deployment controller records the scale-down on the DEPLOYMENT
+            // (`Scaled down replica set <old> to 0 from 1`) — that is the series
+            // `oc describe deploy` shows (#65).
+            if (nextReplicas < oldReplicas) {
+              this._recordDeploymentScalingEvent(
+                deploy,
+                'down',
+                victim.metadata?.name,
+                nextReplicas,
+                oldReplicas
+              );
+            }
             remaining -= remove;
           }
         }
       }
       for (const rs of oldSets) {
-        if (rs.spec.replicas !== 0 && this._activePodsOf(rs).length === 0)
+        if (rs.spec.replicas !== 0 && this._activePodsOf(rs).length === 0) {
+          const oldReplicas = Math.max(0, Number(rs.spec.replicas ?? 0) || 0);
           this._reconcileReplicaSet(rs, 0, minReadySeconds);
+          if (oldReplicas > 0) {
+            this._recordDeploymentScalingEvent(deploy, 'down', rs.metadata?.name, 0, oldReplicas);
+          }
+        }
       }
     }
 
@@ -2584,6 +2609,7 @@ export class SimulationTick {
     let revision =
       ownedSets.reduce((max, rs) => Math.max(max, this._replicaSetRevision(rs)), 0) + 1;
     let rs = this.cluster.getByName('ReplicaSet', name, namespace);
+    let createdNow = false;
     if (!rs) {
       // Real Deployment controller copies the Deployment's annotations onto each
       // new ReplicaSet, which is where `oc rollout history` reads
@@ -2612,8 +2638,15 @@ export class SimulationTick {
           template: deepClone(template),
         },
       });
+      createdNow = Boolean(rs);
     }
     if (!rs) return null;
+    // Real Deployment controller emits `Scaled up replica set <new> to <n>` on
+    // the Deployment when a rollout creates the new ReplicaSet (#65).
+    const desiredReplicas = Math.max(0, Number(deploy.spec?.replicas ?? 1) || 0);
+    if (createdNow && desiredReplicas > 0) {
+      this._recordDeploymentScalingEvent(deploy, 'up', name, desiredReplicas);
+    }
     this.cluster.addRelationship(deploy.uid, rs.uid);
     deploy.metadata.annotations = deploy.metadata.annotations || {};
     const currentRevision =
@@ -2634,6 +2667,32 @@ export class SimulationTick {
       resource: deploy,
     });
     return rs;
+  }
+
+  /**
+   * Record one Deployment-controller `ScalingReplicaSet` event on the
+   * Deployment itself — the only deployment events real `oc describe deploy`
+   * shows (#65). Real controller wording: an up event is
+   * `Scaled up replica set <rs> to <n>` and a down event is
+   * `Scaled down replica set <rs> to <n> from <old>`.
+   * @param {object} deploy Deployment resource
+   * @param {'up'|'down'} direction
+   * @param {string} replicaSetName
+   * @param {number} toReplicas
+   * @param {number} [fromReplicas]
+   */
+  _recordDeploymentScalingEvent(deploy, direction, replicaSetName, toReplicas, fromReplicas) {
+    if (!deploy || !replicaSetName || typeof deploy.recordEvent !== 'function') return;
+    const to = Math.max(0, Math.trunc(Number(toReplicas) || 0));
+    const from =
+      fromReplicas === undefined || fromReplicas === null
+        ? null
+        : Math.max(0, Math.trunc(Number(fromReplicas) || 0));
+    const message =
+      direction === 'down'
+        ? `Scaled down replica set ${replicaSetName} to ${to}${from === null ? '' : ` from ${from}`}`
+        : `Scaled up replica set ${replicaSetName} to ${to}`;
+    deploy.recordEvent('Normal', 'ScalingReplicaSet', message);
   }
 
   /**
