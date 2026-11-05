@@ -63,6 +63,7 @@ import {
   RHCOS_OS_IMAGE,
 } from '../data/platformVersions.js';
 import { parseYaml } from '../engine/YamlParser.js';
+import { deploymentReplicaSetName } from '../engine/TemplateHash.js';
 import {
   validateCronSchedule,
   visibleAnnotations,
@@ -111,6 +112,19 @@ export const INTERNAL_REGISTRY = 'image-registry.openshift-image-registry.svc:50
  */
 const INPUT_PREFIX_RE = /^\s*(?:oc|kubectl)\s+/i;
 const INPUT_PREFIX_WORD_RE = /^\s*(oc|kubectl)\s+/i;
+
+/**
+ * Effects a taint may carry (Kubernetes core/v1 TaintEffect): `oc adm taint` /
+ * `kubectl taint` reject anything else when parsing `key[=value]:effect` (#58).
+ */
+const VALID_TAINT_EFFECTS = ['NoSchedule', 'PreferNoSchedule', 'NoExecute'];
+
+/**
+ * The `openshift-dns/dns-default` ClusterIP on a real OCP install — the
+ * nameserver every Pod's `/etc/resolv.conf` lists. Derived from the seeded
+ * Service object at runtime; this is the documented 4.22 fallback (#58).
+ */
+const CLUSTER_DNS_SERVICE_IP = '172.30.0.10';
 
 /** Top-level command catalog: completion + help. */
 export const BASE_COMMANDS = {
@@ -5635,6 +5649,16 @@ Object.assign(CommandBar.prototype, {
     // `oc get pods` prints Completed for phase Succeeded (real name-printer).
     const displayPhase = phase === 'Succeeded' ? 'Completed' : phase;
     const statuses = resource.status?.containerStatuses || resource.containerStatuses || [];
+    // A Pod the scheduler has not bound yet has no container statuses a real
+    // kubelet could have written: the name-printer shows the pod PHASE
+    // (`Pending`), never `ContainerCreating`. ContainerCreating is only correct
+    // once the Pod is bound to a Node and the kubelet starts setting up its
+    // containers (#57). READY stays 0/N.
+    if (phase === 'Pending' && !resource.spec?.nodeName) {
+      const total = statuses.length || this._containerList(resource).length || 1;
+      const restarts = statuses.reduce((sum, status) => sum + (status.restartCount || 0), 0);
+      return { ready: `0/${total}`, status: 'Pending', restarts };
+    }
     if (!statuses.length)
       return { ready: phase === 'Running' ? '1/1' : '0/1', status: displayPhase, restarts: 0 };
     const readyCount = statuses.filter((status) => status.ready).length;
@@ -6741,10 +6765,12 @@ Object.assign(CommandBar.prototype, {
         ? new Date(deployment.metadata.creationTimestamp).getTime()
         : Date.now() - 240000;
       // The deployment controller scales the *new* ReplicaSet and records its
-      // real name (`Scaled up replica set web-5d8f7c9b6 to 2`); the old
-      // synthetic event truncated it to a short numeric hash (#49).
+      // real name (`Scaled up replica set web-5d8f7c9b6 to 2`). Before the
+      // controller has ticked (paused pre-start sandbox) there is no RS object
+      // yet, so predict the exact name it will get from the pod template hash —
+      // never a truncated numeric placeholder (#49, #58).
       const replicaSetName =
-        this._deploymentReplicaSetName(deployment) || `${name}-${stableHash(name, 900) + 100}`;
+        this._deploymentReplicaSetName(deployment) || deploymentReplicaSetName(deployment);
       const replicas = deployment.spec?.replicas ?? 1;
       push({
         lastTimestamp: created + 3000,
@@ -11352,8 +11378,9 @@ Object.assign(CommandBar.prototype, {
     if (ge && typeof ge.scale === 'function') {
       const result = ge.scale(kind, name, replicas, { namespace });
       if (result.success === false) return this._err(result.message);
-      // #49: the deployment controller records the ScalingReplicaSet event with
-      // the real (never truncated) ReplicaSet name, and scales it up or down.
+      // #49/#58: the ScalingReplicaSet event names the ReplicaSet the
+      // controller owns for the current pod template, using the exact
+      // pod-template-hash name even before the controller has ticked.
       const deployment =
         kind === 'Deployment'
           ? this._findResource('Deployment', name, {
@@ -11362,7 +11389,9 @@ Object.assign(CommandBar.prototype, {
               allowPrefix: false,
             })
           : null;
-      const replicaSetName = deployment ? this._deploymentReplicaSetName(deployment) : null;
+      const replicaSetName = deployment
+        ? this._deploymentReplicaSetName(deployment) || deploymentReplicaSetName(deployment)
+        : null;
       if (deployment && replicaSetName) {
         deployment.addEvent(
           'Normal',
@@ -13760,6 +13789,17 @@ Object.assign(CommandBar.prototype, {
   },
 
   /**
+   * Cluster DNS Service address for a Pod's `/etc/resolv.conf`: the seeded
+   * `openshift-dns/dns-default` ClusterIP (172.30.0.10 on real OCP 4.22).
+   * @returns {string}
+   */
+  _clusterDnsServiceIP() {
+    const service = this.cluster?.getByName?.('Service', 'dns-default', 'openshift-dns');
+    const clusterIP = service?.spec?.clusterIP;
+    return clusterIP && clusterIP !== 'None' ? String(clusterIP) : CLUSTER_DNS_SERVICE_IP;
+  },
+
+  /**
    * Build the simulated Pod filesystem + environment from the Pod spec:
    * ConfigMap/Secret/downwardAPI volumes become files, `env`/`envFrom`/
    * `valueFrom` become environment entries (#32d).
@@ -13816,6 +13856,13 @@ Object.assign(CommandBar.prototype, {
     addFile(
       '/etc/hosts',
       '127.0.0.1\tlocalhost\n::1\tlocalhost ip6-localhost ip6-loopback\n172.30.0.1\tkubernetes.default.svc\n'
+    );
+    // Every real Pod's /etc/resolv.conf points at the cluster DNS Service
+    // ClusterIP — that is `openshift-dns/dns-default` 172.30.0.10 on OCP. The
+    // command is the first thing a learner runs when lab 13 breaks DNS (#58).
+    addFile(
+      '/etc/resolv.conf',
+      `search ${namespace}.svc.cluster.local svc.cluster.local cluster.local\nnameserver ${this._clusterDnsServiceIP()}\noptions ndots:5\n`
     );
     addFile(
       '/etc/os-release',
@@ -15758,6 +15805,13 @@ Object.assign(CommandBar.prototype, {
       // matched an existing taint and the command still printed "untainted"
       // (issue #55A).
       const remove = taintSpec.endsWith('-');
+      /** kubectl/oc `ParseTaint` rejects unknown effects with a dedicated error. */
+      const taintParseError = (match) => {
+        if (!match) return this._err(`error: invalid taint spec "${taintSpec}"`);
+        if (match[3] !== undefined && !VALID_TAINT_EFFECTS.includes(match[3]))
+          return this._err(`error: invalid taint effect: ${match[3]}, unsupported taint effect`);
+        return null;
+      };
       const result = this._updateResource(
         'Node',
         nodeName,
@@ -15765,8 +15819,11 @@ Object.assign(CommandBar.prototype, {
           spec.taints = spec.taints || [];
           if (remove) {
             const removal = taintSpec.slice(0, -1);
-            const match = removal.match(/^([^=:]+)(?:=([^:]+))?(?::([A-Za-z]+))?$/);
-            if (!match) return { error: this._err(`error: invalid taint spec "${taintSpec}"`) };
+            // `key=:Effect` (empty value) is valid kubectl grammar (#58): the
+            // value group must accept the empty string.
+            const match = removal.match(/^([^=:]+)(?:=([^:]*))?(?::([A-Za-z]+))?$/);
+            const parseError = taintParseError(match);
+            if (parseError) return { error: parseError };
             const [, key, value, effect] = match;
             spec.taints = spec.taints.filter(
               (taint) =>
@@ -15776,8 +15833,11 @@ Object.assign(CommandBar.prototype, {
             );
             return {};
           }
-          const match = taintSpec.match(/^([^=:]+)(?:=([^:]+))?:([A-Za-z]+)$/);
-          if (!match) return { error: this._err(`error: invalid taint spec "${taintSpec}"`) };
+          // `key=:Effect` is accepted by kubectl: it is a taint with an empty
+          // value (e.g. `node-role.kubernetes.io/master=:NoSchedule`, #58).
+          const match = taintSpec.match(/^([^=:]+)(?:=([^:]*))?:([A-Za-z]+)$/);
+          const parseError = taintParseError(match);
+          if (parseError) return { error: parseError };
           spec.taints = spec.taints.filter((taint) => taint.key !== match[1]);
           spec.taints.push({ key: match[1], value: match[2] || '', effect: match[3] });
           return {};

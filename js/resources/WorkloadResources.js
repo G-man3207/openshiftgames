@@ -243,7 +243,16 @@ export function describeEventLines(eventList) {
   return ['Events:', render(headers), rule, ...body.map((row) => render(row))];
 }
 
-/** The Node line value for a pod (`node/ip`) plus whether it had to be derived. */
+/**
+ * The Node line value for a pod (`node/ip`) plus whether it had to be derived.
+ *
+ * An unscheduled Pod (`spec.nodeName` empty, phase Pending) prints
+ * `Node: <none>` like a real `oc describe pod`; deriving a worker for it put a
+ * bogus node on the scheduler-troubleshooting flow (#57). The derivation is
+ * only kept for legacy/incident Pods the kubelet has demonstrably acted on
+ * (Running/CrashLoopBackOff/Failed/Succeeded) whose nodeName was cleared, so
+ * describe still shows the node a restarting container runs on.
+ */
 export function resolvePodNode(pod, cluster = null) {
   if (!pod) return { name: null, ip: null, derived: false };
   const nodeIp = (node) =>
@@ -254,14 +263,13 @@ export function resolvePodNode(pod, cluster = null) {
     const node = cluster?.getByName?.('Node', pod.spec.nodeName, '') || null;
     return { name: pod.spec.nodeName, ip: pod.status?.hostIP || nodeIp(node), derived: false };
   }
-  const statuses = pod.status?.containerStatuses || [];
   const phase = String(pod.status?.phase || '');
   // A Pod the kubelet has acted on must have been scheduled. Incidents that
   // damage a preload Pod before the scheduler binds it would otherwise make
-  // describe print `<none>/<none>` for a container that is actually restarting.
-  const kubeletSawPod =
-    statuses.length > 0 ||
-    ['Running', 'CrashLoopBackOff', 'Failed', 'Succeeded', 'Error'].includes(phase);
+  // describe print `<none>` for a container that is actually restarting.
+  const kubeletSawPod = ['Running', 'CrashLoopBackOff', 'Failed', 'Succeeded', 'Error'].includes(
+    phase
+  );
   if (!kubeletSawPod) return { name: null, ip: null, derived: false };
   const nodes = (cluster?.getByKind?.('Node') || []).filter(
     (node) => !node.metadata?.deletionTimestamp
@@ -446,7 +454,9 @@ export class Pod extends ResourceBase {
           status,
         }));
     const node = resolvePodNode(this, cluster);
-    const nodeLine = node.name ? `${node.name}/${node.ip || '<none>'}` : '<none>/<none>';
+    // Real `oc describe pod` prints a bare `Node: <none>` for an unscheduled
+    // Pod (no fake `name/ip` pair, #57).
+    const nodeLine = node.name ? `${node.name}/${node.ip || '<none>'}` : '<none>';
     const annotations = visibleAnnotations(this.metadata.annotations);
     const annotationText =
       Object.entries(annotations)

@@ -341,11 +341,19 @@ export class ResourceBase {
   }
 
   recordEvent(type, reason, message) {
+    const timestamp = new Date().toISOString();
     const event = {
       type,
       reason,
       message,
-      timestamp: new Date().toISOString(),
+      timestamp,
+      // A real Event series is created once and then only its `count` and
+      // `lastTimestamp` are updated; `firstTimestamp` stays at the first
+      // occurrence so the CLI can print the real `(xN over <duration>)` window
+      // instead of the bogus `over 0s` that came from deriving the window from
+      // an overwritten timestamp (#57).
+      firstTimestamp: timestamp,
+      lastTimestamp: timestamp,
       count: 1,
       source: this.kind,
       involvedObject: {
@@ -359,7 +367,9 @@ export class ResourceBase {
       const last = this._events[this._events.length - 1];
       if (last.reason === reason && last.message === message) {
         last.count++;
-        last.timestamp = event.timestamp;
+        last.timestamp = timestamp;
+        last.lastTimestamp = timestamp;
+        last.firstTimestamp = last.firstTimestamp || timestamp;
         return this;
       }
     }

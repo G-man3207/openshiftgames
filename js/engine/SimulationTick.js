@@ -52,6 +52,8 @@ import {
   createServiceSignedCertificate,
   parseCertificatePem,
 } from '../ui/ShellTools.js';
+import { createResource } from '../data/kindRegistry.js';
+import { stableStringify, templateHash } from './TemplateHash.js';
 
 /** Fixed controller timings in game seconds (1 tick = 0.05 s at 20 TPS). */
 const BUILD_PHASE_NEW_SECONDS = 1;
@@ -160,11 +162,35 @@ const ROUTER_503_BODY =
 /** Controller-owned platform workloads (issue #55). */
 const DNS_NAMESPACE = 'openshift-dns';
 const ROUTER_DEPLOYMENT_NAME = 'router-default';
+/**
+ * The real 4.22 platform Services (issue #58). `dns-default` is the
+ * `serviceNetwork` ClusterIP every Pod's `/etc/resolv.conf` points at, so its
+ * address is fixed (172.30.0.10) exactly like the DNS operator allocates it;
+ * `router-internal-default` is the in-cluster router VIP the ingress operator
+ * creates next to the router Deployment.
+ */
+const DNS_DEFAULT_SERVICE_NAME = 'dns-default';
+const DNS_DEFAULT_SERVICE_IP = '172.30.0.10';
+/** Container port the DNS pods listen on inside the pod network (not :53). */
+const DNS_DEFAULT_SERVICE_TARGET_PORT = 5353;
+const ROUTER_INTERNAL_SERVICE_NAME = 'router-internal-default';
+/** Label the ingress operator puts on the default router Pods (and selects on). */
+const INGRESS_CONTROLLER_DEPLOYMENT_LABEL =
+  'ingresscontroller.operator.openshift.io/deployment-ingresscontroller';
 /** Labels that identify the default ingress router (Deployment selector). */
 const ROUTER_DEFAULT_SELECTOR = {
   'ingress.operator.openshift.io/default-router': 'true',
   router: ROUTER_DEPLOYMENT_NAME,
 };
+/**
+ * The real scheduler retries an unschedulable Pod with exponential backoff:
+ * `podInitialBackoffDuration` 1 s doubling to `podMaxBackoffDuration` 10 s
+ * (k8s.io/kubernetes/pkg/scheduler). Attempts are throttled so the
+ * FailedScheduling Event series shows realistic counts over a real time window
+ * (`x4 over 7s`) instead of one Event per 20 TPS tick (`x167 over 0s`, #57).
+ */
+const SCHEDULER_INITIAL_BACKOFF_SECONDS = 1;
+const SCHEDULER_MAX_BACKOFF_SECONDS = 10;
 /**
  * Tolerations of the platform node DaemonSets (dns-default, node-resolver) on a
  * real 4.22 cluster: DNS must run on EVERY node, including dedicated
@@ -656,8 +682,101 @@ export class SimulationTick {
       .getByKind('Node')
       .filter((node) => node.status?.phase !== 'Terminating' && !node.metadata?.deletionTimestamp);
     if (nodes.length === 0) return; // safe before a mode seeds its Nodes
+    this._ensurePlatformServices();
     this._ensureRouterWorkloads(nodes);
     this._ensureDnsWorkloads(nodes);
+  }
+
+  /**
+   * The real 4.22 platform Services (issue #58). They belong to the platform
+   * operators, not to a player project, and every Pod's `/etc/resolv.conf`
+   * points at `openshift-dns/dns-default` (ClusterIP 172.30.0.10) — which is
+   * exactly the first thing a learner checks after a NetworkPolicy breaks DNS
+   * in lab 13 (`oc get svc,endpoints -n openshift-dns`). `router-internal-default`
+   * is the in-cluster router VIP created next to the router Deployment. Both are
+   * seeded synchronously with the rest of the platform (paused pre-start
+   * cluster included) and re-created by the operator seeder if deleted.
+   */
+  _ensurePlatformServices() {
+    this._ensurePlatformService({
+      name: DNS_DEFAULT_SERVICE_NAME,
+      namespace: DNS_NAMESPACE,
+      clusterIP: DNS_DEFAULT_SERVICE_IP,
+      labels: { 'dns.operator.openshift.io/owning-dns': 'default' },
+      selector: { 'dns.operator.openshift.io/daemonset-dns': 'default' },
+      ports: [
+        {
+          name: 'dns',
+          port: 53,
+          protocol: 'UDP',
+          targetPort: DNS_DEFAULT_SERVICE_TARGET_PORT,
+        },
+        {
+          name: 'dns-tcp',
+          port: 53,
+          protocol: 'TCP',
+          targetPort: DNS_DEFAULT_SERVICE_TARGET_PORT,
+        },
+        { name: 'metrics', port: 9154, protocol: 'TCP', targetPort: 9154 },
+      ],
+    });
+    this._ensurePlatformService({
+      name: ROUTER_INTERNAL_SERVICE_NAME,
+      namespace: ROUTER_NAMESPACE,
+      // No fixed ClusterIP: the service controller allocates one from the
+      // 172.30.0.0/16 serviceNetwork like any other ClusterIP Service.
+      labels: { 'ingresscontroller.operator.openshift.io/owning-ingresscontroller': 'default' },
+      selector: { [INGRESS_CONTROLLER_DEPLOYMENT_LABEL]: 'default' },
+      ports: [
+        { name: 'http', port: 80, protocol: 'TCP', targetPort: 80 },
+        { name: 'https', port: 443, protocol: 'TCP', targetPort: 443 },
+        { name: 'metrics', port: 1936, protocol: 'TCP', targetPort: 1936 },
+      ],
+    });
+  }
+
+  /**
+   * Create one platform-owned ClusterIP Service when it is missing.
+   * @param {{name: string, namespace: string, labels?: object, selector: object,
+   *   ports: object[], clusterIP?: string}} definition
+   * @returns {object|null} the Service resource
+   */
+  _ensurePlatformService(definition) {
+    const { name, namespace } = definition;
+    if (!this.cluster.getByName('Project', namespace, '')) return null;
+    const existing = this.cluster.getByName('Service', name, namespace);
+    if (existing) return existing;
+    const spec = {
+      type: 'ClusterIP',
+      selector: deepClone(definition.selector || {}),
+      ports: deepClone(definition.ports || []),
+    };
+    if (definition.clusterIP) {
+      spec.clusterIP = definition.clusterIP;
+      spec.clusterIPs = [definition.clusterIP];
+    }
+    const service = createResource('Service', {
+      apiVersion: 'v1',
+      kind: 'Service',
+      metadata: {
+        name,
+        namespace,
+        labels: deepClone(definition.labels || {}),
+      },
+      spec,
+    });
+    if (!service) return null;
+    // The Service class defaults merge `{app: <name>}` into the selector
+    // (mergeDefaults deep-merges plain objects). A real platform Service selects
+    // ONLY on its operator label — an extra `app: router-internal-default` key
+    // silently matched no router Pod and left the Service with `<none>`
+    // endpoints, so pin the real selector explicitly.
+    service.spec.selector = deepClone(definition.selector || {});
+    if (definition.clusterIP) {
+      service.spec.clusterIP = definition.clusterIP;
+      service.spec.clusterIPs = [definition.clusterIP];
+    }
+    return this.cluster.addResource(service);
   }
 
   /** router-default Deployment + ReplicaSet + bootstrap Pods (issue #55). */
@@ -685,6 +804,7 @@ export class SimulationTick {
             app: 'router',
             router: ROUTER_DEPLOYMENT_NAME,
             'ingress.operator.openshift.io/default-router': 'true',
+            [INGRESS_CONTROLLER_DEPLOYMENT_LABEL]: 'default',
           },
         },
         spec: {
@@ -805,6 +925,9 @@ export class SimulationTick {
           app: 'router',
           router: ROUTER_DEPLOYMENT_NAME,
           'ingress.operator.openshift.io/default-router': 'true',
+          // The ingress operator labels (and selects) the default router Pods
+          // with this key; docs use it to delete a router Pod by label (#58).
+          [INGRESS_CONTROLLER_DEPLOYMENT_LABEL]: 'default',
         },
       },
       spec: {
@@ -850,7 +973,16 @@ export class SimulationTick {
     });
   }
 
-  /** Pod template of the real 4.22 `dns-default` DaemonSet (dns + kube-rbac-proxy). */
+  /**
+   * Pod template of the real 4.22 `dns-default` DaemonSet (dns + kube-rbac-proxy).
+   *
+   * The DNS pods run on the POD network (issue #58): CoreDNS binds :5353 inside
+   * the pod netns and the `dns-default` Service maps :53 to it, exactly like a
+   * real 4.22 install. Only `node-resolver` (and the router on bare metal) is
+   * hostNetwork, so `oc get pods -o wide -n openshift-dns` shows 10.x pod IPs
+   * for dns-default and the node IP for node-resolver. The template also carries
+   * the real `kubernetes.io/os: linux` nodeSelector the DNS operator installs.
+   */
   _dnsDefaultTemplate() {
     return {
       metadata: {
@@ -860,10 +992,9 @@ export class SimulationTick {
         },
       },
       spec: {
-        hostNetwork: true,
-        dnsPolicy: 'ClusterFirstWithHostNet',
         priorityClassName: 'system-node-critical',
         serviceAccountName: 'dns-default',
+        nodeSelector: { 'kubernetes.io/os': 'linux' },
         restartPolicy: 'Always',
         terminationGracePeriodSeconds: 30,
         tolerations: deepClone(PLATFORM_NODE_DAEMONSET_TOLERATIONS),
@@ -873,8 +1004,8 @@ export class SimulationTick {
             image: 'quay.io/openshift/origin-coredns:4.22',
             imagePullPolicy: 'IfNotPresent',
             ports: [
-              { name: 'dns', containerPort: 5353, hostPort: 5353, protocol: 'UDP' },
-              { name: 'dns-tcp', containerPort: 5353, hostPort: 5353, protocol: 'TCP' },
+              { name: 'dns', containerPort: 5353, protocol: 'UDP' },
+              { name: 'dns-tcp', containerPort: 5353, protocol: 'TCP' },
               { name: 'metrics', containerPort: 9153, protocol: 'TCP' },
             ],
             resources: {
@@ -911,6 +1042,7 @@ export class SimulationTick {
         dnsPolicy: 'ClusterFirstWithHostNet',
         priorityClassName: 'system-node-critical',
         serviceAccountName: 'node-resolver',
+        nodeSelector: { 'kubernetes.io/os': 'linux' },
         restartPolicy: 'Always',
         terminationGracePeriodSeconds: 30,
         tolerations: deepClone(PLATFORM_NODE_DAEMONSET_TOLERATIONS),
@@ -968,7 +1100,11 @@ export class SimulationTick {
     if (!created || daemonSet._platformPodsSeeded) return;
     daemonSet._platformPodsSeeded = true;
     const template = deepClone(daemonSet.spec.template || definition.template);
-    const targetNodes = this._platformDaemonSetTargets(nodes, template.spec?.tolerations || []);
+    const targetNodes = this._platformDaemonSetTargets(
+      nodes,
+      template.spec?.nodeSelector || {},
+      template.spec?.tolerations || []
+    );
     for (const node of targetNodes) {
       const podName = `${name}-${this._platformPodSuffix(`${name}:${node.metadata.name}`)}`;
       if (this.cluster.getByName('Pod', podName, DNS_NAMESPACE)) continue;
@@ -1004,14 +1140,18 @@ export class SimulationTick {
 
   /**
    * Nodes a DaemonSet targets, using the same rules as {@link _tickDaemonSets}:
-   * Ready nodes whose taints the template tolerates.
+   * Ready nodes that match the Pod template's nodeSelector and whose taints the
+   * template tolerates.
    * @param {object[]} nodes
+   * @param {object} nodeSelector DaemonSet pod-template nodeSelector
    * @param {object[]} tolerations DaemonSet pod-template tolerations
    * @returns {object[]}
    */
-  _platformDaemonSetTargets(nodes, tolerations) {
+  _platformDaemonSetTargets(nodes, nodeSelector = {}, tolerations = []) {
     return nodes.filter((node) => {
       if (!node.isConditionTrue('Ready')) return false;
+      if (typeof node.matchesSelector === 'function' && !node.matchesSelector(nodeSelector))
+        return false;
       return !this._firstUntoleratedNoScheduleTaint({ spec: { tolerations } }, node);
     });
   }
@@ -1053,7 +1193,11 @@ export class SimulationTick {
         namespace: seed.namespace,
         labels: deepClone(seed.labels || {}),
         annotations: {
-          'openshift.io/scc': 'hostnetwork',
+          // The SCC annotation follows the real platform Pods (#58):
+          // hostNetwork Pods (router, node-resolver) are admitted by the
+          // hostnetwork SCC; dns-default runs on the pod network under the
+          // normal restricted-v2 SCC.
+          'openshift.io/scc': podSpec.hostNetwork ? 'hostnetwork' : 'restricted-v2',
           'k8s.v1.cni.cncf.io/network-status': '{}',
           ...(seed.annotations || {}),
         },
@@ -1126,13 +1270,15 @@ export class SimulationTick {
         !this._isPodBlocked(pod)
     );
     for (const pod of pendingPods) {
+      // Real scheduler retry backoff: a Pod that failed scheduling is not
+      // re-evaluated on every tick, it sits in the unschedulable queue until
+      // the backoff expires (#57). The first attempt is always immediate.
+      if (this._schedulerBackoffPending(pod)) continue;
       const node = this._findBestNode(pod, nodes);
       if (node) {
         this._schedulePodOnNode(pod, node);
       } else {
-        const message = this._schedulingFailureMessage(pod, nodes);
-        pod.setCondition('PodScheduled', 'False', 'Unschedulable', message);
-        pod.recordEvent('Warning', 'FailedScheduling', message);
+        this._recordSchedulingFailure(pod, this._schedulingFailureMessage(pod, nodes));
       }
     }
 
@@ -1148,21 +1294,50 @@ export class SimulationTick {
       )
         continue;
       if (pod._nodeBound) continue; // already bound; kubelet owns it now
+      if (this._schedulerBackoffPending(pod)) continue;
       const node = nodes.find((entry) => entry.metadata.name === pod.spec.nodeName);
       if (!node) {
-        const message = `node "${pod.spec.nodeName}" not found`;
-        pod.setCondition('PodScheduled', 'False', 'Unschedulable', message);
-        pod.recordEvent('Warning', 'FailedScheduling', message);
+        this._recordSchedulingFailure(pod, `node "${pod.spec.nodeName}" not found`);
         continue;
       }
       if (!node.isConditionTrue('Ready') || node.status.phase === 'Terminating') {
-        const message = `node "${node.metadata.name}" is not ready`;
-        pod.setCondition('PodScheduled', 'False', 'Unschedulable', message);
-        pod.recordEvent('Warning', 'FailedScheduling', message);
+        this._recordSchedulingFailure(pod, `node "${node.metadata.name}" is not ready`);
         continue;
       }
       this._schedulePodOnNode(pod, node);
     }
+  }
+
+  /**
+   * True while a Pod that already failed scheduling is still inside the real
+   * scheduler's exponential backoff window (#57).
+   * @param {object} pod
+   * @returns {boolean}
+   */
+  _schedulerBackoffPending(pod) {
+    return (
+      typeof pod?._nextSchedulingAttemptAt === 'number' &&
+      this.gameSeconds < pod._nextSchedulingAttemptAt
+    );
+  }
+
+  /**
+   * Record one FailedScheduling attempt and schedule the next retry with the
+   * real scheduler backoff (1 s initial, doubling, 10 s maximum). This throttles
+   * the Event series so `oc describe pod`/`oc get events` aggregate into a
+   * realistic `(x4 over 7s)` instead of one Event per tick (#57).
+   * @param {object} pod unschedulable Pod
+   * @param {string} message scheduler-style rejection message
+   */
+  _recordSchedulingFailure(pod, message) {
+    pod.setCondition('PodScheduled', 'False', 'Unschedulable', message);
+    pod.recordEvent('Warning', 'FailedScheduling', message);
+    const backoff = Math.min(
+      SCHEDULER_MAX_BACKOFF_SECONDS,
+      pod._schedulingBackoffSeconds || SCHEDULER_INITIAL_BACKOFF_SECONDS
+    );
+    pod._schedulingBackoffSeconds = Math.min(SCHEDULER_MAX_BACKOFF_SECONDS, backoff * 2);
+    pod._nextSchedulingAttemptAt = this.gameSeconds + backoff;
   }
 
   /**
@@ -1175,10 +1350,22 @@ export class SimulationTick {
   _schedulePodOnNode(pod, node) {
     if (pod._nodeBound) return pod;
     pod._nodeBound = true;
+    // Scheduling succeeded: the Pod leaves the unschedulable queue and its
+    // retry backoff state is discarded (a later eviction/reschedule starts a
+    // fresh series, like a real scheduler).
+    delete pod._schedulingBackoffSeconds;
+    delete pod._nextSchedulingAttemptAt;
     pod.spec.nodeName = node.metadata.name;
     pod.status.startTime = pod.status.startTime || new Date().toISOString();
     pod.status.hostIP = node.status.addresses?.[0]?.address || '10.0.0.1';
-    pod.status.podIP = pod.status.podIP || this._generatePodIP();
+    // A hostNetwork Pod shares the node's network namespace, so its Pod IP IS
+    // the node IP (real kubelet behaviour). Controller-recreated hostNetwork
+    // Pods (router-default, node-resolver) used to get a pod-network address
+    // here, which made them disagree with the bootstrap Pods and broke the
+    // router Service endpoints (#58).
+    pod.status.podIP =
+      pod.status.podIP ||
+      (pod.spec.hostNetwork === true ? pod.status.hostIP : this._generatePodIP());
     pod.setCondition(
       'PodScheduled',
       'True',
@@ -3117,27 +3304,19 @@ export class SimulationTick {
    *
    *   pod-template-hash = rand.SafeEncodeString(fmt.Sprint(fnv32a(template)))
    *
-   * The 32-bit FNV digest is rendered as 10 decimal digits and each digit is
-   * mapped through the k8s safe alphabet `bcdfghjklmnpqrstvwxz2456789`, which
-   * yields 10-char suffixes like `5d8f7c9b6` (only digits 4-9 and b/c/d/f
-   * appear). Same template → same hash, so names stay deterministic.
+   * The shared implementation lives in `js/engine/TemplateHash.js` so the CLI
+   * can predict the same ReplicaSet name before a paused cluster ticks (#58);
+   * this method keeps the controller call sites unchanged.
+   * @param {object} template Pod template
+   * @returns {string}
    */
   _templateHash(template) {
-    const digest = this._hashString(this._stableStringify(template || {}));
-    return String(digest)
-      .padStart(10, '0')
-      .split('')
-      .map((digit) => RAND_SAFE_ALPHABET[digit.charCodeAt(0) % RAND_SAFE_ALPHABET.length])
-      .join('');
+    return templateHash(template || {});
   }
 
   /** JSON with recursively sorted keys (stable across apply round-trips). */
   _stableStringify(value) {
-    if (value === null || typeof value !== 'object') return JSON.stringify(value);
-    if (Array.isArray(value))
-      return `[${value.map((entry) => this._stableStringify(entry)).join(',')}]`;
-    const keys = Object.keys(value).sort();
-    return `{${keys.map((key) => `${JSON.stringify(key)}:${this._stableStringify(value[key])}`).join(',')}}`;
+    return stableStringify(value);
   }
 
   _tickStatefulSets(dt) {
@@ -3305,7 +3484,11 @@ export class SimulationTick {
       .filter((node) => node.status.phase !== 'Terminating');
     for (const daemonSet of this.cluster.getByKind('DaemonSet')) {
       const selectorLabels = daemonSet.spec.selector?.matchLabels || {};
-      const nodeSelector = daemonSet.spec.nodeSelector || {};
+      // Real DaemonSets select Nodes with the POD TEMPLATE's nodeSelector (the
+      // `NODE SELECTOR` column of `oc get ds`); `.spec.nodeSelector` is a
+      // simulator-only legacy fallback kept for saved states.
+      const nodeSelector =
+        daemonSet.spec.template?.spec?.nodeSelector || daemonSet.spec.nodeSelector || {};
       const tolerations = daemonSet.spec.template?.spec?.tolerations || [];
       // DaemonSet targets every Ready, matching node. Cordoned nodes still run
       // already-bound DS pods (real DS tolerates unschedulable); custom
@@ -7566,13 +7749,23 @@ export class SimulationTick {
   canResolveDNS(sourcePod) {
     const source = this._resolvePodLike(sourcePod);
     if (!source) return { allowed: false, reason: 'source-not-found' };
-    const dnsPod = {
+    // Resolve against a REAL dns-default Pod (pod-network 10.x address since
+    // #58, real daemonset labels) when one is running; fall back to a synthetic
+    // Pod while the platform is still booting.
+    const dnsPod = this.cluster
+      .getByKind('Pod')
+      .find(
+        (pod) =>
+          pod.metadata?.namespace === DNS_NAMESPACE &&
+          /^dns-default-/.test(String(pod.metadata?.name || '')) &&
+          pod.status?.phase === 'Running'
+      ) || {
       metadata: {
         name: 'dns-default',
-        namespace: 'openshift-dns',
+        namespace: DNS_NAMESPACE,
         labels: { 'dns.operator.openshift.io/daemonset-dns': 'default', app: 'dns-default' },
       },
-      status: { podIP: '172.30.0.10', phase: 'Running' },
+      status: { podIP: DNS_DEFAULT_SERVICE_IP, phase: 'Running' },
     };
     const egressPolicies = this._policiesForPod(source, 'Egress');
     if (egressPolicies.length === 0) return { allowed: true, reason: 'no-egress-policy' };
@@ -7584,7 +7777,7 @@ export class SimulationTick {
             'to',
             policy.metadata.namespace,
             dnsPod,
-            5353,
+            DNS_DEFAULT_SERVICE_TARGET_PORT,
             protocol,
             dnsPod
           )
