@@ -466,6 +466,23 @@ async function advanceSimulation(seconds) {
     return true;
   }, seconds);
 }
+/** Installer-side kubeadmin password (issue #45).
+ * Real OCP keeps only a bcrypt hash in `kube-system/kubeadmin`; the plain-text
+ * password lives in the installer's `auth/kubeadmin-password`, which the
+ * simulator models as `~/auth/kubeadmin-password`. Tests must therefore read
+ * the generated password instead of assuming a literal. */
+let kubeadminPasswordCache = null;
+async function kubeadminPassword() {
+  if (kubeadminPasswordCache) return kubeadminPasswordCache;
+  // A targeted `--only=…` run may start on about:blank before any section has
+  // navigated to the app, so give the page an origin the ES-module URL resolves
+  // against (no game state is needed to read the exported constant).
+  if (!page.url().startsWith(BASE)) await goto('/');
+  kubeadminPasswordCache = await evaluate(() =>
+    import('/js/engine/ClusterState.js').then((module) => module.KUBEADMIN_PASSWORD)
+  );
+  return kubeadminPasswordCache;
+}
 /** Split an oc/helm tabwriter table into header + data rows (3+ space columns). */
 function parseTable(message) {
   const lines = String(message ?? '')
@@ -2308,7 +2325,7 @@ spec:
     await expectCmd('auth: oc whoami admin', 'oc whoami', /^admin/im);
     await expectCmd(
       'auth: login back as kubeadmin',
-      'oc login -u kubeadmin -p kubeadmin',
+      `oc login -u kubeadmin -p ${await kubeadminPassword()}`,
       /Login successful/i
     );
     await expectCmd(
@@ -2410,7 +2427,7 @@ spec:
     await expectCmd('auth: logout', 'oc logout', /logged .* out|logged out/i);
     await expectCmd(
       'auth: login back as kubeadmin',
-      'oc login -u kubeadmin -p kubeadmin',
+      `oc login -u kubeadmin -p ${await kubeadminPassword()}`,
       /logged in|Login successful/i
     );
   } else {
@@ -2589,9 +2606,12 @@ spec:
             (condition) => `${condition.type}=${condition.status}/${condition.reason}`
           ),
         })),
-        csvs: (cluster.getByKindAndNamespace?.('ClusterServiceVersion', ns) || []).map(
-          (csv) => `${csv.metadata.name}:${csv.status?.phase}`
-        ),
+        // #46: an AllNamespaces operator's CSV is copied into every namespace
+        // (status.reason `Copied`); a copy is not an install in this namespace,
+        // so it must not make an unresolvable namespace look resolved.
+        csvs: (cluster.getByKindAndNamespace?.('ClusterServiceVersion', ns) || [])
+          .filter((csv) => String(csv.status?.reason || '') !== 'Copied')
+          .map((csv) => `${csv.metadata.name}:${csv.status?.phase}`),
         installPlans: (cluster.getByKindAndNamespace?.('InstallPlan', ns) || []).map(
           (plan) => plan.metadata.name
         ),
@@ -3238,7 +3258,7 @@ await runSection('campaign', async () => {
 
   await expectCmd(
     'campaign L1: oc login',
-    'oc login -u kubeadmin -p kubeadmin',
+    `oc login -u kubeadmin -p ${await kubeadminPassword()}`,
     /logged in|Login successful|kubeadmin/i
   );
   await expectCmd(
@@ -3965,8 +3985,9 @@ await runSection('followup', async () => {
     /Login successful|logged in/i,
     { wait: 300 }
   );
-  await evaluate(() =>
-    window.game.app.commandBar.executeCommand('oc login -u kubeadmin -p kubeadmin')
+  await evaluate(
+    (password) => window.game.app.commandBar.executeCommand(`oc login -u kubeadmin -p ${password}`),
+    await kubeadminPassword()
   );
   await expectCmd(
     'followup: oc extract secret to virtual FS',
@@ -3997,8 +4018,9 @@ await runSection('followup', async () => {
     'oc login -u rotate-user -p NewPassw0rd!',
     /Login successful|logged in/i
   );
-  await evaluate(() =>
-    window.game.app.commandBar.executeCommand('oc login -u kubeadmin -p kubeadmin')
+  await evaluate(
+    (password) => window.game.app.commandBar.executeCommand(`oc login -u kubeadmin -p ${password}`),
+    await kubeadminPassword()
   );
 
   // project.config singleton + new project inheriting the configured template.
@@ -5028,8 +5050,8 @@ await runSection('qa-incidents', async () => {
 
   step = await runCmd(`oc debug node/${brokenName}`, 250);
   assert(
-    !step.error && step.message.includes(`(node/${brokenName}) $`),
-    'qa-incidents: oc debug node/<n> opens a debug shell',
+    !step.error && step.message.includes('sh-5.1#'),
+    'qa-incidents: oc debug node/<n> opens the real sh-5.1# debug shell (#49-3)',
     step.message
   );
   step = await runCmd('systemctl status kubelet', 150);
@@ -6104,20 +6126,26 @@ await runSection('qa-cli', async () => {
     'qa-cli #36: BuildConfig FROM column is the short builder tag',
     out.message
   );
-  await expectCmd('qa-cli #36: start the build', 'oc start-build webapp-build', /started/);
-  await advanceSimulation(40);
+  const qaBuildStart = await expectCmd(
+    'qa-cli #36: start the build',
+    'oc start-build webapp-build',
+    /started/
+  );
+  const qaBuildName = (qaBuildStart.message.match(/(webapp-build-\d+) started/) || [])[1] || '';
+  assert(Boolean(qaBuildName), 'qa-cli #36: start-build reports the started build name');
+  await advanceSimulation(60);
   out = await runCmd('oc get builds');
   const buildLine =
     String(out.message)
       .split('\n')
-      .find((line) => line.startsWith('webapp-build-1')) || '';
+      .find((line) => line.startsWith(qaBuildName)) || '';
   assert(/Complete/.test(buildLine), 'qa-cli #36: build reaches Complete', buildLine);
   assert(
     !/<none>/.test(buildLine) && /nodejs:20-ubi9\s/.test(buildLine) && !/~/.test(buildLine),
     'qa-cli #36: build STARTED + FROM are real',
     buildLine
   );
-  out = await runCmd('oc describe build webapp-build-1');
+  out = await runCmd(`oc describe build ${qaBuildName}`);
   assert(
     /Build Config:\s+BuildConfig\/webapp-build/.test(out.message) &&
       /Image:\s+image-registry\.openshift-image-registry\.svc:5000\//.test(out.message),
@@ -7451,8 +7479,12 @@ await runSection('qa-openshift', async () => {
   // ── Login: kubeadmin password validation + real User/Identity semantics ──
   const kubeadminSecret = await findResource('Secret', 'kubeadmin', 'kube-system');
   assert(
-    Boolean(kubeadminSecret?.spec?.data?.kubeadmin),
-    'openshift: kube-system/kubeadmin Secret seeds the kubeadmin password'
+    /^\$2a\$10\$\S{53}$/.test(
+      kubeadminSecret?.spec?.data?.kubeadmin
+        ? Buffer.from(String(kubeadminSecret.spec.data.kubeadmin), 'base64').toString('utf8')
+        : ''
+    ) && String(kubeadminSecret?.spec?.data?.kubeadmin || '') !== '',
+    'openshift: kube-system/kubeadmin Secret seeds only the bcrypt hash, not the password'
   );
   // #42-4: real oc prompts for the kubeadmin password instead of logging in
   // silently; the next terminal line is the (un-echoed) password.
@@ -7462,7 +7494,7 @@ await runSection('qa-openshift', async () => {
     'openshift: oc login -u kubeadmin prompts for the password (#42-4)',
     result.message.slice(0, 160)
   );
-  result = await runCmd('kubeadmin');
+  result = await runCmd(await kubeadminPassword());
   assert(
     !result.error && /Login successful/.test(result.message),
     'openshift: typing the kubeadmin password at the prompt logs in (#42-4)',
@@ -7474,7 +7506,7 @@ await runSection('qa-openshift', async () => {
     'openshift: an explicit wrong kubeadmin password is rejected',
     result.message.slice(0, 200)
   );
-  result = await runCmd('oc login -u kubeadmin -p kubeadmin');
+  result = await runCmd(`oc login -u kubeadmin -p ${await kubeadminPassword()}`);
   assert(
     !result.error && /Login successful/.test(result.message),
     'openshift: the seeded kubeadmin password is accepted',
@@ -7529,6 +7561,10 @@ await runSection('qa-openshift', async () => {
   // ── start-build --follow streams logs and only prints Success at the end ──
   await runCmd('oc new-build nodejs:20 --name=webapp');
   result = await runCmd('oc start-build webapp --follow');
+  const followBuildName =
+    (result.message.match(/(webapp-\d+) started/) || [])[1] ||
+    (result.message.match(/Build (webapp-\d+)/) || [])[1] ||
+    'webapp-1';
   const followText = await terminalText();
   const followStart = followText.lastIndexOf('$ oc start-build webapp --follow');
   const followedSoFar = followStart >= 0 ? followText.slice(followStart) : followText;
@@ -7542,7 +7578,7 @@ await runSection('qa-openshift', async () => {
   const followedText = await terminalText();
   assert(
     /STEP 5\/5/.test(followedText) &&
-      /Build webapp-1 completed successfully/.test(followedText) &&
+      new RegExp(`Build ${followBuildName} completed successfully`).test(followedText) &&
       /--> Success/.test(followedText.slice(followedText.lastIndexOf('$ oc start-build'))),
     'openshift: start-build --follow prints --> Success only once the build completes',
     followedText.slice(-500)
@@ -7660,7 +7696,7 @@ await runSection('qa-openshift', async () => {
     'openshift: first login creates the Identity',
     JSON.stringify(aliceIdentity)
   );
-  await runCmd('oc login -u kubeadmin -p kubeadmin');
+  await runCmd(`oc login -u kubeadmin -p ${await kubeadminPassword()}`);
   result = await runCmd('oc get rolebinding -n openshift-qa -o name');
   assert(!result.error, 'openshift: session restored to kubeadmin', result.message);
 
@@ -7706,7 +7742,7 @@ await runSection('qa-openshift', async () => {
   );
   // Rotating the htpasswd Secret triggers the same rollout wait that lab 11
   // teaches (the authentication operator watches the referenced Secret).
-  await runCmd('oc login -u kubeadmin -p kubeadmin');
+  await runCmd(`oc login -u kubeadmin -p ${await kubeadminPassword()}`);
   await runCmd('htpasswd -B -b htpasswd carol carolpass2');
   await runCmd('oc set data secret/htpass-secret --from-file=htpasswd -n openshift-config');
   result = await runCmd('oc login -u carol -p carolpass2');
@@ -8008,7 +8044,7 @@ spec:
     objectiveByLabel(results, /Log in as alice/i)?.completed === true,
     'qa-grading #30c: login objective ticks on a successful login'
   );
-  command = await runCmd('oc login -u kubeadmin -p kubeadmin', 320);
+  command = await runCmd(`oc login -u kubeadmin -p ${await kubeadminPassword()}`, 320);
   assert(!command.error, 'qa-grading #30c: log back in as kubeadmin', command.message);
   results = await objectiveResults();
   assert(
@@ -8050,7 +8086,7 @@ spec:
   command = await runCmd('oc login -u alice -p openshift', 500);
   assert(!command.error, 'qa-grading #30e: L13 log in as alice', command.message);
   await runCmd('oc whoami', 120);
-  command = await runCmd('oc login -u kubeadmin -p kubeadmin', 320);
+  command = await runCmd(`oc login -u kubeadmin -p ${await kubeadminPassword()}`, 320);
   assert(!command.error, 'qa-grading #30e: L13 switch back to kubeadmin', command.message);
   const loginEvidence = await evaluate(() => {
     const def = window.game.app.modeInstance?.currentLevelDef;
@@ -8664,7 +8700,7 @@ spec:
     'coverage: L13 alice can log in with the initial HTPasswd password',
     aliceInitialLogin.message.slice(0, 220)
   );
-  await runCmd('oc login -u kubeadmin -p kubeadmin');
+  await runCmd(`oc login -u kubeadmin -p ${await kubeadminPassword()}`);
   await runCmd('oc extract secret/htpass-secret -n openshift-config --to /tmp --confirm');
   await runCmd(`htpasswd -bB /tmp/htpasswd alice 'NewPassw0rd!'`);
   await runCmd(
@@ -8701,7 +8737,7 @@ spec:
     'coverage: L13 password objective completes after rotation + login with the new password'
   );
 
-  await runCmd('oc login -u kubeadmin -p kubeadmin');
+  await runCmd(`oc login -u kubeadmin -p ${await kubeadminPassword()}`);
   await expectCmd('coverage: oc delete user bob', 'oc delete user bob', /deleted/i);
   const afterUserDelete = await evaluate(() =>
     (window.game.app.modeInstance.objectiveProgress || [])
@@ -8875,6 +8911,36 @@ spec:
     'oc apply -f examples/subscription-manual-pinned.yaml',
     /created|configured/i
   );
+  // #46/#48-1: the shipped example pins a valid NON-head channel entry by its
+  // CSV name; the CSV keeps its historical `cert-manager-operator.vX` name even
+  // though the catalog package is `openshift-cert-manager-operator`.
+  const pinnedSubscription = await evaluate(() => {
+    const sub = window.game.cluster.getByName(
+      'Subscription',
+      'openshift-cert-manager-operator',
+      'openshift-operators'
+    );
+    const manifest = window.game.cluster.getByName(
+      'PackageManifest',
+      'openshift-cert-manager-operator',
+      ''
+    );
+    const channel = (manifest?.status?.channels || []).find((entry) => entry.name === 'stable-v1');
+    return {
+      channel: sub?.spec?.channel || null,
+      startingCSV: sub?.spec?.startingCSV || null,
+      approval: sub?.spec?.installPlanApproval || null,
+      channelHead: channel?.currentCSV || null,
+    };
+  });
+  assert(
+    pinnedSubscription.channel === 'stable-v1' &&
+      /^cert-manager-operator\.v\d+\.\d+\.\d+$/.test(pinnedSubscription.startingCSV || '') &&
+      pinnedSubscription.startingCSV !== pinnedSubscription.channelHead &&
+      pinnedSubscription.approval === 'Manual',
+    'coverage: L18 example pins a valid non-head stable-v1 channel entry',
+    JSON.stringify(pinnedSubscription)
+  );
   await advanceSimulation(3);
   const pinnedPlanName = await evaluate(() => {
     const plan = (window.game.cluster.getByKind('InstallPlan') || []).find(
@@ -8911,9 +8977,9 @@ spec:
   );
   assert(
     operatorCsvs.some(
-      (csv) => csv.name === 'cert-manager-operator.v1.15.0' && csv.phase === 'Succeeded'
-    ),
-    'coverage: L18 startingCSV pins the installed CSV to v1.15.0 and it reaches Succeeded',
+      (csv) => csv.name === pinnedSubscription.startingCSV && csv.phase === 'Succeeded'
+    ) && !operatorCsvs.some((csv) => csv.name === pinnedSubscription.channelHead),
+    'coverage: L18 installs the pinned startingCSV instead of the channel head and it reaches Succeeded',
     JSON.stringify(operatorCsvs)
   );
   assert(
@@ -9764,6 +9830,21 @@ await runSection('qa-issue42', async () => {
     '#42: the new-build ImageStream exists before the first build',
     result.message.slice(0, 300)
   );
+  // A real BuildConfig carries a ConfigChange trigger, so `oc new-build`
+  // auto-starts <name>-1 (#49-2). Let that build finish before exercising the
+  // serial start-build queue so the queue semantics are deterministic whether
+  // or not the trigger is present (the queued-build assertions below only care
+  // about builds started explicitly by start-build).
+  for (let elapsed = 0; elapsed < 60; elapsed += 2) {
+    const autoBuilds = await buildStates();
+    if (
+      autoBuilds.length > 0 &&
+      autoBuilds.every((build) => ['Complete', 'Failed', 'Cancelled'].includes(build.phase))
+    ) {
+      break;
+    }
+    await advanceController(2);
+  }
 
   // ── #42-1 start-build serial runPolicy queue ────────────────────────────
   const firstStart = await runCmd('oc start-build qa-sample', 0);
@@ -9912,12 +9993,12 @@ await runSection('qa-issue42', async () => {
   );
 
   // ── #42-4 kubeadmin password discoverable like a real installer ─────────
-  const kubeadminPassword = await evaluate(() =>
-    import('/js/engine/ClusterState.js').then((module) => module.KUBEADMIN_PASSWORD)
-  );
+  // #45: the cluster Secret holds only a bcrypt hash; the plain-text password
+  // lives in the installer auth/ directory (~/auth/kubeadmin-password).
+  const installerPassword = await kubeadminPassword();
   result = await runCmd('cat ~/auth/kubeadmin-password');
   assert(
-    !result.error && result.message.trim() === kubeadminPassword,
+    !result.error && result.message.trim() === installerPassword,
     '#42: cat ~/auth/kubeadmin-password reveals the installer password',
     JSON.stringify(result.message)
   );
@@ -9929,8 +10010,9 @@ await runSection('qa-issue42', async () => {
   );
   result = await runCmd('oc extract secret/kubeadmin -n kube-system --to=-');
   assert(
-    result.message.includes(kubeadminPassword),
-    '#42: oc extract secret/kubeadmin remains the documented discovery path',
+    /^\$2a\$10\$\S{53}$/m.test(result.message.trim()) &&
+      !result.message.includes(installerPassword),
+    '#42: oc extract secret/kubeadmin prints the bcrypt hash, never the plain password',
     result.message.slice(0, 200)
   );
 
@@ -9976,13 +10058,13 @@ await runSection('qa-issue42', async () => {
     '#42: normal command parsing resumes after the prompt is cancelled'
   );
   await runCmd('oc login -u kubeadmin');
-  result = await runCmd('kubeadmin');
+  result = await runCmd(await kubeadminPassword());
   assert(
     !result.error && /Login successful\./.test(result.message),
     '#42: typing the discovered kubeadmin password logs in',
     result.message.slice(0, 200)
   );
-  result = await runCmd('oc login -u kubeadmin -p kubeadmin');
+  result = await runCmd(`oc login -u kubeadmin -p ${await kubeadminPassword()}`);
   assert(
     !result.error && /Login successful\./.test(result.message),
     '#42: the explicit -p login flow is unchanged',
@@ -10450,12 +10532,18 @@ await runSection('qa-issue43', async () => {
     result.message.slice(0, 700)
   );
   assert(
-    /NoNetworkPlugin/.test(result.message) && /network plugin is not ready/.test(result.message),
-    '#43: NetworkUnavailable renders the NoNetworkPlugin reason/message',
+    /RouteCreated/.test(result.message) &&
+      /ovn-kube cleared kubelet-set NoRouteCreated/.test(result.message) &&
+      !/network plugin is not ready/.test(result.message),
+    '#43: NetworkUnavailable renders the real OVN-Kubernetes route reason/message (#49)',
     result.message.slice(0, 1200)
   );
   result = await runCmd(`oc debug node/${nodes[0]}`);
-  assert(/\(node\/[a-z0-9-]+\) \$/.test(result.message), '#43: oc debug node opens a node session');
+  assert(
+    result.message.includes('sh-5.1#'),
+    '#43: oc debug node opens the real sh-5.1# node session (#49-3)',
+    result.message.slice(-200)
+  );
   await runCmd('chroot /host');
   const hostPrompt = await evaluate(() => window.game.app.commandBar._debugPrompt());
   assert(
@@ -10697,6 +10785,1197 @@ await runSection('qa-issue43', async () => {
     /node\.kubernetes\.io\/unreachable:NoSchedule/.test(result.message),
     '#43: describe node renders the NotReady lifecycle taints',
     result.message.slice(-800)
+  );
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// QA ROUND 1.4.0 — issues #44-#49: global flags before the oc verb, kubeadmin
+// bcrypt Secret + installer-side password, OLM channel/startingCSV resolution
+// and real catalog package naming/columns/copied CSVs, the Lab 13 network
+// policy hint, state-graded L18 pin + cross-level readiness evidence, virtual
+// kubeadmin/admin users, and the collected CLI fidelity differences.
+// ═══════════════════════════════════════════════════════════════════════════
+await runSection('qa-issue44-49', async () => {
+  // Real Red Hat catalog contract (#46): the PACKAGE is
+  // `openshift-cert-manager-operator` with channel `stable-v1`, while the CSVs
+  // keep the historical `cert-manager-operator.vX.Y.Z` names.
+  const olmPackage = 'openshift-cert-manager-operator';
+  const olmChannel = 'stable-v1';
+  const olmHeadCsv = 'cert-manager-operator.v1.17.0';
+  const olmPinCsv = 'cert-manager-operator.v1.16.0';
+  const installerPassword = await kubeadminPassword();
+
+  /** Write a virtual manifest file, then apply it like the player-facing flow. */
+  const applyManifest = async (name, yaml) => {
+    await evaluate(({ file, content }) => window.game.manifestEngine.writeFile(file, content), {
+      file: `qa/${name}.yaml`,
+      content: yaml,
+    });
+    return runCmd(`oc apply -f qa/${name}.yaml`, 300);
+  };
+  const operatorGroupYaml = (namespace) =>
+    [
+      'apiVersion: operators.coreos.com/v1',
+      'kind: OperatorGroup',
+      'metadata:',
+      `  name: ${namespace}-og`,
+      `  namespace: ${namespace}`,
+      'spec:',
+      '  targetNamespaces:',
+      `    - ${namespace}`,
+    ].join('\n');
+  const subscriptionYaml = ({ name, namespace, packageName, channel, startingCSV, approval }) =>
+    [
+      'apiVersion: operators.coreos.com/v1alpha1',
+      'kind: Subscription',
+      'metadata:',
+      `  name: ${name}`,
+      `  namespace: ${namespace}`,
+      'spec:',
+      `  channel: ${channel}`,
+      `  name: ${packageName}`,
+      '  source: redhat-operators',
+      '  sourceNamespace: openshift-marketplace',
+      ...(approval ? [`  installPlanApproval: ${approval}`] : []),
+      ...(startingCSV ? [`  startingCSV: ${startingCSV}`] : []),
+    ].join('\n');
+  const subscriptionState = (name, namespace) =>
+    evaluate(
+      ({ subName, ns }) => {
+        const sub = window.game.cluster.getByName('Subscription', subName, ns);
+        if (!sub) return null;
+        return {
+          phase: sub.status?.phase || null,
+          installedCSV: sub.status?.installedCSV || null,
+          currentCSV: sub.status?.currentCSV || null,
+          startingCSV: sub.spec?.startingCSV || null,
+          conditions: (sub.status?.conditions || []).map((condition) => ({
+            type: condition.type,
+            status: condition.status,
+            reason: condition.reason,
+            message: condition.message || '',
+          })),
+        };
+      },
+      { subName: name, ns: namespace }
+    );
+  const conditionOf = (state, type) =>
+    (state?.conditions || []).find((condition) => condition.type === type) || null;
+  /** The L18 "pin the install" objective entry from the live objective tracker. */
+  const pinObjective = () =>
+    evaluate(() => {
+      const mode = window.game.app.modeInstance;
+      const entry = (mode?.objectiveProgress || []).find(
+        (objective) => objective.type === 'subscription'
+      );
+      return entry ? { label: entry.label || '', completed: entry.completed === true } : null;
+    });
+
+  // ── #44: global flags before the oc verb must work (P1) ────────────────
+  assert(await bootSandbox(), '#44: sandbox boots for the leading-global-flag checks');
+  await runCmd('oc new-project qa2');
+  await runCmd('oc create deployment web --image=quay.io/example/webapp:latest -n qa2');
+  await advanceSimulation(2);
+  let result = await runCmd('oc -n qa2 get pods');
+  assert(
+    !result.error &&
+      !/internal command failure/i.test(result.message) &&
+      /^NAME\s/m.test(result.message),
+    '#44: `oc -n qa2 get pods` succeeds with the global flag before the verb',
+    result.message.slice(0, 240)
+  );
+  result = await runCmd('oc --namespace=qa2 get pods');
+  assert(
+    !result.error &&
+      !/internal command failure/i.test(result.message) &&
+      /^NAME\s/m.test(result.message),
+    '#44: `oc --namespace=qa2 get pods` succeeds with the global flag before the verb',
+    result.message.slice(0, 240)
+  );
+  result = await runCmd(`oc -n qa2 patch deploy web -p '{"spec":{"replicas":2}}'`);
+  assert(
+    !result.error && /deployment\.apps\/web patched/.test(result.message),
+    '#44: `oc -n qa2 patch deploy web -p …` applies the patch',
+    result.message.slice(0, 240)
+  );
+  await advanceSimulation(4);
+  result = await runCmd('oc -n qa2 get deploy web');
+  assert(
+    /^web\s+2\/2/m.test(result.message),
+    '#44: the leading-flag patch really applies (Deployment shows 2/2 replicas)',
+    result.message
+  );
+  result = await runCmd(
+    'oc -n openshift-monitoring exec alertmanager-main-0 -- amtool alert --alertmanager.url=http://localhost:9093'
+  );
+  assert(
+    !result.error &&
+      !/internal command failure/i.test(result.message) &&
+      /exit code 0/.test(result.message),
+    '#44: `oc -n <ns> exec … -- amtool …` runs the container command',
+    result.message.slice(0, 320)
+  );
+  // Acceptance: the trailing `-n` placement keeps working.
+  result = await runCmd('oc get pods -n qa2');
+  assert(
+    !result.error && /^NAME\s/m.test(result.message),
+    '#44: the trailing `-n` form still works',
+    result.message.slice(0, 240)
+  );
+
+  // ── #45: kubeadmin Secret holds a bcrypt hash; installer file has the
+  //        plain-text password; login validates against the installer copy ──
+  assert(
+    /^[a-z0-9]{5}(-[a-z0-9]{5}){3}$/i.test(installerPassword),
+    '#45: KUBEADMIN_PASSWORD uses the real xxxxx-xxxxx-xxxxx-xxxxx installer format',
+    installerPassword
+  );
+  result = await runCmd('cat ~/auth/kubeadmin-password');
+  assert(
+    !result.error && result.message.trim() === installerPassword,
+    '#45: ~/auth/kubeadmin-password holds the installer-side kubeadmin password',
+    JSON.stringify(result.message)
+  );
+  result = await runCmd('ls ~/auth');
+  assert(
+    result.message.split('\n').includes('kubeadmin-password'),
+    '#45: ls ~/auth lists kubeadmin-password like a real install directory',
+    result.message
+  );
+  result = await runCmd('oc extract secret/kubeadmin -n kube-system --to=-');
+  const extractedHash = result.message
+    .split('\n')
+    .map((line) => line.trim())
+    .find((line) => /^\$2a\$10\$/.test(line));
+  assert(
+    !result.error &&
+      /^\$2a\$10\$\S{53}$/.test(extractedHash || '') &&
+      !result.message.includes(installerPassword),
+    '#45: oc extract secret/kubeadmin prints the bcrypt hash, never the plain password',
+    result.message.slice(0, 220)
+  );
+  result = await runCmd(`oc login -u kubeadmin -p ${installerPassword}`, 300);
+  assert(
+    !result.error && /Login successful/.test(result.message),
+    '#45: oc login -u kubeadmin -p <installer password> succeeds',
+    result.message.slice(0, 220)
+  );
+  result = await runCmd('oc login -u kubeadmin -p wrong-password');
+  assert(
+    result.error &&
+      /Login failed \(401 Unauthorized\)\nVerify you have provided the correct credentials\./.test(
+        result.message
+      ),
+    '#45: a wrong kubeadmin password is rejected with the real 401 wording',
+    result.message.slice(0, 220)
+  );
+  result = await runCmd('oc login -u kubeadmin');
+  assert(
+    /Password: $/.test(result.message) && /Authentication required for/.test(result.message),
+    '#45: oc login -u kubeadmin still prompts for the installer password',
+    result.message.slice(0, 220)
+  );
+  result = await runCmd(installerPassword, 300);
+  assert(
+    !result.error && /Login successful/.test(result.message),
+    '#45: typing the installer password at the Password: prompt logs in',
+    result.message.slice(0, 220)
+  );
+  // Hints and README must teach the real discovery + removal flow, never that
+  // the in-cluster Secret recovers the password.
+  const passwordDocs = await evaluate(() =>
+    import('/js/data/CampaignLevels.js').then((module) => ({
+      focused: module.CAMPAIGN_LEVELS.filter((level) => level.id === 1 || level.id === 13).map(
+        (level) => ({ id: level.id, hints: level.hints || [] })
+      ),
+      allHints: module.CAMPAIGN_LEVELS.flatMap((level) => level.hints || []),
+    }))
+  );
+  assert(
+    passwordDocs.focused.every((level) =>
+      level.hints.some((hint) => /auth\/kubeadmin-password/.test(hint))
+    ),
+    '#45: L1 and L13 hints point at ~/auth/kubeadmin-password',
+    JSON.stringify(passwordDocs.focused.map((level) => level.id))
+  );
+  const kubeadminSecretHints = passwordDocs.allHints.filter((hint) =>
+    /extract secret\/kubeadmin/.test(hint)
+  );
+  assert(
+    kubeadminSecretHints.length > 0 &&
+      kubeadminSecretHints.every((hint) => /bcrypt|hash/i.test(hint)),
+    '#45: hints that mention the kubeadmin Secret explain it only holds a bcrypt hash',
+    JSON.stringify(kubeadminSecretHints.slice(0, 2))
+  );
+  assert(
+    passwordDocs.allHints.some((hint) => /delete secret kubeadmin -n kube-system/.test(hint)),
+    '#45: hints teach deleting the kubeadmin Secret as the removal path'
+  );
+  const readmeSource = await readFile(join(ROOT, 'README.md'), 'utf8');
+  assert(
+    /auth\/kubeadmin-password/.test(readmeSource) &&
+      /bcrypt/i.test(readmeSource) &&
+      /delete secret kubeadmin -n kube-system/.test(readmeSource),
+    '#45: README documents the installer password and the Secret-removal path'
+  );
+
+  // ── #48-3: kubeadmin/admin are virtual users, not User resources ───────
+  result = await runCmd('oc get users');
+  assert(
+    !result.error && !/kubeadmin/.test(result.message) && !/^admin\s/m.test(result.message),
+    '#48: oc get users does not list kubeadmin or admin as User objects',
+    result.message.slice(0, 240)
+  );
+  result = await runCmd('oc create user qa-bob --full-name="QA Bob"');
+  assert(
+    !result.error && /user\.user\.openshift\.io\/qa-bob created/.test(result.message),
+    '#48: oc create user still creates a real User object',
+    result.message.slice(0, 200)
+  );
+  result = await runCmd('oc get users');
+  assert(
+    /^qa-bob\s/m.test(result.message) &&
+      !/kubeadmin/.test(result.message) &&
+      !/^admin\s/m.test(result.message),
+    '#48: oc get users lists only real User objects',
+    result.message
+  );
+  await runCmd('oc delete user qa-bob');
+  result = await runCmd('oc delete user kubeadmin');
+  assert(
+    result.error &&
+      /Error from server \(NotFound\): users\.user\.openshift\.io "kubeadmin" not found/.test(
+        result.message
+      ),
+    '#48: oc delete user kubeadmin is NotFound like real oc',
+    result.message
+  );
+  result = await runCmd('oc delete user admin');
+  assert(
+    result.error &&
+      /Error from server \(NotFound\): users\.user\.openshift\.io "admin" not found/.test(
+        result.message
+      ),
+    '#48: oc delete user admin is NotFound too',
+    result.message
+  );
+  result = await runCmd('oc auth can-i get pods --as=kubeadmin');
+  assert(
+    !result.error && /\byes\b/i.test(result.message),
+    '#48: the kubeadmin-cluster-admin ClusterRoleBinding still grants cluster-admin',
+    result.message
+  );
+
+  // ── #49: collected CLI output fidelity ────────────────────────────────
+  // Route admission event must echo the Admitted condition wording (#49-1).
+  await runCmd('oc new-project qa49-route');
+  await runCmd('oc apply -f manifests/deployment.yaml -n qa49-route');
+  await runCmd('oc apply -f manifests/service.yaml -n qa49-route');
+  await runCmd('oc apply -f manifests/route.yaml -n qa49-route');
+  await advanceSimulation(3);
+  result = await runCmd('oc describe route webapp -n qa49-route');
+  const describedRouteEvent =
+    result.message.split('\n').find((line) => /Route webapp not admitted/.test(line)) || '';
+  assert(
+    /Route webapp not admitted: spec\.tls\.externalCertificate:/.test(describedRouteEvent) &&
+      /ExternalCertificateValidationFailed/.test(describedRouteEvent) &&
+      !/no endpoints available/.test(describedRouteEvent),
+    '#49: describe route shows the admission event with the condition reason/message',
+    describedRouteEvent.slice(0, 360)
+  );
+  result = await runCmd('oc get events -n qa49-route');
+  const routeEventRow =
+    result.message
+      .split('\n')
+      .find((line) => /route\/webapp/.test(line) && /not admitted/.test(line)) || '';
+  assert(
+    /ExternalCertificateValidationFailed/.test(routeEventRow) &&
+      /Route webapp not admitted: spec\.tls\.externalCertificate:/.test(routeEventRow) &&
+      !/no endpoints available/.test(routeEventRow),
+    '#49: get events shows the Route admission failure with the condition reason/message',
+    routeEventRow.slice(0, 360)
+  );
+
+  // new-build ConfigChange trigger starts <name>-1 without oc start-build (#49-2).
+  await runCmd('oc new-project qa49-build');
+  result = await runCmd('oc new-build nodejs:20 --name=qa-build -n qa49-build');
+  assert(
+    !result.error && /buildconfig\.build\.openshift\.io "qa-build" created/.test(result.message),
+    '#49: oc new-build creates the BuildConfig',
+    result.message.slice(0, 300)
+  );
+  result = await runCmd('oc get builds -n qa49-build');
+  assert(
+    /qa-build-1/.test(result.message),
+    '#49: the ConfigChange trigger creates qa-build-1 immediately (no oc start-build)',
+    result.message.slice(0, 300)
+  );
+  const immediateBuildPhase = await evaluate(() => {
+    const build = window.game.cluster.getByName('Build', 'qa-build-1', 'qa49-build');
+    return build ? build.status?.phase || null : null;
+  });
+  assert(
+    immediateBuildPhase === 'New',
+    '#49: the ConfigChange-triggered qa-build-1 exists immediately in phase New',
+    JSON.stringify(immediateBuildPhase)
+  );
+  let triggeredBuild = null;
+  for (let elapsed = 0; elapsed < 40; elapsed += 2) {
+    await advanceSimulation(2);
+    triggeredBuild = await evaluate(() => {
+      const build = window.game.cluster.getByName('Build', 'qa-build-1', 'qa49-build');
+      return build ? { phase: build.status?.phase || null } : null;
+    });
+    if (triggeredBuild?.phase === 'Complete' || triggeredBuild?.phase === 'Failed') break;
+  }
+  assert(
+    triggeredBuild?.phase === 'Complete',
+    '#49: the trigger-started build really runs to Complete',
+    JSON.stringify(triggeredBuild)
+  );
+
+  // oc debug node prompts are real and non-empty (#49-3).
+  const clusterNodes = await evaluate(() =>
+    (window.game.cluster.getByKind('Node') || []).map((node) => node.metadata.name)
+  );
+  assert(clusterNodes.length > 0, '#49: the cluster has nodes for the debug checks');
+  result = await runCmd(`oc debug node/${clusterNodes[0]}`);
+  assert(
+    !result.error && /Starting pod\/.*-debug/.test(result.message),
+    '#49: oc debug node starts a debug pod',
+    result.message.slice(0, 320)
+  );
+  const nodeShellPrompt = await evaluate(() => window.game.app.commandBar._debugPrompt());
+  assert(
+    nodeShellPrompt === 'sh-5.1#',
+    '#49: oc debug node opens the real sh-5.1# node shell prompt',
+    JSON.stringify(nodeShellPrompt)
+  );
+  await runCmd('chroot /host');
+  const hostShellPrompt = await evaluate(() => window.game.app.commandBar._debugPrompt());
+  assert(
+    hostShellPrompt === 'sh-5.1#',
+    '#49: chroot /host renders the real host prompt sh-5.1#',
+    JSON.stringify(hostShellPrompt)
+  );
+  await runCmd('exit');
+  await runCmd('exit');
+
+  // Stopped kubelet: Ready Unknown/NodeStatusUnknown + self-consistent
+  // NetworkUnavailable (#49-4).
+  const stoppedKubeletNode = clusterNodes[1] || clusterNodes[0];
+  const kubeletIncidentId = await evaluate((nodeName) => {
+    const engine = window.game.app.incidentEngine;
+    const definition = engine._defsById.get('node-not-ready');
+    return engine.spawnIncident(definition, nodeName);
+  }, stoppedKubeletNode);
+  assert(
+    Boolean(kubeletIncidentId),
+    '#49: the NodeNotReady incident spawns for the stopped-kubelet check'
+  );
+  await advanceSimulation(1);
+  // The real game loop runs IncidentEngine.tick right after the simulation
+  // tick, so drive one incident tick to observe the node-controller view.
+  await evaluate(() => window.game.app.incidentEngine.tick(0.05));
+  const kubeletNodeState = await evaluate((nodeName) => {
+    const node = window.game.cluster
+      .getByKind('Node')
+      .find((entry) => entry.metadata.name === nodeName);
+    const conditions = Object.fromEntries(
+      (node?.status?.conditions || []).map((condition) => [
+        condition.type,
+        { status: condition.status, reason: condition.reason, message: condition.message },
+      ])
+    );
+    return { phase: node?.status?.phase || null, conditions };
+  }, stoppedKubeletNode);
+  const stoppedKubeletMessage = 'Kubelet stopped posting node status.';
+  for (const conditionType of ['Ready', 'MemoryPressure', 'DiskPressure', 'PIDPressure']) {
+    const condition = kubeletNodeState.conditions?.[conditionType] || null;
+    assert(
+      condition?.status === 'Unknown' &&
+        condition?.reason === 'NodeStatusUnknown' &&
+        condition?.message === stoppedKubeletMessage,
+      `#49: a stopped kubelet reports ${conditionType} Unknown/NodeStatusUnknown`,
+      JSON.stringify(condition)
+    );
+  }
+  const networkCondition = kubeletNodeState.conditions?.NetworkUnavailable || null;
+  assert(
+    networkCondition?.status === 'False' &&
+      networkCondition?.reason === 'RouteCreated' &&
+      networkCondition?.message === 'ovn-kube cleared kubelet-set NoRouteCreated',
+    '#49: NetworkUnavailable reports the real OVN-Kubernetes route value instead of contradicting itself',
+    JSON.stringify(networkCondition)
+  );
+  result = await runCmd(`oc describe node ${stoppedKubeletNode}`);
+  assert(
+    /NodeStatusUnknown/.test(result.message) &&
+      /Kubelet stopped posting node status/.test(result.message) &&
+      /ovn-kube cleared kubelet-set NoRouteCreated/.test(result.message),
+    '#49: describe node renders the stopped-kubelet conditions',
+    result.message.slice(-900)
+  );
+
+  // The workstation models a small connected internet: example.com resolves
+  // and serves the real Example Domain page, other hosts keep real curl DNS
+  // failures, and silent curl failures never print the shell's generic
+  // "error: command failed" fallback (#49-5).
+  result = await runCmd('curl https://example.com');
+  assert(
+    /<!doctype html>/i.test(result.message) &&
+      /<title>Example Domain<\/title>/.test(result.message) &&
+      !/error: command failed/i.test(result.message),
+    '#49: workstation curl https://example.com downloads the Example Domain page',
+    result.message.slice(0, 320)
+  );
+  result = await runCmd('curl -s https://example.com');
+  assert(
+    /<!doctype html>/i.test(result.message) &&
+      /<title>Example Domain<\/title>/.test(result.message) &&
+      !/error: command failed/i.test(result.message),
+    '#49: curl -s https://example.com prints the page body only',
+    result.message.slice(0, 320)
+  );
+  result = await runCmd('curl -s no-such-host.example.com');
+  assert(
+    result.message.trim() === '' && !/error: command failed/i.test(result.message),
+    '#49: a silent curl failure prints nothing (no "error: command failed" fallback)',
+    JSON.stringify(result.message.slice(0, 240))
+  );
+
+  // new-app --name=database names the container database (#49-6).
+  await runCmd('oc new-project qa49-app');
+  result = await runCmd(
+    'oc new-app --image=registry.redhat.io/rhel9/mysql-80 --name=database -n qa49-app',
+    400
+  );
+  assert(
+    !result.error && /deployment\.apps "database" created/.test(result.message),
+    '#49: oc new-app --name=database creates the database Deployment',
+    result.message.slice(0, 320)
+  );
+  await advanceSimulation(6);
+  const databaseWorkload = await evaluate(() => {
+    const deployment = window.game.cluster.getByName('Deployment', 'database', 'qa49-app');
+    const pods = window.game.cluster.getByKindAndNamespace('Pod', 'qa49-app') || [];
+    return {
+      deploymentContainers: (deployment?.spec?.template?.spec?.containers || []).map(
+        (container) => container.name
+      ),
+      podContainers: pods.map((pod) =>
+        (pod.spec?.containers || []).map((container) => container.name)
+      ),
+    };
+  });
+  assert(
+    databaseWorkload.deploymentContainers.join() === 'database' &&
+      databaseWorkload.podContainers.length > 0 &&
+      databaseWorkload.podContainers.every((names) => names.join() === 'database'),
+    '#49: oc new-app --image … --name=database names the container database',
+    JSON.stringify(databaseWorkload)
+  );
+  result = await runCmd(
+    "oc get deploy database -n qa49-app -o jsonpath='{.spec.template.spec.containers[0].name}'"
+  );
+  assert(
+    !result.error && result.message.trim() === 'database',
+    '#49: jsonpath reports the database container name on the Deployment',
+    JSON.stringify(result.message)
+  );
+
+  // ScalingReplicaSet events carry the full ReplicaSet name (#49-7).
+  await runCmd('oc new-project qa49-env');
+  await runCmd('oc create deployment hasenv --image=quay.io/example/webapp:latest -n qa49-env');
+  await runCmd('oc create deployment noenv --image=quay.io/example/webapp:latest -n qa49-env');
+  await advanceSimulation(3);
+  await runCmd('oc set env deploy/hasenv FOO=bar -n qa49-env');
+  result = await runCmd('oc set env deploy --all --list -n qa49-env');
+  assert(
+    !/<none>/.test(result.message) &&
+      /# deployment\.apps\/noenv, container \w+/.test(result.message) &&
+      /# deployment\.apps\/hasenv, container \w+/.test(result.message) &&
+      /FOO=bar/.test(result.message),
+    '#49: set env --all --list prints only the header for env-less containers',
+    result.message
+  );
+  await runCmd('oc scale deploy/noenv --replicas=2 -n qa49-env');
+  await advanceSimulation(4);
+  const scaledReplicaSet = await evaluate(() => {
+    const replicaSet = (window.game.cluster.getByKindAndNamespace('ReplicaSet', 'qa49-env') || [])
+      .filter((entry) => /^noenv-/.test(entry.metadata.name))
+      .sort((left, right) =>
+        String(left.metadata.creationTimestamp).localeCompare(
+          String(right.metadata.creationTimestamp)
+        )
+      )
+      .pop();
+    return replicaSet?.metadata?.name || null;
+  });
+  result = await runCmd('oc get events -n qa49-env');
+  const scalingEventRow =
+    result.message
+      .split('\n')
+      .find(
+        (line) =>
+          /ScalingReplicaSet/.test(line) && /deployment\/noenv/.test(line) && /to 2/.test(line)
+      ) || '';
+  assert(
+    Boolean(scaledReplicaSet) &&
+      scalingEventRow.includes(`Scaled up replica set ${scaledReplicaSet} to 2`),
+    '#49: the ScalingReplicaSet event shows the full, untruncated ReplicaSet name',
+    scalingEventRow.slice(0, 320)
+  );
+
+  // perl -e "print 42" Job completes promptly (#49-9).
+  await runCmd('oc new-project qa49-jobs');
+  result = await runCmd('oc create job report-job --image=perl -- perl -e "print 42" -n qa49-jobs');
+  assert(
+    !result.error && /job\.batch\/report-job created/.test(result.message),
+    '#49: oc create job with a perl command is accepted',
+    result.message.slice(0, 240)
+  );
+  let jobCompleteAfter = null;
+  for (let elapsed = 1; elapsed <= 5; elapsed += 1) {
+    await advanceSimulation(1);
+    const jobState = await evaluate(() => {
+      const job = window.game.cluster.getByName('Job', 'report-job', 'qa49-jobs');
+      return job
+        ? {
+            phase: job.status?.phase || null,
+            succeeded: Number(job.status?.succeeded || 0),
+          }
+        : null;
+    });
+    if (jobState?.phase === 'Complete' || jobState?.succeeded >= 1) {
+      jobCompleteAfter = elapsed;
+      break;
+    }
+  }
+  assert(
+    jobCompleteAfter !== null,
+    '#49: the quick perl -e "print 42" Job reaches Complete within 5 simulated seconds',
+    `completeAfter=${jobCompleteAfter}s`
+  );
+  result = await runCmd('oc get job report-job -n qa49-jobs');
+  assert(
+    /report-job\s+Complete/.test(result.message),
+    '#49: oc get job reports Complete for the quick perl Job',
+    result.message
+  );
+  result = await runCmd('oc logs job/report-job -n qa49-jobs');
+  assert(
+    result.message.includes('42'),
+    '#49: the perl Job logs print 42',
+    result.message.slice(0, 240)
+  );
+
+  // describe alertmanager Labels indentation matches the other keys (#49-10).
+  result = await runCmd('oc describe alertmanager main -n openshift-monitoring');
+  const describedLines = result.message.split('\n');
+  const valueColumn = (label) => {
+    const line = describedLines.find((entry) => entry.startsWith(label));
+    const match = line ? line.match(new RegExp(`^${label}\\s*`)) : null;
+    return match ? match[0].length : -1;
+  };
+  const nameColumn = valueColumn('Name:');
+  const labelsColumn = valueColumn('Labels:');
+  const labelsStart = describedLines.findIndex((line) => line.startsWith('Labels:'));
+  const secondLabelLine = labelsStart >= 0 ? describedLines[labelsStart + 1] || '' : '';
+  assert(
+    nameColumn > 0 &&
+      labelsColumn === nameColumn &&
+      /app=alertmanager/.test(describedLines[labelsStart] || '') &&
+      secondLabelLine.startsWith(' '.repeat(nameColumn)) &&
+      /alertmanager=main/.test(secondLabelLine),
+    '#49: describe alertmanager Labels values align exactly with the other keys',
+    JSON.stringify({ nameColumn, labelsColumn, secondLabelLine })
+  );
+
+  // ── #46: OLM catalog, channel/startingCSV resolution, conditions, copies ──
+  result = await runCmd('oc get packagemanifests -n openshift-marketplace');
+  const packageManifestHeader = parseTable(result.message).header.replace(/\s+/g, ' ').trim();
+  assert(
+    packageManifestHeader === 'NAME CATALOG AGE',
+    '#46: oc get packagemanifests header is NAME CATALOG AGE',
+    packageManifestHeader
+  );
+  const packageManifestRows = parseTable(result.message).rows;
+  const certManagerRow = packageManifestRows.find((row) => row[0] === olmPackage) || [];
+  assert(
+    certManagerRow[1] === 'redhat-operators' && certManagerRow.length === 3,
+    '#46: the real Red Hat package openshift-cert-manager-operator is listed with its catalog',
+    JSON.stringify(certManagerRow)
+  );
+  result = await runCmd('oc get packagemanifests -A');
+  assert(
+    parseTable(result.message).header.replace(/\s+/g, ' ').trim() === 'NAME CATALOG AGE',
+    '#46: oc get packagemanifests -A keeps the same NAME CATALOG AGE columns',
+    parseTable(result.message).header
+  );
+  result = await runCmd(`oc describe packagemanifest ${olmPackage} -n openshift-marketplace`);
+  const describedManifest = result.message;
+  assert(
+    new RegExp(`Package Name:\\s+${olmPackage}`).test(describedManifest) &&
+      /Default Channel:\s+stable-v1/.test(describedManifest) &&
+      /Current CSV:\s+cert-manager-operator\.v1\.17\.0/.test(describedManifest) &&
+      /Entries:/.test(describedManifest) &&
+      [
+        'cert-manager-operator.v1.17.0',
+        'cert-manager-operator.v1.16.0',
+        'cert-manager-operator.v1.15.0',
+      ].every((csv) => describedManifest.includes(csv)),
+    '#46: describe packagemanifest shows channel stable-v1 and its channel entries',
+    describedManifest.slice(0, 800)
+  );
+  result = await runCmd(
+    `oc get packagemanifest ${olmPackage} -n openshift-marketplace -o jsonpath='{.status.channels[0].entries[*].name}'`
+  );
+  assert(
+    !result.error &&
+      [
+        'cert-manager-operator.v1.17.0',
+        'cert-manager-operator.v1.16.0',
+        'cert-manager-operator.v1.15.0',
+      ].every((csv) => result.message.includes(csv)),
+    '#46: the channel entries are discoverable via -o jsonpath (the docs way to find a pin)',
+    result.message.slice(0, 320)
+  );
+  result = await runCmd(
+    `oc get packagemanifest ${olmPackage} -n openshift-marketplace -o jsonpath='{.status.channels[*].entries}'`
+  );
+  assert(
+    !result.error && result.message.includes(olmPinCsv),
+    '#46: the issue repro jsonpath path to the channel entries shows the pinnable versions',
+    result.message.slice(0, 320)
+  );
+
+  // Unknown channel → per-Subscription ResolutionFailed with the real wording.
+  await runCmd('oc new-project qa-olm-bad');
+  await applyManifest('qa-olm-bad-og', operatorGroupYaml('qa-olm-bad'));
+  result = await applyManifest(
+    'qa-olm-bad-sub',
+    subscriptionYaml({
+      name: 'bogus-channel',
+      namespace: 'qa-olm-bad',
+      packageName: olmPackage,
+      channel: 'does-not-exist',
+    })
+  );
+  assert(
+    !result.error &&
+      /subscription\.operators\.coreos\.com\/bogus-channel created/.test(result.message),
+    '#46: the unknown-channel Subscription applies',
+    result.message.slice(0, 240)
+  );
+  await advanceSimulation(30);
+  const badChannelSub = await subscriptionState('bogus-channel', 'qa-olm-bad');
+  const badChannelCondition = conditionOf(badChannelSub, 'ResolutionFailed');
+  const unknownChannelMessage = `constraints not satisfiable: no operators found in channel does-not-exist of package ${olmPackage} in the catalog referenced by subscription bogus-channel`;
+  assert(
+    badChannelCondition?.status === 'True' &&
+      badChannelCondition?.reason === 'ConstraintsNotSatisfiable' &&
+      badChannelCondition?.message === unknownChannelMessage,
+    '#46: an unknown channel fails resolution with the real channel/package wording',
+    JSON.stringify(badChannelSub?.conditions)
+  );
+  const badNamespaceState = await evaluate(() => {
+    const cluster = window.game.cluster;
+    // Copied CSVs (status.reason Copied) are replicated status from
+    // AllNamespaces operators, not installs in this namespace (#46).
+    const csvs = (
+      cluster.getByKindAndNamespace?.('ClusterServiceVersion', 'qa-olm-bad') || []
+    ).filter((csv) => String(csv.status?.reason || '') !== 'Copied');
+    return {
+      csvs: csvs.length,
+      plans: (cluster.getByKindAndNamespace?.('InstallPlan', 'qa-olm-bad') || []).length,
+    };
+  });
+  assert(
+    badNamespaceState.csvs === 0 && badNamespaceState.plans === 0,
+    '#46: an unresolvable channel installs no CSV/InstallPlan',
+    JSON.stringify(badNamespaceState)
+  );
+  result = await runCmd('oc describe subscription bogus-channel -n qa-olm-bad');
+  assert(
+    /ResolutionFailed/.test(result.message) &&
+      result.message.includes('no operators found in channel does-not-exist of package'),
+    '#46: oc describe subscription shows the ResolutionFailed condition',
+    result.message.slice(0, 500)
+  );
+
+  // Unknown startingCSV → ResolutionFailed with the real pin wording.
+  await runCmd('oc new-project qa-olm-badpin');
+  await applyManifest('qa-olm-badpin-og', operatorGroupYaml('qa-olm-badpin'));
+  result = await applyManifest(
+    'qa-olm-badpin-sub',
+    subscriptionYaml({
+      name: 'bogus-pin',
+      namespace: 'qa-olm-badpin',
+      packageName: olmPackage,
+      channel: olmChannel,
+      startingCSV: 'cert-manager-operator.v9.9.9',
+    })
+  );
+  assert(
+    !result.error && /subscription\.operators\.coreos\.com\/bogus-pin created/.test(result.message),
+    '#46: the unknown-startingCSV Subscription applies',
+    result.message.slice(0, 240)
+  );
+  await advanceSimulation(30);
+  const badPinSub = await subscriptionState('bogus-pin', 'qa-olm-badpin');
+  const badPinCondition = conditionOf(badPinSub, 'ResolutionFailed');
+  const unknownPinMessage = `constraints not satisfiable: no operators found with name cert-manager-operator.v9.9.9 in channel ${olmChannel} of package ${olmPackage} in the catalog referenced by subscription bogus-pin`;
+  assert(
+    badPinCondition?.status === 'True' && badPinCondition?.message === unknownPinMessage,
+    '#46: an unknown startingCSV fails resolution against the channel entries',
+    JSON.stringify(badPinSub?.conditions)
+  );
+
+  // Valid older channel entry, Manual approval: InstallPlanPending True before
+  // approval, then that exact CSV installs (AllNamespaces in openshift-operators).
+  await applyManifest(
+    'qa-olm-pin-sub',
+    subscriptionYaml({
+      name: olmPackage,
+      namespace: 'openshift-operators',
+      packageName: olmPackage,
+      channel: olmChannel,
+      startingCSV: olmPinCsv,
+      approval: 'Manual',
+    })
+  );
+  await advanceSimulation(5);
+  const pinnedPlanName = await evaluate((csvName) => {
+    const plan = (
+      window.game.cluster.getByKindAndNamespace('InstallPlan', 'openshift-operators') || []
+    ).find((candidate) => (candidate.spec?.clusterServiceVersionNames || []).includes(csvName));
+    return plan?.metadata?.name || null;
+  }, olmPinCsv);
+  assert(
+    Boolean(pinnedPlanName),
+    '#46: the pinned Subscription creates an InstallPlan for the pinned CSV',
+    String(pinnedPlanName)
+  );
+  const pinnedPlanState = await evaluate((planName) => {
+    const plan = window.game.cluster.getByName('InstallPlan', planName, 'openshift-operators');
+    return plan
+      ? { approval: plan.spec?.approval || null, approved: plan.spec?.approved === true }
+      : null;
+  }, pinnedPlanName);
+  assert(
+    pinnedPlanState?.approval === 'Manual' && pinnedPlanState?.approved === false,
+    '#46: the pinned InstallPlan waits at Manual approval',
+    JSON.stringify(pinnedPlanState)
+  );
+  const preApprovalSub = await subscriptionState(olmPackage, 'openshift-operators');
+  const pendingCondition = conditionOf(preApprovalSub, 'InstallPlanPending');
+  assert(
+    pendingCondition?.status === 'True' &&
+      pendingCondition?.reason === 'RequiresApproval' &&
+      pendingCondition?.message === `install plan ${pinnedPlanName} requires approval`,
+    '#46: the Manual Subscription reports InstallPlanPending True RequiresApproval before approval',
+    JSON.stringify(preApprovalSub?.conditions)
+  );
+  result = await runCmd(
+    `oc patch installplan ${pinnedPlanName} -n openshift-operators --type=merge -p '{"spec":{"approved":true}}'`
+  );
+  assert(
+    !result.error && /patched/.test(result.message),
+    '#46: approving the pinned InstallPlan succeeds',
+    result.message.slice(0, 240)
+  );
+  let pinnedCsvPhase = null;
+  for (let elapsed = 0; elapsed < 40 && pinnedCsvPhase !== 'Succeeded'; elapsed += 2) {
+    await advanceSimulation(2);
+    pinnedCsvPhase = await evaluate((csvName) => {
+      const csv = window.game.cluster.getByName(
+        'ClusterServiceVersion',
+        csvName,
+        'openshift-operators'
+      );
+      return csv?.status?.phase || null;
+    }, olmPinCsv);
+  }
+  const installedCsvs = await evaluate(() =>
+    (
+      window.game.cluster.getByKindAndNamespace('ClusterServiceVersion', 'openshift-operators') ||
+      []
+    ).map((csv) => ({ name: csv.metadata.name, phase: csv.status?.phase || null }))
+  );
+  assert(
+    pinnedCsvPhase === 'Succeeded' &&
+      installedCsvs.some((csv) => csv.name === olmPinCsv && csv.phase === 'Succeeded') &&
+      !installedCsvs.some((csv) => csv.name === olmHeadCsv),
+    '#46: the valid older channel entry installs instead of the channel head',
+    JSON.stringify(installedCsvs)
+  );
+  const pinnedSub = await subscriptionState(olmPackage, 'openshift-operators');
+  assert(
+    pinnedSub?.installedCSV === olmPinCsv && pinnedSub?.currentCSV === olmPinCsv,
+    '#46: the Subscription status.installedCSV equals the startingCSV pin',
+    JSON.stringify(pinnedSub)
+  );
+
+  // AllNamespaces copies: OLM creates a copied CSV in every namespace on the
+  // cluster except the source OperatorGroup's namespace (a global
+  // OperatorGroup's target set is all namespaces). Copies mirror the source
+  // status (reason Copied) and are pruned when the source CSV is deleted
+  // (#46 P4).
+  result = await runCmd('oc get csv -A');
+  const csvTable = parseTable(result.message);
+  const csvHeader = csvTable.header.replace(/\s+/g, ' ').trim();
+  assert(
+    /^NAMESPACE NAME .*PHASE$/.test(csvHeader),
+    '#46: oc get csv -A has the real NAMESPACE … PHASE columns',
+    csvHeader
+  );
+  const copiedRows = csvTable.rows.filter((row) => row[1] === olmPinCsv);
+  const copyNamespaces = copiedRows
+    .map((row) => row[0])
+    .filter((namespace) => namespace && namespace !== 'openshift-operators');
+  assert(
+    copiedRows.some((row) => row[0] === 'openshift-operators') && copyNamespaces.length >= 2,
+    '#46: oc get csv -A shows the AllNamespaces CSV in the source and other namespaces',
+    JSON.stringify(copiedRows.map((row) => row[0]))
+  );
+  const copiedCsvState = await evaluate(() => {
+    const csvs = window.game.cluster.getByKind('ClusterServiceVersion') || [];
+    const source = csvs.find(
+      (csv) =>
+        csv.metadata.namespace === 'openshift-operators' &&
+        csv.metadata.name === 'cert-manager-operator.v1.16.0'
+    );
+    const copies = csvs
+      .filter(
+        (csv) =>
+          csv.metadata.name === 'cert-manager-operator.v1.16.0' &&
+          csv.metadata.namespace !== 'openshift-operators'
+      )
+      .map((csv) => ({
+        namespace: csv.metadata.namespace,
+        phase: csv.status?.phase || null,
+        reason: csv.status?.reason || null,
+        copiedFrom:
+          csv.metadata.labels?.['olm.copiedFrom'] ||
+          csv.metadata.annotations?.['olm.copiedFrom'] ||
+          null,
+        targetNamespaces: csv.metadata.annotations?.['olm.targetNamespaces'] ?? null,
+      }));
+    return { source: source ? { phase: source.status?.phase || null } : null, copies };
+  });
+  assert(
+    copiedCsvState.source?.phase === 'Succeeded' &&
+      copiedCsvState.copies.length >= 2 &&
+      copiedCsvState.copies.every(
+        (copy) => copy.phase === copiedCsvState.source.phase && copy.reason === 'Copied'
+      ),
+    '#46: copied CSVs mirror the source phase and carry status.reason Copied',
+    JSON.stringify(copiedCsvState.copies.slice(0, 3))
+  );
+  assert(
+    copiedCsvState.copies.every(
+      (copy) => copy.copiedFrom === 'openshift-operators' && copy.targetNamespaces == null
+    ),
+    '#46: copied CSVs point back at openshift-operators and drop olm.targetNamespaces',
+    JSON.stringify(copiedCsvState.copies.slice(0, 3))
+  );
+  assert(
+    copiedCsvState.copies.some((copy) => copy.namespace === 'qa-olm-bad'),
+    '#46: copied CSVs are cluster-wide (a project with its own OperatorGroup also gets one)',
+    JSON.stringify(copiedCsvState.copies.map((copy) => copy.namespace))
+  );
+  // Deleting the source CSV must prune the copied CSVs like real OLM (delete
+  // the Subscription first, the way L18 teaches the uninstall).
+  await runCmd(`oc delete subscription ${olmPackage} -n openshift-operators`);
+  await runCmd(`oc delete csv ${olmPinCsv} -n openshift-operators`);
+  let copiesPruned = false;
+  for (let elapsed = 0; elapsed < 20 && !copiesPruned; elapsed += 2) {
+    await advanceSimulation(2);
+    copiesPruned = await evaluate(() => {
+      const copies = (window.game.cluster.getByKind('ClusterServiceVersion') || []).filter(
+        (csv) =>
+          csv.metadata.name === 'cert-manager-operator.v1.16.0' &&
+          csv.metadata.namespace !== 'openshift-operators'
+      );
+      return copies.length === 0;
+    });
+  }
+  assert(
+    copiesPruned,
+    '#46: copied CSVs are deleted when the source CSV is deleted',
+    'copies still present'
+  );
+
+  // ── #48-1: the L18 pin objective is graded on state, not exact values ──
+  assert(await bootCampaign(1), '#48: campaign boots for the L18 pin grading check');
+  await evaluate(() => {
+    const progress = window.game.scoringEngine.progress;
+    for (let levelId = 1; levelId < 18; levelId += 1) {
+      progress.campaignProgress[levelId] = { completed: true, stars: 3 };
+    }
+    return true;
+  });
+  assert(await launch('campaign', 18), '#48: campaign L18 starts for the pin grading check');
+  await closeOverlays();
+  await evaluate(() => {
+    document.getElementById('tutorial-start')?.click();
+    const app = window.game?.app;
+    app?.hideTutorial?.();
+    app?.hidePause?.();
+    app?._resumeClocksFor?.('tutorial');
+    const mode = app?.modeInstance;
+    if (mode && mode.state === 'paused' && typeof mode.resume === 'function') mode.resume();
+    if (window.game?.gameEngine && window.game.gameEngine.state !== 'running') {
+      window.game.gameEngine.resume?.();
+    }
+  });
+  await sleep(500);
+  const l18ObjectiveDefs = await evaluate(() =>
+    (window.game.app.modeInstance.currentLevelDef.objectives || [])
+      .filter(
+        (objective) =>
+          objective.type === 'subscription' ||
+          objective.type === 'installPlan' ||
+          objective.type === 'operator'
+      )
+      .map((objective) => ({
+        type: objective.type,
+        name: objective.name || null,
+        package: objective.package || null,
+        channel: objective.channel || null,
+        startingCSV: objective.startingCSV ?? null,
+        pinnedInstall: objective.pinnedInstall === true,
+        approval: objective.installPlanApproval || null,
+      }))
+  );
+  const pinObjectiveDef = l18ObjectiveDefs.find((objective) => objective.type === 'subscription');
+  assert(
+    pinObjectiveDef?.pinnedInstall === true &&
+      pinObjectiveDef?.startingCSV === null &&
+      pinObjectiveDef?.channel === olmChannel &&
+      pinObjectiveDef?.package === olmPackage,
+    '#48: the L18 pin objective grades state (pinnedInstall), not hard-coded v1.15.0/channel stable',
+    JSON.stringify(pinObjectiveDef)
+  );
+  result = await applyManifest(
+    'l18-pin-sub',
+    subscriptionYaml({
+      name: olmPackage,
+      namespace: 'openshift-operators',
+      packageName: olmPackage,
+      channel: olmChannel,
+      startingCSV: olmPinCsv,
+      approval: 'Manual',
+    })
+  );
+  assert(
+    !result.error &&
+      /subscription\.operators\.coreos\.com\/openshift-cert-manager-operator created/.test(
+        result.message
+      ),
+    '#48: the L18 scenario applies a subscription pinned to the valid non-head v1.16.0 entry',
+    result.message.slice(0, 260)
+  );
+  await advanceSimulation(5);
+  const l18PlanName = await evaluate((csvName) => {
+    const plan = (
+      window.game.cluster.getByKindAndNamespace('InstallPlan', 'openshift-operators') || []
+    ).find((candidate) => (candidate.spec?.clusterServiceVersionNames || []).includes(csvName));
+    return plan?.metadata?.name || null;
+  }, olmPinCsv);
+  assert(
+    Boolean(l18PlanName),
+    '#48: the pinned L18 Subscription creates a Manual InstallPlan',
+    String(l18PlanName)
+  );
+  const l18Pending = conditionOf(
+    await subscriptionState(olmPackage, 'openshift-operators'),
+    'InstallPlanPending'
+  );
+  assert(
+    l18Pending?.status === 'True' && l18Pending?.reason === 'RequiresApproval',
+    '#48: the L18 Manual InstallPlan reports RequiresApproval before approval',
+    JSON.stringify(l18Pending)
+  );
+  let pinState = await pinObjective();
+  assert(
+    pinState && pinState.completed === false,
+    '#48: the pin objective stays unticked until the pinned CSV is actually installed',
+    JSON.stringify(pinState)
+  );
+  result = await runCmd(
+    `oc patch installplan ${l18PlanName} -n openshift-operators --type=merge -p '{"spec":{"approved":true}}'`
+  );
+  assert(
+    !result.error && /patched/.test(result.message),
+    '#48: approving the L18 Manual InstallPlan succeeds',
+    result.message.slice(0, 240)
+  );
+  let l18CsvPhase = null;
+  for (let elapsed = 0; elapsed < 40 && l18CsvPhase !== 'Succeeded'; elapsed += 2) {
+    await advanceSimulation(2);
+    l18CsvPhase = await evaluate((csvName) => {
+      const csv = window.game.cluster.getByName(
+        'ClusterServiceVersion',
+        csvName,
+        'openshift-operators'
+      );
+      return csv?.status?.phase || null;
+    }, olmPinCsv);
+  }
+  await waitFor(
+    () =>
+      evaluate(() => {
+        const mode = window.game.app.modeInstance;
+        const entry = (mode?.objectiveProgress || []).find(
+          (objective) => objective.type === 'subscription'
+        );
+        return Boolean(entry?.completed);
+      }),
+    20000
+  );
+  pinState = await pinObjective();
+  const l18PostSub = await subscriptionState(olmPackage, 'openshift-operators');
+  assert(
+    l18CsvPhase === 'Succeeded' &&
+      pinState?.completed === true &&
+      l18PostSub?.installedCSV === olmPinCsv,
+    '#48: the L18 pin objective ticks when installedCSV equals a valid non-head startingCSV',
+    JSON.stringify({ phase: l18CsvPhase, pinState, installedCSV: l18PostSub?.installedCSV })
+  );
+  await returnToMenu();
+
+  // ── #48-2: readiness evidence follows the command, not the level mapping ──
+  await goto('/?tutorial=0');
+  assert(
+    await waitFor(() => evaluate(() => !!window.game?.app?.scoringEngine), 25000),
+    '#48: start page boots for the cross-level readiness-evidence check'
+  );
+  await sleep(500);
+  await closeOverlays();
+  const readinessStatus = () =>
+    evaluate(async () => {
+      const app = window.game.app;
+      try {
+        await app.showExamPrep?.();
+      } catch {
+        /* panel already open */
+      }
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      const snapshot = app.examPrepUI?._computeSnapshot?.();
+      const statusOf = (id) => snapshot?.statuses?.get?.(id) || null;
+      return {
+        secrets: statusOf('security-secrets'),
+        networking: statusOf('net-configure-components'),
+      };
+    });
+  const setEvidenceScenario = (progress, evidenceBuckets) =>
+    evaluate(
+      ({ campaignProgress, buckets }) => {
+        const scoring = window.game.scoringEngine;
+        scoring.progress.campaignProgress = campaignProgress;
+        scoring.progress.challengeProgress = {};
+        scoring.progress.objectiveEvidence = {};
+        scoring.progress.drillCommandEvidence = buckets;
+        return true;
+      },
+      { campaignProgress: progress, buckets: evidenceBuckets }
+    );
+  // L20 commands that belong to bullets mapped to OTHER levels: they must count.
+  await setEvidenceScenario(
+    { 20: { completed: true, stars: 3 } },
+    {
+      'campaign:20': [
+        'oc create secret tls web-tls --cert=tls.crt --key=tls.key',
+        'oc get network/cluster -o yaml',
+      ],
+    }
+  );
+  let readiness = await readinessStatus();
+  assert(
+    readiness.secrets === 'mastered' && readiness.networking === 'mastered',
+    '#48: a matching command from another completed level credits the readiness bullet',
+    JSON.stringify(readiness)
+  );
+  // Same commands from a drill that was never completed only count as practiced.
+  await setEvidenceScenario(
+    { 21: { completed: false, stars: 0 } },
+    {
+      'campaign:21': [
+        'oc create secret tls web-tls --cert=tls.crt --key=tls.key',
+        'oc get network/cluster -o yaml',
+      ],
+    }
+  );
+  readiness = await readinessStatus();
+  assert(
+    readiness.secrets === 'practiced' && readiness.networking === 'practiced',
+    '#48: a matching command from an incomplete drill is evidence, not mastery',
+    JSON.stringify(readiness)
+  );
+  await setEvidenceScenario({}, {});
+  readiness = await readinessStatus();
+  assert(
+    readiness.secrets === 'todo' && readiness.networking === 'todo',
+    '#48: no drill evidence leaves the readiness bullets as todo',
+    JSON.stringify(readiness)
+  );
+  await evaluate(() => window.game.app.examPrepUI?.hide?.());
+
+  // ── #47: Lab 13 hint states BOTH directions need both rules ────────────
+  const lab13Hints = await evaluate(() =>
+    import('/js/modes/ChallengeMode.js').then((module) => {
+      const challenge = (module.CHALLENGES || []).find((entry) => entry.id === 13);
+      return challenge ? challenge.hints || [] : [];
+    })
+  );
+  const directionHint = lab13Hints.find((hint) => /Direction matters/i.test(hint)) || '';
+  assert(
+    /both directions/i.test(directionHint) &&
+      /egress rule on gateway/i.test(directionHint) &&
+      /ingress rule on ledger/i.test(directionHint) &&
+      !/\(or an egress rule on gateway\)/.test(directionHint),
+    '#47: the Lab 13 hint says default-deny in both directions needs an egress rule on gateway AND an ingress rule on ledger',
+    directionHint.slice(0, 400)
+  );
+
+  // ── #45 (destructive, last): deleting the kubeadmin Secret is the real
+  //        removal path; the installer-side backup survives ────────────────
+  assert(await bootSandbox(), '#45: fresh sandbox boots for the kubeadmin removal flow');
+  result = await runCmd(`oc login -u kubeadmin -p ${installerPassword}`, 300);
+  assert(
+    !result.error && /Login successful/.test(result.message),
+    '#45: the installer password logs in while the Secret exists',
+    result.message.slice(0, 220)
+  );
+  result = await runCmd('oc delete secret kubeadmin -n kube-system');
+  assert(
+    !result.error && /secret "kubeadmin" deleted/.test(result.message),
+    '#45: oc delete secret kubeadmin -n kube-system succeeds (the exam removal step)',
+    result.message.slice(0, 240)
+  );
+  result = await runCmd(`oc login -u kubeadmin -p ${installerPassword}`, 300);
+  assert(
+    result.error &&
+      /The kubeadmin password Secret "kubeadmin" in project "kube-system" is missing: kubeadmin password authentication is not available\./.test(
+        result.message
+      ),
+    '#45: after the Secret is deleted kubeadmin password auth is unavailable',
+    result.message.slice(0, 320)
+  );
+  result = await runCmd('cat ~/auth/kubeadmin-password');
+  assert(
+    !result.error && result.message.trim() === installerPassword,
+    '#45: the installer-side kubeadmin-password backup survives Secret removal',
+    JSON.stringify(result.message)
+  );
+  result = await runCmd('oc delete secret kubeadmin -n kube-system');
+  assert(
+    result.error &&
+      /Error from server \(NotFound\): secrets "kubeadmin" not found/.test(result.message),
+    '#45: deleting the already-removed kubeadmin Secret is NotFound',
+    result.message
   );
 });
 
