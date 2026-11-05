@@ -4,6 +4,108 @@ All notable changes to OpenShift Games are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 aims to follow [Semantic Versioning](https://semver.org/).
 
+## [1.5.0] — 2026-11-05
+
+Seventh QA pass on 1.4.0: closes the five open report items (#50–#54) from the 1.4.0 CLI playthrough.
+The release gives the terminal a real shell layer (`;`/`&&`/`||` sequencing, session variables with
+`export`/`$VAR`, loud rejection of unsupported shell grammar), makes Route admission follow the real
+4.22 router (host/path ownership and TLS/external-certificate checks only — missing endpoints stay
+Admitted and answer 503), makes the L20 capstone CrashLoop incident behave like a real bad rollout
+(only the new revision crash-loops, surge/unavailable limits are respected, `oc rollout undo` heals),
+teaches the real Manual `startingCSV` → next-step upgrade InstallPlan, and fixes the collected
+output/state differences (settled authentication ClusterOperator, exact kubelet event stream,
+`oc -n` flag errors, `curl -sI` headers, multi-name Subscription delete, exact debug-node resolution,
+one node naming catalog across modes, populated platform namespaces/pods and the landing-page lab
+count). The game stays no-build and dependency-free.
+
+### Added
+
+- **Real shell sequencing and variables (issue #50).** The terminal accepts `;`, `&&` and `||`
+  chaining (quote/escape-aware; `&&`/`||` honour the previous segment's exit status), session
+  variables (`export NS=default`, `$NS`/`${NS}` expansion in unquoted and double-quoted arguments,
+  single quotes protected), `true`/`false`/`unset` builtins and bare `VAR=$(…)` assignment, so Red Hat
+  doc one-liners such as `HOST=$(oc get route web -o jsonpath='{.spec.host}'); curl -k https://$HOST`
+  run as written. Loops/conditionals/functions are rejected with a clear `simulator: … not supported
+— run one command per line` message instead of silently dropping part of the line; `-f -` stdin,
+  heredocs, `$(...)`, pipes and redirects keep working.
+- **Route host-claim admission (issue #52).** The router models the OCP 4.22 `UniqueHost` admission
+  plugin: the oldest Route for a host/path is admitted and later claims report `Admitted=False,
+reason=HostAlreadyClaimed` with the real message; deleting the older claim admits the waiting Route.
+  The real-target and external-certificate gates stay. A Route whose Service has no ready endpoints
+  stays Admitted=True (the router answers 503 and `oc describe route` prints `Endpoints: <none>`), so
+  the usual `oc get endpoints` → `oc describe svc` → selector debugging flow is taught correctly.
+- **Manual `startingCSV` upgrade resolution (issue #53D).** OLM resolves the catalog graph
+  immediately: `status.currentCSV` names the pinned CSV before the first InstallPlan is approved; a
+  Manual subscription whose installed pin is older than the channel head immediately gets a second
+  unapproved InstallPlan (`InstallPlanPending True RequiresApproval`, currentCSV=head,
+  installedCSV=pin, phase UpgradePending); approving it upgrades the CSV (old CSV replaced, operator
+  Deployment re-owned) to `Succeeded`. Automatic subscriptions auto-approve the upgrade, as real OLM
+  does. `startingCSV`-pin grading (L18) is unchanged.
+- **Populated platform namespaces (issue #53G).** Every cluster seeds the `openshift-dns` Project and
+  the installer `openshift-config` Secrets (`pull-secret` kubernetes.io/dockerconfigjson and
+  `initial-service-account-private-key` Opaque, both extractable), plus controller-owned platform Pods
+  with the real kubelet lifecycle: two `openshift-ingress/router-default-*` Pods and one
+  `openshift-dns/dns-default-*` + `node-resolver-*` Pod per Node. Lab 13's DNS-egress lesson and the
+  first Route/OAuth debugging steps now target objects that actually exist.
+- **One node catalog across every mode (issue #53F).** Sandbox, timed labs and Chaos now seed the same
+  realistic machines as the campaign — `worker-0`, `worker-1`, `master-0`
+  (`control-plane,master` roles; 2-node clusters use the two workers) — so hints, `oc get nodes`
+  output and `oc debug node/<n>` muscle memory transfer between modes. `oc debug` resolves real node
+  names exactly and only forward-maps legacy `node-N` campaign names; a wrong name returns the real
+  NotFound instead of silently starting a debug Pod on another machine.
+- **Real pod event stream (issue #54e).** The kubelet lifecycle stream is recorded once by the engine
+  as `Scheduled → Pulling → Pulled → Created → Started` (`default-scheduler` FROM for scheduling,
+  `kubelet` for container events, plus real `Failed`/`BackOff` warnings); the synthetic `Ready` and
+  `PhaseChange` reasons are gone, so `oc describe pod`/`oc get events` match a real cluster.
+- **Virtual Endpoints in multi-kind `oc get` (issue #52 follow-up).** `oc get pods,endpoints,route`
+  and `-o name|yaml|json|jsonpath` work instead of failing with "the server doesn't have a resource
+  type "endpoints"".
+
+### Changed
+
+- **L20 CrashLoopBackOff is a real bad rollout (issue #51).** The scheduled incident seeds the faulty
+  `APP_MODE` into the Deployment and only the new revision's Pods crash-loop; the old ReplicaSet keeps
+  its replicas Running/Ready and the Service keeps serving, with RollingUpdate
+  maxSurge/maxUnavailable honoured. `oc rollout undo` (and `--to-revision=<n>`) now heals: it restores
+  the previous template, scales the good ReplicaSet back up and the bad one to zero, and clears the
+  incident.
+- **Settled fresh cluster (issue #54f).** Re-seeding the baseline OAuth singleton no longer starts an
+  OAuth rollout, so a fresh sandbox `oc get co` shows authentication `PROGRESSING False` like a real
+  settled install; an actual identity-provider/htpasswd-Secret change still triggers the rollout.
+- **OLM resolution failures (issue #54b).** A `ResolutionFailed`/`ConstraintsNotSatisfiable`
+  Subscription no longer also reports a simulator-only `InstallPlanPending False NoInstallPlan`
+  condition.
+- **Landing copy (issue #54).** The start page stats line now says 13 timed labs (was 12), matching the
+  mode card and "Thirteen timed labs" copy.
+- **`oc exec … curl localhost:<port>` (issue #54d).** Requests to the Pod's own loopback/port hit the
+  container's real app (origin-hello-openshift answers its real body) and generic bodies use the
+  Pod's actual container name (`webapp`), never `main`.
+- README and CONVERSION-SPEC describe the real shell layer, router admission, OLM upgrade
+  resolution, the node catalog and the seeded platform namespaces.
+
+### Fixed
+
+- `oc -n` / `oc --namespace` with no value now print the real
+  `error: flag needs an argument: 'n' in -n` / `error: flag needs an argument: --namespace` instead of
+  an unknown-command error, including before `get`/`delete`/`logs`/… (issue #54).
+- `curl -sI` (and `-I`/`-i`) print plain `HTTP/1.1 200 OK`/header lines — no verbose `< ` prefix and no
+  body for `-I`; `-v` keeps the verbose `< ` format (issue #54).
+- `oc delete sub a b -n openshift-operators` deletes every requested Subscription (one deleted line
+  each), reports missing names like real `oc` and honours `--ignore-not-found`, while keeping the CSV
+  uninstall semantics (issue #53E).
+- The L20 "Create an external Route webapp (Admitted)" / "Route webapp is reachable" objectives no
+  longer un-tick when an unrelated Service-selector incident breaks the endpoints; the reachability
+  objective follows the router's 503/200 behaviour (issue #52).
+
+### Tooling
+
+- Permanent `qa-issue50-54` browser-regression section (151 assertions) covering every report item,
+  plus updated expectations for the changed platform behaviour (node names, event stream, Route
+  admission, OLM upgrade status, platform namespaces, 13 timed labs) and new `scripts/verify.mjs`
+  static locks (11 default Projects incl. `openshift-dns`, the openshift-config bootstrap Secrets, the
+  shared node catalog, absent `sandbox-node-`/`chaos-node-` literals, no Ready/PhaseChange kubelet
+  reasons, 13-lab landing copy).
+
 ## [1.4.0] — 2026-11-05
 
 Sixth QA pass on 1.3.0: closes the six open report items (#44–#49) from the 1.3.0 CLI playthrough.

@@ -1,19 +1,19 @@
 {
-  "timestamp": "2026-11-05T09:35:28.584Z",
+  "timestamp": "2026-11-05T10:55:00.318Z",
   "environment": {
     "node": "v26.10.0",
     "chrome": "Chrome/156.0.8078.79",
-    "baseUrl": "http://127.0.0.1:45635",
+    "baseUrl": "http://127.0.0.1:45335",
     "viewport": {
       "width": 1600,
       "height": 900
     },
     "puppeteerCore": "/tmp/verify-tools",
-    "startedAt": "2026-11-05T09:23:07.537Z",
-    "durationSeconds": 741
+    "startedAt": "2026-11-05T10:39:31.440Z",
+    "durationSeconds": 929
   },
   "summary": {
-    "passes": 1500,
+    "passes": 1651,
     "failures": 0,
     "warnings": 0,
     "consoleErrors": 0,
@@ -181,6 +181,11 @@
       "failures": 0,
       "warnings": 0
     },
+    "qa-issue50-54": {
+      "passes": 151,
+      "failures": 0,
+      "warnings": 0
+    },
     "draw": {
       "passes": 10,
       "failures": 0,
@@ -201,74 +206,74 @@
       "path": "screenshot.png",
       "width": 1600,
       "height": 900,
-      "bytes": 928119
+      "bytes": 955833
     },
     "ogImage": {
       "path": "og-image.png",
       "width": 1200,
       "height": 630,
-      "bytes": 200574
+      "bytes": 203979
     },
     "screenshots": [
       {
         "path": "docs/screenshots/menu.png",
         "width": 1600,
         "height": 900,
-        "bytes": 331482
+        "bytes": 331401
       },
       {
         "path": "docs/screenshots/exam-prep.png",
         "width": 1600,
         "height": 900,
-        "bytes": 203111
+        "bytes": 204311
       },
       {
         "path": "docs/screenshots/sandbox.png",
         "width": 1600,
         "height": 900,
-        "bytes": 928093
+        "bytes": 955362
       },
       {
         "path": "screenshot.png",
         "width": 1600,
         "height": 900,
-        "bytes": 928119
+        "bytes": 955833
       },
       {
         "path": "docs/screenshots/files-panel.png",
         "width": 1600,
         "height": 900,
-        "bytes": 243285
+        "bytes": 245755
       },
       {
         "path": "docs/screenshots/campaign-level-1.png",
         "width": 1600,
         "height": 900,
-        "bytes": 474581
+        "bytes": 476015
       },
       {
         "path": "docs/screenshots/regressions-minimap-collapsed.png",
         "width": 1600,
         "height": 900,
-        "bytes": 905066
+        "bytes": 930072
       },
       {
         "path": "docs/screenshots/regressions-campaign-restart.png",
         "width": 1600,
         "height": 900,
-        "bytes": 482169
+        "bytes": 484414
       },
       {
         "path": "docs/screenshots/draw.png",
         "width": 1600,
         "height": 900,
-        "bytes": 488894
+        "bytes": 488730
       },
       {
         "path": "og-image.png",
         "width": 1200,
         "height": 630,
-        "bytes": 200574
+        "bytes": 203979
       }
     ]
   },
@@ -6087,7 +6092,7 @@
     },
     {
       "section": "qa-issue44-49",
-      "name": "#46: the Subscription status.installedCSV equals the startingCSV pin"
+      "name": "#46: the Subscription keeps installedCSV=startingCSV while the v1.17.0 upgrade plan waits"
     },
     {
       "section": "qa-issue44-49",
@@ -6192,6 +6197,610 @@
     {
       "section": "qa-issue44-49",
       "name": "#45: deleting the already-removed kubeadmin Secret is NotFound"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#54: the landing-page stats line reports 13 timed labs"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#50: sandbox boots for the CLI/platform checks"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#54: `oc get co` keeps the real ClusterOperator columns"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#54: a fresh sandbox authentication ClusterOperator is settled (Progressing False), not rolling out"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#54: every fresh-sandbox ClusterOperator is Available and not progressing/degraded"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#50: `echo a; echo b` runs both commands in order"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#50: `echo a && echo b` runs both commands in order"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#50: a three-command && chain keeps every segment"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#50: `oc project default && oc get svc` runs both commands (the svc output follows)"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#50: `;` continues after a failing command and reports the last exit status"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#50: `&&` short-circuits when the previous command fails"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#50: `||` runs the fallback when the previous command fails"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#50: no silent partial execution — every segment output is kept"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#50: `export NS=default` is silent like a real shell"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#50: `echo $NS` expands an exported variable"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#50: `${NS}` braces expand the same variable"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#50: $NS expands inside double quotes"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#50: single-quoted $NS does not expand"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#50: an undefined variable expands to empty"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#50: exported variables persist for the session (separate command lines)"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#50: `for …; do …; done` fails loudly with the simulator unsupported-shell message (and never runs part of it)"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#50: `while …; do …; done` is rejected with the same clear simulator message"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#50: the shell keeps working after a rejected unsupported line"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#54: `oc -n` with no value reports the real shorthand flag error"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#54: the `oc -n` flag error uses lowercase `error:` like real oc (not cobra's `Error:`)"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#54: `oc --namespace` with no value reports the real long flag error"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#54: the `oc --namespace` flag error uses lowercase `error:` like real oc"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#54: `curl -sI` starts with the plain HTTP status line"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#54: `curl -sI` prints headers only — no verbose \"< \" prefix and no body"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#54: `curl -I` uses the same plain header format"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#54: `curl -si` keeps plain headers and still includes the body"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#54: `curl -v` keeps the verbose \"< \" response-header format"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#53F: sandbox nodes use the shared worker-0/worker-1/master-0 names (no sandbox-node-N)"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#53F: sandbox node roles flag the 2 workers and the control-plane master"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#53G: the openshift-dns namespace exists on a fresh cluster"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#53G: openshift-dns runs one dns-default and one node-resolver pod per node"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#53G: the sandbox DNS pods are Running/Ready"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#53G: openshift-ingress has router-default pods on a fresh cluster"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#53G: at least two router-default pods are Running/Ready"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#53G: dns-default pods carry the real daemonset-dns label"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#53G: router-default pods carry the real app=router label"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#53G: openshift-config seeds the documented platform Secrets"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#53G: htpass-secret is NOT seeded (identity labs create it themselves)"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#53G: pull-secret has the real kubernetes.io/dockerconfigjson type"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#53G: oc extract works on the seeded openshift-config Secrets"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#53F: `oc debug node/worker-0` resolves the real sandbox node"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#53F: `exit` leaves the node debug session cleanly"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#53F: `oc debug node/worker-9` is a real NotFound, never an alias onto another node"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#53F: the retired sandbox-node-N names are NotFound too"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#52: the route-test Deployment reaches 2 Ready pods"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#52: a plain edge Route is created"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#52: the Route is admitted while its Service has endpoints"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#52: the admitted Route answers curl with the app body"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#52: breaking the Service selector applies the patch"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#52: a Route whose Service has no endpoints stays Admitted=True (the router returns 503)"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#52: jsonpath still reports the Admitted True condition with no endpoints"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#52: oc describe route shows Endpoints: <none> without rejecting the Route"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#52: curl to the Route with no endpoints returns 503"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#52: the 503 body is the real router response"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#52: restoring the selector restores the 200 response"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#52: the second Route claiming the same host is accepted by the API"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#52: a Route whose host is already claimed is Admitted=False HostAlreadyClaimed"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#52: oc describe route explains the admission failure with HostAlreadyClaimed"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#52: the first Route keeps the host and stays admitted"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#52: deleting the winning Route admits the waiting Route"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#52: the newly admitted Route starts serving"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#54: `oc exec deploy/webapp -- curl -s localhost:8080` returns the pod app's real body"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#54: the exec body never names a fabricated 'container main'"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#54: 127.0.0.1 resolves to the same pod app as localhost"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#54: the route-test namespace has a pod to describe"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#54: oc describe pod events run Scheduled → Pulling → Pulled → Created → Started"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#54: oc describe pod has no Ready/PhaseChange events"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#54: oc get events records each kubelet lifecycle reason exactly once for the pod"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#54: oc get events has no Ready/PhaseChange reasons for pods"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#53D: fresh sandbox boots for the OLM checks"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#53D: the pinned Manual Subscription manifest applies"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#53D: before approval status.currentCSV already shows the resolved startingCSV (installedCSV empty)"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#53D: the pinned Manual InstallPlan reports InstallPlanPending True RequiresApproval"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#53D: describe subscription shows Current CSV v1.16.0 and no Installed CSV before approval"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#53D: the pinned InstallPlan waits at Manual approval"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#53D: approving the pinned InstallPlan succeeds"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#53D: the pinned v1.16.0 CSV reaches Succeeded"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#53D: real OLM immediately creates a SECOND Manual, unapproved InstallPlan for v1.17.0"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#53D: upgrade pending → currentCSV v1.17.0, installedCSV stays the pinned v1.16.0, phase UpgradePending"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#53D: the pending upgrade reports InstallPlanPending True RequiresApproval"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#53D: describe subscription shows the pending v1.17.0 upgrade with the pinned v1.16.0 installed"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#53D: approving the upgrade InstallPlan succeeds"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#53D: approving the upgrade installs v1.17.0 (currentCSV = installedCSV = head, phase Succeeded)"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#53D: after the upgrade InstallPlanPending reports False InstallPlanComplete"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#53D: the upgraded head CSV replaces the pinned v1.16.0 CSV (old one no longer Succeeded)"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#53D: oc get ip lists both the pinned install plan and the approved upgrade plan"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#53E: deleting the Subscription succeeds"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#53E: deleting a Subscription keeps its ClusterServiceVersion (real OLM uninstall semantics)"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#53E: the first disposable Subscription applies"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#53E: the second disposable Subscription applies"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#53E: both disposable Subscriptions are listed before the multi-name delete"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#53E: `oc delete sub a b` deletes every requested Subscription and prints one deleted line per name"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#53E: both requested Subscriptions are really gone"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#53E: deleting a missing Subscription is a real NotFound error"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#53E: --ignore-not-found keeps a missing-name delete quiet and successful"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#54: the ResolutionFailed project OperatorGroup applies"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#54: the bogus-channel Subscription applies"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#54: an unresolvable channel still reports ResolutionFailed with the real wording"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#54: ResolutionFailed must NOT also report InstallPlanPending False NoInstallPlan"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#54: describe subscription shows ResolutionFailed without a bogus InstallPlanPending line"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#51: campaign L20 starts"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#51: the webapp Deployment is 2/2 Ready before the scheduled incident"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#51: the scheduled CrashLoopBackOff incident fires on webapp"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#51: the crash seed creates a new revision whose template carries the faulty APP_MODE"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#51: the old revision keeps its 2 desired replicas while the rollout stalls"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#51: the new revision respects maxSurge (25% of 2 → one surged pod, not 2)"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#51: old-revision pods keep Running/Ready and never crash (their template has no APP_MODE)"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#51: only the new-revision pods crash"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#51: the Service keeps serving the old pods while the rollout is broken"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#51: campaign mode also runs the openshift-ingress router-default pods"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#51: campaign mode seeds one dns-default and one node-resolver pod per node"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#51: legacy campaign node-N aliases still map forward (node-2 → worker-1)"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#51: `oc rollout undo deployment/webapp -n prod-platform` rolls the Deployment back"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#51: rollout undo heals the Deployment and resolves the CrashLoopBackOff incident"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#51: the revision-1 template is restored (no APP_MODE)"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#51: the good ReplicaSet scales back to 2 while the bad ReplicaSet scales to 0"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#51: both webapp pods are Running/Ready after the undo"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#51: oc get deployment shows 2/2 available after the heal"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#51: L20 exec localhost returns the pod app's real body (no \"container main\")"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#51: the L20 \"Create an external Route (Admitted)\" objective ticks"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#51: the L20 Route stays Admitted when the Service selector matches no pods"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#51: the L20 Route Admitted objective does not flip while endpoints are missing"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#51 --to-revision=1: campaign L20 starts"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#51 --to-revision=1: the webapp Deployment is 2/2 Ready before the scheduled incident"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#51 --to-revision=1: the scheduled CrashLoopBackOff incident fires on webapp"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#51 --to-revision=1: the crash seed creates a new revision whose template carries the faulty APP_MODE"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#51 --to-revision=1: the old revision keeps its 2 desired replicas while the rollout stalls"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#51 --to-revision=1: the new revision respects maxSurge (25% of 2 → one surged pod, not 2)"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#51 --to-revision=1: old-revision pods keep Running/Ready and never crash (their template has no APP_MODE)"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#51 --to-revision=1: only the new-revision pods crash"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#51 --to-revision=1: the Service keeps serving the old pods while the rollout is broken"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#51 --to-revision=1: `oc rollout undo deployment/webapp --to-revision=1` rolls the Deployment back"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#51 --to-revision=1: rollout undo heals the Deployment and resolves the CrashLoopBackOff incident"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#51 --to-revision=1: the revision-1 template is restored (no APP_MODE)"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#51 --to-revision=1: the good ReplicaSet scales back to 2 while the bad ReplicaSet scales to 0"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#51 --to-revision=1: both webapp pods are Running/Ready after the undo"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#51 --to-revision=1: oc get deployment shows 2/2 available after the heal"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#53F: timed Lab 13 starts"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#53F: three-node labs use the shared worker-0/worker-1/master-0 names (no node-N ghosts)"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#53G: Lab 13 has the dns-default/node-resolver pods its DNS egress objective teaches"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#53F: `oc debug node/worker-0` resolves the real lab node instead of silently aliasing node-1"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#53D: campaign L18 starts for the pin/upgrade grading check"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#53D: the L18 pinned Manual Subscription applies"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#53D: the L18 pinned Subscription creates its InstallPlan"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#53D: while the L18 Manual upgrade is pending installedCSV stays the pinned v1.16.0"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#53D: the L18 pin objective still ticks while the Manual upgrade plan is pending"
     },
     {
       "section": "draw",

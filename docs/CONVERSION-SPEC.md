@@ -215,8 +215,8 @@ Deployment with openshift extras: { replicas, selector, strategy, template,
 ```
 
 Default projects seeded in `ClusterState`: `default`, `openshift`, `openshift-config`,
-`openshift-operators`, `openshift-ingress`, `openshift-monitoring`, `openshift-console`,
-`openshift-authentication`, `openshift-image-registry`, `kube-system`.
+`openshift-operators`, `openshift-ingress`, `openshift-dns`, `openshift-monitoring`,
+`openshift-console`, `openshift-authentication`, `openshift-image-registry`, `kube-system`.
 Default cluster resources seeded in every mode: ClusterOperators (authentication, console, dns,
 ingress, monitoring, network, image-registry, kube-apiserver, openshift-apiserver,
 openshift-controller-manager, operator-lifecycle-manager, storage, etcd) with
@@ -228,9 +228,16 @@ virtual identities `kubeadmin` (cluster-admin ClusterRoleBinding; no User resour
 kubeadmin is virtual and never listed by `oc get users`) and `admin` (simulator convenience
 identity, also not a User resource); the `kube-system/kubeadmin` Secret stores only a bcrypt hash of
 the installer-generated password (plain text lives only in `~/auth/kubeadmin-password`);
-ImageStreams in `openshift`: `nodejs` (tags
-`20-ubi9`, `22-ubi9`, `latest`), `python` (`3.12-ubi9`, `latest`), `nginx` (`1.26-ubi9`, `latest`);
-Nodes as specified per level/mode.
+`openshift-config` carries the installer bootstrap Secrets (`pull-secret` type
+`kubernetes.io/dockerconfigjson` and `initial-service-account-private-key` type Opaque — real 4.22
+never seeds the HTPasswd secret, the identity labs create it); ImageStreams in `openshift`: `nodejs`
+(tags `20-ubi9`, `22-ubi9`, `latest`), `python` (`3.12-ubi9`, `latest`), `nginx` (`1.26-ubi9`,
+`latest`); platform workload Pods the routers/DNS operators own on a real 4.22 install:
+`openshift-ingress/router-default-*` (2, Running/Ready) and `openshift-dns/dns-default-*` +
+`node-resolver-*` (one of each per Node), seeded lazily by `SimulationTick` once Nodes exist.
+Nodes follow one catalog shared by every mode: `worker-0`, `worker-1`, `master-0` (2-node clusters
+use worker-0/worker-1; the control-plane Node carries the `control-plane,master` role labels and is
+left schedulable so small-cluster capacity is unchanged).
 
 ---
 
@@ -239,8 +246,14 @@ Nodes as specified per level/mode.
 Input handling: trim; accept optional leading `oc ` or `kubectl ` (strip; if `kubectl`, append an
 educational hint "tip: on OpenShift, use oc"); prompt rendered as `$ oc`; support pipes
 (`oc process ... | oc apply -f -`) and output redirects (`oc get deploy web -o yaml > web.yaml`) for
-the virtual file system. Track every executed raw command in `gameEngine` command history with
-`{raw, baseCommand, success, timestamp}`. Tab completion must include new kinds/commands.
+the virtual file system. Like a real workstation shell, also support `;`, `&&` and `||` command
+sequencing (quote/escape-aware; each segment keeps its own pipes/redirects and `&&`/`||` respect the
+previous segment's exit status) plus session variables — `export NAME=value` and `$NAME`/`${NAME}`
+expansion in unquoted and double-quoted arguments (not inside single quotes). Unsupported shell
+grammar (loops, conditionals, functions) is rejected loudly (`simulator: … not supported — run one
+command per line`); never execute part of a line silently. Track every executed raw command in
+`gameEngine` command history with `{raw, baseCommand, success, timestamp}`. Tab completion must
+include new kinds/commands.
 
 Required base commands and behaviour (implement in CommandBar.js; complex mutations may call
 GameEngine helpers):
@@ -317,9 +330,16 @@ mutating command emits an authorization check event for objectives/achievements.
 Extend the existing fixed-step simulation with OpenShift controllers:
 
 - `_tickProjects`: Projects become Active immediately; deletion marks Terminating.
-- `_tickRoutes`: resolve Service + Endpoints; if the Service has ≥1 ready endpoint, set
-  `status.ingress=[{host, routerName:"default", conditions:[{type:"Admitted",status:"True",reason:"Accepted",message:"..."}], wildcardPolicy:"None"}]`;
-  else Admitted=False reason "ServiceUnavailable" message "no endpoints available".
+- `_tickRoutes`: router ADMISSION is a host/path-ownership + TLS/config check, never an endpoints
+  check (OCP 4.22 router `UniqueHost` + external-certificate validation): a Route targeting an
+  existing Service stays
+  `status.ingress=[{host, routerName:"default", conditions:[{type:"Admitted",status:"True",reason:"Accepted",message:"..."}], wildcardPolicy:"None"}]`
+  even when the Service has zero ready endpoints (traffic then fails with 503; `oc describe route`
+  shows `Endpoints: <none>`). Admitted=False is reserved for real admission failures —
+  `HostAlreadyClaimed` (a host/path claimed by an older Route, usually in another project),
+  `ExternalCertificateValidationFailed` (missing/unreadable `spec.tls.externalCertificate` Secret),
+  `Rejected`, `InvalidTargetKind`, `ServiceNotFound`; deleting the older claim admits the waiting
+  Route on the next reconcile.
   Host defaults to `<route>-<project>.apps.cluster.example.com` when spec.host empty.
 - `_tickBuilds`: `oc start-build`/ConfigChange trigger creates a Build owned by the BuildConfig
   (labels buildconfig=<name>, buildconfig.openshift.io/name). Build phases:
@@ -333,6 +353,15 @@ Extend the existing fixed-step simulation with OpenShift controllers:
 - `_tickSubscriptions`: phase Installing for ~8s then Succeeded with installedCSV
   `<package>.v1.0.0`; on Succeeded emit `operator:installed`; deleting Subscription emits
   `operator:uninstalled`. An operator whose failure flag is set (incidents) becomes Failed.
+  Real OLM resolution/upgrade semantics (OCP 4.22): a Subscription resolves its catalog channel
+  immediately, so `status.currentCSV` names the resolved CSV (the `startingCSV` pin when set) before
+  the first InstallPlan is approved, while `installedCSV` stays empty until that CSV succeeds. When
+  the installed CSV is older than the tracked channel head, OLM immediately resolves the NEXT step
+  and creates a second InstallPlan for the head CSV: for `installPlanApproval: Manual` it waits
+  unapproved (`InstallPlanPending True RequiresApproval`, `currentCSV` = head, `installedCSV` = the
+  pin, phase UpgradePending) and installing it upgrades/replaces the CSV; Automatic subscriptions
+  auto-approve it. A dependency-resolution failure (unknown package/channel/startingCSV) reports
+  only `ResolutionFailed`/`ConstraintsNotSatisfiable` — no install-plan conditions or fake CSV.
 - `_tickOperatorsEffects`: if the `metallb` Subscription is Succeeded, Services of type LoadBalancer get
   `status.loadBalancer.ingress[{ip}]` from the first IPAddressPool address (only when an
   L2Advertisement references the pool); otherwise `<pending>`; emit `route:admitted`-style events.
@@ -343,7 +372,14 @@ Extend the existing fixed-step simulation with OpenShift controllers:
 - `_tickQuotaLimitRanges`: enforce ResourceQuota (existing `checkQuota`) and LimitRange defaults/min/max
   on pod creation (`limitrange:violation`); enforce ClusterResourceQuota across selected projects.
 - `_tickOAuth`: OAuth provider changes take effect after ~5s (simulated oauth rollout); emit
-  `auth:provider-ready`.
+  `auth:provider-ready`. A freshly seeded cluster is already settled — re-adding the baseline OAuth
+  singleton/cluster reset MUST NOT start a rollout (authentication ClusterOperator stays
+  Progressing=False/AsExpected); only a real `spec.identityProviders`/`spec.tokenConfig` change or a
+  data change to the referenced HTPasswd Secret triggers the rollout.
+- Node/Pod events follow real kubelet reasons only: Pods are `Scheduled → Pulling → Pulled →
+Created → Started` (plus real warning reasons such as `Failed`/`BackOff`/`FailedScheduling`);
+  there is no synthetic `Ready` event and no `PhaseChange` event (phase readiness is status, not an
+  event). Platform Pods (`router-default`, `dns-default`, `node-resolver`) carry the same stream.
 - `_tickClusterHealth`: recalc ClusterOperator conditions; emit periodic cluster state tick as today.
 - Keep all existing controllers (Deployment/RS/STS/DS/Job/CronJob/HPA/probes/PVC/quota/chaos).
 - Events (in addition to existing): `build:started`, `build:complete`, `build:failed`,

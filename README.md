@@ -42,10 +42,13 @@ names are shown in EX280 Prep).
   `Error from server (Forbidden): …` for reads and writes they are not allowed to perform.
   `oc` is the taught command; a leading `kubectl` is accepted as an alias with an educational hint.
 - **A real shell around `oc`** — `vim`/`vi` (opens the manifest editor), `cat`, `echo` with
-  `>`/`>>` redirects, heredocs, command substitution, and pipes through `grep`, `sed`, `tail`,
+  `>`/`>>` redirects, heredocs, command substitution, `;`/`&&`/`||` sequencing, session variables
+  (`export NS=default`, `$NS`/`${NS}` expansion) and pipes through `grep`, `sed`, `tail`,
   `head`, `cut`, `wc`, `sort`, `base64 -d`, `openssl` (including real `req -x509` / `x509` PEM
   handling), `htpasswd`, `skopeo` — so exam workflows like writing YAML in the terminal,
-  decoding a Secret and `oc apply -f -` work as on a real workstation. A workstation-side `curl`
+  decoding a Secret and `oc apply -f -` work as on a real workstation. Unsupported shell grammar
+  (loops, conditionals) is rejected with a clear simulator message instead of silently running part
+  of the line. A workstation-side `curl`
   resolves Route hosts through the router model (edge/passthrough/reencrypt, http redirect and
   NetworkPolicy reachability), with real flags and `-w/--write-out` (`%{http_code}` etc.), and
   `oc exec`/`oc rsh` show the Pod's real volumes, ConfigMaps, Secrets, service-account token and
@@ -62,10 +65,17 @@ names are shown in EX280 Prep).
   change triggers and rollouts, internal registry image references.
 - **Routes & networking** — `oc expose svc/...`, edge/passthrough/reencrypt TLS Routes, Route
   admission state, Services, NetworkPolicies, MetalLB `LoadBalancer` services with EXTERNAL-IP.
+  Route admission follows the real 4.22 router rules: host/path ownership (`HostAlreadyClaimed`),
+  external-certificate validation and target checks — a Service with no ready endpoints does **not**
+  reject the Route; the router answers 503 and `oc describe route` shows `Endpoints: <none>`, so the
+  player debugs the selector/endpoints instead of chasing a fake admission failure.
   The service-ca controller issues Service serving certificates
   (`service.beta.openshift.io/serving-cert-secret-name`) and injects CA bundles
   (`inject-cabundle`) for reencrypt Routes; a default-deny policy really blocks a project's Route
   until an ingress NetworkPolicy admits the router namespace (the L20 capstone teaches the fix).
+  The platform namespaces are populated like a real install: `openshift-ingress` runs
+  `router-default` pods and `openshift-dns` runs the `dns-default`/`node-resolver` pods that ARE
+  the `oc debug`/NetworkPolicy labs' DNS egress target.
 - **Declarative workflows** — a Files panel with editable YAML manifests, `oc apply -f`,
   Kustomize base/overlays (`oc apply -k`), OpenShift templates (`oc process -f … | oc apply -f -`),
   Helm charts (`helm install|upgrade|uninstall`), `--dry-run=client -o yaml` manifest skeletons,
@@ -101,11 +111,14 @@ names are shown in EX280 Prep).
   two-step uninstall: deleting the Subscription keeps the CSV; deleting the CSV removes the operands.
   Operator install variants are modelled: AllNamespaces installs through the global OperatorGroup
   into `openshift-operators`, Manual `installPlanApproval` waits for the
-  `oc patch installplan … approved:true` step, and `startingCSV` pins the installed version.
+  `oc patch installplan … approved:true` step, and `startingCSV` pins the installed version — after a
+  pinned install OLM immediately resolves the channel head into a second, unapproved Manual
+  InstallPlan (`InstallPlanPending True RequiresApproval`, `currentCSV` head / `installedCSV` pin), so
+  the real exam decision "Manual and why" is playable end to end.
   The catalog package names follow OCP 4.x (`metallb-operator`); OLM resolves per namespace, so a
   Subscription for a package that is not in the catalog makes every Subscription in that namespace
-  report `ResolutionFailed` (with no fake CSV or InstallPlan), while other namespaces install
-  normally.
+  report `ResolutionFailed` (with no fake CSV, InstallPlan or install-plan conditions), while other
+  namespaces install normally.
 - **Monitoring & alerting** — `oc get prometheusrules -A`, `oc describe prometheusrule`, live
   `Alertmanager` state (`oc get|describe alertmanager -n openshift-monitoring`): the Watchdog alert
   always fires and cluster state (crash-looping or unready Pods) surfaces the matching alert rules.
