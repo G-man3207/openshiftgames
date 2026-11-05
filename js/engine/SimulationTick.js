@@ -157,6 +157,32 @@ const ROUTER_404_BODY =
 const ROUTER_503_BODY =
   '<html><body><h1>503 Service Unavailable</h1>\nNo server is available to handle this request.</body></html>';
 
+/** Controller-owned platform workloads (issue #55). */
+const DNS_NAMESPACE = 'openshift-dns';
+const ROUTER_DEPLOYMENT_NAME = 'router-default';
+/** Labels that identify the default ingress router (Deployment selector). */
+const ROUTER_DEFAULT_SELECTOR = {
+  'ingress.operator.openshift.io/default-router': 'true',
+  router: ROUTER_DEPLOYMENT_NAME,
+};
+/**
+ * Tolerations of the platform node DaemonSets (dns-default, node-resolver) on a
+ * real 4.22 cluster: DNS must run on EVERY node, including dedicated
+ * control-plane machines, so the templates carry the master/control-plane and
+ * node-lifecycle tolerations the DNS operator installs. This is also what keeps
+ * the bootstrap — and any controller-recreated — dns-default Pod running/Ready
+ * on master-0 even though ordinary workload Pods cannot tolerate its taint
+ * (issue #55).
+ */
+const PLATFORM_NODE_DAEMONSET_TOLERATIONS = [
+  { key: 'node-role.kubernetes.io/master', operator: 'Exists', effect: 'NoSchedule' },
+  { key: 'node-role.kubernetes.io/control-plane', operator: 'Exists', effect: 'NoSchedule' },
+  { key: 'node.kubernetes.io/not-ready', operator: 'Exists', effect: 'NoSchedule' },
+  { key: 'node.kubernetes.io/not-ready', operator: 'Exists', effect: 'NoExecute' },
+  { key: 'node.kubernetes.io/unreachable', operator: 'Exists', effect: 'NoSchedule' },
+  { key: 'node.kubernetes.io/unreachable', operator: 'Exists', effect: 'NoExecute' },
+];
+
 /** Real service-account mount path + projected token lifetime (issue #42). */
 const SERVICE_ACCOUNT_MOUNT_PATH = '/var/run/secrets/kubernetes.io/serviceaccount';
 const SERVICE_ACCOUNT_TOKEN_SECONDS = 3607;
@@ -602,30 +628,40 @@ export class SimulationTick {
     return this._syncNodeNotReadyTaints(node, false);
   }
 
-  // ── OpenShift platform workloads (issue #53G) ───────────────────────────
+  // ── OpenShift platform workloads (issues #53G, #55) ─────────────────────
   //
   // A real OCP 4.22 cluster ships controller-owned work that a player sees
-  // immediately: two router-default Pods in openshift-ingress, and a
-  // dns-default + node-resolver DaemonSet Pod on every node. The namespaces /
-  // Secrets are seeded by ClusterState; the workload Pods are seeded here so
-  // they exist in every mode and are visible to `oc get pods -n
-  // openshift-ingress|openshift-dns` (and to lab 13's DNS egress lesson).
+  // immediately: the `router-default` Deployment (2/2) in openshift-ingress,
+  // plus the `dns-default` + `node-resolver` DaemonSets in openshift-dns (one
+  // Pod on every node — including dedicated control-plane machines, whose
+  // master NoSchedule taint the DaemonSet templates tolerate). The namespaces
+  // and Secrets are seeded by ClusterState; the owning controllers and their
+  // bootstrap Pods are seeded here so they exist in every mode and are visible
+  // to `oc get deploy,rs -n openshift-ingress`, `oc describe deploy`,
+  // `oc rollout status`, `oc get ds -n openshift-dns` and lab 13's DNS egress
+  // lesson.
   //
-  // They are static seed Pods (bound to a node, Running/Ready, no controller
-  // owner) so the scheduling / GC / image-pull controllers never churn them.
-  // The reconcile is idempotent: it only creates a Pod when a Pod with that
-  // name does not exist, so it never fabricates duplicates on every tick.
+  // The bootstrap Pods are created synchronously (`ensureOLMDefaultsSync()`
+  // runs before the app's initial mesh auto-align) and are fully Running/Ready,
+  // so a paused pre-start cluster already reports 2/2 and 3/3/3. They are REAL
+  // controller-owned Pods (ownerReferences: Pod → ReplicaSet → Deployment /
+  // Pod → DaemonSet) seeded exactly ONCE per owner (in-memory flag). After
+  // that the normal Deployment/ReplicaSet/DaemonSet controllers own
+  // reconciliation: deleting a platform Pod makes the controller recreate it
+  // normally, while this seeder only re-creates a controller that was deleted
+  // wholesale (the platform operators do the same on a real cluster).
+
   _ensurePlatformWorkloads() {
     const nodes = this.cluster
       .getByKind('Node')
       .filter((node) => node.status?.phase !== 'Terminating' && !node.metadata?.deletionTimestamp);
     if (nodes.length === 0) return; // safe before a mode seeds its Nodes
-    this._ensureRouterPods(nodes);
-    this._ensureDnsPods(nodes);
+    this._ensureRouterWorkloads(nodes);
+    this._ensureDnsWorkloads(nodes);
   }
 
-  /** router-default Pods: one per worker node, at least two (issue #53G). */
-  _ensureRouterPods(nodes) {
+  /** router-default Deployment + ReplicaSet + bootstrap Pods (issue #55). */
+  _ensureRouterWorkloads(nodes) {
     if (!this.cluster.getByName('Project', ROUTER_NAMESPACE, '')) return;
     const workers = nodes.filter(
       (node) =>
@@ -635,61 +671,207 @@ export class SimulationTick {
     const candidates = workers.length > 0 ? workers : nodes;
     // A real 4.22 ingress operator runs at least two router-default replicas.
     const targets = candidates.slice(0, 2);
-    for (const node of targets) {
-      const nodeName = node.metadata.name;
-      const token = (this._hashString(`router-default:${nodeName}`) >>> 0).toString(16);
-      const suffix = (this._hashString(`router-suffix:${nodeName}`) >>> 0)
-        .toString(36)
-        .padStart(5, '0')
-        .slice(-5);
-      const name = `router-default-${token.slice(0, 10).padEnd(10, '0')}-${suffix}`;
+    if (targets.length === 0) return;
+
+    let deployment = this.cluster.getByName('Deployment', ROUTER_DEPLOYMENT_NAME, ROUTER_NAMESPACE);
+    let created = false;
+    if (!deployment) {
+      deployment = this.cluster.addResource({
+        kind: 'Deployment',
+        metadata: {
+          name: ROUTER_DEPLOYMENT_NAME,
+          namespace: ROUTER_NAMESPACE,
+          labels: {
+            app: 'router',
+            router: ROUTER_DEPLOYMENT_NAME,
+            'ingress.operator.openshift.io/default-router': 'true',
+          },
+        },
+        spec: {
+          replicas: targets.length,
+          selector: { matchLabels: deepClone(ROUTER_DEFAULT_SELECTOR) },
+          strategy: {
+            type: 'RollingUpdate',
+            rollingUpdate: { maxSurge: '25%', maxUnavailable: '25%' },
+          },
+          template: this._routerDefaultTemplate(),
+        },
+      });
+      created = Boolean(deployment);
+    }
+    if (!deployment) return;
+    // addResource() merges the Deployment class's default selector
+    // ({app: <name>}); the real router-default selects on the ingress-operator
+    // label only, and a selector that does not match the template labels would
+    // be rejected by a real API server.
+    deployment.spec.selector = { matchLabels: deepClone(ROUTER_DEFAULT_SELECTOR) };
+
+    const template = deepClone(deployment.spec.template || this._routerDefaultTemplate());
+    const templateHash = this._templateHash(template);
+    const selector = deepClone(deployment.spec.selector?.matchLabels || ROUTER_DEFAULT_SELECTOR);
+    const ownedSets = this.cluster
+      .getChildren(deployment.uid)
+      .filter((child) => child.kind === 'ReplicaSet');
+    let replicaSet =
+      ownedSets.find((rs) => rs.metadata?.labels?.['pod-template-hash'] === templateHash) || null;
+    if (!replicaSet) {
+      replicaSet = this._createDeploymentReplicaSet(
+        deployment,
+        template,
+        templateHash,
+        selector,
+        ownedSets
+      );
+    }
+    if (!replicaSet) return;
+
+    if (!created || replicaSet._platformPodsSeeded) return;
+    // One-time synchronous bootstrap. Seeding on later ticks would fight the
+    // Deployment controller (a deleted Pod would be instantly resurrected
+    // instead of recreated by the ReplicaSet) — so this only runs immediately
+    // after this seeder created the Deployment itself.
+    replicaSet._platformPodsSeeded = true;
+    const templateLabels = deepClone(template.metadata?.labels || {});
+    const desired = Math.max(
+      0,
+      Math.min(targets.length, Number(deployment.spec.replicas ?? targets.length) || 0)
+    );
+    for (const node of targets.slice(0, desired)) {
+      const name = `${replicaSet.metadata.name}-${this._platformPodSuffix(
+        `router-default:${node.metadata.name}`
+      )}`;
       if (this.cluster.getByName('Pod', name, ROUTER_NAMESPACE)) continue;
       this._seedPlatformPod({
         name,
         namespace: ROUTER_NAMESPACE,
         node,
+        owner: replicaSet,
         labels: {
-          app: 'router',
-          router: 'router-default',
-          'ingress.operator.openshift.io/default-router': 'true',
+          ...templateLabels,
+          ...selector,
+          'pod-template-hash': templateHash,
         },
-        container: {
-          name: 'router',
-          image: 'quay.io/openshift/origin-haproxy-router:4.22',
-          ports: [
-            { name: 'http', containerPort: 80, hostPort: 80, protocol: 'TCP' },
-            { name: 'https', containerPort: 443, hostPort: 443, protocol: 'TCP' },
-            { name: 'metrics', containerPort: 1936, protocol: 'TCP' },
-          ],
-          resources: {
-            requests: { cpu: '100m', memory: '256Mi' },
-            limits: { cpu: '500m', memory: '512Mi' },
-          },
-        },
+        podSpec: template.spec,
       });
     }
+    replicaSet.spec.replicas = desired;
+    this._refreshReplicaSetStatus(replicaSet, this._activePodsOf(replicaSet), 0);
+    this.cluster.update(replicaSet.uid, replicaSet);
+
+    const pods = this._activePodsOf(replicaSet);
+    const ready = pods.filter((pod) => this._podIsReady(pod, 0));
+    const now = new Date().toISOString();
+    const available = desired > 0 && ready.length >= desired;
+    deployment.status = {
+      ...(deployment.status || {}),
+      observedGeneration: deployment.metadata.generation,
+      replicas: pods.length,
+      updatedReplicas: pods.length,
+      readyReplicas: ready.length,
+      availableReplicas: ready.length,
+      unavailableReplicas: Math.max(0, desired - ready.length),
+      conditions: [
+        {
+          type: 'Available',
+          status: available ? 'True' : 'False',
+          reason: available ? 'MinimumReplicasAvailable' : 'MinimumReplicasUnavailable',
+          message: `${ready.length}/${desired} replicas available`,
+          lastTransitionTime: now,
+        },
+        {
+          type: 'Progressing',
+          status: 'True',
+          reason: 'NewReplicaSetAvailable',
+          message: `ReplicaSet "${replicaSet.metadata.name}" has successfully progressed.`,
+          lastTransitionTime: now,
+        },
+      ],
+    };
+    this.cluster.update(deployment.uid, deployment);
   }
 
-  /** dns-default + node-resolver DaemonSet Pods, one per node (issue #53G). */
-  _ensureDnsPods(nodes) {
-    if (!this.cluster.getByName('Project', 'openshift-dns', '')) return;
-    for (const node of nodes) {
-      const nodeName = node.metadata.name;
-      const suffix = (salt) =>
-        (this._hashString(`${salt}:${nodeName}`) >>> 0).toString(36).padStart(5, '0').slice(-5);
-      const dnsName = `dns-default-${suffix('dns-default')}`;
-      if (!this.cluster.getByName('Pod', dnsName, 'openshift-dns')) {
-        this._seedPlatformPod({
-          name: dnsName,
-          namespace: 'openshift-dns',
-          node,
-          labels: {
-            app: 'dns-default',
-            'dns.operator.openshift.io/daemonset-dns': 'default',
+  /**
+   * Pod template of the real 4.22 default ingress router (`router-default` in
+   * openshift-ingress): hostNetwork with host ports 80/443 — which is also what
+   * makes exactly one router Pod fit per node — and the default IngressController
+   * node placement (`kubernetes.io/os: linux`), so the control-plane NoSchedule
+   * taint is what keeps the router off dedicated masters (issue #55).
+   * @returns {object} pod template
+   */
+  _routerDefaultTemplate() {
+    return {
+      metadata: {
+        labels: {
+          app: 'router',
+          router: ROUTER_DEPLOYMENT_NAME,
+          'ingress.operator.openshift.io/default-router': 'true',
+        },
+      },
+      spec: {
+        hostNetwork: true,
+        dnsPolicy: 'ClusterFirstWithHostNet',
+        priorityClassName: 'system-cluster-critical',
+        serviceAccountName: 'router',
+        nodeSelector: { 'kubernetes.io/os': 'linux' },
+        restartPolicy: 'Always',
+        terminationGracePeriodSeconds: 30,
+        containers: [
+          {
+            name: 'router',
+            image: 'quay.io/openshift/origin-haproxy-router:4.22',
+            imagePullPolicy: 'IfNotPresent',
+            ports: [
+              { name: 'http', containerPort: 80, hostPort: 80, protocol: 'TCP' },
+              { name: 'https', containerPort: 443, hostPort: 443, protocol: 'TCP' },
+              { name: 'metrics', containerPort: 1936, protocol: 'TCP' },
+            ],
+            resources: {
+              requests: { cpu: '100m', memory: '256Mi' },
+              limits: { cpu: '500m', memory: '512Mi' },
+            },
           },
-          container: {
+        ],
+      },
+    };
+  }
+
+  /** dns-default + node-resolver DaemonSets and their Pods (issue #55). */
+  _ensureDnsWorkloads(nodes) {
+    if (!this.cluster.getByName('Project', DNS_NAMESPACE, '')) return;
+    this._ensurePlatformDaemonSet(nodes, {
+      name: 'dns-default',
+      selectorLabels: { 'dns.operator.openshift.io/daemonset-dns': 'default' },
+      template: this._dnsDefaultTemplate(),
+    });
+    this._ensurePlatformDaemonSet(nodes, {
+      name: 'node-resolver',
+      selectorLabels: { 'dns.operator.openshift.io/daemonset-node-resolver': 'default' },
+      template: this._nodeResolverTemplate(),
+    });
+  }
+
+  /** Pod template of the real 4.22 `dns-default` DaemonSet (dns + kube-rbac-proxy). */
+  _dnsDefaultTemplate() {
+    return {
+      metadata: {
+        labels: {
+          app: 'dns-default',
+          'dns.operator.openshift.io/daemonset-dns': 'default',
+        },
+      },
+      spec: {
+        hostNetwork: true,
+        dnsPolicy: 'ClusterFirstWithHostNet',
+        priorityClassName: 'system-node-critical',
+        serviceAccountName: 'dns-default',
+        restartPolicy: 'Always',
+        terminationGracePeriodSeconds: 30,
+        tolerations: deepClone(PLATFORM_NODE_DAEMONSET_TOLERATIONS),
+        containers: [
+          {
             name: 'dns',
             image: 'quay.io/openshift/origin-coredns:4.22',
+            imagePullPolicy: 'IfNotPresent',
             ports: [
               { name: 'dns', containerPort: 5353, hostPort: 5353, protocol: 'UDP' },
               { name: 'dns-tcp', containerPort: 5353, hostPort: 5353, protocol: 'TCP' },
@@ -700,69 +882,196 @@ export class SimulationTick {
               limits: { cpu: '200m', memory: '256Mi' },
             },
           },
-        });
-      }
-      const resolverName = `node-resolver-${suffix('node-resolver')}`;
-      if (!this.cluster.getByName('Pod', resolverName, 'openshift-dns')) {
-        this._seedPlatformPod({
-          name: resolverName,
-          namespace: 'openshift-dns',
-          node,
-          labels: {
-            app: 'node-resolver',
-            'dns.operator.openshift.io/daemonset-node-resolver': 'default',
+          {
+            name: 'kube-rbac-proxy',
+            image: 'quay.io/openshift/origin-kube-rbac-proxy:4.22',
+            imagePullPolicy: 'IfNotPresent',
+            ports: [{ name: 'metrics', containerPort: 9154, protocol: 'TCP' }],
+            resources: {
+              requests: { cpu: '10m', memory: '32Mi' },
+              limits: { cpu: '100m', memory: '128Mi' },
+            },
           },
-          container: {
+        ],
+      },
+    };
+  }
+
+  /** Pod template of the real 4.22 `node-resolver` DaemonSet. */
+  _nodeResolverTemplate() {
+    return {
+      metadata: {
+        labels: {
+          app: 'node-resolver',
+          'dns.operator.openshift.io/daemonset-node-resolver': 'default',
+        },
+      },
+      spec: {
+        hostNetwork: true,
+        dnsPolicy: 'ClusterFirstWithHostNet',
+        priorityClassName: 'system-node-critical',
+        serviceAccountName: 'node-resolver',
+        restartPolicy: 'Always',
+        terminationGracePeriodSeconds: 30,
+        tolerations: deepClone(PLATFORM_NODE_DAEMONSET_TOLERATIONS),
+        containers: [
+          {
             name: 'dns-node-resolver',
             image: 'quay.io/openshift/origin-node-resolver:4.22',
+            imagePullPolicy: 'IfNotPresent',
             ports: [{ name: 'metrics', containerPort: 9113, protocol: 'TCP' }],
             resources: {
               requests: { cpu: '10m', memory: '16Mi' },
               limits: { cpu: '50m', memory: '64Mi' },
             },
           },
-        });
-      }
-    }
+        ],
+      },
+    };
   }
 
   /**
-   * Create one Running/Ready platform seed Pod bound to a node, with the full
-   * status + kubelet lifecycle event stream a real cluster shows. Static: no
-   * ownerReferences, so the RS/GC controllers leave it alone.
-   * @param {{name: string, namespace: string, node: object, labels: object, container: object}} seed
+   * Seed (or refresh) one platform DaemonSet and its bootstrap Pods. The Pods
+   * are seeded once per DaemonSet; afterwards the DaemonSet controller recreates
+   * any Pod the player deletes on the next tick.
+   * @param {object[]} nodes current cluster Nodes
+   * @param {{name: string, selectorLabels: object, template: object}} definition
+   */
+  _ensurePlatformDaemonSet(nodes, definition) {
+    const { name, selectorLabels } = definition;
+    let daemonSet = this.cluster.getByName('DaemonSet', name, DNS_NAMESPACE);
+    let created = false;
+    if (!daemonSet) {
+      daemonSet = this.cluster.addResource({
+        kind: 'DaemonSet',
+        metadata: {
+          name,
+          namespace: DNS_NAMESPACE,
+          labels: deepClone(definition.template.metadata?.labels || selectorLabels),
+        },
+        spec: {
+          selector: { matchLabels: deepClone(selectorLabels) },
+          updateStrategy: {
+            type: 'RollingUpdate',
+            rollingUpdate: { maxUnavailable: '10%' },
+          },
+          template: deepClone(definition.template),
+        },
+      });
+      created = Boolean(daemonSet);
+    }
+    if (!daemonSet) return;
+    // Normalise the selector the class defaults merged in ({app: <name>}), so
+    // `.spec.selector.matchLabels` is the real DNS operator label set.
+    daemonSet.spec.selector = { matchLabels: deepClone(selectorLabels) };
+
+    if (!created || daemonSet._platformPodsSeeded) return;
+    daemonSet._platformPodsSeeded = true;
+    const template = deepClone(daemonSet.spec.template || definition.template);
+    const targetNodes = this._platformDaemonSetTargets(nodes, template.spec?.tolerations || []);
+    for (const node of targetNodes) {
+      const podName = `${name}-${this._platformPodSuffix(`${name}:${node.metadata.name}`)}`;
+      if (this.cluster.getByName('Pod', podName, DNS_NAMESPACE)) continue;
+      this._seedPlatformPod({
+        name: podName,
+        namespace: DNS_NAMESPACE,
+        node,
+        owner: daemonSet,
+        labels: {
+          ...deepClone(template.metadata?.labels || {}),
+          ...deepClone(selectorLabels),
+        },
+        podSpec: template.spec,
+      });
+    }
+    const pods = this._activePodsOf(daemonSet);
+    const ready = pods.filter((pod) => this._podIsReady(pod, 0));
+    daemonSet.status = {
+      ...(daemonSet.status || {}),
+      desiredNumberScheduled: targetNodes.length,
+      currentNumberScheduled: pods.filter((pod) => pod.spec.nodeName).length,
+      numberReady: ready.length,
+      numberAvailable: ready.length,
+      numberUnavailable: Math.max(0, targetNodes.length - ready.length),
+      numberMisscheduled: 0,
+      updatedNumberScheduled: pods.length,
+      observedGeneration: daemonSet.metadata.generation,
+      phase: 'Running',
+      conditions: [],
+    };
+    this.cluster.update(daemonSet.uid, daemonSet);
+  }
+
+  /**
+   * Nodes a DaemonSet targets, using the same rules as {@link _tickDaemonSets}:
+   * Ready nodes whose taints the template tolerates.
+   * @param {object[]} nodes
+   * @param {object[]} tolerations DaemonSet pod-template tolerations
+   * @returns {object[]}
+   */
+  _platformDaemonSetTargets(nodes, tolerations) {
+    return nodes.filter((node) => {
+      if (!node.isConditionTrue('Ready')) return false;
+      return !this._firstUntoleratedNoScheduleTaint({ spec: { tolerations } }, node);
+    });
+  }
+
+  /** Deterministic 5-character rand.String suffix for bootstrap platform Pods. */
+  _platformPodSuffix(seed) {
+    const digest = this._hashString(seed);
+    let suffix = '';
+    for (let index = 0; index < 5; index += 1) {
+      suffix += RAND_SAFE_ALPHABET[(digest >>> (index * 4)) % RAND_SAFE_ALPHABET.length];
+    }
+    return suffix;
+  }
+
+  /**
+   * Create one Running/Ready bootstrap Pod for a controller-owned platform
+   * workload, bound to a node, owned by its ReplicaSet/DaemonSet
+   * (ownerReferences via {@link ClusterState.addRelationship}) and with the
+   * full status + kubelet lifecycle event stream a real cluster shows.
+   *
+   * The Pod is seeded fully Ready synchronously so a paused pre-start cluster
+   * already shows the platform controllers healthy; its in-memory kubelet flags
+   * prevent the scheduling/image-pull/SCC controllers from churning it.
+   *
+   * @param {{name: string, namespace: string, node: object, owner: object,
+   *   labels: object, podSpec: object, annotations?: object}} seed
    * @returns {object|null}
    */
   _seedPlatformPod(seed) {
     const nodeName = seed.node.metadata.name;
     const now = new Date().toISOString();
+    const podSpec = deepClone(seed.podSpec || {});
+    podSpec.containers = podSpec.containers || [];
+    podSpec.nodeName = nodeName;
     const pod = this.cluster.addResource({
       kind: 'Pod',
       metadata: {
         name: seed.name,
         namespace: seed.namespace,
-        labels: { ...seed.labels },
+        labels: deepClone(seed.labels || {}),
         annotations: {
           'openshift.io/scc': 'hostnetwork',
           'k8s.v1.cni.cncf.io/network-status': '{}',
+          ...(seed.annotations || {}),
         },
       },
-      spec: {
-        nodeName,
-        hostNetwork: true,
-        serviceAccountName: 'default',
-        containers: [deepClone(seed.container)],
-      },
+      spec: podSpec,
       status: { phase: 'Running', startTime: now },
     });
     if (!pod) return null;
+    if (seed.owner) this.cluster.addRelationship(seed.owner.uid, pod.uid);
     pod._nodeBound = true;
     pod._imagePullDone = true;
     pod._pullStarted = true;
     pod._sccEvaluated = true;
     pod._readyAt = this.gameSeconds;
-    pod.status.podIP = this._generatePodIP();
-    pod.status.hostIP = seed.node.status?.addresses?.[0]?.address || '10.0.0.1';
+    const hostIP = seed.node.status?.addresses?.[0]?.address || '10.0.0.1';
+    pod.status.hostIP = hostIP;
+    // hostNetwork Pods report the node IP as their Pod IP.
+    pod.status.podIP = podSpec.hostNetwork ? hostIP : this._generatePodIP();
     pod.status.conditions = [];
     pod.setCondition('PodScheduled', 'True', 'Scheduled', `Assigned to ${nodeName}`);
     pod.setCondition('Initialized', 'True', 'PodInitialized', '');
@@ -785,16 +1094,21 @@ export class SimulationTick {
         memoryRequest: parseMemoryMi(container.resources?.requests?.memory || '128Mi'),
       },
     }));
-    const container = pod.spec.containers?.[0] || {};
     pod.recordEvent(
       'Normal',
       'Scheduled',
       `Successfully assigned ${seed.namespace}/${seed.name} to ${nodeName}`
     );
-    pod.recordEvent('Normal', 'Pulling', `Pulling image "${container.image || ''}"`);
-    pod.recordEvent('Normal', 'Pulled', `Successfully pulled image "${container.image || ''}"`);
-    pod.recordEvent('Normal', 'Created', `Created container ${container.name || 'main'}`);
-    pod.recordEvent('Normal', 'Started', `Started container ${container.name || 'main'}`);
+    for (const container of pod.spec.containers) {
+      pod.recordEvent('Normal', 'Pulling', `Pulling image "${container.image || ''}"`);
+    }
+    for (const container of pod.spec.containers) {
+      pod.recordEvent('Normal', 'Pulled', `Successfully pulled image "${container.image || ''}"`);
+    }
+    for (const container of pod.spec.containers) {
+      pod.recordEvent('Normal', 'Created', `Created container ${container.name || 'main'}`);
+      pod.recordEvent('Normal', 'Started', `Started container ${container.name || 'main'}`);
+    }
     this.cluster.update(pod.uid, pod);
     return pod;
   }
@@ -4330,6 +4644,37 @@ export class SimulationTick {
   }
 
   /**
+   * The `spec.replaces` value of a catalog CSV: the NEXT OLDER entry of its
+   * channel's ordered `entries` list (OLM's replacement chain). Derived from
+   * the PackageManifest the catalog advertises, so every package/version gets
+   * the real chain instead of an ad-hoc hardcoded string (issue #56):
+   * `['…v1.17.0', '…v1.16.0', '…v1.15.0']` → v1.17.0 replaces v1.16.0,
+   * v1.16.0 replaces v1.15.0, v1.15.0 (oldest) replaces nothing.
+   * A single-CSV package (one entry) keeps an empty replaces.
+   *
+   * @param {string} packageName catalog package the Subscription tracks
+   * @param {string} csvName CSV whose predecessor we need
+   * @param {string} [channelName] tracked channel (defaults to the manifest's)
+   * @returns {string} older CSV name, or '' at the start of the chain
+   */
+  _csvReplaces(packageName, csvName, channelName) {
+    const channels = this._safe(() => this._packageChannels(packageName), []) || [];
+    if (channels.length === 0 || !csvName) return '';
+    const manifest = this.cluster.getByName('PackageManifest', packageName, '');
+    const defaultChannel = String(
+      manifest?.status?.defaultChannel || manifest?.spec?.defaultChannel || ''
+    );
+    const requested = String(channelName || '');
+    const channel = requested
+      ? channels.find((candidate) => candidate.name === requested) || null
+      : channels.find((candidate) => candidate.name === defaultChannel) || channels[0] || null;
+    if (!channel) return '';
+    const index = channel.entries.findIndex((entry) => entry.name === csvName);
+    if (index < 0) return '';
+    return channel.entries[index + 1]?.name || '';
+  }
+
+  /**
    * Resolve which CSV an OLM Subscription installs, validating its channel and
    * `startingCSV` against the catalog (issue #46, real OLM semantics):
    *  - the channel must exist on the package's PackageManifest;
@@ -4609,6 +4954,9 @@ export class SimulationTick {
         spec: {
           displayName: this._catalogDisplayName(packageName),
           version: target.version,
+          // The head CSV's place in the channel's replacement chain (issue #56):
+          // OLM exposes it as `spec.replaces` / the `oc get csv` REPLACES column.
+          replaces: this._csvReplaces(packageName, headCsv, target.channel),
           customresourcedefinitions: { owned: deepClone(this._catalogCrds(packageName)) },
         },
         status: { phase: 'Installing' },
@@ -4687,6 +5035,37 @@ export class SimulationTick {
   }
 
   /**
+   * Pod template a CSV install strategy applies to an EXISTING operator
+   * Deployment. The strategy's template is used as-is, with the Deployment's
+   * (immutable) selector labels folded into the template labels so the template
+   * keeps matching `.spec.selector`, exactly like the kube API requires.
+   * Returns null when the CSV carries no deployment strategy for it.
+   *
+   * @param {object} csv ClusterServiceVersion whose install strategy to apply
+   * @param {object} deployment existing operator Deployment
+   * @returns {object|null} desired pod template
+   */
+  _operatorDeploymentPodTemplate(csv, deployment) {
+    const strategyDeployments = csv.spec?.install?.spec?.deployments;
+    if (!Array.isArray(strategyDeployments) || strategyDeployments.length === 0) return null;
+    const strategyDeployment =
+      strategyDeployments.find((entry) => entry?.name === deployment.metadata.name) ||
+      strategyDeployments[0];
+    const template = strategyDeployment?.spec?.template;
+    if (!template || typeof template !== 'object') return null;
+    const desired = deepClone(template);
+    desired.metadata = desired.metadata || {};
+    // Selector labels win: a Kubernetes Deployment requires its pod template to
+    // carry every selector label, and the selector is immutable — so the
+    // template (not the selector) is adapted when they disagree.
+    desired.metadata.labels = {
+      ...(desired.metadata.labels || {}),
+      ...(deployment.spec?.selector?.matchLabels || {}),
+    };
+    return desired;
+  }
+
+  /**
    * Create the operator Deployment described by a CSV install strategy, the way
    * OLM does after the CSV reaches Succeeded. The Deployment is labelled with
    * olm.owner so deleting the CSV can remove it (real uninstall).
@@ -4702,14 +5081,29 @@ export class SimulationTick {
     if (existing) {
       // A channel UPGRADE reuses the same operator Deployment name; OLM updates
       // its owning-CSV label so deleting the superseded CSV does not uninstall
-      // the freshly upgraded operator (issue #53D).
+      // the freshly upgraded operator (issue #53D) AND applies the new CSV's
+      // pod template — that is what makes the Deployment controller roll a NEW
+      // ReplicaSet for the upgraded operator (issue #56). `.spec.selector` is
+      // immutable in real Kubernetes and is never touched.
+      let changed = false;
       const ownerName = csv.metadata.name;
-      if (existing.metadata?.labels?.['olm.owner'] !== ownerName) {
-        existing.metadata.labels = existing.metadata.labels || {};
+      existing.metadata.labels = existing.metadata.labels || {};
+      if (existing.metadata.labels['olm.owner'] !== ownerName) {
         existing.metadata.labels['olm.owner'] = ownerName;
         existing.metadata.labels['olm.owner.namespace'] = namespace;
-        this.cluster.update(existing.uid, existing);
+        changed = true;
       }
+      const desiredTemplate = this._operatorDeploymentPodTemplate(csv, existing);
+      if (
+        desiredTemplate &&
+        this._stableStringify(existing.spec?.template || {}) !==
+          this._stableStringify(desiredTemplate)
+      ) {
+        existing.spec.template = desiredTemplate;
+        existing.metadata.generation = (Number(existing.metadata.generation) || 1) + 1;
+        changed = true;
+      }
+      if (changed) this.cluster.update(existing.uid, existing);
       this._olmOperatorDeployments.set(csv.uid, existing.uid);
       return existing;
     }
@@ -5833,6 +6227,10 @@ export class SimulationTick {
           spec: {
             displayName: this._catalogDisplayName(packageName),
             version,
+            // Replacement chain from the channel's ordered entries (issue #56):
+            // a pinned v1.16.0 install carries `replaces: …v1.15.0` here, and
+            // the upgrade CSV carries `replaces: …v1.16.0`.
+            replaces: this._csvReplaces(packageName, csvName, target.channel),
             customresourcedefinitions: { owned: deepClone(this._catalogCrds(packageName)) },
           },
           status: { phase: 'Installing' },

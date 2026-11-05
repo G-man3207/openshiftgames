@@ -5885,6 +5885,22 @@ Object.assign(CommandBar.prototype, {
   },
 
   /**
+   * `oc status` admission annotation for a Route (#56). A Route the router has
+   * not reconciled yet has no Admitted condition at all — say so instead of
+   * pretending missing Service endpoints block admission (they never do, #52:
+   * the router admits the Route and answers 503).
+   * @param {object} resource Route
+   * @returns {string}
+   */
+  _routeAdmissionStatusText(resource) {
+    const conditions = resource.status?.ingress?.[0]?.conditions || [];
+    const condition = conditions.find((entry) => entry.type === 'Admitted');
+    if (!condition) return 'router default (not yet evaluated)';
+    if (condition.status === 'True') return 'router default (Admitted)';
+    return `router default (NOT admitted: ${condition.reason || 'rejected'})`;
+  },
+
+  /**
    * The ReplicaSet the deployment controller currently scales — the owner-linked
    * RS carrying the deployment's pod-template hash, newest first for rolling
    * updates. Used by the synthetic ScalingReplicaSet event so it prints the real
@@ -6794,15 +6810,23 @@ Object.assign(CommandBar.prototype, {
         : Date.now() - 180000;
       // The router records the admission event with the same reason/message as
       // the Admitted condition it sets on the Route (#49): a route rejected for
-      // an unreadable externalCertificate reports ExternalCertificateValidationFailed
-      // instead of the generic no-endpoints ServiceUnavailable.
+      // an unreadable externalCertificate reports ExternalCertificateValidationFailed,
+      // a host-claim conflict reports HostAlreadyClaimed (#52).
       const condition =
         (route.status?.ingress?.[0]?.conditions || []).find(
           (candidate) => candidate.type === 'Admitted'
         ) || null;
-      const admitted = condition ? condition.status === 'True' : this._routeAdmitted(route);
-      const rejectionReason = condition?.reason || 'ServiceUnavailable';
-      const rejectionMessage = condition?.message || 'no endpoints available';
+      // Before the router's first reconcile the Route has no Admitted condition
+      // and the router has published no event: omit the row entirely rather than
+      // fabricate a rejection. The old fallback here invented an admission
+      // failure out of missing endpoints, contradicting the fixed #52 semantics
+      // (missing endpoints never block admission — the router admits the Route
+      // and answers 503 for it).
+      if (!condition) continue;
+      const admitted = condition.status === 'True';
+      const rejectionReason = condition.reason || 'Rejected';
+      const rejectionMessage =
+        condition.message || condition.reason || 'route rejected by the router';
       push({
         lastTimestamp: created + 2000,
         type: admitted ? 'Normal' : 'Warning',
@@ -7950,8 +7974,16 @@ Object.assign(CommandBar.prototype, {
         }
         if (endpointsObjects.length) {
           sections.push(
-            this._formatEndpointsObjects(endpointsObjects, { output, allNamespaces, name: null })
-              .message
+            // Multi-type requests prefix every kind's NAME cell, so the virtual
+            // Endpoints rows must print `endpoints/<name>` like the real
+            // resource does in `oc get pods,endpoints,route` (#56).
+            this._formatEndpointsObjects(endpointsObjects, {
+              output,
+              allNamespaces,
+              name: null,
+              namePrefix: multiKind,
+              noHeaders: Boolean(flags['no-headers']),
+            }).message
           );
         }
         continue;
@@ -8677,7 +8709,10 @@ Object.assign(CommandBar.prototype, {
   },
 
   /** Render a list of virtual Endpoints objects in cli-runtime format. */
-  _formatEndpointsObjects(endpointsObjects, { output, allNamespaces, name = null }) {
+  _formatEndpointsObjects(
+    endpointsObjects,
+    { output, allNamespaces, name = null, namePrefix = false, noHeaders = false }
+  ) {
     if (output.format === 'name') {
       return this._ok(
         endpointsObjects.map((object) => `endpoints/${object.metadata.name}`).join('\n')
@@ -8714,12 +8749,19 @@ Object.assign(CommandBar.prototype, {
       );
       return [
         ...(allNamespaces ? [object.metadata.namespace || ''] : []),
-        object.metadata.name,
+        // `oc get pods,endpoints,route` labels each kind's rows in the NAME
+        // cell (`endpoints/<svc>`) while the single-kind `oc get endpoints`
+        // view stays plain `web` (#56).
+        namePrefix
+          ? `${this._singularName('Endpoints')}/${object.metadata.name}`
+          : object.metadata.name,
         addresses.join(',') || '<none>',
         this._creationAge(object),
       ];
     });
-    return this._ok(padTable(headers, rows));
+    const table = padTable(headers, rows);
+    if (noHeaders) return this._ok(table.split('\n').slice(1).join('\n'));
+    return this._ok(table);
   },
 
   _getEndpointsView({ flags, allNamespaces, namespace, name }) {
@@ -9302,9 +9344,7 @@ Object.assign(CommandBar.prototype, {
       }
       for (const route of routes) {
         lines.push(`route.route.openshift.io/${route.metadata?.name} - ${this._routeHost(route)}`);
-        lines.push(
-          `  exposed by ${this._routeAdmitted(route) ? 'router default (Admitted)' : 'router default (NOT admitted: no endpoints)'}`
-        );
+        lines.push(`  exposed by ${this._routeAdmissionStatusText(route)}`);
       }
       if (routes.length) lines.push('');
       const failedBuilds = builds.filter((build) =>
@@ -15709,15 +15749,31 @@ Object.assign(CommandBar.prototype, {
       }
       const node = this._findResource('Node', nodeName, {});
       if (!node) return this._err(this._notFoundMessage('Node', nodeName));
-      const remove = taintSpec.endsWith('-') && !taintSpec.includes('=');
+      // Real `oc adm taint` removal forms (trailing `-`):
+      //   key-                      remove every taint with that key
+      //   key:NoSchedule-           remove that key/effect
+      //   key=value:NoSchedule-     remove that exact key/value/effect
+      // The old parser stripped the `-` and compared the WHOLE spec against
+      // `taint.key`, so `node-role.kubernetes.io/master:NoSchedule-` never
+      // matched an existing taint and the command still printed "untainted"
+      // (issue #55A).
+      const remove = taintSpec.endsWith('-');
       const result = this._updateResource(
         'Node',
         nodeName,
         (spec) => {
           spec.taints = spec.taints || [];
           if (remove) {
-            const key = taintSpec.slice(0, -1);
-            spec.taints = spec.taints.filter((taint) => taint.key !== key);
+            const removal = taintSpec.slice(0, -1);
+            const match = removal.match(/^([^=:]+)(?:=([^:]+))?(?::([A-Za-z]+))?$/);
+            if (!match) return { error: this._err(`error: invalid taint spec "${taintSpec}"`) };
+            const [, key, value, effect] = match;
+            spec.taints = spec.taints.filter(
+              (taint) =>
+                taint.key !== key ||
+                (value !== undefined && String(taint.value ?? '') !== value) ||
+                (effect !== undefined && taint.effect !== effect)
+            );
             return {};
           }
           const match = taintSpec.match(/^([^=:]+)(?:=([^:]+))?:([A-Za-z]+)$/);

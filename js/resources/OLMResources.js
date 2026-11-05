@@ -220,13 +220,25 @@ export class ClusterServiceVersion extends ResourceBase {
       ...metadata,
       apiVersion: metadata.apiVersion || 'operators.coreos.com/v1alpha1',
     });
-    const packageName = metadata.packageName || metadata.displayName || metadata.name || 'operator';
+    // Catalog CSVs are named `<operator>.v<semver>` (e.g.
+    // `cert-manager-operator.v1.16.0`). Split the operator base from the
+    // version: the install strategy's Deployment name and its selector/template
+    // labels must be identical for every version of a package (a Deployment
+    // selector is immutable, so OLM only ever updates the pod template on a
+    // channel upgrade), while the container image tracks the CSV version — an
+    // upgrade then really changes the pod template and the Deployment
+    // controller rolls a NEW ReplicaSet, like a real OLM operator upgrade
+    // (issue #56).
+    const csvName = String(metadata.name || 'operator');
+    const parsedVersion = csvName.match(/\.v?(\d+\.\d+\.\d+)/);
+    const version = metadata.version || (parsedVersion ? parsedVersion[1] : '1.0.0');
+    const operatorBase = csvName.replace(/\.v\d+.*$/, '') || csvName;
+    const packageName = metadata.packageName || metadata.displayName || operatorBase || 'operator';
     const displayName =
       metadata.displayName ||
       String(packageName)
         .replace(/[-_]/g, ' ')
         .replace(/\b\w/g, (character) => character.toUpperCase());
-    const version = metadata.version || '1.0.0';
     this._initSpec(
       {
         displayName,
@@ -239,20 +251,23 @@ export class ClusterServiceVersion extends ResourceBase {
           spec: {
             deployments: [
               {
-                name: `${String(metadata.name || packageName).replace(/\.v\d+.*$/, '')}-controller-manager`,
+                // Stable across every CSV version of the package: OLM upgrades
+                // the SAME operator Deployment (only its pod template moves).
+                name: `${operatorBase}-controller-manager`,
                 spec: {
                   replicas: 1,
-                  selector: { matchLabels: { name: `${packageName}-operator` } },
+                  selector: { matchLabels: { name: operatorBase } },
                   template: {
-                    metadata: { labels: { name: `${packageName}-operator` } },
+                    metadata: { labels: { name: operatorBase } },
                     spec: {
                       serviceAccountName: 'default',
                       containers: [
                         {
+                          // Version-tagged like the real catalog images, so a
+                          // channel upgrade produces a different pod template
+                          // (`pod-template-hash`) and rolls a new ReplicaSet.
                           name: 'manager',
-                          image:
-                            metadata.image ||
-                            `${String(packageName).replace(/-operator$/, '')}-operator:latest`,
+                          image: metadata.image || `${operatorBase}:v${version}`,
                           resources: {
                             requests: { cpu: '10m', memory: '64Mi' },
                             limits: { cpu: '200m', memory: '256Mi' },
@@ -337,6 +352,10 @@ export class ClusterServiceVersion extends ResourceBase {
       renderKeyValueLines([
         ['Display Name', this.spec.displayName],
         ['Version', this.spec.version],
+        // Real `oc describe csv` exposes the replacement graph; the catalog's
+        // ordered channel entries decide which older CSV this one replaces
+        // (issue #56).
+        ['Replaces', this.spec.replaces],
         ['Provider', this.spec.provider?.name || ''],
         ['Maturity', this.spec.maturity],
       ]),

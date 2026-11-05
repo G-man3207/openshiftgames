@@ -169,16 +169,50 @@ function describeNodeTaints(taints = []) {
     .join(',');
 }
 
+/**
+ * Node-role labels that identify a machine as part of the control plane. Real
+ * OCP 4.x labels control-plane machines with BOTH the legacy `master` role and
+ * the newer `control-plane` role (issue #53F: ROLES `control-plane,master`).
+ */
+const CONTROL_PLANE_ROLE_LABELS = [
+  'node-role.kubernetes.io/master',
+  'node-role.kubernetes.io/control-plane',
+];
+
+/**
+ * The taint the real installer/node lifecycle puts on dedicated control-plane
+ * machines: `node-role.kubernetes.io/master:NoSchedule`. It is derived from the
+ * node-role labels at Node CONSTRUCTION time (every creation path — modes,
+ * campaign levels, `oc create node`/manifests, saved games — funnels through
+ * the Node constructor), which is exactly what the real machine-config
+ * operator does once per machine. Seeding it in the modes instead would leave
+ * lab-created Nodes unprotected and re-adding it from the tick loop would undo
+ * an admin's `oc adm taint node ... NoSchedule-`.
+ *
+ * @param {Record<string, string>|undefined} labels node labels
+ * @returns {{key: string, effect: string}[]} taints to seed on a fresh Node
+ */
+function controlPlaneTaintsForLabels(labels) {
+  const roleLabels = labels && typeof labels === 'object' ? labels : {};
+  const isControlPlane = CONTROL_PLANE_ROLE_LABELS.some(
+    (key) => roleLabels[key] !== undefined && roleLabels[key] !== null
+  );
+  return isControlPlane ? [{ key: 'node-role.kubernetes.io/master', effect: 'NoSchedule' }] : [];
+}
+
 export class Node extends ResourceBase {
   constructor(metadata = {}) {
     super('Node', { ...metadata, namespace: '', apiVersion: metadata.apiVersion || 'v1' });
     const cpuCapacity = metadata.cpuCapacity || '4';
     const memoryCapacity = metadata.memoryCapacity || '8Gi';
+    // `metadata.labels` is where createResource()/addResource() put the caller's
+    // labels; accept the manifest-nested form too for direct construction.
+    const nodeLabels = metadata.labels || metadata.metadata?.labels || {};
     const defaults = {
       // OCP 4.22 default clusterNetwork is 10.128.0.0/14 (OVN-Kubernetes /23 per node).
       podCIDR: metadata.podCIDR || `10.128.${Math.floor(Math.random() * 64) * 2}.0/23`,
       providerID: metadata.providerID || `baremetal://cluster/${metadata.name || 'node'}`,
-      taints: deepClone(metadata.taints || []),
+      taints: deepClone(metadata.taints || controlPlaneTaintsForLabels(nodeLabels)),
       unschedulable: metadata.unschedulable ?? false,
       // Game extension used by ClusterState.getNodeAllocatable()/MetricsDashboard:
       cpu: String(cpuCapacity),

@@ -268,8 +268,8 @@ export function nodeRoleLabels(role) {
 
 /**
  * Resolve the catalog machine for a 0-based node index, with its realistic
- * labels (role labels + `kubernetes.io/hostname`). Beyond the catalog the
- * cluster grows more workers (`worker-2`, `worker-3`, …).
+ * labels (role labels + `kubernetes.io/hostname` + the kubelet's OS label).
+ * Beyond the catalog the cluster grows more workers (`worker-2`, `worker-3`, …).
  * @param {number} index
  * @returns {{name: string, role: 'worker'|'control-plane', labels: Record<string, string>}}
  */
@@ -284,6 +284,11 @@ export function catalogNode(index) {
     labels: {
       ...nodeRoleLabels(entry.role),
       'kubernetes.io/hostname': entry.name,
+      // Every kubelet registers its OS/arch labels; they are the real default
+      // nodeSelector of platform workloads (e.g. router-default uses
+      // `kubernetes.io/os: linux`, issue #55).
+      'kubernetes.io/os': 'linux',
+      'kubernetes.io/arch': 'amd64',
     },
   };
 }
@@ -932,6 +937,44 @@ export class ClusterState {
         ],
       },
     });
+    // Real 4.22 bootstrap SCC binding: the `hostnetwork` SCC is granted to the
+    // infrastructure service accounts whose platform workloads need host
+    // networking (the installer binds system:serviceaccounts:<infra ns> as
+    // groups). The seeded dns-default/node-resolver DaemonSet Pods and
+    // router-default Deployment Pods are hostNetwork Pods (the DNS operator and
+    // ingress operator bind this SCC to their namespaces), so without it a
+    // controller-recreated platform Pod would be rejected by SCC admission even
+    // though the bootstrap Pods exist (issue #55). The ClusterRole is
+    // materialised like every other 4.x install ships it (not only lazily on
+    // `oc adm policy add-scc-*`) so the binding is fully resolvable.
+    this._ensureSCCClusterRole('hostnetwork');
+    this._seed('ClusterRoleBinding', 'system:openshift:scc:hostnetwork', {
+      uid: 'seed-crb-scc-hostnetwork',
+      spec: {
+        roleRef: {
+          apiGroup: 'rbac.authorization.k8s.io',
+          kind: 'ClusterRole',
+          name: 'system:openshift:scc:hostnetwork',
+        },
+        subjects: [
+          {
+            kind: 'Group',
+            apiGroup: 'rbac.authorization.k8s.io',
+            name: 'system:serviceaccounts:openshift-dns',
+          },
+          {
+            kind: 'Group',
+            apiGroup: 'rbac.authorization.k8s.io',
+            name: 'system:serviceaccounts:openshift-ingress',
+          },
+          {
+            kind: 'Group',
+            apiGroup: 'rbac.authorization.k8s.io',
+            name: 'system:cluster-admins',
+          },
+        ],
+      },
+    });
 
     // ClusterOperators: healthy on a freshly installed 4.22 cluster.
     for (const name of CLUSTER_OPERATOR_NAMES) {
@@ -1047,6 +1090,25 @@ export class ClusterState {
       uid: 'seed-sa-openshift-authentication-oauth-openshift',
       spec: {},
     });
+    // Platform workload ServiceAccounts, exactly as the ingress and DNS
+    // operators create them on a real 4.22 cluster: the default router runs as
+    // `openshift-ingress/router`, and each node agent has its own SA
+    // (`openshift-dns/dns-default`, `openshift-dns/node-resolver`) so the
+    // operators can bind host-network SCC/RBAC to the workload, not the
+    // namespace's default SA (issue #55 — the seeded Deployment/DaemonSet pod
+    // templates reference these names).
+    for (const [namespace, names] of [
+      ['openshift-ingress', ['router']],
+      ['openshift-dns', ['dns-default', 'node-resolver']],
+    ]) {
+      for (const serviceAccount of names) {
+        this._seed('ServiceAccount', serviceAccount, {
+          namespace,
+          uid: `seed-sa-${namespace}-${serviceAccount}`,
+          spec: {},
+        });
+      }
+    }
     this._seed('Deployment', 'oauth-openshift', {
       namespace: 'openshift-authentication',
       uid: 'seed-deploy-openshift-authentication-oauth-openshift',
