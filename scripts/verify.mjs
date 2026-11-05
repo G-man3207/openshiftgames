@@ -1144,6 +1144,484 @@ if (seedMod?.ClusterState) {
   }
 }
 
+// ── 4d. Issue #57–#58 scheduler/platform/CLI fidelity locks (static) ──────
+// The browser suite section `qa-issue57-58` proves the behaviour end-to-end.
+// These module/source locks fail the fast static gate if a future refactor
+// silently reintroduces the #57/#58 bugs (no browser, no long sleeps).
+{
+  const engineMod = await tryImport('js/engine/GameEngine.js');
+  const sandboxMod = await tryImport('js/modes/SandboxMode.js');
+  const commandBarMod = await tryImport('js/ui/CommandBar.js');
+  const templateHashMod = await tryImport('js/engine/TemplateHash.js');
+  if (
+    !engineMod?.GameEngine ||
+    !sandboxMod?.SandboxMode ||
+    !commandBarMod?.CommandBar ||
+    !templateHashMod?.deploymentReplicaSetName
+  ) {
+    fail(
+      'fidelity',
+      'GameEngine/SandboxMode/CommandBar/TemplateHash are not importable for the #57/#58 locks'
+    );
+  } else {
+    try {
+      // Build a 3-node sandbox cluster exactly like a mode launch does. The
+      // synchronous platform seed runs before any tick, so the paused
+      // pre-start contract (platform Services present, no ReplicaSet for a
+      // freshly created Deployment) is exercised deterministically.
+      const engine = new engineMod.GameEngine({ mode: 'sandbox' });
+      new sandboxMod.SandboxMode(engine, null).setupCluster(3);
+      const simulation = engine.simulation;
+      simulation.ensureOLMDefaultsSync();
+      const cluster = engine.cluster;
+      const nodes = cluster.getByKind('Node') || [];
+
+      // #57: an unscheduled Pending Pod prints its API phase (`Pending`) in the
+      // `oc get pods` STATUS cell; ContainerCreating is only correct once the
+      // Pod is bound to a node (kubelet state).
+      const bar = new commandBarMod.CommandBar();
+      const fakePod = (spec, status) => ({
+        metadata: { name: 'big', namespace: 'default' },
+        spec,
+        status,
+      });
+      const pendingContainerStatus = {
+        phase: 'Pending',
+        containerStatuses: [
+          {
+            name: 'big',
+            ready: false,
+            restartCount: 0,
+            state: { waiting: { reason: 'ContainerCreating' } },
+          },
+        ],
+      };
+      const unscheduled = bar._podStatus(
+        fakePod({ containers: [{ name: 'big', image: 'ubi' }] }, pendingContainerStatus)
+      );
+      const bound = bar._podStatus(
+        fakePod(
+          { nodeName: 'worker-0', containers: [{ name: 'big', image: 'ubi' }] },
+          pendingContainerStatus
+        )
+      );
+      if (
+        unscheduled.ready === '0/1' &&
+        unscheduled.status === 'Pending' &&
+        bound.status === 'ContainerCreating'
+      ) {
+        passed();
+      } else {
+        fail(
+          'fidelity',
+          `_podStatus must report Pending before binding and ContainerCreating after (#57): ${JSON.stringify({ unscheduled, bound })}`
+        );
+      }
+
+      // #58: the real platform Services must be seeded with the exact
+      // ClusterIP/ports/selectors a 4.22 install carries, in every mode.
+      const dnsService = cluster.getByName('Service', 'dns-default', 'openshift-dns');
+      const routerService = cluster.getByName(
+        'Service',
+        'router-internal-default',
+        'openshift-ingress'
+      );
+      const expectedDnsPorts = [
+        { name: 'dns', port: 53, protocol: 'UDP', targetPort: 5353 },
+        { name: 'dns-tcp', port: 53, protocol: 'TCP', targetPort: 5353 },
+        { name: 'metrics', port: 9154, protocol: 'TCP', targetPort: 9154 },
+      ];
+      const expectedRouterPorts = [
+        { name: 'http', port: 80, protocol: 'TCP', targetPort: 80 },
+        { name: 'https', port: 443, protocol: 'TCP', targetPort: 443 },
+        { name: 'metrics', port: 1936, protocol: 'TCP', targetPort: 1936 },
+      ];
+      if (
+        dnsService?.spec?.type === 'ClusterIP' &&
+        dnsService.spec.clusterIP === '172.30.0.10' &&
+        JSON.stringify(dnsService.spec.ports) === JSON.stringify(expectedDnsPorts) &&
+        JSON.stringify(dnsService.spec.selector) ===
+          JSON.stringify({ 'dns.operator.openshift.io/daemonset-dns': 'default' })
+      ) {
+        passed();
+      } else {
+        fail(
+          'fidelity',
+          `openshift-dns/dns-default Service contract missing (#58): ${JSON.stringify({ type: dnsService?.spec?.type, clusterIP: dnsService?.spec?.clusterIP, ports: dnsService?.spec?.ports, selector: dnsService?.spec?.selector })}`
+        );
+      }
+      if (
+        routerService?.spec?.type === 'ClusterIP' &&
+        /^172\.30\.\d+\.\d+$/.test(String(routerService.spec.clusterIP || '')) &&
+        JSON.stringify(routerService.spec.ports) === JSON.stringify(expectedRouterPorts) &&
+        JSON.stringify(routerService.spec.selector) ===
+          JSON.stringify({
+            'ingresscontroller.operator.openshift.io/deployment-ingresscontroller': 'default',
+          })
+      ) {
+        passed();
+      } else {
+        fail(
+          'fidelity',
+          `openshift-ingress/router-internal-default Service contract missing (#58): ${JSON.stringify({ type: routerService?.spec?.type, clusterIP: routerService?.spec?.clusterIP, ports: routerService?.spec?.ports, selector: routerService?.spec?.selector })}`
+        );
+      }
+
+      // #58: dns-default runs on the pod network (10.x, no hostNetwork) while
+      // node-resolver keeps hostNetwork and reports the node InternalIP.
+      const dnsPods = (cluster.getByKindAndNamespace('Pod', 'openshift-dns') || []).filter((pod) =>
+        /^dns-default-/.test(pod.metadata?.name || '')
+      );
+      const resolverPods = (cluster.getByKindAndNamespace('Pod', 'openshift-dns') || []).filter(
+        (pod) => /^node-resolver-/.test(pod.metadata?.name || '')
+      );
+      if (
+        dnsPods.length === nodes.length &&
+        dnsPods.every(
+          (pod) =>
+            pod.spec?.hostNetwork !== true &&
+            /^10\.\d+\.\d+\.\d+$/.test(String(pod.status?.podIP || '')) &&
+            pod.spec?.nodeSelector?.['kubernetes.io/os'] === 'linux' &&
+            pod.metadata?.annotations?.['openshift.io/scc'] === 'restricted-v2'
+        )
+      ) {
+        passed();
+      } else {
+        fail(
+          'fidelity',
+          `dns-default Pods must run on the pod network (10.x, hostNetwork not set, restricted-v2, kubernetes.io/os=linux) (#58): ${JSON.stringify(dnsPods.map((pod) => ({ name: pod.metadata?.name, hostNetwork: pod.spec?.hostNetwork, podIP: pod.status?.podIP, nodeSelector: pod.spec?.nodeSelector, scc: pod.metadata?.annotations?.['openshift.io/scc'] })))}`
+        );
+      }
+      if (
+        resolverPods.length === nodes.length &&
+        resolverPods.every(
+          (pod) =>
+            pod.spec?.hostNetwork === true &&
+            pod.status?.podIP === pod.status?.hostIP &&
+            !/^10\./.test(String(pod.status?.podIP || '')) &&
+            pod.spec?.nodeSelector?.['kubernetes.io/os'] === 'linux' &&
+            pod.metadata?.annotations?.['openshift.io/scc'] === 'hostnetwork'
+        )
+      ) {
+        passed();
+      } else {
+        fail(
+          'fidelity',
+          `node-resolver Pods must stay hostNetwork with the node IP (#58): ${JSON.stringify(resolverPods.map((pod) => ({ name: pod.metadata?.name, hostNetwork: pod.spec?.hostNetwork, podIP: pod.status?.podIP, hostIP: pod.status?.hostIP })))}`
+        );
+      }
+
+      // #58: both DNS DaemonSet POD TEMPLATES carry the real nodeSelector shown
+      // by the `NODE SELECTOR` column of `oc get ds -n openshift-dns`.
+      const dnsDaemonSet = cluster.getByName('DaemonSet', 'dns-default', 'openshift-dns');
+      const resolverDaemonSet = cluster.getByName('DaemonSet', 'node-resolver', 'openshift-dns');
+      if (
+        [dnsDaemonSet, resolverDaemonSet].every(
+          (daemonSet) =>
+            daemonSet?.spec?.template?.spec?.nodeSelector?.['kubernetes.io/os'] === 'linux'
+        )
+      ) {
+        passed();
+      } else {
+        fail(
+          'fidelity',
+          `DNS DaemonSet pod templates must carry nodeSelector kubernetes.io/os=linux (#58): ${JSON.stringify([dnsDaemonSet?.spec?.template?.spec?.nodeSelector, resolverDaemonSet?.spec?.template?.spec?.nodeSelector])}`
+        );
+      }
+
+      // #58: router Pods carry the ingress controller label the documented
+      // `oc delete pod -n openshift-ingress -l …` flow selects on.
+      const routerPods = (cluster.getByKindAndNamespace('Pod', 'openshift-ingress') || []).filter(
+        (pod) => /^router-default-/.test(pod.metadata?.name || '')
+      );
+      const ingressControllerLabel =
+        'ingresscontroller.operator.openshift.io/deployment-ingresscontroller';
+      if (
+        routerPods.length === 2 &&
+        routerPods.every(
+          (pod) =>
+            pod.metadata?.labels?.[ingressControllerLabel] === 'default' &&
+            pod.spec?.hostNetwork === true &&
+            pod.status?.podIP === pod.status?.hostIP
+        )
+      ) {
+        passed();
+      } else {
+        fail(
+          'fidelity',
+          `router Pods must carry ${ingressControllerLabel}=default and stay hostNetwork (#58): ${JSON.stringify(routerPods.map((pod) => ({ name: pod.metadata?.name, labels: pod.metadata?.labels, hostNetwork: pod.spec?.hostNetwork })))}`
+        );
+      }
+
+      // #58: a controller-recreated hostNetwork Pod reports the node InternalIP
+      // as its Pod IP (real kubelet semantics) — deleting a bootstrap router Pod
+      // and ticking lets the Deployment controller recreate it, and the new Pod
+      // must match the bootstrap Pods' `-o wide` output instead of a fabricated
+      // pod-network address.
+      const routerNamesBefore = routerPods.map((pod) => pod.metadata?.name || '');
+      const victimRouterPod = routerPods[0];
+      if (victimRouterPod) cluster.remove(victimRouterPod.uid);
+      for (let tickIndex = 0; tickIndex < 40; tickIndex += 1) simulation.tick(0.05);
+      const routerPodsAfter = (
+        cluster.getByKindAndNamespace('Pod', 'openshift-ingress') || []
+      ).filter((pod) => /^router-default-/.test(pod.metadata?.name || ''));
+      const recreatedRouterPod = routerPodsAfter.find(
+        (pod) => !routerNamesBefore.includes(pod.metadata?.name || '')
+      );
+      const recreatedRouterNode = recreatedRouterPod
+        ? cluster.getByName('Node', recreatedRouterPod.spec?.nodeName || '', '')
+        : null;
+      const recreatedRouterNodeIP =
+        (recreatedRouterNode?.status?.addresses || []).find(
+          (address) => address.type === 'InternalIP'
+        )?.address || '';
+      if (
+        routerPodsAfter.length === 2 &&
+        recreatedRouterPod?.spec?.hostNetwork === true &&
+        recreatedRouterNodeIP !== '' &&
+        recreatedRouterPod.status?.podIP === recreatedRouterNodeIP
+      ) {
+        passed();
+      } else {
+        fail(
+          'fidelity',
+          `controller-recreated hostNetwork router Pod must report the node IP as its podIP (#58): ${JSON.stringify({ before: routerNamesBefore, after: routerPodsAfter.map((pod) => ({ name: pod.metadata?.name, hostNetwork: pod.spec?.hostNetwork, podIP: pod.status?.podIP, node: pod.spec?.nodeName, hostIP: pod.status?.hostIP })), recreatedRouterPod: recreatedRouterPod?.metadata?.name, recreatedRouterNodeIP })}`
+        );
+      }
+
+      // #57: the scheduler retries FailedScheduling with the real exponential
+      // backoff (1 s initial, doubling, 10 s max) instead of one Event per tick;
+      // the aggregated series keeps a small count and preserves firstTimestamp.
+      const simulationSrc = read('js/engine/SimulationTick.js');
+      const hasBackoffConstants =
+        /SCHEDULER_INITIAL_BACKOFF_SECONDS\s*=\s*1\b/.test(simulationSrc) &&
+        /SCHEDULER_MAX_BACKOFF_SECONDS\s*=\s*10\b/.test(simulationSrc);
+      const hasBackoffGating =
+        /_schedulerBackoffPending\(\s*pod\s*\)/.test(simulationSrc) &&
+        /_recordSchedulingFailure\(\s*pod,/.test(simulationSrc) &&
+        /pod\.recordEvent\('Warning', 'FailedScheduling'/.test(simulationSrc);
+      if (hasBackoffConstants && hasBackoffGating) {
+        passed();
+      } else {
+        fail(
+          'fidelity',
+          `scheduler retry backoff constants/gating missing (#57): constants=${hasBackoffConstants} gating=${hasBackoffGating}`
+        );
+      }
+      const unschedulablePod = cluster.addResource({
+        kind: 'Pod',
+        apiVersion: 'v1',
+        metadata: { name: 'qa57-big', namespace: 'default', labels: { app: 'qa57-big' } },
+        spec: {
+          containers: [
+            {
+              name: 'qa57-big',
+              image: 'registry.access.redhat.com/ubi9/ubi',
+              resources: { requests: { cpu: '64' } },
+            },
+          ],
+        },
+      });
+      if (!unschedulablePod) {
+        fail('fidelity', 'could not add the unschedulable Pod for the #57 backoff lock');
+      } else {
+        simulation.tick(0.05);
+        const firstFailedScheduling = unschedulablePod
+          .getEvents?.()
+          .find((event) => event.reason === 'FailedScheduling');
+        const firstTimestamp = firstFailedScheduling?.firstTimestamp;
+        for (let tickIndex = 0; tickIndex < 219; tickIndex += 1) simulation.tick(0.05);
+        const failedEvents =
+          unschedulablePod.getEvents?.().filter((event) => event.reason === 'FailedScheduling') ||
+          [];
+        const failedEvent = failedEvents[0];
+        const firstTimestampPreserved =
+          Boolean(firstTimestamp) &&
+          failedEvent?.firstTimestamp === firstTimestamp &&
+          String(failedEvent?.firstTimestamp) <= String(failedEvent?.lastTimestamp);
+        if (
+          failedEvents.length === 1 &&
+          failedEvent.count > 1 &&
+          failedEvent.count <= 20 &&
+          firstTimestampPreserved
+        ) {
+          passed();
+        } else {
+          fail(
+            'fidelity',
+            `FailedScheduling series over 11 s must aggregate small and preserve firstTimestamp (#57): ${JSON.stringify(failedEvents.map((event) => ({ count: event.count, firstTimestamp: event.firstTimestamp, lastTimestamp: event.lastTimestamp })))}`
+          );
+        }
+      }
+
+      // CommandBar locks need the `window.game` integration surface the app
+      // wires in the browser; provide the minimum shim around the real engine.
+      globalThis.window = {
+        game: {
+          cluster,
+          gameEngine: engine,
+          engine: { emit() {}, on() {}, off() {} },
+        },
+      };
+      try {
+        const cliBar = new commandBarMod.CommandBar();
+        // #58: `/etc/resolv.conf` inside a Pod names the seeded cluster DNS
+        // Service, exactly what `oc exec <pod> -- cat /etc/resolv.conf` prints.
+        const execContext = cliBar._podExecContext(
+          {
+            metadata: { name: 'shell57', namespace: 'default' },
+            spec: { containers: [{ name: 'shell57', image: 'ubi' }], volumes: [] },
+            status: { phase: 'Running' },
+          },
+          'shell57'
+        );
+        const resolvConf = String(execContext?.files?.get('/etc/resolv.conf') || '');
+        if (
+          /nameserver 172\.30\.0\.10/.test(resolvConf) &&
+          /search default\.svc\.cluster\.local svc\.cluster\.local cluster\.local/.test(
+            resolvConf
+          ) &&
+          /options ndots:5/.test(resolvConf)
+        ) {
+          passed();
+        } else {
+          fail(
+            'fidelity',
+            `CommandBar _podExecContext /etc/resolv.conf contract missing (#58): ${JSON.stringify(resolvConf)}`
+          );
+        }
+
+        // #58: `oc adm taint` accepts kubectl's empty-value `key=:Effect`
+        // grammar, and the real removal forms keep working. The engine cluster
+        // is local to this lock, so the mutations are restored at the end.
+        const addEmptyValue = cliBar._admNodeAction('taint', [
+          'node',
+          'master-0',
+          `${'node-role.kubernetes.io/master'}=:NoSchedule`,
+        ]);
+        const masterAfterAdd = cluster.getByName('Node', 'master-0', '');
+        const addOk =
+          !addEmptyValue?.error &&
+          (masterAfterAdd?.spec?.taints || []).filter(
+            (taint) => taint.key === 'node-role.kubernetes.io/master'
+          ).length === 1 &&
+          (masterAfterAdd?.spec?.taints || []).some(
+            (taint) =>
+              taint.key === 'node-role.kubernetes.io/master' &&
+              taint.value === '' &&
+              taint.effect === 'NoSchedule'
+          );
+        const removeKeyEffect = cliBar._admNodeAction('taint', [
+          'node',
+          'master-0',
+          'node-role.kubernetes.io/master:NoSchedule-',
+        ]);
+        const masterAfterRemove = cluster.getByName('Node', 'master-0', '');
+        const removeOk =
+          !removeKeyEffect?.error &&
+          (masterAfterRemove?.spec?.taints || []).every(
+            (taint) => taint.key !== 'node-role.kubernetes.io/master'
+          );
+        cliBar._admNodeAction('taint', ['node', 'worker-0', 'dedicated=special:NoSchedule']);
+        const removeValueEffect = cliBar._admNodeAction('taint', [
+          'node',
+          'worker-0',
+          'dedicated=special:NoSchedule-',
+        ]);
+        cliBar._admNodeAction('taint', ['node', 'worker-0', 'dedicated=:NoSchedule']);
+        const removeKey = cliBar._admNodeAction('taint', ['node', 'worker-0', 'dedicated-']);
+        const workerAfterRemove = cluster.getByName('Node', 'worker-0', '');
+        const removalFormsOk =
+          !removeValueEffect?.error &&
+          !removeKey?.error &&
+          (workerAfterRemove?.spec?.taints || []).every((taint) => taint.key !== 'dedicated');
+        const invalidEffect = cliBar._admNodeAction('taint', [
+          'node',
+          'worker-0',
+          'dedicated=:Bogus',
+        ]);
+        const invalidEffectOk =
+          Boolean(invalidEffect?.error) &&
+          /invalid taint effect: Bogus, unsupported taint effect/.test(invalidEffect.message);
+        // Restore the seeded control-plane taint (the removal form above
+        // intentionally removed it).
+        cliBar._admNodeAction('taint', [
+          'node',
+          'master-0',
+          'node-role.kubernetes.io/master=:NoSchedule',
+        ]);
+        if (addOk && removeOk && removalFormsOk) {
+          passed();
+        } else {
+          fail(
+            'fidelity',
+            `oc adm taint empty-value grammar/removal forms missing (#58): ${JSON.stringify({ addEmptyValue, addOk, removeKeyEffect, removeOk, removeValueEffect, removeKey, removalFormsOk })}`
+          );
+        }
+        if (invalidEffectOk) {
+          passed();
+        } else {
+          fail(
+            'fidelity',
+            `oc adm taint must reject unknown effects like real oc (#58): ${JSON.stringify(invalidEffect)}`
+          );
+        }
+
+        // #58: in a paused pre-start cluster there is no ReplicaSet yet, so the
+        // synthetic Deployment ScalingReplicaSet event must predict the exact
+        // `<deployment>-<pod-template-hash>` name the controller will create.
+        const newAppCommand = cliBar.executeCommand(
+          'oc new-app --name=pre58 --image=quay.io/openshift/origin-hello-openshift:latest -n default'
+        );
+        const preDeployment = cluster.getByName('Deployment', 'pre58', 'default');
+        const predictedReplicaSetName = preDeployment
+          ? templateHashMod.deploymentReplicaSetName(preDeployment)
+          : null;
+        const scalingEvents = cliBar
+          ._syntheticEvents({ namespace: 'default' })
+          .filter(
+            (event) => event.reason === 'ScalingReplicaSet' && event.object === 'deployment/pre58'
+          );
+        const predictedNameOk =
+          Boolean(predictedReplicaSetName) &&
+          new RegExp(`^pre58-[${templateHashMod.RAND_SAFE_ALPHABET}]{10}$`).test(
+            predictedReplicaSetName
+          ) &&
+          scalingEvents.length === 1 &&
+          String(scalingEvents[0]?.message || '').includes(
+            `replica set ${predictedReplicaSetName} to `
+          ) &&
+          !newAppCommand?.error;
+        if (predictedNameOk) {
+          passed();
+        } else {
+          fail(
+            'fidelity',
+            `paused oc new-app ScalingReplicaSet must use the deterministic template-hash ReplicaSet name (#58): ${JSON.stringify({ command: newAppCommand?.message, predictedReplicaSetName, events: scalingEvents.map((event) => event.message) })}`
+          );
+        }
+        simulation.tick(0.05);
+        simulation.tick(0.05);
+        if (
+          predictedReplicaSetName &&
+          cluster.getByName('ReplicaSet', predictedReplicaSetName, 'default')
+        ) {
+          passed();
+        } else {
+          fail(
+            'fidelity',
+            `the Deployment controller must create the predicted ReplicaSet ${predictedReplicaSetName} after the paused cluster starts (#58)`
+          );
+        }
+      } finally {
+        delete globalThis.window;
+      }
+    } catch (err) {
+      fail('fidelity', `#57/#58 dynamic fidelity lock threw: ${err.message}`);
+    }
+  }
+}
+
 // ── 5. Campaign, challenges, incidents and EX280 content ──────────────────
 const levelsMod = await tryImport('js/data/CampaignLevels.js');
 const challengesMod = await tryImport('js/modes/ChallengeMode.js');

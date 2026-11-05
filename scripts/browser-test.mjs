@@ -13793,19 +13793,23 @@ await runSection('qa-issue55-56', async () => {
     '#55A: the master-nodeSelector pod is created',
     JSON.stringify(pinnedPodRow)
   );
-  // The scheduler leaves the pod unbound: phase Pending with PodScheduled=False.
-  // (Assert the API phase rather than the `oc get pods` STATUS cell: the
-  // simulator seeds every pod with a waiting ContainerCreating container status,
-  // which is a separate, pre-existing display-fidelity nit and not the #55
-  // scheduling contract.)
-  result = await runCmd(
-    `oc get pod ${pinnedPodRow?.[0] || 'missing'} -n qa-taint55 -o jsonpath='{.status.phase}'`
-  );
-  assert(
-    !result.error && result.message.trim() === 'Pending',
-    '#55A: a pod that explicitly targets the master stays Pending under the NoSchedule taint',
-    JSON.stringify(result.message)
-  );
+  // The scheduler leaves the pod unbound: STATUS Pending with PodScheduled=False.
+  // #57 fixed the pre-existing display nit this assertion used to work around:
+  // an unbound Pending Pod now reports its real api phase in the `oc get pods`
+  // STATUS cell (`Pending`), not the kubelet-only ContainerCreating state, so
+  // the assertion reads the STATUS cell instead of the API phase.
+  result = await runCmd('oc get pods -n qa-taint55 -l app=pinned-master');
+  {
+    const pinnedStatusTable = tableParts(result.message);
+    const pinnedStatusAt = pinnedStatusTable.headers.indexOf('STATUS');
+    const pinnedStatusRow =
+      pinnedStatusTable.rows.find((cells) => /^pinned-master-/.test(cells[0] || '')) || [];
+    assert(
+      !result.error && pinnedStatusAt >= 0 && pinnedStatusRow[pinnedStatusAt] === 'Pending',
+      '#55A/#57: a pod that explicitly targets the master stays Pending under the NoSchedule taint',
+      JSON.stringify({ headers: pinnedStatusTable.headers, row: pinnedStatusRow })
+    );
+  }
   result = await runCmd(`oc describe pod ${pinnedPodRow?.[0] || 'missing'} -n qa-taint55`);
   assert(
     /FailedScheduling/.test(result.message) &&
@@ -14574,6 +14578,818 @@ await runSection('qa-issue55-56', async () => {
       result.message.includes(`replicaset.apps/${newReplicaSets[0]?.name}`),
     '#56 OLM: multi-kind `oc get deploy,rs` shows the upgraded operator Deployment 1/1 and its new ReplicaSet',
     result.message.slice(0, 700)
+  );
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// QA ROUND 1.7.0 — issues #57/#58: unschedulable Pods report their real phase
+// (`Pending`, never ContainerCreating, with `Node: <none>`) and the scheduler
+// retries FailedScheduling with the real backoff/event series; the platform
+// bootstrap seeds the real openshift-dns/openshift-ingress Services in every
+// mode (paused pre-start included), moves dns-default to the pod network and
+// gives the DNS DaemonSets their nodeSelector + the router Pods their ingress
+// controller label; `oc adm taint` accepts the kubectl empty-value grammar;
+// `oc exec … cat /etc/resolv.conf` prints the cluster DNS contract; and the
+// paused `oc new-app` ScalingReplicaSet event names the deterministic
+// `pre-<pod-template-hash>` ReplicaSet the controller later creates.
+// ═══════════════════════════════════════════════════════════════════════════
+await runSection('qa-issue57-58', async () => {
+  const ingressControllerLabel =
+    'ingresscontroller.operator.openshift.io/deployment-ingresscontroller';
+  const masterTaintKey = 'node-role.kubernetes.io/master';
+  const masterTaintSpec = `${masterTaintKey}:NoSchedule`;
+  const dnsAlphabet = 'bcdfghjklmnpqrstvwxz2456789';
+  let result;
+
+  /** Advance the simulation AND incident clocks deterministically (0.05 s). */
+  const advanceBoth = async (seconds) =>
+    evaluate((secs) => {
+      const sim = window.game?.gameEngine?.simulation;
+      const engine = window.game?.incidentEngine;
+      if (!sim || typeof sim.tick !== 'function') return false;
+      const steps = Math.ceil(secs / 0.05);
+      for (let index = 0; index < steps; index += 1) {
+        sim.tick(0.05);
+        if (engine && typeof engine.tick === 'function') engine.tick(0.05);
+      }
+      return true;
+    }, seconds);
+  /** Advance both clocks until predicate() is true, or exhaust maxSeconds. */
+  const advanceUntil = async (predicate, maxSeconds = 60, step = 2) => {
+    for (let played = 0; played < maxSeconds; played += step) {
+      await advanceBoth(step);
+      if (await predicate()) return true;
+    }
+    return false;
+  };
+  /** Split an oc tabwriter table into header cells + rows (2+ space columns). */
+  const tableParts = (message) => {
+    const lines = String(message ?? '')
+      .split('\n')
+      .filter((line) => line.trim() !== '');
+    return {
+      headers: (lines[0] || '').split(/\s{2,}/).map((cell) => cell.trim()),
+      rows: lines.slice(1).map((line) => line.split(/\s{2,}/).map((cell) => cell.trim())),
+    };
+  };
+  /** Blank-line separated tables from a multi-kind `oc get` response. */
+  const tableSections = (message) => {
+    const blocks = String(message ?? '').split(/\n{2,}/);
+    const sections = [];
+    for (const block of blocks) {
+      const lines = block.split('\n').filter((line) => line.trim() !== '');
+      if (!lines.length) continue;
+      sections.push({
+        headers: lines[0].split(/\s{2,}/).map((cell) => cell.trim()),
+        rows: lines.slice(1).map((line) => line.split(/\s{2,}/).map((cell) => cell.trim())),
+      });
+    }
+    return sections;
+  };
+  const columnIndex = (section, header) => (section ? section.headers.indexOf(header) : -1);
+  const rowFor = (section, predicate) =>
+    (section?.rows || []).find((cells) => predicate(cells[0] || '')) || [];
+  /** `oc get pods -o wide` parsed with its real IP/NODE columns. */
+  const podWide = async (namespace, selector = '') => {
+    const out = await runCmd(
+      `oc get pods -o wide -n ${namespace}${selector ? ` -l ${selector}` : ''}`
+    );
+    const table = tableParts(out.message);
+    const ipAt = table.headers.indexOf('IP');
+    const nodeAt = table.headers.indexOf('NODE');
+    return {
+      message: out.message,
+      headers: table.headers,
+      rows: table.rows.map((cells) => ({
+        name: cells[0] || '',
+        ready: cells[1] || '',
+        status: cells[2] || '',
+        ip: ipAt >= 0 ? cells[ipAt] || '' : '',
+        node: nodeAt >= 0 ? cells[nodeAt] || '' : '',
+      })),
+    };
+  };
+  /** Rows of `oc get events` as { type, reason, object, message }. */
+  const getEventRows = (message) =>
+    String(message ?? '')
+      .split('\n')
+      .slice(1)
+      .map((line) =>
+        line
+          .split(/\s{2,}/)
+          .map((cell) => cell.trim())
+          .filter(Boolean)
+      )
+      .filter((cells) => cells.length >= 4)
+      .map((cells) => ({
+        type: cells[1],
+        reason: cells[2],
+        object: cells[3],
+        message: cells.slice(4).join(' '),
+      }));
+  /** Engine truth for the platform Pods' networking + namespace annotations. */
+  const podNetworkState = () =>
+    evaluate(() => {
+      const cluster = window.game.cluster;
+      const summarize = (namespace, regex) =>
+        (cluster.getByKindAndNamespace('Pod', namespace) || [])
+          .filter((pod) => regex.test(pod.metadata?.name || ''))
+          .map((pod) => {
+            const node = cluster.getByName('Node', pod.spec?.nodeName || '', '');
+            const nodeIP =
+              (node?.status?.addresses || []).find((address) => address.type === 'InternalIP')
+                ?.address || '';
+            return {
+              name: pod.metadata?.name || '',
+              node: pod.spec?.nodeName || '',
+              nodeIP,
+              phase: pod.status?.phase || '',
+              podIP: pod.status?.podIP || '',
+              hostIP: pod.status?.hostIP || '',
+              hostNetwork: pod.spec?.hostNetwork === true,
+              scc: pod.metadata?.annotations?.['openshift.io/scc'] || '',
+            };
+          });
+      return {
+        dns: summarize('openshift-dns', /^dns-default-/),
+        resolver: summarize('openshift-dns', /^node-resolver-/),
+        router: summarize('openshift-ingress', /^router-default-/),
+      };
+    });
+  /** Platform workload names + Service ClusterIPs (no-churn snapshot). */
+  const platformSnapshot = () =>
+    evaluate(() => {
+      const cluster = window.game.cluster;
+      const names = (namespace, regex) =>
+        (cluster.getByKindAndNamespace('Pod', namespace) || [])
+          .filter((pod) => regex.test(pod.metadata?.name || ''))
+          .map((pod) => pod.metadata?.name || '')
+          .sort();
+      return {
+        ingress: names('openshift-ingress', /^router-default-/),
+        dns: names('openshift-dns', /^dns-default-/),
+        resolver: names('openshift-dns', /^node-resolver-/),
+        dnsService: cluster.getByName('Service', 'dns-default', 'openshift-dns')?.spec?.clusterIP,
+        routerService: cluster.getByName('Service', 'router-internal-default', 'openshift-ingress')
+          ?.spec?.clusterIP,
+      };
+    });
+
+  // ═══ Round 1: #57 unschedulable Pod STATUS + scheduler retry backoff ════
+  assert(await bootSandbox(), '#57: a fresh sandbox boots for the scheduler-display checks');
+
+  result = await runCmd(
+    `oc run big --image=registry.access.redhat.com/ubi9/ubi --overrides='{"spec":{"containers":[{"name":"big","image":"registry.access.redhat.com/ubi9/ubi","resources":{"requests":{"cpu":"64"}}}]}}'`
+  );
+  assert(
+    !result.error && /pod\/big created/.test(result.message),
+    '#57: `oc run big` with a 64-CPU request creates the Pod',
+    result.message.slice(0, 300)
+  );
+  // Deterministic game-time retries (1 s initial, doubling, 10 s max) plus a
+  // short wall-clock gap so the aggregated FailedScheduling window is real
+  // (`over 1s`) instead of the degenerate `over 0s` a purely-fast-forwarded run
+  // produces. The count stays small either way (no per-tick burst).
+  await advanceBoth(2);
+  await sleep(1200);
+  await advanceBoth(8);
+
+  result = await runCmd('oc get pod big');
+  let table = tableParts(result.message);
+  let row = table.rows.find((cells) => cells[0] === 'big') || [];
+  assert(
+    !result.error &&
+      row[columnIndex(table, 'READY')] === '0/1' &&
+      row[columnIndex(table, 'STATUS')] === 'Pending',
+    '#57: `oc get pod big` reports READY 0/1 STATUS Pending (never ContainerCreating before binding)',
+    JSON.stringify({ headers: table.headers, row })
+  );
+  result = await runCmd('oc get pod big -o wide');
+  {
+    const wide = tableParts(result.message);
+    const wideRow = wide.rows.find((cells) => cells[0] === 'big') || [];
+    assert(
+      !result.error && wideRow[columnIndex(wide, 'NODE')] === '<none>',
+      '#57: `oc get pod big -o wide` shows NODE <none> for the unscheduled Pod',
+      JSON.stringify({ headers: wide.headers, row: wideRow })
+    );
+  }
+  result = await runCmd('oc describe pod big');
+  const describeBig = result.message;
+  assert(
+    !result.error && /^Status:\s+Pending\s*$/m.test(describeBig),
+    '#57: `oc describe pod big` shows Status: Pending',
+    (describeBig.match(/^Status:.*$/m) || [''])[0]
+  );
+  assert(
+    /^Node:\s+<none>\s*$/m.test(describeBig),
+    '#57: `oc describe pod big` shows `Node: <none>` (bare <none>, no derived worker/IP)',
+    (describeBig.match(/^Node:.*$/m) || [''])[0]
+  );
+  {
+    const failedRow = describeBig.split('\n').find((line) => /FailedScheduling/.test(line)) || '';
+    const aggregated = failedRow.match(/\(x(\d+) over ([^)]+)\)/);
+    const count = aggregated ? Number(aggregated[1]) : NaN;
+    assert(
+      /FailedScheduling/.test(failedRow) &&
+        /default-scheduler/.test(failedRow) &&
+        Number.isFinite(count) &&
+        count >= 2 &&
+        count <= 20 &&
+        aggregated[2] !== '0s',
+      '#57: describe pod aggregates FailedScheduling into a small real count over a nonzero window (never x100 over 0s)',
+      failedRow.trim()
+    );
+  }
+  result = await runCmd('oc get events -n default');
+  {
+    const eventRow = getEventRows(result.message).find(
+      (event) => event.reason === 'FailedScheduling' && event.object === 'pod/big'
+    );
+    const lastSeenLine = (
+      result.message.split('\n').find((line) => /pod\/big/.test(line)) || ''
+    ).trim();
+    const lastSeenWindow = lastSeenLine.match(/\(x(\d+) over ([^)]+)\)/);
+    const count = lastSeenWindow ? Number(lastSeenWindow[1]) : NaN;
+    assert(
+      Boolean(eventRow) &&
+        eventRow.type === 'Warning' &&
+        Number.isFinite(count) &&
+        count >= 2 &&
+        count <= 20 &&
+        lastSeenWindow[2] !== '0s',
+      '#57: `oc get events` shows the same small aggregated FailedScheduling series over a nonzero window',
+      lastSeenLine
+    );
+  }
+  {
+    const rawEvents = await evaluate(() => {
+      const pod = (window.game?.cluster?.getByKind('Pod') || []).find(
+        (candidate) => candidate.metadata?.name === 'big'
+      );
+      return (pod?.getEvents?.() || [])
+        .filter((event) => event.reason === 'FailedScheduling')
+        .map((event) => ({
+          count: event.count,
+          firstTimestamp: event.firstTimestamp,
+          lastTimestamp: event.lastTimestamp,
+        }));
+    });
+    const event = rawEvents[0];
+    const windowMs =
+      event && event.firstTimestamp && event.lastTimestamp
+        ? new Date(event.lastTimestamp).getTime() - new Date(event.firstTimestamp).getTime()
+        : -1;
+    assert(
+      rawEvents.length === 1 && event.count >= 2 && event.count <= 20 && windowMs > 0,
+      '#57: the FailedScheduling Event series preserves its firstTimestamp across retries',
+      JSON.stringify({ events: rawEvents, windowMs })
+    );
+  }
+
+  // Both workers cordoned: a normal Pod stays unbound Pending, then schedules
+  // after the workers are uncordoned (the retry state is discarded on success).
+  result = await runCmd('oc adm cordon worker-0');
+  assert(
+    !result.error && /node\/worker-0 cordoned/.test(result.message),
+    '#57: `oc adm cordon worker-0` succeeds',
+    result.message.slice(0, 200)
+  );
+  result = await runCmd('oc adm cordon worker-1');
+  assert(
+    !result.error && /node\/worker-1 cordoned/.test(result.message),
+    '#57: `oc adm cordon worker-1` succeeds',
+    result.message.slice(0, 200)
+  );
+  result = await runCmd('oc run p2 --image=registry.access.redhat.com/ubi9/ubi');
+  assert(
+    !result.error && /pod\/p2 created/.test(result.message),
+    '#57: `oc run p2` creates a normal Pod while both workers are cordoned',
+    result.message.slice(0, 300)
+  );
+  await advanceBoth(4);
+  table = tableParts((await runCmd('oc get pod p2')).message);
+  row = table.rows.find((cells) => cells[0] === 'p2') || [];
+  assert(
+    row[columnIndex(table, 'READY')] === '0/1' && row[columnIndex(table, 'STATUS')] === 'Pending',
+    '#57: with both workers cordoned, p2 reports READY 0/1 STATUS Pending',
+    JSON.stringify({ headers: table.headers, row })
+  );
+  {
+    const wide = tableParts((await runCmd('oc get pod p2 -o wide')).message);
+    const wideRow = wide.rows.find((cells) => cells[0] === 'p2') || [];
+    assert(
+      wideRow[columnIndex(wide, 'NODE')] === '<none>',
+      '#57: the cordoned-workers Pod has NODE <none> in `-o wide`',
+      JSON.stringify({ headers: wide.headers, row: wideRow })
+    );
+  }
+  result = await runCmd('oc describe pod p2');
+  assert(
+    /^Status:\s+Pending\s*$/m.test(result.message) && /^Node:\s+<none>\s*$/m.test(result.message),
+    '#57: `oc describe pod p2` shows Status Pending and Node: <none>',
+    result.message.split('\n').slice(0, 12).join(' ⏎ ')
+  );
+  result = await runCmd('oc adm uncordon worker-0');
+  assert(
+    !result.error && /node\/worker-0 uncordoned/.test(result.message),
+    '#57: `oc adm uncordon worker-0` succeeds',
+    result.message.slice(0, 200)
+  );
+  result = await runCmd('oc adm uncordon worker-1');
+  assert(
+    !result.error && /node\/worker-1 uncordoned/.test(result.message),
+    '#57: `oc adm uncordon worker-1` succeeds',
+    result.message.slice(0, 200)
+  );
+  {
+    const p2Running = await advanceUntil(async () => {
+      const wide = await podWide('default');
+      const p2 = wide.rows.find((candidate) => candidate.name === 'p2');
+      return p2?.status === 'Running' && p2.ready === '1/1';
+    }, 40);
+    assert(p2Running, '#57: uncordoning lets the Pending Pod schedule and reach Running 1/1');
+  }
+
+  // A router Pod recreated while both workers are cordoned must be Pending with
+  // no node, exactly like the real scheduler-queue case from the issue.
+  {
+    const wide = await podWide('openshift-ingress');
+    const routerRows = wide.rows.filter((candidate) => /^router-default-/.test(candidate.name));
+    assert(
+      routerRows.length === 2 && routerRows.every((candidate) => candidate.status === 'Running'),
+      '#57: the two router Pods are Running before the recreate scenario',
+      JSON.stringify(routerRows)
+    );
+    // #58: the seeded hostNetwork router Pods report the node InternalIP as
+    // their Pod IP (the controller-recreated replacement is exercised below).
+    const seededPlatform = await podNetworkState();
+    assert(
+      seededPlatform.router.length === 2 &&
+        seededPlatform.router.every((pod) => pod.hostNetwork && pod.podIP === pod.nodeIP),
+      '#58: the seeded router Pods stay hostNetwork and report the node IP',
+      JSON.stringify(seededPlatform.router)
+    );
+    const victim = routerRows[0]?.name;
+    await runCmd('oc adm cordon worker-0');
+    await runCmd('oc adm cordon worker-1');
+    result = await runCmd(`oc delete pod ${victim} -n openshift-ingress`);
+    assert(
+      !result.error && new RegExp(`pod "${victim}" deleted`).test(result.message),
+      '#57: deleting a router Pod while both workers are cordoned succeeds',
+      result.message.slice(0, 300)
+    );
+    const recreatedPending = await advanceUntil(async () => {
+      const state = await podNetworkState();
+      return (
+        state.router.length === 2 &&
+        state.router.some((pod) => pod.phase === 'Pending' && !pod.node)
+      );
+    }, 40);
+    assert(
+      recreatedPending,
+      '#57: the router controller recreates the deleted Pod as an unscheduled Pending Pod'
+    );
+    const pendingWide = await podWide('openshift-ingress');
+    const pendingRow = pendingWide.rows.find((candidate) => candidate.status === 'Pending') || null;
+    assert(
+      Boolean(pendingRow) &&
+        pendingRow.ready === '0/1' &&
+        pendingRow.status === 'Pending' &&
+        pendingRow.node === '<none>',
+      '#57: the recreated router Pod reports READY 0/1 STATUS Pending and NODE <none>',
+      JSON.stringify(pendingRow)
+    );
+    result = await runCmd(`oc describe pod ${pendingRow?.name || 'missing'} -n openshift-ingress`);
+    assert(
+      /^Status:\s+Pending\s*$/m.test(result.message) &&
+        /^Node:\s+<none>\s*$/m.test(result.message) &&
+        /FailedScheduling/.test(result.message),
+      '#57: `oc describe pod` of the recreated router Pod shows Pending, Node: <none> and FailedScheduling',
+      result.message.slice(-900)
+    );
+    await runCmd('oc adm uncordon worker-0');
+    await runCmd('oc adm uncordon worker-1');
+    const healed = await advanceUntil(async () => {
+      const wideAgain = await podWide('openshift-ingress');
+      const pods = wideAgain.rows.filter((candidate) => /^router-default-/.test(candidate.name));
+      return pods.length === 2 && pods.every((candidate) => candidate.status === 'Running');
+    }, 60);
+    assert(
+      healed,
+      '#57: uncordoning lets the recreated router Pod schedule and the Deployment heal to 2/2'
+    );
+    // #58: the controller-recreated hostNetwork Pod reports the node InternalIP
+    // as its Pod IP (kubelet semantics), matching the bootstrap Pods in `-o wide`.
+    const healedPlatform = await podNetworkState();
+    const preRecreateRouterNames = routerRows.map((candidate) => candidate.name);
+    const recreatedRouter = healedPlatform.router.find(
+      (pod) => !preRecreateRouterNames.includes(pod.name)
+    );
+    assert(
+      Boolean(recreatedRouter) &&
+        recreatedRouter.hostNetwork &&
+        recreatedRouter.podIP === recreatedRouter.nodeIP &&
+        recreatedRouter.phase === 'Running',
+      '#58: the recreated router Pod reports the node IP as its Pod IP (hostNetwork kubelet semantics)',
+      JSON.stringify(recreatedRouter)
+    );
+  }
+
+  // Regression guard: a normally-scheduled Pod still shows ContainerCreating
+  // once it is BOUND (kubelet state) and then reaches Running. The create +
+  // single scheduler tick + read run in ONE page.evaluate so the live clock
+  // cannot pull the image (and hide the kubelet window) in between.
+  {
+    const atomic = await evaluate(() => {
+      const bar = window.game.app.commandBar;
+      const sim = window.game.gameEngine.simulation;
+      const created = bar.executeCommand(
+        'oc run sched-check --image=registry.access.redhat.com/ubi9/ubi'
+      );
+      sim._tickPodScheduling(0.05);
+      const get = bar.executeCommand('oc get pod sched-check');
+      return { created: String(created?.message || ''), message: String(get?.message || '') };
+    });
+    assert(
+      /pod\/sched-check created/.test(atomic.created) &&
+        /\bContainerCreating\b/.test(atomic.message) &&
+        /0\/1/.test(atomic.message),
+      '#57: a normally-scheduled Pod still shows STATUS ContainerCreating after binding (kubelet state preserved)',
+      atomic.message.replace(/\n/g, ' ⏎ ')
+    );
+    const running = await advanceUntil(async () => {
+      const wide = await podWide('default');
+      const pod = wide.rows.find((candidate) => candidate.name === 'sched-check');
+      return pod?.status === 'Running' && pod.ready === '1/1';
+    }, 40);
+    assert(running, '#57: the normally-scheduled Pod then reaches Running 1/1');
+  }
+
+  // ═══ Round 2: #58 platform Services + DNS networking/pod detail ═════════
+  result = await runCmd('oc get svc -n openshift-dns');
+  table = tableParts(result.message);
+  row = table.rows.find((cells) => cells[0] === 'dns-default') || [];
+  assert(
+    !result.error &&
+      row[columnIndex(table, 'TYPE')] === 'ClusterIP' &&
+      row[columnIndex(table, 'CLUSTER-IP')] === '172.30.0.10' &&
+      row[columnIndex(table, 'PORT(S)')] === '53/UDP,53/TCP,9154/TCP',
+    '#58: `oc get svc -n openshift-dns` shows dns-default ClusterIP 172.30.0.10 ports 53/UDP,53/TCP,9154/TCP',
+    JSON.stringify({ headers: table.headers, row })
+  );
+  result = await runCmd('oc get svc -n openshift-ingress');
+  table = tableParts(result.message);
+  row = table.rows.find((cells) => cells[0] === 'router-internal-default') || [];
+  assert(
+    !result.error &&
+      row[columnIndex(table, 'TYPE')] === 'ClusterIP' &&
+      /^172\.30\.\d+\.\d+$/.test(row[columnIndex(table, 'CLUSTER-IP')] || '') &&
+      row[columnIndex(table, 'PORT(S)')] === '80/TCP,443/TCP,1936/TCP',
+    '#58: `oc get svc -n openshift-ingress` shows router-internal-default ClusterIP ports 80/TCP,443/TCP,1936/TCP',
+    JSON.stringify({ headers: table.headers, row })
+  );
+  result = await runCmd('oc get endpoints -n openshift-dns');
+  table = tableParts(result.message);
+  row = table.rows.find((cells) => cells[0] === 'dns-default') || [];
+  {
+    const endpointCell = row[columnIndex(table, 'ENDPOINTS')] || '';
+    const endpointPairs = endpointCell.split(',').filter(Boolean);
+    assert(
+      !result.error &&
+        endpointPairs.length > 0 &&
+        endpointPairs.every((pair) => /^10\.\d+\.\d+\.\d+:\d+$/.test(pair)) &&
+        endpointPairs.some((pair) => pair.endsWith(':5353')),
+      '#58: `oc get endpoints -n openshift-dns` lists dns-default pod-network 10.x addresses on 5353',
+      endpointCell.slice(0, 500)
+    );
+  }
+  result = await runCmd('oc get svc,endpoints -n openshift-dns');
+  {
+    const sections = tableSections(result.message);
+    const serviceSection = sections.find((candidate) => candidate.headers.includes('CLUSTER-IP'));
+    const endpointsSection = sections.find((candidate) => candidate.headers.includes('ENDPOINTS'));
+    const serviceRow = rowFor(serviceSection, (name) => name === 'service/dns-default');
+    const endpointsRow = rowFor(endpointsSection, (name) => name === 'endpoints/dns-default');
+    const endpointsCell = endpointsRow[columnIndex(endpointsSection, 'ENDPOINTS')] || '';
+    assert(
+      !result.error &&
+        serviceRow[columnIndex(serviceSection, 'CLUSTER-IP')] === '172.30.0.10' &&
+        Boolean(endpointsRow.length) &&
+        /10\.\d+\.\d+\.\d+:5353/.test(endpointsCell),
+      '#58: multi-kind `oc get svc,endpoints -n openshift-dns` shows service/dns-default + endpoints/dns-default with 10.x:5353',
+      result.message.slice(0, 900)
+    );
+  }
+  {
+    const wide = await podWide('openshift-dns');
+    const dnsRows = wide.rows.filter((candidate) => /^dns-default-/.test(candidate.name));
+    const resolverRows = wide.rows.filter((candidate) => /^node-resolver-/.test(candidate.name));
+    const nodeIPs = new Map(
+      await evaluate(() =>
+        (window.game.cluster.getByKind('Node') || []).map((node) => [
+          node.metadata?.name || '',
+          (node.status?.addresses || []).find((address) => address.type === 'InternalIP')
+            ?.address || '',
+        ])
+      )
+    );
+    assert(
+      dnsRows.length === 3 &&
+        dnsRows.every((candidate) => /^10\.\d+\.\d+\.\d+$/.test(candidate.ip)),
+      '#58: dns-default Pods run on the pod network (10.x Pod IPs, `-o wide` IP column)',
+      JSON.stringify(dnsRows)
+    );
+    assert(
+      resolverRows.length === 3 &&
+        resolverRows.every((candidate) => candidate.ip === nodeIPs.get(candidate.node)),
+      '#58: node-resolver Pods keep the node InternalIP (hostNetwork)',
+      JSON.stringify({ rows: resolverRows, nodeIPs: [...nodeIPs] })
+    );
+    const state = await podNetworkState();
+    assert(
+      state.dns.every(
+        (pod) => !pod.hostNetwork && /^10\./.test(pod.podIP) && pod.scc === 'restricted-v2'
+      ) &&
+        state.resolver.every(
+          (pod) => pod.hostNetwork && pod.podIP === pod.nodeIP && pod.scc === 'hostnetwork'
+        ) &&
+        state.router.every(
+          (pod) => pod.hostNetwork && pod.podIP === pod.nodeIP && pod.scc === 'hostnetwork'
+        ),
+      '#58: dns-default is hostNetwork:false/restricted-v2 while node-resolver and the router are hostNetwork',
+      JSON.stringify(state)
+    );
+  }
+  result = await runCmd('oc get ds -n openshift-dns');
+  table = tableParts(result.message);
+  {
+    const selectorAt = columnIndex(table, 'NODE SELECTOR');
+    const dnsRow = table.rows.find((cells) => cells[0] === 'dns-default') || [];
+    const resolverRow = table.rows.find((cells) => cells[0] === 'node-resolver') || [];
+    assert(
+      !result.error &&
+        selectorAt >= 0 &&
+        dnsRow[selectorAt] === 'kubernetes.io/os=linux' &&
+        resolverRow[selectorAt] === 'kubernetes.io/os=linux',
+      '#58: `oc get ds -n openshift-dns` shows NODE SELECTOR kubernetes.io/os=linux for both DNS DaemonSets',
+      JSON.stringify({ headers: table.headers, rows: [dnsRow, resolverRow] })
+    );
+  }
+  {
+    const labelRows = await podWide('openshift-ingress', `${ingressControllerLabel}=default`);
+    assert(
+      labelRows.rows.length === 2 &&
+        labelRows.rows.every(
+          (candidate) => /^router-default-/.test(candidate.name) && candidate.status === 'Running'
+        ),
+      '#58: `oc get pods -n openshift-ingress -l <ingresscontroller label>` returns the 2 router Pods',
+      JSON.stringify(labelRows.rows)
+    );
+    result = await runCmd(
+      `oc delete pod -n openshift-ingress -l ${ingressControllerLabel}=default`
+    );
+    const deletedCount = (result.message.match(/pod "/g) || []).length;
+    assert(
+      !result.error && deletedCount === 2,
+      '#58: `oc delete pod -n openshift-ingress -l <ingresscontroller label>` deletes both router Pods',
+      result.message.slice(0, 400)
+    );
+    const recreated = await advanceUntil(async () => {
+      const wideAgain = await podWide('openshift-ingress');
+      const pods = wideAgain.rows.filter((candidate) => /^router-default-/.test(candidate.name));
+      return pods.length === 2 && pods.every((candidate) => candidate.status === 'Running');
+    }, 40);
+    assert(recreated, '#58: the router Deployment controller recreates the label-deleted Pods');
+    // #58: with the Service selector pinned to the operator label, the router
+    // Service resolves to its Pods; hostNetwork router Pods expose the node IP
+    // on the Service target ports (80/443/1936).
+    result = await runCmd('oc get endpoints -n openshift-ingress');
+    {
+      const endpointsTable = tableParts(result.message);
+      const endpointsRow =
+        endpointsTable.rows.find((cells) => cells[0] === 'router-internal-default') || [];
+      const endpointsCell = endpointsRow[columnIndex(endpointsTable, 'ENDPOINTS')] || '';
+      const endpointPairs = endpointsCell.split(',').filter(Boolean);
+      const nodeIPs = new Set(
+        await evaluate(() =>
+          (window.game.cluster.getByKind('Node') || []).map(
+            (node) =>
+              (node.status?.addresses || []).find((address) => address.type === 'InternalIP')
+                ?.address || ''
+          )
+        )
+      );
+      const pairsResolve =
+        endpointPairs.length > 0 &&
+        endpointPairs.every((pair) => {
+          const [ip, port] = pair.split(':');
+          return nodeIPs.has(ip) && ['80', '443', '1936'].includes(port);
+        });
+      assert(
+        !result.error &&
+          pairsResolve &&
+          ['80', '443', '1936'].every((port) =>
+            endpointPairs.some((pair) => pair.endsWith(`:${port}`))
+          ),
+        '#58: `oc get endpoints -n openshift-ingress` resolves the router Pods to node IPs on 80/443/1936',
+        endpointsCell.slice(0, 600)
+      );
+    }
+  }
+  result = await runCmd(`oc adm taint node master-0 ${masterTaintKey}=:NoSchedule`);
+  assert(
+    !result.error && /node\/master-0 tainted/.test(result.message),
+    '#58: `oc adm taint node master-0 node-role.kubernetes.io/master=:NoSchedule` accepts the kubectl empty-value grammar',
+    result.message.slice(0, 300)
+  );
+  result = await runCmd('oc describe node master-0');
+  assert(
+    new RegExp(`^Taints:\\s+${masterTaintKey.replace(/\./g, '\\.')}:NoSchedule\\s*$`, 'm').test(
+      result.message
+    ),
+    '#58: `oc describe node master-0` shows the empty-value taint as node-role.kubernetes.io/master:NoSchedule',
+    (result.message.match(/^Taints:.*$/m) || [''])[0]
+  );
+  result = await runCmd(`oc adm taint node master-0 ${masterTaintSpec}-`);
+  assert(
+    !result.error && /node\/master-0 untainted/.test(result.message),
+    '#58: the `key:Effect-` removal form still removes the master taint',
+    result.message.slice(0, 300)
+  );
+  result = await runCmd('oc describe node master-0');
+  assert(
+    /^Taints:\s+<none>\s*$/m.test(result.message),
+    '#58: the removed master taint is gone right after the removal command',
+    (result.message.match(/^Taints:.*$/m) || [''])[0]
+  );
+  result = await runCmd(`oc adm taint node master-0 ${masterTaintKey}=:NoSchedule`);
+  assert(
+    !result.error && /node\/master-0 tainted/.test(result.message),
+    '#58: the control-plane taint can be restored with the empty-value form',
+    result.message.slice(0, 300)
+  );
+  {
+    await runCmd('oc adm taint node worker-0 dedicated=:NoSchedule');
+    result = await runCmd('oc adm taint node worker-0 dedicated:NoSchedule-');
+    assert(
+      !result.error && /node\/worker-0 untainted/.test(result.message),
+      '#58: the `key:Effect-` removal form works for a dedicated taint',
+      result.message.slice(0, 300)
+    );
+    await runCmd('oc adm taint node worker-0 dedicated=:NoSchedule');
+    result = await runCmd('oc adm taint node worker-0 dedicated=NoSchedule-');
+    assert(
+      !result.error && /node\/worker-0 untainted/.test(result.message),
+      '#58: the `key=value:Effect-` removal form works (empty value accepted)',
+      result.message.slice(0, 300)
+    );
+    await runCmd('oc adm taint node worker-0 dedicated=:NoSchedule');
+    result = await runCmd('oc adm taint node worker-0 dedicated-');
+    assert(
+      !result.error && /node\/worker-0 untainted/.test(result.message),
+      '#58: the `key-` removal form still works',
+      result.message.slice(0, 300)
+    );
+    result = await runCmd('oc describe node worker-0');
+    assert(
+      /^Taints:\s+<none>\s*$/m.test(result.message),
+      '#58: worker-0 has no leftover taints after the removal-form checks',
+      (result.message.match(/^Taints:.*$/m) || [''])[0]
+    );
+    result = await runCmd('oc adm taint node worker-0 dedicated=:Bogus');
+    assert(
+      result.error && /invalid taint effect: Bogus, unsupported taint effect/.test(result.message),
+      '#58: an unknown taint effect is rejected with the real oc error',
+      result.message.slice(0, 300)
+    );
+  }
+  result = await runCmd(
+    'oc exec deployment/router-default -n openshift-ingress -- cat /etc/resolv.conf'
+  );
+  assert(
+    !result.error &&
+      /nameserver 172\.30\.0\.10/.test(result.message) &&
+      /search openshift-ingress\.svc\.cluster\.local svc\.cluster\.local cluster\.local/.test(
+        result.message
+      ) &&
+      /options ndots:5/.test(result.message),
+    '#58: `oc exec <running Pod> -- cat /etc/resolv.conf` shows the cluster DNS contract',
+    result.message.slice(0, 400)
+  );
+  {
+    const before = await platformSnapshot();
+    await advanceBoth(90);
+    const after = await platformSnapshot();
+    assert(
+      JSON.stringify(before) === JSON.stringify(after),
+      '#58: platform Pods and Service ClusterIPs do not churn over 90 s of ticks',
+      JSON.stringify({ before, after })
+    );
+  }
+
+  // ═══ Round 3: #58 paused pre-start sandbox — platform Services + the
+  //     deterministic `oc new-app` ScalingReplicaSet name ═════════════════
+  await goto('/?mode=sandbox&tutorial=1');
+  const pausedBooted = await waitFor(
+    () =>
+      evaluate(
+        () =>
+          Boolean(window.game?.app?.modeInstance) &&
+          Boolean(document.getElementById('tutorial-overlay'))
+      ),
+    20000
+  );
+  await sleep(600);
+  {
+    const pausedState = await evaluate(() => ({
+      state: window.game?.gameEngine?.state || '',
+      gameSeconds: window.game?.gameEngine?.simulation?.gameSeconds ?? null,
+      tutorial: Boolean(document.getElementById('tutorial-overlay')),
+    }));
+    assert(
+      pausedBooted && pausedState.state === 'paused' && pausedState.gameSeconds === 0,
+      '#58: the sandbox is genuinely paused before "Start exploring" (platform Services seeded without ticks)',
+      JSON.stringify(pausedState)
+    );
+  }
+  result = await runCmd('oc get svc -n openshift-dns');
+  {
+    const pausedTable = tableParts(result.message);
+    const dnsRow = pausedTable.rows.find((cells) => cells[0] === 'dns-default') || [];
+    assert(
+      !result.error &&
+        dnsRow[columnIndex(pausedTable, 'CLUSTER-IP')] === '172.30.0.10' &&
+        dnsRow[columnIndex(pausedTable, 'PORT(S)')] === '53/UDP,53/TCP,9154/TCP',
+      '#58: the dns-default Service exists in the paused pre-start sandbox',
+      JSON.stringify({ headers: pausedTable.headers, row: dnsRow })
+    );
+  }
+  result = await runCmd('oc get svc -n openshift-ingress');
+  {
+    const pausedTable = tableParts(result.message);
+    const routerRow =
+      pausedTable.rows.find((cells) => cells[0] === 'router-internal-default') || [];
+    assert(
+      !result.error && routerRow[columnIndex(pausedTable, 'PORT(S)')] === '80/TCP,443/TCP,1936/TCP',
+      '#58: the router-internal-default Service exists in the paused pre-start sandbox',
+      JSON.stringify({ headers: pausedTable.headers, row: routerRow })
+    );
+  }
+  result = await runCmd(
+    'oc new-app --name=pre --image=quay.io/openshift/origin-hello-openshift:latest'
+  );
+  assert(
+    !result.error && /deployment\.apps "pre" created/.test(result.message),
+    '#58: `oc new-app --name=pre` creates the Deployment in the paused sandbox',
+    result.message.slice(0, 400)
+  );
+  result = await runCmd('oc get events');
+  let predictedReplicaSet = '';
+  {
+    const scalingRow = getEventRows(result.message).find(
+      (event) => event.reason === 'ScalingReplicaSet' && event.object === 'deployment/pre'
+    );
+    const match = String(scalingRow?.message || '').match(
+      new RegExp(`Scaled up replica set (pre-[${dnsAlphabet}]{10}) to 1`)
+    );
+    predictedReplicaSet = match ? match[1] : '';
+    assert(
+      Boolean(scalingRow) && Boolean(predictedReplicaSet),
+      '#58: the paused new-app ScalingReplicaSet event prints the full deterministic pre-<10-char pod-template-hash> name',
+      JSON.stringify({ message: scalingRow?.message, predictedReplicaSet })
+    );
+  }
+  result = await runCmd('oc get rs');
+  assert(
+    /No resources found/.test(result.message),
+    '#58: no ReplicaSet exists yet while the cluster is paused (the event is only a prediction)',
+    result.message.slice(0, 300)
+  );
+  await evaluate(() => document.getElementById('tutorial-start')?.click());
+  const engineStarted = await waitFor(
+    () => evaluate(() => window.game?.gameEngine?.state === 'running'),
+    8000
+  );
+  assert(engineStarted, '#58: "Start exploring" resumes the paused sandbox');
+  {
+    const replicaSetExists = await advanceUntil(async () => {
+      const out = await runCmd('oc get rs -n default');
+      return tableParts(out.message).rows.some((cells) => cells[0] === predictedReplicaSet);
+    }, 40);
+    assert(
+      replicaSetExists,
+      '#58: after Start the Deployment controller creates exactly the predicted ReplicaSet name',
+      predictedReplicaSet
+    );
+  }
+  result = await runCmd(`oc describe rs ${predictedReplicaSet}`);
+  assert(
+    !result.error &&
+      new RegExp(`^Name:\\s+${predictedReplicaSet}\\s*$`, 'm').test(result.message) &&
+      /Replicas:\s+1 desired/.test(result.message),
+    '#58: `oc describe rs <predicted name>` works and shows the 1-desired ReplicaSet',
+    result.message.slice(0, 500)
   );
 });
 
