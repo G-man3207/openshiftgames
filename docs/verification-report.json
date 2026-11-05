@@ -1,19 +1,19 @@
 {
-  "timestamp": "2026-11-05T13:48:35.656Z",
+  "timestamp": "2026-11-05T15:15:46.105Z",
   "environment": {
     "node": "v26.10.0",
     "chrome": "Chrome/156.0.8078.79",
-    "baseUrl": "http://127.0.0.1:35427",
+    "baseUrl": "http://127.0.0.1:38947",
     "viewport": {
       "width": 1600,
       "height": 900
     },
     "puppeteerCore": "/tmp/verify-tools",
-    "startedAt": "2026-11-05T13:32:38.081Z",
-    "durationSeconds": 958
+    "startedAt": "2026-11-05T14:59:24.575Z",
+    "durationSeconds": 982
   },
   "summary": {
-    "passes": 1798,
+    "passes": 1839,
     "failures": 0,
     "warnings": 0,
     "consoleErrors": 0,
@@ -196,6 +196,11 @@
       "failures": 0,
       "warnings": 0
     },
+    "qa-issue59-60": {
+      "passes": 41,
+      "failures": 0,
+      "warnings": 0
+    },
     "draw": {
       "passes": 10,
       "failures": 0,
@@ -216,74 +221,74 @@
       "path": "screenshot.png",
       "width": 1600,
       "height": 900,
-      "bytes": 982048
+      "bytes": 982703
     },
     "ogImage": {
       "path": "og-image.png",
       "width": 1200,
       "height": 630,
-      "bytes": 205512
+      "bytes": 205709
     },
     "screenshots": [
       {
         "path": "docs/screenshots/menu.png",
         "width": 1600,
         "height": 900,
-        "bytes": 331273
+        "bytes": 332603
       },
       {
         "path": "docs/screenshots/exam-prep.png",
         "width": 1600,
         "height": 900,
-        "bytes": 210924
+        "bytes": 210786
       },
       {
         "path": "docs/screenshots/sandbox.png",
         "width": 1600,
         "height": 900,
-        "bytes": 980337
+        "bytes": 983607
       },
       {
         "path": "screenshot.png",
         "width": 1600,
         "height": 900,
-        "bytes": 982048
+        "bytes": 982703
       },
       {
         "path": "docs/screenshots/files-panel.png",
         "width": 1600,
         "height": 900,
-        "bytes": 243659
+        "bytes": 244017
       },
       {
         "path": "docs/screenshots/campaign-level-1.png",
         "width": 1600,
         "height": 900,
-        "bytes": 480181
+        "bytes": 479888
       },
       {
         "path": "docs/screenshots/regressions-minimap-collapsed.png",
         "width": 1600,
         "height": 900,
-        "bytes": 961355
+        "bytes": 961663
       },
       {
         "path": "docs/screenshots/regressions-campaign-restart.png",
         "width": 1600,
         "height": 900,
-        "bytes": 488461
+        "bytes": 488086
       },
       {
         "path": "docs/screenshots/draw.png",
         "width": 1600,
         "height": 900,
-        "bytes": 489149
+        "bytes": 488827
       },
       {
         "path": "og-image.png",
         "width": 1200,
         "height": 630,
-        "bytes": 205512
+        "bytes": 205709
       }
     ]
   },
@@ -7278,7 +7283,7 @@
     },
     {
       "section": "qa-issue57-58",
-      "name": "#58: `oc get endpoints -n openshift-dns` lists dns-default pod-network 10.x addresses on 5353"
+      "name": "#58: `oc get endpoints -n openshift-dns` lists the first 3 dns-default 10.x:5353 pairs plus \" + N more...\" like kubectl"
     },
     {
       "section": "qa-issue57-58",
@@ -7314,7 +7319,7 @@
     },
     {
       "section": "qa-issue57-58",
-      "name": "#58: `oc get endpoints -n openshift-ingress` resolves the router Pods to node IPs on 80/443/1936"
+      "name": "#58: `oc get endpoints -n openshift-ingress` resolves the first 3 router Pod node-IP pairs on 80/443 plus \" + N more...\""
     },
     {
       "section": "qa-issue57-58",
@@ -7399,6 +7404,170 @@
     {
       "section": "qa-issue57-58",
       "name": "#58: `oc describe rs <predicted name>` works and shows the 1-desired ReplicaSet"
+    },
+    {
+      "section": "qa-issue59-60",
+      "name": "#59/#60: a fresh sandbox boots for the Service/DNS fidelity checks"
+    },
+    {
+      "section": "qa-issue59-60",
+      "name": "#59: `oc new-project qa7` creates the project used by the ClusterIP/DNS checks"
+    },
+    {
+      "section": "qa-issue59-60",
+      "name": "#59: `oc create deployment web --image=registry.access.redhat.com/ubi9/httpd-24 --replicas=2` creates the Deployment"
+    },
+    {
+      "section": "qa-issue59-60",
+      "name": "#59: the two `web` Pods reach Running 1/1 before exposing the Deployment"
+    },
+    {
+      "section": "qa-issue59-60",
+      "name": "#59: `oc expose deployment/web --port=8080` creates the ClusterIP Service"
+    },
+    {
+      "section": "qa-issue59-60",
+      "name": "#59: `oc get svc web` CLUSTER-IP is a real 172.30.x.y address (not empty/<none>)"
+    },
+    {
+      "section": "qa-issue59-60",
+      "name": "#59: the exposed Service is TYPE ClusterIP with PORT(S) 8080/TCP"
+    },
+    {
+      "section": "qa-issue59-60",
+      "name": "#59: `oc get svc web -o jsonpath={.spec.clusterIP}` equals the `oc get svc` CLUSTER-IP"
+    },
+    {
+      "section": "qa-issue59-60",
+      "name": "#59: `oc get svc web -o json` spec carries clusterIP/clusterIPs/ipFamilies/ipFamilyPolicy/sessionAffinity/internalTrafficPolicy and the unnamed 8080 TCP port"
+    },
+    {
+      "section": "qa-issue59-60",
+      "name": "#59: the Service status serializes as ONLY loadBalancer (no phase/conditions/observedGeneration/readyEndpoints/totalEndpoints/endpoints)"
+    },
+    {
+      "section": "qa-issue59-60",
+      "name": "#59: `oc get svc web -o yaml` spec prints the API defaults while status keeps only loadBalancer"
+    },
+    {
+      "section": "qa-issue59-60",
+      "name": "#59: `oc describe svc web` prints the matching IP/IPs, IP Family Policy/IP Families, Session Affinity None and no literal undefined"
+    },
+    {
+      "section": "qa-issue59-60",
+      "name": "#59: the unnamed exposed Service port prints `Port: <unset> 8080/TCP` and `TargetPort: 8080/TCP`"
+    },
+    {
+      "section": "qa-issue59-60",
+      "name": "#59: `oc describe svc web` Endpoints equal `oc get endpoints web` (both ready Pod IPs on 8080)"
+    },
+    {
+      "section": "qa-issue59-60",
+      "name": "#59: `oc exec deploy/web -- nslookup web.qa7.svc.cluster.local` resolves to the Service ClusterIP (never the fabricated 172.30.43.12)"
+    },
+    {
+      "section": "qa-issue59-60",
+      "name": "#59: cross-namespace DNS `router-internal-default.openshift-ingress.svc.cluster.local` resolves to that Service ClusterIP"
+    },
+    {
+      "section": "qa-issue59-60",
+      "name": "#59: an unknown DNS name prints NXDOMAIN (no fabricated Service IP)"
+    },
+    {
+      "section": "qa-issue59-60",
+      "name": "#59: `oc describe svc dns-default -n openshift-dns` shows IP 172.30.0.10, SingleStack/IPv4, Session Affinity None and no undefined"
+    },
+    {
+      "section": "qa-issue59-60",
+      "name": "#59: `oc describe svc dns-default` prints one Port/TargetPort/Endpoints block per port (dns 53/UDP, dns-tcp 53/TCP, metrics 9154/TCP) with the 3 pod-network endpoints each"
+    },
+    {
+      "section": "qa-issue59-60",
+      "name": "#59: `oc exec deploy/web -- curl … http://<clusterIP>:8080` routes through the Service endpoints and prints 200"
+    },
+    {
+      "section": "qa-issue59-60",
+      "name": "#59: `oc apply -f manifests/service.yaml -n qa7` applies an externally authored Service manifest"
+    },
+    {
+      "section": "qa-issue59-60",
+      "name": "#59: an applied Service without spec.clusterIP gets its own real allocated ClusterIP (defaulting on the apply path)"
+    },
+    {
+      "section": "qa-issue59-60",
+      "name": "#60: `oc run unsched` with an impossible nodeSelector creates the Pod"
+    },
+    {
+      "section": "qa-issue59-60",
+      "name": "#60: `oc describe pod unsched` has no Container ID/Image ID/State/Ready/Restart Count lines (never bound → no kubelet status)"
+    },
+    {
+      "section": "qa-issue59-60",
+      "name": "#60: unscheduled Pod describe keeps Image/Port/Host Port/Environment/Mounts plus PodScheduled False and the FailedScheduling event"
+    },
+    {
+      "section": "qa-issue59-60",
+      "name": "#60: a bound/running Pod describe keeps State Running/Ready True/Restart Count 0 plus the Container ID/Image ID fields (no over-removal)"
+    },
+    {
+      "section": "qa-issue59-60",
+      "name": "#60: `oc get endpoints -n openshift-dns` ENDPOINTS prints 3 ready pairs then \" + N more...\" like kubectl"
+    },
+    {
+      "section": "qa-issue59-60",
+      "name": "#60: `oc get endpoints -n openshift-ingress` ENDPOINTS prints 3 node-IP pairs then \" + N more...\" like kubectl"
+    },
+    {
+      "section": "qa-issue59-60",
+      "name": "#60: `oc get rolebinding -n qa7` ROLE prints ClusterRole/<roleRef.name> (admin → ClusterRole/admin, system:deployers → ClusterRole/system:deployer)"
+    },
+    {
+      "section": "qa-issue59-60",
+      "name": "#60: `oc create rolebinding … --clusterrole=edit` creates the binding"
+    },
+    {
+      "section": "qa-issue59-60",
+      "name": "#60: a newly created clusterrole RoleBinding prints ROLE ClusterRole/edit"
+    },
+    {
+      "section": "qa-issue59-60",
+      "name": "#60: `oc get clusterrolebinding` ROLE prints ClusterRole/cluster-admin for kubeadmin-cluster-admin"
+    },
+    {
+      "section": "qa-issue59-60",
+      "name": "#60: `oc create deploy healthy` creates the healthy rollout fixture"
+    },
+    {
+      "section": "qa-issue59-60",
+      "name": "#60: `oc rollout status deploy/healthy --timeout=120s` waits synchronously and succeeds on a healthy rollout"
+    },
+    {
+      "section": "qa-issue59-60",
+      "name": "#60: `oc create deploy stalled` creates the stalled-rollout fixture"
+    },
+    {
+      "section": "qa-issue59-60",
+      "name": "#60: the `stalled` rollout is healthy before the bad image is introduced"
+    },
+    {
+      "section": "qa-issue59-60",
+      "name": "#60: `oc set image deploy/stalled <container>=quay.io/nonexistent/boom:latest` updates the pod template"
+    },
+    {
+      "section": "qa-issue59-60",
+      "name": "#60: the nonexistent image leaves the new `stalled` Pods pending (ErrImagePull/ImagePullBackOff), so the rollout is stuck"
+    },
+    {
+      "section": "qa-issue59-60",
+      "name": "#60: `oc rollout status deploy/stalled --timeout=5s` blocks, prints the Waiting line and ends with `error: timed out waiting for the condition` (error true)"
+    },
+    {
+      "section": "qa-issue59-60",
+      "name": "#60: the timed-out rollout status exits 1, so a chained `&& echo CHAIN_RAN` never runs"
+    },
+    {
+      "section": "qa-issue59-60",
+      "name": "#60: an unchained `; echo AFTER` still runs after the timed-out rollout status (real shell exit-status semantics)"
     },
     {
       "section": "draw",

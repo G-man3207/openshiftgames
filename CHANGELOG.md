@@ -4,6 +4,119 @@ All notable changes to OpenShift Games are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 aims to follow [Semantic Versioning](https://semver.org/).
 
+## [1.8.0] — 2026-11-05
+
+Tenth QA pass on 1.7.0: closes the two open report items (#59–#60) from the 1.7.0 CLI playthrough.
+The release gives the simulated API server a real Service data model: one defaulting helper assigns
+the ClusterIP fields once at create on every creation path — the rich `Service` class,
+`GameEngine.applyManifestObject` (`oc apply/create/replace -f`, `oc expose`), the `ClusterState`
+seed of platform Services and project-template objects — and `oc get svc`, `-o yaml/json`,
+`-o jsonpath={.spec.clusterIP}`, `oc describe svc`, cluster DNS `nslookup` and
+`oc exec … curl http://<ClusterIP>:<port>` all read that same field, so the ClusterIP is no longer a
+display value nothing else agrees with. Service status is exactly `{loadBalancer: {}}` for ClusterIP
+Services (the real 4.22 subresource — no invented phase, conditions or endpoint counters), the
+Endpoints view and `oc describe svc` share one canonical ready-endpoint resolver, and
+`oc get endpoints` truncates the ENDPOINTS cell like kubectl. `oc describe svc` now reproduces the
+real kubectl v1.30 tabwriter output (IP Family Policy/IP Families/IP/IPs, one
+Port/TargetPort/Endpoints block per port, optional External IPs/External Name/LoadBalancer
+Ingress/NodePort/HealthCheck NodePort/LoadBalancer Source Ranges, Session Affinity and Events last),
+and cluster DNS resolves Service names to their own ClusterIP (headless Services to the ready Pod
+IPs, ExternalName to its target) while unknown names get the real NXDOMAIN line instead of a
+fabricated address. The CLI also stops fabricating kubelet detail for a never-bound Pod
+(`oc describe pod` shows no Container ID/Image ID/State/Ready/Restart Count until the Pod is bound),
+prints `<RoleRef.kind>/<RoleRef.name>` in the RoleBinding ROLE column, leaves `oc expose` with one
+unnamed Service port like real oc, and makes `oc rollout status <deploy> --timeout=5s` on a stalled
+rollout block and exit 1 with `error: timed out waiting for the condition`, so `&&` chains stop
+(`;` still runs). The game stays no-build and dependency-free.
+
+### Added
+
+- **A real Service data model and API-server defaulting (issue #59).**
+  `js/resources/NetworkResources.js` owns one `defaultServiceSpec()` helper that applies exactly the
+  defaults the 4.22 kube-apiserver applies: every Service created through the rich class,
+  `GameEngine.applyManifestObject` (`oc apply/create/replace -f`, `oc expose`), the `ClusterState`
+  seed (platform Services included) and project-template objects gets `spec.clusterIP` (a unique
+  `172.30.0.0/16` address; `None` for headless Services), `clusterIPs`, `ipFamilies: [IPv4]`,
+  `ipFamilyPolicy: SingleStack`, `sessionAffinity: None`, `internalTrafficPolicy: Cluster` and port
+  `protocol`/`targetPort` defaults once at create; updates and re-applies preserve the allocated
+  clusterIP. `oc get svc`, `-o yaml/json`, `-o jsonpath={.spec.clusterIP}`, `oc describe svc`,
+  cluster DNS and `oc exec … curl http://<ClusterIP>` all read that one field.
+- **Real `oc describe svc` output (issue #59).** The describe is the real kubectl v1.30 shape:
+  `IP Family Policy: SingleStack`, `IP Families: IPv4`, `IP:`/`IPs:`, one
+  `Port:`/`TargetPort:`/`Endpoints:` block per port (`Port: <unset> 8080/TCP` for the unnamed port
+  `oc expose deploy/web --port=8080` creates, like real oc), tabwriter-aligned columns,
+  `Session Affinity: None`, External IPs/External Name/LoadBalancer Ingress/NodePort/HealthCheck
+  NodePort/LoadBalancer Source Ranges only when set, and Events last. Endpoints come from the
+  canonical ready-endpoint resolver, so they agree with `oc get endpoints`.
+- **Real cluster-DNS answers for `nslookup` (issue #59).**
+  `nslookup <svc>.<ns>.svc.cluster.local`/`.svc`/`<svc>.<ns>`/bare names resolve to the Service's
+  own ClusterIP, headless Services resolve to all ready pod IPs, ExternalName resolves to its
+  target, and an unknown name prints the real `** server can't find <name>: NXDOMAIN` line instead
+  of a fabricated address. `oc exec … curl http://<ClusterIP>:<port>` routes through the same
+  Service's ready endpoints.
+- **Blocking `oc rollout status --timeout` (issue #60).** On a stalled rollout the command now
+  blocks like real oc: it prints the Waiting line, ends with
+  `error: timed out waiting for the condition` and exits 1, so a following `&&` command does not
+  run (`;` still does). The simulation advances its cluster clock synchronously in 0.25 s steps up
+  to the timeout (600 simulated-second cap, then the existing async watcher); a healthy rollout
+  completes within the timeout and prints the waiting lines + `successfully rolled out`. The
+  no-timeout behaviour is unchanged.
+
+### Changed
+
+- **Service status and the Endpoints view are canonical API shapes (issues #59/#60).** A ClusterIP
+  Service's `status` is exactly `{loadBalancer: {}}` — the invented `phase`, `conditions`,
+  `observedGeneration`, `readyEndpoints`, `totalEndpoints` and `endpoints[]` fields are gone. Ready
+  endpoints have one source of truth (`ClusterState.getServiceEndpoints()`), mirrored into the
+  internal `service.endpoints` bookkeeping; `oc get endpoints`, `oc describe svc` and the traffic
+  simulation all read it, and the ENDPOINTS cell truncates like kubectl (first 3 `ip:port` pairs followed by ` + N more...`).
+- **`oc expose` leaves a single unnamed Service port (issue #60).**
+  `oc expose deploy/web --port=8080` now creates the same port shape real oc does, so the get table
+  prints `8080/TCP` and describe prints `Port: <unset> 8080/TCP`.
+- README and CONVERSION-SPEC describe the Service defaulting/single-source contract, the real
+  describe-svc/endpoints/DNS output and the CLI fixes (issues #59–#60); the verification report
+  records the tenth QA pass.
+
+### Fixed
+
+- **ClusterIP is no longer a display-only value (issue #59).** Previously `oc get svc` printed a
+  hash-derived ClusterIP that nothing else agreed with and `oc expose` left `spec.clusterIP` empty
+  (the apply path dropped the API defaults), so `-o jsonpath={.spec.clusterIP}` was empty, describe
+  showed `IP: <none>`, `Endpoints: <none>` and `Session Affinity: undefined`, and
+  `curl <ClusterIP>` returned 000. Now one allocation is stored on the object and every surface
+  reads it.
+- **`oc get svc -o yaml` no longer invents status (issue #59).** The fabricated
+  `phase`/`conditions`/`readyEndpoints`/`totalEndpoints`/`endpoints[]` status fields are removed;
+  YAML/JSON round-trips the real spec defaults plus `{loadBalancer: {}}`.
+- **`oc describe svc` matches real kubectl output (issue #59).** Per-port
+  Port/TargetPort/Endpoints blocks, `IP Family Policy`/`IP Families`/`IP`/`IPs`,
+  `Session Affinity: None`, aligned columns and only-when-set optional lines; the platform
+  `dns-default` Service describes with its real `dns`/`dns-tcp`/`metrics` ports and the
+  pod-network `10.x:5353` endpoints.
+- **Unscheduled-Pod describe is honest (issue #60).** A never-bound Pod now genuinely has no
+  `status.containerStatuses`, so `oc describe pod` omits `Container ID:`, `Image ID:`, `State:`,
+  `Ready:` and `Restart Count:` and shows only Image/Port/Host Port/Environment/Mounts/Conditions
+  (`PodScheduled False`) plus the FailedScheduling event; bound/running Pods keep their real State
+  Running/Ready True/restart-count block.
+- **`oc get rolebinding` prints the role kind (issue #60).** The ROLE column is
+  `<roleRef.kind>/<roleRef.name>` (`ClusterRole/admin`, `Role/edit`,
+  `ClusterRole/system:deployer`), so Role vs ClusterRole is visible like real oc.
+- **`oc rollout status --timeout` reports failure to the shell (issue #60).** A timed-out rollout
+  now exits 1 for `&&`/`||` chaining instead of reporting success.
+
+### Tests
+
+- New permanent `qa-issue59-60` browser-regression section (41 checks) covering every report item
+  (ClusterIP single source across get/jsonpath/describe/DNS/curl, Service status shape,
+  describe-svc per-port format, endpoints truncation, rolebinding ROLE, unscheduled-Pod describe,
+  blocking rollout timeout + shell exit status), plus updated #58 endpoint-truncation assertions.
+  `scripts/verify.mjs` grew the matching §4e static-fidelity locks (16 checks) that fail the fast
+  gate if any of those contracts regress without launching a browser.
+- Static gate: **1046 checks, 0 failures, 0 warnings** (56 JS modules, 118 files); full browser
+  suite: **1839 checks, 0 failures, 0 warnings** (982 s, 0 console/page errors, GO);
+  `visual-qa --strict`: **PASS** (94 checks, 0 failures, 31 informational warnings);
+  see `docs/verification-report.md`.
+
 ## [1.7.0] — 2026-11-05
 
 Ninth QA pass on 1.6.0: closes the two open report items (#57–#58) from the 1.6.0 CLI playthrough.

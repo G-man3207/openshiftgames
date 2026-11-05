@@ -209,10 +209,29 @@ User: { fullName: "", groups: [], identities: [{providerName: "htpasswd", provid
 Group: { users: [] }
 OAuth: { spec: { identityProviders: [{name: "htpasswd", type: "HTPasswd",
           htpasswd: {fileData: {name: "htpasswd-secret"}}}] } }
+Service: { type: ClusterIP, selector: {app: webapp}, ports: [{port: 80, targetPort: 8080}] }
+   # clusterIP/clusterIPs/ipFamilies/ipFamilyPolicy/sessionAffinity/internalTrafficPolicy
+   # and port protocol/targetPort are the API-server defaults applied at create (#59/#60)
 Deployment with openshift extras: { replicas, selector, strategy, template,
    triggers: [{type: ImageChange, imageChangeParams: {automatic: true,
               containerNames: ["main"], from: {kind: ImageStreamTag, name: "app:latest"}}}] }
 ```
+
+Service API-server defaulting (issues #59/#60): every Service creation/update path — the rich
+`Service` class, `GameEngine.applyManifestObject()` (`oc apply/create/replace -f`, `oc expose`),
+`ClusterState` seeding (platform Services and project-template objects) — runs the single
+`defaultServiceSpec()` helper in `js/resources/NetworkResources.js` and stores exactly what a real
+kube-apiserver stores: `spec.clusterIP` (a unique `172.30.0.0/16` address allocated once at create;
+`None` for headless Services), `clusterIPs`, `ipFamilies: [IPv4]`, `ipFamilyPolicy: SingleStack`,
+`sessionAffinity: None`, `internalTrafficPolicy: Cluster`, per-port `protocol: TCP`/`targetPort`,
+and `nodePort`/`externalTrafficPolicy` for NodePort/LoadBalancer types. An update that omits
+`spec.clusterIP` preserves the allocated ClusterIP (the API server never re-allocates it), and
+ExternalName Services carry none of the clusterIP fields. Service status is exactly
+`{loadBalancer: {}}` for ClusterIP — no `phase`, `conditions`, `observedGeneration` or endpoint
+counters. Ready endpoints have one source of truth, `ClusterState.getServiceEndpoints()` (Running
+Pods matching the selector in the Service namespace); the get/describe/traffic surfaces read it and
+`formatEndpointAddresses()` renders it with kubectl's truncation (first 3 `ip:port` pairs followed
+by ` + N more...`, `<none>` when empty).
 
 Default projects seeded in `ClusterState`: `default`, `openshift`, `openshift-config`,
 `openshift-operators`, `openshift-ingress`, `openshift-dns`, `openshift-monitoring`,
@@ -296,7 +315,14 @@ GameEngine helpers):
   pod-network (`10.x:5353`) Endpoints, and `oc get svc -n openshift-ingress` returns
   `router-internal-default` (ClusterIP, ports `80/TCP`, `443/TCP`, `1936/TCP`) with the router Pod
   Endpoints; both Services exist in every mode, including the paused pre-start sandbox (the first
-  check when DNS breaks after a NetworkPolicy change, lab 13).
+  check when DNS breaks after a NetworkPolicy change, lab 13). Both read the Service's stored
+  `spec.clusterIP` and the canonical endpoint resolver (§3.2), so
+  `oc get svc -o jsonpath={.spec.clusterIP}`, `oc describe svc`, `nslookup` and
+  `oc exec … curl http://<ClusterIP>:<port>` agree with the get table (`dig` keeps the legacy
+  generic simulator output — only `nslookup` performs real cluster-DNS resolution). `nslookup`
+  resolves `<svc>.<ns>.svc.cluster.local`/`.svc`/`<svc>.<ns>`/bare names to that ClusterIP, headless
+  Services to all ready pod IPs, ExternalName to its target, and an unknown name prints the real
+  `** server can't find <name>: NXDOMAIN` line — never a fabricated address (issue #59).
 - Exec/shell: `oc exec <pod> [-c <container>] -- <command>` (real container names), `oc rsh <pod>`,
   `oc cp <file> <pod>:<path>` / `oc cp <pod>:<path> <file>`. Inside a Pod `cat /etc/resolv.conf`
   prints the real cluster DNS contract — `search <project>.svc.cluster.local svc.cluster.local
@@ -359,6 +385,52 @@ RBAC: `oc auth can-i` evaluates the model in section 6. Commands themselves are 
 RBAC in v1 (except where a level/incident requires a Forbidden result via `--as`/login), but every
 mutating command emits an authorization check event for objectives/achievements.
 
+### 4.1 Service/DNS and CLI output-fidelity contracts (issues #59–#60)
+
+The Service data model (API-server defaulting and the single ClusterIP source) is defined in §3.2;
+these are the output contracts every command surface must keep:
+
+- **ClusterIP has one source of truth (issue #59).** `oc get svc` CLUSTER-IP,
+  `-o jsonpath={.spec.clusterIP}`, `-o json`/`-o yaml` `spec.clusterIP`, `oc describe svc` `IP:`
+  and `IPs:`, cluster DNS answers and clusterIP traffic all read the Service's stored
+  `spec.clusterIP`. `oc get svc` must never derive a display address, and a Service created by
+  `oc expose`/`oc apply -f` must carry the allocated ClusterIP. Updates that omit it preserve it.
+- **Service status is the real subresource (issue #59).** A ClusterIP Service's serialized `status`
+  contains only `loadBalancer: {}` in YAML/JSON; no `phase`, `conditions`, `observedGeneration`,
+  `readyEndpoints`, `totalEndpoints` or `endpoints[]`. Endpoint bookkeeping lives in the instance
+  (`service.endpoints`) and is fed only by `ClusterState.getServiceEndpoints()`.
+- **`oc describe svc` matches kubectl v1.30 (issue #59).** Header fields `IP Family Policy:`,
+  `IP Families:`, `IP:`, `IPs:`, optional `External IPs:`, `External Name:`,
+  `LoadBalancer Ingress:`, `Desired LoadBalancer IP:`; one block per Service port with `Port:`,
+  `TargetPort:`, optional `AppProtocol:`/`NodePort:` and `Endpoints:` lines
+  (`Port: <unset> 8080/TCP` for a port without a name); then `Session Affinity:`, the optional
+  `External Traffic Policy:`, `HealthCheck NodePort:`, `LoadBalancer Source Ranges:` and the
+  `Events:` block last. Values are tabwriter-aligned; unimplemented defaults are omitted rather
+  than printed as `<none>`/`undefined`.
+- **One endpoint renderer + kubectl truncation (issues #59/#60).**
+  `formatEndpointAddresses()` renders ready endpoints as `ip:port` pairs: up to 3 pairs then
+  ` + N more...`, `<none>` when empty. `oc get endpoints` (ENDPOINTS cell) and `oc describe svc`
+  (per-port `Endpoints:`) both use it over `cluster.getServiceEndpoints(service)`, so the table and
+  the describe never disagree.
+- **RoleBinding ROLE shows the role kind (issue #60).** `oc get rolebinding`/
+  `oc get clusterrolebinding` print the ROLE cell as `<roleRef.kind>/<roleRef.name>`
+  (`ClusterRole/admin`, `Role/edit`, `ClusterRole/system:deployer`), making Role vs ClusterRole
+  visible like real `oc`.
+- **Unscheduled Pod describe is honest (issue #60).** A never-bound Pod has no
+  `status.containerStatuses`; `oc describe pod` then prints Image/Port/Host Port/Environment/
+  Mounts/Conditions (`PodScheduled False`) and the FailedScheduling event only — no `Container ID:`,
+  `Image ID:`, `State:`, `Ready:` or `Restart Count:` lines. A bound/running Pod keeps the real
+  kubelet status block (State Running/Ready True/restart count/IDs).
+- **`oc rollout status --timeout` blocks and exits 1 (issue #60).** With `--timeout`, a stalled
+  rollout streams the Waiting line, ends with `error: timed out waiting for the condition` and
+  returns failure so `&&`/`||` see exit status 1 (`;` still continues); a healthy rollout completes
+  within the timeout and prints `successfully rolled out`. The simulator advances its cluster clock
+  synchronously in 0.25 s steps up to the timeout (600 simulated seconds cap, then the existing
+  async watcher). Without `--timeout` the previous asynchronous watch behaviour is unchanged.
+- **`oc expose` leaves one unnamed Service port (issue #60).** `oc expose deploy/web --port=8080`
+  creates a single port with no `name` (the real oc shape) and defaulted `protocol: TCP`/
+  `targetPort`, so get prints `8080/TCP` and describe prints `Port: <unset> 8080/TCP`.
+
 ---
 
 ## 5. Controllers / simulation (SimulationTick.js)
@@ -390,7 +462,17 @@ Extend the existing fixed-step simulation with OpenShift controllers:
   `podMaxBackoffDuration` 10 s), so Event series aggregate into realistic small counts over a
   nonzero window (e.g. `(x4 over 7s)`) instead of one event per tick (`x167 over 0s`), and each
   series preserves its `firstTimestamp`; a successfully scheduled Pod discards its retry state, so a
-  later eviction/reschedule starts a fresh series.
+  later eviction/reschedule starts a fresh series. A never-bound Pod genuinely has no
+  `status.containerStatuses` (scheduler binding is what creates them), so `oc describe pod` omits
+  the kubelet-only `Container ID:`/`Image ID:`/`State:`/`Ready:`/`Restart Count:` lines for it
+  (#60); a bound/running Pod keeps the real status block.
+- `_tickProbes` / Service endpoint accounting (issues #59/#60): `ClusterState.getServiceEndpoints()`
+  is the canonical ready-endpoint resolver (Running Pods matching the Service selector in the same
+  project); the tick keeps the instance `service.endpoints` bookkeeping in sync with it and never
+  copies endpoints into the API-object `status`, which for ClusterIP Services is exactly
+  `{loadBalancer: {}}` (`_persistService()` avoids the generic ResourceBase `conditions: []`
+  skeleton). `oc get endpoints`, `oc describe svc`, route/incident checks and the traffic simulation
+  read that same resolver, so ENDPOINTS cells and describe lines never disagree.
 - `_tickRoutes`: router ADMISSION is a host/path-ownership + TLS/config check, never an endpoints
   check (OCP 4.22 router `UniqueHost` + external-certificate validation): a Route targeting an
   existing Service stays

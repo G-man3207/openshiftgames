@@ -29,7 +29,9 @@ names are shown in EX280 Prep).
 
 - **`oc` terminal** — a simulated OpenShift CLI with `get`, `describe`, `apply -f`, `create`,
   `new-app`, `new-project`, `expose`, `create route`, `start-build`, `set env|image|resources|volume`,
-  `rollout` (`status --timeout|history|undo`), `logs` (Pods, Deployments, Jobs), `exec`, `rsh`, `cp`, `wait`,
+  `rollout` (`status --timeout|history|undo`; `status --timeout` blocks like real `oc` and exits 1
+  with `error: timed out waiting for the condition` on a stalled rollout, so `&&` chains stop),
+  `logs` (Pods, Deployments, Jobs), `exec`, `rsh`, `cp`, `wait`,
   `diff -f`, `patch --type=strategic|merge|json`, `adm policy` (RBAC + SCC), `auth can-i`,
   `adm top`, `adm cordon|drain`, `adm taint` (all real forms, including kubectl's empty-value
   `key=:Effect`), `create quota|clusterquota` (LimitRanges are declarative —
@@ -39,7 +41,9 @@ names are shown in EX280 Prep).
   `--dry-run=client|server`, `<resource>.<group>` tokens, escaped jsonpath keys, `custom-columns`,
   `events --field-selector`, pipes, redirects and `-f -` stdin. Container names follow real `oc`
   (`oc create deployment --image=…` names the container after the image; `oc set image` never adds
-  one). RBAC is genuinely enforced: a plain user gets the real
+  one). `oc get rolebinding|clusterrolebinding` prints the ROLE as
+  `<roleRef.kind>/<roleRef.name>` (`ClusterRole/admin`, `Role/edit`), so Role vs ClusterRole is
+  visible like real `oc`. RBAC is genuinely enforced: a plain user gets the real
   `Error from server (Forbidden): …` for reads and writes they are not allowed to perform.
   `oc` is the taught command; a leading `kubectl` is accepted as an alias with an educational hint.
 - **A real shell around `oc`** — `vim`/`vi` (opens the manifest editor), `cat`, `echo` with
@@ -94,14 +98,27 @@ names are shown in EX280 Prep).
   `53/UDP,53/TCP,9154/TCP`) and `openshift-ingress/router-internal-default`
   (`80/TCP,443/TCP,1936/TCP`), so `oc get svc,endpoints -n openshift-dns` is the real
   DNS-troubleshooting check (lab 13) and `oc exec <pod> -- cat /etc/resolv.conf` shows the cluster
-  search domains, `nameserver 172.30.0.10` and `options ndots:5`. The control-plane Node carries the
-  real `node-role.kubernetes.io/master:NoSchedule` taint, so application workloads schedule onto the
+  search domains, `nameserver 172.30.0.10` and `options ndots:5`. Service objects carry the API
+  server's real `spec.clusterIP` (unique `172.30.0.0/16`; `None` when headless) plus the defaulted
+  `clusterIPs`/`ipFamilies`/`ipFamilyPolicy`/`sessionAffinity` and per-port `protocol`/`targetPort`,
+  and that one field drives `oc get svc`, `-o yaml/json`, `-o jsonpath={.spec.clusterIP}`,
+  `oc describe svc`, cluster DNS `nslookup` and `oc exec … curl http://<ClusterIP>:<port>` alike.
+  Status is the real `{loadBalancer: {}}` subresource (no invented phase/conditions/endpoint
+  counters), `oc describe svc` prints the kubectl v1.30 shape (`IP Family Policy: SingleStack`,
+  `IP:`/`IPs:`, one `Port:`/`TargetPort:`/`Endpoints:` block per port, `Session Affinity: None`),
+  `oc get endpoints` truncates the ENDPOINTS cell like kubectl
+  (`ip:port,ip:port,ip:port + N more...`), and `nslookup` answers a Service name with its own
+  ClusterIP (headless → ready pod IPs, ExternalName → its target) and an unknown name with the real
+  `NXDOMAIN` line. The control-plane Node carries the real
+  `node-role.kubernetes.io/master:NoSchedule` taint, so application workloads schedule onto the
   workers while the tolerated DaemonSet pods keep running on the master — the taints/tolerations and
   "why is my Pod on the wrong node / Pending" troubleshooting flows behave like 4.22: an
   unschedulable Pod reports `0/1 Pending` (`ContainerCreating` only after it is bound),
-  `oc describe pod` prints `Node: <none>`, and FailedScheduling retries follow the real scheduler
-  backoff (1 s doubling to 10 s max) so `oc describe`/`oc get events` show realistic small counts
-  like `(x4 over 7s)` instead of a zero-second burst.
+  `oc describe pod` prints `Node: <none>` and no fabricated kubelet detail (no `Container ID`,
+  `Image ID`, `State`, `Ready` or `Restart Count` lines until the Pod is bound — only
+  Image/Port/Host Port/Environment/Mounts/Conditions), and FailedScheduling retries follow the real
+  scheduler backoff (1 s doubling to 10 s max) so `oc describe`/`oc get events` show realistic
+  small counts like `(x4 over 7s)` instead of a zero-second burst.
 - **Declarative workflows** — a Files panel with editable YAML manifests, `oc apply -f`,
   Kustomize base/overlays (`oc apply -k`), OpenShift templates (`oc process -f … | oc apply -f -`),
   Helm charts (`helm install|upgrade|uninstall`), `--dry-run=client -o yaml` manifest skeletons,
@@ -324,8 +341,9 @@ The repo is a static site and deploys to any static host. The canonical demo is 
   registry entry + a resource class + a mesh creator (+ optional controller/data changes).
 - **Simulation** — `js/engine/SimulationTick.js` runs fixed-step OpenShift controllers: scheduler
   (real retry backoff + unschedulable-Pod `Pending` display), Pod lifecycle, Deployments/ReplicaSets,
-  StatefulSets, DaemonSets, Jobs/CronJobs, HPA, PVC binding, Services/endpoints (incl. the seeded
-  platform DNS/router Services), Routes (admission), BuildConfig→Build→ImageStream,
+  StatefulSets, DaemonSets, Jobs/CronJobs, HPA, PVC binding, Services/endpoints (API-server
+  ClusterIP defaulting, one canonical ready-endpoint resolver, the seeded platform DNS/router
+  Services), Routes (admission), BuildConfig→Build→ImageStream,
   Subscriptions/operators, MetalLB LoadBalancer IPs, SCC enforcement,
   LimitRange/ResourceQuota/ClusterResourceQuota, OAuth/HTPasswd, ClusterOperator health.
 - **Command layer** — `js/ui/CommandBar.js` parses `oc` commands (with pipes/redirects and tab
