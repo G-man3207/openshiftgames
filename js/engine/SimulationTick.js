@@ -281,6 +281,21 @@ function parseHttpUrl(rawUrl) {
   }
 }
 
+/**
+ * Every virtual IP a Service answers on (`spec.clusterIP` + `spec.clusterIPs`),
+ * ignoring headless (`None`) and ExternalName Services. Used so a literal
+ * ClusterIP target resolves like kube-proxy would (issue #59).
+ * @param {object} service
+ * @returns {string[]}
+ */
+function serviceClusterIPs(service) {
+  const values = [
+    service?.spec?.clusterIP,
+    ...(Array.isArray(service?.spec?.clusterIPs) ? service.spec.clusterIPs : []),
+  ];
+  return values.filter((ip) => typeof ip === 'string' && ip !== '' && ip !== 'None');
+}
+
 export class SimulationTick {
   /**
    * @param {import('./ClusterState.js').ClusterState} clusterState
@@ -2118,6 +2133,10 @@ export class SimulationTick {
     for (const pod of runningPods) {
       for (const status of pod.status.containerStatuses) {
         if (!status.state.running) continue;
+        // Defensive: a container status created by an incident/legacy path may
+        // predate the kubelet resource accounting (the Pod constructor no longer
+        // fabricates pre-bind statuses — issue #60).
+        if (!status.resources) continue;
         const baseLoad = status.resources.cpuRequest * 0.6;
         const variance = status.resources.cpuRequest * 0.3;
         status.resources.cpu = Math.max(0, baseLoad + (Math.random() - 0.5) * variance);
@@ -2216,12 +2235,10 @@ export class SimulationTick {
   _evaluateProbe(probe, containerStatus) {
     if (!containerStatus.state.running) return false;
     const failThreshold = probe.failureThreshold || 3;
-    const cpuOverloaded =
-      containerStatus.resources.cpu > containerStatus.resources.cpuLimit * 0.95 &&
-      containerStatus.resources.cpuLimit > 0;
+    const resources = containerStatus.resources || {};
+    const cpuOverloaded = resources.cpu > resources.cpuLimit * 0.95 && resources.cpuLimit > 0;
     const memOverloaded =
-      containerStatus.resources.memory > containerStatus.resources.memoryLimit * 0.95 &&
-      containerStatus.resources.memoryLimit > 0;
+      resources.memory > resources.memoryLimit * 0.95 && resources.memoryLimit > 0;
     if (cpuOverloaded || memOverloaded) {
       containerStatus._probeFailCount = (containerStatus._probeFailCount || 0) + 1;
       return containerStatus._probeFailCount < failThreshold;
@@ -2242,6 +2259,7 @@ export class SimulationTick {
     for (const pod of runningPods) {
       for (const status of pod.status.containerStatuses) {
         if (!status.state.running) continue;
+        if (!status.resources) continue;
         if (status.resources.memoryLimit <= 0) continue;
         if (status.resources.memory > status.resources.memoryLimit) {
           const memoryUsed = status.resources.memory;
@@ -4318,20 +4336,16 @@ export class SimulationTick {
 
   // ── OpenShift: routes / services / MetalLB ─────────────────────────────
 
-  /** Service endpoint accounting (kept from the original simulation). */
+  /**
+   * Service endpoint accounting. ClusterState.getServiceEndpoints() is the
+   * canonical resolver (ready Running pods matching selector+namespace); the
+   * instance `service.endpoints` list is kept in sync with it and never leaks
+   * into the API-object `status` (issues #59/#60: real Service status only has
+   * loadBalancer).
+   */
   _tickProbes(dt) {
     for (const service of this.cluster.getByKind('Service')) {
-      const pods = this.cluster.findPodsForService(service.name, service.namespace);
-      const readyPods = pods.filter(
-        (pod) => pod.status.phase === 'Running' && !pod.isDeleting && pod.isConditionTrue('Ready')
-      );
-      service.status.readyEndpoints = readyPods.length;
-      service.status.totalEndpoints = pods.length;
-      service.status.endpoints = readyPods.map((pod) => ({
-        ip: pod.status.podIP,
-        nodeName: pod.spec.nodeName,
-        targetRef: { kind: 'Pod', name: pod.name, namespace: pod.namespace },
-      }));
+      service.updateEndpoints(this.cluster.getServiceEndpoints(service));
     }
   }
 
@@ -5539,7 +5553,7 @@ export class SimulationTick {
       if (!metallbInstalled || usablePools.length === 0) {
         if (current.length > 0) {
           service.status.loadBalancer = { ingress: [] };
-          this.cluster.update(service.uid, service);
+          this._persistService(service);
         }
         service.status.loadBalancer = service.status.loadBalancer || { ingress: [] };
         continue;
@@ -5558,7 +5572,7 @@ export class SimulationTick {
           },
         ],
       };
-      this.cluster.update(service.uid, service);
+      this._persistService(service);
       service.recordEvent('Normal', 'EnsuredLoadBalancer', `Assigned external IP ${address}`);
       this.eventBus?.emit('service:external-ip', {
         service: service.metadata.name,
@@ -5567,6 +5581,19 @@ export class SimulationTick {
         resource: service,
       });
     }
+  }
+
+  /**
+   * Persist a Service status mutation without the generic ResourceBase status
+   * skeleton (`conditions: []`) that `ClusterState.update(instance)` normalises
+   * onto every rich resource: a real Service status subresource only carries
+   * `loadBalancer` (issues #59/#60).
+   * @param {object} service
+   */
+  _persistService(service) {
+    const status = deepClone(service.status);
+    this.cluster.update(service.uid, service);
+    service.status = status;
   }
 
   /** Pick the first free IP from the advertised MetalLB pools. */
@@ -7275,6 +7302,7 @@ export class SimulationTick {
         .filter((entry) => entry.status.phase === 'Running' && entry.status.containerStatuses)) {
         for (const status of pod.status.containerStatuses) {
           if (!status.state.running) continue;
+          if (!status.resources) continue;
           if (this.chaosConfig.cpuStress > 0)
             status.resources.cpu += status.resources.cpuRequest * this.chaosConfig.cpuStress;
           if (this.chaosConfig.memoryStress > 0)
@@ -7849,16 +7877,41 @@ export class SimulationTick {
     }
     if (/^\d{1,3}(?:\.\d{1,3}){3}$/.test(host)) {
       const pod = this.cluster.getByKind('Pod').find((entry) => entry.status?.podIP === host);
-      return pod
-        ? {
-            kind: 'Pod',
-            name: pod.metadata.name,
-            pods: [pod],
-            port: port ?? 80,
-            host,
-            requiresDNS: false,
-          }
-        : { kind: 'IP', name: host, pods: [], port: port ?? 80, host, requiresDNS: false };
+      if (pod) {
+        return {
+          kind: 'Pod',
+          name: pod.metadata.name,
+          pods: [pod],
+          port: port ?? 80,
+          host,
+          requiresDNS: false,
+        };
+      }
+      // A Service ClusterIP is a virtual IP: `curl http://<clusterIP>:<port>`
+      // from a Pod is routed by kube-proxy to the Service's ready endpoints, so
+      // it must work without DNS (issue #59).
+      const clusterIPService = this.cluster
+        .getByKind('Service')
+        .find((service) => serviceClusterIPs(service).includes(host));
+      if (clusterIPService) {
+        const pods = this.cluster.getServiceEndpoints(clusterIPService);
+        const resolvedPort = this._routeBackendPort(
+          { spec: { port: { targetPort: options.targetPort } } },
+          clusterIPService,
+          pods
+        );
+        const numericPort = Number(port ?? resolvedPort);
+        return {
+          kind: 'Service',
+          name: clusterIPService.metadata.name,
+          namespace: clusterIPService.metadata.namespace,
+          pods,
+          port: Number.isFinite(numericPort) ? numericPort : 80,
+          host,
+          requiresDNS: false,
+        };
+      }
+      return { kind: 'IP', name: host, pods: [], port: port ?? 80, host, requiresDNS: false };
     }
     const svcMatch = host.match(
       /^([a-z0-9-]+)(?:\.([a-z0-9-]+))?(?:\.svc(?:\.cluster\.local)?)?$/i

@@ -72,6 +72,7 @@ import {
   describeEventLines,
   estimateJobRuntimeSeconds,
 } from '../resources/WorkloadResources.js';
+import { formatEndpointAddresses } from '../resources/NetworkResources.js';
 import { ShellTools, SHELL_COMMANDS, SHELL_FILE_COMMANDS } from './ShellTools.js';
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -6272,6 +6273,7 @@ Object.assign(CommandBar.prototype, {
       case 'RoleBinding':
       case 'ClusterRoleBinding': {
         const subjects = resource.spec?.subjects || [];
+        const roleRef = resource.spec?.roleRef || {};
         const byKind = (kindName) =>
           subjects
             .filter((subject) => subject.kind === kindName)
@@ -6279,7 +6281,9 @@ Object.assign(CommandBar.prototype, {
             .join(',');
         return {
           NAME: name,
-          ROLE: resource.spec?.roleRef?.name || '<none>',
+          // Real kubectl/oc rolebinding printer: `RoleRef.Kind/RoleRef.Name`
+          // (e.g. `ClusterRole/admin`, `Role/edit`) — not the bare role name.
+          ROLE: `${roleRef.kind || 'Role'}/${roleRef.name || ''}`,
           AGE: age,
           USERS: byKind('User'),
           GROUPS: byKind('Group'),
@@ -8684,18 +8688,13 @@ Object.assign(CommandBar.prototype, {
     if (name) services = services.filter((service) => service.metadata?.name === name);
     const endpointsObjects = [];
     for (const service of services) {
-      const selector = service.spec?.selector || {};
-      const pods = this._getKindList('Pod')
-        .filter(
-          (pod) =>
-            pod.metadata?.namespace === service.metadata?.namespace &&
-            Object.keys(selector).length > 0 &&
-            Object.entries(selector).every(
-              ([key, value]) => (pod.metadata?.labels || {})[key] === value
-            ) &&
-            (pod.status?.phase || pod.phase) === 'Running'
-        )
-        .sort((a, b) => String(a.metadata?.name).localeCompare(String(b.metadata?.name)));
+      // Canonical ready endpoints: the same source `oc describe svc` and the
+      // traffic simulator use (ClusterState.getServiceEndpoints). Ready-only and
+      // deterministic (sorted by Pod name) so the ENDPOINTS cells agree across
+      // `oc get endpoints` and `oc describe svc` (#59/#60).
+      const pods = (this.cluster?.getServiceEndpoints?.(service) || []).sort((a, b) =>
+        String(a.metadata?.name).localeCompare(String(b.metadata?.name))
+      );
       // A Service's Endpoints object is one row: every ready address:port pair.
       const subsets = [];
       for (const port of service.spec?.ports || []) {
@@ -8768,9 +8767,12 @@ Object.assign(CommandBar.prototype, {
       ? ['NAMESPACE', 'NAME', 'ENDPOINTS', 'AGE']
       : ['NAME', 'ENDPOINTS', 'AGE'];
     const rows = endpointsObjects.map((object) => {
+      // Real kubectl `formatEndpoints`: flatten every subset's ports × addresses
+      // into `ip:port` pairs, print at most three, then ` + N more...` where N
+      // is the remaining pair count; `<none>` when the Endpoints has no subsets.
       const addresses = (object.subsets || []).flatMap((subset) =>
-        (subset.addresses || []).flatMap((address) =>
-          (subset.ports || []).map((port) => `${address.ip}:${port.port}`)
+        (subset.ports || []).flatMap((port) =>
+          (subset.addresses || []).map((address) => `${address.ip}:${port.port}`)
         )
       );
       return [
@@ -8781,7 +8783,7 @@ Object.assign(CommandBar.prototype, {
         namePrefix
           ? `${this._singularName('Endpoints')}/${object.metadata.name}`
           : object.metadata.name,
-        addresses.join(',') || '<none>',
+        formatEndpointAddresses(addresses),
         this._creationAge(object),
       ];
     });
@@ -13139,8 +13141,6 @@ Object.assign(CommandBar.prototype, {
         return this._ok(
           status.message || `${this._singularName(kind)} "${name}" successfully rolled out`
         );
-      const pending =
-        status?.message || `Waiting for ${this._singularName(kind)} "${name}" rollout to finish...`;
       // `--timeout=<duration>` is CLI-side (real oc blocks, then fails with
       // `error: timed out waiting for the condition` if the rollout never lands).
       const timeoutMs =
@@ -13152,8 +13152,19 @@ Object.assign(CommandBar.prototype, {
           `error: invalid timeout "${flags.timeout}": must be a duration such as 30s, 5m or 0`
         );
       }
-      this._watchRolloutStatus(kind, name, namespace, sim, { timeoutMs: timeoutMs || 0 });
-      return this._ok(pending);
+      if (timeoutMs > 0) {
+        // Real `oc rollout status --timeout=5s` BLOCKS until the rollout lands
+        // or the client-side deadline passes: it streams the Waiting lines and
+        // then exits 1 with `error: timed out waiting for the condition`, so a
+        // following `&&` never runs (a `;` command still does). The simulator
+        // advances its cluster clock synchronously to decide that outcome in
+        // the same command turn (#60).
+        return this._waitRolloutStatusWithTimeout(kind, name, namespace, sim, timeoutMs, status);
+      }
+      this._watchRolloutStatus(kind, name, namespace, sim, { timeoutMs: 0 });
+      return this._ok(
+        status?.message || `Waiting for ${this._singularName(kind)} "${name}" rollout to finish...`
+      );
     }
     if (sub === 'history' && sim && typeof sim.getRolloutHistory === 'function') {
       const history = sim.getRolloutHistory(kind, name, { namespace }) || [];
@@ -13235,11 +13246,10 @@ Object.assign(CommandBar.prototype, {
   },
 
   /**
-   * `oc rollout status` blocks on a real cluster; the simulator prints the
-   * current Waiting line and then appends the final state from runtime's
-   * deployment controller (progress-deadline-exceeded / complete).
+   * Parse `--timeout` durations (`30s`, `5m`, `1h`, bare seconds, `0`).
+   * @param {string} value
+   * @returns {number|null} milliseconds, or null when the duration is invalid
    */
-  /** Parse `--timeout` durations (`30s`, `5m`, `1h`, bare seconds, `0`). */
   _parseTimeoutMs(value) {
     const text = String(value ?? '')
       .trim()
@@ -13255,6 +13265,75 @@ Object.assign(CommandBar.prototype, {
     return Math.round(amount * multiplier);
   },
 
+  /**
+   * Synchronous simulated-time variant of `oc rollout status --timeout=<dur>`
+   * (#60). Real oc blocks for the whole timeout: it streams the Waiting lines
+   * while the controller converges and, when the deadline expires first, exits
+   * 1 with `error: timed out waiting for the condition` — so a following `&&`
+   * must not run (a `;` command does). Advancing the cluster clock in 0.25 s
+   * steps decides that outcome deterministically inside one command turn.
+   * Timeouts beyond the synchronous cap fall back to the existing wall-clock
+   * watcher.
+   * @param {string} kind
+   * @param {string} name
+   * @param {string} namespace
+   * @param {object} sim simulation runtime (`getRolloutStatus` + `tick`)
+   * @param {number} timeoutMs parsed `--timeout` value (> 0)
+   * @param {object} initialStatus first `getRolloutStatus` result (incomplete)
+   * @returns {{error?:object, message?:string}} command result
+   */
+  _waitRolloutStatusWithTimeout(kind, name, namespace, sim, timeoutMs, initialStatus) {
+    const STEP_SECONDS = 0.25;
+    const MAX_SYNC_SECONDS = 600;
+    const timeoutSeconds = timeoutMs / 1000;
+    const waitingMessages = [];
+    const recordWaiting = (status) => {
+      const message = status?.message;
+      if (!message) return;
+      if (waitingMessages[waitingMessages.length - 1] !== message) waitingMessages.push(message);
+    };
+    const successMessage = (status) =>
+      status?.message || `${this._singularName(kind)} "${name}" successfully rolled out`;
+    const progressDeadlineError = (status) =>
+      /^error:/.test(status?.message || '')
+        ? status.message
+        : `error: ${status?.message || `${this._singularName(kind)} "${name}" exceeded its progress deadline`}`;
+    let status = initialStatus;
+    let elapsedSeconds = 0;
+    recordWaiting(status);
+    while (!status || (!status.complete && !status.timedOut && !status.error)) {
+      if (elapsedSeconds >= MAX_SYNC_SECONDS) {
+        // Too long to block synchronously: stream through the async watcher,
+        // which appends the final line once the rollout settles.
+        this._watchRolloutStatus(kind, name, namespace, sim, { timeoutMs });
+        return this._ok(waitingMessages.join('\n'));
+      }
+      if (elapsedSeconds >= timeoutSeconds) {
+        return this._err(
+          [...waitingMessages, 'error: timed out waiting for the condition'].join('\n')
+        );
+      }
+      sim.tick(STEP_SECONDS);
+      this.game?.incidentEngine?.tick?.(STEP_SECONDS);
+      elapsedSeconds += STEP_SECONDS;
+      status = sim.getRolloutStatus(kind, name, { namespace });
+      recordWaiting(status);
+    }
+    // Progress-deadline errors keep the existing message/precedence.
+    if (status.timedOut) return this._err(progressDeadlineError(status));
+    if (status.error) return this._err(status.error);
+    const success = successMessage(status);
+    const lines = waitingMessages.filter((message) => message !== success);
+    lines.push(success);
+    return this._ok(lines.join('\n'));
+  },
+
+  /**
+   * Async `oc rollout status` watcher for the no-timeout form (and the rare
+   * beyond-cap timeout fallback): the simulator prints the current Waiting line
+   * and then appends the final state from runtime's deployment controller
+   * (progress-deadline-exceeded / complete).
+   */
   _watchRolloutStatus(kind, name, namespace, sim, options = {}) {
     this._clearRolloutWatches();
     const timeoutMs = Number(options.timeoutMs) || 0;
@@ -13755,13 +13834,28 @@ Object.assign(CommandBar.prototype, {
     }
     if (name === 'nslookup' || name === 'dig') {
       const target = args[args.length - 1] || '';
-      return ok([
-        'Server:\t\t172.30.0.10',
-        'Address:\t172.30.0.10#53',
-        '',
-        `Name:\t${target}`,
-        'Address: 172.30.43.12',
-      ]);
+      // `dig` keeps the legacy simulator output (not part of #60); only
+      // `nslookup` performs a real cluster-DNS resolution.
+      if (name === 'dig') {
+        return ok([
+          'Server:\t\t172.30.0.10',
+          'Address:\t172.30.0.10#53',
+          '',
+          `Name:\t${target}`,
+          'Address: 172.30.43.12',
+        ]);
+      }
+      const serverIp = this._clusterDnsServiceIP();
+      const header = [`Server:\t\t${serverIp}`, `Address:\t${serverIp}#53`, ''];
+      const resolution = this._resolveClusterDnsName(target, context.namespace);
+      if (!resolution) {
+        // Real nslookup: a name the cluster DNS cannot resolve prints only the
+        // NXDOMAIN line — never a fabricated answer address.
+        return ok([...header, `** server can't find ${target}: NXDOMAIN`]);
+      }
+      // `Name:` echoes the queried name; headless Services resolve to one
+      // Address line per ready endpoint Pod IP, everything else to its ClusterIP.
+      return ok([...header, `Name:\t${resolution.name}`, ...resolution.addresses]);
     }
     // Unknown binary: keep the legacy simulator hint instead of pretending.
     return ok([
@@ -13797,6 +13891,61 @@ Object.assign(CommandBar.prototype, {
     const service = this.cluster?.getByName?.('Service', 'dns-default', 'openshift-dns');
     const clusterIP = service?.spec?.clusterIP;
     return clusterIP && clusterIP !== 'None' ? String(clusterIP) : CLUSTER_DNS_SERVICE_IP;
+  },
+
+  /**
+   * Resolve a name the way cluster DNS (CoreDNS) would for `nslookup` (#60).
+   * Supported shapes, with the search-domain expansion a Pod gets from its
+   * `/etc/resolv.conf`: `<svc>.<ns>.svc.cluster.local`, `<svc>.<ns>.svc`,
+   * `<svc>.<ns>` and a bare `<svc>` (the exec Pod's namespace), each optionally
+   * with a trailing dot. Returns `null` when no Service matches (NXDOMAIN).
+   * @param {string} target queried name as typed by the user
+   * @param {string} [defaultNamespace] namespace of the exec Pod (bare names)
+   * @returns {{name: string, addresses: string[]}|null}
+   */
+  _resolveClusterDnsName(target, defaultNamespace = this.currentProject || 'default') {
+    const original = String(target || '').trim();
+    const name = original.replace(/\.+$/, '');
+    if (!name) return null;
+    const labels = name.toLowerCase().split('.');
+    let serviceName = labels[0];
+    let namespace = defaultNamespace;
+    // Strip the Kubernetes DNS suffixes from the right, most specific first.
+    if (
+      labels.length === 5 &&
+      labels[2] === 'svc' &&
+      labels[3] === 'cluster' &&
+      labels[4] === 'local'
+    ) {
+      namespace = labels[1];
+    } else if (labels.length === 3 && labels[2] === 'svc') {
+      namespace = labels[1];
+    } else if (labels.length === 2) {
+      namespace = labels[1];
+    } else if (labels.length !== 1) {
+      return null;
+    }
+    if (!serviceName || !namespace) return null;
+    const service = this.cluster?.getByName?.('Service', serviceName, namespace);
+    if (!service) return null;
+    const nameLine = original;
+    // ExternalName Services answer with their CNAME target; headless Services
+    // (`clusterIP: None`) answer with every ready endpoint Pod IP, one Address
+    // line per Pod like real nslookup.
+    if (service.spec?.type === 'ExternalName') {
+      const externalName = String(service.spec?.externalName || '').replace(/\.+$/, '');
+      return externalName ? { name: nameLine, addresses: [`Address: ${externalName}`] } : null;
+    }
+    const clusterIP = service.spec?.clusterIP;
+    if (!clusterIP || clusterIP === 'None') {
+      const pods = (this.cluster?.getServiceEndpoints?.(service) || []).sort((a, b) =>
+        String(a.metadata?.name).localeCompare(String(b.metadata?.name))
+      );
+      const ips = pods.map((pod) => String(pod.status?.podIP || pod.ip || '')).filter(Boolean);
+      if (!ips.length) return null;
+      return { name: nameLine, addresses: [...new Set(ips)].map((ip) => `Address: ${ip}`) };
+    }
+    return { name: nameLine, addresses: [`Address: ${clusterIP}`] };
   },
 
   /**
@@ -14388,8 +14537,10 @@ Object.assign(CommandBar.prototype, {
           ? Number(targetPortRaw)
           : targetPortRaw
         : Number(firstPort?.containerPort) || port;
-      const servicePort = { name: firstPort?.name || 'http', port, targetPort, protocol };
-      if (/^\d+$/.test(String(servicePort.name))) servicePort.name = 'http';
+      // Real `oc expose <workload>` (kubectl expose createService) never sets
+      // the Service port NAME: a single generated port stays unnamed, which is
+      // why `oc describe svc` prints `Port: <unset> 8080/TCP` (#60).
+      const servicePort = { port, targetPort, protocol };
       const spec = {
         type: serviceTypes[serviceTypeToken],
         selector,

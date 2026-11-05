@@ -610,7 +610,9 @@ function seedAlertmanager(cluster) {
         { name: 'reloader', port: 9093, targetPort: 9093, protocol: 'TCP' },
       ],
     },
-    status: { phase: 'Active', loadBalancer: { ingress: [] } },
+    // A real 4.22 Service status carries only `loadBalancer` — the API server
+    // never stores a `phase`/`conditions` skeleton on a Service (issue #59).
+    status: { loadBalancer: {} },
   });
 
   addResource(cluster, 'Route', 'alertmanager-main', {

@@ -1948,6 +1948,15 @@ class IncidentEngine {
         eventReason: 'Unhealthy',
         message: `${probeType} probe failed`,
       });
+    // A Pod the kubelet has not started yet carries no container statuses
+    // (real API shape, issue #60). Materialise the kubelet statuses first so the
+    // damaged Pod keeps the resource-accounting fields every controller uses.
+    if (!pod.status?.containerStatuses?.length) {
+      const simulation = this.gameEngine?.simulation || this.gameEngine?.sim || null;
+      if (simulation && typeof simulation._initContainerStatuses === 'function') {
+        simulation._initContainerStatuses(pod);
+      }
+    }
     const containers = pod.status?.containerStatuses || [];
     const first = { ...(containers[0] || {}) };
     first.ready = false;

@@ -49,6 +49,10 @@ import {
 } from './RBACEngine.js';
 import { OCP_CHANNEL, OCP_VERSION as PLATFORM_OCP_VERSION } from '../data/platformVersions.js';
 import { seedMonitoringResources } from '../resources/MonitoringResources.js';
+// Seeded Services must get the same API-server defaulting (clusterIP, IP
+// families, traffic policies) as created/applied ones — a real 4.22 API server
+// assigns those once at creation (issue #59).
+import { defaultServiceSpec } from '../resources/NetworkResources.js';
 // The cluster publishes its CA trust material as ConfigMaps (issue #43). Use the
 // same dependency-free PEM generator as the simulated `openssl`/service-ca, so
 // `openssl x509 -in kube-root-ca.crt` parses what the cluster hands out.
@@ -1162,6 +1166,10 @@ export class ClusterState {
       options.uid || `seed-${kind}-${namespace ? `${namespace}-` : ''}${name}`;
     resource.apiVersion = resource.apiVersion || 'v1';
     resource.spec = deepMerge({}, defaultSpecForKind(kind), options.spec || {});
+    // `_seed` replaces the constructor defaults with the registry defaults +
+    // seed spec; a real API server would still have defaulted the Service
+    // fields (clusterIPs/IP families/traffic policies) at creation (#59).
+    if (kind === 'Service') resource.spec = defaultServiceSpec(resource.spec);
     if (options.status) this._applyStatus(resource, options.status);
     // Register directly to avoid duplicate-name exceptions while seeding.
     this._register(resource);
@@ -1380,7 +1388,12 @@ export class ClusterState {
     if (updates instanceof ResourceBase) {
       resource.spec = deepClone(updates.spec);
       resource.status = deepClone(updates.status);
-      if (!Array.isArray(resource.status.conditions)) resource.status.conditions = [];
+      // A real Service status only carries `loadBalancer`; adding the generic
+      // simulator phase/conditions skeleton would show invented fields in
+      // `oc get svc -o yaml` (issue #59).
+      if (resource.kind !== 'Service' && !Array.isArray(resource.status.conditions)) {
+        resource.status.conditions = [];
+      }
       resource.apiVersion = updates.apiVersion || resource.apiVersion;
       Object.assign(resource.metadata.labels, updates.metadata.labels);
       Object.assign(resource.metadata.annotations, updates.metadata.annotations);
@@ -1415,13 +1428,22 @@ export class ClusterState {
    */
   _applyStatus(resource, status) {
     if (!status || typeof status !== 'object') return resource;
+    // Real 4.22 Service objects carry no status.phase/conditions skeleton — a
+    // Service's status is `loadBalancer` only (issue #59). Keep any Service
+    // keys a caller explicitly passes through, but never invent the generic
+    // simulator fields.
+    const isService = resource.kind === 'Service';
     if (!resource.status || typeof resource.status !== 'object') {
-      resource.status = { phase: 'Pending', conditions: [], observedGeneration: 0 };
+      resource.status = isService
+        ? {}
+        : { phase: 'Pending', conditions: [], observedGeneration: 0 };
     }
-    if (!Array.isArray(resource.status.conditions)) resource.status.conditions = [];
+    if (!isService && !Array.isArray(resource.status.conditions)) {
+      resource.status.conditions = [];
+    }
     for (const [key, value] of Object.entries(status)) {
       if (key === 'phase') {
-        if (value) resource.status.phase = value;
+        if (value && !isService) resource.status.phase = value;
       } else if (key === 'conditions' && Array.isArray(value)) {
         resource.status.conditions = deepClone(value);
       } else {
@@ -3113,6 +3135,9 @@ export class ClusterState {
     // into them, e.g. a NetworkPolicy podSelector, which the API never defaults).
     if (created && normalized.spec && typeof normalized.spec === 'object') {
       created.spec = deepClone(normalized.spec);
+      // The same exception as applyManifestObject: the API server still
+      // defaults the allocated Service fields (clusterIP etc.) on create.
+      if (canonical === 'Service') created.spec = defaultServiceSpec(created.spec);
     }
     return created;
   }

@@ -310,7 +310,11 @@ export class Pod extends ResourceBase {
     if (metadata.imagePullSecrets) defaults.imagePullSecrets = deepClone(metadata.imagePullSecrets);
     this._initSpec(defaults, metadata.spec);
 
-    const podSpec = this.spec;
+    // Real API-server Pods carry NO container statuses until the kubelet (i.e.
+    // after the scheduler has bound the Pod to a Node) publishes them. The
+    // scheduler's `_schedulePodOnNode()` creates the first `ContainerCreating`
+    // status when it binds the Pod (issue #60): an unscheduled Pod must not
+    // pretend its containers are being created.
     this._setInitialStatus({
       phase: 'Pending',
       qosClass: this._calculateQoS(),
@@ -318,30 +322,6 @@ export class Pod extends ResourceBase {
       hostIP: null,
       startTime: timestamp(),
       conditions: [],
-      containerStatuses: (podSpec.containers || []).map((container) => {
-        const limits = container.resources?.limits || {};
-        const requests = container.resources?.requests || {};
-        return {
-          name: container.name,
-          image: container.image,
-          imageID: '',
-          ready: false,
-          started: false,
-          restartCount: 0,
-          state: { waiting: { reason: 'ContainerCreating' } },
-          lastState: {},
-          // Resource accounting consumed by SimulationTick's metrics/OOM/chaos
-          // controllers (millicores and MiB, same units as ClusterState helpers).
-          resources: {
-            cpu: 0,
-            memory: 0,
-            cpuLimit: parseCpuToMillis(limits.cpu || '0'),
-            memoryLimit: parseMemoryToMi(limits.memory || '0'),
-            cpuRequest: parseCpuToMillis(requests.cpu || '100m'),
-            memoryRequest: parseMemoryToMi(requests.memory || '128Mi'),
-          },
-        };
-      }),
     });
   }
 
@@ -493,10 +473,14 @@ export class Pod extends ResourceBase {
     for (const { container, status } of containers) {
       const specResources = container.resources || {};
       lines.push(`  ${container.name}:`);
-      lines.push(`    Container ID:   ${status?.containerID || '<none>'}`);
+      // Real kubectl (describeContainerBasicInfo) prints Container ID / Image ID
+      // only when the kubelet has published a status for the container, and the
+      // State/Last State/Ready/Restart Count block (describeContainerState) only
+      // then too. An unscheduled Pod has no container status yet (#60).
+      if (status) lines.push(`    Container ID:   ${status.containerID || '<none>'}`);
       // The live pod spec image is authoritative (matches `-o jsonpath={.spec...image}`).
       lines.push(`    Image:          ${container.image || status?.image || '<none>'}`);
-      lines.push(`    Image ID:       ${status?.imageID || '<none>'}`);
+      if (status) lines.push(`    Image ID:       ${status.imageID || '<none>'}`);
       const ports = Array.isArray(container.ports) ? container.ports : [];
       lines.push(
         `    Port:           ${ports.length ? ports.map((port) => `${port.containerPort}/${port.protocol || 'TCP'}`).join(', ') : '<none>'}`
@@ -535,13 +519,6 @@ export class Pod extends ResourceBase {
         }
         lines.push(`    Ready:          ${status.ready ? 'True' : 'False'}`);
         lines.push(`    Restart Count:  ${status.restartCount || 0}`);
-      } else {
-        lines.push(
-          '    State:          Waiting',
-          '      Reason:       ContainerCreating',
-          '    Ready:          False',
-          '    Restart Count:  0'
-        );
       }
       const limitEntries = Object.entries(specResources.limits || {});
       if (limitEntries.length) {

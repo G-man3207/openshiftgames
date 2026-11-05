@@ -7,59 +7,238 @@ function randomInt(max) {
   return Math.floor(Math.random() * max);
 }
 
+/** OCP 4.22 default serviceNetwork is 172.30.0.0/16 (not the kubeadm 10.96/12 range). */
+const SERVICE_NETWORK_PREFIX = '172.30';
+
+/** Simulator-internal annotations must never leak into `oc describe` output. */
+const INTERNAL_ANNOTATION_PREFIX_RE = /^openshiftgames(?:\.io)?\//;
+
+/**
+ * Allocate a ClusterIP from the simulated service network, skipping IPs that
+ * are already assigned to another Service — the job of the real API server's
+ * ClusterIP allocator (issues #59/#60).
+ *
+ * @param {string[]} [usedClusterIPs] ClusterIPs currently in use in the cluster
+ * @returns {string} e.g. `172.30.42.7`
+ */
+export function allocateClusterIP(usedClusterIPs = []) {
+  const used = new Set(
+    (Array.isArray(usedClusterIPs) ? usedClusterIPs : []).filter(
+      (ip) => typeof ip === 'string' && ip !== '' && ip !== 'None'
+    )
+  );
+  for (let attempt = 0; attempt < 1024; attempt += 1) {
+    const candidate = `${SERVICE_NETWORK_PREFIX}.${randomInt(256)}.${randomInt(254) + 1}`;
+    if (!used.has(candidate)) return candidate;
+  }
+  // Deterministic fallback for a (theoretical) exhausted random walk.
+  for (let third = 0; third < 256; third += 1) {
+    for (let fourth = 1; fourth < 255; fourth += 1) {
+      const candidate = `${SERVICE_NETWORK_PREFIX}.${third}.${fourth}`;
+      if (!used.has(candidate)) return candidate;
+    }
+  }
+  return `${SERVICE_NETWORK_PREFIX}.0.1`;
+}
+
+/**
+ * Apply the API-server defaulting a real 4.22 kube-apiserver performs when a
+ * Service is created or updated (issues #59/#60). This is the single shared
+ * defaulting helper for the rich `Service` class and the
+ * `GameEngine.applyManifestObject()` upsert path:
+ *
+ *  - `spec.type` defaults to `ClusterIP`;
+ *  - ClusterIP/NodePort/LoadBalancer Services get an allocated `clusterIP`
+ *    (unless headless: `clusterIP: None`), `clusterIPs`, `ipFamilies`,
+ *    `ipFamilyPolicy`, `sessionAffinity: None` and `internalTrafficPolicy:
+ *    Cluster`; ExternalName Services keep none of the clusterIP fields;
+ *  - every port gets `protocol: TCP` and `targetPort` (defaults to the port);
+ *  - NodePort/LoadBalancer ports get an allocated `nodePort` from 30000-32767.
+ *
+ * An update (apply) must preserve the ClusterIP allocated by the previous
+ * object when the manifest omits it — pass it as `options.clusterIP`.
+ *
+ * @param {object} [spec] Service spec from a manifest / constructor defaults
+ * @param {{clusterIP?: string, usedClusterIPs?: string[]}} [options]
+ * @returns {object} a new, fully-defaulted spec object
+ */
+export function defaultServiceSpec(spec = {}, options = {}) {
+  const source = spec && typeof spec === 'object' ? spec : {};
+  const next = deepClone(source);
+  if (!next.type) next.type = 'ClusterIP';
+  if (Array.isArray(next.ports)) {
+    next.ports = next.ports.map((port) => {
+      if (!port || typeof port !== 'object') return port;
+      const entry = { ...port };
+      if (!entry.protocol) entry.protocol = 'TCP';
+      if (entry.targetPort === undefined || entry.targetPort === null || entry.targetPort === '') {
+        entry.targetPort = entry.port;
+      }
+      return entry;
+    });
+  }
+  if (!next.sessionAffinity) next.sessionAffinity = 'None';
+  const isLoadBalancerType = next.type === 'NodePort' || next.type === 'LoadBalancer';
+  if (next.type === 'ExternalName') {
+    // The API server never allocates a ClusterIP for an ExternalName Service.
+    delete next.clusterIP;
+    delete next.clusterIPs;
+    delete next.ipFamilies;
+    delete next.ipFamilyPolicy;
+    delete next.internalTrafficPolicy;
+    delete next.externalTrafficPolicy;
+    return next;
+  }
+  const preservedClusterIP =
+    (typeof next.clusterIP === 'string' && next.clusterIP) || options.clusterIP || '';
+  next.clusterIP = preservedClusterIP || allocateClusterIP(options.usedClusterIPs || []);
+  // The API defaults spec.clusterIPs to the allocated ClusterIP ([] when headless).
+  next.clusterIPs = next.clusterIP === 'None' ? [] : [next.clusterIP];
+  if (!Array.isArray(next.ipFamilies) || next.ipFamilies.length === 0) next.ipFamilies = ['IPv4'];
+  if (!next.ipFamilyPolicy) next.ipFamilyPolicy = 'SingleStack';
+  if (!next.internalTrafficPolicy) next.internalTrafficPolicy = 'Cluster';
+  if (isLoadBalancerType) {
+    if (!next.externalTrafficPolicy) next.externalTrafficPolicy = 'Cluster';
+    if (Array.isArray(next.ports)) {
+      next.ports = next.ports.map((port) =>
+        port && port.nodePort === undefined ? { ...port, nodePort: allocateNodePort() } : port
+      );
+    }
+    if (next.type === 'LoadBalancer' && next.allocateLoadBalancerNodePorts === undefined) {
+      next.allocateLoadBalancerNodePorts = true;
+    }
+  }
+  return next;
+}
+
+/** Allocate a random nodePort from the API server's 30000-32767 range. */
+function allocateNodePort() {
+  return 30000 + randomInt(2768);
+}
+
+/** `Object.entries` sorted by key (labels/annotations/selectors are sorted on output). */
+function sortedEntries(object) {
+  return Object.entries(object || {}).sort(([left], [right]) => left.localeCompare(right));
+}
+
+/** `k=v,k2=v2` sorted, `labels.FormatLabels` style. */
+function formatServiceSelector(selector) {
+  const entries = sortedEntries(selector);
+  if (!entries.length) return '<none>';
+  return entries.map(([key, value]) => `${key}=${value}`).join(',');
+}
+
+/** Tabwriter-style describe rows with one label per line + continuation lines. */
+function addMultilineDescribeRows(rows, title, values) {
+  if (!values.length) {
+    rows.push([`${title}:`, '<none>']);
+    return;
+  }
+  rows.push([`${title}:`, values[0]]);
+  for (const value of values.slice(1)) rows.push(['', value]);
+}
+
+/** The TargetPort column value: spec value verbatim (int or named string). */
+function formatServiceTargetPort(targetPort, port) {
+  const value = targetPort === undefined || targetPort === null ? port : targetPort;
+  return value === undefined || value === null ? '' : String(value);
+}
+
+/** Endpoint address of a ready-pod endpoint entry (rich Pod or stored endpoint). */
+function endpointAddress(endpoint) {
+  return endpoint?.status?.podIP || endpoint?.ip || endpoint?.address || null;
+}
+
+/**
+ * EndpointSlice port for a Service port: the resolved targetPort, as a number
+ * (named target ports are resolved against the endpoint Pod's container ports).
+ */
+function resolveEndpointPort(port, endpoint) {
+  const target = port?.targetPort ?? port?.port;
+  if (typeof target === 'number' && Number.isFinite(target)) return target;
+  const text = String(target ?? '');
+  if (/^\d+$/.test(text)) return Number(text);
+  for (const container of endpoint?.spec?.containers || []) {
+    const match = (container.ports || []).find((entry) => entry.name === text);
+    if (match && Number.isFinite(Number(match.containerPort))) return Number(match.containerPort);
+  }
+  const servicePort = Number(port?.port);
+  return Number.isFinite(servicePort) ? servicePort : null;
+}
+
+/**
+ * Render describe rows the way Go's `text/tabwriter` does with the settings
+ * kubectl uses for `oc describe` (minwidth 0, tabwidth 8, padding 2, spaces):
+ * every tab-terminated cell is padded to the widest cell of its column block
+ * plus two spaces; the trailing cell of a line is never padded. A line with
+ * fewer cells ends the current column block (which is why a `Port:` line's
+ * name column is padded on its own).
+ *
+ * @param {Array<Array<string>>} rows cells; all but the last element are padded
+ * @returns {string}
+ */
+function renderDescribeRows(rows) {
+  const widths = rows.map(() => []);
+  const columnCount = rows.reduce((max, row) => Math.max(max, row.length - 1), 0);
+  for (let column = 0; column < columnCount; column += 1) {
+    let block = [];
+    const flushBlock = () => {
+      if (!block.length) return;
+      const width = Math.max(...block.map((index) => String(rows[index][column] ?? '').length)) + 2;
+      for (const index of block) widths[index][column] = width;
+      block = [];
+    };
+    rows.forEach((row, index) => {
+      if (row.length - 1 > column) block.push(index);
+      else flushBlock();
+    });
+    flushBlock();
+  }
+  return rows
+    .map((row, index) => {
+      let line = '';
+      for (let column = 0; column < row.length - 1; column += 1) {
+        line += String(row[column] ?? '').padEnd(widths[index][column] || 0);
+      }
+      line += String(row[row.length - 1] ?? '');
+      return line.replace(/\s+$/, '');
+    })
+    .join('\n');
+}
+
 export class Service extends ResourceBase {
   constructor(metadata = {}) {
     super('Service', { ...metadata, apiVersion: metadata.apiVersion || 'v1' });
     const name = metadata.name || 'unnamed';
     const type = metadata.serviceType || metadata.type || 'ClusterIP';
-    const ports = deepClone(
-      metadata.ports || [{ name: 'http', port: 80, targetPort: 8080, protocol: 'TCP' }]
-    );
     const defaults = {
       type,
       selector: deepClone(metadata.selector || { app: name }),
-      ports,
-      sessionAffinity: metadata.sessionAffinity || 'None',
-      ipFamilies: ['IPv4'],
-      ipFamilyPolicy: 'SingleStack',
+      ports: deepClone(
+        metadata.ports || [{ name: 'http', port: 80, targetPort: 8080, protocol: 'TCP' }]
+      ),
     };
     if (type === 'ExternalName') {
       defaults.externalName = metadata.externalName || 'example.com';
       delete defaults.selector;
       delete defaults.ports;
     }
-    if (type === 'NodePort' || type === 'LoadBalancer') {
-      defaults.ports = defaults.ports.map((p) => ({
-        ...p,
-        nodePort: p.nodePort || 30000 + randomInt(2768),
-      }));
-    }
-    if (type === 'LoadBalancer') defaults.allocateLoadBalancerNodePorts = true;
-    if (type !== 'ExternalName') {
-      defaults.clusterIP = metadata.clusterIP || this._generateClusterIP();
-      // The API defaults spec.clusterIPs to the allocated ClusterIP ([] when headless).
-      defaults.clusterIPs = defaults.clusterIP === 'None' ? [] : [defaults.clusterIP];
-    }
     if (metadata.externalIPs) defaults.externalIPs = deepClone(metadata.externalIPs);
     if (metadata.loadBalancerIP) defaults.loadBalancerIP = metadata.loadBalancerIP;
     this._initSpec(defaults, metadata.spec);
-    // Keep the API-defaulted clusterIPs list consistent with any overridden clusterIP.
-    if (this.spec.type !== 'ExternalName') {
-      if (this.spec.clusterIP === 'None') this.spec.clusterIPs = [];
-      else if (this.spec.clusterIP) this.spec.clusterIPs = [this.spec.clusterIP];
-    }
+    // Exactly the shape the API server stores: type/selector/ports plus the
+    // defaulted clusterIP(s), ipFamilies/IPFamilyPolicy, traffic policies and
+    // port defaults (shared with GameEngine.applyManifestObject).
+    this.spec = defaultServiceSpec(this.spec, { clusterIP: metadata.clusterIP });
 
     this.endpoints = [];
     this.trafficRate = 0;
     this.totalRequests = 0;
     this.loadBalancerPending = this.spec.type === 'LoadBalancer';
     this.loadBalancerTimer = 0;
-    this._setInitialStatus({ phase: 'Active', loadBalancer: { ingress: [] } });
-  }
-
-  /** OCP 4.22 default serviceNetwork is 172.30.0.0/16 (not the kubeadm 10.96/12 range). */
-  _generateClusterIP() {
-    return `172.30.${randomInt(256)}.${randomInt(254) + 1}`;
+    // A Service has no phase/conditions/observedGeneration: the real status
+    // subresource only carries the (initially empty) LoadBalancer status.
+    this.status = { loadBalancer: {} };
   }
 
   get type() {
@@ -94,13 +273,25 @@ export class Service extends ResourceBase {
     return Object.entries(selector).every(([k, v]) => pod.metadata.labels[k] === v);
   }
 
+  /**
+   * Replace the instance endpoint bookkeeping from a list of ready Pods.
+   * SimulationTick._tickProbes feeds it ClusterState.getServiceEndpoints(),
+   * which stays the canonical resolver shared by `oc describe svc`, the
+   * virtual Endpoints view, the router and the metrics (issues #59/#60).
+   * @param {object[]} pods
+   * @returns {{ip: string, nodeName?: string, namespace?: string, targetRef: object}[]}
+   */
   updateEndpoints(pods) {
-    this.endpoints = pods
-      .filter((p) => p.isReady?.() !== false && p.status?.phase === 'Running' && this.matchesPod(p))
-      .map((p) => ({
-        ip: p.status?.podIP || p.ip,
-        nodeName: p.spec?.nodeName,
-        targetRef: { kind: 'Pod', name: p.metadata.name, uid: p.metadata.uid },
+    this.endpoints = (Array.isArray(pods) ? pods : [])
+      .filter(
+        (pod) =>
+          pod.isReady?.() !== false && pod.status?.phase === 'Running' && this.matchesPod(pod)
+      )
+      .map((pod) => ({
+        ip: pod.status?.podIP || pod.ip,
+        nodeName: pod.spec?.nodeName,
+        namespace: pod.metadata?.namespace,
+        targetRef: { kind: 'Pod', name: pod.metadata.name, uid: pod.metadata.uid },
       }));
     return this.endpoints;
   }
@@ -119,48 +310,109 @@ export class Service extends ResourceBase {
     return this;
   }
 
-  toDescribe() {
-    const externalIP =
-      this.spec.type === 'LoadBalancer' ? this.externalIP || '<pending>' : '<none>';
-    const endpointText =
-      this.endpoints.map((e) => `${e.ip}:${this.spec.ports?.[0]?.targetPort ?? ''}`).join(', ') ||
-      '<none>';
-    const lines = [
-      `Name:              ${this.metadata.name}`,
-      `Namespace:         ${this.metadata.namespace}`,
-      `Labels:            ${
-        Object.entries(this.metadata.labels)
-          .map(([k, v]) => `${k}=${v}`)
-          .join(', ') || '<none>'
-      }`,
-      `Annotations:       ${
-        Object.entries(this.metadata.annotations)
-          .map(([k, v]) => `${k}=${v}`)
-          .join(', ') || '<none>'
-      }`,
-      `Selector:          ${
-        Object.entries(this.spec.selector || {})
-          .map(([k, v]) => `${k}=${v}`)
-          .join(',') || '<none>'
-      }`,
-      `Type:              ${this.spec.type}`,
-      `IP:                ${this.spec.clusterIP || '<none>'}`,
-      `External IP:       ${externalIP}`,
-      `Port:              ${(this.spec.ports || []).map((p) => `${p.name} ${p.port}/${p.protocol}`).join(', ')}`,
-      `TargetPort:        ${(this.spec.ports || []).map((p) => `${p.targetPort}/${p.protocol}`).join(', ')}`,
-    ];
-    if (this.spec.ports?.[0]?.nodePort) {
-      lines.push(
-        `NodePort:          ${this.spec.ports.map((p) => `${p.name} ${p.nodePort}/${p.protocol}`).join(', ')}`
-      );
-    }
-    lines.push(
-      `Endpoints:         ${endpointText}`,
-      `Session Affinity:  ${this.spec.sessionAffinity}`,
-      'Events:',
-      ...this.events.slice(-10).map((e) => `  ${e.type}\t${e.reason}\t${e.message}`)
+  /**
+   * Real OCP 4.22 `oc describe svc` output (issues #59/#60).
+   *
+   * kubectl renders the header with its describe tabwriter (minwidth 0,
+   * tabwidth 8, padding 2) and repeats one Port/TargetPort/(NodePort)/Endpoints
+   * block per Service port. Endpoints are the ready pod addresses the canonical
+   * ClusterState.getServiceEndpoints() resolver returns (pass
+   * `{ cluster: this.cluster }` from `oc describe`); with no cluster the
+   * instance `endpoints` bookkeeping is used (InspectorPanel).
+   *
+   * @param {{cluster?: {getServiceEndpoints?: Function}}} [opts]
+   * @returns {string}
+   */
+  toDescribe(opts = {}) {
+    const cluster = opts?.cluster || null;
+    const endpoints =
+      cluster && typeof cluster.getServiceEndpoints === 'function'
+        ? cluster.getServiceEndpoints(this)
+        : this.endpoints;
+    const endpointList = Array.isArray(endpoints) ? endpoints : [];
+    const rows = [];
+    rows.push(['Name:', this.metadata.name]);
+    rows.push(['Namespace:', this.metadata.namespace]);
+    addMultilineDescribeRows(
+      rows,
+      'Labels',
+      sortedEntries(this.metadata.labels).map(([key, value]) => `${key}=${value}`)
     );
-    return lines.join('\n');
+    addMultilineDescribeRows(
+      rows,
+      'Annotations',
+      sortedEntries(this.metadata.annotations)
+        .filter(([key]) => !INTERNAL_ANNOTATION_PREFIX_RE.test(key))
+        .map(([key, value]) => `${key}: ${value}`)
+    );
+    rows.push(['Selector:', formatServiceSelector(this.spec.selector)]);
+    rows.push(['Type:', this.spec.type || 'ClusterIP']);
+    if (this.spec.ipFamilyPolicy) rows.push(['IP Family Policy:', this.spec.ipFamilyPolicy]);
+    const ipFamilies = Array.isArray(this.spec.ipFamilies) ? this.spec.ipFamilies : [];
+    rows.push(['IP Families:', ipFamilies.length ? ipFamilies.join(',') : '<none>']);
+    rows.push(['IP:', this.spec.clusterIP || '']);
+    const clusterIPs = Array.isArray(this.spec.clusterIPs) ? this.spec.clusterIPs : [];
+    rows.push(['IPs:', clusterIPs.length ? clusterIPs.join(',') : '<none>']);
+    if (Array.isArray(this.spec.externalIPs) && this.spec.externalIPs.length) {
+      rows.push(['External IPs:', this.spec.externalIPs.join(',')]);
+    }
+    if (this.spec.loadBalancerIP) {
+      rows.push(['Desired LoadBalancer IP:', this.spec.loadBalancerIP]);
+    }
+    if (this.spec.externalName) rows.push(['External Name:', this.spec.externalName]);
+    const ingressAddresses = (this.status.loadBalancer?.ingress || [])
+      .map((entry) => entry?.ip || entry?.hostname || '')
+      .filter(Boolean);
+    if (ingressAddresses.length) {
+      rows.push(['LoadBalancer Ingress:', ingressAddresses.join(', ')]);
+    }
+    for (const port of this.spec.ports || []) {
+      const protocol = port.protocol || 'TCP';
+      const name = port.name || '<unset>';
+      rows.push(['Port:', name, `${port.port}/${protocol}`]);
+      rows.push([
+        'TargetPort:',
+        `${formatServiceTargetPort(port.targetPort, port.port)}/${protocol}`,
+      ]);
+      if (port.appProtocol) rows.push(['AppProtocol:', port.appProtocol]);
+      if (port.nodePort) rows.push(['NodePort:', name, `${port.nodePort}/${protocol}`]);
+      rows.push([
+        'Endpoints:',
+        formatEndpointAddresses(this._endpointAddressesForPort(port, endpointList), 3),
+      ]);
+    }
+    rows.push(['Session Affinity:', this.spec.sessionAffinity || 'None']);
+    if (this.spec.externalTrafficPolicy) {
+      rows.push(['External Traffic Policy:', this.spec.externalTrafficPolicy]);
+    }
+    // kubectl v1.30's describeService does not print Internal Traffic Policy
+    // even though the API server defaults spec.internalTrafficPolicy: Cluster.
+    if (this.spec.healthCheckNodePort) {
+      rows.push(['HealthCheck NodePort:', String(this.spec.healthCheckNodePort)]);
+    }
+    if (
+      Array.isArray(this.spec.loadBalancerSourceRanges) &&
+      this.spec.loadBalancerSourceRanges.length
+    ) {
+      rows.push(['LoadBalancer Source Ranges:', this.spec.loadBalancerSourceRanges.join(',')]);
+    }
+    // CommandBar._describeResource replaces everything from this header with
+    // the live aggregated Events table; the bare section keeps InspectorPanel
+    // (which calls toDescribe() without a cluster) readable.
+    rows.push(['Events:', '<none>']);
+    return renderDescribeRows(rows);
+  }
+
+  /** `<ip>:<resolved targetPort>` endpoint addresses for one Service port. */
+  _endpointAddressesForPort(port, endpoints) {
+    const addresses = [];
+    for (const endpoint of endpoints) {
+      const ip = endpointAddress(endpoint);
+      if (!ip) continue;
+      const portNumber = resolveEndpointPort(port, endpoint);
+      addresses.push(Number.isFinite(portNumber) ? `${ip}:${portNumber}` : String(ip));
+    }
+    return addresses;
   }
 }
 
@@ -475,6 +727,26 @@ ${this.events
   .map((e) => `  ${e.type}\t${e.reason}\t${e.message}`)
   .join('\n')}`;
   }
+}
+
+/**
+ * Format ready endpoint addresses the way kubectl's `formatEndpoints` /
+ * `formatEndpointSlices` do: up to `max` entries, then ` + N more...` with the
+ * number of remaining ready endpoints. Shared by `oc get endpoints` (the
+ * virtual Endpoints NAME/ENDPOINTS table) and `oc describe svc` so both print
+ * the same source of truth (issues #59/#60).
+ *
+ * @param {string[]} addresses address strings already rendered as `ip:port`
+ * @param {number} [max=3]
+ * @returns {string}
+ */
+export function formatEndpointAddresses(addresses, max = 3) {
+  const entries = (Array.isArray(addresses) ? addresses : []).filter(
+    (entry) => entry !== undefined && entry !== null && entry !== ''
+  );
+  if (!entries.length) return '<none>';
+  if (entries.length <= max) return entries.join(',');
+  return `${entries.slice(0, max).join(',')} + ${entries.length - max} more...`;
 }
 
 export default { Service, Ingress, NetworkPolicy };

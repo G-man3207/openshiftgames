@@ -45,6 +45,8 @@ import {
 } from './MergePatch.js';
 import { apiVersionForKind, createResource, normalizeKind } from '../data/kindRegistry.js';
 import { knownImageSecurityProfile } from '../resources/ImageSecurityProfiles.js';
+// API-server defaulting for Service objects (spec.clusterIP et al., issues #59/#60).
+import { defaultServiceSpec } from '../resources/NetworkResources.js';
 
 // ─── SHA1 + base64 helpers (for the simulated {SHA} htpasswd hashes) ──────
 
@@ -2835,12 +2837,44 @@ export class GameEngine {
   }
 
   /**
+   * ClusterIPs already allocated in the simulated 172.30.0.0/16 service
+   * network. Mirrors the real API server allocator so two Services never get
+   * the same virtual IP (issues #59/#60).
+   * @param {object|null} [exclude] existing Service being re-applied
+   * @returns {string[]}
+   */
+  _usedServiceClusterIPs(exclude = null) {
+    const used = [];
+    for (const service of this.cluster.getByKind?.('Service') || []) {
+      if (service === exclude) continue;
+      for (const ip of [service.spec?.clusterIP, ...(service.spec?.clusterIPs || [])]) {
+        if (typeof ip === 'string' && ip && ip !== 'None') used.push(ip);
+      }
+    }
+    return used;
+  }
+
+  /**
+   * Apply the real API-server Service defaulting to a manifest spec.
+   * @param {object} spec manifest `spec`
+   * @param {object|null} [existing] Service being updated
+   * @returns {object} defaulted spec (new object)
+   */
+  _defaultServiceManifestSpec(spec, existing = null) {
+    return defaultServiceSpec(spec, {
+      clusterIP: existing?.spec?.clusterIP,
+      usedClusterIPs: this._usedServiceClusterIPs(existing),
+    });
+  }
+
+  /**
    * Apply a single manifest object (upsert by kind/name/namespace).
    *
    * This is the path used by `ManifestEngine.applyFile()`, `oc apply/create -f`
    * and `oc replace -f`. It honours the registry factory (rich resource class,
    * canonical apiVersion) but uses the manifest's spec verbatim instead of
-   * merging palette defaults, so applied YAML round-trips cleanly.
+   * merging palette defaults, so applied YAML round-trips cleanly. Service
+   * objects additionally get the API-server defaulting (ClusterIP etc.).
    *
    * The returned resource exposes `resource._applyAction` = 'created'|'updated'
    * so callers can report which objects changed.
@@ -2927,7 +2961,11 @@ export class GameEngine {
 
     const existing = this.cluster.getByName(kind, name, namespace);
     if (existing) {
-      const nextSpec = deepClone(normalised.spec || {});
+      let nextSpec = deepClone(normalised.spec || {});
+      // A Service update keeps the ClusterIP the API server allocated on
+      // create when the applied manifest omits it (issue #59), while still
+      // defaulting type/ports/traffic-policy fields.
+      if (kind === 'Service') nextSpec = this._defaultServiceManifestSpec(nextSpec, existing);
       const nextLabels = metadata.labels || {};
       const nextAnnotations = metadata.annotations || {};
       // Declarative apply must be idempotent (issue #29): if the manifest does
@@ -2953,7 +2991,12 @@ export class GameEngine {
       // Kubernetes bumps metadata.generation only when the spec changes
       // (a label/annotation-only apply does not roll the workload).
       if (specChanged) existing.metadata.generation++;
+      // The generic in-place update path normalises a `conditions: []` status
+      // skeleton onto every rich resource; a Service status subresource must
+      // stay exactly the loadBalancer status an apply never touches (#59/#60).
+      const serviceStatus = kind === 'Service' ? deepClone(existing.status) : null;
       this.cluster.update(existing.uid, existing);
+      if (serviceStatus) existing.status = serviceStatus;
       existing._applyAction = 'updated';
       this._syncHtpasswdFileFromSecret(kind, existing);
       this.eventBus.emit('resource:applied', {
@@ -3015,6 +3058,10 @@ export class GameEngine {
     // The manifest's spec wins over palette defaults: an applied object must
     // round-trip exactly (no sample data/selectors leaking in from the registry).
     resource.spec = deepClone(normalised.spec || {});
+    // A created Service gets the API-server defaults: allocated ClusterIP,
+    // clusterIPs/ipFamilies/ipFamilyPolicy, session/internal traffic policy and
+    // port protocol/targetPort/nodePort defaults (issue #59).
+    if (kind === 'Service') resource.spec = this._defaultServiceManifestSpec(resource.spec);
     const added = this.cluster.add(resource);
     added._applyAction = 'created';
     this._syncHtpasswdFileFromSecret(kind, added);
