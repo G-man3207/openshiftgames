@@ -3477,7 +3477,9 @@ export class CommandBar {
     const explicitlyPrefixed =
       Boolean(linePrefixed) || /^\s*(?:oc|kubectl)\s+/i.test(String(stage ?? ''));
     const { command } = stripCommandPrefix(stage);
-    const tokens = tokenizeCommand(command);
+    // `let`: the global-flag hoisting below rewrites this array with the
+    // global flags moved after the subcommand (issue #44 — `oc -n ns get pods`).
+    let tokens = tokenizeCommand(command);
     if (tokens.length === 0) return { error: false, message: '' };
     let first = tokens[0].toLowerCase();
     // Shell layer first: shell flags (`-n`, `-i`…) are not oc flags, and
