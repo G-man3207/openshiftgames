@@ -39,7 +39,23 @@ names are shown in EX280 Prep).
   `image info`, `process`, `helm` (repo/search/install/upgrade/history/rollback), `htpasswd`,
   `debug node` (interactive `chroot /host` + `systemctl`/`journalctl` kubelet troubleshooting),
   `--dry-run=client|server`, `<resource>.<group>` tokens, escaped jsonpath keys, `custom-columns`,
-  `events --field-selector`, pipes, redirects and `-f -` stdin. Container names follow real `oc`
+  `events --field-selector`, pipes, redirects and `-f -` stdin. `oc describe` renders like kubectl:
+  env `valueFrom` entries print the `<set to the key 'DB_PASS' in secret 'db'>  Optional: false` /
+  `<set to the key 'APP_LOG' of config map 'cfg'>  Optional: false` placeholders (fieldRef and
+  resourceFieldRef forms too, never the raw JSON), Liveness/Readiness/Startup probes print in
+  kubectl's order and format
+  (`Readiness:  http-get http://:8080/ delay=2s timeout=1s period=10s #success=1 #failure=3`,
+  `tcp-socket :PORT`, `exec […]`), `Volumes:` print the
+  `Type:`/`Name:`/`Optional:` blocks for ConfigMap/Secret/emptyDir/PVC/hostPath/NFS/projected/
+  downwardAPI/CSI sources (including the injected `kube-api-access-*` projected service-account
+  volume) aligned per volume, and annotations print as sorted multiline `key: value` (labels stay
+  `key=value`). `oc set probe` honours `--initial-delay-seconds`, `--period-seconds`,
+  `--timeout-seconds`, `--success-threshold` and `--failure-threshold` (only the supplied fields
+  change; the handler and API-server defaults are preserved), and `oc describe deployment` lists only
+  the Deployment's own `ScalingReplicaSet` events — `Scaled up replica set <rs> to <n>` per rollout
+  and `Scaled down replica set <old> to 0 from <n>` when one is retired, at their real rollout times
+  (ReplicaSet-controller events stay on `oc describe rs`). `oc adm top nodes` is sorted by NAME with
+  a realistically busy control plane and per-node worker variance. Container names follow real `oc`
   (`oc create deployment --image=…` names the container after the image; `oc set image` never adds
   one). `oc get rolebinding|clusterrolebinding` prints the ROLE as
   `<roleRef.kind>/<roleRef.name>` (`ClusterRole/admin`, `Role/edit`), so Role vs ClusterRole is
@@ -74,7 +90,14 @@ names are shown in EX280 Prep).
   resolves Route hosts through the router model (edge/passthrough/reencrypt, http redirect and
   NetworkPolicy reachability), with real flags and `-w/--write-out` (`%{http_code}` etc.), and
   `oc exec`/`oc rsh` show the Pod's real volumes, ConfigMaps, Secrets, service-account token and
-  env, and `cat /etc/resolv.conf` inside a Pod prints the cluster DNS configuration
+  env. `oc exec … -- sh -c '<script>'` runs the script in the container's own shell, so
+  single-quoted `$DB_PASS`/`$APP_MODE` expand from the container environment (`s3cr3t prod`) and
+  `$HOSTNAME` prints the pod name; shell builtins behave like bash
+  (`sh -c "exit 3"; echo rc=$?` → `command terminated with exit code 3` + `rc=3`),
+  `id -u`/`-g`/`-un` print bare IDs like coreutils, `;`/`&&`/`||`/pipes follow the real exit-status
+  rules, and a double-quoted `$APP_MODE` is still expanded by the workstation shell first
+  (`oc exec -- exit 3` stays the authentic missing-binary 127 — `exit` is only a shell builtin).
+  `cat /etc/resolv.conf` inside a Pod prints the cluster DNS configuration
   (`search <project>.svc.cluster.local svc.cluster.local cluster.local`, `nameserver 172.30.0.10`,
   `options ndots:5`).
 - **First-class OpenShift resources** — Project, Pod, Deployment, ReplicaSet, StatefulSet, DaemonSet,

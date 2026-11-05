@@ -4,6 +4,147 @@ All notable changes to OpenShift Games are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 aims to follow [Semantic Versioning](https://semver.org/).
 
+## [1.11.0] — 2026-11-05
+
+Thirteenth QA pass on 1.10.0: closes both open issues of the 1.10.0 CLI retest (#64–#65) — the P3
+describe/exec gaps in how a player verifies injected config and probes (#64) and the P4
+`sh -c`/`oc describe`/`oc adm top` differences (#65). `oc describe deployment` and `oc describe pod`
+now render like kubectl: env `valueFrom` entries print kubectl's placeholders
+(`<set to the key 'DB_PASS' in secret 'db'>  Optional: false`, the
+`<set to the key 'APP_LOG' of config map 'cfg'>` form and the fieldRef/resourceFieldRef forms)
+instead of raw JSON, Liveness/Readiness/Startup lines print their real handler and
+`delay=/timeout=/period=/#success=/#failure=` suffix, `Volumes:` print the full
+`Type:`/`Name:`/`Optional:` blocks for every modelled source (including the injected
+`kube-api-access-*` projected service-account volume), and annotations print as sorted multiline
+`key: value` while labels stay `key=value`. `oc set probe` honours `--initial-delay-seconds`,
+`--period-seconds`, `--timeout-seconds`, `--success-threshold` and `--failure-threshold`
+(previously ignored and forced `initialDelaySeconds: 5`), updates only the fields the player
+supplied while preserving the existing handler, lets the API server default the rest, and
+`--open-tcp` goes through the same engine path. `oc exec`/`oc rsh -- sh -c '<script>'` now runs the
+script in the container's shell: single-quoted `$DB_PASS`/`$APP_MODE` expand from the container env
+(`s3cr3t prod`), `$HOSTNAME` prints the pod name, shell builtins work
+(`sh -c "exit 3"; echo rc=$?` → `command terminated with exit code 3` + `rc=3`) and
+`id -u`/`-g`/`-un`/`-gn`/`-G`/`-Gn` print bare IDs like coreutils, while a double-quoted
+`$APP_MODE` is still expanded by the workstation shell first and direct `oc exec -- exit 3` stays the
+real missing-binary 127. `oc describe deployment` shows only the Deployment controller's own
+`ScalingReplicaSet` series — one `Scaled up replica set <rs> to <n>` per rollout ReplicaSet and
+`Scaled down replica set <old> to 0 from <n>` when a ReplicaSet is retired, at the real rollout time
+(no more ReplicaSet `SuccessfulCreate` rows and no `Scaled up` event named after a ReplicaSet that
+did not exist yet) — and `oc adm top nodes` is sorted by NAME with a realistically busy control
+plane and per-node worker variance. The game stays no-build and dependency-free.
+
+### Added
+
+- **kubectl-style `oc describe` container and volume rendering (issues #64/#65).** Both
+  `oc describe deployment` and `oc describe pod` expand env `valueFrom` entries into kubectl's
+  text: secret and ConfigMap key refs print `<set to the key 'DB_PASS' in secret 'db'>  Optional: false` and
+  `<set to the key 'APP_LOG' of config map 'cfg'>  Optional: false`, fieldRef entries print the
+  resolved value plus `(<apiVersion>:<fieldPath>)` and resourceFieldRef entries the resource name —
+  never the raw JSON object. Liveness/Readiness/Startup probes print in kubectl's order and format
+  (`Readiness:  http-get http://:8080/ delay=2s timeout=1s period=10s #success=1 #failure=3`,
+  `tcp-socket :PORT`, `exec [… cmds]`) with the API-server defaults for unset timing fields.
+  `Volumes:` renders kubectl's `Type:`/`Name:`/`Optional:` field blocks for configMap, secret,
+  emptyDir, PVC, hostPath, NFS, projected, downwardAPI, CSI and unknown sources, aligned per volume
+  — including the injected `kube-api-access-*` projected service-account volume, whose
+  `TokenExpirationSeconds:`, `ConfigMapName:` and `DownwardAPI:` fields now print. Annotations print
+  as sorted multiline `key: value` pairs (labels stay `key=value`, long or multiline values move to
+  continuation lines, and `kubectl.kubernetes.io/last-applied-configuration` is hidden).
+- **`oc exec`/`oc rsh -- sh -c '<script>'` runs a container shell (issues #64/#65).** Single-quoted
+  script text reaches the container's shell untouched and is expanded there from the container
+  environment, so `sh -c 'echo $DB_PASS $APP_MODE'` prints `s3cr3t prod` and
+  `sh -c 'echo $HOSTNAME'` the pod name, while a double-quoted `$APP_MODE` is still expanded by the
+  workstation shell first (empty in the container), exactly like real bash. The shell builtins
+  `exit N`, `:`, `cd`, `export`, `unset` and assignments are recognised only inside the script —
+  `sh -c "exit 3"; echo rc=$?` reports `command terminated with exit code 3` and the same line sees
+  `rc=3`, while direct `oc exec -- exit 3` keeps the authentic missing-binary result (127) — and
+  `;`/`&&`/`||`/pipes inside the script follow the real exit-status rules.
+- **`oc set probe` numeric flags and `--open-tcp` pass-through (issue #64).**
+  `--initial-delay-seconds`, `--period-seconds`, `--timeout-seconds`, `--success-threshold` and
+  `--failure-threshold` are now honoured (the probe used to ignore them and force
+  `initialDelaySeconds: 5`), and `--open-tcp` uses the same engine path as `--get-url` instead of a
+  separate fallback. Real `oc` semantics: only the supplied fields change, an existing probe's
+  handler is preserved, and unset timing/threshold fields get the API-server defaults (delay 0s,
+  timeout 1s, period 10s, #success 1, #failure 3).
+
+### Changed
+
+- **`oc describe deployment` events are the Deployment controller's own series (issue #65).** The
+  describe output no longer mixes in ReplicaSet-controller rows: real `oc describe deploy` shows only
+  `ScalingReplicaSet` events recorded on the Deployment, and the engine now records one
+  `Scaled up replica set <rs> to <n>` per rollout ReplicaSet plus
+  `Scaled down replica set <old> to 0 from <n>` when the controller retires an old ReplicaSet — at
+  the actual rollout time, so the newest event's age matches the newest ReplicaSet's AGE (the old
+  event named the newest ReplicaSet but was timed before that ReplicaSet existed). Seeded and paused
+  states reconstruct the same series synthetically. `SuccessfulCreate`/`FailedCreate` stay on the
+  ReplicaSet: `oc describe rs` shows them and `oc get events --field-selector reason=FailedCreate`
+  is unchanged.
+- **`oc adm top nodes` is sorted and realistic (issue #65).** Rows are sorted by NAME, the
+  control-plane node is now the busiest (several cores, with the ~8–12 Gi resident control-plane
+  components and the greatest CPU%), and the worker rows carry deterministic per-node variance so no
+  two workers print identical usage; the NAME/CPU(cores)/CPU%/MEMORY(bytes)/MEMORY% columns are
+  unchanged.
+- README and CONVERSION-SPEC describe the kubectl-style describe renderers, the `oc set probe`
+  flags, the container `sh -c` shell and the sorted `oc adm top nodes` output (issues #64–#65); the
+  verification report records the thirteenth QA pass.
+
+### Fixed
+
+- **`oc describe` printed raw `valueFrom` JSON and omitted probes (issue #64).** A secret-backed env
+  showed `DB_PASS:  {"secretKeyRef":{"name":"db","key":"DB_PASS"}}` and readiness/liveness/startup
+  probes did not appear at all; both now render the kubectl text above, with the probe line placed
+  in kubectl's Limits → Requests → probes → Environment order.
+- **`oc set probe --initial-delay-seconds` was ignored (issue #64).** The flag (and the other
+  numeric probe flags) did not reach the API object: `-o jsonpath=…readinessProbe.initialDelaySeconds`
+  showed the forced 5 instead of the requested value; it now shows the supplied value (2 in the
+  issue's repro).
+- **`sh -c 'echo $DB_PASS'` printed the variable literally (issue #64).** Single-quoted container
+  scripts were not expanded, so a correct secret injection looked broken; the container shell now
+  expands `$VAR`/`${VAR}`/`$?` from the container env, making the issue's `s3cr3t prod` and
+  `$HOSTNAME` → pod name cases work.
+- **`sh -c "exit 3"` reported a missing binary and `id -u` printed the whole identity line
+  (issue #65).** `exit` is a shell builtin, not `/usr/bin/exit`, so the container shell now honours
+  it with the real status (surfaced as `command terminated with exit code 3`, `$?` sees 3), and the
+  `id` flags `-u`/`-g`/`-un`/`-gn`/`-G`/`-Gn` print bare IDs like coreutils while the plain `id`
+  line is unchanged.
+- **`oc describe deploy` leaked ReplicaSet events and mis-timed `ScalingReplicaSet` (issue #65).**
+  `SuccessfulCreate` from replicaset-controller appeared under describe deploy, and the single
+  scaling event named the newest ReplicaSet while carrying an age from before it existed; describe
+  deploy now shows only the Deployment's own correctly-timed series (see Changed).
+- **`oc describe` volumes and annotations did not match kubectl (issue #65).** A ConfigMap volume
+  printed `cfg: Type: configMap` instead of `Type: ConfigMap (a volume populated by a ConfigMap)` +
+  `Name:` + `Optional:`, and annotations printed `key=value` (label syntax) instead of sorted
+  multiline `key: value`.
+- **`oc adm top nodes` showed identical workers, an unsorted table and an idle control plane
+  (issue #65).** `worker-0`/`worker-1` had the same 175m/418Mi, rows were not sorted by NAME and
+  `master-0` sat at 70m/112Mi; the table now looks like a real metrics-server snapshot (master
+  busiest, workers distinct) with the same columns.
+
+### Tests
+
+- New permanent `qa-issue64` browser-regression section (27 checks) covering every report item
+  end-to-end: the issue's exact command sequence (new-project → deployment → secret/configmap env →
+  readiness/liveness probes with `--initial-delay-seconds`), the secret/ConfigMap env placeholders,
+  the readiness/liveness probe lines, no raw `valueFrom` JSON, the `--initial-delay-seconds=2`
+  jsonpath, and the `sh -c` single-quote/double-quote env contracts plus `printenv`/`$HOSTNAME`.
+- New permanent `qa-issue65` browser-regression section (32 checks) covering three rollouts → four
+  ReplicaSets with one correctly-timed `Scaled up replica set <rs> to 1` row per ReplicaSet,
+  `Scaled down replica set <old> to 0 from 1` rows for retired sets, no ReplicaSet-controller rows,
+  annotation/label formats on `describe deploy` and `describe pod`, the aligned ConfigMap volume
+  block, `exit 3`/`rc=3`, the full `id` line vs `id -u`/`-g`/`-un`, and the sorted, busy,
+  non-identical `oc adm top nodes` rows.
+- `scripts/verify.mjs` grew the matching §4h static-fidelity locks (10 checks) that drive the same
+  GameEngine/SandboxMode/CommandBar fixture without a browser and fail the fast gate on any
+  describe/probe/exec/events/metrics regression.
+- Legacy #36/#43 assertions were corrected to the real describe-deploy event contract: the #36
+  FailedCreate evidence is now read from `oc describe rs <newRS>` (and the
+  `oc get events --field-selector reason=FailedCreate` output), `describe deploy` is asserted to
+  stay free of ReplicaSet-controller rows, and #43 gained the same `randomFailureRate = 0`
+  determinism guard as #61–#63.
+- Static gate: **1084 checks, 0 failures, 0 warnings** (56 JS modules, 118 files); full
+  browser suite: **1986 checks, 0 failures, 0 warnings** (1042 s,
+  0 console/page errors, GO); `visual-qa --strict`: **PASS** (94 checks, 0 failures,
+  31 informational warnings); see `docs/verification-report.md`.
+
 ## [1.10.0] — 2026-11-05
 
 Twelfth QA pass on 1.9.0: closes the four P4 findings of the 1.9.0 CLI retest (issue #63) — three

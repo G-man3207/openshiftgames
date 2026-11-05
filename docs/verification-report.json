@@ -1,19 +1,19 @@
 {
-  "timestamp": "2026-11-05T17:44:47.041Z",
+  "timestamp": "2026-11-05T19:19:46.434Z",
   "environment": {
     "node": "v26.10.0",
     "chrome": "Chrome/156.0.8078.79",
-    "baseUrl": "http://127.0.0.1:32839",
+    "baseUrl": "http://127.0.0.1:46165",
     "viewport": {
       "width": 1600,
       "height": 900
     },
     "puppeteerCore": "/tmp/verify-tools",
-    "startedAt": "2026-11-05T17:28:30.611Z",
-    "durationSeconds": 976
+    "startedAt": "2026-11-05T19:02:24.442Z",
+    "durationSeconds": 1042
   },
   "summary": {
-    "passes": 1921,
+    "passes": 1986,
     "failures": 0,
     "warnings": 0,
     "consoleErrors": 0,
@@ -122,7 +122,7 @@
       "warnings": 0
     },
     "qa-cli": {
-      "passes": 78,
+      "passes": 81,
       "failures": 0,
       "warnings": 0
     },
@@ -172,7 +172,7 @@
       "warnings": 0
     },
     "qa-issue43": {
-      "passes": 54,
+      "passes": 57,
       "failures": 0,
       "warnings": 0
     },
@@ -211,6 +211,16 @@
       "failures": 0,
       "warnings": 0
     },
+    "qa-issue64": {
+      "passes": 27,
+      "failures": 0,
+      "warnings": 0
+    },
+    "qa-issue65": {
+      "passes": 32,
+      "failures": 0,
+      "warnings": 0
+    },
     "draw": {
       "passes": 10,
       "failures": 0,
@@ -231,74 +241,74 @@
       "path": "screenshot.png",
       "width": 1600,
       "height": 900,
-      "bytes": 981667
+      "bytes": 981960
     },
     "ogImage": {
       "path": "og-image.png",
       "width": 1200,
       "height": 630,
-      "bytes": 205742
+      "bytes": 205982
     },
     "screenshots": [
       {
         "path": "docs/screenshots/menu.png",
         "width": 1600,
         "height": 900,
-        "bytes": 331883
+        "bytes": 331861
       },
       {
         "path": "docs/screenshots/exam-prep.png",
         "width": 1600,
         "height": 900,
-        "bytes": 210539
+        "bytes": 210980
       },
       {
         "path": "docs/screenshots/sandbox.png",
         "width": 1600,
         "height": 900,
-        "bytes": 981435
+        "bytes": 983218
       },
       {
         "path": "screenshot.png",
         "width": 1600,
         "height": 900,
-        "bytes": 981667
+        "bytes": 981960
       },
       {
         "path": "docs/screenshots/files-panel.png",
         "width": 1600,
         "height": 900,
-        "bytes": 243946
+        "bytes": 243959
       },
       {
         "path": "docs/screenshots/campaign-level-1.png",
         "width": 1600,
         "height": 900,
-        "bytes": 479304
+        "bytes": 479302
       },
       {
         "path": "docs/screenshots/regressions-minimap-collapsed.png",
         "width": 1600,
         "height": 900,
-        "bytes": 961478
+        "bytes": 961121
       },
       {
         "path": "docs/screenshots/regressions-campaign-restart.png",
         "width": 1600,
         "height": 900,
-        "bytes": 489092
+        "bytes": 489321
       },
       {
         "path": "docs/screenshots/draw.png",
         "width": 1600,
         "height": 900,
-        "bytes": 488450
+        "bytes": 488499
       },
       {
         "path": "og-image.png",
         "width": 1200,
         "height": 630,
-        "bytes": 205742
+        "bytes": 205982
       }
     ]
   },
@@ -3905,7 +3915,19 @@
     },
     {
       "section": "qa-cli",
-      "name": "qa-cli #36: describe deploy shows Events during FailedCreate"
+      "name": "qa-cli #36: describe deploy shows only Deployment-controller events during FailedCreate (no RS FailedCreate)"
+    },
+    {
+      "section": "qa-cli",
+      "name": "qa-cli #36: describe deploy priv names its NewReplicaSet so the FailedCreate can be read there"
+    },
+    {
+      "section": "qa-cli",
+      "name": "qa-cli #36: describe rs <newRS> shows the privileged SCC FailedCreate with the real Error creating: wording"
+    },
+    {
+      "section": "qa-cli",
+      "name": "qa-cli #36: oc get events --field-selector reason=FailedCreate keeps surfacing the ReplicaSet FailedCreate"
     },
     {
       "section": "qa-cli",
@@ -5617,6 +5639,10 @@
     },
     {
       "section": "qa-issue43",
+      "name": "#43: sandbox random container failures are disabled for deterministic CLI output"
+    },
+    {
+      "section": "qa-issue43",
       "name": "#43: multi-type get prefixes NAME with deployment.apps/ and service/"
     },
     {
@@ -5657,7 +5683,15 @@
     },
     {
       "section": "qa-issue43",
-      "name": "#43: describe deployment shows the quota FailedCreate exactly once with real wording"
+      "name": "#43: describe deploy/limited does not list ReplicaSet-controller events (FailedCreate lives on the RS)"
+    },
+    {
+      "section": "qa-issue43",
+      "name": "#43: quota-lab keeps the quota FailedCreate on a ReplicaSet (never on the Deployment describe)"
+    },
+    {
+      "section": "qa-issue43",
+      "name": "#43: describe rs shows the quota FailedCreate exactly once with real wording"
     },
     {
       "section": "qa-issue43",
@@ -7906,6 +7940,242 @@
     {
       "section": "qa-issue63",
       "name": "#63d: the on-screen Lab 13 objectives panel renders the provided-policy wording (challenges/payments-networkpolicy.yaml + apply)"
+    },
+    {
+      "section": "qa-issue64",
+      "name": "#64: a fresh sandbox boots for the describe env/probe and `sh -c` exec checks (random failures disabled)"
+    },
+    {
+      "section": "qa-issue64",
+      "name": "#64: `oc new-project qa64` creates the fixture project"
+    },
+    {
+      "section": "qa-issue64",
+      "name": "#64: `oc create deployment web` creates the one-replica fixture"
+    },
+    {
+      "section": "qa-issue64",
+      "name": "#64: the qa64 web Pod reaches Running 1/1"
+    },
+    {
+      "section": "qa-issue64",
+      "name": "#64: `oc create secret generic db` creates the DB_PASS fixture secret"
+    },
+    {
+      "section": "qa-issue64",
+      "name": "#64: `oc set env deploy/web --from=secret/db` adds the DB_PASS secretRef env"
+    },
+    {
+      "section": "qa-issue64",
+      "name": "#64: the secret-env rollout settles before the next template change"
+    },
+    {
+      "section": "qa-issue64",
+      "name": "#64: `oc set env deploy/web APP_MODE=prod` adds the plain env value"
+    },
+    {
+      "section": "qa-issue64",
+      "name": "#64: the APP_MODE rollout settles before the probe change"
+    },
+    {
+      "section": "qa-issue64",
+      "name": "#64: `oc set probe deploy/web --readiness … --initial-delay-seconds=2` updates the readiness probe"
+    },
+    {
+      "section": "qa-issue64",
+      "name": "#64: the readiness-probe rollout settles before the liveness probe change"
+    },
+    {
+      "section": "qa-issue64",
+      "name": "#64: `oc set probe deploy/web --liveness …` updates the liveness probe too"
+    },
+    {
+      "section": "qa-issue64",
+      "name": "#64: the liveness-probe rollout settles before the configmap env change"
+    },
+    {
+      "section": "qa-issue64",
+      "name": "#64: `oc create configmap cfg` creates the APP_LOG fixture ConfigMap"
+    },
+    {
+      "section": "qa-issue64",
+      "name": "#64: `oc set env deploy/web --from=configmap/cfg` adds the APP_LOG configMapRef env"
+    },
+    {
+      "section": "qa-issue64",
+      "name": "#64: the configmap-env rollout settles before the describe/exec assertions"
+    },
+    {
+      "section": "qa-issue64",
+      "name": "#64: `-o jsonpath={.spec.template.spec.containers[0].readinessProbe.initialDelaySeconds}` is 2 (flag not ignored)"
+    },
+    {
+      "section": "qa-issue64",
+      "name": "#64: describe deploy renders the secret env as `<set to the key 'DB_PASS' in secret 'db'> Optional: false`"
+    },
+    {
+      "section": "qa-issue64",
+      "name": "#64: describe deploy renders the configmap env as `<set to the key 'APP_LOG' of config map 'cfg'> Optional: false`"
+    },
+    {
+      "section": "qa-issue64",
+      "name": "#64: describe deploy never prints the raw JSON valueFrom object for env entries"
+    },
+    {
+      "section": "qa-issue64",
+      "name": "#64: describe deploy prints the real Readiness probe line (http-get :8080/ delay=2s timeout=1s period=10s #success=1 #failure=3)"
+    },
+    {
+      "section": "qa-issue64",
+      "name": "#64: describe deploy prints the real Liveness probe line with delay=3s"
+    },
+    {
+      "section": "qa-issue64",
+      "name": "#64: the running qa64 web Pod is resolvable before the exec checks"
+    },
+    {
+      "section": "qa-issue64",
+      "name": "#64: `oc exec … -- sh -c 'echo $DB_PASS $APP_MODE'` expands the container env to `s3cr3t prod`"
+    },
+    {
+      "section": "qa-issue64",
+      "name": "#64: `oc exec … -- sh -c 'echo $HOSTNAME'` prints the exec Pod’s real name"
+    },
+    {
+      "section": "qa-issue64",
+      "name": "#64: `oc exec … -- sh -c \"echo $APP_MODE\"` prints an empty line (the workstation shell expands $APP_MODE before oc)"
+    },
+    {
+      "section": "qa-issue64",
+      "name": "#64: `oc exec … -- printenv DB_PASS` still resolves the secret to s3cr3t"
+    },
+    {
+      "section": "qa-issue65",
+      "name": "#65: a fresh sandbox boots for the describe/events/exec/top checks (random failures disabled)"
+    },
+    {
+      "section": "qa-issue65",
+      "name": "#65: `oc new-project qa65` creates the fixture project"
+    },
+    {
+      "section": "qa-issue65",
+      "name": "#65: `oc create configmap cfg` creates the ConfigMap used by the volume fixture"
+    },
+    {
+      "section": "qa-issue65",
+      "name": "#65: `oc create deployment web` creates the one-replica rollout fixture"
+    },
+    {
+      "section": "qa-issue65",
+      "name": "#65: the initial qa65 web rollout settles before the three template rollouts"
+    },
+    {
+      "section": "qa-issue65",
+      "name": "#65: rollout 1/3 `oc set env deploy/web ROLLOUT=1` updates the deployment"
+    },
+    {
+      "section": "qa-issue65",
+      "name": "#65: rollout 1/3 settles before the next template change"
+    },
+    {
+      "section": "qa-issue65",
+      "name": "#65: rollout 2/3 `oc set env deploy/web ROLLOUT=2` updates the deployment"
+    },
+    {
+      "section": "qa-issue65",
+      "name": "#65: rollout 2/3 settles before the next template change"
+    },
+    {
+      "section": "qa-issue65",
+      "name": "#65: rollout 3/3 `oc set env deploy/web ROLLOUT=3` updates the deployment"
+    },
+    {
+      "section": "qa-issue65",
+      "name": "#65: rollout 3/3 settles before the next template change"
+    },
+    {
+      "section": "qa-issue65",
+      "name": "#65: three rollouts leave four ReplicaSets (initial + one per rollout)"
+    },
+    {
+      "section": "qa-issue65",
+      "name": "#65: describe deploy events are the Deployment controller’s own series — no SuccessfulCreate and no replicaset-controller FROM rows"
+    },
+    {
+      "section": "qa-issue65",
+      "name": "#65: describe deploy has one `Scaled up replica set <rs> to 1` row per ReplicaSet/rollout"
+    },
+    {
+      "section": "qa-issue65",
+      "name": "#65: retired ReplicaSets get `Scaled down replica set <rs> to 0 from 1` rows"
+    },
+    {
+      "section": "qa-issue65",
+      "name": "#65: the newest `Scaled up` event age matches the newest ReplicaSet AGE (within 10s)"
+    },
+    {
+      "section": "qa-issue65",
+      "name": "#65: describe deploy prints annotations as `key: value` (revision) and the selector stays `key=value`"
+    },
+    {
+      "section": "qa-issue65",
+      "name": "#65: describe pod prints annotations as `key: value` (openshift.io/scc: restricted-v2) and labels stay `key=value`"
+    },
+    {
+      "section": "qa-issue65",
+      "name": "#65: `oc create deployment volweb` creates the volume fixture"
+    },
+    {
+      "section": "qa-issue65",
+      "name": "#65: the volweb Deployment is patched with a cfg ConfigMap volume and mount"
+    },
+    {
+      "section": "qa-issue65",
+      "name": "#65: the volweb rollout with the ConfigMap volume settles"
+    },
+    {
+      "section": "qa-issue65",
+      "name": "#65: describe deploy renders the ConfigMap volume block (cfg: Type/Name/Optional), never the old bare `Type:  configMap`"
+    },
+    {
+      "section": "qa-issue65",
+      "name": "#65: volume Type/Name/Optional values align on a single column like kubectl"
+    },
+    {
+      "section": "qa-issue65",
+      "name": "#65: `oc exec … -- sh -c \"exit 3\"; echo rc=$?` reports exit 3 and the same line sees rc=3"
+    },
+    {
+      "section": "qa-issue65",
+      "name": "#65: `oc exec … -- id` keeps the full uid=N gid=0(root) groups=… output line"
+    },
+    {
+      "section": "qa-issue65",
+      "name": "#65: `sh -c \"id -u\"` prints the bare numeric UID that matches `id`"
+    },
+    {
+      "section": "qa-issue65",
+      "name": "#65: `sh -c \"id -g\"` prints the container root gid 0"
+    },
+    {
+      "section": "qa-issue65",
+      "name": "#65: `sh -c \"id -un\"` prints the bare numeric user (no uid= prefix)"
+    },
+    {
+      "section": "qa-issue65",
+      "name": "#65: `oc adm top nodes` keeps the NAME/CPU(cores)/CPU%/MEMORY(bytes)/MEMORY% header"
+    },
+    {
+      "section": "qa-issue65",
+      "name": "#65: `oc adm top nodes` rows are sorted by NAME (master-0, worker-0, worker-1)"
+    },
+    {
+      "section": "qa-issue65",
+      "name": "#65: the control-plane node is the busiest — CPU(cores) >= 2000m, MEMORY between 8Gi and 12Gi and the greatest CPU%"
+    },
+    {
+      "section": "qa-issue65",
+      "name": "#65: the two worker rows differ from each other in at least one of CPU/MEMORY"
     },
     {
       "section": "draw",

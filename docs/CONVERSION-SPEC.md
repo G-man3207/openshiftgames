@@ -300,7 +300,8 @@ GameEngine helpers):
 - Lifecycle: `oc login [-u user] [-p pass]`, `oc logout`, `oc whoami`, `oc project [name]`,
   `oc projects`, `oc new-project <name> [--description=] [--display-name=]`, `oc delete project <name>`.
 - Querying: `oc get <resource> [name] [-n project] [-A] [-o wide|yaml|json|name|jsonpath=...|custom-columns=...] [-l selector] [--field-selector=...] [--sort-by=...] [--show-labels]`;
-  `oc describe <resource> <name>`; `oc status [-n]`; `oc events`/`oc get events [-w]`;
+  `oc describe <resource> <name>` (kubectl-style container env/probe/volume rendering and
+  `key: value` annotations, §4.4); `oc status [-n]`; `oc events`/`oc get events [-w]`;
   `oc explain <resource>[.field]`; `oc get all`.
   Include: pods, deployments, replicasets, statefulsets, daemonsets, jobs, cronjobs, services,
   routes, ingresses, networkpolicies, configmaps, secrets, pvcs, pvs, storageclasses, hpa, pdb,
@@ -311,7 +312,8 @@ GameEngine helpers):
   Aliases per real `oc` (po, deploy, svc, route, bc, is, istag, dc→warning, ns/project, quota,
   clusterquota, scc, user, group, co, etc.).
 - Logs/events/health: `oc logs <pod|deployment/name|build/name|bc/name> [-f] [--previous] [-c container] [--tail=N]`,
-  `oc adm top pods|nodes`, `oc get clusteroperators`, `oc get clusterversion`, `oc adm must-gather`
+  `oc adm top pods|nodes` (nodes sorted by NAME with the real control-plane load and worker
+  variance, §4.4), `oc get clusteroperators`, `oc get clusterversion`, `oc adm must-gather`
   (simulated output), `oc adm inspect ns/<project>` (simulated output).
 - Platform Services/DNS (issues #58/#61/#62): `oc get svc,endpoints -n openshift-dns` returns the
   real `dns-default` Service (ClusterIP `172.30.0.10`, ports `53/UDP`, `53/TCP`, `9154/TCP`, named
@@ -341,14 +343,21 @@ cluster.local`, `nameserver 172.30.0.10`, `options ndots:5` (issue #58) — and 
   cluster DNS. An `oc exec`/`oc rsh` command the image does not model is a real OCI exec failure —
   `error: Internal error occurred: … exec: "<cmd>": executable file not found in $PATH` followed by
   `command terminated with exit code 127` and a failed shell status, so `&&` stops and `||`
-  recovers; modelled binaries are matched by basename (`/bin/cat`) (#62).
+  recovers; modelled binaries are matched by basename (`/bin/cat`) (#62). A container script
+  (`oc exec <pod> -- sh -c '<script>'` or `/bin/bash -c`) runs in the container's shell (see §4.4):
+  single-quoted script text is expanded from the container environment (`$VAR`/`$?`, `$HOSTNAME`),
+  shell builtins (`exit N`, `:`, `cd`, `export`, `unset`, assignments) exist only in that shell, and
+  the script's `;`/`&&`/`||`/pipes follow the real exit-status rules (issues #64–#65).
 - Mutations: `oc create <resource> <name> [flags]`, `oc apply -f <file>`, `oc create -f <file>`,
   `oc replace -f <file>`, `oc delete -f <file>`, `oc apply -k <dir>`, `oc delete <resource> <name>`,
   `oc scale <resource> <name> --replicas=N`, `oc edit <resource> <name>` (opens editor modal),
   `oc label <resource> <name> key=value`, `oc annotate ...`, `oc patch <resource> <name> -p '<json>' --type=merge|strategic`,
   `oc set env deployment/name KEY=VALUE [--from=configmap|secret/name] [--list] [--remove=KEY]`,
   `oc set image deployment/name container=image`, `oc set resources deployment/name --limits=cpu=500m,memory=512Mi --requests=...`,
-  `oc set probe deployment/name --liveness|--readiness --get-url=http://:8080/healthz | --remove`,
+  `oc set probe deployment/name --liveness|--readiness|--startup --get-url=http://:8080/healthz`
+  with `--open-tcp=<port>` or the numeric flags `--initial-delay-seconds=<n>`,
+  `--period-seconds=<n>`, `--timeout-seconds=<n>`, `--success-threshold=<n>`,
+  `--failure-threshold=<n>`, and `--remove` (see §4.4),
   `oc set serviceaccount deployment/name <sa>`, `oc set triggers bc/name --from-image=app:latest --containers=main | --remove`,
   `oc set selector svc/name app=web` (if supported; else patch fallback),
   `oc set volumes deployment/name --add --name=data --claim-name=data --mount-path=/data`.
@@ -538,6 +547,65 @@ The simulated shell and the `oc exec`/`oc rsh` container surface share one hones
   `command terminated with exit code <N>` and return a failed result, so `&&` stops and `||`
   recovers exactly like the existing 127 not-found contract. This closes the old behaviour where a
   failing modelled command printed only its error line and the shell still saw exit 0.
+
+### 4.4 kubectl-style describe, probe flags, container `sh -c` and node metrics (issues #64–#65)
+
+`oc describe` and the container shell are the surfaces a player uses to verify injected config and
+probes; these are the output contracts every command surface must keep:
+
+- **kubectl-style container and probe rendering (issue #64).** An env entry with
+  `valueFrom.secretKeyRef` prints
+  `<set to the key 'DB_PASS' in secret 'db'>  Optional: false`, `configMapKeyRef` the
+  `<set to the key 'APP_LOG' of config map 'cfg'>` wording, `fieldRef` the resolved value plus
+  `(<apiVersion>:<fieldPath>)` and `resourceFieldRef` `(<resource>)` — never
+  `JSON.stringify(valueFrom)`. `oc describe pod` resolves `fieldRef` from the live Pod
+  (name/namespace/uid/nodeName/serviceAccountName/hostIP/podIP/labels/annotations); a Deployment
+  template has no Pod, so its `fieldRef` prints the empty resolved value like kubectl. Liveness/
+  Readiness/Startup print in kubectl's order (after Limits/Requests, before Environment) as
+  `http-get [scheme://][host:]port/path`, `tcp-socket [host:]port` or `exec [args]` plus
+  `delay=<n>s timeout=<n>s period=<n>s #success=<n> #failure=<n>`, with unset fields defaulted to
+  the API-server values (0/1/10/1/3).
+- **kubectl-style volume rendering (issue #65).** `describeVolumes` prints the volume name (`cfg:`)
+  then the source's `Type:` line (the ConfigMap/Secret/EmptyDir/PVC/HostPath/NFS/Projected/
+  DownwardAPI/CSI wording) and its fields — `Name:`/`SecretName:`/`ClaimName:`/`Path:`/`Server:`/
+  `ReadOnly:`/`Optional:`, downwardAPI `Items:`, the projected sources
+  (`TokenExpirationSeconds:`, `ConfigMapName:`, `SecretName:`, `DownwardAPI:`), CSI
+  `Driver:`/`FSType:`/`VolumeAttributes:` — aligned per volume (keys padded to that volume's longest
+  key + 2). The injected `kube-api-access-*` projected service-account volume
+  (token + ConfigMap + DownwardAPI) renders, never the old bare `Type:  configMap`; an unknown
+  source prints `<unknown>`.
+- **`key: value` annotations (issue #65).** Both describe surfaces print annotations sorted, as
+  `key: value` (labels stay `key=value`), the first entry on the `Annotations:` line and the rest
+  aligned to the same value column; values longer than kubectl's 140-char `maxAnnotationLen` (or
+  multiline) move to indented continuation lines, and
+  `kubectl.kubernetes.io/last-applied-configuration` is hidden.
+- **`oc set probe` real flag semantics (issue #64).** `--initial-delay-seconds`,
+  `--period-seconds`, `--timeout-seconds`, `--success-threshold` and `--failure-threshold` reach the
+  probe with their supplied values (invalid values fail with oc's `must be a non-negative integer`
+  error); only the supplied fields are written, an existing handler is preserved when no handler
+  flag is given, and the API server defaults delay 0s/timeout 1s/period 10s/#success 1/#failure 3.
+  `--open-tcp` creates the same `tcpSocket` handler through the engine path as `--get-url` creates
+  `httpGet` (host optional, port numeric or named, scheme defaults HTTP).
+- **Container `sh -c` shell (issues #64–#65).** `oc exec <pod> -- sh -c '<script>'` (and
+  `/bin/bash -c`) runs the script in the container shell: single-quoted text is expanded there from
+  the container env (`$VAR`/`${VAR}`, `$?`), so env/secret checks print real values and `$HOSTNAME`
+  prints the pod name, while double-quoted text is expanded by the workstation shell first. Shell
+  builtins (`exit N`, `:`, `cd`, `export`, `unset`, `KEY=VALUE` assignments) exist only in this
+  shell — `oc exec -- exit 3` is still the real missing binary (127) — and the script's
+  `;`/`&&`/`||`/pipes follow the real exit-status rules. `id` prints coreutils output: the full
+  `uid=… gid=0(root) groups=…` line for plain `id` and bare IDs for
+  `-u`/`-g`/`-un`/`-gn`/`-G`/`-Gn`.
+- **Deployment-only describe events (issue #65).** `oc describe deployment` lists only events whose
+  object is the Deployment itself: the Deployment controller's `ScalingReplicaSet` series
+  (`Scaled up replica set <rs> to <n>` when a rollout creates the ReplicaSet,
+  `Scaled down replica set <old> to 0 from <n>` when a ReplicaSet is retired, recorded at the real
+  rollout time). ReplicaSet-controller `SuccessfulCreate`/`FailedCreate` events belong to the
+  ReplicaSet (`oc describe rs`, `oc get events --field-selector reason=FailedCreate`) and never
+  leak into describe deploy; seeded/paused states reconstruct the same series synthetically.
+- **`oc adm top nodes` (issue #65).** The metrics-server view keeps its
+  NAME/CPU(cores)/CPU%/MEMORY(bytes)/MEMORY% columns and is sorted by NAME; the control-plane node is
+  the busiest (≥2000m CPU, 8–12 Gi resident control-plane components, greatest CPU%), and the worker
+  rows carry deterministic per-node variance (never two identical workers).
 
 ---
 
