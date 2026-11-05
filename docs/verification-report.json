@@ -1,19 +1,19 @@
 {
-  "timestamp": "2026-11-05T15:15:46.105Z",
+  "timestamp": "2026-11-05T16:44:15.441Z",
   "environment": {
     "node": "v26.10.0",
     "chrome": "Chrome/156.0.8078.79",
-    "baseUrl": "http://127.0.0.1:38947",
+    "baseUrl": "http://127.0.0.1:46855",
     "viewport": {
       "width": 1600,
       "height": 900
     },
     "puppeteerCore": "/tmp/verify-tools",
-    "startedAt": "2026-11-05T14:59:24.575Z",
-    "durationSeconds": 982
+    "startedAt": "2026-11-05T16:28:04.515Z",
+    "durationSeconds": 971
   },
   "summary": {
-    "passes": 1839,
+    "passes": 1893,
     "failures": 0,
     "warnings": 0,
     "consoleErrors": 0,
@@ -201,6 +201,11 @@
       "failures": 0,
       "warnings": 0
     },
+    "qa-issue61-62": {
+      "passes": 54,
+      "failures": 0,
+      "warnings": 0
+    },
     "draw": {
       "passes": 10,
       "failures": 0,
@@ -221,74 +226,74 @@
       "path": "screenshot.png",
       "width": 1600,
       "height": 900,
-      "bytes": 982703
+      "bytes": 981967
     },
     "ogImage": {
       "path": "og-image.png",
       "width": 1200,
       "height": 630,
-      "bytes": 205709
+      "bytes": 205691
     },
     "screenshots": [
       {
         "path": "docs/screenshots/menu.png",
         "width": 1600,
         "height": 900,
-        "bytes": 332603
+        "bytes": 331989
       },
       {
         "path": "docs/screenshots/exam-prep.png",
         "width": 1600,
         "height": 900,
-        "bytes": 210786
+        "bytes": 211514
       },
       {
         "path": "docs/screenshots/sandbox.png",
         "width": 1600,
         "height": 900,
-        "bytes": 983607
+        "bytes": 982658
       },
       {
         "path": "screenshot.png",
         "width": 1600,
         "height": 900,
-        "bytes": 982703
+        "bytes": 981967
       },
       {
         "path": "docs/screenshots/files-panel.png",
         "width": 1600,
         "height": 900,
-        "bytes": 244017
+        "bytes": 244417
       },
       {
         "path": "docs/screenshots/campaign-level-1.png",
         "width": 1600,
         "height": 900,
-        "bytes": 479888
+        "bytes": 479284
       },
       {
         "path": "docs/screenshots/regressions-minimap-collapsed.png",
         "width": 1600,
         "height": 900,
-        "bytes": 961663
+        "bytes": 961056
       },
       {
         "path": "docs/screenshots/regressions-campaign-restart.png",
         "width": 1600,
         "height": 900,
-        "bytes": 488086
+        "bytes": 488320
       },
       {
         "path": "docs/screenshots/draw.png",
         "width": 1600,
         "height": 900,
-        "bytes": 488827
+        "bytes": 488977
       },
       {
         "path": "og-image.png",
         "width": 1200,
         "height": 630,
-        "bytes": 205709
+        "bytes": 205691
       }
     ]
   },
@@ -5839,7 +5844,7 @@
     },
     {
       "section": "qa-issue44-49",
-      "name": "#44: `oc -n <ns> exec … -- amtool …` runs the container command"
+      "name": "#44: `oc -n <ns> exec deploy/web -- hostname` runs the modelled container command with the leading global flag"
     },
     {
       "section": "qa-issue44-49",
@@ -7568,6 +7573,222 @@
     {
       "section": "qa-issue59-60",
       "name": "#60: an unchained `; echo AFTER` still runs after the timed-out rollout status (real shell exit-status semantics)"
+    },
+    {
+      "section": "qa-issue61-62",
+      "name": "#61/#62: a fresh sandbox boots for the DNS/exec/pod-network fidelity checks (random failures disabled for deterministic output)"
+    },
+    {
+      "section": "qa-issue61-62",
+      "name": "#61/#62: `oc new-project qa8` creates the project used by every #61/#62 check"
+    },
+    {
+      "section": "qa-issue61-62",
+      "name": "#61/#62: `oc create deployment web` creates the two-replica fixture"
+    },
+    {
+      "section": "qa-issue61-62",
+      "name": "#61/#62: the two qa8 web Pods reach Running 1/1"
+    },
+    {
+      "section": "qa-issue61-62",
+      "name": "#61/#62: `oc expose deploy/web --port=8080` creates the ClusterIP Service"
+    },
+    {
+      "section": "qa-issue61-62",
+      "name": "#61/#62: the fixture Service has a real 172.30.x.y ClusterIP"
+    },
+    {
+      "section": "qa-issue61-62",
+      "name": "#62B: every qa8 web Pod IP is in 10.128–10.131 and inside its Node spec.podCIDR"
+    },
+    {
+      "section": "qa-issue61-62",
+      "name": "#62B: the dns-default Pod IPs are in 10.128–10.131 and inside their Node spec.podCIDR"
+    },
+    {
+      "section": "qa-issue61-62",
+      "name": "#62B: no visible Pod IP uses the old 10.244.x.x pod range (`oc get pods -o wide --all-namespaces`)"
+    },
+    {
+      "section": "qa-issue61-62",
+      "name": "#62B: `_generatePodIP` without Node/CIDR info falls back to 10.128–10.131 (never 10.244), and a Node name resolves inside its podCIDR"
+    },
+    {
+      "section": "qa-issue61-62",
+      "name": "#62A: `oc exec … -- foobar` fails with the OCI-runtime not-found wording + exit 127 (no fake `exit code 0` lines)"
+    },
+    {
+      "section": "qa-issue61-62",
+      "name": "#62A: the not-found exec exits non-zero, so a chained `&& echo AFTER` never runs"
+    },
+    {
+      "section": "qa-issue61-62",
+      "name": "#62A: the not-found exec failure runs a following `|| echo RECOVERED` branch (shell exit-status semantics)"
+    },
+    {
+      "section": "qa-issue61-62",
+      "name": "#62A: any other unmodelled container binary (amtool) is also a real not-found failure, not a fake success"
+    },
+    {
+      "section": "qa-issue61-62",
+      "name": "#62A: `oc rsh` shares the remote exit-status contract for an unmodelled binary"
+    },
+    {
+      "section": "qa-issue61-62",
+      "name": "#62A: the failed `oc rsh` runs a following `||` recovery branch"
+    },
+    {
+      "section": "qa-issue61-62",
+      "name": "#62A: modelled `hostname` still runs and prints the exec Pod name"
+    },
+    {
+      "section": "qa-issue61-62",
+      "name": "#62A: a basename-matched modelled binary (`/bin/cat`) still works"
+    },
+    {
+      "section": "qa-issue61-62",
+      "name": "#62A: `sh -c \"…\"` unwraps and runs like the real container shell no-op"
+    },
+    {
+      "section": "qa-issue61-62",
+      "name": "#62C: Pod /etc/hosts is the exact kubelet-managed file (header + loopback lines + own podIP/pod name)"
+    },
+    {
+      "section": "qa-issue61-62",
+      "name": "#62C: /etc/hosts carries no `172.30.0.1 kubernetes.default.svc` (or other) Service entry"
+    },
+    {
+      "section": "qa-issue61-62",
+      "name": "#62D: `oc get rolebinding -o wide` prints SERVICEACCOUNTS as `namespace/name` (qa8/deployer, qa8/builder, no leading `/`)"
+    },
+    {
+      "section": "qa-issue61-62",
+      "name": "#62D: the USERS/GROUPS columns stay unchanged while only ServiceAccount subjects get the namespace prefix"
+    },
+    {
+      "section": "qa-issue61-62",
+      "name": "#62E: dns-default Service spec ports keep the real NAMED targetPorts (dns/dns-tcp/metrics) with 53/UDP, 53/TCP, 9154/TCP"
+    },
+    {
+      "section": "qa-issue61-62",
+      "name": "#62E: `oc describe svc dns-default` prints TargetPort dns/UDP, dns-tcp/TCP, metrics/TCP"
+    },
+    {
+      "section": "qa-issue61-62",
+      "name": "#62E: named dns-default targetPorts resolve to the real endpoint ports 5353/5353/9154 (never the sidecar 9153 mismatch)"
+    },
+    {
+      "section": "qa-issue61-62",
+      "name": "#62E: the Endpoints object keeps 5353/UDP, 5353/TCP, 9154/TCP with the 10.128–10.131 dns-default Pod IPs"
+    },
+    {
+      "section": "qa-issue61-62",
+      "name": "#62E: `oc get endpoints -n openshift-dns` lists three 10.128–10.131 :5353 pairs then \" + N more...\""
+    },
+    {
+      "section": "qa-issue61-62",
+      "name": "#62F: `oc describe svc web` Events placeholder aligns like kubectl (exactly 12 spaces after `Events:`)"
+    },
+    {
+      "section": "qa-issue61-62",
+      "name": "#61: `nslookup <fqdn>` resolves to the Service ClusterIP (never the fabricated 172.30.43.12)"
+    },
+    {
+      "section": "qa-issue61-62",
+      "name": "#61 #62-1: `nslookup web` resolves through the Pod search list and prints the canonical FQDN in Name:"
+    },
+    {
+      "section": "qa-issue61-62",
+      "name": "#61: `dig +short <fqdn>` prints just the real Service ClusterIP"
+    },
+    {
+      "section": "qa-issue61-62",
+      "name": "#61: plain `dig` prints its own DiG format (header/HEADER/QUESTION/ANSWER/SERVER) with the real answer"
+    },
+    {
+      "section": "qa-issue61-62",
+      "name": "#61: `dig web` does not apply the resolv.conf search list by default (NXDOMAIN, exit 0)"
+    },
+    {
+      "section": "qa-issue61-62",
+      "name": "#61: `dig +search web` applies the Pod search list and answers the Service ClusterIP"
+    },
+    {
+      "section": "qa-issue61-62",
+      "name": "#61: `getent hosts <fqdn>` prints glibc’s `%-15s %s` line (IP padded + one space + canonical name)"
+    },
+    {
+      "section": "qa-issue61-62",
+      "name": "#61: `getent hosts web` resolves through the same search list and prints the canonical FQDN"
+    },
+    {
+      "section": "qa-issue61-62",
+      "name": "#61: `getent hosts <unknown>` prints no answer and exits 2"
+    },
+    {
+      "section": "qa-issue61-62",
+      "name": "#61: an unknown DNS name is NXDOMAIN and nslookup exits 1 (real nslookup status)"
+    },
+    {
+      "section": "qa-issue61-62",
+      "name": "#61: applying a headless Service manifest (`clusterIP: None`) succeeds"
+    },
+    {
+      "section": "qa-issue61-62",
+      "name": "#61: a headless Service answers every ready Pod IP as its own Address line"
+    },
+    {
+      "section": "qa-issue61-62",
+      "name": "#61: applying an ExternalName Service manifest succeeds"
+    },
+    {
+      "section": "qa-issue61-62",
+      "name": "#61: an ExternalName Service answers the CNAME target"
+    },
+    {
+      "section": "qa-issue61-62",
+      "name": "#61: the issue’s deny-egress + allow-same-ns policies apply in qa8"
+    },
+    {
+      "section": "qa-issue61-62",
+      "name": "#61: with DNS egress blocked, `curl -sv` has no Trying/Connected lines and reports the real (6) resolve failure"
+    },
+    {
+      "section": "qa-issue61-62",
+      "name": "#61: an in-namespace curl to the numeric ClusterIP still reaches the Service (200) while DNS is blocked"
+    },
+    {
+      "section": "qa-issue61-62",
+      "name": "#61: a blocked connection after a resolved numeric address keeps curl’s real order (Trying then (28), never Connected)"
+    },
+    {
+      "section": "qa-issue61-62",
+      "name": "#61: a DNS-blocked `nslookup` prints the real timeout line only and exits 1"
+    },
+    {
+      "section": "qa-issue61-62",
+      "name": "#61: a DNS-blocked `dig +short` prints the same timeout line, no answer, and exits 9"
+    },
+    {
+      "section": "qa-issue61-62",
+      "name": "#61: a DNS-blocked plain `dig` also exits 9 with the timeout line (no fabricated answer section)"
+    },
+    {
+      "section": "qa-issue61-62",
+      "name": "#61: a DNS-blocked `getent hosts` is silent and exits 2"
+    },
+    {
+      "section": "qa-issue61-62",
+      "name": "#61: the allow-dns-egress policy opens UDP/TCP 5353 to openshift-dns (the lab-13 lesson)"
+    },
+    {
+      "section": "qa-issue61-62",
+      "name": "#61: allow-dns-egress restores nslookup/dig/getent together"
+    },
+    {
+      "section": "qa-issue61-62",
+      "name": "#61: allow-dns-egress restores name-based curl with the real order Trying → Connected → 200 body"
     },
     {
       "section": "draw",

@@ -43,7 +43,19 @@ names are shown in EX280 Prep).
   (`oc create deployment --image=…` names the container after the image; `oc set image` never adds
   one). `oc get rolebinding|clusterrolebinding` prints the ROLE as
   `<roleRef.kind>/<roleRef.name>` (`ClusterRole/admin`, `Role/edit`), so Role vs ClusterRole is
-  visible like real `oc`. RBAC is genuinely enforced: a plain user gets the real
+  visible like real `oc`, and `-o wide` prints ServiceAccount subjects as `<namespace>/<name>`
+  (`qa8/deployer`) like `rbac.SubjectsStrings`. `oc exec`/`oc rsh` return the remote command's exit
+  status: an unmodelled binary fails with the real OCI `executable file not found in $PATH` error
+  and `command terminated with exit code 127`, so `&&` chains stop (`||` still runs). Cluster DNS
+  is NetworkPolicy-aware: `nslookup`, `dig` and `getent hosts` query the same `openshift-dns`
+  dns-default Pods on 5353 that `curl`'s name resolution uses, print the real tool formats
+  (`nslookup` applies the Pod's search list, so bare `web` prints
+  `Name: web.<ns>.svc.cluster.local`; `dig +short` prints just the Service ClusterIP and `dig` has
+  its own header/ANSWER/SERVER format; `getent hosts` prints the glibc `IP  canonical` line) and
+  fail with `;; connection timed out; no servers could be reached` plus the real exit status when
+  an egress policy blocks DNS — the lab 13 diagnostic flow. Verbose `curl` prints
+  `Trying`/`Connected` only in the real order (never before a name resolves, never `Connected` on a
+  failed connection). RBAC is genuinely enforced: a plain user gets the real
   `Error from server (Forbidden): …` for reads and writes they are not allowed to perform.
   `oc` is the taught command; a leading `kubectl` is accepted as an alias with an educational hint.
 - **A real shell around `oc`** — `vim`/`vi` (opens the manifest editor), `cat`, `echo` with
@@ -87,7 +99,8 @@ names are shown in EX280 Prep).
   runs `deployment.apps/router-default` (2/2 Ready) with its ReplicaSet and two shared-hash router
   pods, and `openshift-dns` runs the `daemonset.apps/dns-default` + `daemonset.apps/node-resolver`
   DaemonSets with one owned Pod per Node (the `dns-default` Pods report READY `2/2`). DNS pods run
-  on the pod network (`10.x`, `hostNetwork: false`) while `node-resolver` and the router stay
+  on the pod network (`10.128.x`–`10.131.x` — each Pod IP is allocated inside its Node's
+  `spec.podCIDR` `/23`, `hostNetwork: false`) while `node-resolver` and the router stay
   hostNetwork, both DNS DaemonSets show the real `kubernetes.io/os=linux` NODE SELECTOR in
   `oc get ds -n openshift-dns`, and the router pods carry
   `ingresscontroller.operator.openshift.io/deployment-ingresscontroller=default`, so the documented
@@ -109,7 +122,13 @@ names are shown in EX280 Prep).
   `oc get endpoints` truncates the ENDPOINTS cell like kubectl
   (`ip:port,ip:port,ip:port + N more...`), and `nslookup` answers a Service name with its own
   ClusterIP (headless → ready pod IPs, ExternalName → its target) and an unknown name with the real
-  `NXDOMAIN` line. The control-plane Node carries the real
+  `NXDOMAIN` line. The `dns-default` Service carries the real 4.22 named targetPorts
+  (`TargetPort: dns/UDP`, `dns-tcp/TCP`, `metrics/TCP`) while its ready endpoints stay
+  5353/5353/9154, `oc describe` aligns its `Events: <none>` placeholder like kubectl's single
+  tabwriter, and each Pod's `/etc/hosts` is the kubelet-managed file
+  (`# Kubernetes-managed hosts file.`, the loopback/localnet lines and `<podIP>\t<podName>` — no
+  Service entry), so `oc exec … cat /etc/hosts` matches a real Pod. The control-plane Node carries
+  the real
   `node-role.kubernetes.io/master:NoSchedule` taint, so application workloads schedule onto the
   workers while the tolerated DaemonSet pods keep running on the master — the taints/tolerations and
   "why is my Pod on the wrong node / Pending" troubleshooting flows behave like 4.22: an
@@ -341,15 +360,21 @@ The repo is a static site and deploys to any static host. The canonical demo is 
   registry entry + a resource class + a mesh creator (+ optional controller/data changes).
 - **Simulation** — `js/engine/SimulationTick.js` runs fixed-step OpenShift controllers: scheduler
   (real retry backoff + unschedulable-Pod `Pending` display), Pod lifecycle, Deployments/ReplicaSets,
-  StatefulSets, DaemonSets, Jobs/CronJobs, HPA, PVC binding, Services/endpoints (API-server
-  ClusterIP defaulting, one canonical ready-endpoint resolver, the seeded platform DNS/router
-  Services), Routes (admission), BuildConfig→Build→ImageStream,
+  StatefulSets, DaemonSets, Jobs/CronJobs, HPA, PVC binding, Pod-network IP allocation inside each
+  Node's `spec.podCIDR` (OpenShift's `10.128.0.0/14` clusterNetwork, `/23` per node), Services and
+  endpoints (API-server ClusterIP defaulting, named/numeric targetPort resolution, one canonical
+  ready-endpoint resolver, the seeded platform DNS/router Services), NetworkPolicy evaluation
+  shared by the traffic simulation and the cluster-DNS diagnostics, Routes (admission),
+  BuildConfig→Build→ImageStream,
   Subscriptions/operators, MetalLB LoadBalancer IPs, SCC enforcement,
   LimitRange/ResourceQuota/ClusterResourceQuota, OAuth/HTPasswd, ClusterOperator health.
 - **Command layer** — `js/ui/CommandBar.js` parses `oc` commands (with pipes/redirects and tab
   completion), runs them through the RBAC authorization gate and drives the same engine APIs as the
   UI; `js/ui/ShellTools.js` is the simulated shell (heredocs, redirects, cat/echo/grep/tail/head/wc/
-  vim/openssl/skopeo/htpasswd/…) that shares the ManifestEngine virtual filesystem.
+  vim/openssl/skopeo/htpasswd/…) that shares the ManifestEngine virtual filesystem. Cluster-DNS
+  diagnostics (`nslookup`/`dig`/`getent hosts`) and verbose `curl` use the engine's NetworkPolicy
+  evaluation, and `oc exec`/`oc rsh` propagate remote exit statuses (unmodelled binaries terminate
+  with exit code 127).
 - **Declarative engine** — `js/engine/YamlParser.js` + `js/engine/ManifestEngine.js` provide a
   virtual file system, YAML manifests, Kustomize overlays, OpenShift templates, Helm charts and
   HTPasswd file operations; `js/ui/ManifestPanel.js` is the Files panel.

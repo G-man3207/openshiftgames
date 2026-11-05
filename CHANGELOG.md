@@ -4,6 +4,112 @@ All notable changes to OpenShift Games are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 aims to follow [Semantic Versioning](https://semver.org/).
 
+## [1.9.0] — 2026-11-05
+
+Eleventh QA pass on 1.8.0: closes the two open report items (#61–#62) from the 1.8.0 CLI retest.
+The simulated cluster DNS is now NetworkPolicy-aware: `nslookup`, `dig` and the new `getent hosts`
+run through the same egress check as `curl`'s name resolution (UDP/TCP 5353 to the `openshift-dns`
+dns-default Pods), so after a default-deny egress policy all four diagnostics fail together with the
+real timeout line and real exit statuses, and adding the lab-13 allow-DNS policy brings them back
+together. `nslookup` applies the Pod's `/etc/resolv.conf` search list (bare `web` prints
+`Name: web.<namespace>.svc.cluster.local`), `dig` gets its own real output format (`+short` prints
+just the Service ClusterIP, `+search` opts into the search list, NXDOMAIN is dig's own status 0 and
+a blocked DNS egress is status 9), and verbose `curl` only prints `Trying`/`Connected` in the real
+order — never before a name resolves, never `Connected` on a failed connection. `oc exec`/`oc rsh`
+are honest about unmodelled binaries: the OCI runtime reports `executable file not found in $PATH`,
+the command terminates with exit code 127 and the result is a failure, so `&&` chains stop and `||`
+recovery branches run. The Pod network is OpenShift's real `10.128.0.0/14` (each Pod gets an IP
+inside its Node's `spec.podCIDR` `/23`, 10.128–10.131, never the kubeadm `10.244` range), the Pod
+`/etc/hosts` is the kubelet-managed file with the Pod's own IP/name and no Service entries,
+`oc get rolebinding -o wide` prints ServiceAccount subjects as `namespace/name`, `oc describe`'s
+`Events: <none>` placeholder is tabwriter-aligned like kubectl, and the `openshift-dns/dns-default`
+Service carries the real named targetPorts (`dns/UDP`, `dns-tcp/TCP`, `metrics/TCP`) while its
+Endpoints stay 5353/5353/9154. The game stays no-build and dependency-free.
+
+### Added
+
+- **NetworkPolicy-aware cluster-DNS diagnostics (issue #61).** `nslookup`, `dig` and `getent hosts`
+  run through `SimulationTick.canResolveDNS()` — the same check the traffic simulation uses for
+  `curl`'s name resolution, i.e. egress from the Pod to the `openshift-dns` dns-default Pods on
+  UDP/TCP 5353. Under default-deny egress plus a same-namespace allow policy they all report
+  `;; connection timed out; no servers could be reached` and exit like the real binaries
+  (nslookup 1, dig 9, getent hosts silent 2, surfaced by `oc exec` as
+  `command terminated with exit code <N>`); adding the lab-13 allow-DNS rule (`port: 5353`)
+  restores them together.
+- **Real `dig` output (issue #61).** `dig <name>` prints the real dig header/QUESTION/ANSWER/SERVER
+  sections and answers with the Service's stored `spec.clusterIP` (headless Services with the ready
+  Pod IPs, ExternalName with its target); `+short` prints just the answer IP(s), `+search` applies
+  the Pod's resolv.conf search list (`dig` itself defaults to no search); an unknown name is
+  NXDOMAIN with dig's status 0 and a blocked DNS egress is status 9.
+- **`getent hosts` (issues #61/#62).** Resolves `/etc/hosts` and cluster DNS through the same
+  search list and NetworkPolicy check, prints glibc's `%-15s %s` layout (padded IP, canonical FQDN)
+  and exits 2 silently when the name cannot be resolved; `getent passwd|group` read the image files.
+- **Honest `oc exec`/`oc rsh` exit codes (issue #62).** Binaries the image does not model fail with
+  the containerd/kubelet OCI wording (`exec: "<cmd>": executable file not found in $PATH`), print
+  `command terminated with exit code 127` and return a failed command result, so `&&` stops and
+  `||` recovers like real oc. Modelled binaries are matched by basename (`/bin/cat`) and
+  `sh`/`bash` are real no-ops; existing commands keep their previous exit semantics.
+
+### Changed
+
+- **The Pod network is OpenShift's `10.128.0.0/14` (issue #62).** `SimulationTick._generatePodIP()`
+  allocates the Pod IP inside the Pod's Node `spec.podCIDR` (`/23`, hostPrefix 23, host octet
+  2–254, skipping addresses already assigned) and falls back to 10.128–10.131 when no Node/CIDR is
+  known; the platform seeder, the scheduler and the incident binder all pass the Node through, so
+  every `-o wide` IP and endpoint address is realistic and no `10.244.` remains in the runtime.
+- **Pod `/etc/hosts` is the kubelet-managed file (issue #62).** `# Kubernetes-managed hosts file.`,
+  the loopback/localnet `fe00::` lines and `<podIP>\t<podName>` — with no `172.30.0.1
+kubernetes.default.svc` Service entry; `getent hosts` answers the Pod's own hostname from it.
+- **`oc get rolebinding|clusterrolebinding -o wide` (issue #62).** SERVICEACCOUNTS prints
+  `<subject.namespace>/<subject.name>` (`qa8/deployer`, `qa8/builder`) like `rbac.SubjectsStrings`,
+  falling back to the binding namespace and never emitting a leading `/`; USERS/GROUPS are
+  unchanged.
+- **`oc describe` Events alignment (issue #62).** The `Events: <none>` placeholder is aligned to
+  the same tabwriter column as the widest top-level `Label:` above it — `oc describe svc` now
+  prints `Events:            <none>` (12 spaces), matching the real single-tabwriter describe.
+- **`openshift-dns/dns-default` named targetPorts (issue #62).** The Service ports carry the real
+  4.22 targetPort names (`dns`/`dns-tcp` on CoreDNS → 5353, `metrics` on the kube-rbac-proxy
+  sidecar → 9154); `oc describe svc` prints `TargetPort: dns/UDP`, `dns-tcp/TCP`, `metrics/TCP`
+  while the ready EndpointSlice ports stay 5353/5353/9154. Named targetPorts now resolve against
+  the endpoint Pod's container ports in one shared helper used by describe, `oc get endpoints` and
+  the traffic simulation.
+- **`nslookup` applies the Pod search list (issues #61/#62).** Bare names expand through
+  `<ns>.svc.cluster.local`, `svc.cluster.local` and `cluster.local` with `options ndots:5`, so
+  `nslookup web` prints `Name:\tweb.<ns>.svc.cluster.local`; explicit FQDNs keep resolving as
+  before.
+
+### Fixed
+
+- **DNS answers while egress is blocked (issue #61).** `nslookup`/`dig` no longer answer when the
+  Pod cannot reach dns-default on 5353, and `dig` no longer returns the old fabricated
+  `172.30.43.12`; every DNS tool reads the real Service ClusterIP and the real NetworkPolicy
+  verdict.
+- **curl verbose order (issue #61).** `curl -v` prints `Trying` only after the name resolved and
+  `Connected` only when the request actually connected; a DNS failure prints the real
+  `* Could not resolve host: …` + `curl: (6) …` with no Trying/Connected lines, so the diagnostic
+  points at the DNS egress problem instead of a fake connection.
+- **Unknown exec commands silently "succeeding" (issue #62).** `oc exec … -- foobar` no longer
+  prints `(command executed in …)` / `exit code 0`; it fails with the real not-found OCI error and
+  exit 127, so a following `&&` command does not run.
+- **Old pod-network and kubelet details (issue #62).** 10.244 Pod IPs, the Service entry in
+  `/etc/hosts`, bare service-account names in rolebinding `-o wide`, the one-column-short describe
+  Events placeholder and numeric dns-default targetPorts are all replaced with the real 4.22
+  shapes above.
+
+### Tests
+
+- New permanent `qa-issue61-62` browser-regression section (54 checks) covering every report item
+  end-to-end — NetworkPolicy-blocked/restored nslookup/dig/getent/curl, DNS output formats and exit
+  codes, exec not-found/exit-127 + `&&`/`||` chaining, the 10.128.0.0/14 pod network and Node
+  podCIDR containment, the kubelet `/etc/hosts`, rolebinding-wide ServiceAccounts, describe Events
+  alignment and the named dns-default targetPorts — plus updated #44/#59–#60 assertions.
+- `scripts/verify.mjs` grew the matching §4f static-fidelity locks (16 checks) that fail the fast
+  gate if any contract regresses without launching a browser.
+- Static gate: **1063 checks, 0 failures, 0 warnings** (56 JS modules, 118 files); full browser
+  suite: **1893 checks, 0 failures, 0 warnings** (971 s,
+  0 console/page errors, GO); `visual-qa --strict`: **PASS** (94 checks, 0 failures,
+  26 informational warnings); see `docs/verification-report.md`.
+
 ## [1.8.0] — 2026-11-05
 
 Tenth QA pass on 1.7.0: closes the two open report items (#59–#60) from the 1.7.0 CLI playthrough.

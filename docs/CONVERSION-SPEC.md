@@ -310,23 +310,35 @@ GameEngine helpers):
 - Logs/events/health: `oc logs <pod|deployment/name|build/name|bc/name> [-f] [--previous] [-c container] [--tail=N]`,
   `oc adm top pods|nodes`, `oc get clusteroperators`, `oc get clusterversion`, `oc adm must-gather`
   (simulated output), `oc adm inspect ns/<project>` (simulated output).
-- Platform Services/DNS (issue #58): `oc get svc,endpoints -n openshift-dns` returns the real
-  `dns-default` Service (ClusterIP `172.30.0.10`, ports `53/UDP`, `53/TCP`, `9154/TCP`) with the
-  pod-network (`10.x:5353`) Endpoints, and `oc get svc -n openshift-ingress` returns
+- Platform Services/DNS (issues #58/#61/#62): `oc get svc,endpoints -n openshift-dns` returns the
+  real `dns-default` Service (ClusterIP `172.30.0.10`, ports `53/UDP`, `53/TCP`, `9154/TCP`, named
+  targetPorts `dns`/`dns-tcp`/`metrics` like a real 4.22 install) with the pod-network
+  (`10.128.x–10.131.x:5353`) Endpoints, and `oc get svc -n openshift-ingress` returns
   `router-internal-default` (ClusterIP, ports `80/TCP`, `443/TCP`, `1936/TCP`) with the router Pod
   Endpoints; both Services exist in every mode, including the paused pre-start sandbox (the first
   check when DNS breaks after a NetworkPolicy change, lab 13). Both read the Service's stored
   `spec.clusterIP` and the canonical endpoint resolver (§3.2), so
-  `oc get svc -o jsonpath={.spec.clusterIP}`, `oc describe svc`, `nslookup` and
-  `oc exec … curl http://<ClusterIP>:<port>` agree with the get table (`dig` keeps the legacy
-  generic simulator output — only `nslookup` performs real cluster-DNS resolution). `nslookup`
-  resolves `<svc>.<ns>.svc.cluster.local`/`.svc`/`<svc>.<ns>`/bare names to that ClusterIP, headless
-  Services to all ready pod IPs, ExternalName to its target, and an unknown name prints the real
-  `** server can't find <name>: NXDOMAIN` line — never a fabricated address (issue #59).
+  `oc get svc -o jsonpath={.spec.clusterIP}`, `oc describe svc`, `nslookup`/`dig`/`getent hosts` and
+  `oc exec … curl http://<ClusterIP>:<port>` agree with the get table. All three DNS tools perform a
+  real cluster-DNS resolution and share the traffic simulation's NetworkPolicy egress check
+  (UDP/TCP 5353 to the `openshift-dns` dns-default Pods): when an egress policy isolates the Pod
+  without that rule they print `;; connection timed out; no servers could be reached` and exit like
+  the real binaries (nslookup 1, dig 9, getent hosts silent 2). `nslookup` applies the Pod's
+  resolv.conf search list (bare `web` → `Name: web.<ns>.svc.cluster.local`), `dig` has its own
+  real header/QUESTION/ANSWER/SERVER format (`+short` = answer IPs only, `+search` opts into the
+  search list), `getent hosts` prints glibc's `%-15s %s` IP/canonical line, and unknown names print
+  the real `** server can't find <name>: NXDOMAIN` line (dig: NXDOMAIN status 0) — never a
+  fabricated address (issues #59/#61).
 - Exec/shell: `oc exec <pod> [-c <container>] -- <command>` (real container names), `oc rsh <pod>`,
   `oc cp <file> <pod>:<path>` / `oc cp <pod>:<path> <file>`. Inside a Pod `cat /etc/resolv.conf`
   prints the real cluster DNS contract — `search <project>.svc.cluster.local svc.cluster.local
-cluster.local`, `nameserver 172.30.0.10`, `options ndots:5` (issue #58).
+cluster.local`, `nameserver 172.30.0.10`, `options ndots:5` (issue #58) — and `cat /etc/hosts` is
+  the kubelet-managed file (`# Kubernetes-managed hosts file.`, loopback/localnet lines and
+  `<podIP>\t<podName>`, no Service entries, #62). `getent hosts|passwd|group` read the Pod files /
+  cluster DNS. An `oc exec`/`oc rsh` command the image does not model is a real OCI exec failure —
+  `error: Internal error occurred: … exec: "<cmd>": executable file not found in $PATH` followed by
+  `command terminated with exit code 127` and a failed shell status, so `&&` stops and `||`
+  recovers; modelled binaries are matched by basename (`/bin/cat`) (#62).
 - Mutations: `oc create <resource> <name> [flags]`, `oc apply -f <file>`, `oc create -f <file>`,
   `oc replace -f <file>`, `oc delete -f <file>`, `oc apply -k <dir>`, `oc delete <resource> <name>`,
   `oc scale <resource> <name> --replicas=N`, `oc edit <resource> <name>` (opens editor modal),
@@ -431,6 +443,71 @@ these are the output contracts every command surface must keep:
   creates a single port with no `name` (the real oc shape) and defaulted `protocol: TCP`/
   `targetPort`, so get prints `8080/TCP` and describe prints `Port: <unset> 8080/TCP`.
 
+### 4.2 NetworkPolicy-aware DNS, exec exit status and Pod-network contracts (issues #61–#62)
+
+The DNS diagnostics, the exec exit-status model and the Pod networking detail are part of the
+simulation contract; these are the invariants every surface must keep:
+
+- **DNS diagnostics honour NetworkPolicy (issue #61).** `nslookup`, `dig` and `getent hosts` call
+  `SimulationTick.canResolveDNS(pod)` — egress from the exec Pod to the `openshift-dns` dns-default
+  Pods on UDP/TCP 5353, the same check `curl`'s name resolution uses. A blocked result prints only
+  `;; connection timed out; no servers could be reached` and sets the real exit status (nslookup 1,
+  dig 9, getent 2), surfaced by `oc exec` as `command terminated with exit code <N>` +
+  `error: true`. Allowing 5353 (the lab-13 allow-DNS policy) restores nslookup, dig, getent and
+  curl-by-name together. DNS tools must never answer from the simulator when the network forbids
+  the query, and `dig` must never print the old fabricated `172.30.43.12`.
+- **DNS output formats (issues #61/#62).** `nslookup` prints
+  `Server:`/`Address:`/`Name:`/`Address:`; it applies the Pod's search list
+  (`<ns>.svc.cluster.local svc.cluster.local cluster.local`, `options ndots:5`) so bare names print
+  the canonical FQDN in `Name:`, with headless Services answering every ready Pod IP, ExternalName
+  its CNAME target and unknown names the real NXDOMAIN line (exit 1). `dig` prints its real
+  header/`;; QUESTION SECTION:`/`;; ANSWER SECTION:`/`;; SERVER:` format, answers
+  `<qname>. 30 IN A <ClusterIP>`, supports `+short` (answer IPs only) and `+search` (default
+  no-search; NXDOMAIN is status 0). `getent hosts` prints glibc's `%-15s %s`
+  (IP padded, canonical name) and exits 2 silently for unknown names; `getent passwd|group` read
+  the image files.
+- **curl verbose ordering (issue #61).** `runExecCurl` prints `*   Trying …` only after the name
+  resolved, and `* Connected …` only when the request actually connected. A DNS failure prints
+  `* Could not resolve host: <host>` + `curl: (6) Could not resolve host: <host>` with no
+  Trying/Connected lines; a post-resolution connection failure prints the Trying line and the real
+  `(7)`/`(28)` line but never Connected; success keeps the existing Trying → Connected → response
+  order.
+- **Honest `oc exec`/`oc rsh` exit codes (issue #62).** `_execStage` may return an `exitCode`; the
+  exec/rsh surface appends `command terminated with exit code <N>` and returns a failed result when
+  it is non-zero. An unmodelled binary returns 127 with the OCI not-found wording
+  (`exec: "<cmd>": executable file not found in $PATH`) and no fabricated
+  `(command executed in …)`/`exit code 0` lines, so `&&` chains stop and `||` branches run.
+  Modelled binaries match by basename (`/bin/cat`); `sh`/`bash` are no-ops; other commands keep
+  their previous exit semantics.
+- **Pod network 10.128.0.0/14 (issue #62).** `SimulationTick._generatePodIP(node)` allocates
+  `status.podIP` inside the Pod's Node `spec.podCIDR` (`/23` hostPrefix, host octet 2–254, skipping
+  already-assigned Pod IPs) and falls back to 10.128–10.131 when no Node/CIDR is known; scheduler,
+  platform seeder and incident binder pass the Node. No runtime code may emit a `10.244.` pod IP.
+  HostNetwork Pods keep the Node IP as their Pod IP.
+- **Kubelet `/etc/hosts` (issue #62).** Each Pod's `/etc/hosts` (and `oc cp pod:/etc/hosts`) is the
+  kubelet-managed file: `# Kubernetes-managed hosts file.`, `127.0.0.1 localhost`,
+  `::1 localhost ip6-localhost ip6-loopback`, `fe00::0 ip6-localnet`, `fe00::0 ip6-mcastprefix`,
+  `fe00::1 ip6-allnodes`, `fe00::2 ip6-allrouters` and `<podIP>\t<podName>` — no
+  `172.30.0.1 kubernetes.default.svc` Service entry. A Pod without `status.podIP` omits only the
+  final line.
+- **rolebinding wide ServiceAccounts (issue #62).** The SERVICEACCOUNTS column of
+  `oc get rolebinding|clusterrolebinding -o wide` prints `<subject.namespace>/<subject.name>`
+  (`qa8/deployer`) like `rbac.SubjectsStrings`, falls back to the binding namespace and never
+  emits a leading `/`; USERS/GROUPS are unchanged.
+- **Describe Events alignment (issue #62).** kubectl's describe uses one text/tabwriter for the
+  whole output, so the `Events: <none>` placeholder starts in the same column as the widest
+  top-level `Label:` value printed above it. The command layer derives that column from the output
+  (Service: `Events:            <none>`, 12 spaces) instead of using a fixed 10-space placeholder;
+  the non-empty Events table format is unchanged.
+- **dns-default named targetPorts (issue #62).** `openshift-dns/dns-default` `spec.ports` carry
+  targetPort names `dns`, `dns-tcp` and `metrics` (ports unchanged 53/UDP, 53/TCP, 9154/TCP).
+  `oc describe svc` prints `TargetPort: dns/UDP`, `dns-tcp/TCP`, `metrics/TCP` while the ready
+  EndpointSlice/`oc get endpoints` ports resolve to 5353/5353/9154. One shared resolver
+  (`NetworkResources.resolveEndpointPort`) resolves named targetPorts against the endpoint Pod's
+  container ports (last matching container port, so the kube-rbac-proxy `metrics` 9154 wins over
+  CoreDNS' 9153) and is used by describe, `oc get endpoints` and the traffic simulation; numeric
+  targetPorts keep their previous behaviour.
+
 ---
 
 ## 5. Controllers / simulation (SimulationTick.js)
@@ -442,12 +519,13 @@ Extend the existing fixed-step simulation with OpenShift controllers:
   the controller-owned platform workloads — `deployment.apps/router-default` + its ReplicaSet +
   Pods and the `daemonset.apps/dns-default`/`node-resolver` DaemonSets with one owned Pod per Node —
   together with the real platform Services `openshift-dns/dns-default` (ClusterIP `172.30.0.10`,
-  ports `53/UDP`, `53/TCP`, `9154/TCP`, target port `5353`, selector
-  `dns.operator.openshift.io/daemonset-dns=default`) and
+  ports `53/UDP`, `53/TCP`, `9154/TCP`, named target ports `dns`/`dns-tcp`/`metrics` resolving to
+  5353/5353/9154, selector `dns.operator.openshift.io/daemonset-dns=default`) and
   `openshift-ingress/router-internal-default` (ClusterIP, ports `80/TCP`, `443/TCP`, `1936/TCP`,
   selector `ingresscontroller.operator.openshift.io/deployment-ingresscontroller=default`), in every
   mode including the paused pre-start sandbox. DNS Pods run on the pod network
-  (`hostNetwork: false`, `10.x` Pod IP) while `node-resolver`/the router stay hostNetwork; the DNS
+  (`hostNetwork: false`, 10.128–10.131 Pod IP from the Node's `spec.podCIDR`) while
+  `node-resolver`/the router stay hostNetwork; the DNS
   DaemonSet templates carry the `kubernetes.io/os=linux` nodeSelector and the router Pods the
   ingress-controller deployment label. The bootstrap runs synchronously from
   `ensureOLMDefaultsSync()` (so a paused pre-start cluster already reports the router Deployment
@@ -465,7 +543,10 @@ Extend the existing fixed-step simulation with OpenShift controllers:
   later eviction/reschedule starts a fresh series. A never-bound Pod genuinely has no
   `status.containerStatuses` (scheduler binding is what creates them), so `oc describe pod` omits
   the kubelet-only `Container ID:`/`Image ID:`/`State:`/`Ready:`/`Restart Count:` lines for it
-  (#60); a bound/running Pod keeps the real status block.
+  (#60); a bound/running Pod keeps the real status block. Binding also allocates `status.podIP`
+  inside the Node's `spec.podCIDR` /23 (OpenShift's `10.128.0.0/14` clusterNetwork, host octet
+  2–254, never an address already assigned to another Pod; hostNetwork Pods use the Node IP), and
+  incident-bound Pods go through the same allocator (#62).
 - `_tickProbes` / Service endpoint accounting (issues #59/#60): `ClusterState.getServiceEndpoints()`
   is the canonical ready-endpoint resolver (Running Pods matching the Service selector in the same
   project); the tick keeps the instance `service.endpoints` bookkeeping in sync with it and never
