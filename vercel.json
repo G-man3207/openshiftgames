@@ -8,7 +8,7 @@
   "ignoreCommand": "git rev-parse --verify HEAD^ >/dev/null 2>&1 && git diff --quiet HEAD^ HEAD -- . ':!README.md' ':!*.md' ':!LICENSE' ':!.github' || exit 1",
   "headers": [
     {
-      "source": "/js/(.*)",
+      "source": "/(.*)\\.(png|jpg|jpeg|svg|webp|woff2|woff|ttf|ico)",
       "headers": [
         {
           "key": "Cache-Control",
@@ -17,11 +17,20 @@
       ]
     },
     {
-      "source": "/(.*)\\.(css|png|jpg|jpeg|svg|webp|woff2|woff|ttf|ico)",
+      "source": "/js/(.*)",
       "headers": [
         {
           "key": "Cache-Control",
-          "value": "public, max-age=86400, s-maxage=604800, stale-while-revalidate=2592000"
+          "value": "public, max-age=0, must-revalidate"
+        }
+      ]
+    },
+    {
+      "source": "/(.*)\\.css",
+      "headers": [
+        {
+          "key": "Cache-Control",
+          "value": "public, max-age=0, must-revalidate"
         }
       ]
     },
@@ -30,7 +39,7 @@
       "headers": [
         {
           "key": "Cache-Control",
-          "value": "public, max-age=300, s-maxage=86400, stale-while-revalidate=604800"
+          "value": "public, max-age=0, must-revalidate"
         }
       ]
     },
@@ -39,7 +48,7 @@
       "headers": [
         {
           "key": "Cache-Control",
-          "value": "public, max-age=300, s-maxage=86400, stale-while-revalidate=604800"
+          "value": "public, max-age=0, must-revalidate"
         }
       ]
     },
@@ -48,7 +57,7 @@
       "headers": [
         {
           "key": "Cache-Control",
-          "value": "public, max-age=300, s-maxage=86400, stale-while-revalidate=604800"
+          "value": "public, max-age=0, must-revalidate"
         }
       ]
     }
