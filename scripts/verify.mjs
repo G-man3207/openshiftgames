@@ -827,6 +827,323 @@ if (seedMod?.ClusterState) {
     else passed();
 }
 
+// ── 4c. Issue #55–#56 platform/OLM/CLI fidelity locks (static) ────────────
+// The browser suite section `qa-issue55-56` proves the behaviour end-to-end.
+// These module/source locks fail the fast static gate if a future refactor
+// silently reintroduces the #55/#56 bugs (no browser, no long sleeps).
+{
+  // #55A: Node construction derives the dedicated control-plane NoSchedule taint
+  // from the master/control-plane role labels. Every creation path (modes,
+  // campaign levels, manifests, saved games) funnels through this constructor,
+  // so `oc adm taint …-` is the only way to remove it (the tick loop never
+  // re-adds it). Worker Nodes must stay untainted.
+  const clusterResourcesMod = await tryImport('js/resources/ClusterResources.js');
+  if (typeof clusterResourcesMod?.Node !== 'function') {
+    fail('fidelity', 'ClusterResources.js must export the Node class (#55A)');
+  } else {
+    try {
+      const masterNode = new clusterResourcesMod.Node({
+        name: 'master-0',
+        labels: {
+          'node-role.kubernetes.io/control-plane': '',
+          'node-role.kubernetes.io/master': '',
+          'kubernetes.io/hostname': 'master-0',
+        },
+      });
+      const workerNode = new clusterResourcesMod.Node({
+        name: 'worker-0',
+        labels: {
+          'node-role.kubernetes.io/worker': '',
+          'kubernetes.io/hostname': 'worker-0',
+        },
+      });
+      const masterTaints = (masterNode.spec?.taints || []).map(
+        (taint) => `${taint.key}:${taint.effect}`
+      );
+      const workerTaints = workerNode.spec?.taints || [];
+      if (
+        masterTaints.includes('node-role.kubernetes.io/master:NoSchedule') &&
+        workerTaints.length === 0
+      )
+        passed();
+      else
+        fail(
+          'fidelity',
+          `Node constructor control-plane taint contract (#55A): master=${JSON.stringify(masterTaints)} worker=${JSON.stringify(workerTaints)}`
+        );
+    } catch (err) {
+      fail('fidelity', `Node constructor taint contract threw: ${err.message} (#55A)`);
+    }
+  }
+
+  // #55A/#55B: build a sandbox cluster exactly like a mode launch does, then run
+  // the synchronous platform seed — the paused pre-start {deployment, RS, DS,
+  // pods} contract — and assert the real controller-owned graph. Seeding twice
+  // and ticking must not churn or duplicate platform Pods.
+  const platformEngineMod = await tryImport('js/engine/GameEngine.js');
+  const platformSandboxMod = await tryImport('js/modes/SandboxMode.js');
+  if (!platformEngineMod?.GameEngine || !platformSandboxMod?.SandboxMode) {
+    fail('fidelity', 'GameEngine/SandboxMode are not importable for the #55 platform lock');
+  } else {
+    try {
+      const engine = new platformEngineMod.GameEngine({ mode: 'sandbox' });
+      new platformSandboxMod.SandboxMode(engine, null).setupCluster(3);
+      const simulation = engine.simulation;
+      if (typeof simulation?.ensureOLMDefaultsSync !== 'function') {
+        fail(
+          'fidelity',
+          'SimulationTick.ensureOLMDefaultsSync() synchronous platform seed hook is missing (#55)'
+        );
+      } else {
+        simulation.ensureOLMDefaultsSync();
+        const cluster = engine.cluster;
+        const nodes = cluster.getByKind('Node') || [];
+        const master = nodes.find((node) => node.metadata?.name === 'master-0');
+        const workers = nodes.filter((node) => /^worker-\d+$/.test(node.metadata?.name || ''));
+        const masterTaints = (master?.spec?.taints || []).map(
+          (taint) => `${taint.key}:${taint.effect}`
+        );
+        if (
+          masterTaints.includes('node-role.kubernetes.io/master:NoSchedule') &&
+          workers.length > 0 &&
+          workers.every((worker) => (worker.spec?.taints || []).length === 0)
+        )
+          passed();
+        else
+          fail(
+            'fidelity',
+            `sandbox Nodes must be master-tainted and worker-clean (#55A): master=${JSON.stringify(masterTaints)}`
+          );
+        const ingressPods = (
+          cluster.getByKindAndNamespace('Pod', 'openshift-ingress') || []
+        ).filter((pod) => /^router-default-/.test(pod.metadata?.name || ''));
+        const ingressReplicaSets = (
+          cluster.getByKindAndNamespace('ReplicaSet', 'openshift-ingress') || []
+        ).filter((replicaSet) => /^router-default-/.test(replicaSet.metadata?.name || ''));
+        const routerDeployment = cluster.getByName(
+          'Deployment',
+          'router-default',
+          'openshift-ingress'
+        );
+        const routerHashes = new Set(
+          ingressPods.map((pod) => pod.metadata?.labels?.['pod-template-hash'])
+        );
+        const routerReplicaSetName = ingressReplicaSets[0]?.metadata?.name;
+        const routerGraphOk =
+          Boolean(routerDeployment) &&
+          routerDeployment.spec?.replicas === 2 &&
+          ingressReplicaSets.length === 1 &&
+          (ingressReplicaSets[0].metadata?.ownerReferences || []).some(
+            (reference) => reference.kind === 'Deployment' && reference.name === 'router-default'
+          ) &&
+          ingressPods.length === 2 &&
+          routerHashes.size === 1 &&
+          Boolean([...routerHashes][0]) &&
+          ingressPods.every((pod) =>
+            (pod.metadata?.ownerReferences || []).some(
+              (reference) =>
+                reference.kind === 'ReplicaSet' && reference.name === routerReplicaSetName
+            )
+          );
+        if (routerGraphOk) passed();
+        else
+          fail(
+            'fidelity',
+            `router-default controller graph missing (#55B): Deployment 2/2 → one ReplicaSet → two shared-hash owned Pods`
+          );
+        const dnsDaemonSet = cluster.getByName('DaemonSet', 'dns-default', 'openshift-dns');
+        const resolverDaemonSet = cluster.getByName('DaemonSet', 'node-resolver', 'openshift-dns');
+        const expectedNodes = nodes.length;
+        const daemonSetStatusOk = [dnsDaemonSet, resolverDaemonSet].every(
+          (daemonSet) =>
+            daemonSet &&
+            daemonSet.status?.desiredNumberScheduled === expectedNodes &&
+            daemonSet.status?.currentNumberScheduled === expectedNodes &&
+            daemonSet.status?.numberReady === expectedNodes
+        );
+        if (dnsDaemonSet && resolverDaemonSet && daemonSetStatusOk) passed();
+        else
+          fail(
+            'fidelity',
+            `dns DaemonSets must seed DESIRED/CURRENT/READY ${expectedNodes}/${expectedNodes}/${expectedNodes} (#55B)`
+          );
+        const dnsPods = (cluster.getByKindAndNamespace('Pod', 'openshift-dns') || []).filter(
+          (pod) => /^dns-default-/.test(pod.metadata?.name || '')
+        );
+        const resolverPods = (cluster.getByKindAndNamespace('Pod', 'openshift-dns') || []).filter(
+          (pod) => /^node-resolver-/.test(pod.metadata?.name || '')
+        );
+        const nodeNameSet = new Set(nodes.map((node) => node.metadata?.name));
+        const onePodPerNodeOk =
+          [dnsPods, resolverPods].every(
+            (pods) =>
+              pods.length === expectedNodes &&
+              new Set(pods.map((pod) => pod.spec?.nodeName)).size === expectedNodes &&
+              pods.every((pod) => nodeNameSet.has(pod.spec?.nodeName))
+          ) &&
+          dnsPods.every((pod) =>
+            (pod.metadata?.ownerReferences || []).some(
+              (reference) => reference.kind === 'DaemonSet' && reference.name === 'dns-default'
+            )
+          ) &&
+          resolverPods.every((pod) =>
+            (pod.metadata?.ownerReferences || []).some(
+              (reference) => reference.kind === 'DaemonSet' && reference.name === 'node-resolver'
+            )
+          );
+        if (onePodPerNodeOk) passed();
+        else
+          fail(
+            'fidelity',
+            `DNS DaemonSets must own exactly one pod per node (#55B): dns=${dnsPods.length} resolver=${resolverPods.length} nodes=${expectedNodes}`
+          );
+        const dnsPodShapeOk =
+          dnsPods.length > 0 &&
+          dnsPods.every((pod) => {
+            const containers = (pod.spec?.containers || []).map((container) => container.name);
+            const toleratesMaster = (pod.spec?.tolerations || []).some(
+              (toleration) =>
+                toleration.key === 'node-role.kubernetes.io/master' &&
+                (!toleration.effect || toleration.effect === 'NoSchedule')
+            );
+            const readyContainers = (pod.status?.containerStatuses || []).filter(
+              (status) => status.ready
+            ).length;
+            return (
+              containers.includes('dns') &&
+              containers.includes('kube-rbac-proxy') &&
+              readyContainers === 2 &&
+              toleratesMaster
+            );
+          });
+        if (dnsPodShapeOk) passed();
+        else
+          fail(
+            'fidelity',
+            'dns-default pods must run dns + kube-rbac-proxy READY 2/2 and tolerate node-role.kubernetes.io/master:NoSchedule (#55A/#56)'
+          );
+        const platformPodNames = () =>
+          [...ingressPods, ...dnsPods, ...resolverPods]
+            .map((pod) => pod.metadata?.name || '')
+            .sort();
+        const beforeSeedAgain = platformPodNames();
+        simulation.ensureOLMDefaultsSync();
+        for (let tickIndex = 0; tickIndex < 200; tickIndex += 1) simulation.tick(0.05);
+        const refreshPods = (namespace, pattern) =>
+          (cluster.getByKindAndNamespace('Pod', namespace) || []).filter((pod) =>
+            pattern.test(pod.metadata?.name || '')
+          );
+        const afterSeedAgain = [
+          ...refreshPods('openshift-ingress', /^router-default-/),
+          ...refreshPods('openshift-dns', /^dns-default-/),
+          ...refreshPods('openshift-dns', /^node-resolver-/),
+        ]
+          .map((pod) => pod.metadata?.name || '')
+          .sort();
+        if (
+          JSON.stringify(beforeSeedAgain) === JSON.stringify(afterSeedAgain) &&
+          afterSeedAgain.length === 2 + expectedNodes * 2
+        )
+          passed();
+        else
+          fail(
+            'fidelity',
+            `platform seed is not idempotent — Pod churn/duplication (#55B): before=${JSON.stringify(beforeSeedAgain)} after=${JSON.stringify(afterSeedAgain)}`
+          );
+      }
+    } catch (err) {
+      fail('fidelity', `#55 sandbox platform-seed lock threw: ${err.message}`);
+    }
+  }
+
+  // #56 OLM: the CSV replacement chain must be derived from the catalog
+  // channel's ordered entries and applied on BOTH the initial-install and the
+  // channel-upgrade paths (v1.17.0 → REPLACES v1.16.0, v1.16.0 → v1.15.0).
+  const olmTickSrc = read('js/engine/SimulationTick.js');
+  const olmResourceSrc = read('js/resources/OLMResources.js');
+  const replacesAssignments = (olmTickSrc.match(/replaces:\s*this\._csvReplaces\(/g) || []).length;
+  if (replacesAssignments >= 2 && /entries\[index \+ 1\]/.test(olmTickSrc)) {
+    passed();
+  } else {
+    fail(
+      'fidelity',
+      `CSV replacement-chain wiring missing (#56): _csvReplaces assignments=${replacesAssignments}, channel-ordered entries lookup missing=${!/entries\[index \+ 1\]/.test(olmTickSrc)}`
+    );
+  }
+
+  // #56 OLM: a channel upgrade applies the NEW CSV install strategy's pod
+  // template to the existing operator Deployment, so the Deployment controller
+  // rolls a new ReplicaSet/pod-template-hash.
+  if (
+    /_operatorDeploymentPodTemplate\s*\(/.test(olmTickSrc) &&
+    /existing\.spec\.template\s*=\s*desiredTemplate/.test(olmTickSrc)
+  ) {
+    passed();
+  } else {
+    fail(
+      'fidelity',
+      'OLM upgrade does not apply the new CSV pod template to the operator Deployment (#56)'
+    );
+  }
+
+  // #56 OLM: `oc describe csv` exposes the replacement graph.
+  if (/(?:['"]Replaces['"]|Replaces:)/.test(olmResourceSrc)) passed();
+  else fail('fidelity', 'CSV describe output does not expose the Replaces chain (#56)');
+
+  // #56 CLI: multi-type `oc get …` prefixes the virtual Endpoints NAME cell
+  // (`endpoints/<svc>`) while single-kind `oc get endpoints` stays plain.
+  const cliLockSrc = read('js/ui/CommandBar.js');
+  const multiKindEndpointsPrefixed =
+    /_formatEndpointsObjects\(endpointsObjects, \{[\s\S]{0,400}?namePrefix:\s*multiKind/.test(
+      cliLockSrc
+    ) &&
+    /_formatEndpointsObjects\(\s*endpointsObjects,\s*\{[^}]*namePrefix\s*=\s*false/.test(
+      cliLockSrc
+    ) &&
+    /this\._singularName\('Endpoints'\)/.test(cliLockSrc);
+  if (multiKindEndpointsPrefixed) passed();
+  else
+    fail(
+      'fidelity',
+      'multi-kind `oc get` does not prefix endpoints NAME with endpoints/<svc> (#56)'
+    );
+
+  // #56 CLI: the router's admission events/`oc status` must never invent a
+  // "no endpoints available"/ServiceUnavailable rejection for an un-evaluated
+  // Route; only a real Admitted condition produces an event row.
+  const staleRouteFallback =
+    /no endpoints available/.test(cliLockSrc) || /ServiceUnavailable/.test(cliLockSrc);
+  if (!staleRouteFallback && /if \(!condition\) continue;/.test(cliLockSrc)) passed();
+  else
+    fail(
+      'fidelity',
+      'CommandBar still fabricates a "no endpoints available"/ServiceUnavailable route admission event (#56)'
+    );
+  if (
+    /_routeAdmissionStatusText\s*\(resource\)/.test(cliLockSrc) &&
+    /_routeAdmissionStatusText\(route\)/.test(cliLockSrc) &&
+    !/_routeAdmissionStatusText[\s\S]{0,600}?endpoints/.test(cliLockSrc)
+  )
+    passed();
+  else fail('fidelity', '`oc status` does not use the honest route admission wording (#56)');
+
+  // #55A: `oc adm taint node <node> key:Effect-` must parse the optional
+  // value/effect before removing the matching taint(s) (the old parser compared
+  // the whole `key:Effect` string against `taint.key` and silently did nothing).
+  if (
+    /const removal = taintSpec\.slice\(0, -1\)/.test(cliLockSrc) &&
+    /removal\.match\(/.test(cliLockSrc) &&
+    !/const key = taintSpec\.slice\(0, -1\)/.test(cliLockSrc)
+  ) {
+    passed();
+  } else {
+    fail(
+      'fidelity',
+      '`oc adm taint …:Effect-` removal parser does not strip the value/effect before matching the taint key (#55A)'
+    );
+  }
+}
+
 // ── 5. Campaign, challenges, incidents and EX280 content ──────────────────
 const levelsMod = await tryImport('js/data/CampaignLevels.js');
 const challengesMod = await tryImport('js/modes/ChallengeMode.js');

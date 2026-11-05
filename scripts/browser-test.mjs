@@ -12463,7 +12463,13 @@ await runSection('qa-issue50-54', async () => {
   );
   const sandboxDnsTable = parseTable(result.message);
   assert(
-    sandboxDnsTable.rows.every((cells) => cells[1] === '1/1' && cells[2] === 'Running'),
+    // #56: dns-default pods are READY 2/2 now (dns + kube-rbac-proxy container);
+    // node-resolver pods keep the real single-container READY 1/1.
+    sandboxDnsTable.rows.every(
+      (cells) =>
+        cells[2] === 'Running' &&
+        (/^dns-default-/.test(cells[0]) ? cells[1] === '2/2' : cells[1] === '1/1')
+    ),
     '#53G: the sandbox DNS pods are Running/Ready',
     JSON.stringify(sandboxDnsTable.rows)
   );
@@ -13343,6 +13349,1231 @@ await runSection('qa-issue50-54', async () => {
     l18Objective?.completed === true,
     '#53D: the L18 pin objective still ticks while the Manual upgrade plan is pending',
     JSON.stringify(l18Objective)
+  );
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// QA ROUND 1.5.0 — issues #55/#56: control-plane NoSchedule taint + pod
+// scheduling, controller-owned platform workloads (router Deployment/RS, DNS
+// DaemonSets), the OLM Manual pin→upgrade replacement chain/operator rollout,
+// and the multi-kind `endpoints/` prefix + route-admission event fixes.
+// ═══════════════════════════════════════════════════════════════════════════
+await runSection('qa-issue55-56', async () => {
+  const olmNamespace = 'openshift-operators';
+  const olmPackageName = 'openshift-cert-manager-operator';
+  const olmChannel = 'stable-v1';
+  const olmHeadCsv = 'cert-manager-operator.v1.17.0';
+  const olmPinCsv = 'cert-manager-operator.v1.16.0';
+  const olmPreviousCsv = 'cert-manager-operator.v1.15.0';
+  const operatorDeploymentName = 'cert-manager-operator-controller-manager';
+  const masterTaintKey = 'node-role.kubernetes.io/master';
+  const masterTaintSpec = `${masterTaintKey}:NoSchedule`;
+  let result;
+
+  /** Advance the simulation AND incident clocks deterministically (0.05 s). */
+  const advanceBoth = async (seconds) =>
+    evaluate((secs) => {
+      const sim = window.game?.gameEngine?.simulation;
+      const engine = window.game?.incidentEngine;
+      if (!sim || typeof sim.tick !== 'function') return false;
+      const steps = Math.ceil(secs / 0.05);
+      for (let index = 0; index < steps; index += 1) {
+        sim.tick(0.05);
+        if (engine && typeof engine.tick === 'function') engine.tick(0.05);
+      }
+      return true;
+    }, seconds);
+  /** Advance both clocks until predicate() is true, or exhaust maxSeconds. */
+  const advanceUntil = async (predicate, maxSeconds = 60, step = 2) => {
+    for (let played = 0; played < maxSeconds; played += step) {
+      await advanceBoth(step);
+      if (await predicate()) return true;
+    }
+    return false;
+  };
+  /** Write a virtual manifest file then apply it like the player would. */
+  const applyManifest = async (name, yaml) => {
+    await waitFor(() => evaluate(() => !!window.game?.manifestEngine), 5000);
+    await evaluate(({ file, content }) => window.game.manifestEngine.writeFile(file, content), {
+      file: `qa/${name}.yaml`,
+      content: yaml,
+    });
+    return runCmd(`oc apply -f qa/${name}.yaml`, 300);
+  };
+  /** Split an oc tabwriter table into header cells + rows (3+ space columns). */
+  const tableParts = (message) => {
+    const lines = String(message ?? '')
+      .split('\n')
+      .filter((line) => line.trim() !== '');
+    return {
+      headers: (lines[0] || '').split(/\s{2,}/).map((cell) => cell.trim()),
+      rows: lines.slice(1).map((line) => line.split(/\s{2,}/).map((cell) => cell.trim())),
+    };
+  };
+  /** Blank-line separated tables from a multi-kind `oc get` response. */
+  const tableSections = (message) => {
+    const blocks = String(message ?? '').split(/\n{2,}/);
+    const sections = [];
+    for (const block of blocks) {
+      const lines = block.split('\n').filter((line) => line.trim() !== '');
+      if (!lines.length) continue;
+      sections.push({
+        headers: lines[0].split(/\s{2,}/).map((cell) => cell.trim()),
+        rows: lines.slice(1).map((line) => line.split(/\s{2,}/).map((cell) => cell.trim())),
+        block,
+      });
+    }
+    return sections;
+  };
+  const sectionWithHeaders = (message, required) =>
+    tableSections(message).find((candidate) =>
+      required.every((header) => candidate.headers.includes(header))
+    ) || null;
+  const columnIndex = (section, header) => (section ? section.headers.indexOf(header) : -1);
+  const cellsForRow = (section, predicate) =>
+    (section?.rows || []).find((cells) => predicate(cells[0] || '')) || null;
+  /** `oc get pods -o wide` parsed with its real NODE column. */
+  const podWide = async (namespace) => {
+    const out = await runCmd(`oc get pods -o wide -n ${namespace}`);
+    const table = tableParts(out.message);
+    const nodeAt = table.headers.indexOf('NODE');
+    return {
+      message: out.message,
+      rows: table.rows.map((cells) => ({
+        name: cells[0] || '',
+        ready: cells[1] || '',
+        status: cells[2] || '',
+        node: nodeAt >= 0 ? cells[nodeAt] || '' : '',
+      })),
+    };
+  };
+  const nodeNames = () =>
+    evaluate(() =>
+      (window.game?.cluster?.getByKind('Node') || []).map((node) => node.metadata?.name || '')
+    );
+  /** Pod/deployment/ReplicaSet/DaemonSet shapes the platform is expected to be. */
+  const platformState = () =>
+    evaluate(() => {
+      const cluster = window.game.cluster;
+      const summarize = (namespace) =>
+        (cluster.getByKindAndNamespace('Pod', namespace) || []).map((pod) => ({
+          name: pod.metadata?.name || '',
+          node: pod.spec?.nodeName || '',
+          phase: pod.status?.phase || '',
+          ready: (pod.status?.conditions || []).some(
+            (condition) => condition.type === 'Ready' && condition.status === 'True'
+          ),
+          hash: pod.metadata?.labels?.['pod-template-hash'] || '',
+          containers: (pod.spec?.containers || []).map((container) => container.name),
+          containerStatuses: (pod.status?.containerStatuses || []).map((status) => ({
+            name: status.name,
+            ready: status.ready === true,
+          })),
+          tolerations: (pod.spec?.tolerations || []).map((toleration) => ({
+            key: toleration.key || '',
+            operator: toleration.operator || 'Equal',
+            value: toleration.value ?? '',
+            effect: toleration.effect || '',
+          })),
+          owners: (pod.metadata?.ownerReferences || []).map((reference) => ({
+            kind: reference.kind,
+            name: reference.name,
+            controller: reference.controller === true,
+          })),
+          labels: pod.metadata?.labels || {},
+        }));
+      return { ingress: summarize('openshift-ingress'), dns: summarize('openshift-dns') };
+    });
+  /** Deployments/ReplicaSets/DaemonSets in a namespace with owner links. */
+  const namespaceControllers = (namespace) =>
+    evaluate((ns) => {
+      const cluster = window.game.cluster;
+      const ownersOf = (resource) =>
+        (resource.metadata?.ownerReferences || []).map((reference) => ({
+          kind: reference.kind,
+          name: reference.name,
+        }));
+      const podsOf = (kind) => cluster.getByKindAndNamespace(kind, ns) || [];
+      return {
+        deployments: podsOf('Deployment').map((resource) => ({
+          name: resource.metadata?.name || '',
+          replicas: resource.spec?.replicas ?? null,
+          readyReplicas: resource.status?.readyReplicas ?? 0,
+          availableReplicas: resource.status?.availableReplicas ?? 0,
+          updatedReplicas: resource.status?.updatedReplicas ?? 0,
+          owners: ownersOf(resource),
+        })),
+        replicaSets: podsOf('ReplicaSet').map((resource) => ({
+          name: resource.metadata?.name || '',
+          hash: resource.metadata?.labels?.['pod-template-hash'] || '',
+          desired: resource.spec?.replicas ?? null,
+          readyReplicas: resource.status?.readyReplicas ?? 0,
+          owners: ownersOf(resource),
+        })),
+        daemonSets: podsOf('DaemonSet').map((resource) => ({
+          name: resource.metadata?.name || '',
+          desiredNumberScheduled: resource.status?.desiredNumberScheduled ?? null,
+          currentNumberScheduled: resource.status?.currentNumberScheduled ?? null,
+          numberReady: resource.status?.numberReady ?? null,
+          owners: ownersOf(resource),
+        })),
+      };
+    }, namespace);
+  /** The cert-manager operator Deployment + ReplicaSets + pods (issue #56). */
+  const operatorState = (namespace) =>
+    evaluate(
+      ({ ns, deploymentName }) => {
+        const cluster = window.game.cluster;
+        const isOperator = (name) => String(name || '').startsWith(`${deploymentName}-`);
+        const deployment = cluster.getByName('Deployment', deploymentName, ns);
+        const container = deployment?.spec?.template?.spec?.containers?.[0] || null;
+        return {
+          deployment: deployment
+            ? {
+                name: deployment.metadata?.name || '',
+                labels: deployment.metadata?.labels || {},
+                replicas: deployment.spec?.replicas ?? null,
+                readyReplicas: deployment.status?.readyReplicas ?? 0,
+                availableReplicas: deployment.status?.availableReplicas ?? 0,
+                updatedReplicas: deployment.status?.updatedReplicas ?? 0,
+                image: container?.image || '',
+                template: JSON.parse(JSON.stringify(deployment.spec?.template || {})),
+              }
+            : null,
+          replicaSets: (cluster.getByKindAndNamespace('ReplicaSet', ns) || [])
+            .filter((resource) => isOperator(resource.metadata?.name))
+            .map((resource) => ({
+              name: resource.metadata?.name || '',
+              hash: resource.metadata?.labels?.['pod-template-hash'] || '',
+              desired: resource.spec?.replicas ?? null,
+              readyReplicas: resource.status?.readyReplicas ?? 0,
+              owners: (resource.metadata?.ownerReferences || []).map(
+                (reference) => `${reference.kind}/${reference.name}`
+              ),
+            })),
+          pods: (cluster.getByKindAndNamespace('Pod', ns) || [])
+            .filter((resource) => isOperator(resource.metadata?.name))
+            .map((resource) => ({
+              name: resource.metadata?.name || '',
+              hash: resource.metadata?.labels?.['pod-template-hash'] || '',
+              phase: resource.status?.phase || '',
+              ready: (resource.status?.conditions || []).some(
+                (condition) => condition.type === 'Ready' && condition.status === 'True'
+              ),
+              owners: (resource.metadata?.ownerReferences || []).map((reference) => ({
+                kind: reference.kind,
+                name: reference.name,
+              })),
+            })),
+        };
+      },
+      { ns: namespace, deploymentName: operatorDeploymentName }
+    );
+  const subscriptionState = (name, namespace) =>
+    evaluate(
+      ({ subName, ns }) => {
+        const sub = window.game.cluster.getByName('Subscription', subName, ns);
+        return sub
+          ? {
+              phase: sub.status?.phase || null,
+              state: sub.status?.state || null,
+              installedCSV: sub.status?.installedCSV || null,
+              currentCSV: sub.status?.currentCSV || null,
+              startingCSV: sub.spec?.startingCSV || null,
+            }
+          : null;
+      },
+      { subName: name, ns: namespace }
+    );
+  const installPlanFor = (namespace, csvName) =>
+    evaluate(
+      ({ ns, csv }) => {
+        const plan = (window.game.cluster.getByKindAndNamespace('InstallPlan', ns) || []).find(
+          (candidate) => (candidate.spec?.clusterServiceVersionNames || []).includes(csv)
+        );
+        return plan
+          ? {
+              name: plan.metadata?.name || null,
+              csvs: plan.spec?.clusterServiceVersionNames || [],
+              approval: plan.spec?.approval || null,
+              approved: plan.spec?.approved === true,
+            }
+          : null;
+      },
+      { ns: namespace, csv: csvName }
+    );
+  const csvPhase = (namespace, csvName) =>
+    evaluate(
+      ({ ns, csv }) =>
+        window.game.cluster.getByName('ClusterServiceVersion', csv, ns)?.status?.phase || null,
+      { ns: namespace, csv: csvName }
+    );
+  const csvJsonPath = async (csvName, path) => {
+    const out = await runCmd(`oc get csv ${csvName} -n ${olmNamespace} -o jsonpath='{${path}}'`);
+    return { error: out.error, value: out.message.trim(), message: out.message };
+  };
+  /** Rows of `oc get events` as { type, reason, object, message }. */
+  const getEventRows = (message) =>
+    String(message ?? '')
+      .split('\n')
+      .slice(1)
+      .map((line) =>
+        line
+          .split(/\s{2,}/)
+          .map((cell) => cell.trim())
+          .filter(Boolean)
+      )
+      .filter((cells) => cells.length >= 4)
+      .map((cells) => ({
+        type: cells[1],
+        reason: cells[2],
+        object: cells[3],
+        message: cells.slice(4).join(' '),
+      }));
+  const routeCondition = (namespace, name) =>
+    evaluate(
+      ({ ns, routeName }) => {
+        const route = window.game.cluster.getByName('Route', routeName, ns);
+        const condition = (route?.status?.ingress?.[0]?.conditions || []).find(
+          (candidate) => candidate.type === 'Admitted'
+        );
+        return condition
+          ? {
+              status: condition.status,
+              reason: condition.reason || '',
+              message: condition.message || '',
+            }
+          : null;
+      },
+      { ns: namespace, routeName: name }
+    );
+
+  // ═══ Round 1: #55A control-plane taint + scheduling (running sandbox) ═══
+  assert(await bootSandbox(), '#55A: a fresh sandbox boots for the control-plane checks');
+
+  result = await runCmd('oc describe node master-0');
+  assert(
+    /^Taints:\s+node-role\.kubernetes\.io\/master:NoSchedule\s*$/m.test(result.message),
+    '#55A: `oc describe node master-0` shows the dedicated NoSchedule control-plane taint',
+    (result.message.match(/^Taints:.*$/m) || [''])[0]
+  );
+  for (const workerName of ['worker-0', 'worker-1']) {
+    result = await runCmd(`oc describe node ${workerName}`);
+    assert(
+      /^Taints:\s+<none>\s*$/m.test(result.message),
+      `#55A: \`oc describe node ${workerName}\` has no taints`,
+      (result.message.match(/^Taints:.*$/m) || [''])[0]
+    );
+  }
+
+  // Platform DaemonSet pods tolerate the control-plane taint and keep running.
+  let platform = await platformState();
+  const masterDnsPods = platform.dns.filter((pod) => pod.node === 'master-0');
+  const dnsPodOnMaster = masterDnsPods.find((pod) => /^dns-default-/.test(pod.name)) || null;
+  const resolverPodOnMaster = masterDnsPods.find((pod) => /^node-resolver-/.test(pod.name)) || null;
+  const toleratesMasterTaint = (pod) =>
+    Boolean(
+      pod?.tolerations.some(
+        (toleration) =>
+          toleration.key === masterTaintKey &&
+          (toleration.operator === 'Exists' || toleration.value === '') &&
+          (!toleration.effect || toleration.effect === 'NoSchedule')
+      )
+    );
+  assert(
+    Boolean(dnsPodOnMaster && resolverPodOnMaster) &&
+      toleratesMasterTaint(dnsPodOnMaster) &&
+      toleratesMasterTaint(resolverPodOnMaster),
+    '#55A: dns-default/node-resolver pods on master-0 tolerate node-role.kubernetes.io/master:NoSchedule',
+    JSON.stringify(masterDnsPods)
+  );
+  assert(
+    masterDnsPods.every((pod) => pod.phase === 'Running' && pod.ready),
+    '#55A: the platform pods on the tainted master-0 keep Running/Ready',
+    JSON.stringify(masterDnsPods)
+  );
+
+  // User Deployment pods never schedule on the control plane and spread over workers.
+  await runCmd('oc new-project qa-taint55');
+  await runCmd('oc apply -f manifests/deployment.yaml -n qa-taint55');
+  await runCmd('oc apply -f manifests/service.yaml -n qa-taint55');
+  const userPodsRunning = await advanceUntil(async () => {
+    const wide = await podWide('qa-taint55');
+    return wide.rows.length >= 2 && wide.rows.every((row) => row.status === 'Running');
+  }, 40);
+  const userWide = await podWide('qa-taint55');
+  assert(
+    userPodsRunning && userWide.rows.length === 2,
+    '#55A: the webapp Deployment reaches two Running pods',
+    JSON.stringify(userWide.rows)
+  );
+  assert(
+    userWide.rows.length > 0 &&
+      userWide.rows.every((row) => row.node !== 'master-0' && /^worker-\d+$/.test(row.node)),
+    '#55A: user workload pods never land on the tainted master-0',
+    JSON.stringify(userWide.rows)
+  );
+  const spreadNodes = [...new Set(userWide.rows.map((row) => row.node))].sort();
+  assert(
+    spreadNodes.length === 2 &&
+      spreadNodes.includes('worker-0') &&
+      spreadNodes.includes('worker-1'),
+    '#55A: the two user replicas spread over worker-0 and worker-1',
+    JSON.stringify(spreadNodes)
+  );
+
+  // The issue's `oc new-app --image=…` repro must schedule on a worker too.
+  await runCmd('oc new-project qa-taint55b');
+  result = await runCmd(
+    'oc new-app --image=quay.io/openshift/origin-hello-openshift --name=web -n qa-taint55b',
+    400
+  );
+  assert(
+    !result.error && /deployment/.test(result.message),
+    '#55A: `oc new-app --image=… --name=web` creates the workload',
+    result.message.slice(0, 300)
+  );
+  const newAppReady = await advanceUntil(async () => {
+    const wide = await podWide('qa-taint55b');
+    const pods = wide.rows.filter((row) => /^web-/.test(row.name));
+    return pods.length === 1 && pods.every((row) => row.status === 'Running');
+  }, 40);
+  const newAppWide = await podWide('qa-taint55b');
+  const newAppPod = newAppWide.rows.find((row) => /^web-/.test(row.name)) || null;
+  assert(
+    newAppReady && Boolean(newAppPod) && newAppPod.node !== 'master-0',
+    '#55A: an `oc new-app` pod is scheduled on a worker, never master-0',
+    JSON.stringify(newAppWide.rows)
+  );
+
+  // A pod that explicitly targets the master must stay Pending with a
+  // FailedScheduling event that names the untolerated taint.
+  const masterPinnedYaml = [
+    'apiVersion: apps/v1',
+    'kind: Deployment',
+    'metadata:',
+    '  name: pinned-master',
+    '  namespace: qa-taint55',
+    'spec:',
+    '  replicas: 1',
+    '  selector:',
+    '    matchLabels:',
+    '      app: pinned-master',
+    '  template:',
+    '    metadata:',
+    '      labels:',
+    '        app: pinned-master',
+    '    spec:',
+    '      nodeSelector:',
+    '        node-role.kubernetes.io/master: ""',
+    '      containers:',
+    '      - name: app',
+    '        image: quay.io/openshift/origin-hello-openshift:latest',
+  ].join('\n');
+  result = await applyManifest('qa-master-pinned', masterPinnedYaml);
+  assert(
+    !result.error && /deployment\.apps\/pinned-master created/.test(result.message),
+    '#55A: the master-nodeSelector Deployment applies',
+    result.message.slice(0, 300)
+  );
+  await advanceBoth(10);
+  result = await runCmd('oc get pods -n qa-taint55 -l app=pinned-master');
+  let pinnedPodRow = tableParts(result.message).rows.find((cells) =>
+    /^pinned-master-/.test(cells[0] || '')
+  );
+  const pinnedAppeared = await advanceUntil(async () => {
+    const out = await runCmd('oc get pods -n qa-taint55 -l app=pinned-master');
+    pinnedPodRow = tableParts(out.message).rows.find((cells) =>
+      /^pinned-master-/.test(cells[0] || '')
+    );
+    return Boolean(pinnedPodRow);
+  }, 20);
+  assert(
+    pinnedAppeared && Boolean(pinnedPodRow),
+    '#55A: the master-nodeSelector pod is created',
+    JSON.stringify(pinnedPodRow)
+  );
+  // The scheduler leaves the pod unbound: phase Pending with PodScheduled=False.
+  // (Assert the API phase rather than the `oc get pods` STATUS cell: the
+  // simulator seeds every pod with a waiting ContainerCreating container status,
+  // which is a separate, pre-existing display-fidelity nit and not the #55
+  // scheduling contract.)
+  result = await runCmd(
+    `oc get pod ${pinnedPodRow?.[0] || 'missing'} -n qa-taint55 -o jsonpath='{.status.phase}'`
+  );
+  assert(
+    !result.error && result.message.trim() === 'Pending',
+    '#55A: a pod that explicitly targets the master stays Pending under the NoSchedule taint',
+    JSON.stringify(result.message)
+  );
+  result = await runCmd(`oc describe pod ${pinnedPodRow?.[0] || 'missing'} -n qa-taint55`);
+  assert(
+    /FailedScheduling/.test(result.message) &&
+      /untolerated taint/.test(result.message) &&
+      new RegExp(masterTaintKey.replace(/\./g, '\\.')).test(result.message),
+    '#55A: the Pending pod reports FailedScheduling naming the untolerated master taint',
+    result.message.slice(-900)
+  );
+
+  // ═══ Round 2: #55B controller-owned platform workloads ══════════════════
+  result = await runCmd('oc get deploy,rs -n openshift-ingress');
+  let deploySection = sectionWithHeaders(result.message, [
+    'NAME',
+    'READY',
+    'UP-TO-DATE',
+    'AVAILABLE',
+    'AGE',
+  ]);
+  let replicasetSection = sectionWithHeaders(result.message, [
+    'NAME',
+    'DESIRED',
+    'CURRENT',
+    'READY',
+    'AGE',
+  ]);
+  const routerDeployRow = cellsForRow(deploySection, (name) =>
+    /^(?:deployment\.apps\/)?router-default$/.test(name)
+  );
+  const routerRsRows = (replicasetSection?.rows || []).filter((cells) =>
+    /^(?:replicaset\.apps\/)?router-default-/.test(cells[0] || '')
+  );
+  assert(
+    Boolean(routerDeployRow) && routerDeployRow[columnIndex(deploySection, 'READY')] === '2/2',
+    '#55B: `oc get deploy,rs -n openshift-ingress` shows deployment.apps/router-default 2/2',
+    result.message.slice(0, 500)
+  );
+  assert(
+    routerRsRows.length === 1,
+    '#55B: openshift-ingress has exactly one router-default ReplicaSet',
+    JSON.stringify(routerRsRows)
+  );
+  const routerRsName = String(routerRsRows[0]?.[0] || '').replace(/^(?:replicaset\.apps\/)/, '');
+  const routerHash = routerRsName.replace(/^router-default-/, '');
+
+  const ingressControllers = await namespaceControllers('openshift-ingress');
+  const routerDeployment = ingressControllers.deployments.find(
+    (deployment) => deployment.name === 'router-default'
+  );
+  const routerReplicaSets = ingressControllers.replicaSets.filter((replicaSet) =>
+    /^router-default-/.test(replicaSet.name)
+  );
+  assert(
+    Boolean(routerDeployment) &&
+      routerDeployment.replicas === 2 &&
+      routerDeployment.readyReplicas >= 2 &&
+      routerDeployment.availableReplicas >= 2,
+    '#55B: the router-default Deployment object is 2/2 ready/available',
+    JSON.stringify(routerDeployment)
+  );
+  assert(
+    routerReplicaSets.length === 1 &&
+      routerReplicaSets[0].hash === routerHash &&
+      routerReplicaSets[0].owners.some(
+        (owner) => owner.kind === 'Deployment' && owner.name === 'router-default'
+      ),
+    '#55B: the router ReplicaSet carries the Deployment ownerReference and the pod-template-hash',
+    JSON.stringify(routerReplicaSets)
+  );
+
+  platform = await platformState();
+  const routerPods = platform.ingress.filter((pod) => /^router-default-/.test(pod.name));
+  assert(
+    routerPods.length === 2 && routerPods.every((pod) => pod.phase === 'Running' && pod.ready),
+    '#55B: exactly two router-default pods are Running/Ready',
+    JSON.stringify(routerPods.map((pod) => `${pod.name}:${pod.phase}`))
+  );
+  assert(
+    routerPods.every((pod) => pod.hash === routerHash) && /^[a-z0-9]+$/.test(routerHash),
+    '#55B: both router pods share the ReplicaSet pod-template-hash prefix',
+    JSON.stringify({ hash: routerHash, pods: routerPods.map((pod) => pod.hash) })
+  );
+  assert(
+    routerPods.every((pod) =>
+      pod.owners.some((owner) => owner.kind === 'ReplicaSet' && owner.name === routerRsName)
+    ),
+    '#55B: every router pod is owned by the router ReplicaSet (pod → ReplicaSet → Deployment)',
+    JSON.stringify(routerPods.map((pod) => pod.owners))
+  );
+
+  result = await runCmd(
+    `oc get pod ${routerPods[0]?.name || 'missing'} -n openshift-ingress -o jsonpath='{.metadata.ownerReferences}'`
+  );
+  assert(
+    !result.error &&
+      /"kind"\s*:\s*"ReplicaSet"/.test(result.message) &&
+      result.message.includes(routerRsName),
+    '#55B: `oc get pod … -o jsonpath=ownerReferences` shows the ReplicaSet owner',
+    result.message.slice(0, 500)
+  );
+  result = await runCmd(
+    `oc get rs ${routerRsName} -n openshift-ingress -o jsonpath='{.metadata.ownerReferences}'`
+  );
+  assert(
+    !result.error &&
+      /"kind"\s*:\s*"Deployment"/.test(result.message) &&
+      /"name"\s*:\s*"router-default"/.test(result.message),
+    '#55B: the router ReplicaSet ownerReference points at deployment.apps/router-default',
+    result.message.slice(0, 500)
+  );
+
+  result = await runCmd('oc describe deploy router-default -n openshift-ingress');
+  assert(
+    !result.error &&
+      /^Name:\s+router-default\s*$/m.test(result.message) &&
+      /Replicas:\s+2 desired/.test(result.message) &&
+      /Pod Template:/.test(result.message),
+    '#55B: `oc describe deploy router-default -n openshift-ingress` works',
+    result.message.slice(0, 900)
+  );
+  result = await runCmd('oc rollout status deployment/router-default -n openshift-ingress');
+  assert(
+    !result.error && /successfully rolled out/.test(result.message),
+    '#55B: `oc rollout status deployment/router-default -n openshift-ingress` reports the rollout complete',
+    result.message.slice(0, 400)
+  );
+
+  // openshift-dns: two DaemonSets, one owned pod per node.
+  result = await runCmd('oc get ds -n openshift-dns');
+  const daemonSetTable = tableParts(result.message);
+  const daemonSetCell = (name, header) => {
+    const row = daemonSetTable.rows.find((cells) => cells[0] === name) || [];
+    const at = daemonSetTable.headers.indexOf(header);
+    return at >= 0 ? row[at] || '' : '';
+  };
+  const expectedNodes = (await nodeNames()).length;
+  assert(
+    !result.error &&
+      daemonSetTable.rows.some((cells) => cells[0] === 'dns-default') &&
+      daemonSetTable.rows.some((cells) => cells[0] === 'node-resolver'),
+    '#55B: `oc get ds -n openshift-dns` lists dns-default and node-resolver',
+    result.message.slice(0, 500)
+  );
+  for (const daemonSetName of ['dns-default', 'node-resolver']) {
+    assert(
+      daemonSetCell(daemonSetName, 'DESIRED') === String(expectedNodes) &&
+        daemonSetCell(daemonSetName, 'CURRENT') === String(expectedNodes) &&
+        daemonSetCell(daemonSetName, 'READY') === String(expectedNodes),
+      `#55B: DaemonSet ${daemonSetName} is DESIRED/CURRENT/READY ${expectedNodes}/${expectedNodes}/${expectedNodes}`,
+      JSON.stringify(
+        ['DESIRED', 'CURRENT', 'READY'].map((header) => daemonSetCell(daemonSetName, header))
+      )
+    );
+  }
+  const dnsControllers = await namespaceControllers('openshift-dns');
+  assert(
+    ['dns-default', 'node-resolver'].every((name) =>
+      dnsControllers.daemonSets.some((daemonSet) => daemonSet.name === name)
+    ),
+    '#55B: the dns-default and node-resolver DaemonSet objects exist',
+    JSON.stringify(dnsControllers.daemonSets)
+  );
+
+  // dns-default pods run dns + kube-rbac-proxy at READY 2/2; node-resolver 1/1.
+  result = await runCmd('oc get pods -n openshift-dns');
+  const dnsPodTable = tableParts(result.message);
+  const dnsPodRows = dnsPodTable.rows.filter((cells) => /^dns-default-/.test(cells[0] || ''));
+  const resolverPodRows = dnsPodTable.rows.filter((cells) =>
+    /^node-resolver-/.test(cells[0] || '')
+  );
+  assert(
+    dnsPodRows.length === expectedNodes &&
+      dnsPodRows.every((cells) => cells[1] === '2/2' && cells[2] === 'Running'),
+    '#56: dns-default pods are READY 2/2 (dns + kube-rbac-proxy) and Running',
+    JSON.stringify(dnsPodRows)
+  );
+  assert(
+    resolverPodRows.length === expectedNodes &&
+      resolverPodRows.every((cells) => cells[1] === '1/1' && cells[2] === 'Running'),
+    '#55B: node-resolver pods stay READY 1/1 and Running',
+    JSON.stringify(resolverPodRows)
+  );
+  const dnsPods = platform.dns.filter((pod) => /^dns-default-/.test(pod.name));
+  assert(
+    dnsPods.length === expectedNodes &&
+      dnsPods.every(
+        (pod) =>
+          pod.containers.includes('dns') &&
+          pod.containers.includes('kube-rbac-proxy') &&
+          pod.containerStatuses.filter((status) => status.ready).length === 2
+      ),
+    '#56: dns-default pod spec has the dns + kube-rbac-proxy containers, both ready',
+    JSON.stringify(dnsPods.map((pod) => ({ name: pod.name, containers: pod.containers })))
+  );
+  assert(
+    platform.dns
+      .filter((pod) => /^dns-default-/.test(pod.name))
+      .every((pod) =>
+        pod.owners.some((owner) => owner.kind === 'DaemonSet' && owner.name === 'dns-default')
+      ) &&
+      platform.dns
+        .filter((pod) => /^node-resolver-/.test(pod.name))
+        .every((pod) =>
+          pod.owners.some((owner) => owner.kind === 'DaemonSet' && owner.name === 'node-resolver')
+        ),
+    '#55B: every DNS pod is owned by its DaemonSet',
+    JSON.stringify(platform.dns.map((pod) => pod.owners))
+  );
+  {
+    const dnsPod = platform.dns.find((pod) => /^dns-default-/.test(pod.name));
+    result = await runCmd(
+      `oc get pod ${dnsPod?.name || 'missing'} -n openshift-dns -o jsonpath='{.spec.containers[*].name}'`
+    );
+    assert(
+      !result.error && /\bdns\b/.test(result.message) && /kube-rbac-proxy/.test(result.message),
+      '#56: `oc get pod … -o jsonpath` lists the dns and kube-rbac-proxy containers',
+      result.message.slice(0, 300)
+    );
+    result = await runCmd(
+      `oc get pod ${dnsPod?.name || 'missing'} -n openshift-dns -o jsonpath='{.metadata.ownerReferences}'`
+    );
+    assert(
+      !result.error &&
+        /"kind"\s*:\s*"DaemonSet"/.test(result.message) &&
+        /"name"\s*:\s*"dns-default"/.test(result.message),
+      '#55B: `oc get pod … -o jsonpath=ownerReferences` shows the dns-default DaemonSet owner',
+      result.message.slice(0, 500)
+    );
+  }
+
+  // No pod churn or duplicates after a long deterministic tick run.
+  {
+    const before = await platformState();
+    await advanceBoth(120);
+    const after = await platformState();
+    const namesOf = (state, key, pattern) =>
+      state[key]
+        .filter((pod) => pattern.test(pod.name))
+        .map((pod) => pod.name)
+        .sort();
+    assert(
+      JSON.stringify(namesOf(before, 'ingress', /^router-default-/)) ===
+        JSON.stringify(namesOf(after, 'ingress', /^router-default-/)) &&
+        JSON.stringify(namesOf(before, 'dns', /^dns-default-/)) ===
+          JSON.stringify(namesOf(after, 'dns', /^dns-default-/)) &&
+        JSON.stringify(namesOf(before, 'dns', /^node-resolver-/)) ===
+          JSON.stringify(namesOf(after, 'dns', /^node-resolver-/)),
+      '#55B: platform pods do not churn or duplicate over 120 s of ticks',
+      JSON.stringify({
+        before: namesOf(before, 'ingress', /^router-default-/),
+        after: namesOf(after, 'ingress', /^router-default-/),
+      })
+    );
+    result = await runCmd('oc get deploy,rs -n openshift-ingress');
+    deploySection = sectionWithHeaders(result.message, [
+      'NAME',
+      'READY',
+      'UP-TO-DATE',
+      'AVAILABLE',
+      'AGE',
+    ]);
+    replicasetSection = sectionWithHeaders(result.message, [
+      'NAME',
+      'DESIRED',
+      'CURRENT',
+      'READY',
+      'AGE',
+    ]);
+    assert(
+      cellsForRow(deploySection, (name) => /^(?:deployment\.apps\/)?router-default$/.test(name))?.[
+        columnIndex(deploySection, 'READY')
+      ] === '2/2' &&
+        (replicasetSection?.rows || []).filter((cells) =>
+          /^(?:replicaset\.apps\/)?router-default-/.test(cells[0] || '')
+        ).length === 1,
+      '#55B: the router Deployment stays 2/2 with one ReplicaSet after the long tick run',
+      result.message.slice(0, 500)
+    );
+  }
+
+  // Controller-owned pods are recreated after a manual delete.
+  {
+    const victim = (await platformState()).ingress.find((pod) =>
+      /^router-default-/.test(pod.name)
+    )?.name;
+    await runCmd(`oc delete pod ${victim} -n openshift-ingress`);
+    const recreated = await advanceUntil(async () => {
+      const state = await platformState();
+      const pods = state.ingress.filter((pod) => /^router-default-/.test(pod.name));
+      return (
+        pods.length === 2 &&
+        pods.every((pod) => pod.phase === 'Running' && pod.ready) &&
+        pods.every((pod) => pod.owners.some((owner) => owner.kind === 'ReplicaSet'))
+      );
+    }, 60);
+    assert(recreated, '#55B: the router controller recreates a deleted router pod');
+  }
+  {
+    const victim = (await platformState()).dns.find((pod) => /^dns-default-/.test(pod.name))?.name;
+    await runCmd(`oc delete pod ${victim} -n openshift-dns`);
+    const recreated = await advanceUntil(async () => {
+      const state = await platformState();
+      const pods = state.dns.filter((pod) => /^dns-default-/.test(pod.name));
+      return (
+        pods.length === expectedNodes &&
+        pods.every((pod) => pod.phase === 'Running' && pod.ready) &&
+        pods.every((pod) => pod.owners.some((owner) => owner.kind === 'DaemonSet'))
+      );
+    }, 60);
+    assert(recreated, '#55B: the DNS DaemonSet controller recreates a deleted dns-default pod');
+  }
+
+  // ═══ Round 3: #55A taint removal semantics (still running sandbox) ══════
+  result = await runCmd(`oc adm taint node master-0 ${masterTaintSpec}-`);
+  assert(
+    !result.error && /node\/master-0\s+untainted/.test(result.message),
+    '#55A: `oc adm taint node master-0 node-role.kubernetes.io/master:NoSchedule-` removes the taint',
+    result.message.slice(0, 300)
+  );
+  result = await runCmd('oc describe node master-0');
+  assert(
+    /^Taints:\s+<none>\s*$/m.test(result.message),
+    '#55A: the master taint is gone right after `oc adm taint …-`',
+    (result.message.match(/^Taints:.*$/m) || [''])[0]
+  );
+  await advanceBoth(90);
+  result = await runCmd('oc describe node master-0');
+  assert(
+    /^Taints:\s+<none>\s*$/m.test(result.message),
+    '#55A: the controller loop does not re-add the removed master taint',
+    (result.message.match(/^Taints:.*$/m) || [''])[0]
+  );
+  const pinnedCanSchedule = await advanceUntil(async () => {
+    const out = await runCmd('oc get pods -n qa-taint55 -l app=pinned-master');
+    return tableParts(out.message).rows.some(
+      (cells) => /^pinned-master-/.test(cells[0] || '') && cells[2] === 'Running'
+    );
+  }, 30);
+  assert(
+    pinnedCanSchedule,
+    '#55A: removing the taint lets the master-pinned pod actually schedule (real taint semantics)'
+  );
+
+  // ═══ Round 4: #56 CLI multi-kind `endpoints/` prefix (running sandbox) ═══
+  await runCmd('oc new-project qa-cli56');
+  await runCmd('oc apply -f manifests/deployment.yaml -n qa-cli56');
+  await runCmd('oc apply -f manifests/service.yaml -n qa-cli56');
+  const cliPodsReady = await advanceUntil(async () => {
+    const wide = await podWide('qa-cli56');
+    return wide.rows.length >= 2 && wide.rows.every((row) => row.status === 'Running');
+  }, 40);
+  assert(cliPodsReady, '#56 CLI: the qa-cli56 workload is Running before the output checks');
+  await runCmd('oc expose svc/webapp -n qa-cli56');
+  await advanceBoth(8);
+  result = await runCmd('oc get pods,endpoints,route -n qa-cli56');
+  {
+    const sections = tableSections(result.message);
+    const endpointsSection = sections.find((section) => section.headers.includes('ENDPOINTS'));
+    const podsSection = sections.find(
+      (section) => section.headers.includes('STATUS') && section.headers.includes('RESTARTS')
+    );
+    const routeSection = sections.find((section) => section.headers.includes('HOST/PORT'));
+    assert(
+      Boolean(endpointsSection) &&
+        endpointsSection.rows.length === 1 &&
+        endpointsSection.rows[0][0] === 'endpoints/webapp',
+      '#56 CLI: multi-kind `oc get pods,endpoints,route` prints the endpoints NAME as endpoints/webapp',
+      JSON.stringify(endpointsSection?.rows || [])
+    );
+    assert(
+      Boolean(podsSection) &&
+        podsSection.rows.length >= 2 &&
+        podsSection.rows.every((cells) => /^pod\//.test(cells[0] || '')),
+      '#56 CLI: multi-kind pod rows keep the pod/ NAME prefix',
+      JSON.stringify(podsSection?.rows || [])
+    );
+    assert(
+      Boolean(routeSection) &&
+        routeSection.rows.some((cells) => cells[0] === 'route.route.openshift.io/webapp'),
+      '#56 CLI: multi-kind route rows keep the route.route.openshift.io/ NAME prefix',
+      JSON.stringify(routeSection?.rows || [])
+    );
+  }
+  result = await runCmd('oc get endpoints -n qa-cli56');
+  {
+    const single = tableParts(result.message);
+    assert(
+      single.rows.length === 1 && single.rows[0][0] === 'webapp',
+      '#56 CLI: single-kind `oc get endpoints` keeps the plain NAME',
+      result.message.slice(0, 300)
+    );
+  }
+  result = await runCmd('oc get pods,endpoints -n qa-cli56');
+  {
+    const sections = tableSections(result.message);
+    const endpointsSection = sections.find((section) => section.headers.includes('ENDPOINTS'));
+    const podsSection = sections.find(
+      (section) => section.headers.includes('STATUS') && section.headers.includes('RESTARTS')
+    );
+    assert(
+      Boolean(endpointsSection) &&
+        endpointsSection.rows.length === 1 &&
+        endpointsSection.rows[0][0] === 'endpoints/webapp' &&
+        Boolean(podsSection) &&
+        podsSection.rows.every((cells) => /^pod\//.test(cells[0] || '')),
+      '#56 CLI: mixing endpoints with another kind keeps both kinds’ NAME prefixes',
+      result.message.slice(0, 700)
+    );
+  }
+
+  // ═══ Round 5: paused pre-start sandbox — #55B platform presence and
+  //     #56 CLI Route admission events/status (no ticks until Start) ═══════
+  await goto('/?mode=sandbox&tutorial=1');
+  const pausedBooted = await waitFor(
+    () =>
+      evaluate(
+        () =>
+          Boolean(window.game?.app?.modeInstance) &&
+          Boolean(document.getElementById('tutorial-overlay'))
+      ),
+    20000
+  );
+  await sleep(600);
+  const pausedSandbox = await evaluate(() => ({
+    state: window.game?.gameEngine?.state || '',
+    gameSeconds: window.game?.gameEngine?.simulation?.gameSeconds ?? null,
+    tutorial: Boolean(document.getElementById('tutorial-overlay')),
+  }));
+  assert(
+    pausedBooted && pausedSandbox.state === 'paused' && pausedSandbox.gameSeconds === 0,
+    '#55B: the sandbox is genuinely paused before "Start exploring" (zero ticks)',
+    JSON.stringify(pausedSandbox)
+  );
+  result = await runCmd('oc get deploy,rs -n openshift-ingress');
+  deploySection = sectionWithHeaders(result.message, [
+    'NAME',
+    'READY',
+    'UP-TO-DATE',
+    'AVAILABLE',
+    'AGE',
+  ]);
+  replicasetSection = sectionWithHeaders(result.message, [
+    'NAME',
+    'DESIRED',
+    'CURRENT',
+    'READY',
+    'AGE',
+  ]);
+  assert(
+    cellsForRow(deploySection, (name) => /^(?:deployment\.apps\/)?router-default$/.test(name))?.[
+      columnIndex(deploySection, 'READY')
+    ] === '2/2' &&
+      (replicasetSection?.rows || []).filter((cells) =>
+        /^(?:replicaset\.apps\/)?router-default-/.test(cells[0] || '')
+      ).length === 1,
+    '#55B: the router Deployment/ReplicaSet exist synchronously in a paused pre-start sandbox',
+    result.message.slice(0, 500)
+  );
+  result = await runCmd('oc get ds -n openshift-dns');
+  assert(
+    !result.error &&
+      /^dns-default\s/m.test(result.message) &&
+      /^node-resolver\s/m.test(result.message),
+    '#55B: the DNS DaemonSets exist synchronously in a paused pre-start sandbox',
+    result.message.slice(0, 500)
+  );
+  result = await runCmd('oc get pods -n openshift-ingress');
+  {
+    const table = tableParts(result.message);
+    const routerPods = table.rows.filter((cells) => /^router-default-/.test(cells[0] || ''));
+    assert(
+      routerPods.length === 2 && routerPods.every((cells) => cells[2] === 'Running'),
+      '#55B: platform router pods are present in a paused pre-start sandbox',
+      JSON.stringify(routerPods)
+    );
+  }
+
+  // #56 CLI: a Route created while paused must not fabricate a rejection event.
+  await runCmd('oc new-project qa-admit56');
+  await runCmd('oc apply -f manifests/deployment.yaml -n qa-admit56');
+  await runCmd('oc apply -f manifests/service.yaml -n qa-admit56');
+  result = await runCmd('oc expose svc/webapp -n qa-admit56');
+  assert(
+    !result.error && /route\.route\.openshift\.io\/webapp exposed/.test(result.message),
+    '#56 CLI: `oc expose svc/webapp` creates the Route in a paused pre-start sandbox',
+    result.message.slice(0, 300)
+  );
+  result = await runCmd('oc get events -n qa-admit56');
+  {
+    const routeRows = getEventRows(result.message).filter((row) => /^route\//.test(row.object));
+    assert(
+      routeRows.length === 0,
+      '#56 CLI: a pre-tick Route publishes no fabricated route admission event',
+      JSON.stringify(routeRows)
+    );
+    assert(
+      !/ServiceUnavailable/i.test(result.message) &&
+        !/not admitted/i.test(result.message) &&
+        !/no endpoints available/i.test(result.message),
+      '#56 CLI: `oc get events` has no "Warning/ServiceUnavailable … not admitted: no endpoints available" row before the router evaluates the Route',
+      result.message.slice(0, 700)
+    );
+  }
+  result = await runCmd('oc status -n qa-admit56');
+  assert(
+    !result.error &&
+      /exposed by router/.test(result.message) &&
+      !/no endpoints/i.test(result.message) &&
+      !/not admitted/i.test(result.message),
+    '#56 CLI: `oc status` does not claim missing endpoints block Route admission',
+    result.message.slice(0, 800)
+  );
+
+  // Start the engine and tick: the Route is admitted with the real Normal event.
+  await evaluate(() => document.getElementById('tutorial-start')?.click());
+  const engineStarted = await waitFor(
+    () => evaluate(() => window.game?.gameEngine?.state === 'running'),
+    8000
+  );
+  assert(engineStarted, '#56 CLI: "Start exploring" resumes the paused sandbox');
+  await advanceBoth(12);
+  const admittedCondition = await routeCondition('qa-admit56', 'webapp');
+  assert(
+    admittedCondition?.status === 'True',
+    '#56 CLI: the Route is Admitted after the router ticks',
+    JSON.stringify(admittedCondition)
+  );
+  result = await runCmd('oc get events -n qa-admit56');
+  {
+    const routeRows = getEventRows(result.message).filter((row) => row.object === 'route/webapp');
+    assert(
+      routeRows.length === 1 &&
+        routeRows[0].type === 'Normal' &&
+        routeRows[0].reason === 'Admitted',
+      '#56 CLI: after ticking, the Route event is the real Normal Admitted event',
+      JSON.stringify(routeRows)
+    );
+    assert(
+      !routeRows.some((row) => row.type === 'Warning') &&
+        !/ServiceUnavailable/i.test(result.message) &&
+        !/no endpoints available/i.test(result.message),
+      '#56 CLI: no bogus warning admission event remains after the router admits the Route',
+      JSON.stringify(routeRows)
+    );
+  }
+  result = await runCmd('oc status -n qa-admit56');
+  assert(
+    /exposed by router default \(Admitted\)/.test(result.message),
+    '#56 CLI: `oc status` reports the admitted Route',
+    result.message.slice(0, 800)
+  );
+
+  // ═══ Round 6: #56 OLM Manual pin → upgrade chain + operator rollout ═════
+  assert(await bootSandbox(), '#56 OLM: a fresh sandbox boots for the pin→upgrade checks');
+  result = await runCmd('oc get csv -n openshift-operators');
+  assert(
+    /No resources found/.test(result.message),
+    '#56 OLM: a fresh cluster has no installed ClusterServiceVersion yet',
+    result.message.slice(0, 300)
+  );
+  result = await runCmd('oc apply -f examples/subscription-manual-pinned.yaml', 300);
+  assert(
+    !result.error &&
+      /subscription\.operators\.coreos\.com\/openshift-cert-manager-operator created/.test(
+        result.message
+      ),
+    '#56 OLM: the Manual pinned v1.16.0 Subscription manifest applies',
+    result.message.slice(0, 300)
+  );
+  let pinPlan = null;
+  const pinPlanAppeared = await advanceUntil(async () => {
+    pinPlan = await installPlanFor(olmNamespace, olmPinCsv);
+    return Boolean(pinPlan);
+  }, 30);
+  assert(
+    pinPlanAppeared && pinPlan.approval === 'Manual' && pinPlan.approved === false,
+    '#56 OLM: the pinned v1.16.0 InstallPlan waits for Manual approval',
+    JSON.stringify(pinPlan)
+  );
+  if (pinPlan) {
+    result = await runCmd(
+      `oc patch installplan ${pinPlan.name} -n ${olmNamespace} --type=merge -p '{"spec":{"approved":true}}'`
+    );
+    assert(
+      !result.error && /patched/.test(result.message),
+      '#56 OLM: approving the pinned InstallPlan succeeds',
+      result.message.slice(0, 300)
+    );
+  }
+  let pinCsvPhase = null;
+  for (let elapsed = 0; elapsed < 40 && pinCsvPhase !== 'Succeeded'; elapsed += 2) {
+    await advanceBoth(2);
+    pinCsvPhase = await csvPhase(olmNamespace, olmPinCsv);
+  }
+  assert(
+    pinCsvPhase === 'Succeeded',
+    '#56 OLM: the pinned v1.16.0 CSV reaches Succeeded',
+    JSON.stringify(pinCsvPhase)
+  );
+  // The pin is a real member of the channel's replacement chain.
+  const pinReplaces = await csvJsonPath(olmPinCsv, '.spec.replaces');
+  assert(
+    !pinReplaces.error && pinReplaces.value === olmPreviousCsv,
+    '#56 OLM: the pinned v1.16.0 CSV carries the real chain value spec.replaces=v1.15.0',
+    JSON.stringify(pinReplaces)
+  );
+  const operatorReady = await advanceUntil(async () => {
+    const state = await operatorState(olmNamespace);
+    return Boolean(state.deployment) && state.deployment.readyReplicas >= 1;
+  }, 40);
+  const beforeUpgrade = await operatorState(olmNamespace);
+  assert(
+    operatorReady &&
+      beforeUpgrade.deployment?.name === operatorDeploymentName &&
+      beforeUpgrade.deployment?.image.includes('v1.16.0'),
+    '#56 OLM: the v1.16.0 operator Deployment is installed and Ready',
+    JSON.stringify(beforeUpgrade.deployment)
+  );
+  const beforeReplicaSetNames = beforeUpgrade.replicaSets.map((rs) => rs.name);
+
+  let upgradePlan = null;
+  const upgradeAppeared = await advanceUntil(async () => {
+    upgradePlan = await installPlanFor(olmNamespace, olmHeadCsv);
+    return Boolean(upgradePlan);
+  }, 40);
+  assert(
+    upgradeAppeared && upgradePlan.approval === 'Manual' && upgradePlan.approved === false,
+    '#56 OLM: OLM creates a second Manual, unapproved v1.17.0 upgrade InstallPlan',
+    JSON.stringify(upgradePlan)
+  );
+  if (upgradePlan) {
+    result = await runCmd(
+      `oc patch installplan ${upgradePlan.name} -n ${olmNamespace} --type=merge -p '{"spec":{"approved":true}}'`
+    );
+    assert(
+      !result.error && /patched/.test(result.message),
+      '#56 OLM: approving the v1.17.0 upgrade InstallPlan succeeds',
+      result.message.slice(0, 300)
+    );
+  }
+  let upgradedSub = await subscriptionState(olmPackageName, olmNamespace);
+  const upgraded = await advanceUntil(async () => {
+    upgradedSub = await subscriptionState(olmPackageName, olmNamespace);
+    return upgradedSub?.installedCSV === olmHeadCsv && upgradedSub?.phase === 'Succeeded';
+  }, 60);
+  assert(
+    upgraded,
+    '#56 OLM: approving the upgrade installs v1.17.0 (installedCSV=currentCSV=head, Succeeded)',
+    JSON.stringify(upgradedSub)
+  );
+
+  // `oc get csv`: the REPLACES column names the previous CSV.
+  result = await runCmd('oc get csv -n openshift-operators');
+  {
+    const table = tableParts(result.message);
+    const replacesAt = table.headers.indexOf('REPLACES');
+    const headRow = table.rows.find((cells) => cells[0] === olmHeadCsv) || [];
+    const pinRowStillListed = table.rows.some((cells) => cells[0] === olmPinCsv);
+    assert(
+      replacesAt >= 0 && headRow[replacesAt] === olmPinCsv,
+      '#56 OLM: `oc get csv` prints REPLACES cert-manager-operator.v1.16.0 on the v1.17.0 row',
+      JSON.stringify({ headers: table.headers, row: headRow })
+    );
+    assert(
+      !pinRowStillListed,
+      '#56 OLM: the superseded v1.16.0 CSV is gone from `oc get csv` after the upgrade',
+      JSON.stringify(table.rows.map((cells) => cells[0]))
+    );
+  }
+  const headReplaces = await csvJsonPath(olmHeadCsv, '.spec.replaces');
+  assert(
+    !headReplaces.error && headReplaces.value === olmPinCsv,
+    '#56 OLM: the v1.17.0 CSV spec.replaces is cert-manager-operator.v1.16.0',
+    JSON.stringify(headReplaces)
+  );
+  result = await runCmd(`oc describe csv ${olmHeadCsv} -n ${olmNamespace}`);
+  assert(
+    /Replaces:\s+cert-manager-operator\.v1\.16\.0/.test(result.message),
+    '#56 OLM: `oc describe csv` shows the Replaces chain',
+    result.message.slice(0, 700)
+  );
+
+  // The operator pod rolls to a new ReplicaSet/pod-template hash.
+  let afterUpgrade = await operatorState(olmNamespace);
+  const rolledOut = await advanceUntil(async () => {
+    afterUpgrade = await operatorState(olmNamespace);
+    const newReplicaSets = afterUpgrade.replicaSets.filter(
+      (rs) => !beforeReplicaSetNames.includes(rs.name)
+    );
+    return (
+      newReplicaSets.length === 1 &&
+      newReplicaSets[0].readyReplicas >= 1 &&
+      afterUpgrade.pods.some(
+        (pod) => pod.hash === newReplicaSets[0].hash && pod.phase === 'Running' && pod.ready
+      )
+    );
+  }, 60);
+  const newReplicaSets = afterUpgrade.replicaSets.filter(
+    (rs) => !beforeReplicaSetNames.includes(rs.name)
+  );
+  const oldReplicaSets = afterUpgrade.replicaSets.filter((rs) =>
+    beforeReplicaSetNames.includes(rs.name)
+  );
+  const rolledPod = afterUpgrade.pods.find(
+    (pod) => pod.hash === newReplicaSets[0]?.hash && pod.phase === 'Running' && pod.ready
+  );
+  assert(
+    rolledOut &&
+      afterUpgrade.deployment?.name === beforeUpgrade.deployment?.name &&
+      afterUpgrade.deployment?.readyReplicas >= 1,
+    '#56 OLM: the upgraded operator Deployment is Ready after the rollout',
+    JSON.stringify(afterUpgrade.deployment)
+  );
+  assert(
+    JSON.stringify(afterUpgrade.deployment?.template) !==
+      JSON.stringify(beforeUpgrade.deployment?.template) &&
+      afterUpgrade.deployment?.image !== beforeUpgrade.deployment?.image &&
+      /v1\.17\.0/.test(afterUpgrade.deployment?.image || '') &&
+      /v1\.16\.0/.test(beforeUpgrade.deployment?.image || ''),
+    '#56 OLM: the upgrade changes the operator Deployment pod template/image (v1.16.0 → v1.17.0)',
+    JSON.stringify({
+      before: beforeUpgrade.deployment?.image,
+      after: afterUpgrade.deployment?.image,
+    })
+  );
+  assert(
+    newReplicaSets.length === 1 &&
+      newReplicaSets[0].hash !== beforeUpgrade.replicaSets[0]?.hash &&
+      newReplicaSets[0].owners.some((owner) => owner.startsWith('Deployment/')),
+    '#56 OLM: the Deployment controller rolls a NEW operator ReplicaSet with a new pod-template-hash',
+    JSON.stringify(afterUpgrade.replicaSets)
+  );
+  assert(
+    oldReplicaSets.length === 1 && oldReplicaSets.every((rs) => rs.desired === 0),
+    '#56 OLM: the old operator ReplicaSet is scaled to 0 and kept for rollout history',
+    JSON.stringify(oldReplicaSets)
+  );
+  assert(
+    Boolean(rolledPod) &&
+      rolledPod.hash === newReplicaSets[0]?.hash &&
+      rolledPod.owners.some(
+        (owner) => owner.kind === 'ReplicaSet' && owner.name === newReplicaSets[0]?.name
+      ),
+    '#56 OLM: the operator pod has the new hash and is owned by the new ReplicaSet',
+    JSON.stringify({ pod: rolledPod, rs: newReplicaSets[0] })
+  );
+  result = await runCmd('oc get rs -n openshift-operators');
+  {
+    const table = tableParts(result.message);
+    const desiredAt = table.headers.indexOf('DESIRED');
+    const newRow = table.rows.find((cells) => cells[0] === newReplicaSets[0]?.name) || [];
+    const oldRow = table.rows.find((cells) => cells[0] === oldReplicaSets[0]?.name) || [];
+    assert(
+      Boolean(newRow.length) && newRow[desiredAt] !== '0',
+      '#56 OLM: `oc get rs` lists the new operator ReplicaSet with desired replicas',
+      result.message.slice(0, 500)
+    );
+    assert(
+      Boolean(oldRow.length) && oldRow[desiredAt] === '0',
+      '#56 OLM: `oc get rs` shows the old operator ReplicaSet scaled to 0',
+      result.message.slice(0, 500)
+    );
+  }
+  result = await runCmd('oc get deploy,rs -n openshift-operators');
+  assert(
+    new RegExp(`deployment\\.apps/${operatorDeploymentName}\\s+1/1`).test(result.message) &&
+      result.message.includes(`replicaset.apps/${newReplicaSets[0]?.name}`),
+    '#56 OLM: multi-kind `oc get deploy,rs` shows the upgraded operator Deployment 1/1 and its new ReplicaSet',
+    result.message.slice(0, 700)
   );
 });
 
