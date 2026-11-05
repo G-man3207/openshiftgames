@@ -1,19 +1,19 @@
 {
-  "timestamp": "2026-11-05T16:44:15.441Z",
+  "timestamp": "2026-11-05T17:44:47.041Z",
   "environment": {
     "node": "v26.10.0",
     "chrome": "Chrome/156.0.8078.79",
-    "baseUrl": "http://127.0.0.1:46855",
+    "baseUrl": "http://127.0.0.1:32839",
     "viewport": {
       "width": 1600,
       "height": 900
     },
     "puppeteerCore": "/tmp/verify-tools",
-    "startedAt": "2026-11-05T16:28:04.515Z",
-    "durationSeconds": 971
+    "startedAt": "2026-11-05T17:28:30.611Z",
+    "durationSeconds": 976
   },
   "summary": {
-    "passes": 1893,
+    "passes": 1921,
     "failures": 0,
     "warnings": 0,
     "consoleErrors": 0,
@@ -206,6 +206,11 @@
       "failures": 0,
       "warnings": 0
     },
+    "qa-issue63": {
+      "passes": 28,
+      "failures": 0,
+      "warnings": 0
+    },
     "draw": {
       "passes": 10,
       "failures": 0,
@@ -226,74 +231,74 @@
       "path": "screenshot.png",
       "width": 1600,
       "height": 900,
-      "bytes": 981967
+      "bytes": 981667
     },
     "ogImage": {
       "path": "og-image.png",
       "width": 1200,
       "height": 630,
-      "bytes": 205691
+      "bytes": 205742
     },
     "screenshots": [
       {
         "path": "docs/screenshots/menu.png",
         "width": 1600,
         "height": 900,
-        "bytes": 331989
+        "bytes": 331883
       },
       {
         "path": "docs/screenshots/exam-prep.png",
         "width": 1600,
         "height": 900,
-        "bytes": 211514
+        "bytes": 210539
       },
       {
         "path": "docs/screenshots/sandbox.png",
         "width": 1600,
         "height": 900,
-        "bytes": 982658
+        "bytes": 981435
       },
       {
         "path": "screenshot.png",
         "width": 1600,
         "height": 900,
-        "bytes": 981967
+        "bytes": 981667
       },
       {
         "path": "docs/screenshots/files-panel.png",
         "width": 1600,
         "height": 900,
-        "bytes": 244417
+        "bytes": 243946
       },
       {
         "path": "docs/screenshots/campaign-level-1.png",
         "width": 1600,
         "height": 900,
-        "bytes": 479284
+        "bytes": 479304
       },
       {
         "path": "docs/screenshots/regressions-minimap-collapsed.png",
         "width": 1600,
         "height": 900,
-        "bytes": 961056
+        "bytes": 961478
       },
       {
         "path": "docs/screenshots/regressions-campaign-restart.png",
         "width": 1600,
         "height": 900,
-        "bytes": 488320
+        "bytes": 489092
       },
       {
         "path": "docs/screenshots/draw.png",
         "width": 1600,
         "height": 900,
-        "bytes": 488977
+        "bytes": 488450
       },
       {
         "path": "og-image.png",
         "width": 1200,
         "height": 630,
-        "bytes": 205691
+        "bytes": 205742
       }
     ]
   },
@@ -7789,6 +7794,118 @@
     {
       "section": "qa-issue61-62",
       "name": "#61: allow-dns-egress restores name-based curl with the real order Trying → Connected → 200 body"
+    },
+    {
+      "section": "qa-issue63",
+      "name": "#63: a fresh sandbox boots for the shell/exec exit-status checks (random failures disabled)"
+    },
+    {
+      "section": "qa-issue63",
+      "name": "#63: `oc new-project qa63` creates the fixture project"
+    },
+    {
+      "section": "qa-issue63",
+      "name": "#63: `oc create deployment web` creates the one-replica fixture"
+    },
+    {
+      "section": "qa-issue63",
+      "name": "#63: the qa63 web Pod reaches Running 1/1"
+    },
+    {
+      "section": "qa-issue63",
+      "name": "#63: `oc expose deploy/web --port=8080` creates the Service used by the issue’s nslookup flow"
+    },
+    {
+      "section": "qa-issue63",
+      "name": "#63a: `oc exec … -- nslookup <unknown>; echo rc=$?` prints rc=1 — the failed exec status reaches the same line"
+    },
+    {
+      "section": "qa-issue63",
+      "name": "#63a: `$?` persists across terminal lines — the previous `cat /nope` (exit 1) is read as rc=1"
+    },
+    {
+      "section": "qa-issue63",
+      "name": "#63a: the across-line `$?` of a real `ls /nope` failure is 2, not a generic 1"
+    },
+    {
+      "section": "qa-issue63",
+      "name": "#63a: `$?` after a successful exec is 0"
+    },
+    {
+      "section": "qa-issue63",
+      "name": "#63a: `export X=5; echo $X $?` prints `5 0` in the same line"
+    },
+    {
+      "section": "qa-issue63",
+      "name": "#63a: the braced `${?}` form expands to the failed exec status"
+    },
+    {
+      "section": "qa-issue63",
+      "name": "#63a: `$?` expands in double quotes but stays literal inside single quotes"
+    },
+    {
+      "section": "qa-issue63",
+      "name": "#63a: `env` lists the exported X but never leaks `$?` as an environment variable"
+    },
+    {
+      "section": "qa-issue63",
+      "name": "#63b: `oc exec … -- true` is a silent success (no missing-binary error)"
+    },
+    {
+      "section": "qa-issue63",
+      "name": "#63b: `oc exec … -- false` fails with `command terminated with exit code 1` (never the OCI 127 wording)"
+    },
+    {
+      "section": "qa-issue63",
+      "name": "#63b: a failed container `false` propagates to `||`, so `echo RECOVERED` runs and the line succeeds"
+    },
+    {
+      "section": "qa-issue63",
+      "name": "#63c: `oc exec … -- ls /nope` prints the real ls error then `command terminated with exit code 2`"
+    },
+    {
+      "section": "qa-issue63",
+      "name": "#63c: a container command that exits non-zero stops the `&&` chain (`echo AFTER` never runs)"
+    },
+    {
+      "section": "qa-issue63",
+      "name": "#63c: `|| echo RECOVERED` recovers from a container exit 2"
+    },
+    {
+      "section": "qa-issue63",
+      "name": "#63c: `oc exec … -- cat /nope` reports the cat error and exits 1"
+    },
+    {
+      "section": "qa-issue63",
+      "name": "#63c: `oc rsh … ls /nope` returns the remote command’s status 2 like oc exec"
+    },
+    {
+      "section": "qa-issue63",
+      "name": "#62/#63: the OCI exec not-found contract still exits 127 with the containerd wording"
+    },
+    {
+      "section": "qa-issue63",
+      "name": "#63d: the Lab 13 description says the default-deny policy is provided in challenges/payments-networkpolicy.yaml and must be applied (not seeded)"
+    },
+    {
+      "section": "qa-issue63",
+      "name": "#63d: the first Lab 13 hint tells the learner to apply the provided policy and that no policy exists at start"
+    },
+    {
+      "section": "qa-issue63",
+      "name": "#63d: timed Lab 13 starts from the sandbox flow"
+    },
+    {
+      "section": "qa-issue63",
+      "name": "#63d: the running Lab 13 mode renders the provided-policy description"
+    },
+    {
+      "section": "qa-issue63",
+      "name": "#63d: `oc get netpol -n payments` is empty at the start of Lab 13 (the learner must apply the provided policy)"
+    },
+    {
+      "section": "qa-issue63",
+      "name": "#63d: the on-screen Lab 13 objectives panel renders the provided-policy wording (challenges/payments-networkpolicy.yaml + apply)"
     },
     {
       "section": "draw",

@@ -46,7 +46,10 @@ names are shown in EX280 Prep).
   visible like real `oc`, and `-o wide` prints ServiceAccount subjects as `<namespace>/<name>`
   (`qa8/deployer`) like `rbac.SubjectsStrings`. `oc exec`/`oc rsh` return the remote command's exit
   status: an unmodelled binary fails with the real OCI `executable file not found in $PATH` error
-  and `command terminated with exit code 127`, so `&&` chains stop (`||` still runs). Cluster DNS
+  and `command terminated with exit code 127`, coreutils behave like the image's own binaries
+  (`true` exits 0 silently, `false` exits 1), and a real command's failure is surfaced with its real
+  status (`ls` on a missing path exits 2, `cat`/`grep` failures exit 1) followed by the real
+  `command terminated with exit code <N>` line, so `&&` chains stop (`||` still runs). Cluster DNS
   is NetworkPolicy-aware: `nslookup`, `dig` and `getent hosts` query the same `openshift-dns`
   dns-default Pods on 5353 that `curl`'s name resolution uses, print the real tool formats
   (`nslookup` applies the Pod's search list, so bare `web` prints
@@ -60,9 +63,11 @@ names are shown in EX280 Prep).
   `oc` is the taught command; a leading `kubectl` is accepted as an alias with an educational hint.
 - **A real shell around `oc`** — `vim`/`vi` (opens the manifest editor), `cat`, `echo` with
   `>`/`>>` redirects, heredocs, command substitution, `;`/`&&`/`||` sequencing, session variables
-  (`export NS=default`, `$NS`/`${NS}` expansion) and pipes through `grep`, `sed`, `tail`,
-  `head`, `cut`, `wc`, `sort`, `base64 -d`, `openssl` (including real `req -x509` / `x509` PEM
-  handling), `htpasswd`, `skopeo` — so exam workflows like writing YAML in the terminal,
+  (`export NS=default`, `$NS`/`${NS}` expansion), bash's `$?`/`${?}` exit-status parameter
+  (`oc exec … -- ls /nope; echo rc=$?` → `rc=2`, `false; echo $?` → `1`) and pipes through
+  `grep`, `sed`, `tail`, `head`, `cut`, `wc`, `sort`, `base64 -d`, `openssl` (including real
+  `req -x509` / `x509` PEM handling), `htpasswd`, `skopeo` — so exam workflows like writing YAML in
+  the terminal,
   decoding a Secret and `oc apply -f -` work as on a real workstation. Unsupported shell grammar
   (loops, conditionals) is rejected with a clear simulator message instead of silently running part
   of the line. A workstation-side `curl`

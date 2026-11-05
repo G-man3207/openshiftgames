@@ -4,6 +4,93 @@ All notable changes to OpenShift Games are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 aims to follow [Semantic Versioning](https://semver.org/).
 
+## [1.10.0] — 2026-11-05
+
+Twelfth QA pass on 1.9.0: closes the four P4 findings of the 1.9.0 CLI retest (issue #63) — three
+in the shell/`oc exec` exit-status layer and one in the Lab 13 copy. The simulated workstation shell
+now expands bash's `$?` / `${?}` special parameter: the CommandBar records every executed segment's
+real numeric status (success 0, failed `oc` command 1, syntax error 2, and the remote status
+returned by `oc exec`/`oc rsh`), keeps it across `;`/`&&`/`||` segments and terminal lines exactly
+like a login shell, and expands it in unquoted and double-quoted words (never inside single quotes)
+while keeping it out of `env`/`printenv`. Inside containers, `true`/`false` are now real coreutils
+(`true` silent exit 0, `false` silent exit 1) instead of missing binaries, and a modelled command's
+non-zero status is finally reported: `ls /nope` exits 2 (`ls: cannot access …` + `command
+terminated with exit code 2`), `cat` on a missing file exits 1 and `grep` with no match exits 1, so
+`&&` chains stop and `||` recovers for every failing modelled container command — not just the
+existing 127 not-found case — and a pipeline's status is its last stage's status. Lab 13's
+description and first hint no longer imply a default-deny policy is already seeded: a default-deny
+policy is provided in `challenges/payments-networkpolicy.yaml`, and the learner applies it (or
+writes their own) before adding the allow rules; `oc get netpol -n payments` is empty at start. The
+game stays no-build and dependency-free.
+
+### Added
+
+- **`$?` / `${?}` in the simulated shell (issue #63).** `ShellTools.lastExitCode` now holds the
+  numeric status of the last executed command and `expandShellVariables()` expands bash's special
+  status parameter in unquoted and double-quoted words (single quotes keep it literal); it is a
+  shell parameter, so `env`/`printenv`/`export` never list it. The issue's examples work as on a
+  real workstation: `oc exec deploy/web -- nslookup web; echo rc=$?` prints `rc=1` when the exec
+  fails, `export X=5; echo $X $?` prints `5 0`, and `$?` persists across terminal lines and engine
+  resets (fresh shell = 0).
+- **Container coreutils `true`/`false` (issue #63).** Every UBI image ships coreutils, so
+  `oc exec`/`oc rsh` now model `true` as a silent exit 0 and `false` as a silent exit 1, surfaced by
+  the exec/rsh surface as `command terminated with exit code 1` (with no fabricated OCI
+  `executable file not found` error and no `command executed in …` line).
+- **Real exit statuses from modelled container commands (issue #63).** `_execStage` reports the
+  real status of the commands it models: `ls` on a missing path prints
+  `ls: cannot access '<path>': No such file or directory` and exits 2, `cat` on a missing file exits
+  1 and `grep` with no match is silent and exits 1. `oc exec`/`oc rsh` append the real
+  `command terminated with exit code <N>` and return a failed result, so `&&` stops and `||`
+  recovers for every such failure, exactly like the 127 not-found contract.
+
+### Changed
+
+- **The shell's exit status is one numeric, persistent model (issue #63).** Each executed segment
+  records its status (`oc exec`/`oc rsh` return the remote status; other failures are 1; a syntax
+  error is 2; success is 0), a skipped `&&`/`||` segment leaves it unchanged, and `_runSegment`
+  reports a pipeline's last-stage status. This also preserves `grep`'s real exit 1 on no match (a
+  failed shell status without a printed error), so `cmd | grep NOPE` stops a following `&&` and
+  `echo $?` reads 1.
+- **Lab 13 description and first hint (issue #63).** The description now reads "A default-deny
+  policy is provided in `challenges/payments-networkpolicy.yaml`; apply it (or write your own),
+  then add the allow rules." and the first hint starts with the provided policy apply step and
+  states that no policy is applied to `payments` at start — matching `startingResources` (Project,
+  Deployments, Services only) and the first objective ("Deny all ingress and egress…").
+- README and CONVERSION-SPEC describe the `$?`/exit-status model, the container coreutils and real
+  exit statuses, and the corrected Lab 13 copy (issues #63); the verification report records the
+  twelfth QA pass.
+
+### Fixed
+
+- **`$?` was printed literally (issue #63).** The shell expanded `$NAME`/`${NAME}` but not the
+  special `?` parameter, so `oc exec …; echo rc=$?` printed `rc=$?` and `echo $X $?` printed `5 $?`.
+  Both now print the real status (`rc=1`, `5 0`) on the same line and on following lines.
+- **`true`/`false` appeared to be missing binaries (issue #63).** `oc exec … -- false` no longer
+  fails with the OCI `executable file not found in $PATH` error + exit 127; it is the real coreutil
+  failure (exit 1).
+- **Failing real commands looked like successes (issue #63).** `oc exec … -- ls /nope` printed only
+  `ls: cannot access …` and the shell still saw success — a following `&&` ran. It now prints the
+  real `command terminated with exit code 2`, exits 2 and stops the chain (`||` recovers); `cat` and
+  `grep` failures likewise exit 1.
+- **Lab 13 read as if its policy was already seeded (issue #63).** "You start from a seeded
+  default-deny policy" is replaced with the provided-file/apply-it wording, so the description
+  agrees with the empty `oc get netpol -n payments` at the start and with the first objective.
+
+### Tests
+
+- New permanent `qa-issue63` browser-regression section (28 checks) covering every report item
+  end-to-end: same-line and cross-line `$?`/`${?}` (including the issue's `nslookup; echo rc=$?`
+  shape), `export X=5; echo $X $?`, single-quote literal / double-quote expansion, `env` not
+  listing `?`, container `true`/`false` + `||` recovery, `ls`/`cat`/`grep`/`rsh` real statuses with
+  `&&`/`||` chaining, the preserved 127 not-found contract, and Lab 13's provided-policy
+  description/hint, on-screen objectives panel and empty-netpol start state.
+- `scripts/verify.mjs` grew the matching §4g static-fidelity locks (9 checks) that drive the same
+  CommandBar fixture without a browser and fail the fast gate on any shell/exec/Lab 13 regression.
+- Static gate: **1072 checks, 0 failures, 0 warnings** (56 JS modules, 118 files); full browser
+  suite: **1921 checks, 0 failures, 0 warnings** (976 s,
+  0 console/page errors, GO); `visual-qa --strict`: **PASS** (94 checks, 0 failures,
+  30 informational warnings); see `docs/verification-report.md`.
+
 ## [1.9.0] — 2026-11-05
 
 Eleventh QA pass on 1.8.0: closes the two open report items (#61–#62) from the 1.8.0 CLI retest.

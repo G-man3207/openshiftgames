@@ -284,8 +284,11 @@ educational hint "tip: on OpenShift, use oc"); prompt rendered as `$ oc`; suppor
 (`oc process ... | oc apply -f -`) and output redirects (`oc get deploy web -o yaml > web.yaml`) for
 the virtual file system. Like a real workstation shell, also support `;`, `&&` and `||` command
 sequencing (quote/escape-aware; each segment keeps its own pipes/redirects and `&&`/`||` respect the
-previous segment's exit status) plus session variables — `export NAME=value` and `$NAME`/`${NAME}`
-expansion in unquoted and double-quoted arguments (not inside single quotes). Unsupported shell
+previous segment's exit status) plus session variables — `export NAME=value`, `$NAME`/`${NAME}`
+expansion and bash's `$?`/`${?}` last-exit-status parameter — in unquoted and double-quoted
+arguments (not inside single quotes). The exit status is the real numeric status of the last
+executed command (see §4.3), persists across segments and terminal lines, and is reset with the
+shell session; a skipped `&&`/`||` segment leaves it unchanged. Unsupported shell
 grammar (loops, conditionals, functions) is rejected loudly (`simulator: … not supported — run one
 command per line`); never execute part of a line silently. Track every executed raw command in
 `gameEngine` command history with `{raw, baseCommand, success, timestamp}`. Tab completion must
@@ -477,8 +480,8 @@ simulation contract; these are the invariants every surface must keep:
   it is non-zero. An unmodelled binary returns 127 with the OCI not-found wording
   (`exec: "<cmd>": executable file not found in $PATH`) and no fabricated
   `(command executed in …)`/`exit code 0` lines, so `&&` chains stop and `||` branches run.
-  Modelled binaries match by basename (`/bin/cat`); `sh`/`bash` are no-ops; other commands keep
-  their previous exit semantics.
+  Modelled binaries match by basename (`/bin/cat`); `sh`/`bash` are no-ops; every real command
+  reports its real status (see §4.3: `true`/`false`, `ls` 2, `cat`/`grep` 1).
 - **Pod network 10.128.0.0/14 (issue #62).** `SimulationTick._generatePodIP(node)` allocates
   `status.podIP` inside the Pod's Node `spec.podCIDR` (`/23` hostPrefix, host octet 2–254, skipping
   already-assigned Pod IPs) and falls back to 10.128–10.131 when no Node/CIDR is known; scheduler,
@@ -507,6 +510,34 @@ simulation contract; these are the invariants every surface must keep:
   container ports (last matching container port, so the kube-rbac-proxy `metrics` 9154 wins over
   CoreDNS' 9153) and is used by describe, `oc get endpoints` and the traffic simulation; numeric
   targetPorts keep their previous behaviour.
+
+### 4.3 Shell exit statuses and container coreutils (issue #63)
+
+The simulated shell and the `oc exec`/`oc rsh` container surface share one honest exit-status model:
+
+- **`$?` / `${?}` expansion (issue #63).** `ShellTools.lastExitCode` holds the numeric status of the
+  last executed command: the CommandBar records each segment's status after it runs (`oc exec`/
+  `oc rsh` return the remote command's status; a failed `oc` command is 1; a syntax error is 2;
+  success is 0) and bash `$?`/`${?}` expands it in unquoted and double-quoted words, never inside
+  single quotes. The value survives `;`/`&&`/`||` segments and terminal lines like a real login
+  shell, a skipped segment leaves it unchanged, and a fresh shell (engine reset) starts at 0.
+  Examples: `oc exec deploy/web -- nslookup web; echo rc=$?` prints `rc=1` when the exec fails,
+  `export X=5; echo $X $?` prints `5 0`, and `oc exec … -- ls /nope` on one line followed by
+  `echo rc=$?` prints `rc=2`. `$?` is a shell special parameter — it is never listed by
+  `env`/`printenv`/`export`.
+- **Real command statuses in the shell.** Commands that fail without printing an error keep their
+  real status: `grep` with no match returns 1 (so `cmd | grep NOPE` makes the pipeline status 1 and
+  stops a following `&&`); a pipeline's status is its last stage's status. Working `true`/`false`
+  shell builtins keep the sequencing grammar honest (0 / 1).
+- **Coreutils in containers (issue #63).** `true` is a silent exit 0 and `false` a silent exit 1
+  inside `oc exec`/`oc rsh` (mainstream UBI images ship coreutils), surfaced by the exec/rsh
+  surface as `command terminated with exit code 1` with no fabricated OCI not-found error.
+- **Real container commands report their real non-zero status (issue #63).** `ls` on a missing path
+  prints `ls: cannot access '<path>': No such file or directory` and exits 2; `cat` on a missing
+  file exits 1; `grep` with no match exits 1. `oc exec`/`oc rsh` append
+  `command terminated with exit code <N>` and return a failed result, so `&&` stops and `||`
+  recovers exactly like the existing 127 not-found contract. This closes the old behaviour where a
+  failing modelled command printed only its error line and the shell still saw exit 0.
 
 ---
 
