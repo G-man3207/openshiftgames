@@ -15054,14 +15054,28 @@ await runSection('qa-issue57-58', async () => {
   row = table.rows.find((cells) => cells[0] === 'dns-default') || [];
   {
     const endpointCell = row[columnIndex(table, 'ENDPOINTS')] || '';
-    const endpointPairs = endpointCell.split(',').filter(Boolean);
+    // #60: the ENDPOINTS cell truncates like kubectl — three pairs, then
+    // ` + N more...` for the rest. Derive N from the canonical ready endpoints
+    // (3 DNS Pods × 3 ports = 9) instead of hardcoding it, so a transiently
+    // recreated platform Pod cannot make this look like a truncation bug.
+    const expectedPairs = await evaluate(() => {
+      const svc = window.game.cluster.getByName('Service', 'dns-default', 'openshift-dns');
+      const pods = window.game.cluster.getServiceEndpoints(svc);
+      return pods.length * ((svc?.spec?.ports || []).length || 1);
+    });
+    const truncation = endpointCell.match(/^(.*?) \+ (\d+) more\.\.\.$/);
+    const endpointPairs = (truncation ? truncation[1] : endpointCell).split(',').filter(Boolean);
+    const expectedListed = Math.min(3, expectedPairs);
+    const expectedMore = expectedPairs > 3 ? String(expectedPairs - 3) : null;
     assert(
       !result.error &&
-        endpointPairs.length > 0 &&
+        expectedPairs > 3 &&
+        endpointPairs.length === expectedListed &&
         endpointPairs.every((pair) => /^10\.\d+\.\d+\.\d+:\d+$/.test(pair)) &&
-        endpointPairs.some((pair) => pair.endsWith(':5353')),
-      '#58: `oc get endpoints -n openshift-dns` lists dns-default pod-network 10.x addresses on 5353',
-      endpointCell.slice(0, 500)
+        endpointPairs.some((pair) => pair.endsWith(':5353')) &&
+        truncation?.[2] === expectedMore,
+      '#58: `oc get endpoints -n openshift-dns` lists the first 3 dns-default 10.x:5353 pairs plus " + N more..." like kubectl',
+      JSON.stringify({ endpointCell: endpointCell.slice(0, 500), expectedPairs, expectedMore })
     );
   }
   result = await runCmd('oc get svc,endpoints -n openshift-dns');
@@ -15169,8 +15183,23 @@ await runSection('qa-issue57-58', async () => {
       const endpointsTable = tableParts(result.message);
       const endpointsRow =
         endpointsTable.rows.find((cells) => cells[0] === 'router-internal-default') || [];
-      const endpointsCell = endpointsRow[columnIndex(endpointsTable, 'ENDPOINTS')] || '';
-      const endpointPairs = endpointsCell.split(',').filter(Boolean);
+      const endpointCell = endpointsRow[columnIndex(endpointsTable, 'ENDPOINTS')] || '';
+      // #60: router Pods × 3 ports (2 × 3 = 6 ready pairs) truncate to the
+      // first three then ` + N more...`. Derive N from the canonical endpoint
+      // count so a transiently recreated router Pod cannot fail the check.
+      const expectedPairs = await evaluate(() => {
+        const svc = window.game.cluster.getByName(
+          'Service',
+          'router-internal-default',
+          'openshift-ingress'
+        );
+        const pods = window.game.cluster.getServiceEndpoints(svc);
+        return pods.length * ((svc?.spec?.ports || []).length || 1);
+      });
+      const truncation = endpointCell.match(/^(.*?) \+ (\d+) more\.\.\.$/);
+      const endpointPairs = (truncation ? truncation[1] : endpointCell).split(',').filter(Boolean);
+      const expectedListed = Math.min(3, expectedPairs);
+      const expectedMore = expectedPairs > 3 ? String(expectedPairs - 3) : null;
       const nodeIPs = new Set(
         await evaluate(() =>
           (window.game.cluster.getByKind('Node') || []).map(
@@ -15181,19 +15210,15 @@ await runSection('qa-issue57-58', async () => {
         )
       );
       const pairsResolve =
-        endpointPairs.length > 0 &&
+        endpointPairs.length === expectedListed &&
         endpointPairs.every((pair) => {
           const [ip, port] = pair.split(':');
           return nodeIPs.has(ip) && ['80', '443', '1936'].includes(port);
         });
       assert(
-        !result.error &&
-          pairsResolve &&
-          ['80', '443', '1936'].every((port) =>
-            endpointPairs.some((pair) => pair.endsWith(`:${port}`))
-          ),
-        '#58: `oc get endpoints -n openshift-ingress` resolves the router Pods to node IPs on 80/443/1936',
-        endpointsCell.slice(0, 600)
+        !result.error && expectedPairs > 3 && pairsResolve && truncation?.[2] === expectedMore,
+        '#58: `oc get endpoints -n openshift-ingress` resolves the first 3 router Pod node-IP pairs on 80/443 plus " + N more..."',
+        JSON.stringify({ endpointsCell: endpointCell.slice(0, 600), expectedPairs, expectedMore })
       );
     }
   }
@@ -15390,6 +15415,643 @@ await runSection('qa-issue57-58', async () => {
       /Replicas:\s+1 desired/.test(result.message),
     '#58: `oc describe rs <predicted name>` works and shows the 1-desired ReplicaSet',
     result.message.slice(0, 500)
+  );
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// QA ROUND 1.8.0 — issues #59/#60: Service objects carry a real
+// `spec.clusterIP` + the other API-server defaults created by `oc expose` and
+// `oc apply -f`, `oc describe svc` prints the real per-port kubectl shape and
+// cluster DNS resolves the actual Service ClusterIP names; the #60 output
+// fidelity items (unscheduled Pod describe without kubelet-only lines,
+// kubectl-style Endpoints truncation, RoleBinding ROLE kind and the blocking
+// `oc rollout status --timeout`) stay honest.
+// ═══════════════════════════════════════════════════════════════════════════
+await runSection('qa-issue59-60', async () => {
+  let result;
+  let row;
+
+  /** Advance the simulation AND incident clocks deterministically (0.05 s). */
+  const advanceBoth = async (seconds) =>
+    evaluate((secs) => {
+      const sim = window.game?.gameEngine?.simulation;
+      const engine = window.game?.incidentEngine;
+      if (!sim || typeof sim.tick !== 'function') return false;
+      const steps = Math.ceil(secs / 0.05);
+      for (let index = 0; index < steps; index += 1) {
+        sim.tick(0.05);
+        if (engine && typeof engine.tick === 'function') engine.tick(0.05);
+      }
+      return true;
+    }, seconds);
+  /** Advance both clocks until predicate() is true, or exhaust maxSeconds. */
+  const advanceUntil = async (predicate, maxSeconds = 60, step = 2) => {
+    for (let played = 0; played < maxSeconds; played += step) {
+      await advanceBoth(step);
+      if (await predicate()) return true;
+    }
+    return false;
+  };
+  /** Split an oc tabwriter table into header cells + rows (2+ space columns). */
+  const tableParts = (message) => {
+    const lines = String(message ?? '')
+      .split('\n')
+      .filter((line) => line.trim() !== '');
+    return {
+      headers: (lines[0] || '').split(/\s{2,}/).map((cell) => cell.trim()),
+      rows: lines.slice(1).map((line) => line.split(/\s{2,}/).map((cell) => cell.trim())),
+    };
+  };
+  const columnIndex = (section, header) => (section ? section.headers.indexOf(header) : -1);
+  const escapeRe = (text) => String(text).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  /** Ready `ip:port` pairs of an ENDPOINTS cell (strips a ` + N more...` tail). */
+  const endpointCellParts = (cell) => {
+    const text = String(cell ?? '').trim();
+    const truncation = text.match(/^(.*?)(?: \+ (\d+) more\.\.\.)?$/);
+    return {
+      text,
+      listed: (truncation?.[1] || '')
+        .split(',')
+        .map((entry) => entry.trim())
+        .filter(Boolean),
+      more: truncation?.[2] === undefined ? null : Number(truncation[2]),
+    };
+  };
+  /** Per-port blocks of `oc describe svc` (Port:/TargetPort:/Endpoints: groups). */
+  const describePortBlocks = (message) => {
+    const blocks = [];
+    let current = null;
+    for (const line of String(message ?? '').split('\n')) {
+      if (/^Port:\s/.test(line)) {
+        current = { header: line, lines: [] };
+        blocks.push(current);
+        continue;
+      }
+      if (current) current.lines.push(line);
+    }
+    return blocks;
+  };
+  const describeField = (block, field) => {
+    const prefix = new RegExp(`^\\s*${field}:\\s*`);
+    const line = (block?.lines || []).find((candidate) => prefix.test(candidate));
+    return line ? line.replace(prefix, '').trim() : '';
+  };
+  const normalizeDescribeLine = (line) =>
+    String(line ?? '')
+      .replace(/\s+/g, ' ')
+      .trim();
+  /** Top-level (`  key:`) keys of one top-level YAML section such as `status:`. */
+  const yamlSectionKeys = (text, sectionName) => {
+    const lines = String(text ?? '').split('\n');
+    const start = lines.findIndex((line) => new RegExp(`^${sectionName}:\\s*$`).test(line));
+    if (start < 0) return null;
+    const keys = [];
+    for (let index = start + 1; index < lines.length; index += 1) {
+      const line = lines[index];
+      if (!line.trim()) continue;
+      if (!/^\s/.test(line)) break;
+      const match = line.match(/^ {2}([A-Za-z][A-Za-z0-9]*):/);
+      if (match) keys.push(match[1]);
+    }
+    return keys;
+  };
+  /** Rows of `oc get pods -n <namespace>` as { name, ready, status }. */
+  const podRows = async (namespace) => {
+    const out = await runCmd(`oc get pods -n ${namespace}`);
+    return tableParts(out.message).rows.map((cells) => ({
+      name: cells[0] || '',
+      ready: cells[1] || '',
+      status: cells[2] || '',
+    }));
+  };
+  const podsWithPrefix = async (namespace, prefix) => {
+    const rows = await podRows(namespace);
+    const pattern = new RegExp(`^${prefix}`);
+    return rows.filter((candidate) => pattern.test(candidate.name));
+  };
+
+  // ═══ Round 1: #59 — `oc expose deployment/web` carries a real ClusterIP ══
+  assert(await bootSandbox(), '#59/#60: a fresh sandbox boots for the Service/DNS fidelity checks');
+
+  result = await runCmd('oc new-project qa7');
+  assert(
+    !result.error && /Now using project "qa7"/.test(result.message),
+    '#59: `oc new-project qa7` creates the project used by the ClusterIP/DNS checks',
+    result.message.slice(0, 300)
+  );
+  result = await runCmd(
+    'oc create deployment web --image=registry.access.redhat.com/ubi9/httpd-24 --replicas=2'
+  );
+  assert(
+    !result.error && /deployment\.apps\/web created/.test(result.message),
+    '#59: `oc create deployment web --image=registry.access.redhat.com/ubi9/httpd-24 --replicas=2` creates the Deployment',
+    result.message.slice(0, 300)
+  );
+  const webPodsRunning = await advanceUntil(async () => {
+    const pods = await podsWithPrefix('qa7', 'web-');
+    return (
+      pods.length === 2 && pods.every((pod) => pod.ready === '1/1' && pod.status === 'Running')
+    );
+  }, 40);
+  assert(
+    webPodsRunning,
+    '#59: the two `web` Pods reach Running 1/1 before exposing the Deployment'
+  );
+  result = await runCmd('oc expose deploy/web --port=8080');
+  assert(
+    !result.error && /service\/web exposed/.test(result.message),
+    '#59: `oc expose deployment/web --port=8080` creates the ClusterIP Service',
+    result.message.slice(0, 300)
+  );
+  await advanceBoth(3);
+
+  result = await runCmd('oc get svc web');
+  const svcTable = tableParts(result.message);
+  row = svcTable.rows.find((cells) => cells[0] === 'web') || [];
+  const clusterIP = row[columnIndex(svcTable, 'CLUSTER-IP')] || '';
+  assert(
+    !result.error && /^172\.30\.\d+\.\d+$/.test(clusterIP),
+    '#59: `oc get svc web` CLUSTER-IP is a real 172.30.x.y address (not empty/<none>)',
+    JSON.stringify({ headers: svcTable.headers, row })
+  );
+  assert(
+    !result.error &&
+      row[columnIndex(svcTable, 'TYPE')] === 'ClusterIP' &&
+      row[columnIndex(svcTable, 'PORT(S)')] === '8080/TCP',
+    '#59: the exposed Service is TYPE ClusterIP with PORT(S) 8080/TCP',
+    JSON.stringify({ headers: svcTable.headers, row })
+  );
+
+  result = await runCmd("oc get svc web -o jsonpath='{.spec.clusterIP}'");
+  assert(
+    !result.error && result.message.trim() === clusterIP,
+    '#59: `oc get svc web -o jsonpath={.spec.clusterIP}` equals the `oc get svc` CLUSTER-IP',
+    JSON.stringify({ clusterIP, jsonpath: result.message.trim() })
+  );
+
+  result = await runCmd('oc get svc web -o json');
+  let serviceJson = null;
+  try {
+    serviceJson = JSON.parse(result.message);
+  } catch {
+    serviceJson = null;
+  }
+  const webSpec = serviceJson?.spec || {};
+  const webSpecPort = (webSpec.ports || [])[0] || {};
+  assert(
+    !result.error &&
+      Boolean(serviceJson) &&
+      webSpec.clusterIP === clusterIP &&
+      JSON.stringify(webSpec.clusterIPs) === JSON.stringify([clusterIP]) &&
+      JSON.stringify(webSpec.ipFamilies) === JSON.stringify(['IPv4']) &&
+      webSpec.ipFamilyPolicy === 'SingleStack' &&
+      webSpec.sessionAffinity === 'None' &&
+      webSpec.internalTrafficPolicy === 'Cluster' &&
+      String(webSpecPort.targetPort) === '8080' &&
+      webSpecPort.protocol === 'TCP' &&
+      !webSpecPort.name,
+    '#59: `oc get svc web -o json` spec carries clusterIP/clusterIPs/ipFamilies/ipFamilyPolicy/sessionAffinity/internalTrafficPolicy and the unnamed 8080 TCP port',
+    JSON.stringify(webSpec)
+  );
+  const svcStatusKeys = serviceJson ? Object.keys(serviceJson.status || {}).sort() : [];
+  assert(
+    JSON.stringify(svcStatusKeys) === JSON.stringify(['loadBalancer']),
+    '#59: the Service status serializes as ONLY loadBalancer (no phase/conditions/observedGeneration/readyEndpoints/totalEndpoints/endpoints)',
+    JSON.stringify(serviceJson?.status)
+  );
+
+  result = await runCmd('oc get svc web -o yaml');
+  const svcYaml = result.message;
+  const yamlStatusKeys = yamlSectionKeys(svcYaml, 'status');
+  const yamlSpecHasDefaults =
+    new RegExp(`clusterIP:\\s+${escapeRe(clusterIP)}`).test(svcYaml) &&
+    /clusterIPs:/.test(svcYaml) &&
+    /ipFamilies:/.test(svcYaml) &&
+    /ipFamilyPolicy:\s+SingleStack/.test(svcYaml) &&
+    /sessionAffinity:\s+None/.test(svcYaml) &&
+    /internalTrafficPolicy:\s+Cluster/.test(svcYaml);
+  assert(
+    !result.error &&
+      yamlSpecHasDefaults &&
+      JSON.stringify(yamlStatusKeys) === JSON.stringify(['loadBalancer']),
+    '#59: `oc get svc web -o yaml` spec prints the API defaults while status keeps only loadBalancer',
+    JSON.stringify({ yamlSpecHasDefaults, yamlStatusKeys })
+  );
+
+  result = await runCmd('oc describe svc web');
+  const describeWeb = result.message;
+  const webBlocks = describePortBlocks(describeWeb);
+  assert(
+    !result.error &&
+      new RegExp(`^IP:\\s+${escapeRe(clusterIP)}\\s*$`, 'm').test(describeWeb) &&
+      new RegExp(`^IPs:\\s+${escapeRe(clusterIP)}\\s*$`, 'm').test(describeWeb) &&
+      /^IP Family Policy:\s+SingleStack\s*$/m.test(describeWeb) &&
+      /^IP Families:\s+IPv4\s*$/m.test(describeWeb) &&
+      /^Session Affinity:\s+None\s*$/m.test(describeWeb) &&
+      !/\bundefined\b/.test(describeWeb),
+    '#59: `oc describe svc web` prints the matching IP/IPs, IP Family Policy/IP Families, Session Affinity None and no literal undefined',
+    describeWeb.slice(0, 900)
+  );
+  const webPortBlock = webBlocks[0] || { header: '', lines: [] };
+  assert(
+    webBlocks.length === 1 &&
+      normalizeDescribeLine(webPortBlock.header) === 'Port: <unset> 8080/TCP' &&
+      describeField(webPortBlock, 'TargetPort') === '8080/TCP',
+    '#59: the unnamed exposed Service port prints `Port: <unset> 8080/TCP` and `TargetPort: 8080/TCP`',
+    JSON.stringify({
+      blocks: webBlocks.map((block) => normalizeDescribeLine(block.header)),
+      targetPort: describeField(webPortBlock, 'TargetPort'),
+    })
+  );
+
+  result = await runCmd('oc get endpoints web');
+  const webEndpointsTable = tableParts(result.message);
+  row = webEndpointsTable.rows.find((cells) => cells[0] === 'web') || [];
+  const webEndpointCell = row[columnIndex(webEndpointsTable, 'ENDPOINTS')] || '';
+  const webEndpointParts = endpointCellParts(webEndpointCell);
+  const webDescribeEndpointPairs = (describeField(webPortBlock, 'Endpoints') || '')
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+  const sortedPairs = (entries) => [...entries].sort();
+  assert(
+    !result.error &&
+      webEndpointParts.more === null &&
+      webEndpointParts.listed.length === 2 &&
+      JSON.stringify(sortedPairs(webEndpointParts.listed)) ===
+        JSON.stringify(sortedPairs(webDescribeEndpointPairs)) &&
+      webDescribeEndpointPairs.every((pair) => /^10\.\d+\.\d+\.\d+:8080$/.test(pair)),
+    '#59: `oc describe svc web` Endpoints equal `oc get endpoints web` (both ready Pod IPs on 8080)',
+    JSON.stringify({ webEndpointCell, describeEndpoints: webDescribeEndpointPairs })
+  );
+
+  result = await runCmd('oc exec deploy/web -n qa7 -- nslookup web.qa7.svc.cluster.local');
+  const webDnsLookup = result.message;
+  assert(
+    !result.error &&
+      /^Name:\s+web\.qa7\.svc\.cluster\.local\s*$/m.test(webDnsLookup) &&
+      new RegExp(`^Address:\\s+${escapeRe(clusterIP)}\\s*$`, 'm').test(webDnsLookup) &&
+      !/172\.30\.43\.12/.test(webDnsLookup),
+    '#59: `oc exec deploy/web -- nslookup web.qa7.svc.cluster.local` resolves to the Service ClusterIP (never the fabricated 172.30.43.12)',
+    webDnsLookup.slice(0, 500)
+  );
+  result = await runCmd('oc get svc router-internal-default -n openshift-ingress');
+  const routerSvcTable = tableParts(result.message);
+  row = routerSvcTable.rows.find((cells) => cells[0] === 'router-internal-default') || [];
+  const routerClusterIP = row[columnIndex(routerSvcTable, 'CLUSTER-IP')] || '';
+  result = await runCmd(
+    'oc exec deploy/web -n qa7 -- nslookup router-internal-default.openshift-ingress.svc.cluster.local'
+  );
+  assert(
+    !result.error &&
+      /^172\.30\.\d+\.\d+$/.test(routerClusterIP) &&
+      new RegExp(`^Address:\\s+${escapeRe(routerClusterIP)}\\s*$`, 'm').test(result.message),
+    '#59: cross-namespace DNS `router-internal-default.openshift-ingress.svc.cluster.local` resolves to that Service ClusterIP',
+    JSON.stringify({ routerClusterIP, message: result.message.slice(0, 400) })
+  );
+  result = await runCmd(
+    'oc exec deploy/web -n qa7 -- nslookup does-not-exist.qa7.svc.cluster.local'
+  );
+  assert(
+    /NXDOMAIN/.test(result.message) && !/172\.30\.43\.12/.test(result.message),
+    '#59: an unknown DNS name prints NXDOMAIN (no fabricated Service IP)',
+    result.message.slice(0, 400)
+  );
+
+  result = await runCmd('oc describe svc dns-default -n openshift-dns');
+  const describeDns = result.message;
+  const dnsBlocks = describePortBlocks(describeDns);
+  const dnsExpectedPorts = [
+    { header: 'Port: dns 53/UDP', target: '5353', endpointPort: '5353' },
+    { header: 'Port: dns-tcp 53/TCP', target: '5353', endpointPort: '5353' },
+    { header: 'Port: metrics 9154/TCP', target: '9154', endpointPort: '9154' },
+  ];
+  const dnsPodIPs = await evaluate(() =>
+    (window.game?.cluster?.getByKindAndNamespace?.('Pod', 'openshift-dns') || [])
+      .filter((pod) => /^dns-default-/.test(pod.metadata?.name || ''))
+      .map((pod) => pod.status?.podIP || '')
+      .filter(Boolean)
+  );
+  const dnsPortBlocksOk =
+    dnsBlocks.length === 3 &&
+    dnsExpectedPorts.every((expected, index) => {
+      const block = dnsBlocks[index];
+      const target = describeField(block, 'TargetPort');
+      const pairs = (describeField(block, 'Endpoints') || '')
+        .split(',')
+        .map((entry) => entry.trim())
+        .filter(Boolean);
+      return (
+        normalizeDescribeLine(block.header) === expected.header &&
+        new RegExp(`^${expected.target}(?:\\/(?:UDP|TCP))?$`).test(target) &&
+        pairs.length === 3 &&
+        pairs.every((pair) => {
+          const match = pair.match(/^(10\.\d+\.\d+\.\d+):(\d+)$/);
+          return (
+            Boolean(match) && dnsPodIPs.includes(match[1]) && match[2] === expected.endpointPort
+          );
+        })
+      );
+    });
+  assert(
+    !result.error &&
+      /^IP:\s+172\.30\.0\.10\s*$/m.test(describeDns) &&
+      /^IPs:\s+172\.30\.0\.10\s*$/m.test(describeDns) &&
+      /^IP Family Policy:\s+SingleStack\s*$/m.test(describeDns) &&
+      /^IP Families:\s+IPv4\s*$/m.test(describeDns) &&
+      /^Session Affinity:\s+None\s*$/m.test(describeDns) &&
+      !/\bundefined\b/.test(describeDns),
+    '#59: `oc describe svc dns-default -n openshift-dns` shows IP 172.30.0.10, SingleStack/IPv4, Session Affinity None and no undefined',
+    describeDns.slice(0, 1200)
+  );
+  assert(
+    dnsPortBlocksOk,
+    '#59: `oc describe svc dns-default` prints one Port/TargetPort/Endpoints block per port (dns 53/UDP, dns-tcp 53/TCP, metrics 9154/TCP) with the 3 pod-network endpoints each',
+    JSON.stringify({
+      blocks: dnsBlocks.map((block) => ({
+        header: normalizeDescribeLine(block.header),
+        targetPort: describeField(block, 'TargetPort'),
+        endpoints: describeField(block, 'Endpoints'),
+      })),
+      dnsPodIPs,
+    })
+  );
+
+  result = await runCmd(
+    `oc exec deploy/web -n qa7 -- curl -s -o /dev/null -w "%{http_code}" http://${clusterIP}:8080`
+  );
+  assert(
+    !result.error && result.message.trim() === '200',
+    '#59: `oc exec deploy/web -- curl … http://<clusterIP>:8080` routes through the Service endpoints and prints 200',
+    result.message.replace(/\n/g, ' ⏎ ').slice(0, 300)
+  );
+
+  result = await runCmd('oc apply -f manifests/service.yaml -n qa7');
+  assert(
+    !result.error && /service\/webapp/.test(result.message),
+    '#59: `oc apply -f manifests/service.yaml -n qa7` applies an externally authored Service manifest',
+    result.message.slice(0, 400)
+  );
+  result = await runCmd("oc get svc webapp -n qa7 -o jsonpath='{.spec.clusterIP}'");
+  const appliedClusterIP = result.message.trim();
+  assert(
+    !result.error && /^172\.30\.\d+\.\d+$/.test(appliedClusterIP) && appliedClusterIP !== clusterIP,
+    '#59: an applied Service without spec.clusterIP gets its own real allocated ClusterIP (defaulting on the apply path)',
+    JSON.stringify({ appliedClusterIP, clusterIP })
+  );
+
+  // ═══ Round 2: #60 — unscheduled Pod describe is not the kubelet view ═════
+  result = await runCmd(
+    `oc run unsched --image=registry.access.redhat.com/ubi9/ubi --overrides='{"spec":{"nodeSelector":{"nope":"nope"}}}' -n qa7`
+  );
+  assert(
+    !result.error && /pod\/unsched created/.test(result.message),
+    '#60: `oc run unsched` with an impossible nodeSelector creates the Pod',
+    result.message.slice(0, 300)
+  );
+  await advanceBoth(6);
+  result = await runCmd('oc describe pod unsched -n qa7');
+  const describeUnsched = result.message;
+  const kubeletOnlyLines = [
+    ['Container ID', /^\s*Container ID:/m],
+    ['Image ID', /^\s*Image ID:/m],
+    ['State', /^\s*State:/m],
+    ['Ready', /^\s*Ready:/m],
+    ['Restart Count', /^\s*Restart Count:/m],
+  ];
+  const presentKubeletLines = kubeletOnlyLines
+    .filter(([, pattern]) => pattern.test(describeUnsched))
+    .map(([label]) => label);
+  assert(
+    !result.error && presentKubeletLines.length === 0,
+    '#60: `oc describe pod unsched` has no Container ID/Image ID/State/Ready/Restart Count lines (never bound → no kubelet status)',
+    JSON.stringify({ presentKubeletLines, excerpt: describeUnsched.slice(0, 800) })
+  );
+  assert(
+    !result.error &&
+      /^\s+Image:\s+registry\.access\.redhat\.com\/ubi9\/ubi\s*$/m.test(describeUnsched) &&
+      /^\s+Port:/m.test(describeUnsched) &&
+      /^\s+Host Port:/m.test(describeUnsched) &&
+      /^\s+Environment:/m.test(describeUnsched) &&
+      /^\s+Mounts:/m.test(describeUnsched) &&
+      /PodScheduled\s+False/.test(describeUnsched) &&
+      /FailedScheduling/.test(describeUnsched),
+    '#60: unscheduled Pod describe keeps Image/Port/Host Port/Environment/Mounts plus PodScheduled False and the FailedScheduling event',
+    describeUnsched.slice(-900)
+  );
+
+  const runningWebPod = (await podsWithPrefix('qa7', 'web-'))[0]?.name || '';
+  result = await runCmd(`oc describe pod ${runningWebPod} -n qa7`);
+  const describeRunning = result.message;
+  assert(
+    Boolean(runningWebPod) &&
+      !result.error &&
+      /^\s*State:\s+Running\s*$/m.test(describeRunning) &&
+      /^\s*Ready:\s+True\s*$/m.test(describeRunning) &&
+      /^\s*Restart Count:\s+0\s*$/m.test(describeRunning) &&
+      /^\s*Container ID:/m.test(describeRunning) &&
+      /^\s*Image ID:/m.test(describeRunning),
+    '#60: a bound/running Pod describe keeps State Running/Ready True/Restart Count 0 plus the Container ID/Image ID fields (no over-removal)',
+    JSON.stringify({ runningWebPod, excerpt: describeRunning.slice(0, 1000) })
+  );
+
+  result = await runCmd('oc get endpoints -n openshift-dns');
+  const dnsEndpointsTable = tableParts(result.message);
+  row = dnsEndpointsTable.rows.find((cells) => cells[0] === 'dns-default') || [];
+  const dnsEndpointCell = row[columnIndex(dnsEndpointsTable, 'ENDPOINTS')] || '';
+  const dnsEndpointParts = endpointCellParts(dnsEndpointCell);
+  const expectedDnsPairs = await evaluate(() => {
+    const svc = window.game.cluster.getByName('Service', 'dns-default', 'openshift-dns');
+    const pods = window.game.cluster.getServiceEndpoints(svc);
+    return pods.length * ((svc?.spec?.ports || []).length || 1);
+  });
+  assert(
+    !result.error &&
+      expectedDnsPairs > 3 &&
+      dnsEndpointParts.more === expectedDnsPairs - 3 &&
+      dnsEndpointParts.listed.length === 3 &&
+      dnsEndpointParts.listed.every((pair) => /^10\.\d+\.\d+\.\d+:\d+$/.test(pair)),
+    '#60: `oc get endpoints -n openshift-dns` ENDPOINTS prints 3 ready pairs then " + N more..." like kubectl',
+    JSON.stringify({ cell: dnsEndpointCell, expectedDnsPairs })
+  );
+  result = await runCmd('oc get endpoints -n openshift-ingress');
+  const routerEndpointsTable = tableParts(result.message);
+  row = routerEndpointsTable.rows.find((cells) => cells[0] === 'router-internal-default') || [];
+  const routerEndpointCell = row[columnIndex(routerEndpointsTable, 'ENDPOINTS')] || '';
+  const routerEndpointParts = endpointCellParts(routerEndpointCell);
+  const nodeIPs = new Set(
+    await evaluate(() =>
+      (window.game?.cluster?.getByKind?.('Node') || []).map(
+        (node) =>
+          (node.status?.addresses || []).find((address) => address.type === 'InternalIP')
+            ?.address || ''
+      )
+    )
+  );
+  const routerPairsResolve = routerEndpointParts.listed.every((pair) => {
+    const [ip, port] = pair.split(':');
+    return nodeIPs.has(ip) && ['80', '443', '1936'].includes(port);
+  });
+  const expectedRouterPairs = await evaluate(() => {
+    const svc = window.game.cluster.getByName(
+      'Service',
+      'router-internal-default',
+      'openshift-ingress'
+    );
+    const pods = window.game.cluster.getServiceEndpoints(svc);
+    return pods.length * ((svc?.spec?.ports || []).length || 1);
+  });
+  assert(
+    !result.error &&
+      expectedRouterPairs > 3 &&
+      routerEndpointParts.more === expectedRouterPairs - 3 &&
+      routerEndpointParts.listed.length === 3 &&
+      routerPairsResolve,
+    '#60: `oc get endpoints -n openshift-ingress` ENDPOINTS prints 3 node-IP pairs then " + N more..." like kubectl',
+    JSON.stringify({ cell: routerEndpointCell, nodeIPs: [...nodeIPs], expectedRouterPairs })
+  );
+
+  result = await runCmd('oc get rolebinding -n qa7');
+  const roleBindingTable = tableParts(result.message);
+  {
+    const roleAt = columnIndex(roleBindingTable, 'ROLE');
+    const adminRow = roleBindingTable.rows.find((cells) => cells[0] === 'admin') || [];
+    const deployersRow =
+      roleBindingTable.rows.find((cells) => cells[0] === 'system:deployers') || [];
+    assert(
+      !result.error &&
+        roleAt >= 0 &&
+        adminRow[roleAt] === 'ClusterRole/admin' &&
+        deployersRow[roleAt] === 'ClusterRole/system:deployer',
+      '#60: `oc get rolebinding -n qa7` ROLE prints ClusterRole/<roleRef.name> (admin → ClusterRole/admin, system:deployers → ClusterRole/system:deployer)',
+      JSON.stringify({
+        headers: roleBindingTable.headers,
+        admin: adminRow,
+        deployers: deployersRow,
+      })
+    );
+  }
+  result = await runCmd(
+    'oc create rolebinding qa7-edit --clusterrole=edit --user=developer -n qa7'
+  );
+  assert(
+    !result.error &&
+      /rolebinding\.rbac\.authorization\.k8s\.io\/qa7-edit created/.test(result.message),
+    '#60: `oc create rolebinding … --clusterrole=edit` creates the binding',
+    result.message.slice(0, 400)
+  );
+  result = await runCmd('oc get rolebinding qa7-edit -n qa7');
+  const createdBindingTable = tableParts(result.message);
+  row = createdBindingTable.rows.find((cells) => cells[0] === 'qa7-edit') || [];
+  assert(
+    !result.error && row[columnIndex(createdBindingTable, 'ROLE')] === 'ClusterRole/edit',
+    '#60: a newly created clusterrole RoleBinding prints ROLE ClusterRole/edit',
+    JSON.stringify({ headers: createdBindingTable.headers, row })
+  );
+  result = await runCmd('oc get clusterrolebinding');
+  const clusterBindingTable = tableParts(result.message);
+  row = clusterBindingTable.rows.find((cells) => cells[0] === 'kubeadmin-cluster-admin') || [];
+  assert(
+    !result.error && row[columnIndex(clusterBindingTable, 'ROLE')] === 'ClusterRole/cluster-admin',
+    '#60: `oc get clusterrolebinding` ROLE prints ClusterRole/cluster-admin for kubeadmin-cluster-admin',
+    JSON.stringify({ headers: clusterBindingTable.headers, row })
+  );
+
+  // ═══ Round 3: #60 — `oc rollout status --timeout` blocks and fails ═══════
+  result = await runCmd(
+    'oc create deploy healthy --image=quay.io/openshift/origin-hello-openshift:latest --replicas=1 -n qa7'
+  );
+  assert(
+    !result.error && /deployment\.apps\/healthy created/.test(result.message),
+    '#60: `oc create deploy healthy` creates the healthy rollout fixture',
+    result.message.slice(0, 300)
+  );
+  result = await runCmd('oc rollout status deploy/healthy --timeout=120s -n qa7');
+  assert(
+    !result.error &&
+      /successfully rolled out/.test(result.message) &&
+      !/timed out waiting for the condition/.test(result.message),
+    '#60: `oc rollout status deploy/healthy --timeout=120s` waits synchronously and succeeds on a healthy rollout',
+    result.message.slice(0, 500)
+  );
+
+  result = await runCmd(
+    'oc create deploy stalled --image=registry.access.redhat.com/ubi9/httpd-24 --replicas=2 -n qa7'
+  );
+  assert(
+    !result.error && /deployment\.apps\/stalled created/.test(result.message),
+    '#60: `oc create deploy stalled` creates the stalled-rollout fixture',
+    result.message.slice(0, 300)
+  );
+  const stalledRunning = await advanceUntil(async () => {
+    const pods = await podsWithPrefix('qa7', 'stalled-');
+    return (
+      pods.length === 2 && pods.every((pod) => pod.ready === '1/1' && pod.status === 'Running')
+    );
+  }, 40);
+  assert(
+    stalledRunning,
+    '#60: the `stalled` rollout is healthy before the bad image is introduced'
+  );
+  const stalledContainer = await evaluate(() => {
+    const deployment = window.game?.cluster?.getByName?.('Deployment', 'stalled', 'qa7');
+    return deployment?.spec?.template?.spec?.containers?.[0]?.name || '';
+  });
+  result = await runCmd(
+    `oc set image deploy/stalled ${stalledContainer}=quay.io/nonexistent/boom:latest -n qa7`
+  );
+  assert(
+    !result.error && /image updated/.test(result.message),
+    '#60: `oc set image deploy/stalled <container>=quay.io/nonexistent/boom:latest` updates the pod template',
+    result.message.slice(0, 300)
+  );
+  await advanceBoth(10);
+  const stalledPods = await evaluate(() =>
+    (window.game?.cluster?.getByKindAndNamespace?.('Pod', 'qa7') || [])
+      .filter((pod) => /^stalled-/.test(pod.metadata?.name || ''))
+      .map((pod) => ({
+        name: pod.metadata.name,
+        phase: pod.status?.phase || '',
+        waiting: (pod.status?.containerStatuses || [])
+          .map((status) => status.state?.waiting?.reason || '')
+          .filter(Boolean)
+          .join(','),
+      }))
+  );
+  assert(
+    stalledPods.some((pod) => pod.phase !== 'Running' && /ImagePull/.test(pod.waiting)),
+    '#60: the nonexistent image leaves the new `stalled` Pods pending (ErrImagePull/ImagePullBackOff), so the rollout is stuck',
+    JSON.stringify(stalledPods)
+  );
+
+  result = await runCmd('oc rollout status deploy/stalled --timeout=5s -n qa7');
+  const stalledStatusMessage = result.message;
+  const stalledStatusLines = stalledStatusMessage
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean);
+  assert(
+    result.error === true &&
+      /Waiting for deployment "stalled"/.test(stalledStatusMessage) &&
+      stalledStatusLines[stalledStatusLines.length - 1] ===
+        'error: timed out waiting for the condition' &&
+      !/successfully rolled out/.test(stalledStatusMessage),
+    '#60: `oc rollout status deploy/stalled --timeout=5s` blocks, prints the Waiting line and ends with `error: timed out waiting for the condition` (error true)',
+    JSON.stringify({ error: result.error, message: stalledStatusMessage.slice(0, 900) })
+  );
+  result = await runCmd('oc rollout status deploy/stalled --timeout=5s -n qa7 && echo CHAIN_RAN');
+  assert(
+    result.error === true && !/CHAIN_RAN/.test(result.message),
+    '#60: the timed-out rollout status exits 1, so a chained `&& echo CHAIN_RAN` never runs',
+    JSON.stringify({ error: result.error, message: result.message.slice(0, 900) })
+  );
+  result = await runCmd('oc rollout status deploy/stalled --timeout=5s -n qa7 ; echo AFTER');
+  assert(
+    !result.error &&
+      /AFTER/.test(result.message) &&
+      /error: timed out waiting for the condition/.test(result.message),
+    '#60: an unchained `; echo AFTER` still runs after the timed-out rollout status (real shell exit-status semantics)',
+    JSON.stringify({ error: result.error, message: result.message.slice(0, 900) })
   );
 });
 

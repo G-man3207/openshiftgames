@@ -1622,6 +1622,614 @@ if (seedMod?.ClusterState) {
   }
 }
 
+// ── 4e. Issue #59–#60 Service/CLI fidelity locks (static) ────────────────
+// The browser suite section `qa-issue59-60` proves the behaviour end-to-end.
+// These module/source locks fail the fast static gate if a future refactor
+// silently reintroduces the #59/#60 bugs (no browser, no long sleeps).
+{
+  const netMod = await tryImport('js/resources/NetworkResources.js');
+  const engineMod = await tryImport('js/engine/GameEngine.js');
+  const sandboxMod = await tryImport('js/modes/SandboxMode.js');
+  const commandBarMod = await tryImport('js/ui/CommandBar.js');
+  const workloadMod = await tryImport('js/resources/WorkloadResources.js');
+  if (
+    !netMod?.Service ||
+    typeof netMod.formatEndpointAddresses !== 'function' ||
+    !engineMod?.GameEngine ||
+    !sandboxMod?.SandboxMode ||
+    !commandBarMod?.CommandBar ||
+    !workloadMod?.Pod
+  ) {
+    fail(
+      'fidelity',
+      'NetworkResources/GameEngine/SandboxMode/CommandBar/WorkloadResources are not importable for the #59/#60 locks'
+    );
+  } else {
+    try {
+      const engine = new engineMod.GameEngine({ mode: 'sandbox' });
+      new sandboxMod.SandboxMode(engine, null).setupCluster(3);
+      const simulation = engine.simulation;
+      simulation.ensureOLMDefaultsSync();
+      const cluster = engine.cluster;
+
+      /** Per-port groups of `oc describe svc` (Port:/TargetPort:/Endpoints:). */
+      const describeServicePorts = (text) => {
+        const rows = [];
+        let current = null;
+        for (const line of String(text ?? '').split('\n')) {
+          if (/^Port:\s/.test(line)) {
+            current = {
+              portLine: line.replace(/\s+/g, ' ').trim(),
+              targetPort: '',
+              endpoints: '',
+            };
+            rows.push(current);
+            continue;
+          }
+          if (!current) continue;
+          if (/^TargetPort:\s/.test(line)) {
+            current.targetPort = line.replace(/^TargetPort:\s*/, '').trim();
+          } else if (/^Endpoints:\s/.test(line)) {
+            current.endpoints = line.replace(/^Endpoints:\s*/, '').trim();
+          }
+        }
+        return rows;
+      };
+
+      // #59: the Service class must build the API-server shape even when the
+      // caller supplies only a name/ports (palette, manifest panel, expose);
+      // ExternalName Services never get ClusterIP fields.
+      const constructedService = new netMod.Service({
+        name: 'qa59-constructed',
+        namespace: 'default',
+        ports: [{ port: 8080 }],
+      });
+      const constructedSpec = constructedService.spec || {};
+      const constructedPort = (constructedSpec.ports || [])[0] || {};
+      const externalNameService = new netMod.Service({
+        name: 'qa59-external',
+        namespace: 'default',
+        serviceType: 'ExternalName',
+        externalName: 'example.com',
+      });
+      const externalSpec = externalNameService.spec || {};
+      if (
+        constructedSpec.type === 'ClusterIP' &&
+        /^172\.30\.\d+\.\d+$/.test(String(constructedSpec.clusterIP || '')) &&
+        JSON.stringify(constructedSpec.clusterIPs) ===
+          JSON.stringify([constructedSpec.clusterIP]) &&
+        JSON.stringify(constructedSpec.ipFamilies) === JSON.stringify(['IPv4']) &&
+        constructedSpec.ipFamilyPolicy === 'SingleStack' &&
+        constructedSpec.sessionAffinity === 'None' &&
+        constructedSpec.internalTrafficPolicy === 'Cluster' &&
+        constructedPort.protocol === 'TCP' &&
+        Number(constructedPort.targetPort) === 8080 &&
+        externalSpec.type === 'ExternalName' &&
+        externalSpec.externalName === 'example.com' &&
+        externalSpec.clusterIP === undefined &&
+        externalSpec.clusterIPs === undefined &&
+        externalSpec.ipFamilies === undefined
+      ) {
+        passed();
+      } else {
+        fail(
+          'fidelity',
+          `Service constructor must default clusterIP/clusterIPs/ipFamilies/ipFamilyPolicy/sessionAffinity/internalTrafficPolicy and port protocol/targetPort, while ExternalName stays ClusterIP-free (#59): ${JSON.stringify({ constructedSpec, externalSpec })}`
+        );
+      }
+
+      // #59: manifest upserts (oc apply/create -f) go through the same API
+      // defaulting and are idempotent.
+      const serviceManifest = {
+        apiVersion: 'v1',
+        kind: 'Service',
+        metadata: { name: 'qa59-applied', namespace: 'default' },
+        spec: { selector: { app: 'qa59-applied' }, ports: [{ port: 8080 }] },
+      };
+      const appliedService = engine.applyManifestObject(
+        JSON.parse(JSON.stringify(serviceManifest))
+      );
+      const appliedSpec = appliedService?.spec || {};
+      const appliedPort = (appliedSpec.ports || [])[0] || {};
+      if (
+        appliedService?._applyAction === 'created' &&
+        /^172\.30\.\d+\.\d+$/.test(String(appliedSpec.clusterIP || '')) &&
+        JSON.stringify(appliedSpec.clusterIPs) === JSON.stringify([appliedSpec.clusterIP]) &&
+        JSON.stringify(appliedSpec.ipFamilies) === JSON.stringify(['IPv4']) &&
+        appliedSpec.ipFamilyPolicy === 'SingleStack' &&
+        appliedSpec.sessionAffinity === 'None' &&
+        appliedSpec.internalTrafficPolicy === 'Cluster' &&
+        appliedPort.protocol === 'TCP' &&
+        Number(appliedPort.targetPort) === 8080
+      ) {
+        passed();
+      } else {
+        fail(
+          'fidelity',
+          `GameEngine.applyManifestObject must default a created Service like the API server (#59): ${JSON.stringify({ action: appliedService?._applyAction, spec: appliedSpec })}`
+        );
+      }
+      const reappliedService = engine.applyManifestObject(
+        JSON.parse(JSON.stringify(serviceManifest))
+      );
+      if (
+        reappliedService?._applyAction === 'unchanged' &&
+        reappliedService?.spec?.clusterIP === appliedSpec.clusterIP &&
+        reappliedService?.metadata?.generation === appliedService?.metadata?.generation
+      ) {
+        passed();
+      } else {
+        fail(
+          'fidelity',
+          `re-applying the same Service manifest must be unchanged and keep the ClusterIP (#59): ${JSON.stringify({ action: reappliedService?._applyAction, clusterIP: reappliedService?.spec?.clusterIP, generation: reappliedService?.metadata?.generation })}`
+        );
+      }
+
+      // #59: applying an updated manifest that omits spec.clusterIP preserves
+      // the ClusterIP the API server allocated on create.
+      const updatedServiceManifest = {
+        apiVersion: 'v1',
+        kind: 'Service',
+        metadata: {
+          name: 'qa59-applied',
+          namespace: 'default',
+          labels: { qa59: 'updated' },
+        },
+        spec: { selector: { app: 'qa59-updated' }, ports: [{ port: 8080 }] },
+      };
+      const updatedService = engine.applyManifestObject(
+        JSON.parse(JSON.stringify(updatedServiceManifest))
+      );
+      if (
+        updatedService?._applyAction === 'updated' &&
+        updatedService?.spec?.clusterIP === appliedSpec.clusterIP &&
+        JSON.stringify(updatedService?.spec?.clusterIPs) ===
+          JSON.stringify([appliedSpec.clusterIP]) &&
+        JSON.stringify(updatedService?.spec?.selector) === JSON.stringify({ app: 'qa59-updated' })
+      ) {
+        passed();
+      } else {
+        fail(
+          'fidelity',
+          `applying an updated Service manifest without spec.clusterIP must preserve the allocated ClusterIP (#59): ${JSON.stringify({ action: updatedService?._applyAction, spec: updatedService?.spec })}`
+        );
+      }
+
+      // #60: the shared Endpoints formatter prints at most 3 pairs and then
+      // ` + N more...`, `<none>` when there are no addresses.
+      const endpointPairs = Array.from({ length: 9 }, (_, index) => `10.0.0.${index + 1}:8080`);
+      const formattedNine = netMod.formatEndpointAddresses(endpointPairs);
+      const formattedThree = netMod.formatEndpointAddresses(endpointPairs.slice(0, 3));
+      const formattedSix = netMod.formatEndpointAddresses(endpointPairs.slice(0, 6));
+      const formattedNone = netMod.formatEndpointAddresses([]);
+      const formattedUndefined = netMod.formatEndpointAddresses(undefined);
+      if (
+        formattedNine === `${endpointPairs.slice(0, 3).join(',')} + 6 more...` &&
+        formattedThree === endpointPairs.slice(0, 3).join(',') &&
+        !/more\.\.\./.test(formattedThree) &&
+        formattedSix === `${endpointPairs.slice(0, 3).join(',')} + 3 more...` &&
+        formattedNone === '<none>' &&
+        formattedUndefined === '<none>'
+      ) {
+        passed();
+      } else {
+        fail(
+          'fidelity',
+          `formatEndpointAddresses must truncate like kubectl's formatEndpoints (#60): ${JSON.stringify({ formattedNine, formattedThree, formattedSix, formattedNone, formattedUndefined })}`
+        );
+      }
+
+      // #59/#60: Service.status carries ONLY the LoadBalancer subresource after
+      // ticks (no phase/conditions/observedGeneration/endpoint counters) and
+      // the instance endpoints stay in sync with getServiceEndpoints.
+      for (let tickIndex = 0; tickIndex < 20; tickIndex += 1) simulation.tick(0.05);
+      const dnsService = cluster.getByName('Service', 'dns-default', 'openshift-dns');
+      const dnsStatusKeys = Object.keys(dnsService?.status || {}).sort();
+      const canonicalDnsEndpoints = cluster.getServiceEndpoints(dnsService);
+      const dnsEndpointIPs = (dnsService?.endpoints || []).map((entry) => entry.ip).sort();
+      const canonicalEndpointIPs = canonicalDnsEndpoints.map((pod) => pod.status?.podIP).sort();
+      if (
+        JSON.stringify(dnsStatusKeys) === JSON.stringify(['loadBalancer']) &&
+        dnsService?.status?.readyEndpoints === undefined &&
+        dnsService?.status?.totalEndpoints === undefined &&
+        dnsService?.status?.endpoints === undefined &&
+        dnsEndpointIPs.length === canonicalEndpointIPs.length &&
+        JSON.stringify(dnsEndpointIPs) === JSON.stringify(canonicalEndpointIPs)
+      ) {
+        passed();
+      } else {
+        fail(
+          'fidelity',
+          `Service status must only contain loadBalancer after ticks while service.endpoints mirrors getServiceEndpoints (#59/#60): ${JSON.stringify({ status: dnsService?.status, dnsEndpointIPs, canonicalEndpointIPs })}`
+        );
+      }
+
+      // #59: `oc describe svc dns-default` prints the real per-port kubectl
+      // blocks with the canonical ready endpoints.
+      const dnsDescribe = dnsService?.toDescribe({ cluster }) || '';
+      const dnsPortRows = describeServicePorts(dnsDescribe);
+      const dnsExpectedPorts = [
+        { portLine: 'Port: dns 53/UDP', targetPrefix: '5353', endpointPort: '5353' },
+        { portLine: 'Port: dns-tcp 53/TCP', targetPrefix: '5353', endpointPort: '5353' },
+        { portLine: 'Port: metrics 9154/TCP', targetPrefix: '9154', endpointPort: '9154' },
+      ];
+      const dnsPodIPs = (cluster.getByKindAndNamespace('Pod', 'openshift-dns') || [])
+        .filter((pod) => /^dns-default-/.test(pod.metadata?.name || ''))
+        .map((pod) => pod.status?.podIP)
+        .filter(Boolean);
+      const dnsDescribeOk =
+        /^IP:\s+172\.30\.0\.10\s*$/m.test(dnsDescribe) &&
+        /^IPs:\s+172\.30\.0\.10\s*$/m.test(dnsDescribe) &&
+        /^IP Family Policy:\s+SingleStack\s*$/m.test(dnsDescribe) &&
+        /^IP Families:\s+IPv4\s*$/m.test(dnsDescribe) &&
+        /^Session Affinity:\s+None\s*$/m.test(dnsDescribe) &&
+        !/\bundefined\b/.test(dnsDescribe) &&
+        dnsPortRows.length === dnsExpectedPorts.length &&
+        dnsExpectedPorts.every((expected, index) => {
+          const portRow = dnsPortRows[index];
+          const pairs = String(portRow.endpoints || '')
+            .split(',')
+            .map((entry) => entry.trim())
+            .filter(Boolean);
+          return (
+            portRow.portLine === expected.portLine &&
+            String(portRow.targetPort).startsWith(expected.targetPrefix) &&
+            pairs.length === dnsPodIPs.length &&
+            pairs.every((pair) => {
+              const match = pair.match(/^(10\.\d+\.\d+\.\d+):(\d+)$/);
+              return (
+                Boolean(match) && dnsPodIPs.includes(match[1]) && match[2] === expected.endpointPort
+              );
+            })
+          );
+        });
+      if (dnsDescribeOk) {
+        passed();
+      } else {
+        fail(
+          'fidelity',
+          `Service.toDescribe must print the real per-port describe-svc shape for openshift-dns/dns-default (#59): ${JSON.stringify({ dnsPortRows, dnsPodIPs, excerpt: dnsDescribe.slice(0, 1600) })}`
+        );
+      }
+
+      // #59: an unnamed Service port describes as `Port: <unset> port/proto`.
+      const unnamedService = engine.applyManifestObject({
+        apiVersion: 'v1',
+        kind: 'Service',
+        metadata: { name: 'qa59-unnamed', namespace: 'default' },
+        spec: { selector: { app: 'qa59-unnamed' }, ports: [{ port: 8080 }] },
+      });
+      const unnamedDescribe = unnamedService?.toDescribe({ cluster }) || '';
+      const unnamedPortRows = describeServicePorts(unnamedDescribe);
+      if (
+        unnamedPortRows.length === 1 &&
+        unnamedPortRows[0].portLine === 'Port: <unset> 8080/TCP' &&
+        unnamedPortRows[0].targetPort === '8080/TCP' &&
+        /^IP Family Policy:\s+SingleStack\s*$/m.test(unnamedDescribe) &&
+        /^IP Families:\s+IPv4\s*$/m.test(unnamedDescribe) &&
+        /^Session Affinity:\s+None\s*$/m.test(unnamedDescribe) &&
+        !/\bundefined\b/.test(unnamedDescribe)
+      ) {
+        passed();
+      } else {
+        fail(
+          'fidelity',
+          `an unnamed Service port must describe as "Port: <unset> 8080/TCP" with IP Family Policy/IPs/Session Affinity and no undefined (#59): ${JSON.stringify({ unnamedPortRows, excerpt: unnamedDescribe.slice(0, 900) })}`
+        );
+      }
+
+      // #60: an unscheduled/unbound Pod has no kubelet container status, so
+      // describe must not print Container ID/Image ID/State/Ready/Restart Count.
+      const unscheduledPod = new workloadMod.Pod({
+        name: 'qa60-unscheduled',
+        namespace: 'default',
+        containers: [{ name: 'ubi', image: 'registry.access.redhat.com/ubi9/ubi' }],
+      });
+      const unscheduledDescribe = unscheduledPod.toDescribe({ cluster });
+      const kubeletOnlyLines = [
+        /^\s*Container ID:/m,
+        /^\s*Image ID:/m,
+        /^\s*State:/m,
+        /^\s*Ready:/m,
+        /^\s*Restart Count:/m,
+      ];
+      const presentKubeletLines = kubeletOnlyLines.filter((pattern) =>
+        pattern.test(unscheduledDescribe)
+      ).length;
+      if (
+        presentKubeletLines === 0 &&
+        /^\s+Image:\s+registry\.access\.redhat\.com\/ubi9\/ubi\s*$/m.test(unscheduledDescribe) &&
+        /^\s+Port:/m.test(unscheduledDescribe) &&
+        /^\s+Host Port:/m.test(unscheduledDescribe) &&
+        /^\s+Environment:/m.test(unscheduledDescribe)
+      ) {
+        passed();
+      } else {
+        fail(
+          'fidelity',
+          `Pod.toDescribe for an unbound Pod must omit kubelet-only Container ID/Image ID/State/Ready/Restart Count lines but keep Image/Port/Host Port/Environment (#60): ${JSON.stringify({ presentKubeletLines, excerpt: unscheduledDescribe.slice(0, 900) })}`
+        );
+      }
+
+      // #60: a bound/running Pod keeps the kubelet status block.
+      const runningPod = new workloadMod.Pod({
+        name: 'qa60-running',
+        namespace: 'default',
+        nodeName: 'worker-0',
+        containers: [{ name: 'ubi', image: 'registry.access.redhat.com/ubi9/ubi' }],
+      });
+      runningPod.status.phase = 'Running';
+      runningPod.status.containerStatuses = [
+        {
+          name: 'ubi',
+          image: 'registry.access.redhat.com/ubi9/ubi',
+          imageID: `docker://sha256:${'a'.repeat(64)}`,
+          containerID: `cri-o://${'b'.repeat(64)}`,
+          ready: true,
+          started: true,
+          restartCount: 0,
+          state: { running: { startedAt: new Date().toISOString() } },
+          lastState: {},
+        },
+      ];
+      const runningDescribe = runningPod.toDescribe({ cluster });
+      if (
+        /^\s*State:\s+Running\s*$/m.test(runningDescribe) &&
+        /^\s*Ready:\s+True\s*$/m.test(runningDescribe) &&
+        /^\s*Restart Count:\s+0\s*$/m.test(runningDescribe) &&
+        /^\s*Container ID:\s+cri-o:\/\//m.test(runningDescribe) &&
+        /^\s*Image ID:\s+docker:\/\/sha256:/m.test(runningDescribe)
+      ) {
+        passed();
+      } else {
+        fail(
+          'fidelity',
+          `Pod.toDescribe for a bound/running Pod must keep State Running/Ready True/Restart Count 0 and the container/image IDs (#60): ${JSON.stringify({ excerpt: runningDescribe.slice(0, 900) })}`
+        );
+      }
+
+      // CommandBar behaviour locks need the `window.game` integration surface
+      // the app wires in the browser; provide the minimum shim around the
+      // real sandbox engine (mirrors the #57/#58 lock above).
+      globalThis.window = {
+        game: {
+          cluster,
+          gameEngine: engine,
+          engine: { emit() {}, on() {}, off() {} },
+        },
+      };
+      try {
+        const cliBar = new commandBarMod.CommandBar();
+        const parseTable = (message) => {
+          const lines = String(message ?? '')
+            .split('\n')
+            .filter((line) => line.trim() !== '');
+          return {
+            headers: (lines[0] || '').split(/\s{2,}/).map((cell) => cell.trim()),
+            rows: lines.slice(1).map((line) => line.split(/\s{2,}/).map((cell) => cell.trim())),
+          };
+        };
+
+        // #60: `oc get endpoints` truncates the ENDPOINTS cell like kubectl.
+        const endpointsResult = cliBar.executeCommand('oc get endpoints -n openshift-dns');
+        const endpointsTable = parseTable(endpointsResult?.message);
+        const endpointsAt = endpointsTable.headers.indexOf('ENDPOINTS');
+        const dnsEndpointsRow =
+          endpointsTable.rows.find((cells) => cells[0] === 'dns-default') || [];
+        const endpointsCell = endpointsAt >= 0 ? dnsEndpointsRow[endpointsAt] || '' : '';
+        const endpointsTruncation = endpointsCell.match(/^(.*?) \+ (\d+) more\.\.\.$/);
+        const listedEndpointPairs = (endpointsTruncation ? endpointsTruncation[1] : endpointsCell)
+          .split(',')
+          .filter(Boolean);
+        if (
+          !endpointsResult?.error &&
+          endpointsTruncation?.[2] === '6' &&
+          listedEndpointPairs.length === 3 &&
+          listedEndpointPairs.every((pair) => /^10\.\d+\.\d+\.\d+:\d+$/.test(pair))
+        ) {
+          passed();
+        } else {
+          fail(
+            'fidelity',
+            `CommandBar \`oc get endpoints -n openshift-dns\` must print 3 pairs + " + 6 more..." (#60): ${JSON.stringify({ headers: endpointsTable.headers, endpointsCell, listedEndpointPairs })}`
+          );
+        }
+
+        // #60: RoleBinding/ClusterRoleBinding ROLE prints roleRef.kind/name.
+        const newProjectResult = cliBar.executeCommand('oc new-project qa59-locks');
+        const roleBindingResult = cliBar.executeCommand('oc get rolebinding -n qa59-locks');
+        const roleBindingTable = parseTable(roleBindingResult?.message);
+        const roleAt = roleBindingTable.headers.indexOf('ROLE');
+        const adminBinding = roleBindingTable.rows.find((cells) => cells[0] === 'admin') || [];
+        const deployerBinding =
+          roleBindingTable.rows.find((cells) => cells[0] === 'system:deployers') || [];
+        const createdBindingResult = cliBar.executeCommand(
+          'oc create rolebinding qa59-edit --clusterrole=edit --user=developer -n qa59-locks'
+        );
+        const createdBindingTable = parseTable(
+          cliBar.executeCommand('oc get rolebinding qa59-edit -n qa59-locks')?.message
+        );
+        const createdBindingRow =
+          createdBindingTable.rows.find((cells) => cells[0] === 'qa59-edit') || [];
+        const clusterBindingTable = parseTable(
+          cliBar.executeCommand('oc get clusterrolebinding')?.message
+        );
+        const kubeadminBinding =
+          clusterBindingTable.rows.find((cells) => cells[0] === 'kubeadmin-cluster-admin') || [];
+        const roleKindOk =
+          !newProjectResult?.error &&
+          !roleBindingResult?.error &&
+          roleAt >= 0 &&
+          adminBinding[roleAt] === 'ClusterRole/admin' &&
+          deployerBinding[roleAt] === 'ClusterRole/system:deployer' &&
+          !createdBindingResult?.error &&
+          createdBindingRow[createdBindingTable.headers.indexOf('ROLE')] === 'ClusterRole/edit' &&
+          kubeadminBinding[clusterBindingTable.headers.indexOf('ROLE')] ===
+            'ClusterRole/cluster-admin';
+        if (roleKindOk) {
+          passed();
+        } else {
+          fail(
+            'fidelity',
+            `RoleBinding ROLE cells must print ClusterRole/<roleRef.name> (#60): ${JSON.stringify({ admin: adminBinding, deployers: deployerBinding, created: createdBindingRow, kubeadmin: kubeadminBinding })}`
+          );
+        }
+
+        // #59: a literal Service ClusterIP routes through the Service's ready
+        // endpoints (kube-proxy semantics), while a non-Service IP does not.
+        const trafficService = engine.applyManifestObject({
+          apiVersion: 'v1',
+          kind: 'Service',
+          metadata: { name: 'qa59-traffic', namespace: 'default' },
+          spec: { selector: { app: 'qa59-traffic' }, ports: [{ port: 8080 }] },
+        });
+        const trafficPod = cluster.addResource({
+          kind: 'Pod',
+          apiVersion: 'v1',
+          metadata: {
+            name: 'qa59-traffic-pod',
+            namespace: 'default',
+            labels: { app: 'qa59-traffic' },
+          },
+          spec: {
+            nodeName: 'worker-0',
+            containers: [
+              {
+                name: 'web',
+                image: 'registry.access.redhat.com/ubi9/httpd-24',
+                ports: [{ containerPort: 8080 }],
+              },
+            ],
+          },
+          status: {
+            phase: 'Running',
+            podIP: '10.244.250.10',
+            hostIP: '192.168.1.10',
+            conditions: [{ type: 'Ready', status: 'True' }],
+          },
+        });
+        simulation.tick(0.05);
+        const trafficResult = simulation.trafficForExec(trafficPod, {
+          target: trafficService?.spec?.clusterIP,
+          port: 8080,
+          namespace: 'default',
+        });
+        const usedServiceIPs = new Set(
+          (cluster.getByKind('Service') || [])
+            .flatMap((service) => [service.spec?.clusterIP, ...(service.spec?.clusterIPs || [])])
+            .filter(Boolean)
+        );
+        const nonServiceIP = ['172.30.249.249', '172.30.248.248', '172.30.247.247'].find(
+          (candidate) => !usedServiceIPs.has(candidate)
+        );
+        const nonServiceDestination = simulation._resolveTrafficDestination(nonServiceIP, {
+          namespace: 'default',
+        });
+        if (
+          /^172\.30\.\d+\.\d+$/.test(String(trafficService?.spec?.clusterIP || '')) &&
+          trafficResult?.allowed === true &&
+          Array.isArray(trafficResult.lines) &&
+          trafficResult.lines.length > 0 &&
+          nonServiceDestination?.kind !== 'Service' &&
+          (nonServiceDestination?.pods || []).length === 0
+        ) {
+          passed();
+        } else {
+          fail(
+            'fidelity',
+            `SimulationTick clusterIP traffic: a Service ClusterIP must route to ready endpoints while a non-Service IP stays unresolved (#59): ${JSON.stringify({ clusterIP: trafficService?.spec?.clusterIP, trafficResult, nonServiceIP, nonServiceDestination })}`
+          );
+        }
+
+        // #60: a healthy `oc rollout status --timeout` waits synchronously and
+        // succeeds; a stalled rollout fails with real oc's timeout error.
+        const healthyCreate = cliBar.executeCommand(
+          'oc create deploy qa60-healthy --image=quay.io/openshift/origin-hello-openshift:latest --replicas=1 -n qa59-locks'
+        );
+        const healthyStatus = cliBar.executeCommand(
+          'oc rollout status deploy/qa60-healthy --timeout=120s -n qa59-locks'
+        );
+        const healthyStatusMessage = String(healthyStatus?.message || '');
+        if (
+          !healthyCreate?.error &&
+          !healthyStatus?.error &&
+          /successfully rolled out/.test(healthyStatusMessage) &&
+          !/timed out waiting for the condition/.test(healthyStatusMessage)
+        ) {
+          passed();
+        } else {
+          fail(
+            'fidelity',
+            `\`oc rollout status --timeout=120s\` on a healthy Deployment must succeed (#60): ${JSON.stringify({ create: healthyCreate?.message, status: healthyStatus })}`
+          );
+        }
+
+        const stalledCreate = cliBar.executeCommand(
+          'oc create deploy qa60-stalled --image=registry.access.redhat.com/ubi9/httpd-24 --replicas=2 -n qa59-locks'
+        );
+        for (let tickIndex = 0; tickIndex < 240; tickIndex += 1) simulation.tick(0.05);
+        const stalledDeployment = cluster.getByName('Deployment', 'qa60-stalled', 'qa59-locks');
+        const stalledContainer = stalledDeployment?.spec?.template?.spec?.containers?.[0]?.name;
+        const stalledImageUpdate = cliBar.executeCommand(
+          `oc set image deploy/qa60-stalled ${stalledContainer}=quay.io/nonexistent/boom:latest -n qa59-locks`
+        );
+        for (let tickIndex = 0; tickIndex < 200; tickIndex += 1) simulation.tick(0.05);
+        const timedOutStatus = cliBar.executeCommand(
+          'oc rollout status deploy/qa60-stalled --timeout=5s -n qa59-locks'
+        );
+        const timedOutMessage = String(timedOutStatus?.message || '');
+        const timedOutLines = timedOutMessage
+          .split('\n')
+          .map((line) => line.trim())
+          .filter(Boolean);
+        if (
+          !stalledCreate?.error &&
+          !stalledImageUpdate?.error &&
+          timedOutStatus?.error === true &&
+          /Waiting for deployment "qa60-stalled"/.test(timedOutMessage) &&
+          timedOutLines[timedOutLines.length - 1] ===
+            'error: timed out waiting for the condition' &&
+          !/successfully rolled out/.test(timedOutMessage)
+        ) {
+          passed();
+        } else {
+          fail(
+            'fidelity',
+            `\`oc rollout status --timeout=5s\` on a stalled Deployment must block, print the Waiting line and end with error: timed out waiting for the condition (#60): ${JSON.stringify({ create: stalledCreate?.message, imageUpdate: stalledImageUpdate?.message, status: timedOutStatus })}`
+          );
+        }
+
+        // #60: the timeout makes the command exit 1, so `&&` is skipped while
+        // `;` continues (real shell exit-status semantics).
+        const chainedTimeout = cliBar.executeCommand(
+          'oc rollout status deploy/qa60-stalled --timeout=5s -n qa59-locks && echo CHAIN_RAN'
+        );
+        const semicolonTimeout = cliBar.executeCommand(
+          'oc rollout status deploy/qa60-stalled --timeout=5s -n qa59-locks ; echo AFTER'
+        );
+        if (
+          chainedTimeout?.error === true &&
+          !/CHAIN_RAN/.test(String(chainedTimeout?.message || '')) &&
+          semicolonTimeout?.error === false &&
+          /AFTER/.test(String(semicolonTimeout?.message || '')) &&
+          /timed out waiting for the condition/.test(String(semicolonTimeout?.message || ''))
+        ) {
+          passed();
+        } else {
+          fail(
+            'fidelity',
+            `a timed-out \`oc rollout status\` must skip a following \`&&\` command but run a following \`;\` command (#60): ${JSON.stringify({ chained: chainedTimeout, semicolon: semicolonTimeout })}`
+          );
+        }
+      } finally {
+        delete globalThis.window;
+      }
+    } catch (err) {
+      fail('fidelity', `#59/#60 dynamic fidelity lock threw: ${err.message}`);
+    }
+  }
+}
+
 // ── 5. Campaign, challenges, incidents and EX280 content ──────────────────
 const levelsMod = await tryImport('js/data/CampaignLevels.js');
 const challengesMod = await tryImport('js/modes/ChallengeMode.js');
