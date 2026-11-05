@@ -1085,6 +1085,13 @@ export class Deployment extends ResourceBase {
     const oldSets = sortedSets.slice(0, Math.max(0, sortedSets.length - 1));
     const replicaSetLine = (rs) =>
       `${rs.metadata?.name || '<none>'} (${rs.status?.replicas ?? 0}/${rs.spec?.replicas ?? 0} replicas created)`;
+    // kubectl 1.35 (the version vendored by OCP 4.22) prints ALL old
+    // ReplicaSets, including the `(0/0 replicas created)` ones a finished
+    // rollout leaves behind — not `<none>`. `Describe` consumes the second
+    // return value of `GetAllReplicaSetsInChunks` (all old RSes), and its own
+    // tests assert `OldReplicaSets: bar-001 (0/0 replicas created)` after a
+    // successful rollout. Keep this behavior; a filtered list matched older
+    // kubectl (<1.27) but is wrong for the 4.22 target (#67 P4).
     const oldReplicaSetText = oldSets.length ? oldSets.map(replicaSetLine).join(', ') : '<none>';
     const newReplicaSetText = currentSet ? replicaSetLine(currentSet) : '<none>';
 

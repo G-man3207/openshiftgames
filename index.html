@@ -1565,6 +1565,14 @@
             examPrepUI: null,
           };
 
+          // #67: kubelet-executed probes must reuse the SAME simulated container
+          // filesystem/env as the terminal's `oc exec` (`cat /tmp/healthy` is a
+          // real ENOENT, `cat /etc/os-release` succeeds), so the engine evaluates
+          // exec probes through CommandBar's container exec layer.
+          this.engine.simulation.setContainerExecEvaluator((pod, containerName, argv) =>
+            this.commandBar._simulateExecCommand(argv, pod, containerName)
+          );
+
           this.renderPalette();
           this.bindMenuEvents();
           this.bindGameEvents();

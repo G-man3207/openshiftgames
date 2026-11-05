@@ -12273,7 +12273,7 @@ Object.assign(CommandBar.prototype, {
   },
 
   _setProbe(rest) {
-    const { positionals, flags } = parseArgs(rest, {
+    const { positionals, flags, afterDoubleDash } = parseArgs(rest, {
       shortValues: { '-n': 'namespace', '-c': 'container' },
       longValues: [
         'namespace',
@@ -12289,6 +12289,12 @@ Object.assign(CommandBar.prototype, {
       ],
       longBools: ['liveness', 'readiness', 'startup', 'remove'],
     });
+    // `oc set probe … -- <command>` (issue #67): everything after `--` is the
+    // exec handler's argv, parsed verbatim like pflag/cobra does — flag tokens
+    // placed after `--` belong to the command, never to oc.
+    const execCommand = (Array.isArray(afterDoubleDash) ? afterDoubleDash : [])
+      .filter((token) => token !== undefined && token !== null && String(token) !== '')
+      .map((token) => String(token));
     const { kind, name } = this._resolveRef(positionals);
     if (!kind) return this._resourceTypeError(positionals[0] || '');
     if (!name)
@@ -12299,6 +12305,23 @@ Object.assign(CommandBar.prototype, {
     const probeType = flags.readiness ? 'readiness' : flags.startup ? 'startup' : 'liveness';
     const namespace = this._namespaceFromFlags(flags);
     const ge = this.gameEngine;
+    const hasGetUrl = flags['get-url'] !== undefined && flags['get-url'] !== true;
+    const hasOpenTcp = flags['open-tcp'] !== undefined && flags['open-tcp'] !== true;
+    // A probe has exactly one handler: exec (argv after `--`) OR httpGet OR
+    // tcpSocket. Real oc silently keeps whichever handler the flags replace
+    // last; the simulator rejects the ambiguous invocation instead (#67).
+    if (!flags.remove && execCommand.length > 0 && (hasGetUrl || hasOpenTcp)) {
+      const handlerFlags = [hasGetUrl ? '--get-url' : null, hasOpenTcp ? '--open-tcp' : null]
+        .filter(Boolean)
+        .join('/');
+      return this._err(
+        `error: a probe can use only one handler, but ${handlerFlags} and a command after "--" were both given\n\n` +
+          'Either define an HTTP/TCP handler:\n' +
+          '  oc set probe <resource>/<name> --liveness --get-url=http://:8080/healthz\n' +
+          'or an exec handler:\n' +
+          '  oc set probe <resource>/<name> --liveness -- cat /tmp/healthy'
+      );
+    }
     const openTcpRaw = flags['open-tcp'];
     const openTcp =
       openTcpRaw !== undefined && openTcpRaw !== true && openTcpRaw !== ''
@@ -12342,6 +12365,7 @@ Object.assign(CommandBar.prototype, {
         getUrl:
           flags['get-url'] && flags['get-url'] !== true ? String(flags['get-url']) : undefined,
         openTcp,
+        execCommand: execCommand.length > 0 ? execCommand : undefined,
         remove: Boolean(flags.remove),
         container: flags.container,
         ...numericFlags,
@@ -12359,6 +12383,15 @@ Object.assign(CommandBar.prototype, {
         for (const container of containers) {
           if (flags.remove) {
             delete container[`${probeType}Probe`];
+          } else if (execCommand.length > 0) {
+            container[`${probeType}Probe`] = {
+              exec: { command: [...execCommand] },
+              initialDelaySeconds: numericFlags.initialDelaySeconds ?? 0,
+              periodSeconds: numericFlags.periodSeconds ?? 10,
+              timeoutSeconds: numericFlags.timeoutSeconds ?? 1,
+              successThreshold: numericFlags.successThreshold ?? 1,
+              failureThreshold: numericFlags.failureThreshold ?? 3,
+            };
           } else if (openTcp !== undefined) {
             container[`${probeType}Probe`] = {
               tcpSocket: { port: openTcp },
@@ -13848,18 +13881,23 @@ Object.assign(CommandBar.prototype, {
    * shell: single-quoted text reaches it untouched and is expanded from the
    * container environment, and shell builtins like `exit` are available (#64,
    * #65). Direct `oc exec -- <command>` still execs the binary without a shell.
-   * @param {string} command
+   *
+   * Issue #67: kubelet exec probes are evaluated by this same simulator, but a
+   * probe handler is an argv ARRAY (`exec.command`), not a shell string. When
+   * `command` is an array it is treated as a pre-tokenized argv (elements are
+   * never re-split, so `sh -c '<script with spaces>'` keeps working).
+   * @param {string|string[]} command
    * @param {object} pod
    * @param {string} containerName
    * @returns {{lines: string[], exitCode: number}}
    */
   _simulateExecCommand(command, pod, containerName) {
-    const raw = String(command ?? '').trim();
-    if (!raw) return { lines: [], exitCode: 0 };
+    // Pre-tokenized argv (exec probe) vs. a raw command string (`oc exec`).
+    const tokens = Array.isArray(command)
+      ? command.map((token) => String(token ?? ''))
+      : tokenizeCommand(String(command ?? '').trim());
+    if (!tokens.length) return { lines: [], exitCode: 0 };
     const context = this._podExecContext(pod, containerName);
-    // `oc exec … -- sh -c "cmd"` / `/bin/bash -c "…"` / `sh -c <script>`: run
-    // the script through the container shell semantics below.
-    const tokens = tokenizeCommand(raw);
     if (tokens.length >= 2 && /(?:^|\/)(?:ba)?sh$/.test(tokens[0]) && tokens[1] === '-c') {
       return this._runContainerShellScript(tokens.slice(2).join(' '), context);
     }

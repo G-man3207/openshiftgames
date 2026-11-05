@@ -309,6 +309,14 @@ export class SimulationTick {
   constructor(clusterState, eventBus) {
     this.cluster = clusterState;
     this.eventBus = eventBus || null;
+    /**
+     * Injected container exec evaluator for kubelet exec probes (issue #67).
+     * The browser registers CommandBar._simulateExecCommand so probes run in
+     * the SAME simulated container filesystem/env as `oc exec`; a bare Node
+     * engine falls back to {@link _fallbackExecProbe}.
+     * @type {((pod: object, containerName: string, argv: string[]) => {lines?: string[], exitCode?: number})|null}
+     */
+    this.containerExecEvaluator = null;
     this.cluster._evictedOwnerCounts = new Map();
     this.cluster._rescheduledCount = 0;
     /**
@@ -1962,6 +1970,9 @@ export class SimulationTick {
    * `oc logs` / `oc logs --previous` (issue #25).
    */
   _crashKnownRootImageContainer(pod, status, failure) {
+    // The container will be restarted by the CrashLoopBackOff loop: clear the
+    // kubelet probe window so initial delays/thresholds apply to the new start.
+    this._resetProbeState(status);
     const now = new Date().toISOString();
     status.restartCount = (status.restartCount || 0) + 1;
     status.ready = false;
@@ -2096,6 +2107,10 @@ export class SimulationTick {
    * `Failed` (a Job pod must fail instead of restarting forever, SIM-011).
    */
   _handleContainerFailure(pod, status, reason, exitCode) {
+    // A restarted container gets a fresh kubelet probe window: initial delays
+    // are measured from the new start, failed/successful counts restart and a
+    // startup probe must succeed again (issue #67).
+    this._resetProbeState(status);
     const now = new Date().toISOString();
     status.restartCount = (status.restartCount || 0) + 1;
     status.ready = false;
@@ -2178,6 +2193,286 @@ export class SimulationTick {
     }
   }
 
+  /**
+   * Inject the simulated container exec runner used to evaluate kubelet exec
+   * probes (issue #67). The browser registers `CommandBar._simulateExecCommand`
+   * from `index.html`, so a probe command sees exactly the same simulated
+   * container filesystem, environment and exit codes as `oc exec`. When no
+   * evaluator is injected (bare Node engine) {@link _fallbackExecProbe} keeps
+   * exec probes deterministic instead of throwing.
+   * @param {((pod: object, containerName: string, argv: string[]) => {lines?: string[], exitCode?: number})|null} evaluator
+   * @returns {this}
+   */
+  setContainerExecEvaluator(evaluator) {
+    this.containerExecEvaluator = typeof evaluator === 'function' ? evaluator : null;
+    return this;
+  }
+
+  /** Clear all probe bookkeeping for a container (new start / restart). */
+  _resetProbeState(status) {
+    if (!status || typeof status !== 'object') return;
+    delete status._probes;
+    delete status._runningSince;
+    delete status._probeRunSignature;
+    delete status._startupComplete;
+  }
+
+  /**
+   * The kubelet measures probe timing (`initialDelaySeconds`, `periodSeconds`)
+   * from the moment it first observes a RUNNING container. A (re)start begins a
+   * new window and discards the previous failure/readiness probe results
+   * (issue #67).
+   * @param {object} status containerStatus
+   */
+  _ensureProbeWindow(status) {
+    const signature = status.state?.running?.startedAt;
+    if (typeof status._runningSince !== 'number' || status._probeRunSignature !== signature) {
+      status._runningSince = this.gameSeconds;
+      status._probeRunSignature = signature;
+      status._probes = {};
+      delete status._startupComplete;
+    }
+  }
+
+  /** Per-probe consecutive success/failure counters + event throttle clock. */
+  _probeState(status, kind) {
+    if (!status._probes || typeof status._probes !== 'object') status._probes = {};
+    if (!status._probes[kind]) {
+      status._probes[kind] = {
+        failures: 0,
+        successes: 0,
+        lastEvalAt: undefined,
+        failed: false,
+        lastEventAt: undefined,
+      };
+    }
+    return status._probes[kind];
+  }
+
+  /**
+   * Evaluate one probe handler on the kubelet schedule: the first attempt
+   * happens `initialDelaySeconds` after the container started, later attempts
+   * every `periodSeconds` (all in simulated `gameSeconds`). Consecutive
+   * failures/successes are thresholded like the real kubelet (issue #67).
+   * @param {'liveness'|'readiness'|'startup'} kind
+   * @param {object} probe container spec probe (`livenessProbe`, ...)
+   * @param {object} pod
+   * @param {object} container pod.spec.containers entry
+   * @param {object} status pod.status.containerStatuses entry
+   * @returns {{evaluated: boolean, ok: boolean, failed: boolean, healthy: boolean, detail: string, justFailed: boolean, justRecovered: boolean}}
+   */
+  _runProbe(kind, probe, pod, container, status) {
+    const state = this._probeState(status, kind);
+    const initialDelay = Math.max(0, Number(probe.initialDelaySeconds ?? 0) || 0);
+    const period = Math.max(1, Number(probe.periodSeconds ?? 10) || 10);
+    const successThreshold = Math.max(1, Math.trunc(Number(probe.successThreshold ?? 1) || 1));
+    const failureThreshold = Math.max(1, Math.trunc(Number(probe.failureThreshold ?? 3) || 3));
+    const pending = () => ({
+      evaluated: false,
+      ok: false,
+      failed: state.failed,
+      healthy: !state.failed && state.successes >= successThreshold,
+      detail: '',
+      justFailed: false,
+      justRecovered: false,
+    });
+    const runningSince =
+      typeof status._runningSince === 'number' ? status._runningSince : this.gameSeconds;
+    if (this.gameSeconds - runningSince < initialDelay) return pending();
+    if (state.lastEvalAt !== undefined && this.gameSeconds - state.lastEvalAt < period) {
+      return pending();
+    }
+    state.lastEvalAt = this.gameSeconds;
+    const wasFailed = state.failed;
+    const result = this._evaluateProbeHandler(probe, pod, container, status);
+    if (result.ok) {
+      state.successes += 1;
+      state.failures = 0;
+      if (state.successes >= successThreshold) state.failed = false;
+    } else {
+      state.failures += 1;
+      state.successes = 0;
+      if (state.failures >= failureThreshold) state.failed = true;
+    }
+    return {
+      evaluated: true,
+      ok: result.ok,
+      failed: state.failed,
+      healthy: !state.failed && state.successes >= successThreshold,
+      detail: result.detail || '',
+      justFailed: !wasFailed && state.failed,
+      justRecovered: wasFailed && !state.failed,
+    };
+  }
+
+  /**
+   * Evaluate a probe handler against the simulated container. Returns
+   * `{ok, detail}`: `detail` is the exact kubelet failure text used in the
+   * `Warning Unhealthy` event.
+   * @param {object} probe
+   * @param {object} pod
+   * @param {object} container
+   * @param {object} status
+   * @returns {{ok: boolean, detail: string}}
+   */
+  _evaluateProbeHandler(probe, pod, container, status) {
+    // Sim-only additional failure reason (chaos stress): a container pushed
+    // over its CPU/memory limit also fails its probes — thresholded like every
+    // other failure by `_runProbe` (kept from the pre-#67 model).
+    const resources = status.resources || {};
+    const cpuOverloaded = resources.cpuLimit > 0 && resources.cpu > resources.cpuLimit * 0.95;
+    const memOverloaded =
+      resources.memoryLimit > 0 && resources.memory > resources.memoryLimit * 0.95;
+    if (cpuOverloaded || memOverloaded) {
+      return {
+        ok: false,
+        detail: cpuOverloaded
+          ? 'container CPU usage exceeded its limit'
+          : 'container memory usage exceeded its limit',
+      };
+    }
+    if (probe.exec) return this._evaluateExecProbe(probe.exec, pod, container, status);
+    if (probe.httpGet) return this._evaluateHttpGetProbe(probe.httpGet, pod, container);
+    if (probe.tcpSocket) return this._evaluateTcpSocketProbe(probe.tcpSocket, pod);
+    // Unknown handler (e.g. grpc): never fabricate a failure.
+    return { ok: true, detail: '' };
+  }
+
+  /**
+   * "Is this probe port accepting TCP connections?" model (issue #67).
+   * Containers in a Pod share the network namespace, so ANY container's
+   * declared `ports[].containerPort` opens the port. A Pod that declares NO
+   * ports at all is the permissive legacy fallback (hand-built fixtures with no
+   * port metadata) — only a Pod WITH declared ports can refuse a probe port.
+   * Named ports resolve cluster-side across every container in the Pod.
+   * @param {object} pod
+   * @param {number|string} rawPort probe port (numeric or named)
+   * @returns {{open: boolean, port: number|string}}
+   */
+  _probePortState(pod, rawPort) {
+    const declared = [];
+    for (const container of pod.spec?.containers || []) {
+      for (const port of container.ports || []) declared.push(port);
+    }
+    const text = String(rawPort ?? '');
+    if (/^\d+$/.test(text)) {
+      const port = Number(text);
+      if (declared.length === 0) return { open: true, port };
+      return { open: declared.some((entry) => Number(entry.containerPort) === port), port };
+    }
+    const named = declared.find((entry) => String(entry.name || '') === text);
+    if (named) return { open: true, port: Number(named.containerPort) };
+    return { open: declared.length === 0, port: text };
+  }
+
+  /** HTTP GET probe: port refusal or the simulated app's status code. */
+  _evaluateHttpGetProbe(action, pod, container) {
+    const portState = this._probePortState(pod, action.port);
+    const scheme = String(action.scheme || 'HTTP').toLowerCase();
+    const host = action.host ? String(action.host) : String(pod.status?.podIP || '0.0.0.0');
+    const path = String(action.path || '/');
+    if (!portState.open) {
+      return {
+        ok: false,
+        detail: `Get "${scheme}://${host}:${portState.port}${path}": dial tcp ${host}:${portState.port}: connect: connection refused`,
+      };
+    }
+    const image = String(container?.image || '');
+    // hello-openshift is a Go catch-all handler: every path answers 200.
+    if (/hello-openshift/.test(image)) return { ok: true, detail: '' };
+    // The simulated HTTP app serves `/` and the conventional health endpoints;
+    // any other path is the app's 404 (httpd/nginx-style static application).
+    const served = ['/', '/healthz', '/health', '/readyz', '/ready', '/livez', '/live'];
+    if (served.includes(path)) return { ok: true, detail: '' };
+    return { ok: false, detail: 'HTTP probe failed with statuscode: 404' };
+  }
+
+  /** TCP socket probe: connection accepted iff the port is declared/open. */
+  _evaluateTcpSocketProbe(action, pod) {
+    const portState = this._probePortState(pod, action.port);
+    const host = action.host ? String(action.host) : String(pod.status?.podIP || '0.0.0.0');
+    if (portState.open) return { ok: true, detail: '' };
+    return {
+      ok: false,
+      detail: `dial tcp ${host}:${portState.port}: connect: connection refused`,
+    };
+  }
+
+  /**
+   * Exec probe: run the stored argv through the injected container exec
+   * evaluator (`CommandBar._simulateExecCommand` in the browser) so the probe
+   * sees the same simulated container filesystem/env as `oc exec` (issue #67).
+   * Success is exit code 0; the failure detail is the command's output.
+   */
+  _evaluateExecProbe(action, pod, container, status) {
+    const argv = Array.isArray(action.command) ? action.command.map((token) => String(token)) : [];
+    if (!argv.length) return { ok: false, detail: 'exec probe has no command' };
+    const containerName = container?.name || status?.name || 'main';
+    let result;
+    if (this.containerExecEvaluator) {
+      try {
+        result = this.containerExecEvaluator(pod, containerName, [...argv]);
+      } catch (err) {
+        return { ok: false, detail: `exec probe failed: ${err.message}` };
+      }
+    } else {
+      result = this._fallbackExecProbe(argv);
+    }
+    const exitCode = Number.isFinite(Number(result?.exitCode)) ? Number(result.exitCode) : 1;
+    if (exitCode === 0) return { ok: true, detail: '' };
+    const lines = Array.isArray(result?.lines) ? result.lines.map((line) => String(line)) : [];
+    const output = lines.join('\n').trim();
+    // Command-not-found: keep kubelet's short `exec: "<bin>": ...` suffix
+    // instead of the CLI's `oc exec` wrapper text.
+    const notFound = output.match(/exec: "[^"]+": executable file not found in \$PATH/);
+    return { ok: false, detail: notFound ? notFound[0] : output };
+  }
+
+  /**
+   * Safe exec-probe fallback when no container exec evaluator is registered
+   * (bare Node engine): minimal deterministic container binaries so exec probes
+   * never throw. There is no modelled filesystem here, so `cat <path>` is
+   * always ENOENT — exactly the `/tmp/healthy` probe case.
+   * @param {string[]} argv
+   * @returns {{lines: string[], exitCode: number}}
+   */
+  _fallbackExecProbe(argv) {
+    const binary = String(argv[0] ?? '')
+      .split('/')
+      .pop()
+      .toLowerCase();
+    const args = argv.slice(1);
+    if (binary === 'true') return { lines: [], exitCode: 0 };
+    if (binary === 'false') return { lines: [], exitCode: 1 };
+    if (binary === 'cat') {
+      if (!args.length) return { lines: ['cat: missing operand'], exitCode: 1 };
+      return {
+        lines: args.map((path) => `cat: ${path}: No such file or directory`),
+        exitCode: 1,
+      };
+    }
+    return { lines: [`exec: "${binary}": executable file not found in $PATH`], exitCode: 127 };
+  }
+
+  /**
+   * Record the kubelet `Warning Unhealthy` event for a failed probe evaluation.
+   * Repeated identical failures are throttled to one event per ~10 simulated
+   * seconds (EventRecorder aggregation); the transition into the failed state
+   * always records immediately.
+   */
+  _recordProbeFailure(pod, status, kindLabel, outcome, probeKind, force = false) {
+    const state = this._probeState(status, probeKind);
+    if (
+      !force &&
+      typeof state.lastEventAt === 'number' &&
+      this.gameSeconds - state.lastEventAt < 10
+    ) {
+      return;
+    }
+    state.lastEventAt = this.gameSeconds;
+    pod.recordEvent('Warning', 'Unhealthy', `${kindLabel} probe failed: ${outcome.detail}`);
+  }
+
   _tickHealthChecks(dt) {
     const runningPods = this.cluster
       .getByKind('Pod')
@@ -2193,31 +2488,106 @@ export class SimulationTick {
         const container = containers[index];
         const status = pod.status.containerStatuses[index];
         if (!status || !status.state.running) continue;
-
-        if (container.livenessProbe && !this._evaluateProbe(container.livenessProbe, status)) {
-          this._handleContainerFailure(pod, status, 'LivenessProbeFailure', 137);
-          pod.recordEvent(
-            'Warning',
-            'Unhealthy',
-            `Liveness probe failed for container ${status.name}`
-          );
+        // Only containers with probes need probe bookkeeping (keeps the
+        // kubelet status of ordinary containers free of simulator-only fields).
+        if (!container.livenessProbe && !container.readinessProbe && !container.startupProbe) {
           continue;
         }
+        this._ensureProbeWindow(status);
+
+        // kubelet startup-probe phase: while the startup probe has not
+        // succeeded, ONLY it runs and the container stays not-Ready.
         if (container.startupProbe && !status._startupComplete) {
-          if (this._evaluateProbe(container.startupProbe, status)) status._startupComplete = true;
-          else status.ready = false;
-        }
-        if (container.readinessProbe) {
-          const startupPending = Boolean(container.startupProbe) && !status._startupComplete;
-          const ready = !startupPending && this._evaluateProbe(container.readinessProbe, status);
-          if (!ready && status.ready) {
-            status.ready = false;
-            pod.recordEvent(
-              'Warning',
-              'Unhealthy',
-              `Readiness probe failed for container ${status.name}`
+          const outcome = this._runProbe('startup', container.startupProbe, pod, container, status);
+          if (outcome.evaluated && !outcome.ok) {
+            this._recordProbeFailure(
+              pod,
+              status,
+              'Startup',
+              outcome,
+              'startup',
+              outcome.justFailed
             );
-          } else if (ready && !status.ready) {
+          }
+          if (outcome.evaluated && outcome.failed) {
+            // Failed startup probe: kubelet restarts the container (137) and
+            // records the real `Killing` event.
+            this._handleContainerFailure(pod, status, 'Error', 137);
+            pod.recordEvent(
+              'Normal',
+              'Killing',
+              `Container ${status.name} failed startup probe, will be restarted`
+            );
+            this.cluster.update(pod.uid, pod);
+            continue;
+          }
+          if (!outcome.healthy) {
+            status.ready = false;
+            continue;
+          }
+          status._startupComplete = true;
+          // With no readiness probe the container becomes Ready as soon as the
+          // startup probe succeeds; do it in this same tick (kubelet semantics).
+          if (!container.readinessProbe) status.ready = true;
+        }
+
+        if (container.livenessProbe) {
+          const outcome = this._runProbe(
+            'liveness',
+            container.livenessProbe,
+            pod,
+            container,
+            status
+          );
+          if (outcome.evaluated && !outcome.ok) {
+            this._recordProbeFailure(
+              pod,
+              status,
+              'Liveness',
+              outcome,
+              'liveness',
+              outcome.justFailed
+            );
+          }
+          if (outcome.evaluated && outcome.failed) {
+            // Real kubelet restarts a container whose liveness probe failed:
+            // exit code 137, lastState.terminated.reason `Error` (NOT
+            // `LivenessProbeFailure`), then a `Killing` event with this exact
+            // message. `_handleContainerFailure` owns RESTARTS/backoff.
+            this._handleContainerFailure(pod, status, 'Error', 137);
+            pod.recordEvent(
+              'Normal',
+              'Killing',
+              `Container ${status.name} failed liveness probe, will be restarted`
+            );
+            this.cluster.update(pod.uid, pod);
+            // Never evaluate readiness in the same tick after a restart.
+            continue;
+          }
+        }
+
+        if (container.readinessProbe) {
+          const outcome = this._runProbe(
+            'readiness',
+            container.readinessProbe,
+            pod,
+            container,
+            status
+          );
+          if (outcome.evaluated && !outcome.ok) {
+            const wasReady = status.ready;
+            if (outcome.failed) status.ready = false;
+            this._recordProbeFailure(
+              pod,
+              status,
+              'Readiness',
+              outcome,
+              'readiness',
+              outcome.justFailed || wasReady
+            );
+          } else if (outcome.healthy) {
+            // Recovery: the condition update below repopulates the Pod Ready
+            // condition and Service endpoints in this same tick (SIM-019).
             status.ready = true;
           }
         }
@@ -2239,21 +2609,6 @@ export class SimulationTick {
         if (wasReady) pod._readyAt = undefined;
       }
     }
-  }
-
-  _evaluateProbe(probe, containerStatus) {
-    if (!containerStatus.state.running) return false;
-    const failThreshold = probe.failureThreshold || 3;
-    const resources = containerStatus.resources || {};
-    const cpuOverloaded = resources.cpu > resources.cpuLimit * 0.95 && resources.cpuLimit > 0;
-    const memOverloaded =
-      resources.memory > resources.memoryLimit * 0.95 && resources.memoryLimit > 0;
-    if (cpuOverloaded || memOverloaded) {
-      containerStatus._probeFailCount = (containerStatus._probeFailCount || 0) + 1;
-      return containerStatus._probeFailCount < failThreshold;
-    }
-    containerStatus._probeFailCount = 0;
-    return true;
   }
 
   _tickOOMKiller(dt) {

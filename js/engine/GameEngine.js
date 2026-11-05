@@ -4168,12 +4168,16 @@ export class GameEngine {
 
   /**
    * `oc set probe <kind>/<name> --liveness|--readiness|--startup --get-url=... |
-   * --open-tcp=... | --initial-delay-seconds=... | --remove`.
+   * --open-tcp=... | --initial-delay-seconds=... | --remove`, or
+   * `oc set probe <kind>/<name> --liveness -- <command> [args...]` for an exec
+   * probe.
    *
    * Real oc only updates the fields whose flags were supplied (it preserves an
    * existing probe's handler/fields otherwise), and the API server defaults the
-   * unset threshold fields — see oc `pkg/cli/set/probe.go` (#64).
-   * @param {{namespace?: string, probe?: 'liveness'|'readiness'|'startup', getUrl?: string, openTcp?: number|string, httpGet?: object, remove?: boolean, container?: string, initialDelaySeconds?: number, periodSeconds?: number, timeoutSeconds?: number, successThreshold?: number, failureThreshold?: number}} [options]
+   * unset threshold fields — see oc `pkg/cli/set/probe.go` (#64). The exec
+   * handler (`-- <command>`) replaces any previous handler exactly like
+   * `--get-url`/`--open-tcp` do (#67).
+   * @param {{namespace?: string, probe?: 'liveness'|'readiness'|'startup', getUrl?: string, openTcp?: number|string, httpGet?: object, execCommand?: string[], remove?: boolean, container?: string, initialDelaySeconds?: number, periodSeconds?: number, timeoutSeconds?: number, successThreshold?: number, failureThreshold?: number}} [options]
    */
   setProbe(kind, name, options = {}) {
     const probeType = options.probe || 'liveness';
@@ -4198,6 +4202,11 @@ export class GameEngine {
         const probe = existing || {};
         // The handler is replaced only when a handler flag is supplied; real oc
         // keeps the existing exec/httpGet/tcpSocket otherwise (#64).
+        const execCommand = Array.isArray(options.execCommand)
+          ? options.execCommand
+              .filter((token) => token !== undefined && token !== null)
+              .map((token) => String(token))
+          : [];
         const httpGet =
           options.httpGet || (options.getUrl ? this._probeHttpGetFromUrl(options.getUrl) : null);
         const openTcp =
@@ -4207,7 +4216,12 @@ export class GameEngine {
           options.openTcp !== ''
             ? options.openTcp
             : null;
-        if (httpGet) {
+        if (execCommand.length > 0) {
+          // `oc set probe … -- <command>`: an exec handler (issue #67). Any
+          // previous handler is replaced; numeric flags below still merge in.
+          for (const handler of ['exec', 'httpGet', 'tcpSocket', 'grpc']) delete probe[handler];
+          probe.exec = { command: execCommand };
+        } else if (httpGet) {
           for (const handler of ['exec', 'httpGet', 'tcpSocket', 'grpc']) delete probe[handler];
           probe.httpGet = deepClone(httpGet);
         } else if (openTcp !== null) {
