@@ -2948,6 +2948,289 @@ if (seedMod?.ClusterState) {
   }
 }
 
+// ── 4g. Issue #63 shell/exec fidelity locks (static) ──────────────────────
+// The browser suite section `qa-issue63` proves the behaviour end-to-end.
+// These module/source locks fail the fast static gate if a future refactor
+// silently reintroduces the #63 bugs (no browser, no long sleeps): real `$?` /
+// `${?}` expansion (within a line and across terminal lines), container
+// `true`/`false`, honest non-zero exit statuses from real container commands
+// with `&&`/`||` chaining, and the corrected Lab 13 description (the provided
+// policy must be applied — it is neither seeded nor already applied).
+{
+  const engineMod = await tryImport('js/engine/GameEngine.js');
+  const sandboxMod = await tryImport('js/modes/SandboxMode.js');
+  const commandBarMod = await tryImport('js/ui/CommandBar.js');
+  const challengeMod = await tryImport('js/modes/ChallengeMode.js');
+  if (
+    !engineMod?.GameEngine ||
+    !sandboxMod?.SandboxMode ||
+    !commandBarMod?.CommandBar ||
+    !challengeMod?.CHALLENGES
+  ) {
+    fail(
+      'fidelity',
+      '#63: GameEngine/SandboxMode/CommandBar/ChallengeMode are not importable for the locks'
+    );
+  } else {
+    try {
+      const engine = new engineMod.GameEngine({ mode: 'sandbox' });
+      new sandboxMod.SandboxMode(engine, null).setupCluster(3);
+      const simulation = engine.simulation;
+      simulation.ensureOLMDefaultsSync();
+      // The sandbox seeds random container failures (0.002) that could restart
+      // the fixture Pod mid-lock; this lock proves fixed shell/exec semantics,
+      // so disable them for deterministic output (#61/#62 lock precedent).
+      simulation.randomFailureRate = 0;
+      const cluster = engine.cluster;
+      // CommandBar needs the `window.game` integration surface the app wires in
+      // the browser; provide the minimum shim around the real engine.
+      const windowShim = {
+        game: {
+          cluster,
+          gameEngine: engine,
+          engine: { emit() {}, on() {}, off() {} },
+          manifestEngine: null,
+        },
+      };
+      globalThis.window = windowShim;
+      try {
+        const cliBar = new commandBarMod.CommandBar();
+        const run = (command) => cliBar.executeCommand(command);
+        const messageOf = (result) => String(result?.message ?? '');
+
+        // Self-contained fixture: project + Deployment + a Running Pod, so
+        // `oc exec` / `oc rsh` resolve a real container to run in.
+        const projectResult = run('oc new-project qa63');
+        const deploymentResult = run(
+          'oc create deployment web --image=registry.access.redhat.com/ubi9/httpd-24 --replicas=1 -n qa63'
+        );
+        const findRunningWebPod = () =>
+          (cluster.getByKindAndNamespace('Pod', 'qa63') || []).find(
+            (pod) =>
+              /^web-/.test(String(pod.metadata?.name || '')) && pod.status?.phase === 'Running'
+          ) || null;
+        for (let tickIndex = 0; tickIndex < 400 && !findRunningWebPod(); tickIndex += 1) {
+          simulation.tick(0.05);
+        }
+        const fixtureOk =
+          !projectResult?.error && !deploymentResult?.error && Boolean(findRunningWebPod());
+
+        // #63A: `$?` is bash's last-exit-status special parameter. It is
+        // expanded per segment (after the previous segment ran), so a failed
+        // `oc exec` on the same line feeds the next `echo`; `${?}` is the braced
+        // form and a successful command leaves 0.
+        const failedInline = run('oc exec deploy/web -n qa63 -- ls /nope; echo rc=$?');
+        const bracedInline = run('oc exec deploy/web -n qa63 -- ls /nope; echo rc=${?}');
+        const successInline = run('oc exec deploy/web -n qa63 -- true; echo rc=$?');
+        const failedInlineMessage = messageOf(failedInline);
+        if (
+          fixtureOk &&
+          failedInline?.error === false &&
+          /^rc=2$/m.test(failedInlineMessage) &&
+          /^rc=2$/m.test(messageOf(bracedInline)) &&
+          successInline?.error === false &&
+          /^rc=0$/m.test(messageOf(successInline))
+        ) {
+          passed();
+        } else {
+          fail(
+            'fidelity',
+            `\`$?\` / \`\${?}\` must expand to the previous command's real status within a line (failed exec -> rc=2, success -> rc=0) (#63A): ${JSON.stringify({ failed: failedInlineMessage, braced: messageOf(bracedInline), success: messageOf(successInline) })}`
+          );
+        }
+
+        // #63A: exported variables and `$?` expand together; the assignment
+        // itself exits 0, so `export X=5; echo $X $?` is `5 0`.
+        const exportInline = run('export X=5; echo $X $?');
+        if (
+          fixtureOk &&
+          exportInline?.error === false &&
+          messageOf(exportInline).trim() === '5 0'
+        ) {
+          passed();
+        } else {
+          fail(
+            'fidelity',
+            `\`export X=5; echo $X $?\` must print \`5 0\` (variable expansion + assignment status 0) (#63A): ${JSON.stringify({ message: messageOf(exportInline) })}`
+          );
+        }
+
+        // #63A: the shell status persists ACROSS terminal lines — the next
+        // command line's `echo rc=$?` sees 1 after an NXDOMAIN `nslookup`, 2
+        // after `ls /nope`, and 0 after a successful `hostname` exec.
+        const nxdomainExec = run(
+          'oc exec deploy/web -n qa63 -- nslookup does-not-exist.qa63.svc.cluster.local'
+        );
+        const afterNxdomain = run('echo rc=$?');
+        const failingExec = run('oc exec deploy/web -n qa63 -- ls /nope');
+        const afterFailingExec = run('echo rc=$?');
+        const succeedingExec = run('oc exec deploy/web -n qa63 -- hostname');
+        const afterSucceedingExec = run('echo rc=$?');
+        if (
+          fixtureOk &&
+          nxdomainExec?.error === true &&
+          /command terminated with exit code 1\s*$/.test(messageOf(nxdomainExec)) &&
+          messageOf(afterNxdomain).trim() === 'rc=1' &&
+          failingExec?.error === true &&
+          messageOf(afterFailingExec).trim() === 'rc=2' &&
+          succeedingExec?.error === false &&
+          messageOf(afterSucceedingExec).trim() === 'rc=0'
+        ) {
+          passed();
+        } else {
+          fail(
+            'fidelity',
+            `$? must persist ACROSS terminal lines (nslookup NXDOMAIN -> rc=1, ls /nope -> rc=2, hostname -> rc=0) (#63A): ${JSON.stringify({ nxdomain: messageOf(afterNxdomain), failing: messageOf(afterFailingExec), succeeding: messageOf(afterSucceedingExec) })}`
+          );
+        }
+
+        // #63B: UBI images ship coreutils, so `true`/`false` are real container
+        // binaries: `true` is a silent success, `false` a silent failure with
+        // `command terminated with exit code 1` — never a fake local success.
+        const trueResult = run('oc exec deploy/web -n qa63 -- true');
+        const falseResult = run('oc exec deploy/web -n qa63 -- false');
+        const falseRecovered = run('oc exec deploy/web -n qa63 -- false || echo RECOVERED');
+        const falseMessage = messageOf(falseResult);
+        if (
+          fixtureOk &&
+          trueResult?.error === false &&
+          messageOf(trueResult).trim() === '' &&
+          falseResult?.error === true &&
+          /^command terminated with exit code 1$/m.test(falseMessage) &&
+          !/\(command executed in /.test(falseMessage) &&
+          !/exit code 0/.test(falseMessage) &&
+          falseRecovered?.error === false &&
+          /RECOVERED/.test(messageOf(falseRecovered))
+        ) {
+          passed();
+        } else {
+          fail(
+            'fidelity',
+            `container \`true\` must be a silent success and \`false\` a silent exit 1 with \`command terminated with exit code 1\` that \`||\` recovers from (#63B): ${JSON.stringify({ trueResult, falseResult, recovered: messageOf(falseRecovered) })}`
+          );
+        }
+
+        // #63C: a real container command's non-zero status is reported exactly
+        // like oc: the tool's stderr + `command terminated with exit code 2`,
+        // with the remote status driving `&&` (stops) / `||` (recovers).
+        const lsResult = run('oc exec deploy/web -n qa63 -- ls /nope');
+        const lsMessage = messageOf(lsResult);
+        const lsChained = run('oc exec deploy/web -n qa63 -- ls /nope && echo AFTER');
+        const lsRecovered = run('oc exec deploy/web -n qa63 -- ls /nope || echo RECOVERED');
+        if (
+          fixtureOk &&
+          lsResult?.error === true &&
+          lsMessage.includes("ls: cannot access '/nope': No such file or directory") &&
+          /command terminated with exit code 2\s*$/.test(lsMessage) &&
+          lsChained?.error === true &&
+          !/AFTER/.test(messageOf(lsChained)) &&
+          lsRecovered?.error === false &&
+          /RECOVERED/.test(messageOf(lsRecovered))
+        ) {
+          passed();
+        } else {
+          fail(
+            'fidelity',
+            `\`oc exec … -- ls /nope\` must report the real stderr + exit 2 and honour \`&&\`/\`||\` (#63C): ${JSON.stringify({ ls: lsMessage, chained: messageOf(lsChained), recovered: messageOf(lsRecovered) })}`
+          );
+        }
+
+        // #63C: exit 1 failures — `cat` on a missing file prints its own error
+        // then exits 1; `grep` with no match is silent and exits 1.
+        const catResult = run('oc exec deploy/web -n qa63 -- cat /nope');
+        const catMessage = messageOf(catResult);
+        const grepResult = run('oc exec deploy/web -n qa63 -- grep nope');
+        const grepMessage = messageOf(grepResult);
+        if (
+          fixtureOk &&
+          catResult?.error === true &&
+          catMessage.includes('cat: /nope: No such file or directory') &&
+          /command terminated with exit code 1\s*$/.test(catMessage) &&
+          grepResult?.error === true &&
+          grepMessage.trim() === 'command terminated with exit code 1'
+        ) {
+          passed();
+        } else {
+          fail(
+            'fidelity',
+            `\`cat /nope\` must exit 1 with its own error and \`grep\` with no match must be silent exit 1 (#63C): ${JSON.stringify({ cat: catMessage, grep: grepMessage })}`
+          );
+        }
+
+        // #63C: `oc rsh` shares the same remote exit-status contract as
+        // `oc exec` — a failed command terminates the session with its code.
+        const rshResult = run('oc rsh -n qa63 deploy/web ls /nope');
+        const rshMessage = messageOf(rshResult);
+        if (
+          fixtureOk &&
+          rshResult?.error === true &&
+          rshMessage.includes("ls: cannot access '/nope': No such file or directory") &&
+          /command terminated with exit code 2\s*$/.test(rshMessage)
+        ) {
+          passed();
+        } else {
+          fail(
+            'fidelity',
+            `\`oc rsh … ls /nope\` must report the real exit 2 like \`oc exec\` (#63C): ${JSON.stringify({ rsh: rshMessage })}`
+          );
+        }
+
+        // #63D: Lab 13 ships a starter manifest, so the description must tell
+        // the learner to apply `challenges/payments-networkpolicy.yaml` (or
+        // write their own) — never pretend a default-deny policy is seeded or
+        // already applied.
+        const lab13 = (challengeMod.CHALLENGES || []).find((challenge) => challenge.id === 13);
+        const lab13Description = String(lab13?.description || '');
+        const lab13Hint = String(lab13?.hints?.[0] || '');
+        const lab13ManifestFiles = lab13?.manifestFiles || [];
+        const lab13FocusFiles = lab13?.focusFiles || [];
+        if (
+          lab13 &&
+          /challenges\/payments-networkpolicy\.yaml/.test(lab13Description) &&
+          /\bapply\b/i.test(lab13Description) &&
+          !/seeded/i.test(lab13Description) &&
+          !/already\s+(?:applied|seeded)/i.test(lab13Description) &&
+          lab13ManifestFiles.includes('challenges/payments-networkpolicy.yaml') &&
+          lab13FocusFiles.includes('challenges/payments-networkpolicy.yaml') &&
+          /apply\s+-f\s+challenges\/payments-networkpolicy\.yaml/.test(lab13Hint) &&
+          !/seeded/i.test(lab13Hint) &&
+          !/already\s+(?:applied|seeded)/i.test(lab13Hint)
+        ) {
+          passed();
+        } else {
+          fail(
+            'fidelity',
+            `Lab 13 must point at the provided challenges/payments-networkpolicy.yaml, instruct applying it, and not claim a seeded/applied default-deny policy (#63D): ${JSON.stringify({ description: lab13Description, hint: lab13Hint, manifestFiles: lab13ManifestFiles, focusFiles: lab13FocusFiles })}`
+          );
+        }
+
+        // #63D: the project starts WITHOUT a NetworkPolicy — only Nodes,
+        // Project, Deployments and Services are seeded (the learner applies the
+        // provided policy first).
+        const lab13StartingResources = lab13?.startingResources || [];
+        const lab13SeededPolicies = lab13StartingResources.filter(
+          (resource) => resource?.kind === 'NetworkPolicy'
+        );
+        const lab13PaymentsProject = lab13StartingResources.some(
+          (resource) => resource?.kind === 'Project' && resource?.name === 'payments'
+        );
+        if (lab13 && lab13SeededPolicies.length === 0 && lab13PaymentsProject) {
+          passed();
+        } else {
+          fail(
+            'fidelity',
+            `Lab 13 startingResources must seed the payments Project and no NetworkPolicy object (nothing is applied at start) (#63D): ${JSON.stringify(lab13StartingResources.map((resource) => `${resource?.kind}/${resource?.name}`))}`
+          );
+        }
+      } finally {
+        delete globalThis.window;
+      }
+    } catch (err) {
+      fail('fidelity', `#63 dynamic fidelity lock threw: ${err.message}`);
+    }
+  }
+}
+
 // ── 5. Campaign, challenges, incidents and EX280 content ──────────────────
 const levelsMod = await tryImport('js/data/CampaignLevels.js');
 const challengesMod = await tryImport('js/modes/ChallengeMode.js');

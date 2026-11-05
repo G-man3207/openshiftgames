@@ -16943,6 +16943,343 @@ await runSection('qa-issue61-62', async () => {
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
+// 10d. QA ROUND #63 — bash `$?`, container true/false, real exec/rsh exit
+//      statuses, and the Lab 13 provided-policy wording / empty start state
+// ═══════════════════════════════════════════════════════════════════════════
+await runSection('qa-issue63', async () => {
+  let result;
+  const projectName = 'qa63';
+  /** Split a multi-line CLI message into its non-empty, trimmed lines. */
+  const messageLines = (message) =>
+    String(message ?? '')
+      .split('\n')
+      .map((line) => line.trim())
+      .filter(Boolean);
+  /** Advance the simulation clock deterministically (0.05 s fixed steps). */
+  const advanceBy = async (seconds) =>
+    evaluate((secs) => {
+      const sim = window.game?.gameEngine?.simulation;
+      if (!sim || typeof sim.tick !== 'function') return false;
+      const steps = Math.ceil(secs / 0.05);
+      for (let index = 0; index < steps; index += 1) sim.tick(0.05);
+      return true;
+    }, seconds);
+  /** Advance the simulation until predicate() is true, or exhaust maxSeconds. */
+  const advanceUntil = async (predicate, maxSeconds = 40, step = 2) => {
+    for (let played = 0; played < maxSeconds; played += step) {
+      await advanceBy(step);
+      if (await predicate()) return true;
+    }
+    return false;
+  };
+  /** Split an oc tabwriter table into header cells + rows (2+ space columns). */
+  const tableParts = (message) => {
+    const lines = String(message ?? '')
+      .split('\n')
+      .filter((line) => line.trim() !== '');
+    return {
+      headers: (lines[0] || '').split(/\s{2,}/).map((cell) => cell.trim()),
+      rows: lines.slice(1).map((line) => line.split(/\s{2,}/).map((cell) => cell.trim())),
+    };
+  };
+  const podRows = async (namespace) => {
+    const out = await runCmd(`oc get pods -n ${namespace}`);
+    return tableParts(out.message).rows.map((cells) => ({
+      name: cells[0] || '',
+      ready: cells[1] || '',
+      status: cells[2] || '',
+    }));
+  };
+
+  // ═══ Fixture: fresh sandbox → qa63 web Deployment + ClusterIP Service ═════
+  // The sandbox seeds random container failures; disable them for this section
+  // so exact-output assertions cannot flake on a transiently restarted Pod.
+  const booted = await bootSandbox();
+  const randomFailuresOff =
+    booted &&
+    (await evaluate(() => {
+      const sim = window.game?.gameEngine?.simulation;
+      if (!sim) return false;
+      sim.randomFailureRate = 0;
+      return sim.randomFailureRate === 0;
+    }));
+  assert(
+    booted && randomFailuresOff,
+    '#63: a fresh sandbox boots for the shell/exec exit-status checks (random failures disabled)'
+  );
+  result = await runCmd(`oc new-project ${projectName}`);
+  assert(
+    !result.error && /Now using project "qa63"/.test(result.message),
+    '#63: `oc new-project qa63` creates the fixture project',
+    result.message.slice(0, 300)
+  );
+  result = await runCmd(
+    `oc create deployment web --image=registry.access.redhat.com/ubi9/httpd-24 --replicas=1 -n ${projectName}`
+  );
+  assert(
+    !result.error && /deployment\.apps\/web created/.test(result.message),
+    '#63: `oc create deployment web` creates the one-replica fixture',
+    result.message.slice(0, 300)
+  );
+  const webPodRunning = await advanceUntil(async () => {
+    const pods = await podRows(projectName);
+    return (
+      pods.filter((pod) => /^web-/.test(pod.name)).length === 1 &&
+      pods.every(
+        (pod) => !/^web-/.test(pod.name) || (pod.ready === '1/1' && pod.status === 'Running')
+      )
+    );
+  });
+  assert(webPodRunning, '#63: the qa63 web Pod reaches Running 1/1');
+  result = await runCmd(`oc expose deploy/web --port=8080 -n ${projectName}`);
+  assert(
+    !result.error && /service\/web exposed/.test(result.message),
+    '#63: `oc expose deploy/web --port=8080` creates the Service used by the issue’s nslookup flow',
+    result.message.slice(0, 300)
+  );
+
+  // ═══ Round 1: #63a — bash `$?` / `${?}` after a failed exec ═══════════════
+  // The issue's exact shape (`oc exec … -- nslookup …; echo rc=$?`), made
+  // deterministic with an NXDOMAIN name: the exec exits 1 and the same line's
+  // `$?` must see that 1 instead of staying unexpanded/empty.
+  const nxdomain = `does-not-exist.${projectName}.svc.cluster.local`;
+  result = await runCmd(`oc exec deploy/web -n ${projectName} -- nslookup ${nxdomain}; echo rc=$?`);
+  assert(
+    !result.error &&
+      /command terminated with exit code 1/.test(result.message) &&
+      messageLines(result.message).pop() === 'rc=1',
+    '#63a: `oc exec … -- nslookup <unknown>; echo rc=$?` prints rc=1 — the failed exec status reaches the same line',
+    JSON.stringify({ error: result.error, message: result.message })
+  );
+
+  // `$?` persists across terminal lines, exactly like bash.
+  result = await runCmd(`oc exec deploy/web -n ${projectName} -- cat /nope`);
+  const catFailure = result;
+  result = await runCmd('echo rc=$?');
+  assert(
+    catFailure.error && messageLines(result.message).pop() === 'rc=1',
+    '#63a: `$?` persists across terminal lines — the previous `cat /nope` (exit 1) is read as rc=1',
+    JSON.stringify({ cat: catFailure.message, echo: result.message })
+  );
+  result = await runCmd(`oc exec deploy/web -n ${projectName} -- ls /nope`);
+  const lsFailure = result;
+  result = await runCmd('echo rc=$?');
+  assert(
+    lsFailure.error && messageLines(result.message).pop() === 'rc=2',
+    '#63a: the across-line `$?` of a real `ls /nope` failure is 2, not a generic 1',
+    JSON.stringify({ ls: lsFailure.message, echo: result.message })
+  );
+
+  // A successful command resets the status to 0.
+  result = await runCmd(`oc exec deploy/web -n ${projectName} -- true`);
+  const trueSuccess = result;
+  result = await runCmd('echo rc=$?');
+  assert(
+    !trueSuccess.error && messageLines(result.message).pop() === 'rc=0',
+    '#63a: `$?` after a successful exec is 0',
+    JSON.stringify({ exec: trueSuccess.message, echo: result.message })
+  );
+
+  // The issue's second example: `export X=5; echo $X $?` → `5 0`.
+  result = await runCmd('export X=5; echo $X $?');
+  assert(
+    !result.error && result.message.trim() === '5 0',
+    '#63a: `export X=5; echo $X $?` prints `5 0` in the same line',
+    JSON.stringify(result.message)
+  );
+
+  // The braced `${?}` form expands too.
+  result = await runCmd(`oc exec deploy/web -n ${projectName} -- false; echo rc=\${?}`);
+  assert(
+    !result.error && messageLines(result.message).pop() === 'rc=1',
+    '#63a: the braced `${?}` form expands to the failed exec status',
+    JSON.stringify({ error: result.error, message: result.message })
+  );
+
+  // Single quotes protect the literal; double quotes expand.
+  result = await runCmd("echo '$?'");
+  const singleQuoted = result;
+  result = await runCmd('echo "quoted=$?"');
+  assert(
+    !singleQuoted.error &&
+      singleQuoted.message.trim() === '$?' &&
+      !result.error &&
+      result.message.trim() === 'quoted=0',
+    '#63a: `$?` expands in double quotes but stays literal inside single quotes',
+    JSON.stringify({ single: singleQuoted.message, double: result.message })
+  );
+
+  // `$?` is a shell special parameter, never an environment entry.
+  result = await runCmd('env');
+  assert(
+    !result.error &&
+      !/^\?=/m.test(result.message) &&
+      /^X=5$/m.test(result.message) &&
+      /^PATH=/m.test(result.message),
+    '#63a: `env` lists the exported X but never leaks `$?` as an environment variable',
+    result.message.slice(0, 500)
+  );
+
+  // ═══ Round 2: #63b — container `true` / `false` (coreutils in every UBI) ══
+  result = await runCmd(`oc exec deploy/web -n ${projectName} -- true`);
+  assert(
+    !result.error && result.message === '',
+    '#63b: `oc exec … -- true` is a silent success (no missing-binary error)',
+    JSON.stringify({ error: result.error, message: result.message })
+  );
+  result = await runCmd(`oc exec deploy/web -n ${projectName} -- false`);
+  assert(
+    result.error === true &&
+      messageLines(result.message).pop() === 'command terminated with exit code 1' &&
+      !/executable file not found/.test(result.message),
+    '#63b: `oc exec … -- false` fails with `command terminated with exit code 1` (never the OCI 127 wording)',
+    JSON.stringify({ error: result.error, message: result.message })
+  );
+  result = await runCmd(`oc exec deploy/web -n ${projectName} -- false || echo RECOVERED`);
+  assert(
+    !result.error &&
+      messageLines(result.message).pop() === 'RECOVERED' &&
+      /command terminated with exit code 1/.test(result.message),
+    '#63b: a failed container `false` propagates to `||`, so `echo RECOVERED` runs and the line succeeds',
+    JSON.stringify({ error: result.error, message: result.message })
+  );
+
+  // ═══ Round 3: #63c — real exec/rsh exit statuses and `&&` / `||` ══════════
+  result = await runCmd(`oc exec deploy/web -n ${projectName} -- ls /nope`);
+  assert(
+    result.error === true &&
+      messageLines(result.message).join('\n') ===
+        "ls: cannot access '/nope': No such file or directory\ncommand terminated with exit code 2",
+    '#63c: `oc exec … -- ls /nope` prints the real ls error then `command terminated with exit code 2`',
+    JSON.stringify({ error: result.error, message: result.message })
+  );
+  result = await runCmd(`oc exec deploy/web -n ${projectName} -- ls /nope && echo AFTER`);
+  assert(
+    result.error === true && !/AFTER/.test(result.message),
+    '#63c: a container command that exits non-zero stops the `&&` chain (`echo AFTER` never runs)',
+    JSON.stringify({ error: result.error, message: result.message })
+  );
+  result = await runCmd(`oc exec deploy/web -n ${projectName} -- ls /nope || echo RECOVERED`);
+  assert(
+    !result.error &&
+      messageLines(result.message).pop() === 'RECOVERED' &&
+      /command terminated with exit code 2/.test(result.message),
+    '#63c: `|| echo RECOVERED` recovers from a container exit 2',
+    JSON.stringify({ error: result.error, message: result.message })
+  );
+  result = await runCmd(`oc exec deploy/web -n ${projectName} -- cat /nope`);
+  assert(
+    result.error === true &&
+      /^cat: \/nope: No such file or directory$/m.test(result.message) &&
+      messageLines(result.message).pop() === 'command terminated with exit code 1',
+    '#63c: `oc exec … -- cat /nope` reports the cat error and exits 1',
+    JSON.stringify({ error: result.error, message: result.message })
+  );
+  result = await runCmd(`oc rsh -n ${projectName} deploy/web ls /nope`);
+  assert(
+    result.error === true &&
+      messageLines(result.message).pop() === 'command terminated with exit code 2',
+    '#63c: `oc rsh … ls /nope` returns the remote command’s status 2 like oc exec',
+    JSON.stringify({ error: result.error, message: result.message })
+  );
+  // The pre-existing OCI not-found contract must keep working.
+  result = await runCmd(`oc exec deploy/web -n ${projectName} -- foobar`);
+  assert(
+    result.error === true &&
+      /executable file not found in \$PATH/.test(result.message) &&
+      messageLines(result.message).pop() === 'command terminated with exit code 127',
+    '#62/#63: the OCI exec not-found contract still exits 127 with the containerd wording',
+    JSON.stringify({ error: result.error, message: result.message })
+  );
+
+  // ═══ Round 4 (LAST): #63d — Lab 13 provided-policy wording + empty start ══
+  // Launching challenge 13 exits the sandbox flow, so this must run last.
+  const lab13Content = await evaluate(() =>
+    import('/js/modes/ChallengeMode.js').then((module) => {
+      const def = (module.CHALLENGES || []).find((challenge) => challenge.id === 13);
+      return def
+        ? { title: def.title, description: def.description || '', hints: def.hints || [] }
+        : null;
+    })
+  );
+  const lab13Description = lab13Content?.description || '';
+  const lab13Hint = lab13Content?.hints?.[0] || '';
+  assert(
+    Boolean(lab13Content) &&
+      lab13Content.title === 'Production Network Policies' &&
+      /provided in challenges\/payments-networkpolicy\.yaml/.test(lab13Description) &&
+      /\bapply it\b/i.test(lab13Description) &&
+      !/seeded default-deny/i.test(lab13Description),
+    '#63d: the Lab 13 description says the default-deny policy is provided in challenges/payments-networkpolicy.yaml and must be applied (not seeded)',
+    JSON.stringify(lab13Description.slice(0, 700))
+  );
+  assert(
+    /provided default-deny policy/i.test(lab13Hint) &&
+      /challenges\/payments-networkpolicy\.yaml/.test(lab13Hint) &&
+      /oc apply -f/.test(lab13Hint) &&
+      /No policy is applied to payments at start/i.test(lab13Hint),
+    '#63d: the first Lab 13 hint tells the learner to apply the provided policy and that no policy exists at start',
+    JSON.stringify(lab13Hint.slice(0, 700))
+  );
+
+  assert(await launch('challenge', 13), '#63d: timed Lab 13 starts from the sandbox flow');
+  await closeOverlays();
+  const lab13Started = await evaluate(() => {
+    const mode = window.game.app.modeInstance;
+    return {
+      challenge: mode?.currentChallenge,
+      description: mode?.currentChallengeDef?.description || '',
+      panelDisplay: document.getElementById('objectives-panel')
+        ? getComputedStyle(document.getElementById('objectives-panel')).display
+        : 'none',
+    };
+  });
+  assert(
+    lab13Started.challenge === 13 &&
+      lab13Started.description === lab13Description &&
+      lab13Started.panelDisplay !== 'none',
+    '#63d: the running Lab 13 mode renders the provided-policy description',
+    JSON.stringify({ ...lab13Started, description: lab13Started.description.slice(0, 400) })
+  );
+  result = await runCmd('oc get netpol -n payments');
+  assert(
+    !result.error && /No resources found in payments namespace\./.test(result.message),
+    '#63d: `oc get netpol -n payments` is empty at the start of Lab 13 (the learner must apply the provided policy)',
+    JSON.stringify({ error: result.error, message: result.message })
+  );
+
+  // The on-screen objectives panel must show the same "provided, apply it" text.
+  const panelDescriptionRendered = await waitFor(
+    () =>
+      evaluate(() =>
+        /payments-networkpolicy\.yaml/.test(
+          document.getElementById('obj-panel-desc')?.textContent || ''
+        )
+      ),
+    8000,
+    250
+  );
+  const lab13Panel = await evaluate(() => ({
+    title: document.getElementById('obj-panel-title')?.textContent || '',
+    description: document.getElementById('obj-panel-desc')?.textContent || '',
+    panelText: document.getElementById('objectives-panel')?.innerText || '',
+  }));
+  assert(
+    panelDescriptionRendered &&
+      lab13Panel.description === lab13Description &&
+      lab13Panel.title === 'Production Network Policies' &&
+      /challenges\/payments-networkpolicy\.yaml/.test(lab13Panel.panelText) &&
+      /\bapply it\b/i.test(lab13Panel.panelText),
+    '#63d: the on-screen Lab 13 objectives panel renders the provided-policy wording (challenges/payments-networkpolicy.yaml + apply)',
+    JSON.stringify({
+      rendered: panelDescriptionRendered,
+      title: lab13Panel.title,
+      description: lab13Panel.description.slice(0, 700),
+    })
+  );
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
 // 11. DRAW PAGE
 // ═══════════════════════════════════════════════════════════════════════════
 await runSection('draw', async () => {
