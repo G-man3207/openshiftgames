@@ -11,7 +11,7 @@
  */
 
 import { ResourceBase } from './ResourceBase.js';
-import { deepClone } from './ManifestSerializer.js';
+import { deepClone, deterministicUserUid } from './ManifestSerializer.js';
 
 export class User extends ResourceBase {
   constructor(metadata = {}) {
@@ -187,6 +187,11 @@ ${this.events
   }
 }
 
+// Identities are linked to a User whose UID the API records as `spec.user.uid`;
+// `deterministicUserUid()` (ManifestSerializer) fills the stable fallback while
+// login links the real User UID (#76).
+export { deterministicUserUid };
+
 export class Identity extends ResourceBase {
   constructor(metadata = {}) {
     super('Identity', {
@@ -215,6 +220,7 @@ export class Identity extends ResourceBase {
       },
       metadata.spec
     );
+    this.applyAdmissionDefaults();
     this._setInitialStatus({ phase: 'Active' });
   }
 
@@ -235,8 +241,37 @@ export class Identity extends ResourceBase {
     return `${this.providerName}:${this.providerUserName}`;
   }
 
+  /**
+   * API-server admission for an Identity (#76): it is linked to a User, so
+   * `spec.user.uid` is always populated. Login supplies the real User UID
+   * (ClusterState.createIdentity); an object that only names its user gets the
+   * deterministic fallback. Hidden from `oc get identities` no longer: the CLI
+   * prints this value in the USER UID column.
+   * GameEngine.applyManifestObject() calls this after installing an applied
+   * spec (that path replaces `.spec` wholesale).
+   * @returns {this}
+   */
+  applyAdmissionDefaults() {
+    return this._ensureUserUid();
+  }
+
+  /**
+   * Fill in the linked User UID when the object only referenced the user by
+   * name (keeps an explicit/real UID untouched, #76).
+   * @returns {this}
+   */
+  _ensureUserUid() {
+    const user = this.spec.user || {};
+    this.spec.user = user;
+    if (!user.uid && user.name) user.uid = deterministicUserUid(user.name);
+    return this;
+  }
+
   linkUser(userName, userUid = '') {
-    this.spec.user = { name: userName, uid: userUid };
+    this.spec.user = {
+      name: userName,
+      uid: userUid || deterministicUserUid(userName),
+    };
     this.metadata.generation++;
     this._bumpResourceVersion();
     return this;

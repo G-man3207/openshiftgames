@@ -127,6 +127,43 @@ export function tokenizeShell(input) {
 }
 
 /**
+ * Index of the `)` that closes the `$(` starting at `dollarIndex`, honouring
+ * nested parentheses and quotes inside the substitution (bash `$(…)` grammar).
+ * @param {string} text
+ * @param {number} dollarIndex index of the `$` character
+ * @returns {number} index of the closing `)`, or -1 when unterminated
+ */
+export function findCommandSubstitutionEnd(text, dollarIndex) {
+  let depth = 0;
+  let quote = null;
+  for (let index = dollarIndex + 1; index < text.length; index += 1) {
+    const char = text[index];
+    if (quote) {
+      if (char === '\\' && quote === '"' && index + 1 < text.length) {
+        index += 1;
+        continue;
+      }
+      if (char === quote) quote = null;
+      continue;
+    }
+    if (char === "'" || char === '"') {
+      quote = char;
+      continue;
+    }
+    if (char === '\\') {
+      index += 1;
+      continue;
+    }
+    if (char === '(') depth += 1;
+    else if (char === ')') {
+      depth -= 1;
+      if (depth === 0) return index;
+    }
+  }
+  return -1;
+}
+
+/**
  * Split a raw shell command line into `;` / `&&` / `||` segments (issue #50).
  *
  * The split is quote- and escape-aware, so operators inside quotes are plain
@@ -1391,19 +1428,112 @@ export class ShellTools {
   }
 
   /**
+   * True for a virtual-filesystem directory path (#76). Directories are derived
+   * from file paths, so an existing-but-empty directory is not representable —
+   * except the mapped `/tmp` (see expandHomePath), which is a real workstation
+   * directory and must stay listable after its last file is removed.
+   * @param {string} path
+   * @returns {boolean}
+   */
+  _isVirtualDirectory(path) {
+    const clean = this.expandHomePath(path)
+      .replace(/^\.\/+/, '')
+      .replace(/\/+$/, '');
+    if (!clean) return false;
+    if (clean === 'tmp') return true;
+    const prefix = `${clean}/`;
+    return this.bar._manifestFileList().some((file) => file.startsWith(prefix));
+  }
+
+  /**
    * Expand `$(command)` substitutions the way bash does before running a line.
+   *
+   * Bash expands command substitutions in unquoted and double-quoted words but
+   * NOT inside single quotes (`'…$(cat …)…'` is passed literally to the command,
+   * e.g. to a container `sh -c`). Quoting is tracked while scanning here so an
+   * `oc exec … -- sh -c 'curl -H "Authorization: Bearer $(cat …/token)"'`
+   * one-liner reaches the container shell with the substitution intact
+   * (#75 L16). Word-final substitutions still expand and the value never ends
+   * with stray whitespace (#75/#76).
    * @param {string} text
    * @returns {string}
    */
   expandSubstitutions(text) {
-    let result = String(text ?? '');
-    for (let guard = 0; guard < 10; guard += 1) {
-      const match = result.match(/\$\(([^()\n]+)\)/);
-      if (!match) break;
-      const output = this._runSubcommand(match[1].trim());
-      result = result.slice(0, match.index) + output + result.slice(match.index + match[0].length);
+    const source = String(text ?? '');
+    const expandAt = (index) => {
+      const end = findCommandSubstitutionEnd(source, index);
+      if (end < 0) return null;
+      const inner = source.slice(index + 2, end);
+      return { end, value: this._expandOneSubstitution(inner) };
+    };
+    let result = '';
+    let quote = null;
+    for (let index = 0; index < source.length; index += 1) {
+      const char = source[index];
+      if (quote === "'") {
+        result += char;
+        if (char === "'") quote = null;
+        continue;
+      }
+      if (quote === '"') {
+        if (char === '"') {
+          quote = null;
+          result += char;
+          continue;
+        }
+        if (char === '\\' && index + 1 < source.length) {
+          result += char + source[index + 1];
+          index += 1;
+          continue;
+        }
+        if (char === '$' && source[index + 1] === '(') {
+          const expanded = expandAt(index);
+          if (expanded) {
+            result += expanded.value;
+            index = expanded.end;
+            continue;
+          }
+        }
+        result += char;
+        continue;
+      }
+      if (char === '"' || char === "'") {
+        quote = char;
+        result += char;
+        continue;
+      }
+      if (char === '\\' && index + 1 < source.length) {
+        result += char + source[index + 1];
+        index += 1;
+        continue;
+      }
+      if (char === '$' && source[index + 1] === '(') {
+        const expanded = expandAt(index);
+        if (expanded) {
+          result += expanded.value;
+          index = expanded.end;
+          continue;
+        }
+      }
+      result += char;
     }
     return result;
+  }
+
+  /**
+   * Run one `$(…)` body like bash: nested substitutions expand first, the
+   * command runs on the workstation, and all trailing newlines are stripped
+   * (bash command substitution semantics).
+   * @param {string} inner the text between `$(` and the matching `)`
+   * @returns {string}
+   */
+  _expandOneSubstitution(inner) {
+    const command = this.expandSubstitutions(String(inner ?? '')).trim();
+    // Bash strips ALL trailing newlines from a `$(…)` value; `_runSubcommand`
+    // already trims, but strip defensively here too so a word-final
+    // substitution can never inject whitespace into the surrounding word
+    // (issue #75/#76: `curl http://$(oc get route … -o jsonpath=…)`).
+    return this._runSubcommand(command).replace(/[\r\n]+$/, '');
   }
 
   _runSubcommand(command) {
@@ -1543,6 +1673,13 @@ export class ShellTools {
     // root (which is the workstation home directory).
     const absoluteHome = raw.match(/^\/home\/student(?:\/(.*))?$/);
     if (absoluteHome) return absoluteHome[1] ?? '';
+    // #76: `/tmp` is a real directory on the virtual filesystem. The VFS is
+    // rooted at the home directory, and ManifestEngine normalises leading
+    // slashes away, so a redirect (`> /tmp/webapp.yaml`) is stored as
+    // `tmp/webapp.yaml`. Map absolute `/tmp` paths onto that same directory so
+    // writes, `ls /tmp`, `cat`, `rm`, `oc apply -f /tmp/...` all agree.
+    if (raw === '/tmp') return 'tmp';
+    if (raw.startsWith('/tmp/')) return raw.slice(1);
     const home = raw.match(/^\$(?:\{HOME\}|HOME)(\/.*)?$/);
     if (home) return home[1] ? home[1].slice(1) : '';
     return raw;
@@ -1585,6 +1722,7 @@ export class ShellTools {
       const content = this._readFile(file);
       if (content === null) {
         const expanded = this.expandHomePath(file);
+        if (this._isVirtualDirectory(expanded)) return this._err(`cat: ${file}: Is a directory`);
         if (this._listFiles(expanded).length) return this._err(`cat: ${file}: Is a directory`);
         return this._err(`cat: ${file}: No such file or directory`);
       }
@@ -1594,12 +1732,13 @@ export class ShellTools {
   }
 
   _cmd_echo(args, stdin) {
-    let newline = true;
     let interpret = false;
     const words = [];
     for (const arg of args) {
       if (/^-[neE]+$/.test(arg)) {
-        if (arg.includes('n')) newline = false;
+        // `-n` only suppresses echo's trailing newline; the terminal renders one
+        // line block per output, so it never needs the byte here (#76). `-e`
+        // does change the payload (escape sequences).
         if (arg.includes('e')) interpret = true;
         continue;
       }
@@ -1610,7 +1749,10 @@ export class ShellTools {
       text = text.replace(/\\n/g, '\n').replace(/\\t/g, '\t').replace(/\\\\/g, '\\');
     }
     if (stdin !== null && stdin !== '') text = words.length ? `${text}\n${stdin}` : stdin;
-    return this._ok(newline ? `${text}\n` : text);
+    // #76: the terminal renders one block per command output, so a trailing
+    // newline in the message would show as an extra blank line after `echo`;
+    // no other shell builtin ends its message with a newline either.
+    return this._ok(text);
   }
 
   // ── grep / head / tail / wc ──────────────────────────────────────────────
@@ -2288,6 +2430,9 @@ export class ShellTools {
       const direct = clean ? this._readFile(clean) : null;
       if (direct !== null) return { output: [target] };
       if (!clean) return { output: [] };
+      // An existing-but-empty directory (`ls /tmp` after its last file is
+      // removed) lists nothing and succeeds (#76).
+      if (this._isVirtualDirectory(clean)) return { output: [] };
       return { error: `ls: cannot access '${target}': No such file or directory` };
     };
     if (!targets.length) targets.push('');
@@ -2310,6 +2455,11 @@ export class ShellTools {
     const errors = [];
     for (const file of files) {
       if (!this._fileExists(file)) {
+        // A directory target is a real error unless -f; `rm -r` is not modelled.
+        if (this._isVirtualDirectory(file)) {
+          if (!force) errors.push(`rm: cannot remove '${file}': Is a directory`);
+          continue;
+        }
         if (!force) errors.push(`rm: cannot remove '${file}': No such file or directory`);
         continue;
       }
@@ -2983,6 +3133,15 @@ export class ShellTools {
       method: null,
       writeOut: null,
       maxTime: null,
+      /** Custom request headers, lowercase name → value (last `-H` wins). */
+      headers: {},
+    };
+    /** Record one `-H/--header 'Name: value'` argument. */
+    const setHeader = (value) => {
+      const text = String(value ?? '');
+      const colon = text.indexOf(':');
+      if (colon <= 0) return;
+      options.headers[text.slice(0, colon).trim().toLowerCase()] = text.slice(colon + 1).trim();
     };
     const urls = [];
     const shortValueFlags = new Set([
@@ -3058,6 +3217,7 @@ export class ShellTools {
         else if (arg === '--cacert') options.cacert = value;
         else if (arg === '--request') options.method = value.toUpperCase();
         else if (arg === '--write-out') options.writeOut = value;
+        else if (arg === '--header') setHeader(value);
         else if (arg === '--max-time' || arg === '--connect-timeout')
           options.maxTime = Number(value) || null;
         else if (arg === '--url') urls.push(value);
@@ -3086,9 +3246,7 @@ export class ShellTools {
         else if (arg === '-X') options.method = value.toUpperCase();
         else if (arg === '-w') options.writeOut = value;
         else if (arg === '-m') options.maxTime = Number(value) || null;
-        else if (arg === '-H') {
-          /* custom headers are echoed by -v only; the simulator keeps the defaults */
-        }
+        else if (arg === '-H') setHeader(value);
         continue;
       }
       if (arg.startsWith('-') && arg.length > 1) {
@@ -3205,6 +3363,16 @@ export class ShellTools {
   }
 
   /**
+   * A direct `curl: (N) message` failure that never reached the network, with
+   * curl's real exit status (a failed command's status is its error code).
+   */
+  _curlError(code, message) {
+    const result = this._err(`curl: (${code}) ${message}`);
+    result.exitCode = code;
+    return result;
+  }
+
+  /**
    * Render a failed curl request: `-s` silences error messages unless `-S`,
    * while `--write-out` still runs (real curl prints it even on failure).
    */
@@ -3226,6 +3394,9 @@ export class ShellTools {
     });
     const text = allLines.join('\n') + (allLines.length && writeOut ? '\n' : '') + writeOut;
     const result = this._err(text);
+    // Real curl exits with the error code itself (e.g. 6/7/28/35/60), which
+    // `$?`/`&&`/`||` must observe; a TLS handshake failure is exit 35 (#75).
+    result.exitCode = normalized.code;
     // A silent failure (`curl -s`) has no output at all; the shell must not
     // replace it with the generic `error: command failed` fallback (#49).
     result.silentFailure = text === '';
@@ -3241,9 +3412,11 @@ export class ShellTools {
   _cmd_curl(args) {
     const { options, urls } = this._parseCurlOptions(args);
     if (!urls.length) {
-      return this._err(
+      const result = this._err(
         "curl: no URL specified!\ncurl: try 'curl --help' or 'curl --manual' for more information"
       );
+      result.exitCode = 2; // real curl's "no URL specified" exit status
+      return result;
     }
     let url = urls[0];
     if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(url)) url = `http://${url}`;
@@ -3253,12 +3426,12 @@ export class ShellTools {
     let result = null;
     for (let hop = 0; hop <= maxRedirects; hop += 1) {
       const parsed = this._parseCurlUrl(url);
-      if (parsed.error) return this._err(`curl: (1) ${parsed.error}`);
+      if (parsed.error) return this._curlError(3, parsed.error);
       if (!['http', 'https'].includes(parsed.scheme)) {
-        return this._err(`curl: (1) Protocol "${parsed.scheme}" not supported`);
+        return this._curlError(1, `Protocol "${parsed.scheme}" not supported`);
       }
       if (!parsed.hostname) {
-        return this._err('curl: (3) URL rejected: Malformed input to a URL function');
+        return this._curlError(3, 'URL rejected: Malformed input to a URL function');
       }
       result =
         this._simulatedInternetCurl(parsed) ||
@@ -3271,7 +3444,7 @@ export class ShellTools {
       const location = result.location;
       if (options.follow && location && status >= 300 && status < 400) {
         if (hop >= maxRedirects) {
-          return this._err(this._curlFailureLines(47, 'Maximum (5) redirects followed').join('\n'));
+          return this._curlError(47, 'Maximum (5) redirects followed');
         }
         redirects += 1;
         if (options.verbose)
@@ -3348,10 +3521,10 @@ export class ShellTools {
       if (options.cacert) {
         const ca = this._readFile(options.cacert);
         if (ca === null) {
-          return this._err(`curl: (77) error setting certificate file: ${options.cacert}`);
+          return this._curlError(77, `error setting certificate file: ${options.cacert}`);
         }
         if (!parseCertificatePem(ca)) {
-          return this._err(`curl: (77) error setting certificate file: ${options.cacert}`);
+          return this._curlError(77, `error setting certificate file: ${options.cacert}`);
         }
       } else if (!certificate.trusted) {
         const problem = certificate.selfSigned
@@ -3482,6 +3655,11 @@ export class ShellTools {
         // Real container name resolved from the workload pod template
         // (`webapp`, not a hardcoded `main`, #54d).
         container: context.containerName,
+        // L16 (#76): the in-cluster API-server model needs the request path and
+        // headers (`Authorization: Bearer <sa-token>`) to answer with the real
+        // PodList / 403 Status JSON instead of the anonymous fallback.
+        path: parsed.path || '/',
+        headers: options.headers || {},
       });
     }
     /** Real curl exit code for a simulated deny reason (issue #43). */

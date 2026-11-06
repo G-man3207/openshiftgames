@@ -440,7 +440,7 @@ const CHALLENGES = [
       'Deploy the database tier from the real MySQL image: oc new-app --image=registry.redhat.io/rhel9/mysql-80 --name=database -n backend. It CrashLoopBackOffs until credentials are supplied — oc get pods -n backend shows CrashLoopBackOff and oc logs <pod> -n backend prints "You must either specify the following environment variables: MYSQL_USER, MYSQL_PASSWORD, MYSQL_DATABASE or MYSQL_ROOT_PASSWORD". Fix it the exam way: oc set env deployment/database -n backend MYSQL_ROOT_PASSWORD=secretpw MYSQL_DATABASE=appdb, then watch the new Pods become Running.',
       'oc new-app creates both a Deployment and a Service; the generated Service exposes the image port (3306/TCP for MySQL, 8080 for the hello-openshift image). Verify with oc get deploy,svc -n frontend and -n backend',
       'Expose the frontend Service: oc expose svc/frontend -n frontend (or oc create route edge...)',
-      'A Route is only Admitted when its Service has ready endpoints: oc get route frontend -n frontend -o wide',
+      'A Route is Admitted on host/path/certificate validity, not on backend health: with no ready endpoints the Route is still Admitted=True while requests from the workstation fail with 503 and the router logs an error. Verify both: oc get route frontend -n frontend -o wide and curl -k https://<route-host>.',
     ],
   },
   {
@@ -531,8 +531,8 @@ const CHALLENGES = [
     ],
     availableResources: ['Secret', 'Route', 'Service', 'Deployment', 'Project'],
     hints: [
-      'Create the TLS material Secret (the simulator supplies a self-signed pair if the files are absent):',
-      'oc create secret tls app-tls --cert=tls.crt --key=tls.key -n web',
+      'Create real TLS material first — `oc create secret tls` reads the cert/key files from the virtual filesystem, so a missing file fails with `error: open tls.crt: no such file or directory`. Generate a self-signed pair: openssl req -x509 -newkey rsa:2048 -nodes -keyout tls.key -out tls.crt -days 365 -subj "/CN=app.apps.cluster.example.com"',
+      'Create the TLS Secret from those files: oc create secret tls app-tls --cert=tls.crt --key=tls.key -n web',
       'Create the edge Route: oc create route edge app --service=app-svc --cert=tls.crt --key=tls.key -n web',
       'Verify admission and TLS: oc get route app -n web -o yaml; look for status.ingress[0].conditions type=Admitted, status=True',
       'For a Secret-referencing Route, OCP 4.22 supports spec.tls.externalCertificate with a kubernetes.io/tls Secret.',
@@ -721,11 +721,17 @@ const CHALLENGES = [
         label: 'Group developers contains developer',
       },
       {
-        type: 'deploy',
-        kind: 'RoleBinding',
-        name: 'edit',
+        // Issue #71: grade the resulting RBAC state (what `oc auth can-i`
+        // reports), not a binding literally named `edit`. Any RoleBinding that
+        // gives developers edit in team-dev counts — the generated `edit`,
+        // `edit-0`, or the player's own `dev-edit`.
+        type: 'canI',
+        verb: 'update',
+        resource: 'deployments',
+        user: 'developer',
         namespace: 'team-dev',
-        label: 'RoleBinding grants edit in team-dev',
+        expected: true,
+        label: 'RoleBinding grants edit in team-dev (developer can update Deployments)',
       },
       {
         type: 'canI',
@@ -756,9 +762,9 @@ const CHALLENGES = [
     ],
     hints: [
       'Create the user and group: oc create user developer; oc adm groups new developers developer',
-      'Bind the built-in edit ClusterRole at project scope: oc adm policy add-role-to-group edit developers -n team-dev',
-      'Prove it: oc auth can-i delete pods --as=developer -n team-dev',
-      'Inspect the binding: oc get rolebinding edit -n team-dev -o yaml',
+      'Bind the built-in edit ClusterRole at project scope: oc adm policy add-role-to-group edit developers -n team-dev (or create your own binding: oc create rolebinding dev-edit --clusterrole=edit --group=developers -n team-dev)',
+      'Prove it: oc auth can-i delete pods --as=developer -n team-dev and oc auth can-i update deployments --as=developer -n team-dev — the lab grades these answers, not the binding name.',
+      'Inspect the binding: oc get rolebinding -n team-dev -o yaml (a reused binding such as dev-edit is just as valid as one named edit).',
       'Avoid cluster-admin and wildcard rules; edit is enough for a developer in one project.',
     ],
   },
@@ -790,13 +796,26 @@ const CHALLENGES = [
         subject: 'system:serviceaccount:secure:priv-sa',
         label: 'Grant the privileged SCC to the dedicated ServiceAccount priv-sa',
       },
-      { type: 'privileged', count: 1, label: 'Get a privileged: true Pod admitted and Running' },
+      {
+        type: 'privileged',
+        count: 1,
+        namespace: 'secure',
+        serviceAccount: 'priv-sa',
+        label: 'Get a privileged: true Pod admitted and Running as priv-sa',
+      },
       { type: 'resolve', incidentType: 'SCCForbidden', count: 1, label: 'Resolve SCCForbidden' },
       {
-        type: 'command',
-        pattern: 'add-scc-to-(user|group)',
-        count: 1,
-        label: 'Grant the SCC with oc adm policy',
+        // Issue #71: the label asks for the oc adm policy flow, but the grade is
+        // the resulting RBAC state — `oc auth can-i use scc/privileged` for the
+        // dedicated ServiceAccount, whatever binding (generated or hand-written)
+        // grants it.
+        type: 'canI',
+        verb: 'use',
+        resource: 'scc/privileged',
+        user: 'system:serviceaccount:secure:priv-sa',
+        namespace: 'secure',
+        expected: true,
+        label: 'Grant the SCC with oc adm policy (priv-sa can use scc/privileged)',
       },
     ],
     startingResources: [...nodes(2), project('secure', 'Secure workloads')],
@@ -820,12 +839,12 @@ const CHALLENGES = [
       'RoleBinding',
     ],
     hints: [
-      'Apply the workload: oc apply -f challenges/privileged-app.yaml — it runs as the dedicated ServiceAccount priv-sa and requests privileged: true.',
-      'The rejected Pod is never created on 4.x: oc get pods -n secure stays empty and oc describe deployment/privileged-app -n secure shows FailedCreate / "unable to validate against any security context constraint".',
-      'Create the dedicated identity: oc create sa priv-sa -n secure (or keep the one from the manifest) — do NOT grant elevated SCCs to the default ServiceAccount.',
+      'Apply the workload: oc apply -f challenges/privileged-app.yaml — it sets serviceAccountName: priv-sa and requests privileged: true. The manifest does NOT create that ServiceAccount.',
+      'The rejected Pod is never created on 4.x: oc get pods -n secure stays empty and oc describe deployment/privileged-app -n secure shows FailedCreate — either "unable to validate against any security context constraint" (SCC denial) or, before the grant, `error looking up service account secure/priv-sa: serviceaccount "priv-sa" not found` when the ServiceAccount is missing.',
+      'Create the dedicated identity (the manifest only references it): oc create sa priv-sa -n secure — do NOT grant elevated SCCs to the default ServiceAccount.',
       'Grant the SCC the 4.x way: oc adm policy add-scc-to-user privileged -z priv-sa -n secure (creates a RoleBinding to ClusterRole system:openshift:scc:privileged; the SCC users list stays unchanged).',
-      'Verify with RBAC, not the SCC users list: oc auth can-i use scc/privileged --as=system:serviceaccount:secure:priv-sa; oc get rolebinding -n secure; then oc get pods -n secure shows the admitted Pod Running.',
-      'The SCCForbidden incident clears as soon as the binding exists; the incident panel resolution action is only for exploring the fault.',
+      'Verify with RBAC, not the SCC users list: oc auth can-i use scc/privileged --as=system:serviceaccount:secure:priv-sa; oc get rolebinding -n secure; then oc get pods -n secure shows the admitted Pod Running as priv-sa.',
+      'The SCCForbidden incident clears when the state is right — the ServiceAccount can use the privileged SCC and its privileged Pod is Running; the incident panel resolution action is only for exploring the fault.',
     ],
   },
   {
@@ -925,7 +944,7 @@ const CHALLENGES = [
         type: 'operator',
         name: 'metallb-operator',
         installed: true,
-        label: 'MetalLB operator CSV (metallb-operator.v0.14.9) reaches Succeeded',
+        label: 'MetalLB operator CSV (metallb-operator.v4.22.0-202610281200) reaches Succeeded',
       },
       {
         type: 'deploy',
@@ -1005,9 +1024,9 @@ const CHALLENGES = [
     ],
     hints: [
       'Apply the whole OLM manifest set (OperatorGroup + Subscription for package metallb-operator + MetalLB CR + IPAddressPool + L2Advertisement, all in metallb-system): oc apply -f challenges/metallb-operator.yaml',
-      'Watch OLM: oc get sub,csv,installplan -n metallb-system — an InstallPlan appears, then the CSV metallb-operator.v0.14.9 reaches Succeeded; oc get subscription -n metallb-system -o yaml shows status.installedCSV (redhat-operators package name is metallb-operator).',
+      'Watch OLM: oc get sub,csv,installplan -n metallb-system — an InstallPlan appears, then the CSV metallb-operator.v4.22.0-202610281200 reaches Succeeded; oc get subscription -n metallb-system -o yaml shows status.installedCSV (redhat-operators package name is metallb-operator).',
       'Create a LoadBalancer Service in the store project: oc create service loadbalancer web-lb --tcp=80:8080 -n store',
-      'Check the EXTERNAL-IP column: oc get svc web-lb -n store (MetalLB assigns it from metallb-pool/L2Advertisement).',
+      'Check the EXTERNAL-IP column: oc get svc web-lb -n store (MetalLB assigns it from metallb-pool/L2Advertisement; oc describe svc web-lb and oc get events show MetalLB’s Normal IPAllocated event — Assigned IP ["192.168.100.200"]).',
       'Uninstall the old AAP operator properly: oc delete subscription ansible-automation-platform-operator -n openshift-operators, then delete its CSV — read the name from oc get csv -n openshift-operators (aap-operator.v2.6.0) and run oc delete csv aap-operator.v2.6.0 -n openshift-operators — deleting the Subscription alone leaves the operator installed.',
       'AllNamespaces variant: apply examples/subscription-pipelines.yaml (Subscription for openshift-pipelines-operator-rh in openshift-operators) — the cluster-global global-operators OperatorGroup is already there, so no OperatorGroup is needed; watch oc get sub,csv -n openshift-operators until the Pipelines CSV reaches Succeeded.',
       'Confirm the AAP uninstall: oc get csv -n openshift-operators no longer lists the AAP CSV (the Pipelines Subscription/CSV from the AllNamespaces install may still be present).',
@@ -1042,9 +1061,12 @@ const CHALLENGES = [
       { type: 'user', name: 'alice', label: 'User alice exists (created on first login)' },
       { type: 'login', user: 'alice', label: 'Log in as alice' },
       {
+        // Issue #71: state-graded rotation — the player's OWN new password
+        // counts. The hash must change after an earlier successful login, and a
+        // later login must authenticate the new hash.
         type: 'password',
         user: 'alice',
-        password: 'NewPassw0rd!',
+        rotate: true,
         requireLogin: true,
         label: 'Rotate alice’s htpasswd password and log in with the new password',
       },
@@ -1089,7 +1111,7 @@ const CHALLENGES = [
       'Store it in openshift-config with the mandatory htpasswd key: oc create secret generic htpass-secret --from-file=htpasswd=htpasswd -n openshift-config',
       'Configure the provider from the Files panel: oc apply -f challenges/oauth-htpasswd.yaml — or write the OAuth manifest yourself and oc apply -f idp.yaml / cat <<EOF | oc apply -f - / oc patch oauth cluster --type=merge -p \'{"spec":…}\'. The check grades the resulting OAuth state, not the command.',
       'Wait for the OAuth rollout, then log in: oc login -u alice -p openshift; oc whoami',
-      'Rotate the password: oc extract secret/htpass-secret -n openshift-config --to /tmp --confirm; htpasswd -bB /tmp/htpasswd alice "NewPassw0rd!"; oc set data secret/htpass-secret -n openshift-config --from-file=htpasswd=/tmp/htpasswd — the operator restarts oauth-openshift, so wait for the rollout (oc get clusteroperators authentication) before oc login -u alice -p "NewPassw0rd!" (the old password is rejected until then).',
+      'Rotate the password with YOUR OWN new password: oc extract secret/htpass-secret -n openshift-config --to /tmp --confirm; htpasswd -bB /tmp/htpasswd alice "<new-password>"; oc set data secret/htpass-secret -n openshift-config --from-file=htpasswd=/tmp/htpasswd — the operator restarts oauth-openshift, so wait for the rollout (oc get clusteroperators authentication) before oc login -u alice -p "<new-password>" (the old password is rejected until then). There is no fixed password: the check grades state — alice’s hash changed after a successful login and a later login with the new password succeeds.',
       'Create the group with the user (or add later): oc adm groups new developers alice  # oc adm groups add-users developers alice',
       'Grant project access: oc adm policy add-role-to-user edit alice -n onboarding',
       'Verify: oc auth can-i get pods --as=alice -n onboarding',
@@ -1189,7 +1211,7 @@ const CHALLENGES = [
       'Then apply the Route: oc apply -f manifests/route.yaml -n prod; oc get route webapp -n prod and confirm Admitted.',
       'Create and start a build: oc new-build nodejs:20-ubi9 --name=builder; oc start-build builder',
       'Create the quota: oc create quota prod-quota --hard=pods=20,requests.cpu=4,requests.memory=8Gi',
-      'Run the Job: oc create job db-migrate --image=busybox:latest. Trap: a compute quota without a LimitRange rejects a Pod that omits requests — no Pod is created and oc describe job db-migrate -n prod shows a FailedCreate event ("failed quota: prod-quota: must specify requests.cpu,requests.memory"). Add the requests to the Job template (or apply a Job manifest that sets them): oc set resources job/db-migrate -n prod --requests=cpu=100m,memory=128Mi, then watch it Complete with oc get job db-migrate -w.',
+      'Run the Job: oc create job db-migrate --image=busybox:latest. Trap: a compute quota without a LimitRange rejects a Pod that omits requests — no Pod is created and oc describe job db-migrate -n prod shows a FailedCreate event ("failed quota: prod-quota: must specify requests.cpu,requests.memory"). A Job’s pod template is IMMUTABLE, so updating the resources of an existing Job with `oc set resources` is rejected (The Job \\"db-migrate\\" is invalid: spec.template: Invalid value: …: field is immutable): delete the Job and recreate it from a manifest that sets the requests — oc create job db-migrate --image=busybox:latest --dry-run=client -o yaml > job.yaml, add resources.requests.cpu: 100m and memory: 128Mi to the container, then oc delete job db-migrate and oc apply -f job.yaml (a `cat <<EOF | oc apply -f -` manifest works too). Watch it Complete with oc get job db-migrate -w.',
       'Grant RBAC: oc create user developer; oc adm policy add-role-to-user edit developer -n prod',
       'Verify the Route is admitted and the Job completes before the timer runs out.',
     ],

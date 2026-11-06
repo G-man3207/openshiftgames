@@ -1162,10 +1162,34 @@ function evidenceCache(engine) {
           const user =
             typeof data === 'string' ? data : (data?.user ?? data?.username ?? data?.name);
           if (!user) return;
+          // Snapshot the hash that authenticated this login (#71): the password
+          // rotation objective proves the hash CHANGED after an earlier
+          // successful login without ever learning the player's literal
+          // password. A login event is emitted synchronously by GameEngine.login
+          // after the IdP Secret was verified, so this reads the hash that just
+          // authenticated the user.
+          let passwordHash = null;
+          try {
+            const name =
+              typeof engine._providerSecretName === 'function' ? engine._providerSecretName() : '';
+            const entries =
+              name && typeof engine._getHtpasswdEntries === 'function'
+                ? engine._getHtpasswdEntries(name)
+                : null;
+            const entry = asArray(entries).find(
+              (candidate) => String(candidate?.user || '') === String(user)
+            );
+            if (entry && entry.hash !== undefined && entry.hash !== null) {
+              passwordHash = String(entry.hash);
+            }
+          } catch {
+            /* the rotation objective falls back to Secret-write evidence */
+          }
           cache.entries.push({
             user: String(user),
             provider: data?.provider || null,
             time: Date.now(),
+            ...(passwordHash ? { passwordHash } : {}),
           });
           if (cache.entries.length > 200) cache.entries.splice(0, cache.entries.length - 200);
         });
@@ -1179,6 +1203,14 @@ function evidenceCache(engine) {
         };
         bus.on('cluster:modified', noteSecret);
         bus.on('cluster:added', noteSecret);
+        // A new level/challenge/retry is a new engine session: the engine's
+        // loginHistory is cleared on cluster:reset, so the evidence latch must
+        // be cleared with it (#71). Otherwise snapshots from a previous run of
+        // the same objective can satisfy or poison the rotation predicate.
+        bus.on('cluster:reset', () => {
+          cache.entries.length = 0;
+          cache.secretTouches.clear();
+        });
       }
     } catch {
       /* feature-detected: an engine without an event bus simply has no latch */
@@ -1303,15 +1335,31 @@ function htpasswdSecretOf(provider) {
   return provider?.htpasswd?.fileData?.name || provider?.htpasswd?.secret?.name || '';
 }
 
+/** Does an openshift-config Secret hold a non-empty `htpasswd` data key? */
+function htpasswdSecretResolves(cluster, secretName) {
+  if (!secretName) return false;
+  const secret = findResource(cluster, 'Secret', secretName, 'openshift-config');
+  if (!secret) return false;
+  const data = secret?.spec?.data || secret?.data || {};
+  const encoded = data.htpasswd;
+  return typeof encoded === 'string' && encoded.length > 0;
+}
+
 /**
  * OAuth identity-provider state (issue #30): grade
  * `oauth.config.openshift.io/cluster` and the live authentication rollout
  * instead of a command regex. Heredoc applies, `oc apply -f` and
  * `oc patch oauth cluster` all count once the provider is really active.
+ *
+ * `secretReferenced: true` (#71) grades "the htpasswd Secret exists and the
+ * identity provider actually references it" instead of a hidden Secret name: a
+ * Secret called `my-htp` that `oauth/cluster` points at is exactly as valid as
+ * the shipped `htpass-secret` example, as long as the auth rollout applied it.
  */
 function evaluateOAuthProvider(obj, c) {
   const wantedType = String(obj.providerType || 'HTPasswd').toLowerCase();
   const wantedSecret = obj.secretName ? String(obj.secretName) : null;
+  const requireResolvedSecret = obj.secretReferenced === true;
   const cluster = c.clusterState;
   let oauth = null;
   try {
@@ -1324,6 +1372,9 @@ function evaluateOAuthProvider(obj, c) {
     if (!candidate || String(candidate.type || '').toLowerCase() !== wantedType) return false;
     if (obj.providerName && candidate.name !== obj.providerName) return false;
     if (wantedSecret && htpasswdSecretOf(candidate) !== wantedSecret) return false;
+    if (requireResolvedSecret && !htpasswdSecretResolves(cluster, htpasswdSecretOf(candidate))) {
+      return false;
+    }
     return true;
   });
   if (!provider) return bool(false);
@@ -1457,7 +1508,88 @@ function passwordVerifies(c, user, password) {
   return String(entry.hash) === String(password);
 }
 
+/** The `{user, hash}` entry for `user` in the IdP-referenced Secret. */
+function htpasswdEntryFor(c, user) {
+  const entries = htpasswdEntriesFor(c);
+  if (!Array.isArray(entries)) return null;
+  return entries.find((candidate) => candidate && String(candidate.user) === String(user)) || null;
+}
+
+/**
+ * State-graded password rotation (#71): no literal password is required, the
+ * player's own new password counts. Completion is proven from cluster + login
+ * evidence:
+ *  - the IdP is active and the user's htpasswd hash CHANGED after a successful
+ *    login that authenticated the old hash, and
+ *  - a later successful login authenticated the CURRENT hash (the new password
+ *    works; the login path only records successes, so no plaintext is stored).
+ * Login-time hash snapshots are primary evidence; the Secret write timestamp
+ * and a per-run hash baseline cover builds without the event latch.
+ */
+function evaluatePasswordRotation(obj, c) {
+  const user = obj.user ? String(obj.user) : '';
+  if (!user) return bool(false);
+  if (!identityProviderActive(c)) return bool(false);
+  const entry = htpasswdEntryFor(c, user);
+  if (!entry) return bool(false);
+  const currentHash = String(entry.hash || '');
+  if (!currentHash) return bool(false);
+  const history = asArray(loginHistory(c));
+  const logins = history.filter((item) => loginEntryUser(item) === user);
+  // Capture the per-run baseline as soon as the IdP and the user's htpasswd
+  // entry exist — BEFORE any successful login — so the fallback below can prove
+  // the rotation even when the EventBus latch missed the first login event (the
+  // evidence cache attaches its listeners lazily on the first evaluation; a
+  // suite/level that logs in before any objective tick must still complete).
+  const baseline = ensureBaseline(obj, () => ({ hash: currentHash, historyLength: logins.length }));
+  if (logins.length === 0) return bool(false);
+  // The engine login history is reset on level/challenge seeding; the event
+  // latch is session-scoped, so only snapshots at/after this run's first login
+  // belong to it (a replayed level must not reuse a previous run's hash).
+  const runStart = Math.min(
+    ...history
+      .map((item) => (item && typeof item === 'object' ? Number(item.time) : NaN))
+      .filter((time) => Number.isFinite(time))
+  );
+  // 1) Login-time snapshots: the latest login authenticated the current hash,
+  //    and an earlier login authenticated a different (the old) hash.
+  const snapshots = asArray(latchLoginEvents(c.gameEngine)).filter(
+    (item) =>
+      item &&
+      String(item.user) === user &&
+      typeof item.passwordHash === 'string' &&
+      item.passwordHash.length > 0 &&
+      (!Number.isFinite(runStart) || Number(item.time) >= runStart)
+  );
+  const lastSnapshot = snapshots[snapshots.length - 1];
+  if (lastSnapshot) {
+    if (lastSnapshot.passwordHash !== currentHash) return bool(false);
+    if (snapshots.some((item) => item.passwordHash !== currentHash)) return bool(true);
+  }
+  // 2) The authentication operator watches the IdP Secret: a login before the
+  //    most recent write and another one after it prove the rotated password.
+  const cache = evidenceCache(c.gameEngine);
+  const secretName = passwordProviderSecretName(c);
+  const rotatedAt = cache?.secretTouches?.get(secretName);
+  if (typeof rotatedAt === 'number') {
+    const times = logins
+      .map((item) => (item && typeof item === 'object' ? Number(item.time) : NaN))
+      .filter((time) => Number.isFinite(time));
+    if (times.some((time) => time < rotatedAt) && times.some((time) => time >= rotatedAt)) {
+      return bool(true);
+    }
+  }
+  // 3) Baseline for environments without the event latch: the hash captured the
+  //    first time the objective saw the IdP Secret must differ, and a login by
+  //    the user must have happened since.
+  if (baseline.hash && baseline.hash !== currentHash) {
+    return bool(logins.length > asNumber(baseline.historyLength, 0));
+  }
+  return bool(false);
+}
+
 function evaluatePassword(obj, c) {
+  if (obj.rotate === true || obj.rotation === true) return evaluatePasswordRotation(obj, c);
   const user = obj.user ? String(obj.user) : '';
   if (!user || obj.password === undefined || obj.password === null) return bool(false);
   if (!identityProviderActive(c)) return bool(false);
@@ -1569,6 +1701,7 @@ function evaluateConnect(obj, c) {
   const cluster = c.clusterState;
   const to = obj.to || obj.service || obj.name;
   if (!to) return bool(false);
+  const namespace = obj.namespace || levelProjectNamespace(c) || '';
   const services = listKind(cluster, 'Service');
   const workloads = listKinds(cluster, [
     'Deployment',
@@ -1577,17 +1710,22 @@ function evaluateConnect(obj, c) {
     'Pod',
     'ReplicaSet',
   ]);
+  // Only the Service the objective names may satisfy it (issue #75): falling
+  // back to "any Service in the cluster" let the platform's dns-default /
+  // router-internal-default Services tick "Service web selects the workload"
+  // before the learner had created Service web at all.
   const candidateServices = services.filter((service) => {
+    if (namespace && resourceNamespace(service) !== namespace) return false;
     const name = resourceName(service);
     return name === to || name === `${to}-svc` || resourceSpec(service).to?.name === to;
   });
-  const pool = candidateServices.length > 0 ? candidateServices : services;
-  const connected = pool.some((service) => {
+  if (candidateServices.length === 0) return bool(false);
+  const connected = candidateServices.some((service) => {
     const selector = resourceSpec(service).selector;
     if (!selector || Object.keys(selector).length === 0) return false;
-    const namespace = resourceNamespace(service);
+    const serviceNamespace = resourceNamespace(service);
     return workloads.some((workload) => {
-      if (namespace && resourceNamespace(workload) !== namespace) return false;
+      if (serviceNamespace && resourceNamespace(workload) !== serviceNamespace) return false;
       return labelsMatchSelector(podTemplateLabelsOf(workload), selector);
     });
   });
@@ -2200,23 +2338,66 @@ function sccGrantedTo(c, sccName, subject) {
   return subjectMatches(state.legacy?.users, plain) || subjectMatches(state.legacy?.groups, plain);
 }
 
+/**
+ * Can `subject` USE the SCC under the simulator's full 4.x RBAC model? Unlike
+ * `sccGrantedTo` (which looks for a binding whose roleRef is the synthetic
+ * `system:openshift:scc:<name>` ClusterRole), this follows exactly what
+ * `oc auth can-i use scc/<name>` evaluates: any Role/Binding rule set that
+ * grants `use` on that SCC counts — including a hand-written Role with
+ * `apiGroups: [security.openshift.io]`/`resources: [securitycontextconstraints]`
+ * (issue #71). Grading the grant's effect, not the object shape, is the same
+ * state contract IncidentEngine uses to heal SCCForbidden.
+ */
+function sccUsableBySubject(c, sccName, subject, namespace = '') {
+  const cluster = c.clusterState;
+  try {
+    if (cluster && typeof cluster.getSCCsForSubject === 'function') {
+      const grants = asArray(cluster.getSCCsForSubject(subject, namespace || ''));
+      if (
+        grants.some((entry) =>
+          typeof entry === 'string'
+            ? entry === String(sccName)
+            : resourceName(entry) === String(sccName)
+        )
+      ) {
+        return true;
+      }
+    }
+  } catch {
+    /* fall through to can-i */
+  }
+  const engine = c.gameEngine;
+  try {
+    if (engine && typeof engine.canI === 'function') {
+      const check = engine.canI('use', `scc/${sccName}`, namespace || undefined, subject);
+      if (check?.allowed === true) return true;
+    } else if (cluster && typeof cluster.canI === 'function') {
+      const check = cluster.canI(subject, 'use', `scc/${sccName}`, namespace || '');
+      if (check?.allowed === true) return true;
+    }
+  } catch {
+    /* ignore */
+  }
+  return false;
+}
+
 function evaluateScc(obj, c) {
   const name = obj.scc || obj.name || obj.sccName;
   if (!name) return bool(false);
   const scc = findResource(c.clusterState, 'SecurityContextConstraints', name);
   if (!scc) return bool(false);
   let subject = obj.subject;
+  const namespace = obj.namespace || levelProjectNamespace(c) || '';
   // A `*` project wildcard in the level data means "this lab's project", not
   // "any project in the cluster": `system:serviceaccount:*:default` must match
   // the level's seeded Project (e.g. privileged-lab), not the default project.
   if (subject && String(subject).includes('*')) {
-    const namespace = obj.namespace || levelProjectNamespace(c);
     if (namespace) subject = String(subject).split('*').join(namespace);
   }
   const expected = obj.expected !== false;
   const state = sccGrantState(c, name);
   const present = subject
-    ? sccGrantedTo(c, name, subject)
+    ? sccGrantedTo(c, name, subject) || sccUsableBySubject(c, name, subject, namespace)
     : state.kind === 'binding'
       ? asArray(state.subjects).length > 0
       : asArray(state.legacy?.users).length > 0 || asArray(state.legacy?.groups).length > 0;
@@ -2255,8 +2436,16 @@ function evaluatePrivileged(obj, c) {
   const sccs = listKind(c.clusterState, 'SecurityContextConstraints');
   const sccByName = new Map(sccs.map((scc) => [resourceName(scc), scc]));
   const privilegedNamespace = obj.namespace || levelProjectNamespace(c);
+  const wantedServiceAccount = obj.serviceAccount ? String(obj.serviceAccount) : '';
   const pods = listKind(c.clusterState, 'Pod').filter((pod) => {
     if (privilegedNamespace && resourceNamespace(pod) !== privilegedNamespace) return false;
+    // "Run the privileged workload AS priv-sa" (#71): a privileged Pod admitted
+    // for another (e.g. the project default) ServiceAccount is a different
+    // security posture and must not satisfy the level.
+    if (wantedServiceAccount) {
+      const podServiceAccount = String(resourceSpec(pod).serviceAccountName || 'default');
+      if (podServiceAccount !== wantedServiceAccount) return false;
+    }
     if (!podIsPrivileged(pod)) return false;
     if (resourceStatus(pod).phase !== 'Running') return false;
     const ready = typeof pod.isConditionTrue === 'function' ? pod.isConditionTrue('Ready') : true;
@@ -2323,6 +2512,12 @@ function volumeReferences(workload, kind, name) {
   const volumes = asArray(podSpec.volumes);
   return volumes.some((volume) => {
     if (!volume || typeof volume !== 'object') return false;
+    // The API server/kubelet injects a projected `kube-api-access-*` volume
+    // into every Pod (ServiceAccount token + kube-root-ca.crt + service CA).
+    // It is platform infrastructure, not a learner-mounted ConfigMap, and it
+    // used to tick "Mount a ConfigMap into a workload volume" at level start
+    // (issue #75).
+    if (/^kube-api-access-/.test(String(volume.name || ''))) return false;
     if (kind === 'ConfigMap' && volume.configMap) {
       return !name || volume.configMap.name === name;
     }
@@ -2344,7 +2539,12 @@ function evaluateMount(obj, c) {
     ? [canonicalKind(obj.targetKind)]
     : ['Deployment', 'StatefulSet', 'DaemonSet', 'Pod', 'Job'];
   const name = obj.name || obj.resourceName;
-  const workloads = listKinds(c.clusterState, targetKinds);
+  // Grade the level's own project only: cluster-wide platform workloads (e.g.
+  // the router's projected volumes) must not satisfy a workload objective.
+  const namespace = obj.namespace || levelProjectNamespace(c) || '';
+  let workloads = listKinds(c.clusterState, targetKinds);
+  if (namespace)
+    workloads = workloads.filter((workload) => resourceNamespace(workload) === namespace);
   const mounted = workloads.filter((workload) => volumeReferences(workload, kind, name)).length;
   const target = Math.max(1, asNumber(obj.count, 1));
   return result(mounted >= target, Math.min(mounted, target), target);
@@ -2380,7 +2580,10 @@ function evaluateEnvFrom(obj, c) {
   const targetKinds = obj.targetKind
     ? [canonicalKind(obj.targetKind)]
     : ['Deployment', 'StatefulSet', 'DaemonSet', 'Pod'];
-  const workloads = listKinds(c.clusterState, targetKinds);
+  const namespace = obj.namespace || levelProjectNamespace(c) || '';
+  let workloads = listKinds(c.clusterState, targetKinds);
+  if (namespace)
+    workloads = workloads.filter((workload) => resourceNamespace(workload) === namespace);
   const name = obj.name || obj.resourceName;
   const using = workloads.filter((workload) => envReferences(workload, kind, name)).length;
   const target = Math.max(1, asNumber(obj.count, 1));
@@ -2997,6 +3200,15 @@ export function evaluateObjectives(objectives, ctx = {}, options = {}) {
   const progress = Array.isArray(options.progress)
     ? options.progress
     : createObjectiveProgress(objectives);
+  // Attach the login/Secret evidence latch (issues #30/#71) at the FIRST
+  // objective evaluation of a run: the cache installs its EventBus listeners
+  // lazily, and a run that logs a user in before any other objective needs
+  // evidence must still capture that login's htpasswd-hash snapshot.
+  try {
+    evidenceCache(ctx?.gameEngine);
+  } catch {
+    /* feature-detected: an engine without an event bus simply has no latch */
+  }
   const recheckCompleted = options.recheckCompleted === true;
   for (let index = 0; index < progress.length; index += 1) {
     const objective = progress[index];

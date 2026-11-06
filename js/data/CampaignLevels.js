@@ -143,7 +143,12 @@ const deployment = (name, options = {}) => ({
           {
             name: options.containerName || 'main',
             image: options.image || 'quay.io/openshift/origin-hello-openshift:latest',
-            ports: [{ containerPort: 8080, name: 'http' }],
+            ports: [
+              {
+                containerPort: options.containerPort ?? 8080,
+                name: options.containerPortName || 'http',
+              },
+            ],
             ...(options.env ? { env: options.env } : {}),
             ...(options.securityContext ? { securityContext: options.securityContext } : {}),
             ...(options.resources ? { resources: options.resources } : {}),
@@ -160,7 +165,13 @@ const service = (name, options = {}) => ({
   spec: {
     type: options.type || 'ClusterIP',
     selector: options.selector || { app: options.app || name },
-    ports: [{ name: 'http', port: options.port ?? 8080, targetPort: options.targetPort ?? 8080 }],
+    ports: [
+      {
+        name: options.portName || 'http',
+        port: options.port ?? 8080,
+        targetPort: options.targetPort ?? 8080,
+      },
+    ],
   },
 });
 
@@ -350,7 +361,7 @@ const CAMPAIGN_LEVELS = [
     chapter: 1,
     chapterName: 'Manage OpenShift',
     description:
-      'Production OpenShift is about reading symptoms: `oc logs`, `oc describe`, `oc get events`, `oc adm top`, ClusterOperators and ClusterVersion. A hidden CrashLoopBackOff is breaking the web-app Deployment: its container carries an invalid `APP_MODE` value, so the app exits 1 on startup. Read the crash reason, fix the faulty configuration value (not just the Pod — adding an unrelated env var or restarting the Pod changes nothing), and bring cluster health back to 90%+.',
+      'Production OpenShift is about reading symptoms: `oc logs`, `oc describe`, `oc get events`, `oc adm top`, ClusterOperators and ClusterVersion. An incident rolls an invalid `APP_MODE` value into the web-app Deployment: its container exits 1 on startup, so the NEW Pods are CrashLoopBackOff from their first start while the old Pods keep serving. Read the crash reason, fix the faulty configuration value (not just the Pod — adding an unrelated env var or restarting the Pod changes nothing), and bring cluster health back to 90%+.',
     examObjectives: [
       'Manage OpenShift Container Platform > Use the web console to manage and configure an OpenShift cluster',
       'Manage OpenShift Container Platform > Examine resources and cluster status',
@@ -365,12 +376,11 @@ const CAMPAIGN_LEVELS = [
       node('node-1'),
       node('node-2'),
       project('ops-lab'),
-      deployment('web-app', {
-        replicas: 2,
-        // Issue #42-3: keep a neutral image — the crash cause is only the
-        // invalid APP_MODE env var, and the log must not blame the image.
-        env: [{ name: 'APP_MODE', value: 'debug-invalid' }],
-      }),
+      // The level starts HEALTHY; the CrashLoopBackOff incident rolls the bad
+      // APP_MODE value into the Deployment template (seed below), exactly like
+      // L20. The crash is therefore honest from the first start of the NEW
+      // Pods — the old ones keep serving until the rollout is corrected (#75).
+      deployment('web-app', { replicas: 2 }),
     ],
     availableResources: ['Project', 'Deployment', 'Pod', 'Service', 'Node'],
     objectives: [
@@ -406,9 +416,14 @@ const CAMPAIGN_LEVELS = [
         triggerTime: 10,
         target: 'web-app',
         severity: 2,
-        // The Deployment already carries the invalid APP_MODE (seeded above);
-        // the incident only clears when that value is CORRECTED — not when any
-        // other env/annotation changes (issue #31).
+        // Issue #75: the incident rolls the invalid APP_MODE into the
+        // Deployment template (the level starts healthy), so the replacement
+        // Pods crash from their FIRST start instead of healthy Pods mutating in
+        // place. The incident only clears when that value is CORRECTED — not
+        // when any other env/annotation changes (issue #31).
+        seed: {
+          env: { name: 'APP_MODE', value: 'debug-invalid' },
+        },
         fix: {
           env: {
             name: 'APP_MODE',
@@ -418,10 +433,10 @@ const CAMPAIGN_LEVELS = [
       },
     ],
     hints: [
-      'Switch projects: `oc project ops-lab`. Then `oc get pods` and click the failing Pod for Inspector → Events.',
-      'Read the crash output: `oc logs <pod> --previous` — `configuration validation failed: APP_MODE has an unsupported value`. `oc describe pod <pod>` shows a growing restart count and Back-off restarting failed container.',
+      'Switch projects: `oc project ops-lab`. The Deployment was healthy until the incident rolled a bad env value into its template — the NEW Pods crash from their first start (no restart can fix a wrong configuration), while the old Pods keep serving. `oc get pods` and click a failing Pod for Inspector → Events.',
+      'Read the crash output: `oc logs <pod> --previous` — `configuration validation failed: APP_MODE has an unsupported value`. `oc describe pod <pod>` shows a growing restart count and Back-off restarting failed container from the Pod’s own first start.',
       'Correlate events: `oc get events --sort-by=.lastTimestamp`, and check cluster operators with `oc get clusteroperators`.',
-      'Inspect the faulty value: `oc get deployment/web-app -o yaml` — the container env sets `APP_MODE=debug-invalid`. Correct it: `oc set env deployment/web-app APP_MODE=production`. Anything else fails: `oc set env deployment/web-app FOO=bar` (unrelated variable), `oc rollout restart` and deleting the Pod only recreate the same broken configuration, so the incident keeps firing.',
+      'Inspect the fault: `oc describe deployment/web-app` shows the rollout is not progressing, and `oc get deployment/web-app -o yaml` shows the container env sets `APP_MODE=debug-invalid`. Correct the TEMPLATE value: `oc set env deployment/web-app APP_MODE=production` — the controller then rolls out fresh Pods. Anything else fails: `oc set env deployment/web-app FOO=bar` (unrelated variable), `oc rollout restart` and deleting a crashing Pod only recreate the same broken configuration, so the incident keeps firing.',
       'Related trap (admission ≠ runtime): a `nginx:latest` Pod is ADMITTED by `restricted-v2` — the SCC validates the pod spec, not the image USER — and then crashes with `mkdir "/var/cache/nginx/client_temp" failed (13: Permission denied)`. Check the image USER before blaming the SCC; a Pod that explicitly requests `runAsUser: 0` IS rejected at admission (FailedCreate).',
     ],
     starCriteria: { time: 360, efficiency: 0.7, noFailures: false },
@@ -885,7 +900,7 @@ const CAMPAIGN_LEVELS = [
       'Switch projects: `oc project route-lab`. Create the Service: `oc create service clusterip web --tcp=8080:8080` (it selects app=web).',
       'Expose it with TLS at the Route: `oc create route edge web --service=web` (omit the name to name the Route after the Service) — then `oc get route` shows the generated host and Admitted status.',
       'Know the two expose forms: `oc expose svc/web --name=web-public --path=/api` creates a Route from an existing Service, while `oc expose deployment/<name>` creates ONLY a Service and never a Route (try it on another project/Deployment, not on web which already has a Service).',
-      'Create the TLS Secret: `oc create secret tls web-tls --cert=tls.crt --key=tls.key` (the simulator accepts placeholder cert files; `oc create secret generic web-tls --from-literal=tls.crt=placeholder --from-literal=tls.key=placeholder` also satisfies the Secret objective — edge Routes can use the router default certificate).',
+      'Create real TLS material, then the Secret: `openssl req -x509 -newkey rsa:2048 -nodes -keyout tls.key -out tls.crt -days 365 -subj "/CN=web.apps.cluster.example.com"`, then `oc create secret tls web-tls --cert=tls.crt --key=tls.key` — `oc create secret tls` reads those files from the virtual filesystem and fails with `error: open tls.crt: no such file or directory` when they are missing (edge Routes can use the router default certificate, but the Secret itself must be real).',
       'Verify: `oc describe route web` — look for TLS Termination: edge and the Admitted condition.',
     ],
     starCriteria: { time: 420, efficiency: 0.7, noFailures: true },
@@ -898,7 +913,7 @@ const CAMPAIGN_LEVELS = [
     chapter: 3,
     chapterName: 'Deploy & Expose',
     description:
-      'HTTP Routes are not the only way to expose an app. Install the MetalLB operator, create a LoadBalancer Service that receives an EXTERNAL-IP, and expose a non-HTTP TLS service with a passthrough Route.',
+      'HTTP Routes are not the only way to expose an app. Install the MetalLB operator, create a LoadBalancer Service that receives an EXTERNAL-IP, and expose a TLS-serving non-HTTP backend (nginx on 8443) with a passthrough Route that targets the Service port by name.',
     examObjectives: [
       'Deploy applications > Expose applications to external access',
       'Configure network security > Configure networking components',
@@ -913,8 +928,26 @@ const CAMPAIGN_LEVELS = [
       node('node-1'),
       node('node-2'),
       project('lb-lab'),
-      deployment('tls-app', { replicas: 2 }),
-      service('tls-app', { namespace: 'lb-lab', app: 'tls-app', port: 443, targetPort: 8080 }),
+      // Self-consistent non-HTTP TLS fixture (issue #75): the nginx personality
+      // serves TLS on 8443; the Service publishes port 443 named `https` and
+      // targets the named container port. A passthrough Route therefore points
+      // at a real TLS backend, and `curl -k https://<route-host>` answers 200.
+      // Use the UBI nginx image: it runs as non-root, so restricted-v2 admits
+      // and runs it — a bare `nginx:latest` is admitted but crashes as UID 0
+      // (mkdir /var/cache/nginx … Permission denied), leaving 0 endpoints.
+      deployment('tls-app', {
+        replicas: 2,
+        image: 'registry.access.redhat.com/ubi9/nginx-122:latest',
+        containerPort: 8443,
+        containerPortName: 'https',
+      }),
+      service('tls-app', {
+        namespace: 'lb-lab',
+        app: 'tls-app',
+        port: 443,
+        portName: 'https',
+        targetPort: 8443,
+      }),
     ],
     availableResources: [
       'Project',
@@ -942,7 +975,7 @@ const CAMPAIGN_LEVELS = [
         type: 'operator',
         name: 'metallb-operator',
         installed: true,
-        label: 'Install the MetalLB operator (CSV metallb-operator.v0.14.9 Succeeded)',
+        label: 'Install the MetalLB operator (CSV metallb-operator.v4.22.0-202610281200 Succeeded)',
       },
       {
         type: 'serviceType',
@@ -953,8 +986,9 @@ const CAMPAIGN_LEVELS = [
       {
         type: 'route',
         name: 'tls-app',
+        service: 'tls-app',
         termination: 'passthrough',
-        label: 'Expose tls-app with a passthrough Route',
+        label: 'Expose tls-app with a passthrough Route targeting the Service port name https',
       },
       {
         type: 'tls',
@@ -967,11 +1001,12 @@ const CAMPAIGN_LEVELS = [
     hints: [
       'Find the catalog package: `oc get packagemanifests -n openshift-marketplace` lists `metallb-operator` (the redhat-operators package name is `metallb-operator`, not `metallb`); `oc describe packagemanifests metallb-operator -n openshift-marketplace` shows channel `stable` and currentCSV.',
       'Install the operator the 4.x way: `oc new-project metallb-system`, then apply the shipped single-namespace OperatorGroup: `oc apply -f examples/operatorgroup.yaml`. A Subscription without a matching OperatorGroup never installs.',
-      'Edit `examples/subscription.yaml` so `spec.name` is `metallb-operator`, metadata.name is `metallb-operator` and metadata.namespace is `metallb-system`, then `oc apply -f examples/subscription.yaml`. OLM creates an InstallPlan and then the CSV `metallb-operator.v0.14.9` in metallb-system. A misspelled/old package (`metallb`) fails with ResolutionFailed "no operators found in package".',
-      'Verify OLM: `oc get sub,csv,installplan -n metallb-system` — the ClusterServiceVersion (not the Subscription) moves Installing → Succeeded; `oc get csv -n metallb-system` shows `metallb-operator.v0.14.9` and `oc get subscription -n metallb-system -o yaml` shows `status.installedCSV`.',
+      'Edit `examples/subscription.yaml` so `spec.name` is `metallb-operator`, metadata.name is `metallb-operator` and metadata.namespace is `metallb-system`, then `oc apply -f examples/subscription.yaml`. OLM creates an InstallPlan and then the CSV `metallb-operator.v4.22.0-202610281200` in metallb-system. A misspelled/old package (`metallb`) fails with ResolutionFailed "no operators found in package".',
+      'Verify OLM: `oc get sub,csv,installplan -n metallb-system` — the ClusterServiceVersion (not the Subscription) moves Installing → Succeeded; `oc get csv -n metallb-system` shows `metallb-operator.v4.22.0-202610281200` and `oc get subscription -n metallb-system -o yaml` shows `status.installedCSV`.',
       'Create the operand: `oc apply -f examples/metallb.yaml` (MetalLB CR + IPAddressPool + L2Advertisement in metallb-system), then `oc get pods -n metallb-system` shows the controller/speaker Pods.',
-      'Create the LoadBalancer Service in lb-lab: `oc project lb-lab` then `oc create service loadbalancer lb --tcp=443:443`; `oc get svc lb` now gets an EXTERNAL-IP from the pool.',
-      'Expose the non-HTTP app with a passthrough Route: `oc create route passthrough tls-app --service=tls-app`, then confirm `oc describe route tls-app` shows passthrough TLS and Admitted=True (the Service tls-app is already seeded in lb-lab).',
+      'Create the LoadBalancer Service in lb-lab: `oc project lb-lab` then `oc create service loadbalancer lb --tcp=443:443`; `oc get svc lb` now gets an EXTERNAL-IP from the pool (MetalLB reports it with a `Normal IPAllocated Assigned IP ["192.168.100.200"]` event — `oc describe svc lb` / `oc get events`).',
+      'Check the seeded TLS app: `oc get deploy,svc,pods -n lb-lab` — the UBI nginx image serves TLS on container port 8443 (`https`), and the Service tls-app maps port 443 named `https` to it. A passthrough Route to a plain-HTTP backend would fail the TLS handshake, which is why this fixture is TLS end to end.',
+      'Expose the non-HTTP app with a passthrough Route: `oc create route passthrough tls-app --service=tls-app` — the Route gets `spec.port.targetPort: https` (the Service port NAME, not the 8443 number). Confirm `oc describe route tls-app` shows passthrough TLS and Admitted=True, then `curl -k https://<route-host>` returns the nginx page (200).',
     ],
     starCriteria: { time: 480, efficiency: 0.65, noFailures: false },
     nextLevel: 13,
@@ -1014,20 +1049,28 @@ const CAMPAIGN_LEVELS = [
         label: 'Add a user to the htpasswd file (htpasswd -c/-b)',
       },
       {
-        type: 'deploy',
-        kind: 'Secret',
-        name: 'htpass-secret',
-        label: 'Create the htpasswd Secret',
+        // Issue #71: grade the resulting identity-provider state, not a hidden
+        // Secret name. Any Secret the OAuth singleton references counts once
+        // the auth rollout applied it (the shipped `htpass-secret` is only the
+        // example name used by the hints).
+        type: 'oauthProvider',
+        providerType: 'HTPasswd',
+        secretReferenced: true,
+        label: 'Create the htpasswd Secret and reference it from the OAuth identity provider',
       },
       { type: 'user', name: 'alice', label: 'User "alice" exists after first login' },
       { type: 'login', user: 'alice', label: 'Log in to the CLI as alice' },
       {
+        // Issue #71: state-graded rotation — the player's own new password
+        // counts. No literal password is hard-coded; the objective proves the
+        // hash changed after an earlier successful login and that a later
+        // login authenticated the new hash.
         type: 'password',
         user: 'alice',
-        password: 'NewPassw0rd!',
+        rotate: true,
         requireLogin: true,
         label:
-          'Rotate alice’s htpasswd password and log in with it (extract → htpasswd → oc set data → OAuth rollout)',
+          'Rotate alice’s htpasswd password and log in with the new password (extract → htpasswd → oc set data → OAuth rollout)',
       },
       {
         type: 'user',
@@ -1045,11 +1088,11 @@ const CAMPAIGN_LEVELS = [
     incidents: [],
     hints: [
       'Add a user to the virtual htpasswd file with bcrypt hashes: `htpasswd -c -B -b htpasswd alice <password>` (or `htpasswd -B -b htpasswd alice <password>` to add another).',
-      'Create the Secret: `oc create secret generic htpass-secret --from-file=htpasswd -n openshift-config`. The key must be named `htpasswd`.',
+      'Create the Secret: `oc create secret generic htpass-secret --from-file=htpasswd -n openshift-config`. The key must be named `htpasswd`; the Secret NAME is your choice — the objective grades that the OAuth provider references a real Secret with that key (the hints/examples use `htpass-secret`).',
       'Configure the provider: `oc edit oauth cluster` and add an HTPasswd identityProvider referencing `htpass-secret` (mappingMethod: claim).',
       'Wait for the authentication operator to roll out, then `oc login -u alice -p <password>` and confirm with `oc whoami`.',
       'Going back to cluster-admin after logging in as alice: the installer keeps the kubeadmin password in its auth directory — `cat ~/auth/kubeadmin-password`, then `oc login -u kubeadmin -p <password>` (or log in without `-p` and type it at the `Password:` prompt). The kube-system/kubeadmin Secret stores only a bcrypt hash (`oc extract secret/kubeadmin -n kube-system --to=-` prints `$2a$10$…`), so it cannot recover the password. The exam-relevant use of that secret is removing kubeadmin once another cluster-admin exists: `oc delete secret kubeadmin -n kube-system`.',
-      'Rotate the password the exam way: `oc extract secret/htpass-secret -n openshift-config --to /tmp --confirm`, then `htpasswd -bB /tmp/htpasswd alice "NewPassw0rd!"`, then `oc set data secret/htpass-secret -n openshift-config --from-file=htpasswd=/tmp/htpasswd`. The authentication operator watches the secret, restarts the oauth-openshift pods and keeps the old password until the rollout completes — logging in too early is rejected, so wait for `oc get clusteroperators authentication` and then `oc login -u alice -p "NewPassw0rd!"`.',
+      'Rotate the password the exam way with YOUR OWN new password: `oc extract secret/htpass-secret -n openshift-config --to /tmp --confirm`, then `htpasswd -bB /tmp/htpasswd alice "<new-password>"`, then `oc set data secret/htpass-secret -n openshift-config --from-file=htpasswd=/tmp/htpasswd`. The authentication operator watches the secret, restarts the oauth-openshift pods and keeps the old password until the rollout completes — logging in too early is rejected, so wait for `oc get clusteroperators authentication` and then `oc login -u alice -p "<new-password>"`. The objective is graded on state (alice’s hash changed after a successful login and a later login with the new password succeeds), so any new password works.',
       'Clean up the departing user: `oc delete user bob` removes the User but leaves the Identity `htpasswd:bob` behind (a stale login mapping), so finish with `oc delete identity htpasswd:bob` and verify `oc get users` / `oc get identities` are clean.',
     ],
     starCriteria: { time: 420, efficiency: 0.7, noFailures: true },
@@ -1062,7 +1105,7 @@ const CAMPAIGN_LEVELS = [
     chapter: 4,
     chapterName: 'Identity, RBAC & Self-service',
     description:
-      'Grant permissions with least privilege. Create users and a group, bind a role to the group in a project, prove the access with `oc auth can-i`, and resolve an UnauthorizedAccess incident without creating wildcard roles.',
+      'Grant permissions with least privilege. Create users and a group, bind a role to the group in a project, prove the access with `oc auth can-i`, and resolve an UnauthorizedAccess incident — the denial is visible in the application log (`oc logs deploy/web`), not in Kubernetes events — without creating wildcard roles.',
     examObjectives: [
       'Manage authentication and authorization > Create and manage groups',
       'Manage authentication and authorization > Modify user and group permissions',
@@ -1124,6 +1167,7 @@ const CAMPAIGN_LEVELS = [
       'Bind a role in the project: `oc adm policy add-role-to-group edit developers -n rbac-lab`. View it with `oc get rolebinding -n rbac-lab -o yaml`.',
       'Prove the access: `oc auth can-i get pods --as=alice -n rbac-lab` (and `oc auth can-i delete deployments --as=alice -n rbac-lab`).',
       'Avoid wildcards: create precise Roles or reuse built-in `view`/`edit`. The UnauthorizedAccess incident is a missing binding for the web workload ServiceAccount — repair it with `oc adm policy add-role-to-user view -z default -n rbac-lab` (or the incident panel); the incident clears as soon as the RoleBinding exists.',
+      'Find the RBAC denial where a real cluster shows it: Kubernetes does not emit events for RBAC denials — the symptom is in the application log. `oc logs deploy/web -n rbac-lab` prints a line like `WARN failed to list pods for the cache sync: pods is forbidden: User "system:serviceaccount:rbac-lab:default" cannot list resource "pods" in API group "" in the namespace "rbac-lab"` once the incident is active; `oc get sa -n rbac-lab` shows the `default` ServiceAccount the workload runs as.',
       'End-state check: `oc adm groups remove-users developers bob` removes bob from the group on the spot — re-run `oc get groups` to confirm membership, because objectives are evaluated against the live cluster, not on a one-time tick.',
     ],
     starCriteria: { time: 420, efficiency: 0.7, noFailures: false },
@@ -1269,7 +1313,8 @@ const CAMPAIGN_LEVELS = [
         resource: 'pods',
         user: 'system:serviceaccount:sa-lab:api-reader',
         expected: true,
-        label: 'api-reader can get pods via the API',
+        label:
+          'api-reader can list Pods via the Kubernetes API (verified inside the Pod with curl)',
       },
       { type: 'command', pattern: 'oc auth can-i ', label: 'Verify access with oc auth can-i' },
     ],
@@ -1279,6 +1324,7 @@ const CAMPAIGN_LEVELS = [
       'Grant read access: `oc adm policy add-role-to-user view -z api-reader` (this creates a RoleBinding for the ServiceAccount).',
       'Run the app as the ServiceAccount: `oc set serviceaccount deployment/api api-reader`.',
       'Check with `oc auth can-i get pods --as=system:serviceaccount:sa-lab:api-reader -n sa-lab`.',
+      'Prove the application really has API access (this is the exam check): the kubelet mounts the SA token into every Pod; use it from inside the workload — `oc exec deploy/api -- sh -c \'curl -sk -H "Authorization: Bearer $(cat /var/run/secrets/kubernetes.io/serviceaccount/token)" https://kubernetes.default.svc/api/v1/namespaces/sa-lab/pods\'`. It returns the PodList JSON once the RoleBinding grants `list`/`get` on pods; without it the same request returns a 403 `Status` JSON (the token authenticates, the RBAC binding authorizes).',
     ],
     starCriteria: { time: 360, efficiency: 0.75, noFailures: true },
     nextLevel: 17,
@@ -1329,6 +1375,7 @@ const CAMPAIGN_LEVELS = [
       {
         type: 'privileged',
         count: 1,
+        serviceAccount: 'priv-sa',
         label: 'Run the privileged workload as priv-sa (Pod admitted by the privileged SCC)',
       },
       {
@@ -1343,8 +1390,8 @@ const CAMPAIGN_LEVELS = [
       'See the denied workload: `oc get pods -n privileged-lab` stays empty and `oc describe deployment/privileged-app -n privileged-lab` shows a FailedCreate event — "unable to validate against any security context constraint". On 4.x the rejected Pod is never created.',
       'Check the identity: `oc get sa -n privileged-lab` — the shipped dedicated ServiceAccount is `priv-sa` (the workload runs as it). Avoid granting elevated SCCs to the project default SA.',
       'Grant the SCC the 4.x way (creates a RoleBinding in the project to ClusterRole system:openshift:scc:privileged): `oc adm policy add-scc-to-user privileged -z priv-sa -n privileged-lab`.',
-      'Verify the grant without the SCC users list (it stays unchanged on 4.x): `oc auth can-i use scc/privileged --as=system:serviceaccount:privileged-lab:priv-sa`, `oc get rolebinding -n privileged-lab`, then `oc get pods -n privileged-lab` — the privileged Pod is created and Running.',
-      "Prove admission: `oc get pod -n privileged-lab -o jsonpath='{.items[*].metadata.annotations.openshift\\.io/scc}'` prints `privileged`. The SCCForbidden incident clears as soon as the binding exists; the panel resolution action is only for exploring the fault.",
+      'Verify the grant with the RBAC question, not the SCC users list (it stays unchanged on 4.x): `oc auth can-i use scc/privileged --as=system:serviceaccount:privileged-lab:priv-sa`, `oc get rolebinding -n privileged-lab`, then `oc get pods -n privileged-lab` — the privileged Pod is created and Running. The objective is graded on that state, so any equivalent binding works too — e.g. a Role with apiGroups `security.openshift.io`, resources `securitycontextconstraints`, resourceNames `privileged`, verbs `use` bound to priv-sa through a RoleBinding (not only the generated `system:openshift:scc:privileged` roleRef).',
+      "Prove admission: `oc get pod -n privileged-lab -o jsonpath='{.items[*].metadata.annotations.openshift\\.io/scc}'` prints `privileged`. The SCCForbidden incident clears once the state is right — the ServiceAccount can use the privileged SCC and its privileged Pod is Running; the panel resolution action is only for exploring the fault.",
     ],
     starCriteria: { time: 420, efficiency: 0.7, noFailures: false },
     nextLevel: 18,
@@ -1430,9 +1477,9 @@ const CAMPAIGN_LEVELS = [
       'Create the operator namespace and its OperatorGroup: `oc new-project metallb-system`, then `oc apply -f examples/operatorgroup.yaml` (single-namespace OperatorGroup targeting metallb-system). A Subscription with no matching OperatorGroup never resolves.',
       'Find the package: `oc get packagemanifests -n openshift-marketplace` lists `metallb-operator` — the redhat-operators package name is `metallb-operator` (an old/misspelled package fails with ResolutionFailed "no operators found in package").',
       'Install: edit `examples/subscription.yaml` so `spec.name` is `metallb-operator`, metadata.name is `metallb-operator` and metadata.namespace is `metallb-system`, then `oc apply -f examples/subscription.yaml`.',
-      'Watch OLM: `oc get sub,csv,installplan -n metallb-system` — an InstallPlan appears, then the CSV `metallb-operator.v0.14.9` goes Installing → Succeeded; `oc get subscription -n metallb-system -o yaml` reports `status.installedCSV`.',
+      'Watch OLM: `oc get sub,csv,installplan -n metallb-system` — an InstallPlan appears, then the CSV `metallb-operator.v4.22.0-202610281200` goes Installing → Succeeded; `oc get subscription -n metallb-system -o yaml` reports `status.installedCSV`.',
       'Uninstall (only after the install above reached Succeeded): `oc delete subscription metallb-operator -n metallb-system`, then confirm the CSV is STILL there with `oc get csv -n metallb-system` — deleting the Subscription does not remove the operator.',
-      'Finish the uninstall by deleting the CSV itself: `oc delete csv metallb-operator.v0.14.9 -n metallb-system` (typing `clusterserviceversion`/`csv` is the uninstall step), then confirm with `oc get csv -n metallb-system` and `oc get subscription -A`.',
+      'Finish the uninstall by deleting the CSV itself: `oc delete csv metallb-operator.v4.22.0-202610281200 -n metallb-system` (typing `clusterserviceversion`/`csv` is the uninstall step), then confirm with `oc get csv -n metallb-system` and `oc get subscription -A`.',
       'AllNamespaces variant: no new OperatorGroup is needed — `openshift-operators` already ships the cluster-global `global-operators` group (`oc get operatorgroup -n openshift-operators`), and the Subscription must live in `openshift-operators` too. The installed CSV appears in that project (`oc get csv -n openshift-operators`), and because the install is AllNamespaces OLM also creates a copied CSV of it in every other namespace: `oc get csv -A` shows the same CSV name across the cluster (the copies have the `Copied` status reason).',
       'Discover the cert-manager package and its pinnable versions: `oc get packagemanifests -n openshift-marketplace` lists `openshift-cert-manager-operator` (channel `stable-v1`); `oc describe packagemanifest openshift-cert-manager-operator -n openshift-marketplace` lists the channel entries — the head `cert-manager-operator.v1.17.0` plus `.v1.16.0` and `.v1.15.0`. Only an entry of the channel is a valid `startingCSV`; anything else fails resolution with `ResolutionFailed` ("no operators found with name … in channel stable-v1 of package openshift-cert-manager-operator").',
       'Manual approval + pinned version: apply `examples/subscription-manual-pinned.yaml` (namespace `openshift-operators`, `installPlanApproval: Manual`, `startingCSV: cert-manager-operator.v1.16.0`), then approve the InstallPlan OLM creates: `oc patch installplan <name> -n openshift-operators --type=merge -p \'{"spec":{"approved":true}}\'`. Until then the Subscription reports `InstallPlanPending True RequiresApproval`.',
@@ -1495,7 +1542,7 @@ const CAMPAIGN_LEVELS = [
       { type: 'JobDeadlineExceeded', triggerTime: 15, target: 'report-batch', severity: 2 },
     ],
     hints: [
-      'Switch projects: `oc project batch-lab`, then inspect the broken batch job: `oc get jobs` (report-batch is Failed), `oc describe job report-batch` (condition Failed / reason DeadlineExceeded) and `oc get job report-batch -o yaml` — `activeDeadlineSeconds: 8` is far too short for the report.',
+      'Switch projects: `oc project batch-lab`, then inspect the broken batch job: `oc get jobs` (report-batch is Failed), `oc describe job report-batch` — the conditions show Failed with reason `DeadlineExceeded`, and the diagnostic line `Active Deadline Seconds:  8s` says the Job was killed after 8 seconds; the events show `Job was active longer than specified deadline`. `oc get job report-batch -o yaml` confirms `activeDeadlineSeconds: 8`, far too short for the report.',
       'Read its output: `oc logs job/report-batch` (the container was killed while the report was still running). A Failed Job cannot be resumed — raise the deadline by recreating it: `oc delete job report-batch` then `oc create job report-batch --image=perl --active-deadline-seconds=600 -- perl -e "print 42"`. That new Job completes, so the JobDeadlineExceeded incident clears.',
       'Run a second, simple Job and read its REAL stdout: `oc create job report-job --image=perl -- perl -e "print 42"`; watch `oc get jobs,pods`, then `oc logs job/report-job` prints `42` (the Pod stays around after completion, like on a real cluster).',
       'Schedule recurring work (five-field cron only — `--schedule="every 5 min"` is rejected by the API server, and the first Job only appears at the next scheduled time): `oc create cronjob cleanup --image=busybox --schedule="*/5 * * * *" -- sh -c date`.',
@@ -1640,7 +1687,7 @@ const CAMPAIGN_LEVELS = [
         type: 'operator',
         name: 'metallb-operator',
         installed: true,
-        label: 'Install the MetalLB operator (CSV metallb-operator.v0.14.9)',
+        label: 'Install the MetalLB operator (CSV metallb-operator.v4.22.0-202610281200)',
       },
       { type: 'complete', kind: 'Job', count: 1, label: 'Run a Job to phase Complete' },
       { type: 'cronJob', name: 'nightly', suspended: false, label: 'Create the CronJob "nightly"' },
@@ -1701,7 +1748,7 @@ const CAMPAIGN_LEVELS = [
       'TLS Route with `tls.externalCertificate` (manifests/route.yaml): real OCP 4.22 admits it only after the referenced Secret exists AND the ingress router can read it - a Route applied without both stays rejected with `ExternalCertificateValidationFailed`. (1) Create the Secret in prod-platform: `openssl req -x509 -newkey rsa:2048 -nodes -keyout tls.key -out tls.crt -days 365 -subj "/CN=webapp.apps.cluster.example.com"`, then `oc create secret tls webapp-tls --cert=tls.crt --key=tls.key -n prod-platform`. (2) Grant the router read access in the same project: `oc apply -f examples/route-external-cert-rbac.yaml -n prod-platform` (a Role with get/list/watch on the named Secret plus a RoleBinding to system:serviceaccount:openshift-ingress:router). (3) Only then apply the Route: `oc apply -f manifests/route.yaml -n prod-platform`, and confirm `oc get route webapp -n prod-platform` reports Admitted. A plain `oc create route edge webapp --service=webapp` embeds no externalCertificate and needs none of this.',
       'Build: `oc apply -f examples/buildconfig.yaml` (it already outputs ImageStreamTag `webapp:latest`), then `oc start-build webapp --follow` and watch the Build reach Complete.',
       'NetworkPolicy + ingress: apply the shipped `examples/default-deny.yaml` (`networking.k8s.io/v1`, selects all Pods) with `oc apply -f examples/default-deny.yaml -n prod-platform`, then verify from the workstation: `HOST=$(oc get route webapp -n prod-platform -o jsonpath="{.spec.host}"); curl -k https://$HOST` now fails with 503 even though the Route is Admitted. Allow the router with an ingress NetworkPolicy whose `namespaceSelector.matchLabels` is `policy-group.network.openshift.io/ingress: ""` (the shipped `examples/allow-from-router.yaml`, `oc apply -f examples/allow-from-router.yaml -n prod-platform`) and re-run `curl` — it must answer again. There is no `oc create networkpolicy` subcommand; use the Files panel New/Import buttons for other policies. Also create `oc create user developer` and `oc adm groups new developers developer`.',
-      'Install MetalLB the 4.x OLM way: `oc new-project metallb-system`, `oc apply -f examples/operatorgroup.yaml`, edit `examples/subscription.yaml` (spec.name/metadata.name `metallb-operator`, namespace `metallb-system`) and apply it, wait for the CSV `metallb-operator.v0.14.9` (`oc get csv -n metallb-system`) to reach Succeeded, then `oc apply -f examples/metallb.yaml` (MetalLB CR + IP pool + L2 advertisement).',
+      'Install MetalLB the 4.x OLM way: `oc new-project metallb-system`, `oc apply -f examples/operatorgroup.yaml`, edit `examples/subscription.yaml` (spec.name/metadata.name `metallb-operator`, namespace `metallb-system`) and apply it, wait for the CSV `metallb-operator.v4.22.0-202610281200` (`oc get csv -n metallb-system`) to reach Succeeded, then `oc apply -f examples/metallb.yaml` (MetalLB CR + IP pool + L2 advertisement).',
       'Finish with a Job (`oc create job report-job --image=perl -- perl -e "print 42"`) and a CronJob (`oc create cronjob nightly --image=busybox --schedule="*/5 * * * *" -- sh -c date`), then check `oc status` and the Architecture Advisor in the HUD. The capstone is gated on the scheduled incidents being RESOLVED: CrashLoopBackOff fires 60 s in on webapp and NodeNotReady fires 120 s in on worker-1. For the CrashLoopBackOff, run `oc logs <pod> -n prod-platform --previous` (the crash names the invalid `APP_MODE`) and correct it with `oc set env deployment/webapp APP_MODE=production -n prod-platform` — an unrelated env var or `oc rollout restart` will NOT clear it. Restore the node (`oc debug node/worker-1`, then `chroot /host systemctl restart kubelet`) and confirm both incidents are gone from the Incidents panel — the level cannot complete while either is still active.',
     ],
     starCriteria: { time: 900, efficiency: 0.6, noFailures: false },

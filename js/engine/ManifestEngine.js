@@ -158,6 +158,86 @@ function resolvePath(baseDir, relative) {
   return out.join('/');
 }
 
+/**
+ * Kustomize legacy output order (`SortOrderTransformer.go`): these kinds are
+ * emitted first, in this order; everything else keeps the middle band and the
+ * webhook configurations are emitted last. `oc kustomize` / `oc apply -k` use
+ * this legacy sort by default, so a Service is printed/applied before a
+ * Deployment regardless of the resource file order (#76).
+ */
+const KUSTOMIZE_LEGACY_ORDER_FIRST = [
+  'Namespace',
+  'ResourceQuota',
+  'StorageClass',
+  'CustomResourceDefinition',
+  'ServiceAccount',
+  'PodSecurityPolicy',
+  'Role',
+  'ClusterRole',
+  'RoleBinding',
+  'ClusterRoleBinding',
+  'ConfigMap',
+  'Secret',
+  'Endpoints',
+  'Service',
+  'LimitRange',
+  'PriorityClass',
+  'PersistentVolume',
+  'PersistentVolumeClaim',
+  'Deployment',
+  'StatefulSet',
+  'CronJob',
+  'PodDisruptionBudget',
+];
+const KUSTOMIZE_LEGACY_ORDER_LAST = [
+  'MutatingWebhookConfiguration',
+  'ValidatingWebhookConfiguration',
+];
+
+/** Sort key mirroring kustomize's `legacyIDSorter` (GVK + namespace/name tiebreak). */
+function kustomizeLegacySortKey(object) {
+  const kind = String(object?.kind || '');
+  const apiVersion = String(object?.apiVersion || '');
+  const slash = apiVersion.indexOf('/');
+  const group = slash >= 0 ? apiVersion.slice(0, slash) : '';
+  const version = slash >= 0 ? apiVersion.slice(slash + 1) : apiVersion;
+  const firstIndex = KUSTOMIZE_LEGACY_ORDER_FIRST.indexOf(kind);
+  const lastIndex = KUSTOMIZE_LEGACY_ORDER_LAST.indexOf(kind);
+  const rank =
+    firstIndex >= 0
+      ? firstIndex - KUSTOMIZE_LEGACY_ORDER_FIRST.length
+      : lastIndex >= 0
+        ? lastIndex + 1
+        : 0;
+  return {
+    rank,
+    // `legacyGVKSortString` — empty group/version/kind sort after real values.
+    gvk: `${group || '~G'}_${version || '~V'}_${kind || '~K'}`,
+    namespace: String(object?.metadata?.namespace || '~X'),
+    name: String(object?.metadata?.name || '~N'),
+  };
+}
+
+/**
+ * Apply Kustomize's legacy sort to rendered resources before they are printed
+ * (`oc kustomize`) or applied (`oc apply -k`).
+ * @param {object[]} objects
+ * @returns {object[]} sorted copy
+ */
+function kustomizeLegacySort(objects) {
+  return (objects || [])
+    .map((object, index) => ({ object, index, key: kustomizeLegacySortKey(object) }))
+    .sort((left, right) => {
+      if (left.key.rank !== right.key.rank) return left.key.rank - right.key.rank;
+      if (left.key.gvk !== right.key.gvk) return left.key.gvk < right.key.gvk ? -1 : 1;
+      if (left.key.namespace !== right.key.namespace)
+        return left.key.namespace < right.key.namespace ? -1 : 1;
+      if (left.key.name !== right.key.name) return left.key.name < right.key.name ? -1 : 1;
+      return left.index - right.index;
+    })
+    .map((entry) => entry.object);
+}
+
 function basename(path) {
   const norm = normalizePath(path);
   const idx = norm.lastIndexOf('/');
@@ -1729,12 +1809,16 @@ export class ManifestEngine {
     }
     try {
       const loaded = this._loadKustomization(dir);
+      // Kustomize applies its legacy sort to the build output before emitting
+      // YAML (SortOrderTransformer.go default `reorder: legacy`), not the
+      // resource-file order (#76).
+      const objects = kustomizeLegacySort(loaded.objects);
       // Real `oc kustomize` starts directly with the first document (no leading
       // `---`); later documents are separated by `---` like kubectl output.
-      const yaml = loaded.objects
+      const yaml = objects
         .map((obj, index) => `${index === 0 ? '' : '---\n'}${stringifyYaml(obj)}`)
         .join('');
-      return { ok: true, objects: loaded.objects, yaml, warnings: loaded.warnings, errors: [] };
+      return { ok: true, objects, yaml, warnings: loaded.warnings, errors: [] };
     } catch (err) {
       const message = formatError(err, kustomizationPath);
       return { ok: false, objects: [], yaml: '', warnings: [], errors: [message], error: message };
@@ -1762,7 +1846,8 @@ export class ManifestEngine {
         errorDetails: [errorDetail(err, kustomizationPath)],
       });
     }
-    const result = this._applyDocuments(loaded.objects, {
+    // Apply in the same Kustomize legacy order `oc kustomize` prints (#76).
+    const result = this._applyDocuments(kustomizeLegacySort(loaded.objects), {
       source: dir || '.',
       path: dir || '.',
       event: 'kustomize:applied',

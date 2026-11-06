@@ -2983,6 +2983,9 @@ export class GameEngine {
         return existing;
       }
       existing.spec = nextSpec;
+      // API-server admission/defaulting completes some specs at create/update
+      // time (Route spec.host, Identity spec.user.uid — #75/#76).
+      if (typeof existing.applyAdmissionDefaults === 'function') existing.applyAdmissionDefaults();
       existing.metadata.labels = { ...existing.metadata.labels, ...nextLabels };
       existing.metadata.annotations = {
         ...existing.metadata.annotations,
@@ -3062,6 +3065,9 @@ export class GameEngine {
     // clusterIPs/ipFamilies/ipFamilyPolicy, session/internal traffic policy and
     // port protocol/targetPort/nodePort defaults (issue #59).
     if (kind === 'Service') resource.spec = this._defaultServiceManifestSpec(resource.spec);
+    // API-server admission/defaulting completes some specs at create time
+    // (Route generated host, Identity spec.user.uid — #75/#76).
+    if (typeof resource.applyAdmissionDefaults === 'function') resource.applyAdmissionDefaults();
     const added = this.cluster.add(resource);
     added._applyAction = 'created';
     this._syncHtpasswdFileFromSecret(kind, added);
@@ -3522,13 +3528,25 @@ export class GameEngine {
       options.containerPort ||
       knownImageSecurityProfile(options.image)?.ports?.[0] ||
       8080;
+    // oc new-app names generated Service ports `fmt.Sprintf("%d-%s", port,
+    // protocol)` (newapp/app/pipeline.go `portName`): `8080-tcp`, `3306-tcp`.
+    // That name is what `oc expose svc` copies into route.spec.port.targetPort,
+    // so the Route PORT column stays honest (#76).
+    const protocol = 'TCP';
     return {
       apiVersion: 'v1',
       kind: 'Service',
       metadata: { name, namespace: options.namespace, labels: { app: name } },
       spec: {
         selector: { app: name },
-        ports: [{ name: 'http', port, targetPort: options.containerPort || port, protocol: 'TCP' }],
+        ports: [
+          {
+            name: `${port}-${protocol.toLowerCase()}`,
+            port,
+            targetPort: options.containerPort || port,
+            protocol,
+          },
+        ],
         type: options.type || 'ClusterIP',
       },
     };
@@ -3932,7 +3950,24 @@ export class GameEngine {
         message: `error: ${String(kind).toLowerCase()}/${name} has no pod template`,
       };
     }
+    const immutable = this._jobTemplateImmutableError(resource);
+    if (immutable) return { success: false, message: immutable };
     return { success: true, resource };
+  }
+
+  /**
+   * API-server validation error for a template update on an immutable Job.
+   * batch/v1 `JobSpec.Template` is immutable: `ValidateJobUpdate` rejects any
+   * change unless the Job is suspended *and* only scheduling directives moved
+   * (since 1.27), so every `oc set …` that patches the pod template fails with
+   * the real field.Invalid wording instead of mutating the object (#74).
+   * @param {object} resource
+   * @returns {string|null} API-server-shaped error, or null when mutable
+   */
+  _jobTemplateImmutableError(resource) {
+    if (!resource || this.cluster._canonicalKind(resource.kind) !== 'Job') return null;
+    const name = resource.metadata?.name || '';
+    return `The Job "${name}" is invalid: spec.template: Invalid value: v1.PodTemplateSpec{ObjectMeta:v1.ObjectMeta{...}, Spec:v1.PodSpec{...}}: field is immutable`;
   }
 
   /** Apply a mutation to a container template and persist it. */

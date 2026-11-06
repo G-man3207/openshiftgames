@@ -1195,14 +1195,19 @@ export const EX280_QUICK_LABS = [
       { type: 'tls', enabled: true, termination: 'edge' },
     ],
     hints: [
+      'Create real TLS files first with openssl — `oc create secret tls` reads them from the virtual filesystem and fails with `error: open tls.crt: no such file or directory` when they are missing.',
       'Create a kubernetes.io/tls secret with tls.crt and tls.key before the edge route.',
       'oc create route edge needs --service and a certificate/key pair.',
     ],
     steps: [
       { command: `oc new-project web`, text: 'Create a project for the app.' },
       {
+        command: `openssl req -x509 -newkey rsa:2048 -nodes -keyout tls.key -out tls.crt -days 365 -subj "/CN=web.apps.example.com"`,
+        text: 'Generate a self-signed certificate/key pair in the virtual filesystem.',
+      },
+      {
         command: `oc create secret tls web-tls --cert=tls.crt --key=tls.key`,
-        text: 'Create the TLS secret.',
+        text: 'Create the TLS secret from those real files.',
       },
       {
         command: `oc create route edge web --service=web --hostname=web.apps.example.com --cert=tls.crt --key=tls.key`,
@@ -1447,10 +1452,10 @@ export const EX280_QUICK_LABS = [
       startingResources: [{ kind: 'Project', name: 'operators-lab' }],
       manifestFiles: ['examples/subscription.yaml'],
     },
-    check: [{ type: 'operator', name: 'metallb', installed: true }],
+    check: [{ type: 'operator', name: 'metallb-operator', installed: true }],
     hints: [
       'The simulator installs into the openshift-operators project (AllNamespaces); a real cluster documents MetalLB in metallb-system.',
-      'The Subscription needs channel, name, source and sourceNamespace; the CSV (not the Subscription) reports Installing → Succeeded.',
+      'The redhat-operators PACKAGE is `metallb-operator`, and the Subscription needs channel, name, source and sourceNamespace; the CSV (not the Subscription) reports Installing → Succeeded.',
     ],
     steps: [
       {
@@ -1463,14 +1468,14 @@ export const EX280_QUICK_LABS = [
       },
       {
         command: `oc apply -f examples/subscription.yaml`,
-        text: 'First edit examples/subscription.yaml in the Files panel so metadata.name, spec.name and the package are metallb, then create the Subscription.',
+        text: 'First edit examples/subscription.yaml in the Files panel so metadata.name and spec.name are metallb-operator (the redhat-operators package name, not metallb), then create the Subscription.',
       },
       {
         command: `oc get sub,csv,installplan -n openshift-operators`,
-        text: 'Wait for the CSV to reach Succeeded (oc describe sub metallb shows installedCSV).',
+        text: 'Wait for the CSV metallb-operator.v4.22.0-202610281200 to reach Succeeded (oc describe sub metallb-operator shows installedCSV).',
       },
       {
-        command: `oc delete subscription metallb -n openshift-operators`,
+        command: `oc delete subscription metallb-operator -n openshift-operators`,
         text: 'Uninstall by deleting the Subscription, then the CSV it installed.',
       },
     ],

@@ -28,6 +28,65 @@ function parseMemoryToBytes(mem) {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
+const QUANTITY_DECIMAL_SUFFIXES = { '': 0, m: -3, k: 3, M: 6, G: 9, T: 12, P: 15, E: 18 };
+const QUANTITY_DECIMAL_UNITS = {
+  '-3': 'm',
+  0: '',
+  3: 'k',
+  6: 'M',
+  9: 'G',
+  12: 'T',
+  15: 'P',
+  18: 'E',
+};
+const QUANTITY_BINARY_UNITS = ['', 'Ki', 'Mi', 'Gi', 'Ti', 'Pi', 'Ei'];
+
+/**
+ * Canonical `resource.Quantity.String()` rendering (#76).
+ *
+ * Kubernetes stores resource quantities as exact numbers and prints their
+ * canonical form, not the string the object was created with:
+ * `1000m` → `1`, `1024Mi` → `1Gi`, while `1500m` stays `1500m` (milli is the
+ * largest suffix that keeps the mantissa integral) and `1536Mi` stays `1536Mi`
+ * (binary tends to the largest suffix that keeps the value exact). Real
+ * `oc describe quota` prints both Used and Hard with this rendering.
+ * @param {string|number} value
+ * @returns {string}
+ */
+export function canonicalQuantity(value) {
+  const raw = String(value ?? '').trim();
+  if (!raw) return '0';
+  const match = raw.match(/^(-?)(\d+(?:\.\d+)?)([a-zA-Z]*)$/);
+  if (!match) return raw;
+  const sign = match[1] === '-' ? '-' : '';
+  const amount = Number(match[2]);
+  if (!Number.isFinite(amount) || amount === 0) return '0';
+  const suffix = match[3];
+
+  if (QUANTITY_BINARY_UNITS.includes(suffix) && suffix !== '') {
+    const exponent = QUANTITY_BINARY_UNITS.indexOf(suffix);
+    const base = amount * 1024 ** exponent;
+    // BinarySI only applies to values of at least 1024; below that the
+    // canonical form falls back to DecimalSI.
+    if (base >= 1024 && Number.isInteger(base)) {
+      let unit = QUANTITY_BINARY_UNITS.length - 1;
+      while (unit > 0 && base % 1024 ** unit !== 0) unit -= 1;
+      return `${sign}${base / 1024 ** unit}${QUANTITY_BINARY_UNITS[unit]}`;
+    }
+  }
+
+  if (Object.prototype.hasOwnProperty.call(QUANTITY_DECIMAL_SUFFIXES, suffix)) {
+    const exponent = QUANTITY_DECIMAL_SUFFIXES[suffix];
+    // Quantities are exact to 1/1000; anything finer is left to the raw string.
+    const milli = Math.round(amount * 10 ** (exponent + 3));
+    if (Math.abs(amount * 10 ** (exponent + 3) - milli) > 1e-6) return raw;
+    let outExponent = 18;
+    while (outExponent > -3 && milli % 10 ** (outExponent + 3) !== 0) outExponent -= 3;
+    return `${sign}${milli / 10 ** (outExponent + 3)}${QUANTITY_DECIMAL_UNITS[outExponent]}`;
+  }
+  return raw;
+}
+
 /**
  * Canonical kubelet reason/message pairs for Node conditions on OCP 4.22
  * (issue #43). The node controller re-evaluates conditions every tick and
@@ -325,13 +384,31 @@ export class Node extends ResourceBase {
       reason = KUBELET_STOPPED_REASON;
       message = KUBELET_STOPPED_MESSAGE;
     }
+    const previous = this.getCondition(type);
     const defaults = NODE_CONDITION_DEFAULTS[type]?.[String(status)] || null;
-    return super.setCondition(
+    super.setCondition(
       type,
       String(status),
       reason || (defaults ? defaults[0] : ''),
       message || (defaults ? defaults[1] : '')
     );
+    // #76: real node conditions freeze their LastHeartbeatTime at the last
+    // kubelet post. Once the lifecycle controller has latched a condition
+    // `Unknown / NodeStatusUnknown / "Kubelet stopped posting node status."`,
+    // neither its heartbeat nor its transition time may move again until the
+    // kubelet comes back. SimulationTick re-asserts the latched condition every
+    // tick, so without this the heartbeat kept advancing while the message said
+    // the kubelet stopped posting (#76).
+    const current = this.getCondition(type);
+    const latchedUnknown = (condition) =>
+      condition?.status === 'Unknown' &&
+      condition.reason === KUBELET_STOPPED_REASON &&
+      condition.message === KUBELET_STOPPED_MESSAGE;
+    if (latchedUnknown(current) && latchedUnknown(previous)) {
+      current.lastHeartbeatTime = previous.lastHeartbeatTime;
+      current.lastTransitionTime = previous.lastTransitionTime;
+    }
+    return this;
   }
 
   get isReady() {
@@ -688,18 +765,23 @@ export class ResourceQuota extends ResourceBase {
   toDescribe() {
     const hard = this.spec.hard || {};
     const used = this.status.used || {};
-    // Real `oc describe quota` uses a tabwriter: every column is padded to the
-    // widest cell so Resource/Used/Hard line up exactly (#36).
+    // Real `oc describe quota` prints `Quantity.String()` in BOTH the Used and
+    // Hard columns (canonical units, #76), and pads every column through one
+    // tabwriter so Resource/Used/Hard line up exactly (#36).
     const keys = Object.keys(hard).sort();
+    const usedValues = Object.fromEntries(
+      keys.map((key) => [key, canonicalQuantity(used[key] ?? '0')])
+    );
+    const hardValues = Object.fromEntries(keys.map((key) => [key, canonicalQuantity(hard[key])]));
     const keyWidth = Math.max(14, ...keys.map((key) => key.length + 2));
-    const usedWidth = Math.max(6, ...keys.map((key) => String(used[key] ?? '0').length + 2));
+    const usedWidth = Math.max(6, ...keys.map((key) => usedValues[key].length + 2));
     const row = (resource, usedValue, hardValue) =>
       `${String(resource).padEnd(keyWidth)}${String(usedValue).padEnd(usedWidth)}${hardValue}`;
     return `Name:         ${this.metadata.name}
 Namespace:    ${this.metadata.namespace}
 ${row('Resource', 'Used', 'Hard')}
 ${row('--------', '----', '----')}
-${keys.map((key) => row(key, used[key] ?? '0', hard[key])).join('\n')}
+${keys.map((key) => row(key, usedValues[key], hardValues[key])).join('\n')}
 Events:
 ${this.events
   .slice(-10)

@@ -207,6 +207,40 @@ function hasKeys(value) {
 // ─── Manifest construction ──────────────────────────────────────────────────
 
 /**
+ * Stable, RFC-4122-v4-shaped UID for the User an OpenShift Identity references
+ * (#76). Real Identities always carry `spec.user.uid` (the linked User's
+ * metadata.uid) and the CLI prints it in the `oc get identities` USER UID
+ * column. Login links the real UID; an Identity that only names its user (a
+ * seeded/applied manifest) gets a deterministic UID derived from the name, so
+ * the column is never empty and repeated reads agree.
+ * @param {string} userName
+ * @returns {string}
+ */
+export function deterministicUserUid(userName) {
+  const source = String(userName ?? '');
+  let state = 0x811c9dc5;
+  for (let index = 0; index < source.length; index += 1) {
+    state ^= source.charCodeAt(index);
+    state = Math.imul(state, 0x01000193) >>> 0;
+  }
+  let hex = '';
+  while (hex.length < 32) {
+    state ^= state << 13;
+    state >>>= 0;
+    state ^= state >>> 17;
+    state ^= state << 5;
+    state >>>= 0;
+    state = (state + 0x9e3779b9) >>> 0;
+    hex += state.toString(16).padStart(8, '0');
+  }
+  const chars = hex.slice(0, 32).split('');
+  chars[12] = '4'; // version 4
+  chars[16] = '89ab'[Number.parseInt(chars[16], 16) % 4]; // RFC 4122 variant
+  const value = chars.join('');
+  return `${value.slice(0, 8)}-${value.slice(8, 12)}-${value.slice(12, 16)}-${value.slice(16, 20)}-${value.slice(20)}`;
+}
+
+/**
  * Normalise a Kubernetes/OpenShift manifest object (as parsed from YAML) into
  * the game resource model.
  *
@@ -227,6 +261,12 @@ export function normalizeManifestObject(manifest = {}) {
     }
   } else {
     spec = deepClone(manifest.spec || {});
+  }
+  // Identity admission records the linked User's UID; a manifest that only names
+  // its user gets the deterministic fallback before the spec is stored (#76).
+  if (kind === 'Identity') {
+    spec.user = isPlainObject(spec.user) ? spec.user : {};
+    if (!spec.user.uid && spec.user.name) spec.user.uid = deterministicUserUid(spec.user.name);
   }
   return {
     kind,

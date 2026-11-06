@@ -317,11 +317,18 @@ export class Service extends ResourceBase {
     return this.endpoints[randomInt(this.endpoints.length)];
   }
 
-  /** Mark the LoadBalancer service as provisioned with an IP. */
+  /**
+   * Mark the LoadBalancer service as provisioned with an IP.
+   *
+   * The simulator's MetalLB controller (SimulationTick) is the single canonical
+   * emitter of the Service's load-balancer event, using the operator's own
+   * `Assigned IP [...]` wording; the legacy cloud-provider event this method
+   * used to add is not what an OpenShift 4.22 cluster reports, so only the
+   * status is written here (#76).
+   */
   setLoadBalancerIP(ip) {
     this.status.loadBalancer = { ingress: [{ ip, hostname: '' }] };
     this.loadBalancerPending = false;
-    this.addEvent('Normal', 'EnsuredLoadBalancer', `Ensured load balancer with IP ${ip}`);
     return this;
   }
 

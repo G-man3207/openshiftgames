@@ -64,6 +64,7 @@ import {
 } from '../data/platformVersions.js';
 import { parseYaml } from '../engine/YamlParser.js';
 import { deploymentReplicaSetName } from '../engine/TemplateHash.js';
+import { apiGroupForKind } from '../engine/RBACEngine.js';
 import {
   validateCronSchedule,
   visibleAnnotations,
@@ -1760,12 +1761,32 @@ function renderJsonPathBrace(context, innerRaw, root) {
   if (literal !== null) return literal;
   if (inner === '@') return JSON.stringify(context);
   const value = resolveJsonPathTokens(context, inner, root);
-  if (Array.isArray(value))
+  return jsonPathResultText(value, inner);
+}
+
+/**
+ * Render one JSONPath expression result exactly like client-go's
+ * `jsonpath.PrintResults` (used by `kubectl -o jsonpath`):
+ *  - a multi-result wildcard expression prints every result separated by a
+ *    space (`{.items[*].metadata.name}` → `a b c`);
+ *  - a single map/slice/struct result is marshalled as JSON, so a slice field
+ *    prints its brackets (`{.spec.ports}` → `[{...}]`, issue #76);
+ *  - scalars print bare (`{.metadata.name}` → `web`), unset values print empty.
+ * @param {any} value
+ * @param {string} expression
+ * @returns {string}
+ */
+function jsonPathResultText(value, expression) {
+  const wildcard = /\[\*\]|(?:^|\.)\*(?:\.|$)/.test(String(expression ?? ''));
+  if (wildcard && Array.isArray(value)) {
     return value
-      .map((entry) =>
-        entry !== null && typeof entry === 'object' ? JSON.stringify(entry) : String(entry)
-      )
+      .map((entry) => {
+        if (entry === undefined || entry === null) return 'null';
+        return typeof entry === 'object' ? JSON.stringify(entry) : String(entry);
+      })
       .join(' ');
+  }
+  if (Array.isArray(value)) return JSON.stringify(value);
   if (value === undefined || value === null) return '';
   return typeof value === 'object' ? JSON.stringify(value) : String(value);
 }
@@ -1805,9 +1826,7 @@ function renderJsonPathTemplate(item, root, template) {
       continue;
     }
     const value = resolveJsonPathTokens(item, inner, root);
-    if (Array.isArray(value)) out += value.join(' ');
-    else if (value !== undefined && value !== null)
-      out += typeof value === 'object' ? JSON.stringify(value) : String(value);
+    out += jsonPathResultText(value, inner);
   }
   out += template.slice(lastIndex);
   return out;
@@ -1993,6 +2012,26 @@ export function formatHelmDate(value = new Date()) {
 }
 
 /**
+ * `helm list` UPDATED column: Helm prints the stored release timestamp with Go's
+ * `time.Time.String()` layout (`2006-01-02 15:04:05.999999999 -0700 MST`,
+ * trailing fractional zeros trimmed). Helm stores release times in UTC, so the
+ * simulator renders `YYYY-MM-DD HH:MM:SS.fff +0000 UTC` (#76).
+ * @param {Date|number|string} value
+ * @returns {string}
+ */
+export function formatHelmTimestamp(value) {
+  const date = value instanceof Date ? value : new Date(value ?? Date.now());
+  if (!Number.isFinite(date.getTime())) return '-';
+  const pad = (number) => String(number).padStart(2, '0');
+  const fraction = String(date.getUTCMilliseconds() * 1e6)
+    .padStart(9, '0')
+    .replace(/0+$/, '');
+  return `${date.getUTCFullYear()}-${pad(date.getUTCMonth() + 1)}-${pad(date.getUTCDate())} ${pad(
+    date.getUTCHours()
+  )}:${pad(date.getUTCMinutes())}:${pad(date.getUTCSeconds())}${fraction ? `.${fraction}` : ''} +0000 UTC`;
+}
+
+/**
  * Strip simulator-internal `openshiftgames*` annotations/finalizers from a
  * manifest object tree before it is printed by `oc ... -o yaml|json` (issue
  * #23). Top-level metadata and nested pod templates are both covered; genuine
@@ -2106,6 +2145,20 @@ export function stableHash(text, max) {
   return max ? hash % max : hash;
 }
 
+/**
+ * API resources that are not the plural of the modelled game kind. The CLI
+ * serves `imagestreamtags` as an ImageStream view, but real oc resolves the
+ * token through the RESTMapper to the distinct `imagestreamtags` resource of
+ * image.openshift.io (`oc create role --resource=imagestreamtags`, issue #72).
+ * @type {Record<string, {kind: string, resource: string}>}
+ */
+const RBAC_RESOURCE_OVERRIDES = {
+  istag: { kind: 'ImageStream', resource: 'imagestreamtags' },
+  istags: { kind: 'ImageStream', resource: 'imagestreamtags' },
+  imagestreamtag: { kind: 'ImageStream', resource: 'imagestreamtags' },
+  imagestreamtags: { kind: 'ImageStream', resource: 'imagestreamtags' },
+};
+
 /** Plural resource name for tables/errors (e.g. Deployment → deployments). */
 export function pluralForKind(kind) {
   return KIND_PLURALS[kind] || `${String(kind).toLowerCase()}s`;
@@ -2173,6 +2226,10 @@ const EXPLAIN_FIELDS = {
     'spec.template': 'PodTemplateSpec - Template describing the pods that will be created.',
     'spec.strategy': 'DeploymentStrategy - Strategy used to replace old pods.',
     'spec.strategy.type': 'string - Type of strategy: RollingUpdate or Recreate.',
+    // The parent object itself must be in the DB so `oc explain
+    // deployment.spec.strategy` lists rollingUpdate before type (#76).
+    'spec.strategy.rollingUpdate':
+      'RollingUpdateDeployment - Rolling update config params. Present only if type is RollingUpdate.',
     'spec.strategy.rollingUpdate.maxSurge':
       'IntOrString - Maximum pods above the desired count during update.',
     'spec.strategy.rollingUpdate.maxUnavailable':
@@ -2523,6 +2580,160 @@ const EXPLAIN_FIELDS = {
     subjects: 'Subject[] - Users, Groups or ServiceAccounts.',
   },
 };
+
+/**
+ * Enum values the kubectl explain v2 plaintext view renders under a field
+ * (`  enum: A, B` in the simple field list; `ENUM:` block for a leaf FIELD).
+ * Keys are `<Kind>.<field path>`; only fields whose schema carries an enum are
+ * listed (#76).
+ * @type {Record<string, string[]>}
+ */
+const EXPLAIN_ENUMS = {
+  'Deployment.spec.strategy.type': ['Recreate', 'RollingUpdate'],
+  'Pod.spec.restartPolicy': ['Always', 'OnFailure', 'Never'],
+  'Pod.spec.containers.imagePullPolicy': ['Always', 'IfNotPresent', 'Never'],
+  'Service.spec.type': ['ClusterIP', 'NodePort', 'LoadBalancer', 'ExternalName'],
+  'Service.spec.ports.protocol': ['TCP', 'UDP', 'SCTP'],
+  'Route.spec.tls.termination': ['edge', 'passthrough', 'reencrypt'],
+  'Route.spec.tls.insecureEdgeTerminationPolicy': ['Allow', 'None', 'Redirect'],
+};
+
+/** Split an EXPLAIN_FIELDS entry's `<Type> - <description>` prefix. */
+function splitExplainField(text) {
+  const combined = String(text ?? '');
+  const separator = combined.indexOf(' - ');
+  if (separator < 0) return { type: 'Object', description: combined };
+  return { type: combined.slice(0, separator), description: combined.slice(separator + 3) };
+}
+
+/** kubectl explain's `typeGuess`: Go slice types render as `<[]Container>`. */
+function explainTypeGuess(rawType) {
+  const type = String(rawType || 'Object').trim() || 'Object';
+  if (type.endsWith('[]')) return `[]${type.slice(0, -2)}`;
+  return type;
+}
+
+/** Default schema type for the synthetic top-level fields of a kind. */
+function explainTopLevelType(kind, name) {
+  if (name === 'apiVersion' || name === 'kind') return 'string';
+  if (name === 'metadata') return 'ObjectMeta';
+  if (name === 'spec') return `${kind}Spec`;
+  if (name === 'status') return `${kind}Status`;
+  return 'Object';
+}
+
+/**
+ * Direct children of a field-DB node, alphabetically sorted like the v2
+ * template's `range $resolved.properties` (Go maps iterate in key order).
+ * @returns {Array<{name: string, type: string}>}
+ */
+function explainFieldChildren(kind, fields, parentPath) {
+  const prefix = parentPath ? `${parentPath}.` : '';
+  /** @type {Map<string, string|null>} */
+  const children = new Map();
+  for (const [path, text] of Object.entries(fields)) {
+    if (!path.startsWith(prefix)) continue;
+    const rest = path.slice(prefix.length);
+    const name = rest.split('.')[0];
+    if (!name) continue;
+    if (rest === name) children.set(name, splitExplainField(text).type);
+    else if (!children.has(name)) children.set(name, null);
+  }
+  // Every Kubernetes object schema always exposes apiVersion/kind/metadata.
+  if (!parentPath) {
+    if (!children.has('apiVersion')) children.set('apiVersion', null);
+    if (!children.has('kind')) children.set('kind', null);
+    if (!children.has('metadata')) children.set('metadata', null);
+  }
+  return [...children.entries()]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([name, type]) => ({
+      name,
+      type: explainTypeGuess(type || explainTopLevelType(kind, name)),
+    }));
+}
+
+/** Greedy word wrap that preserves explicit newlines (v2 `wrap <width>`). */
+function explainWrapText(text, width) {
+  const lines = [];
+  for (const rawLine of String(text ?? '').split('\n')) {
+    const words = rawLine.split(/\s+/).filter(Boolean);
+    if (!words.length) {
+      lines.push('');
+      continue;
+    }
+    let line = '';
+    for (const word of words) {
+      if (!line) line = word;
+      else if (line.length + 1 + word.length <= width) line += ` ${word}`;
+      else {
+        lines.push(line);
+        line = word;
+      }
+    }
+    if (line) lines.push(line);
+  }
+  return lines;
+}
+
+/** DESCRIPTION block: wrap to 76 columns and indent four spaces (v2 template). */
+function explainDescriptionLines(text) {
+  return explainWrapText(text, 76).map((line) => (line ? `    ${line}` : ''));
+}
+
+/** `enum:` continuation line of the v2 simple field list (max 4 values). */
+function explainEnumLine(values, indent) {
+  if (!Array.isArray(values) || !values.length) return null;
+  const shown = values.slice(0, 4).map((value) => (value === '' ? '""' : String(value)));
+  const suffix = values.length > 4 ? ', ....' : '';
+  return `${indent}enum: ${shown.join(', ')}${suffix}`;
+}
+
+/** Long-form `ENUM:` block printed under a leaf FIELD line. */
+function explainLongEnumLines(values) {
+  if (!Array.isArray(values) || !values.length) return [];
+  return ['ENUM:', ...values.map((value) => `    ${value === '' ? '""' : String(value)}`)];
+}
+
+/** One simple-view field line (`<indent><name>\t<<Type>>`) plus its enum line. */
+function explainSimpleFieldLines(kind, fieldPath, name, type, indent = '  ') {
+  const lines = [`${indent}${name}\t<${type}>`];
+  const enumLine = explainEnumLine(EXPLAIN_ENUMS[`${kind}.${fieldPath}`], indent);
+  if (enumLine) lines.push(enumLine);
+  return lines;
+}
+
+/** Non-recursive `FIELDS:` block: single-line entries, no per-field text. */
+function explainFieldsBlock(kind, fields, parentPath) {
+  const lines = [];
+  for (const child of explainFieldChildren(kind, fields, parentPath)) {
+    const fieldPath = parentPath ? `${parentPath}.${child.name}` : child.name;
+    lines.push(...explainSimpleFieldLines(kind, fieldPath, child.name, child.type));
+  }
+  return lines;
+}
+
+/** Recursive `FIELDS:` tree: field lines followed by their indented descriptions. */
+function explainRecursiveFieldsBlock(kind, fields, parentPath, level) {
+  const lines = [];
+  const indent = '  '.repeat(level);
+  for (const child of explainFieldChildren(kind, fields, parentPath)) {
+    const fieldPath = parentPath ? `${parentPath}.${child.name}` : child.name;
+    lines.push(...explainSimpleFieldLines(kind, fieldPath, child.name, child.type, indent));
+    const entry = Object.prototype.hasOwnProperty.call(fields, fieldPath)
+      ? splitExplainField(fields[fieldPath]).description
+      : '';
+    if (entry) {
+      const wrapWidth = Math.max(20, 78 - level * 2);
+      for (const line of explainWrapText(entry, wrapWidth)) {
+        lines.push(line ? `${' '.repeat(level * 2 + 2)}${line}` : '');
+      }
+    }
+    const nested = explainRecursiveFieldsBlock(kind, fields, fieldPath, level + 1);
+    if (nested.length) lines.push(...nested);
+  }
+  return lines;
+}
 
 /**
  * Templates the simulator ships with when the cluster has no Template objects
@@ -5833,7 +6044,11 @@ Object.assign(CommandBar.prototype, {
           { header: 'IP', value: (resource) => resource.status?.podIP || resource.ip || '<none>' },
           {
             header: 'NODE',
-            value: (resource) => resource.spec?.nodeName || resource.status?.hostIP || '<none>',
+            // Real kubectl's `-o wide` Pod printer shows only
+            // `pod.Spec.NodeName`; an unbound (Pending) pod therefore prints
+            // `<none>` and never the status.hostIP of a node it never bound to
+            // (#73).
+            value: (resource) => resource.spec?.nodeName || '<none>',
           },
           { header: 'NOMINATED NODE', value: () => '<none>' },
           { header: 'READINESS GATES', value: () => '<none>' },
@@ -6409,12 +6624,15 @@ Object.assign(CommandBar.prototype, {
       }
       case 'Identity': {
         const spec = resource.spec || resource;
+        // OpenShift always assigns the mapped User a UID; the printer column
+        // shows it, and the simulator's Identity keeps it on spec.user (falling
+        // back to its own object UID for pre-created identities) (#76).
         return {
           NAME: name,
           'IDP NAME': spec.providerName || 'htpasswd',
           'IDP USER NAME': spec.providerUserName || '',
           'USER NAME': spec.user?.name || '',
-          'USER UID': spec.user?.uid || '',
+          'USER UID': spec.user?.uid || resource.metadata?.uid || '',
         };
       }
       case 'Template': {
@@ -6783,31 +7001,12 @@ Object.assign(CommandBar.prototype, {
     const namespace = options.namespace || this.currentProject;
     const push = (event) => events.push(event);
 
-    // 1. Active incidents surface as Warning events.
-    const incidentEngine = this.game?.incidentEngine;
-    let incidents = [];
-    try {
-      incidents = incidentEngine?.getActiveIncidents?.() || incidentEngine?.incidents || [];
-    } catch {
-      incidents = [];
-    }
-    for (const incident of Array.isArray(incidents) ? incidents : []) {
-      if (!incident) continue;
-      const state = String(incident.state || incident.status || '');
-      if (state && !/active|investigating|created/i.test(state)) continue;
-      const targetKind = (incident.affectedResourceTypes || ['Pod'])[0] || 'Pod';
-      const timestamp = incident.activatedAt || incident.createdAt || Date.now() - 120000;
-      push({
-        lastTimestamp: timestamp,
-        type: 'Warning',
-        reason: incident.name || 'Warning',
-        object: `${String(targetKind).toLowerCase()}/${incident.target || 'unknown'}`,
-        subobject: '',
-        source: 'incident-controller',
-        message: incident.description || `${incident.name || 'Incident'} detected`,
-        namespace,
-      });
-    }
+    // Active incidents are deliberately NOT surfaced as synthetic Kubernetes
+    // Events (#73/#75): a real cluster never records an Event just because an
+    // incident fired, and the old `incident-controller` pseudo-stream produced
+    // invented `PendingScheduling`/`UnauthorizedAccess` reasons in `oc get
+    // events`. The incident drawer owns the symptom; resource-level events are
+    // recorded by the engine's real recorder.
 
     // 2. Pod failure events (Warning). The kubelet lifecycle stream
     // (Scheduled → Pulling → Pulled → Created → Started) is recorded by the
@@ -8386,7 +8585,11 @@ Object.assign(CommandBar.prototype, {
         resources = resources.filter((resource) => resource.metadata?.namespace === namespace);
       }
       resources = this._filterResources(resources, kind, flags);
+      // `oc get all -o yaml|json|name` and the tabular output are the API's
+      // name-sorted list order (etcd namespace/name key order), not creation
+      // order; `--sort-by` still overrides it (#76).
       if (flags['sort-by']) resources = this._sortResources(resources, flags['sort-by']);
+      else resources = this._sortResourcesByName(resources);
       return { kind, resources };
     });
     const visible = grouped.filter((entry) => entry.resources.length > 0);
@@ -9390,6 +9593,15 @@ Object.assign(CommandBar.prototype, {
     return lines;
   },
 
+  /**
+   * `oc explain <resource>[.<field>][.field…] [--recursive]` — kubectl 1.35
+   * explain v2 plaintext layout (#76): `GROUP:`/`KIND:`/`VERSION:` headers with
+   * the value column aligned at 13, blank line, optional `FIELD: <name> <Type>`
+   * line, blank line, a 4-space indented DESCRIPTION, then `FIELDS:` entries as
+   * `<2 spaces><name>\t<<Type>>` (alphabetical, plus a 2-space `enum:` line for
+   * enum fields). Core kinds omit the GROUP line; `--recursive` prints the same
+   * tree with per-field descriptions.
+   */
   _cmdExplain(tokens) {
     const { positionals, flags } = parseArgs(tokens, { longBools: ['recursive'] });
     if (!positionals.length) {
@@ -9418,57 +9630,46 @@ Object.assign(CommandBar.prototype, {
       status: `${kind}Status - Observed state of the resource.`,
     };
     const description = explainForKind(kind) || `${kind} is an OpenShift resource (${apiVersion}).`;
-    const indent = (text) =>
-      text
-        .split('\n')
-        .map((line) => `  ${line}`)
-        .join('\n');
+    const slash = apiVersion.indexOf('/');
+    const group = slash >= 0 ? apiVersion.slice(0, slash) : '';
+    const version = slash >= 0 ? apiVersion.slice(slash + 1) : apiVersion;
+
+    // Header block: fixed-column labels (values start at column 13); GROUP is
+    // only printed for non-core API groups, like the real v2 template.
+    const lines = [];
+    if (group) lines.push(`GROUP:      ${group}`);
+    lines.push(`KIND:       ${kind}`);
+    lines.push(`VERSION:    ${version}`);
+    lines.push('');
+    const recursive = Boolean(flags.recursive);
 
     if (!fieldPath) {
-      const topLevel = ['apiVersion', 'kind', 'metadata', 'spec', 'status'];
-      const known = Object.keys(fields).filter((path) => !path.includes('.'));
-      const names = [...new Set([...topLevel, ...known])];
-      if (flags.recursive) {
-        return this._ok(
-          `KIND:     ${kind}\nVERSION:  ${apiVersion}\n\nDESCRIPTION:\n${indent(description)}\n\nFIELDS:\n${Object.entries(
-            fields
-          )
-            .map(([path, text]) => `   ${path.padEnd(40)} ${text}`)
-            .join('\n')}`
-        );
-      }
-      const fieldLines = names
-        .map((name) => {
-          const text =
-            fields[name] ||
-            (name === 'apiVersion'
-              ? 'string - API version of this object.'
-              : name === 'kind'
-                ? 'string - Kind of this object.'
-                : '');
-          return `   ${name.padEnd(40)} ${text}`;
-        })
-        .join('\n');
-      return this._ok(
-        `KIND:     ${kind}\nVERSION:  ${apiVersion}\n\nDESCRIPTION:\n${indent(description)}\n\nFIELDS:\n${fieldLines}`
-      );
+      lines.push('DESCRIPTION:', ...explainDescriptionLines(description));
+      const fieldLines = recursive
+        ? explainRecursiveFieldsBlock(kind, fields, '', 1)
+        : explainFieldsBlock(kind, fields, '');
+      if (fieldLines.length) lines.push('FIELDS:', ...fieldLines);
+      return this._ok(`${lines.join('\n')}\n`);
     }
 
-    const exact = fields[fieldPath];
-    if (!exact) {
-      return this._err(`error: field "${fieldPath}" does not exist`);
+    const entry = fields[fieldPath];
+    if (!entry) {
+      return this._err(`error: field "${fieldPath.split('.').pop()}" does not exist`);
     }
-    const children = Object.entries(fields)
-      .filter(
-        ([path]) =>
-          path.startsWith(`${fieldPath}.`) &&
-          path.split('.').length === fieldPath.split('.').length + 1
-      )
-      .map(([path, text]) => `   ${path.split('.').pop().padEnd(36)} ${text}`)
-      .join('\n');
-    return this._ok(
-      `KIND:     ${kind}\nVERSION:  ${apiVersion}\n\nFIELD:    ${fieldPath}\n\nDESCRIPTION:\n${indent(exact)}${children ? `\n\nFIELDS:\n${children}` : ''}`
-    );
+    const parsedEntry = splitExplainField(entry);
+    const fieldName = fieldPath.split('.').pop();
+    // Real kubectl v1.35 prints `FIELD: <name> <Type>` with a single space;
+    // only the GROUP/KIND/VERSION header values are aligned at column 13 (#76).
+    lines.push(`FIELD: ${fieldName} <${explainTypeGuess(parsedEntry.type)}>`);
+    const enumValues = EXPLAIN_ENUMS[`${kind}.${fieldPath}`];
+    if (enumValues) lines.push(...explainLongEnumLines(enumValues));
+    lines.push('');
+    lines.push('DESCRIPTION:', ...explainDescriptionLines(parsedEntry.description));
+    const fieldLines = recursive
+      ? explainRecursiveFieldsBlock(kind, fields, fieldPath, 1)
+      : explainFieldsBlock(kind, fields, fieldPath);
+    if (fieldLines.length) lines.push('FIELDS:', ...fieldLines);
+    return this._ok(`${lines.join('\n')}\n`);
   },
 
   _cmdStatus(tokens) {
@@ -9831,15 +10032,35 @@ Object.assign(CommandBar.prototype, {
         ].join('\n')
       );
     }
+    // oc 4.22 loginoptions.go #gatherProjectInfo: exactly one visible project
+    // gets the singular sentence (and becomes the current project); several are
+    // listed with the current one marked `  * <name>` and the rest indented
+    // four spaces, then `Using project "<name>".` (#76).
+    if (projects.length === 1) {
+      const only = projects[0];
+      if (only !== current) this._setCurrentProject(only);
+      return this._ok(
+        [
+          'Login successful.',
+          '',
+          `You have one project on this server: "${only}"`,
+          '',
+          `Using project "${only}".`,
+        ].join('\n')
+      );
+    }
+    const activeProject = projects.includes(current) ? current : projects[0];
     const lines = [
       'Login successful.',
       '',
-      `You have access to ${projects.length} project${projects.length === 1 ? '' : 's'}, the list of projects are:`,
-      ...projects.map((project) => `    ${project === current ? '* ' : '  '}${project}`),
+      "You have access to the following projects and can switch between them with 'oc project <projectname>':",
       '',
+      ...projects.map((project) =>
+        project === activeProject ? `  * ${project}` : `    ${project}`
+      ),
+      '',
+      `Using project "${activeProject}".`,
     ];
-    if (projects.includes(current)) lines.push(`Using project "${current}".`);
-    else lines.push(`Using project "${projects[0]}".`);
     return this._ok(lines.join('\n'));
   },
 
@@ -10601,8 +10822,18 @@ Object.assign(CommandBar.prototype, {
     let type = 'Opaque';
     if (secretType === 'tls') {
       type = 'kubernetes.io/tls';
-      const cert = this._certMaterial(flags.cert, 'CERTIFICATE', warnings);
-      const key = this._certMaterial(flags.key, 'PRIVATE KEY', warnings);
+      // kubectl `create secret tls` must read real PEM files: missing files are
+      // a hard error (`open <path>: no such file or directory`), never a
+      // synthetic certificate. The virtual workstation FS is the source of
+      // truth, so the openssl flow works and `--dry-run=client` still reads it
+      // (#75). kubectl reads the cert before the key.
+      const certPath = flags.cert && flags.cert !== true ? String(flags.cert) : '';
+      const keyPath = flags.key && flags.key !== true ? String(flags.key) : '';
+      if (!certPath || !keyPath) return this._err('error: key and cert must be specified');
+      const cert = this._readVirtualFile(certPath);
+      if (cert === null) return this._err(`error: open ${certPath}: no such file or directory`);
+      const key = this._readVirtualFile(keyPath);
+      if (key === null) return this._err(`error: open ${keyPath}: no such file or directory`);
       data['tls.crt'] = this._base64(cert);
       data['tls.key'] = this._base64(key);
     } else if (secretType === 'docker-registry' || secretType === 'dockerconfigjson') {
@@ -11028,11 +11259,13 @@ Object.assign(CommandBar.prototype, {
       spec.template.spec.restartPolicy = restartPolicy;
       spec.template.spec.containers = spec.template.spec.containers?.length
         ? spec.template.spec.containers
-        : [{ name: 'main', image }];
+        : [{ name, image }];
       if (flags.image && flags.image !== true) spec.template.spec.containers[0].image = image;
       if (commandSpec.command) spec.template.spec.containers[0].command = commandSpec.command;
     } else {
-      const container = { name: 'main', image };
+      // kubectl's create_job.go names the generated container after the Job
+      // (`db-migrate`), never the generic `main` (#74).
+      const container = { name, image };
       if (commandSpec.command) container.command = commandSpec.command;
       spec = { template: { metadata: {}, spec: { containers: [container], restartPolicy } } };
     }
@@ -11094,7 +11327,9 @@ Object.assign(CommandBar.prototype, {
     if (!['Never', 'OnFailure', 'Always'].includes(restartPolicy)) {
       return this._err(`error: invalid restart policy "${restartPolicy}"`);
     }
-    const container = { name: 'main', image };
+    // kubectl's create_cronjob.go names the generated container after the
+    // CronJob, not `main` (#74).
+    const container = { name, image };
     if (commandSpec.command) container.command = commandSpec.command;
     const jobSpec = {
       template: { metadata: {}, spec: { containers: [container], restartPolicy } },
@@ -11200,19 +11435,22 @@ Object.assign(CommandBar.prototype, {
           warnings
         );
     }
-    // Real `oc create route passthrough` always pins route.spec.port to the
-    // Service's targetPort (forcePort), so a TLS Service on 443:8443 shows
-    // PORT 8443 — not the (synthetic) service port name `http` (#36).
-    if (termination === 'passthrough' && options.port === undefined) {
+    // Real oc `route.UnsecuredRoute(..., forcePort=false)` (pkg/cli/create/
+    // route/route.go): with no --port, `route.spec.port.targetPort` is the
+    // Service port NAME when that port has one, otherwise the Service port
+    // number — never the Service's targetPort number. `oc expose svc` passes
+    // forcePort=true and uses the same name/number preference (#76 / L12).
+    if (options.port === undefined) {
       const service = this._findResource('Service', serviceName, {
         namespace: flags.namespace,
         explicitNamespace: Boolean(flags.namespace),
         allowOtherNamespaces: false,
       });
-      const servicePort = service?.spec?.ports?.[0];
-      if (servicePort) {
-        options.port = String(servicePort.targetPort ?? servicePort.port);
-      }
+      const servicePort = service?.spec?.ports?.find(
+        (port) => String(port.protocol || 'TCP').toUpperCase() === 'TCP'
+      );
+      if (servicePort?.name) options.port = String(servicePort.name);
+      else if (servicePort?.port !== undefined) options.port = String(servicePort.port);
     }
     const ge = this.gameEngine;
     if (ge && typeof ge.createRoute === 'function') {
@@ -13843,10 +14081,20 @@ Object.assign(CommandBar.prototype, {
     const containerStateError = this._execContainerStateError(pod, containerName);
     if (containerStateError) return this._err(containerStateError);
     const interactive = rawTokens.some((token) => /^-[a-z]*[it][a-z]*$/.test(token));
-    let command = afterDoubleDash.join(' ').trim();
+    // `tokenizeCommand` already removed the shell quoting, so rebuilding the
+    // remote command from argv must re-quote every token that carries
+    // whitespace/quotes/metacharacters. Otherwise `-H "Authorization: Bearer …"`
+    // is re-split into separate argv elements and `sh -c '<script>'` loses its
+    // script boundary — breaking the L16 `$(cat …/token)` one-liner (#75).
+    const quoteArgvToken = (token) => {
+      const text = String(token);
+      if (!/[\s'"$`\\]/.test(text)) return text;
+      return `'${text.replace(/'/g, `'\\''`)}'`;
+    };
+    let command = afterDoubleDash.map(quoteArgvToken).join(' ').trim();
     if (!command) {
       const consumed = String(positionals[0] || '').includes('/') ? 1 : refKind ? 2 : 1;
-      const plainCommand = positionals.slice(consumed).join(' ').trim();
+      const plainCommand = positionals.slice(consumed).map(quoteArgvToken).join(' ').trim();
       command = plainCommand || (interactive ? '/bin/sh' : '');
     }
     // Real oc only prints the "Defaulting container name" hint for
@@ -13954,9 +14202,14 @@ Object.assign(CommandBar.prototype, {
       if (!shouldRun) continue;
       const segment = String(plan.segments[index] ?? '').trim();
       if (!segment) continue;
+      // Bash-like `$(…)` command substitution runs in the CONTAINER's shell and
+      // filesystem (so `sh -c 'curl -H "Authorization: Bearer $(cat …/token)"'`
+      // sends the mounted ServiceAccount token — L16/#75), then `$VAR`/`$?`
+      // expansion happens on the result.
+      const substituted = this._expandContainerCommandSubstitutions(segment, context);
       // Refresh the expansion environment per segment so `export`/assignments
       // earlier in the script are visible to later commands, like a real shell.
-      const expanded = expandShellVariables(segment, {
+      const expanded = expandShellVariables(substituted, {
         ...Object.fromEntries(context.env.entries()),
         '?': String(lastExit),
       });
@@ -13966,6 +14219,104 @@ Object.assign(CommandBar.prototype, {
       if (result.exitRequested) break;
     }
     return { lines, exitCode: lastExit };
+  },
+
+  /**
+   * Expand `$(command)` command substitutions in one container `sh -c` script
+   * segment with bash quoting rules: substitutions are evaluated inside double
+   * quotes but never inside single quotes; each inner command runs through the
+   * container shell (`_runContainerShellScript`) against the Pod filesystem, and
+   * its stdout replaces the substitution with trailing newlines stripped.
+   * `$(hostname)` resolves from the container environment without spawning a
+   * fake binary. This is what makes the documented L16 API call work:
+   * `sh -c 'curl -sk -H "Authorization: Bearer $(cat
+   * /var/run/secrets/kubernetes.io/serviceaccount/token)" …'`.
+   * @param {string} segment
+   * @param {object} context `_podExecContext` result
+   * @returns {string}
+   */
+  _expandContainerCommandSubstitutions(segment, context) {
+    const source = String(segment ?? '');
+    let out = '';
+    let singleQuoted = false;
+    let doubleQuoted = false;
+    for (let index = 0; index < source.length; index += 1) {
+      const char = source[index];
+      if (char === "'" && !doubleQuoted) {
+        singleQuoted = !singleQuoted;
+        out += char;
+        continue;
+      }
+      if (char === '"' && !singleQuoted) {
+        doubleQuoted = !doubleQuoted;
+        out += char;
+        continue;
+      }
+      if (char === '\\' && !singleQuoted && index + 1 < source.length) {
+        out += char + source[index + 1];
+        index += 1;
+        continue;
+      }
+      if (char === '$' && !singleQuoted && source[index + 1] === '(') {
+        // Find the matching `)`; nested `$(…)` and quotes inside count too.
+        let depth = 0;
+        let innerSingle = false;
+        let innerDouble = false;
+        let close = index + 1;
+        for (; close < source.length; close += 1) {
+          const inner = source[close];
+          if (inner === "'" && !innerDouble) {
+            innerSingle = !innerSingle;
+            continue;
+          }
+          if (inner === '"' && !innerSingle) {
+            innerDouble = !innerDouble;
+            continue;
+          }
+          if (innerSingle) continue;
+          if (inner === '(') depth += 1;
+          else if (inner === ')') {
+            depth -= 1;
+            if (depth === 0) break;
+          }
+        }
+        if (close < source.length) {
+          const command = source.slice(index + 2, close);
+          out += this._runContainerCommandSubstitution(command, context);
+          index = close;
+          continue;
+        }
+      }
+      out += char;
+    }
+    return out;
+  },
+
+  /**
+   * Run the inner command of one `$(…)` container substitution and return its
+   * stdout (trailing newlines stripped; empty string when it fails, which is how
+   * a real shell substitutes a failed command).
+   * @param {string} command
+   * @param {object} context `_podExecContext` result
+   * @returns {string}
+   */
+  _runContainerCommandSubstitution(command, context) {
+    const inner = String(command ?? '').trim();
+    if (!inner) return '';
+    if (inner === 'hostname') {
+      return String(context.env?.get?.('HOSTNAME') || context.pod?.metadata?.name || '');
+    }
+    let result;
+    try {
+      result = this._runContainerShellScript(inner, {
+        ...context,
+        env: new Map(context.env || []),
+      });
+    } catch {
+      return '';
+    }
+    if (!result || result.exitCode) return '';
+    return (result.lines || []).join('\n').replace(/\n+$/, '');
   },
 
   /**
@@ -14220,10 +14571,12 @@ Object.assign(CommandBar.prototype, {
       }
       // Fallback body when the engine cannot route the request: use the app's
       // real response for the origin-hello-openshift image and the resolved
-      // container name (never a hardcoded `main`, #54d).
+      // container name (never a hardcoded `main`, #54d). The real
+      // examples/hello-openshift handler is `fmt.Fprintln(w, "Hello OpenShift!")`
+      // — plain text, not an HTML document (#76).
       const image = String(context.container?.image || '');
       if (/hello-openshift/.test(image)) {
-        return ok(['<html><body>Hello OpenShift!</body></html>']);
+        return ok(['Hello OpenShift!']);
       }
       const selector = context.pod?.metadata?.labels?.app || '';
       return ok([
@@ -17803,7 +18156,14 @@ Object.assign(CommandBar.prototype, {
       case 'ls': {
         const { releases, error } = this._helmReleaseList(namespace);
         if (error) return error;
-        const rows = releases.map((release) => {
+        // Helm's action.List sorts releases by name and prints Info.LastDeployed
+        // with Go time.Time.String(), never a relative age (#76).
+        const sortedReleases = [...releases].sort((left, right) =>
+          String(left.name || left.release || '').localeCompare(
+            String(right.name || right.release || '')
+          )
+        );
+        const rows = sortedReleases.map((release) => {
           const name = release.name || release.release || '';
           const meta = this._helmReleasesMeta?.get(name) || {};
           const chartName = release.chart || meta.chart || release.chartName || '';
@@ -17812,7 +18172,7 @@ Object.assign(CommandBar.prototype, {
             name,
             release.namespace || namespace,
             String(release.revision || 1),
-            release.updatedAt ? formatAge(release.updatedAt) : release.updated || 'just now',
+            release.updatedAt ? formatHelmTimestamp(release.updatedAt) : release.updated || '-',
             release.status || 'deployed',
             chartName ? `${chartName}${chartVersion ? `-${chartVersion}` : ''}` : '',
             release.appVersion || release.app_version || meta.appVersion || '1.0.0',
@@ -18338,8 +18698,11 @@ Object.assign(CommandBar.prototype, {
     const rules = [...byGroup.values()]
       .sort((left, right) => String(left.group).localeCompare(String(right.group)))
       .map((entry) => {
-        const rule = { apiGroups: [entry.group], resources: entry.resources, verbs };
+        // Field order mirrors the object kubectl generates (apiGroups,
+        // resources, resourceNames, verbs) so `-o yaml` round-trips (#72).
+        const rule = { apiGroups: [entry.group], resources: entry.resources };
         if (resourceNames.length) rule.resourceNames = resourceNames;
+        rule.verbs = verbs;
         return rule;
       });
     const namespace = this._namespaceFromFlags(flags);
@@ -18354,8 +18717,11 @@ Object.assign(CommandBar.prototype, {
 
   /**
    * Parse an `oc create role --resource` token into `{resource, group}` using
-   * real oc semantics: `resource.group/subresource`, short names mapped to
-   * resource plurals, subresources preserved.
+   * real oc semantics: `resource.group/subresource`, RESTMapper resolution of
+   * short names to `<plural>.<apiGroup>`, subresources preserved (#72).
+   * @param {string} token
+   * @param {string} [defaultGroup] `--api-group` override
+   * @returns {{resource: string, group: string}}
    */
   _parseRbacResourceToken(token, defaultGroup = '') {
     const raw = String(token || '').trim();
@@ -18363,13 +18729,29 @@ Object.assign(CommandBar.prototype, {
     let base = slash >= 0 ? raw.slice(0, slash) : raw;
     const sub = slash >= 0 ? raw.slice(slash + 1) : '';
     let group = defaultGroup || '';
+    // `<resource>.<group>` wins over an inherited `--api-group`.
     if (base.includes('.')) {
       const dot = base.indexOf('.');
       group = base.slice(dot + 1) || group;
       base = base.slice(0, dot);
     }
+    const lower = base.toLowerCase();
+    const override = RBAC_RESOURCE_OVERRIDES[lower];
     const kind = normalizeKind(base);
-    let resource = kind ? String(pluralForKind(kind)).toLowerCase() : base.toLowerCase();
+    let resource;
+    if (override) {
+      resource = override.resource;
+      group = group || apiGroupForKind(override.kind);
+    } else if (kind) {
+      resource = String(pluralForKind(kind)).toLowerCase();
+      // A bare resource token is resolved through the RESTMapper: `deployments`
+      // → apps, `securitycontextconstraints`/`scc` → security.openshift.io.
+      // Core resources stay in apiGroups [""] (kubectl create_role.go).
+      group = group || apiGroupForKind(kind);
+    } else {
+      resource = lower;
+      group = group || apiGroupForKind(lower);
+    }
     if (sub) resource = `${resource}/${sub.toLowerCase()}`;
     return { resource, group };
   },

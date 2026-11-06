@@ -319,6 +319,150 @@ const ENV_VALUE_INDENT = '      ';
 const VOLUME_FIELD_INDENT = '    ';
 
 /**
+ * Deterministic lowercase hex digest for simulator-derived runtime IDs (#76).
+ *
+ * A real kubelet publishes opaque container/image IDs; the simulation has no
+ * runtime to ask, so derive a stable value from the pod/container identity. The
+ * same inputs always produce the same ID, on every `oc describe` and every
+ * simulation tick (an incident that damages the pod must not renumber it).
+ * @param {string} seed
+ * @param {number} [length] hex characters to emit
+ * @returns {string}
+ */
+function deterministicHex(seed, length = 64) {
+  let state = 0x811c9dc5;
+  const source = String(seed ?? '');
+  for (let index = 0; index < source.length; index += 1) {
+    state ^= source.charCodeAt(index);
+    state = Math.imul(state, 0x01000193) >>> 0;
+  }
+  let output = '';
+  while (output.length < length) {
+    // xorshift32 + the golden-ratio constant, so short seeds still fill a
+    // full-length digest that looks like a real opaque runtime ID.
+    state ^= state << 13;
+    state >>>= 0;
+    state ^= state >>> 17;
+    state ^= state << 5;
+    state >>>= 0;
+    state = (state + 0x9e3779b9) >>> 0;
+    output += state.toString(16).padStart(8, '0');
+  }
+  return output.slice(0, length);
+}
+
+/** Stable seed for one Pod's derived runtime IDs (UID when the API assigned one). */
+function podRuntimeSeed(pod) {
+  return (
+    pod?.metadata?.uid || `${pod?.metadata?.namespace || 'default'}/${pod?.metadata?.name || 'pod'}`
+  );
+}
+
+/**
+ * The `cri-o://<64 hex>` Container ID a CRI-O kubelet publishes for a graceful
+ * Pod container (#76). Derived per Pod + container name so it is stable across
+ * describes and ticks, and distinct for two containers of the same Pod.
+ * @param {object} pod
+ * @param {string} containerName
+ * @returns {string}
+ */
+function describeContainerRuntimeId(pod, containerName) {
+  return `cri-o://${deterministicHex(
+    `container|${podRuntimeSeed(pod)}|${containerName || 'main'}`,
+    64
+  )}`;
+}
+
+/**
+ * Fully qualified repository for an image reference (tag/digest stripped),
+ * e.g. `nginx:latest` → `docker.io/library/nginx`,
+ * `quay.io/a/b:t` → `quay.io/a/b`.
+ * @param {string} image
+ * @returns {string}
+ */
+function canonicalImageRepository(image) {
+  const raw = String(image || '')
+    .trim()
+    .split('@')[0];
+  const parts = raw.split('/').filter(Boolean);
+  if (!parts.length) return '';
+  const last = parts[parts.length - 1];
+  const colon = last.indexOf(':');
+  if (colon >= 0) parts[parts.length - 1] = last.slice(0, colon);
+  if (parts.length === 1) parts.unshift('docker.io', 'library');
+  else if (!parts[0].includes('.') && !parts[0].includes(':') && parts[0] !== 'localhost')
+    parts.unshift('docker.io');
+  return parts.join('/');
+}
+
+/**
+ * The `Image ID:` a CRI-O kubelet publishes for a Pod container (#76): the
+ * fully qualified repository plus the image manifest digest. A digest-pinned
+ * reference keeps its digest; every other image gets a deterministic sha256 so
+ * the same image always describes with the same image ID.
+ * @param {object} container the live pod spec container
+ * @returns {string}
+ */
+function describeContainerImageId(container) {
+  const image = String(container?.image || '');
+  const pinned = image.match(/@(sha256:[0-9a-f]{64})$/i);
+  const repository = canonicalImageRepository(image) || 'docker.io/library/scratch';
+  const digest = pinned
+    ? pinned[1].toLowerCase()
+    : `sha256:${deterministicHex(`image|${image}`, 64)}`;
+  return `${repository}@${digest}`;
+}
+
+/**
+ * kubectl formats Go's zero `Time` for an unset container-state timestamp.
+ * Pods damaged by an incident carry no `startedAt` on their terminated last
+ * state; real `oc describe pod` still prints the Started line.
+ * @param {string|undefined} value
+ * @returns {string}
+ */
+function describeStateTimestamp(value) {
+  return formatDescribeTime(value || '0001-01-01T00:00:00Z');
+}
+
+/**
+ * One `State:` / `Last State:` block exactly as kubectl 1.35's `describeStatus`
+ * renders it (#76):
+ *  - Running prints `Started:` only,
+ *  - Waiting prints ONLY `Reason:` (kubectl never prints Waiting.Message),
+ *  - Terminated prints Reason, Message, Exit Code, optional Signal, then
+ *    Started BEFORE Finished.
+ * @param {string} label `State` or `Last State`
+ * @param {object} containerState corev1.ContainerState-shaped object
+ * @returns {string[]}
+ */
+function describeContainerStateBlock(label, containerState) {
+  const kind = Object.keys(containerState || {})[0];
+  const title = `${CONTAINER_VALUE_INDENT}${`${label}:`.padEnd(
+    POD_CONTAINER_VALUE_COLUMN - CONTAINER_VALUE_INDENT.length
+  )}`;
+  if (!kind) return [`${title}Waiting`];
+  const detail = containerState[kind] || {};
+  const child = (name, value) =>
+    `${' '.repeat(6)}${`${name}:`.padEnd(POD_CONTAINER_VALUE_COLUMN - 6)}${value}`;
+  const lines = [`${title}${kind.charAt(0).toUpperCase()}${kind.slice(1)}`];
+  if (kind === 'running') {
+    lines.push(child('Started', describeStateTimestamp(detail.startedAt)));
+    return lines;
+  }
+  if (kind === 'waiting') {
+    if (detail.reason) lines.push(child('Reason', detail.reason));
+    return lines;
+  }
+  if (detail.reason) lines.push(child('Reason', detail.reason));
+  if (detail.message) lines.push(child('Message', detail.message));
+  lines.push(child('Exit Code', detail.exitCode ?? 0));
+  if (Number(detail.signal) > 0) lines.push(child('Signal', detail.signal));
+  lines.push(child('Started', describeStateTimestamp(detail.startedAt)));
+  lines.push(child('Finished', describeStateTimestamp(detail.finishedAt)));
+  return lines;
+}
+
+/**
  * Render the `Annotations:` block like kubectl's `printAnnotationsMultiline`:
  * sorted `key: value` pairs, the first entry on the `Annotations:` line and
  * every later entry aligned to the same value column. Values that are too long
@@ -810,10 +954,16 @@ export class Pod extends ResourceBase {
       // only when the kubelet has published a status for the container, and the
       // State/Last State/Ready/Restart Count block (describeContainerState) only
       // then too. An unscheduled Pod has no container status yet (#60).
-      if (status) lines.push(`    Container ID:   ${status.containerID || '<none>'}`);
+      // #76: a CRI-O kubelet always publishes the runtime IDs; derive a stable
+      // cri-o:// container ID and image digest when the simulation has none.
+      if (status)
+        lines.push(
+          `    Container ID:   ${status.containerID || describeContainerRuntimeId(this, container.name)}`
+        );
       // The live pod spec image is authoritative (matches `-o jsonpath={.spec...image}`).
       lines.push(`    Image:          ${container.image || status?.image || '<none>'}`);
-      if (status) lines.push(`    Image ID:       ${status.imageID || '<none>'}`);
+      if (status)
+        lines.push(`    Image ID:       ${status.imageID || describeContainerImageId(container)}`);
       const ports = Array.isArray(container.ports) ? container.ports : [];
       lines.push(
         `    Port:           ${ports.length ? ports.map((port) => `${port.containerPort}/${port.protocol || 'TCP'}`).join(', ') : '<none>'}`
@@ -822,34 +972,12 @@ export class Pod extends ResourceBase {
         `    Host Port:      ${ports.length ? ports.map((port) => `${port.hostPort || 0}/${port.protocol || 'TCP'}`).join(', ') : '<none>'}`
       );
       if (status) {
-        const state = status.state || {};
-        const stateKind = Object.keys(state)[0];
-        if (stateKind) {
-          const stateDetail = state[stateKind] || {};
-          lines.push(
-            `    State:          ${stateKind.charAt(0).toUpperCase()}${stateKind.slice(1)}`
-          );
-          if (stateDetail.reason) lines.push(`      Reason:       ${stateDetail.reason}`);
-          if (stateDetail.message && stateDetail.message !== stateDetail.reason)
-            lines.push(`      Message:      ${stateDetail.message}`);
-          if (stateDetail.exitCode !== undefined)
-            lines.push(`      Exit Code:    ${stateDetail.exitCode}`);
-          if (stateDetail.startedAt)
-            lines.push(`      Started:      ${formatDescribeTime(stateDetail.startedAt)}`);
-          if (stateDetail.finishedAt)
-            lines.push(`      Finished:     ${formatDescribeTime(stateDetail.finishedAt)}`);
-        }
-        const lastState = status.lastState || {};
-        const lastKind = Object.keys(lastState)[0];
-        if (lastKind) {
-          const lastDetail = lastState[lastKind] || {};
-          lines.push(`    Last State:     ${lastKind.charAt(0).toUpperCase()}${lastKind.slice(1)}`);
-          if (lastDetail.reason) lines.push(`      Reason:       ${lastDetail.reason}`);
-          if (lastDetail.exitCode !== undefined)
-            lines.push(`      Exit Code:    ${lastDetail.exitCode}`);
-          if (lastDetail.finishedAt)
-            lines.push(`      Finished:     ${formatDescribeTime(lastDetail.finishedAt)}`);
-        }
+        // kubectl 1.35 describeStatus blocks (#76): Waiting keeps only Reason,
+        // Running shows Started, and Last State only appears for a terminated
+        // last state with Started printed before Finished.
+        lines.push(...describeContainerStateBlock('State', status.state));
+        if (status.lastState?.terminated)
+          lines.push(...describeContainerStateBlock('Last State', status.lastState));
         lines.push(`    Ready:          ${status.ready ? 'True' : 'False'}`);
         lines.push(`    Restart Count:  ${status.restartCount || 0}`);
       }
@@ -1442,6 +1570,109 @@ ${this.events
 
 // ─── Job ────────────────────────────────────────────────────────────────────
 
+// kubectl 1.35 `describeJob` writes its top-level fields through ONE tabwriter
+// (minwidth 0, tabwidth 8, padding 2): every `Label:<tab>value` line shares the
+// value column sized by the longest label actually printed. With
+// `Active Deadline Seconds:` (24 chars) set, that column is 26 — which is
+// exactly why the L19 diagnostic line reads `Active Deadline Seconds:  8s`.
+const JOB_POD_TEMPLATE_FIELD_WIDTH = 14;
+
+/** Go's `duration.HumanDuration`, used by the Job `Duration:` line. */
+function describeHumanDuration(milliseconds) {
+  const seconds = Math.max(0, Math.floor((Number(milliseconds) || 0) / 1000));
+  if (seconds < 120) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 120) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 48) return `${hours}h`;
+  return `${Math.floor(hours / 24)}d`;
+}
+
+/** `Controlled By:` value for a Job owned by a controller (e.g. a CronJob). */
+function describeControllerValue(resource) {
+  const owner = (resource.metadata?.ownerReferences || []).find((ref) => ref.controller);
+  return owner ? `${owner.kind}/${owner.name}` : null;
+}
+
+/**
+ * The `Pod Template:` block of `oc describe job` (kubectl's
+ * `DescribePodTemplate`): template labels/annotations, then one container block
+ * (Image/Port/Host Port/Command/Args/Environment/Mounts) and the volumes.
+ * @param {object} template Job `.spec.template`
+ * @returns {string[]}
+ */
+function describeJobPodTemplateLines(template = {}) {
+  const lines = ['Pod Template:'];
+  const labels = Object.entries(template?.metadata?.labels || {})
+    .map(([key, value]) => `${key}=${value}`)
+    .join(', ');
+  if (labels) lines.push(`  Labels:  ${labels}`);
+  const annotations = Object.entries(visibleAnnotations(template?.metadata?.annotations || {}))
+    .filter(([key]) => !SKIPPED_ANNOTATION_KEYS.has(key))
+    .map(([key, value]) => `${key}: ${value}`)
+    .join(', ');
+  if (annotations) lines.push(`  Annotations:  ${annotations}`);
+
+  const containers = template?.spec?.containers || [];
+  lines.push('  Containers:');
+  if (!containers.length) lines.push('   <none>');
+  const field = (label, value) => `    ${`${label}:`.padEnd(JOB_POD_TEMPLATE_FIELD_WIDTH)}${value}`;
+  for (const container of containers) {
+    lines.push(`   ${container.name}:`);
+    lines.push(field('Image', container.image || '<none>'));
+    const ports = Array.isArray(container.ports) ? container.ports : [];
+    lines.push(
+      field(
+        'Port',
+        ports.length
+          ? ports.map((port) => `${port.containerPort}/${port.protocol || 'TCP'}`).join(', ')
+          : '<none>'
+      )
+    );
+    lines.push(
+      field(
+        'Host Port',
+        ports.length
+          ? ports.map((port) => `${port.hostPort || 0}/${port.protocol || 'TCP'}`).join(', ')
+          : '<none>'
+      )
+    );
+    for (const [label, entries] of [
+      ['Command', container.command],
+      ['Args', container.args],
+    ]) {
+      if (!Array.isArray(entries) || !entries.length) continue;
+      lines.push(`    ${label}:`);
+      for (const entry of entries) {
+        for (const part of String(entry).split('\n')) lines.push(`      ${part}`);
+      }
+    }
+    const env = Array.isArray(container.env) ? container.env : [];
+    if (env.length) {
+      lines.push('    Environment:');
+      for (const entry of env) lines.push(...describeEnvEntryLines(entry));
+    } else {
+      lines.push('    Environment:  <none>');
+    }
+    const mounts = Array.isArray(container.volumeMounts) ? container.volumeMounts : [];
+    if (mounts.length) {
+      lines.push('    Mounts:');
+      for (const mount of mounts)
+        lines.push(`      ${mount.mountPath} from ${mount.name} (${mount.readOnly ? 'ro' : 'rw'})`);
+    } else {
+      lines.push('    Mounts:       <none>');
+    }
+  }
+  const volumes = template?.spec?.volumes || [];
+  if (volumes.length) {
+    lines.push('  Volumes:');
+    lines.push(...describeVolumeLines(volumes, '  '));
+  } else {
+    lines.push(`  ${'Volumes:'.padEnd(16)}<none>`);
+  }
+  return lines;
+}
+
 export class Job extends ResourceBase {
   constructor(metadata = {}) {
     super('Job', { ...metadata, apiVersion: metadata.apiVersion || 'batch/v1' });
@@ -1462,6 +1693,7 @@ export class Job extends ResourceBase {
       },
     };
     this._initSpec(defaults, metadata.spec);
+    this.applyAdmissionDefaults();
     // #49: derive a realistic runtime hint for trivial one-shot commands so the
     // build controller does not report every Job as taking ~30 s. Explicit
     // `estimatedDurationSeconds` from data-authored Jobs always wins.
@@ -1479,6 +1711,27 @@ export class Job extends ResourceBase {
       completionTime: null,
       conditions: [],
     });
+  }
+
+  /**
+   * API-server defaulting for batch/v1 Jobs (#76): completions, parallelism,
+   * backoffLimit, completionMode and suspend are all defaulted on create, which
+   * is why real `oc describe job` always prints them. Called by the constructor
+   * and by GameEngine.applyManifestObject() after it installs an applied/created
+   * spec (that path replaces `.spec` wholesale, so a CLI-created Job would
+   * otherwise describe as `Completions: <unset>` with no Parallelism line).
+   * @returns {this}
+   */
+  applyAdmissionDefaults() {
+    if (this.spec.completions === undefined || this.spec.completions === null)
+      this.spec.completions = 1;
+    if (this.spec.parallelism === undefined || this.spec.parallelism === null)
+      this.spec.parallelism = 1;
+    if (this.spec.backoffLimit === undefined || this.spec.backoffLimit === null)
+      this.spec.backoffLimit = 6;
+    if (!this.spec.completionMode) this.spec.completionMode = 'NonIndexed';
+    if (this.spec.suspend === undefined || this.spec.suspend === null) this.spec.suspend = false;
+    return this;
   }
 
   addPod(pod) {
@@ -1505,27 +1758,93 @@ export class Job extends ResourceBase {
     return this.status.phase === 'Failed';
   }
 
+  /**
+   * Real kubectl 1.35 `oc describe job` (describeJob), including the
+   * `Active Deadline Seconds:` line whenever `spec.activeDeadlineSeconds` is
+   * set — the L19 diagnostic (#76). Top-level fields share one tabwriter column
+   * (longest printed label + 2), so labels/annotations align with the rest.
+   * @returns {string}
+   */
   toDescribe() {
-    return `Name:           ${this.metadata.name}
-Namespace:      ${this.metadata.namespace}
-Selector:       controller-uid=${this.metadata.uid}
-Completions:    ${this.status.succeeded || 0}/${this.spec.completions || 1}
-Parallelism:    ${this.spec.parallelism || 1}
-Backoff Limit:  ${this.spec.backoffLimit || 0}
-Start Time:     ${this.status.startTime || '<none>'}
-Completed At:   ${this.status.completionTime || '<pending>'}
-Duration:       ${this.getDuration()}s
-Pods Statuses:  ${this.status.active || 0} Active / ${this.status.succeeded || 0} Succeeded / ${this.status.failed || 0} Failed
-Pod Template:
-  Containers:
-${(this.spec.template?.spec?.containers || [])
-  .map((c) => `   ${c.name}:\n    Image:  ${c.image}`)
-  .join('\n')}
-Events:
-${this.events
-  .slice(-10)
-  .map((e) => `  ${e.type}\t${e.reason}\t${e.message}`)
-  .join('\n')}`;
+    const spec = this.spec || {};
+    const status = this.status || {};
+    /** [label, first value, continuation values] */
+    const rows = [];
+    const add = (label, value) => rows.push([`${label}:`, String(value), []]);
+    const addPairs = (label, pairs, separator) => {
+      if (!pairs.length) return;
+      rows.push([
+        `${label}:`,
+        `${pairs[0][0]}${separator}${pairs[0][1]}`,
+        pairs.slice(1).map(([key, value]) => `${key}${separator}${value}`),
+      ]);
+    };
+    const sortedPairs = (source) =>
+      Object.entries(source || {}).sort(([left], [right]) =>
+        left < right ? -1 : left > right ? 1 : 0
+      );
+
+    add('Name', this.metadata.name);
+    add('Namespace', this.metadata.namespace || '');
+    const selector =
+      sortedPairs(spec.selector?.matchLabels)
+        .map(([key, value]) => `${key}=${value}`)
+        .join(',') || `controller-uid=${this.metadata.uid}`;
+    add('Selector', selector);
+    const labels = sortedPairs(this.metadata.labels);
+    if (labels.length) addPairs('Labels', labels, '=');
+    const annotations = sortedPairs(visibleAnnotations(this.metadata.annotations)).filter(
+      ([key]) => !SKIPPED_ANNOTATION_KEYS.has(key)
+    );
+    if (annotations.length) addPairs('Annotations', annotations, ': ');
+    const controlledBy = describeControllerValue(this);
+    if (controlledBy) add('Controlled By', controlledBy);
+    if (spec.parallelism !== undefined && spec.parallelism !== null)
+      add('Parallelism', spec.parallelism);
+    if (spec.completions !== undefined && spec.completions !== null)
+      add('Completions', spec.completions);
+    else add('Completions', '<unset>');
+    // The API server defaults these two fields on every Job; real describe
+    // prints them whenever they are set (always, in practice).
+    add('Completion Mode', spec.completionMode || 'NonIndexed');
+    add('Suspend', Boolean(spec.suspend));
+    if (spec.backoffLimit !== undefined && spec.backoffLimit !== null)
+      add('Backoff Limit', spec.backoffLimit);
+    if (spec.ttlSecondsAfterFinished !== undefined && spec.ttlSecondsAfterFinished !== null)
+      add('TTL Seconds After Finished', spec.ttlSecondsAfterFinished);
+    if (status.startTime) add('Start Time', formatDescribeTime(status.startTime));
+    if (status.completionTime) add('Completed At', formatDescribeTime(status.completionTime));
+    if (status.startTime && status.completionTime) {
+      add(
+        'Duration',
+        describeHumanDuration(
+          new Date(status.completionTime).getTime() - new Date(status.startTime).getTime()
+        )
+      );
+    }
+    if (spec.activeDeadlineSeconds !== undefined && spec.activeDeadlineSeconds !== null) {
+      add('Active Deadline Seconds', `${spec.activeDeadlineSeconds}s`);
+    }
+    const ready = status.ready === undefined || status.ready === null ? null : Number(status.ready);
+    add(
+      'Pods Statuses',
+      ready === null
+        ? `${status.active || 0} Active / ${status.succeeded || 0} Succeeded / ${status.failed || 0} Failed`
+        : `${status.active || 0} Active (${ready} Ready) / ${status.succeeded || 0} Succeeded / ${status.failed || 0} Failed`
+    );
+    if (String(spec.completionMode || '') === 'Indexed') {
+      add('Completed Indexes', status.completedIndexes || '<none>');
+    }
+
+    const valueColumn = Math.max(...rows.map(([label]) => label.length)) + 2;
+    const lines = [];
+    for (const [label, first, continuation] of rows) {
+      lines.push(`${label.padEnd(valueColumn)}${first}`);
+      for (const value of continuation) lines.push(`${' '.repeat(valueColumn)}${value}`);
+    }
+    lines.push(...describeJobPodTemplateLines(spec.template));
+    lines.push(...describeEventLines(this.events));
+    return lines.join('\n');
   }
 }
 

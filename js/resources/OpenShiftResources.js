@@ -169,6 +169,7 @@ export class Route extends ResourceBase {
       };
     }
     this._initSpec(defaults, metadata.spec);
+    this.applyAdmissionDefaults();
     this._setInitialStatus({ phase: 'Active', ingress: [] });
   }
 
@@ -186,6 +187,21 @@ export class Route extends ResourceBase {
 
   defaultHost() {
     return `${this.metadata.name}-${this.metadata.namespace}.${APPS_DOMAIN}`;
+  }
+
+  /**
+   * Route admission plugin defaults (#75/#76): a Route created without
+   * `spec.host` gets the generated `<name>-<namespace>.<apps-domain>` host
+   * SYNCHRONOUSLY, exactly like a real cluster (`oc get route -o yaml` right
+   * after `oc expose` already shows it). GameEngine.applyManifestObject() calls
+   * this after installing an applied spec — that path replaces `.spec`
+   * wholesale, which used to leave `host: ""` until a later router tick and made
+   * `oc get route … -o jsonpath={.spec.host}` print nothing.
+   * @returns {this}
+   */
+  applyAdmissionDefaults() {
+    if (!this.spec.host) this.spec.host = this.defaultHost();
+    return this;
   }
 
   effectiveHost() {

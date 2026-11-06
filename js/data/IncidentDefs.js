@@ -306,28 +306,38 @@ const INCIDENT_DEFS = [
     category: 'Pod',
     severity: 3,
     description:
-      'The Pod cannot be scheduled: no node matches its nodeSelector/affinity, nodes are tainted, or there is not enough allocatable CPU/memory.',
+      'A rolling update cannot place its new Pods: the Deployment pod template now carries a nodeSelector that no Node matches, so the new ReplicaSet Pods stay Pending (FailedScheduling) while the previous ReplicaSet keeps serving within maxUnavailable.',
     visualEffect: 'pulse-yellow',
     affectedResourceTypes: ['Pod', 'Deployment'],
     investigationSteps: [
       S(
-        'oc describe pod <pod>',
-        'The Events/Scheduler section explains why no node fits (FailedScheduling).'
+        'oc get pods -n <namespace> -o wide',
+        'Exactly one revision of the workload is Pending with NODE <none>; the previous Pods still serve traffic.'
       ),
-      S('oc get nodes', 'Check Ready state and labels of candidate nodes.'),
+      S(
+        'oc describe pod <pod>',
+        "The Events/Scheduler section explains why no node fits (FailedScheduling: didn't match Pod's node affinity/selector)."
+      ),
+      S(
+        'oc get deployment <deployment> -o yaml',
+        'The pod template carries a nodeSelector that no Node label satisfies — the real cause.'
+      ),
+      S('oc get nodes --show-labels', 'Check Ready state and labels of candidate nodes.'),
       S('oc describe node <node>', 'Inspect taints, conditions and allocatable resources.'),
-      S('oc get resourcequota -n <namespace>', 'A quota can also prevent pod creation/admission.'),
     ],
     resolutionActions: [
-      A('fix-node-selector', 'Fix nodeSelector/affinity', 1),
+      A('fix-node-selector', 'Revert the bad nodeSelector (rollout undo / edit)', 1),
       A('add-capacity', 'Scale nodes or reduce requests', 2),
       A('remove-taint', 'Tolerate or remove the node taint', 2),
     ],
     ocCommands: [
+      'oc get pods -n <namespace> -o wide',
       'oc describe pod <pod>',
-      'oc get nodes',
-      'oc adm top node <node>',
-      'oc label node <node> region=east',
+      'oc get deployment <deployment> -o yaml',
+      'oc rollout undo deployment/<deployment> -n <namespace>',
+      'oc edit deployment/<deployment> -n <namespace>',
+      'oc label node <node> disktype=ssd',
+      'oc get nodes --show-labels',
     ],
     autoResolveTime: null,
     docsUrl: DOCS.nodes,
@@ -1101,7 +1111,7 @@ const INCIDENT_DEFS = [
     category: 'Security',
     severity: 4,
     description:
-      'An application/ServiceAccount is denied by RBAC when calling the Kubernetes API (403 Forbidden), or a user lost access to a project.',
+      'An application/ServiceAccount is denied by RBAC when calling the Kubernetes API (403 Forbidden). Kubernetes emits NO event for an authorization failure — the symptom is in the application log, not in `oc get events`.',
     visualEffect: 'flash-red',
     affectedResourceTypes: ['Deployment', 'Pod', 'ServiceAccount', 'RoleBinding'],
     investigationSteps: [
@@ -1117,7 +1127,10 @@ const INCIDENT_DEFS = [
         'oc get sa -n <namespace>',
         'Confirm the ServiceAccount identity the workload Pods run as.'
       ),
-      S('oc get events -n <namespace>', 'Look for 403 Forbidden responses from the API.'),
+      S(
+        'oc logs deploy/<deployment> -n <namespace>',
+        'The app log carries the API server Status: pods is forbidden: User "system:serviceaccount:…" cannot list resource "pods" …'
+      ),
     ],
     resolutionActions: [
       A('add-rolebinding', 'Bind a role to the ServiceAccount/user', 2),
@@ -1125,10 +1138,23 @@ const INCIDENT_DEFS = [
     ],
     ocCommands: [
       'oc auth can-i get pods --as=system:serviceaccount:<namespace>:default',
+      'oc logs deploy/<deployment> -n <namespace>',
       'oc get rolebindings -n <namespace>',
       'oc adm policy add-role-to-user view -z default -n <namespace>',
-      'oc get events -n <namespace>',
+      'oc describe rolebinding -n <namespace>',
     ],
+    // `oc logs` output while the ServiceAccount lacks the RBAC binding. The
+    // message is the real API server Status string an application (client-go)
+    // receives and logs on a 403 (issue #75 L14). Tokens: <namespace>,
+    // <serviceaccount>.
+    logs: {
+      current: [
+        'Starting application...',
+        'server listening on :8080',
+        'WARN failed to list pods for the cache sync: pods is forbidden: User "system:serviceaccount:<namespace>:<serviceaccount>" cannot list resource "pods" in API group "" in the namespace "<namespace>"',
+        'WARN retrying Kubernetes API watch in 5s',
+      ],
+    },
     autoResolveTime: null,
     docsUrl: DOCS.scc,
     resolution: {

@@ -113,6 +113,26 @@ const NODE_NAME_ALIASES = {
   'node-3': 'master-0',
 };
 
+/**
+ * Bad nodeSelector the PendingScheduling incident patches into the Deployment's
+ * Pod template (#73). A Pod's `spec.nodeSelector` is immutable and a bound Pod
+ * never returns to Pending, so the incident is modelled exactly like a real bad
+ * rollout: a template change with a selector no Node carries. The learner fixes
+ * it by editing the template (`oc rollout undo`, `oc patch`/`oc edit`) or by
+ * labelling a Node `disktype=ssd`; deleting the Pending Pod only recreates it
+ * from the still-broken template.
+ */
+const PENDING_SCHEDULING_NODE_SELECTOR = { disktype: 'ssd' };
+
+/**
+ * redhat-operators bundle name for the MetalLB operator on OCP 4.22 (#76). The
+ * CSV follows the OCP minor (`metallb-operator.v4.22.x-<build>`), never the
+ * upstream `v0.14.9` release. Keep this identical to the SimulationTick OLM
+ * catalog seed; it is only a fallback for the incident OLM heal path when the
+ * catalog PackageManifest is unavailable.
+ */
+const METALLB_CSV_NAME = 'metallb-operator.v4.22.0-202610281200';
+
 const nowIso = () => new Date().toISOString();
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -590,6 +610,12 @@ class IncidentEngine {
       return false;
     }
     if (!STATE_RESOLVABLE.has(incident.name)) return false;
+    // #73: the Pending Pod is recreated by the Deployment controller when the
+    // learner deletes it; keep the incident's panel commands pointed at the
+    // current concrete Pod instead of the deleted one.
+    if (incident.name === 'PendingScheduling') {
+      this._safe(() => this._refreshPendingSchedulingTargetPod(incident));
+    }
     if (!this._incidentPastActivationGrace(incident, gameSeconds)) return false;
     const healed = this._safe(() => this._targetLooksHealthy(incident), false);
     if (!healed) return false;
@@ -1334,14 +1360,25 @@ class IncidentEngine {
   }
 
   /**
-   * CrashLoopBackOff onset (#31 A1): when the level authors a `seed` env
-   * contract, inject that faulty value into the workload template FIRST so the
-   * broken value is part of the live cluster state (and therefore of the
-   * baseline a later "did the learner fix it?" comparison uses), then damage
-   * the Pods exactly as before.
+   * CrashLoopBackOff onset (#31 A1).
+   *
+   * When the level authors a `seed` env contract, inject that faulty value into
+   * the workload template FIRST so the broken value is part of the live cluster
+   * state (and therefore of the baseline a later "did the learner fix it?"
+   * comparison uses). Then:
+   *  - if the simulator models the failure from the container's first start
+   *    (invalid static `APP_MODE`, issue #75 L3), the Pods crash honestly on
+   *    their own — do not fabricate restart counts/container state;
+   *  - otherwise damage the Pods exactly as before.
    */
   _damageCrashLoop(incident) {
     this._seedIncidentEnv(incident);
+    // The simulator validates the container's static configuration at startup,
+    // so a template carrying an invalid APP_MODE crashes its Pods honestly from
+    // their first start (valid with or without a seed) — never fake it (#75 L3).
+    if (this._engineCrashesSeedFromFirstStart(incident)) {
+      return this._adoptNativeCrashLoop(incident);
+    }
     return this._damagePod(incident, {
       phase: 'CrashLoopBackOff',
       waitingReason: 'CrashLoopBackOff',
@@ -1351,6 +1388,70 @@ class IncidentEngine {
       eventReason: 'BackOff',
       message: 'Back-off restarting failed container',
     });
+  }
+
+  /**
+   * Does the simulator's kubelet model crash the seeded container on its FIRST
+   * start? The simulated demo app validates `APP_MODE` at startup, so an invalid
+   * seeded value must never be faked by mutating a Pod (#75 L3).
+   * @param {object} incident
+   * @returns {boolean}
+   */
+  _engineCrashesSeedFromFirstStart(incident) {
+    const simulation = this.gameEngine?.simulation || this.gameEngine?.sim || null;
+    if (!simulation || typeof simulation._knownEnvRuntimeFailure !== 'function') return false;
+    const target = this._resolveTargetResource(incident);
+    const container = target?.spec?.template?.spec?.containers?.[0] || null;
+    if (!container) return false;
+    return Boolean(this._safe(() => simulation._knownEnvRuntimeFailure(container), null));
+  }
+
+  /**
+   * Adopt a seed-induced CrashLoopBackOff whose Pods the simulator will crash
+   * from their first start: leave the container state/restart accounting to the
+   * kubelet model, only bind the incident to the workload + concrete Pod (and
+   * snapshot the broken template baseline used by the fix-contract heal path).
+   * @param {object} incident
+   * @returns {object}
+   */
+  _adoptNativeCrashLoop(incident) {
+    const target = this._resolveTargetResource(incident);
+    const pods = target ? this._workloadPodsForDamage(incident, target) : [];
+    if (target && target.kind !== 'Pod') {
+      this._markIncident(target, incident);
+      this._commit(target);
+      if (!incident.baseline?.workload) {
+        incident.baseline = incident.baseline || {};
+        incident.baseline.workload = {
+          uid: target.uid || target.metadata?.uid || null,
+          generation: Number(target.metadata?.generation ?? 1),
+          template: this._safe(() => JSON.stringify(target.spec?.template || {}), '') || '',
+          containers: this._safe(() => this._containerSemanticSignature(target), '') || '',
+        };
+      }
+    }
+    const crashed = pods.find(
+      (pod) =>
+        pod?.status?.phase === 'CrashLoopBackOff' ||
+        (pod?.status?.containerStatuses || []).some(
+          (status) => status?.state?.waiting?.reason === 'CrashLoopBackOff'
+        )
+    );
+    const pod = crashed || pods[0] || this._pickPodForIncident(incident);
+    if (pod) {
+      incident.targetPod = pod.metadata?.name || pod.name || incident.targetPod;
+      incident.targetPodUid = pod.uid || pod.metadata?.uid || incident.targetPodUid;
+    }
+    // No re-damage bookkeeping: deleting a Pod must recreate it from the same
+    // broken template, which the simulator crashes again honestly.
+    incident.damageSpec = null;
+    return {
+      applied: true,
+      kind: 'pod',
+      target: incident.targetPod || incident.target,
+      pods: pods.length,
+      nativeCrash: true,
+    };
   }
 
   /**
@@ -1367,11 +1468,7 @@ class IncidentEngine {
     const containers = target.spec?.template?.spec?.containers || [];
     if (containers.length === 0) return false;
     const container = containers[0];
-    const changes = [];
-    if (seed.image) {
-      container.image = String(seed.image);
-      changes.push(`image=${seed.image}`);
-    }
+    if (seed.image) container.image = String(seed.image);
     if (seed.env?.name) {
       container.env = Array.isArray(container.env) ? container.env : [];
       const existing = container.env.find((entry) => entry.name === seed.env.name);
@@ -1381,15 +1478,10 @@ class IncidentEngine {
       } else {
         container.env.push({ name: seed.env.name, value: String(seed.env.value ?? '') });
       }
-      changes.push(`${seed.env.name}=${seed.env.value}`);
     }
     incident._seedApplied = true;
-    this._recordEvent(
-      target,
-      'Warning',
-      'ConfigInjected',
-      `Deployment is configured with ${changes.join(', ')}; the container cannot start with this configuration`
-    );
+    // No invented Deployment event: real controller events are ScalingReplicaSet
+    // only; the broken template is visible in `oc get deployment -o yaml` (#73).
     this._commit(target);
     // Issue #51: let the Deployment controller create the new revision NOW so
     // the damage pass below chooses the NEW ReplicaSet's Pods. Old-revision Pods
@@ -1468,7 +1560,6 @@ class IncidentEngine {
       // No pod available: mark the workload so the incident is still visible/repairable.
       if (target) {
         this._markIncident(target, incident);
-        this._recordEvent(target, 'Warning', 'IncidentInjected', incident.description);
         this._commit(target);
       }
       return { applied: false, reason: 'no-pod' };
@@ -1760,12 +1851,19 @@ class IncidentEngine {
     const image = containerSpec.image || (pod.status?.containerStatuses || [])[0]?.image || '';
     const workloadName = this._workloadNameForPod(pod) || incident.target || podName;
     const namespace = pod.namespace || pod.metadata?.namespace || incident.namespace || '';
+    // The identity an RBAC/security incident damaged, for log profiles that
+    // quote a real API Status message (#75 L14).
+    const serviceAccount =
+      incident.rbacSubject?.kind === 'ServiceAccount'
+        ? incident.rbacSubject.name
+        : pod.spec?.serviceAccountName || pod.spec?.serviceAccount || 'default';
     const substitute = (line) =>
       String(line)
         .replace(/<pod>/g, podName)
         .replace(/<deployment>/g, workloadName)
         .replace(/<image>/g, image)
-        .replace(/<namespace>/g, namespace);
+        .replace(/<namespace>/g, namespace)
+        .replace(/<serviceaccount>/g, serviceAccount);
     const current = Array.isArray(profile.current) ? profile.current.map(substitute) : null;
     const previous = Array.isArray(profile.previous) ? profile.previous.map(substitute) : null;
     if (current) this._annotate(pod, 'openshiftgames.io/logs', JSON.stringify(current));
@@ -1902,43 +2000,188 @@ class IncidentEngine {
     };
   }
 
+  /**
+   * PendingScheduling onset (#73).
+   *
+   * A Pod's `spec.nodeSelector` is immutable and a Pod that was ever bound can
+   * never return to Pending, so damaging a Running Pod is impossible on a real
+   * cluster (and `oc delete pod` was the only "fix" the old model accepted).
+   * Model the real cause instead: patch the owning Deployment's POD TEMPLATE
+   * with a nodeSelector no Node carries. The Deployment controller then rolls a
+   * new ReplicaSet whose new Pod the scheduler leaves Pending with honest
+   * FailedScheduling events (`0/N nodes are available: … didn't match Pod's
+   * node affinity/selector.`), while the previous ReplicaSet keeps serving
+   * within `maxUnavailable`. `oc rollout undo`, `oc patch`/`oc edit` removing
+   * the selector and `oc label node <node> disktype=ssd` all repair it.
+   *
+   * The incident is rebound to the Deployment (the object that actually carries
+   * the fault) so every state check and panel command resolves the real object;
+   * the concrete Pending Pod is exposed as `incident.targetPod`.
+   */
   _damagePendingScheduling(incident) {
-    const pod = this._pickPodForIncident(incident);
-    if (!pod)
-      return this._damagePod(incident, {
-        phase: 'Pending',
-        markPhase: 'Pending',
-        eventReason: 'FailedScheduling',
-        message: 'No nodes available',
-      });
+    const deploy = this._pendingSchedulingWorkload(incident);
+    if (!deploy) return { applied: false, reason: 'no-deployment' };
+
+    const goodTemplate = JSON.parse(JSON.stringify(deploy.spec?.template || {}));
     this._saveRestore(incident, {
-      uid: pod.uid,
-      nodeName: pod.spec?.nodeName || null,
-      nodeSelector: pod.spec?.nodeSelector
-        ? JSON.parse(JSON.stringify(pod.spec.nodeSelector))
-        : null,
+      uid: deploy.uid || deploy.metadata?.uid || null,
+      deployment: deploy.name || deploy.metadata?.name,
+      template: goodTemplate,
     });
-    if (pod.spec) {
-      pod.spec.nodeName = null;
-      pod.spec.nodeSelector = { 'openshiftgames.io/incident': 'no-such-label' };
+    // Rebind: the damaged object is the Deployment, not the Pod that happened to
+    // be selected as the chaos target.
+    incident.target = deploy.name || deploy.metadata?.name;
+    incident.uid = deploy.uid || deploy.metadata?.uid || null;
+    incident.namespace = deploy.namespace || deploy.metadata?.namespace || incident.namespace;
+    incident.pendingTarget = false;
+
+    deploy.spec = deploy.spec || {};
+    deploy.spec.template = deploy.spec.template || {};
+    deploy.spec.template.spec = deploy.spec.template.spec || {};
+    deploy.spec.template.spec.nodeSelector = {
+      ...(deploy.spec.template.spec.nodeSelector || {}),
+      ...PENDING_SCHEDULING_NODE_SELECTOR,
+    };
+    deploy.metadata = deploy.metadata || {};
+    // The API server bumps metadata.generation on a spec write; the Deployment
+    // controller only rolls out after it observes the new template.
+    deploy.metadata.generation = (Number(deploy.metadata.generation) || 1) + 1;
+    this._markIncident(deploy, incident);
+    this._commit(deploy);
+
+    // Let the Deployment controller create the new ReplicaSet + its first
+    // Pending Pod synchronously (same hook the seeded CrashLoopBackOff path
+    // uses) so the announcement can name the real Pending Pod and the first
+    // scheduler attempt is recorded immediately.
+    const simulation = this.gameEngine?.simulation || this.gameEngine?.sim || null;
+    if (simulation && typeof simulation._reconcileDeployment === 'function') {
+      this._safe(() => simulation._reconcileDeployment(deploy));
     }
-    this._setPhase(pod, 'Pending');
-    this._setCondition(
-      pod,
-      'PodScheduled',
-      'False',
-      'Unschedulable',
-      "0/3 nodes are available: 3 node(s) didn't match Pod's node affinity/anti-affinity."
+    const pending = this._pendingPodOf(deploy);
+    if (pending) {
+      incident.targetPod = pending.metadata?.name || pending.name || null;
+      incident.targetPodUid = pending.uid || pending.metadata?.uid || null;
+      // The scheduler's OWN event/backoff bookkeeping: same wording, source and
+      // exponential retry the next ticks will use, so the describe/events stream
+      // is a real Event series instead of a fabricated one (#73).
+      this._safe(() => this._recordFirstSchedulingFailure(pending, simulation));
+      this._commit(pending);
+    }
+    return {
+      applied: true,
+      kind: 'deployment',
+      target: incident.target,
+      targetPod: incident.targetPod,
+      pods: this._workloadPods(deploy).length,
+    };
+  }
+
+  /** Record the first scheduler attempt for a Pending Pod through the scheduler. */
+  _recordFirstSchedulingFailure(pod, simulation) {
+    if (!pod || !simulation) return;
+    if (typeof simulation._schedulingFailureMessage !== 'function') return;
+    if (typeof simulation._recordSchedulingFailure !== 'function') return;
+    const nodes = this._safe(() => this.cluster?.getByKind('Node'), []) || [];
+    const message = this._safe(() => simulation._schedulingFailureMessage(pod, nodes), '');
+    if (!message) return;
+    this._safe(() => simulation._recordSchedulingFailure(pod, message));
+  }
+
+  /**
+   * Resolve the Deployment a PendingScheduling incident should damage.
+   *
+   * The chaos/scripted target can be a Pod (the incident's affected kinds list
+   * Pod first), so walk Pod → ReplicaSet → Deployment; fall back to a selector
+   * match, then to any Deployment in the incident namespace for authored
+   * incidents that name the workload directly.
+   * @param {object} incident
+   * @returns {object|null}
+   */
+  _pendingSchedulingWorkload(incident) {
+    const target = this._resolveTargetResource(incident);
+    const namespace =
+      target?.namespace ||
+      target?.metadata?.namespace ||
+      incident.namespace ||
+      this.gameEngine?.currentProject ||
+      '';
+    const deploymentForSet = (set) => {
+      const ref = (set?.metadata?.ownerReferences || [])[0];
+      if (ref?.kind === 'Deployment' && ref.name) {
+        return (
+          this._safe(() => this.cluster?.get?.(ref.uid)) ||
+          this._findResource('Deployment', ref.name, namespace)
+        );
+      }
+      return null;
+    };
+
+    if (target?.kind === 'Deployment') return target;
+    if (target?.kind === 'ReplicaSet') return deploymentForSet(target) || null;
+    if (target?.kind === 'StatefulSet' || target?.kind === 'DaemonSet') return target;
+    if (target?.kind === 'Pod') {
+      for (const ref of target.metadata?.ownerReferences || []) {
+        if (ref?.kind !== 'ReplicaSet') continue;
+        const set =
+          this._safe(() => this.cluster?.get?.(ref.uid)) ||
+          this._findResource('ReplicaSet', ref.name, namespace);
+        const deploy = deploymentForSet(set);
+        if (deploy) return deploy;
+      }
+      // Selector match: the Pod's labels tell us which Deployment owns it even
+      // when the ownerReference chain was lost (saved games / injected state).
+      const labels = target.metadata?.labels || {};
+      const deployments = this._safe(
+        () => this.cluster?.getByKindAndNamespace('Deployment', namespace),
+        []
+      );
+      const matched = deployments.find((candidate) =>
+        Object.entries(candidate.spec?.selector?.matchLabels || {}).every(
+          ([key, value]) => labels[key] === value
+        )
+      );
+      if (matched) return matched;
+    }
+
+    const candidates = this._safe(
+      () => this.cluster?.getByKindAndNamespace('Deployment', namespace),
+      []
     );
-    this._recordEvent(
-      pod,
-      'Warning',
-      'FailedScheduling',
-      "0/3 nodes are available: 3 node(s) didn't match Pod's node affinity/anti-affinity."
+    return (
+      candidates.sort((left, right) =>
+        String(left.name || left.metadata?.name || '').localeCompare(
+          String(right.name || right.metadata?.name || '')
+        )
+      )[0] || null
     );
-    this._markIncident(pod, incident);
-    this._commit(pod);
-    return { applied: true, kind: 'pod', target: pod.name };
+  }
+
+  /** Re-point a PendingScheduling incident at the current Pending Pod (#73). */
+  _refreshPendingSchedulingTargetPod(incident) {
+    const target = this._resolveTargetResource(incident);
+    if (!target || target.kind === 'Pod') return;
+    const pending = this._pendingPodOf(target);
+    if (!pending) return;
+    incident.targetPod = pending.metadata?.name || pending.name || incident.targetPod;
+    incident.targetPodUid = pending.uid || pending.metadata?.uid || incident.targetPodUid;
+  }
+
+  /** The first Pending, never-scheduled Pod of a workload (name-sorted). */
+  _pendingPodOf(workload) {
+    return (
+      this._workloadPods(workload)
+        .filter(
+          (pod) =>
+            pod?.status?.phase === 'Pending' &&
+            !pod.spec?.nodeName &&
+            !pod.metadata?.deletionTimestamp
+        )
+        .sort((left, right) =>
+          String(left.metadata?.name || left.name || '').localeCompare(
+            String(right.metadata?.name || right.name || '')
+          )
+        )[0] || null
+    );
   }
 
   _damageProbe(incident, probeType) {
@@ -2554,13 +2797,32 @@ class IncidentEngine {
     return { applied: true, kind: 'service', target: svc.name };
   }
 
+  /**
+   * RBAC denial onset (#75 L14).
+   *
+   * Kubernetes emits NO event for an authorization failure — the API server
+   * answers 403 to the caller. The symptom an operator actually sees is the
+   * application log: the workload keeps running but logs the real Status
+   * message, e.g.
+   * `pods is forbidden: User "system:serviceaccount:rbac-lab:default" cannot
+   *  list resource "pods" in API group "" in the namespace "rbac-lab"`.
+   *
+   * So remove the ServiceAccount's bindings (the damaged state) and write that
+   * denial into the workload Pods' `oc logs` stream; no invented events are
+   * recorded on the identity or the workload.
+   */
   _damageRbac(incident) {
-    const sa =
-      this._findResource('ServiceAccount', incident.target, incident.namespace) ||
-      this._findResource('ServiceAccount', 'default', incident.namespace) ||
-      (this._safe(() =>
-        this.cluster?.getByKindAndNamespace('ServiceAccount', incident.namespace)
-      ) || [])[0];
+    const target = this._resolveTargetResource(incident);
+    let sa = null;
+    if (target?.kind === 'ServiceAccount') sa = target;
+    if (!sa) sa = this._findResource('ServiceAccount', incident.target, incident.namespace);
+    if (!sa) sa = this._findResource('ServiceAccount', 'default', incident.namespace);
+    if (!sa) {
+      sa =
+        (this._safe(() =>
+          this.cluster?.getByKindAndNamespace('ServiceAccount', incident.namespace)
+        ) || [])[0] || null;
+    }
     const removed = [];
     if (sa) {
       incident.namespace = sa.namespace || sa.metadata?.namespace || incident.namespace;
@@ -2599,27 +2861,47 @@ class IncidentEngine {
         this._safe(() => this.cluster.remove(rb.uid));
       }
       this._markIncident(sa, incident);
-      this._recordEvent(
-        sa,
-        'Warning',
-        'Forbidden',
-        `User "system:serviceaccount:${incident.namespace}:${sa.name}" cannot get resource "pods": RBAC binding removed`
-      );
       this._commit(sa);
     }
-    this._saveRestore(incident, { removedBindings: removed });
+    this._saveRestore(incident, {
+      removedBindings: removed,
+      loggedPods: this._applyRbacLogAnnotations(incident),
+    });
+    return {
+      applied: removed.length > 0 || !!sa || Boolean(incident.restoreState?.loggedPods?.length),
+      removedBindings: removed.length,
+      serviceAccount: incident.rbacSubject,
+    };
+  }
+
+  /**
+   * Write the real 403 Status message into every running workload Pod's
+   * `oc logs` stream (the symptom `oc logs deploy/<name>` must surface) and
+   * return the annotated Pod UIDs so resolution can clear it again.
+   * @param {object} incident
+   * @returns {string[]}
+   */
+  _applyRbacLogAnnotations(incident) {
+    const def = this._defsById.get(incident.defId) || null;
+    if (!def?.logs) return [];
     const target = this._resolveTargetResource(incident);
-    if (target && target.kind === 'Pod') {
-      this._setPhase(target, 'Running');
-      this._recordEvent(
-        target,
-        'Warning',
-        'Forbidden',
-        'the server responded with 403 Forbidden: User cannot get resource "pods"'
+    let pods = [];
+    if (target?.kind === 'Pod') pods = [target];
+    else if (target) pods = this._workloadPods(target);
+    if (pods.length === 0) {
+      const namespace = incident.namespace || this.gameEngine?.currentProject;
+      pods = (this._safe(() => this.cluster?.getByKindAndNamespace('Pod', namespace)) || []).filter(
+        (pod) => pod.status?.phase === 'Running'
       );
-      this._commit(target);
     }
-    return { applied: removed.length > 0 || !!sa, removedBindings: removed.length };
+    const uids = [];
+    for (const pod of pods) {
+      if (!pod || pod.metadata?.deletionTimestamp) continue;
+      this._applyPodLogAnnotations(incident, pod);
+      this._commit(pod);
+      uids.push(pod.uid || pod.metadata?.uid);
+    }
+    return uids.filter(Boolean);
   }
 
   _damageOAuth(incident) {
@@ -2879,6 +3161,17 @@ class IncidentEngine {
         unschedulable: node.spec?.unschedulable ?? false,
       });
     }
+    // #76: LastHeartbeatTime is the last successful kubelet post; it must FREEZE
+    // when the kubelet stops posting, while LastTransitionTime marks when the
+    // node lifecycle controller noticed the change. Capture the last heartbeat
+    // before flipping the conditions (the resource model keeps it frozen for
+    // conditions latched `Unknown / NodeStatusUnknown`).
+    const previousReady = (node.status?.conditions || []).find(
+      (condition) => condition.type === 'Ready'
+    );
+    const lastKubeletPost =
+      previousReady?.lastHeartbeatTime || previousReady?.lastTransitionTime || nowIso();
+    const transitionedAt = nowIso();
     this._setPhase(node, 'NotReady');
     // #49: a stopped kubelet stops posting a heartbeat. The node lifecycle
     // controller then marks EVERY kubelet-posted condition (Ready plus the three
@@ -2894,6 +3187,13 @@ class IncidentEngine {
         'Kubelet stopped posting node status.'
       );
     }
+    for (const condition of node.status?.conditions || []) {
+      if (!['Ready', 'MemoryPressure', 'DiskPressure', 'PIDPressure'].includes(condition.type))
+        continue;
+      condition.lastHeartbeatTime = lastKubeletPost;
+      condition.lastTransitionTime = transitionedAt;
+    }
+    node._lastKubeletHeartbeat = lastKubeletPost;
     // Issue #43: a real NotReady node is NOT cordoned. The node lifecycle
     // controller adds node.kubernetes.io/unreachable / not-ready taints
     // (NoSchedule + NoExecute) and `oc get nodes` STATUS stays plain NotReady.
@@ -3022,12 +3322,9 @@ class IncidentEngine {
     if (target) this._clearAnnotation(target, INCIDENT_ANNOTATION);
     if (target) {
       this._annotate(target, HEAL_ANNOTATION, nowIso());
-      this._recordEvent(
-        target,
-        'Normal',
-        'IncidentResolved',
-        `${incident.name} resolved by ${actionId}`
-      );
+      // No invented `IncidentResolved` resource event: the incident lifecycle is
+      // announced on the event bus (`incident:resolved`); a real cluster never
+      // records a game-internal reason in the object's Event stream.
       this._commit(target);
     }
 
@@ -3158,7 +3455,9 @@ class IncidentEngine {
     this._setCondition(pod, 'ContainersReady', 'True', 'ContainersReady', '');
     this._clearAnnotation(pod, INCIDENT_ANNOTATION);
     this._clearPodLogAnnotations(pod);
-    this._recordEvent(pod, 'Normal', 'Healed', 'Pod is running and ready again');
+    // No `Healed` event: real kubelet emits no such reason (it only emits
+    // Scheduled/Pulling/Pulled/Created/Started/Killing and failure reasons), so
+    // the recovery is a status change, not an invented Event (#73).
     this._commit(pod);
   }
 
@@ -3206,8 +3505,31 @@ class IncidentEngine {
       if (actionId !== 'resource-fixed') this._grantSccTo(incident, incident.resolution.grantScc);
     }
 
+    // PendingScheduling (#73): the Pod created from the bad-selector revision
+    // can never be scheduled; once the template is repaired the Deployment
+    // controller replaces it. Remove it here, as the controller would, so the
+    // healed cluster does not keep a bogus Pending Pod behind.
+    if (incident.name === 'PendingScheduling') {
+      for (const pod of pods) {
+        if (pod.status?.phase !== 'Pending' || pod.spec?.nodeName) continue;
+        this._clearAnnotation(pod, INCIDENT_ANNOTATION);
+        this._safe(() => this.cluster.remove(pod.uid));
+      }
+    }
+
     let healed = 0;
     for (const pod of pods) {
+      if (!this._safe(() => this.cluster.get?.(pod.uid))) continue;
+      // A Pod that was never scheduled (`spec.nodeName` unset) has no kubelet
+      // state to heal: the scheduler owns it. Flipping it to Running here would
+      // fabricate a Running Pod without a Node (#73).
+      if (
+        pod.status?.phase === 'Pending' &&
+        !pod.spec?.nodeName &&
+        !pod.metadata?.deletionTimestamp
+      ) {
+        continue;
+      }
       // Stuck terminating: clear finalizers and delete the pod object.
       if (
         incident.name === 'PodStuckTerminating' ||
@@ -3335,8 +3657,11 @@ class IncidentEngine {
   /**
    * Is the SCC required by this incident actually granted to the workload's
    * ServiceAccount under the OCP 4.x RBAC-binding model? Used by state-driven
-   * resolution so the incident clears when the learner runs
-   * `oc adm policy add-scc-to-user <scc> -z <sa>`, not from an auto-grant.
+   * resolution so the incident clears when the learner makes an equivalent
+   * grant — `oc adm policy add-scc-to-user <scc> -z <sa>`, a custom Role with
+   * `apiGroups: [security.openshift.io], resources: [securitycontextconstraints],
+   * resourceNames: [<scc>], verbs: [use]` bound to the SA, or a legacy SCC users
+   * entry — never from an auto-grant (issue #71).
    */
   _incidentSccGranted(incident) {
     const sccName =
@@ -3355,18 +3680,45 @@ class IncidentEngine {
           typeof entry === 'string' ? entry : entry?.name || entry?.metadata?.name || ''
         )
         .filter(Boolean);
+
+    // 1) Ground truth: a workload Pod is already Running under the required SCC
+    //    as the damaged ServiceAccount. Whichever equivalent grant admitted it —
+    //    custom Role/RoleBinding, the canonical system:openshift:scc:<scc>
+    //    binding, a legacy users list — the incident's cause is gone (#71).
+    const target = this._resolveTargetResource(incident);
+    const workloadPods =
+      target?.kind === 'Pod' ? [target] : target ? this._workloadPods(target) : [];
+    if (workloadPods.some((pod) => this._podAdmittedByScc(pod, sccName, saName))) return true;
+
+    // 2) Binding-aware evaluation: getSCCsForServiceAccount() runs the real
+    //    `use` rule check over every RoleBinding/ClusterRoleBinding, so a custom
+    //    Role is accepted as long as its rules grant `use` on scc/<name>.
     try {
-      if (typeof cluster.getSCCGrantsForSubject === 'function') {
-        return toNames(cluster.getSCCGrantsForSubject(subjectStr)).includes(String(sccName));
-      }
       if (saName && typeof cluster.getSCCsForServiceAccount === 'function') {
-        if (toNames(cluster.getSCCsForServiceAccount(namespace, saName)).includes(String(sccName)))
-          return true;
+        const granted = toNames(cluster.getSCCsForServiceAccount(namespace, saName));
+        if (granted.includes(String(sccName))) return true;
       }
     } catch {
       /* fall through to the binding scan */
     }
-    // Binding scan (works on partially-integrated builds / before helpers land).
+
+    // 3) Canonical 4.x grants helper (`system:openshift:scc:<scc>` bindings and
+    //    legacy SCC users/groups lists). Accepts every subject spelling.
+    try {
+      if (typeof cluster.getSCCGrantsForSubject === 'function') {
+        const granted = toNames(cluster.getSCCGrantsForSubject(subjectStr, namespace));
+        if (granted.includes(String(sccName))) return true;
+      }
+      if (saName && typeof cluster.getSCCsForServiceAccount === 'function') {
+        const granted = toNames(cluster.getSCCsForServiceAccount(namespace, saName));
+        if (granted.includes(String(sccName))) return true;
+      }
+    } catch {
+      /* fall through to the binding scan */
+    }
+
+    // 4) Binding scan fallback (works on partially-integrated builds / before
+    //    the helpers land).
     const roleName = `system:openshift:scc:${sccName}`;
     for (const kind of ['RoleBinding', 'ClusterRoleBinding']) {
       for (const binding of this._safe(() => cluster.getByKind(kind)) || []) {
@@ -3390,6 +3742,17 @@ class IncidentEngine {
     return false;
   }
 
+  /** Is `pod` admitted by exactly `sccName` and running as `saName` (#71)? */
+  _podAdmittedByScc(pod, sccName, saName) {
+    if (!pod) return false;
+    const phase = pod.status?.phase;
+    if (phase !== 'Running' && phase !== 'Pending') return false;
+    const podScc = pod.metadata?.annotations?.['openshift.io/scc'];
+    if (!podScc || String(podScc) !== String(sccName)) return false;
+    const podSa = pod.spec?.serviceAccountName || pod.spec?.serviceAccount || 'default';
+    return !saName || podSa === saName;
+  }
+
   _healDeployment(incident, target) {
     const deploy =
       target &&
@@ -3401,14 +3764,43 @@ class IncidentEngine {
           this._safe(() => (this.cluster?.getByKind('Deployment') || [])[0]);
     if (!deploy) return { applied: false };
 
-    // Restore the original pod template (broken image / env refs).
+    // Restore the original pod template (broken image / env refs). Deep-clone so
+    // the live template never aliases the saved snapshot, and bump the
+    // generation like the API server does for a spec write (#73).
+    let templateRestored = false;
     if (incident.restoreState?.template && deploy.spec) {
-      deploy.spec.template = incident.restoreState.template;
+      deploy.spec.template = JSON.parse(JSON.stringify(incident.restoreState.template));
+      deploy.metadata = deploy.metadata || {};
+      deploy.metadata.generation = (Number(deploy.metadata.generation) || 1) + 1;
+      templateRestored = true;
     }
+    const simulation = this.gameEngine?.simulation || this.gameEngine?.sim || null;
+    if (templateRestored && simulation && typeof simulation._reconcileDeployment === 'function') {
+      // Let the Deployment controller reconcile the restored template NOW so a
+      // PendingScheduling heal does not wait a tick to remove the doomed Pod.
+      this._safe(() => simulation._reconcileDeployment(deploy));
+    }
+
     const pods = this._workloadPods(deploy);
     for (const pod of pods) {
       if (incident.name === 'SCCForbidden' && !this._isPodAdmissible(pod)) continue;
+      // A never-scheduled Pod has no kubelet state to heal (#73).
+      if (pod.status?.phase === 'Pending' && !pod.spec?.nodeName) continue;
       this._healPodContainer(pod);
+    }
+
+    if (incident.name === 'PendingScheduling') {
+      // The fault was a bad pod-template selector, not container state: the
+      // template is restored and the controller's rollout is in flight. Do not
+      // fabricate `Available`/`ReadyReplicas` here — the Deployment controller
+      // owns that status and reports it honestly on the next tick (#73).
+      for (const pod of this._workloadPods(deploy)) {
+        if (pod.status?.phase === 'Pending' && !pod.spec?.nodeName)
+          this._safe(() => this.cluster.remove(pod.uid));
+      }
+      this._clearAnnotation(deploy, INCIDENT_ANNOTATION);
+      this._commit(deploy);
+      return { applied: true, kind: 'deployment', target: deploy.name, pods: pods.length };
     }
 
     const desired = deploy.spec?.replicas ?? 1;
@@ -3477,7 +3869,8 @@ class IncidentEngine {
       'ReplicaSet has successfully progressed.'
     );
     this._clearAnnotation(deploy, INCIDENT_ANNOTATION);
-    this._recordEvent(deploy, 'Normal', 'Healed', 'Rollout completed; all replicas are available');
+    // No invented `Healed` reason: the Deployment controller only emits
+    // ScalingReplicaSet events, which the simulator records itself.
     this._commit(deploy);
     return { applied: true, kind: 'deployment', target: deploy.name, pods: pods.length };
   }
@@ -3502,18 +3895,25 @@ class IncidentEngine {
     for (const pod of pods) this._healPodContainer(pod);
 
     if (effect === 'assign-ip') {
-      svc.status = svc.status || {};
-      svc.status.loadBalancer = { ingress: [{ ip: '203.0.113.10', hostname: '' }] };
+      // MetalLB's controller is the SINGLE canonical emitter of the Service
+      // external-IP event: SimulationTick records the MetalLB allocation form
+      // once it programs the address (issue #76). The incident path must not
+      // emit a second, cloud-provider style event. When MetalLB is configured,
+      // leave the status to that controller; only a panel heal on a cluster
+      // with no address pool keeps the game's convenience address.
       this._clearAnnotation(svc, 'openshiftgames.io/lb-pending');
-      this._recordEvent(
-        svc,
-        'Normal',
-        'EnsuredLoadBalancer',
-        'Load balancer IP assigned from the MetalLB address pool'
-      );
+      const pools = this._safe(() => this.cluster?.getByKind('IPAddressPool'), []) || [];
+      const hasUsablePool = pools.some((pool) => (pool.spec?.addresses || []).length > 0);
+      if (!hasUsablePool) {
+        svc.status = svc.status || {};
+        svc.status.loadBalancer = {
+          ingress: [{ ip: '192.168.100.200', ipMode: 'VIP', hostname: '' }],
+        };
+      }
     }
     this._clearAnnotation(svc, INCIDENT_ANNOTATION);
-    this._recordEvent(svc, 'Normal', 'Healed', 'Service has ready endpoints');
+    // No invented `Healed` reason: a Service is repaired by real Endpoints /
+    // controller events, not by an event the game invents.
     this._commit(svc);
     return { applied: true, kind: 'service', target: svc.name, pods: pods.length };
   }
@@ -3838,6 +4238,18 @@ class IncidentEngine {
       'RouteCreated',
       'ovn-kube cleared kubelet-set NoRouteCreated'
     );
+    // #76: the kubelet is posting again — heartbeat and status transition both
+    // belong to this heal tick. Keep the four kubelet-posted conditions on the
+    // SAME timestamp so `oc describe node` shows one coherent recovery instead
+    // of per-condition drift from four separate nowIso() calls.
+    const resumedAt = nowIso();
+    for (const condition of node.status?.conditions || []) {
+      if (!['Ready', 'MemoryPressure', 'DiskPressure', 'PIDPressure'].includes(condition.type))
+        continue;
+      condition.lastHeartbeatTime = resumedAt;
+      condition.lastTransitionTime = resumedAt;
+    }
+    delete node._lastKubeletHeartbeat;
     this._clearAnnotation(node, INCIDENT_ANNOTATION);
     this._recordEvent(node, 'Normal', 'NodeReady', `Node ${node.name} status is now: NodeReady`);
     this._commit(node);
@@ -4265,9 +4677,7 @@ class IncidentEngine {
       (this._safe(() => this.cluster?.getByKind('Subscription')) || [])[0];
     if (!sub) return { applied: false };
 
-    const csvName =
-      resolution.csvName ||
-      `${String(sub.spec?.name || sub.name || 'operator').split('.')[0]}.v1.0.0`;
+    const csvName = this._healOperatorCSVName(sub, resolution);
     sub.status = sub.status || {};
     sub.status.phase = 'Succeeded';
     sub.status.installedCSV = csvName;
@@ -4308,6 +4718,36 @@ class IncidentEngine {
       this._commit(co);
     }
     return { applied: true, kind: 'operator', csv: csvName };
+  }
+
+  /**
+   * CSV name an operator install/heal must converge on (#76).
+   *
+   * The simulated OLM catalog is the source of truth: a Subscription installs
+   * its channel head (or `startingCSV`). The redhat-operators MetalLB bundle
+   * follows the OCP minor (`metallb-operator.v4.22.x-<build>`), never the
+   * upstream `v0.14.9` release; the constant is only a fallback for a cluster
+   * whose PackageManifest has been deleted.
+   * @param {object} sub Subscription
+   * @param {object} [resolution] incident resolution descriptor
+   * @returns {string}
+   */
+  _healOperatorCSVName(sub, resolution) {
+    if (resolution?.csvName) return String(resolution.csvName);
+    const spec = sub?.spec || {};
+    if (spec.startingCSV) return String(spec.startingCSV);
+    const packageName = String(spec.name || sub?.name || '').trim();
+    const manifest = this._findResource('PackageManifest', packageName, '');
+    const channels = Array.isArray(manifest?.status?.channels)
+      ? manifest.status.channels
+      : Array.isArray(manifest?.spec?.channels)
+        ? manifest.spec.channels
+        : [];
+    const channel = channels.find((entry) => entry.name === spec.channel) || channels[0] || null;
+    if (channel?.currentCSV) return String(channel.currentCSV);
+    if (packageName === 'metallb-operator') return METALLB_CSV_NAME;
+    const prefix = packageName.split('.')[0] || 'operator';
+    return `${prefix}.v1.0.0`;
   }
 
   _healClusterOperator(incident, target) {
@@ -4506,13 +4946,31 @@ class IncidentEngine {
         });
       }
       this._clearAnnotation(sa, INCIDENT_ANNOTATION);
-      this._recordEvent(
-        sa,
-        'Normal',
-        'AccessGranted',
-        `view role bound to service account ${sa.name}`
-      );
+      // No invented `AccessGranted` event: RBAC bindings are objects, not
+      // events; a real cluster records nothing on the ServiceAccount (#75 L14).
       this._commit(sa);
+    }
+    // Clear the application-log symptom written at onset (`oc logs deploy/…`
+    // must be healthy again once the binding exists). Look the Pods up by UID
+    // because the controller may have rolled them since the damage (#75 L14).
+    const loggedPods = incident.restoreState?.loggedPods || [];
+    for (const uid of loggedPods) {
+      const pod = uid ? this._safe(() => this.cluster.get?.(uid)) : null;
+      if (!pod) continue;
+      this._clearPodLogAnnotations(pod);
+      this._commit(pod);
+    }
+    const workloadTarget = this._resolveTargetResource(incident);
+    const workloadPods =
+      workloadTarget?.kind === 'Pod'
+        ? [workloadTarget]
+        : workloadTarget
+          ? this._workloadPods(workloadTarget)
+          : [];
+    for (const pod of workloadPods) {
+      if (!pod?.metadata?.annotations?.['openshiftgames.io/logs']) continue;
+      this._clearPodLogAnnotations(pod);
+      this._commit(pod);
     }
     return { applied: !!sa || removed.length > 0, kind: 'rbac', restoredBindings: removed.length };
   }
@@ -5144,12 +5602,48 @@ class IncidentEngine {
       case 'CreateContainerConfigError':
       case 'ConfigMapMissing':
       case 'SecretMissing':
-      case 'PendingScheduling':
       case 'ReadinessProbeFailure':
       case 'LivenessProbeFailure':
       case 'PodStuckTerminating': {
         const pods =
           incident.name === 'PodStuckTerminating' ? [target] : this._workloadPods(target);
+        if (pods.length === 0) return podHealthy(target);
+        return pods.every(podHealthy);
+      }
+      case 'PendingScheduling': {
+        // #73: the damage is a bad pod-template selector, so the incident is
+        // healed when the workload's rollout is healthy again — the template
+        // was repaired (`oc rollout undo` / patch / edit) or a Node now carries
+        // the required label. A never-scheduled Pending Pod is the live symptom
+        // and keeps the incident open; deleting it does not help because the
+        // controller recreates it from the still-broken template.
+        if (!target) return false;
+        if (
+          target.kind === 'Deployment' ||
+          target.kind === 'ReplicaSet' ||
+          target.kind === 'StatefulSet' ||
+          target.kind === 'DaemonSet'
+        ) {
+          const pods = this._workloadPods(target);
+          if (pods.length === 0) {
+            // No Pod can be Pending (e.g. a paused or zero-replica workload):
+            // the incident is healed when the template no longer carries the
+            // bad selector, i.e. the learner repaired the real fault (#73).
+            const selector = target.spec?.template?.spec?.nodeSelector || {};
+            return Object.entries(PENDING_SCHEDULING_NODE_SELECTOR).some(
+              ([key, value]) => selector[key] !== value
+            );
+          }
+          const unschedulable = pods.some(
+            (pod) =>
+              pod.status?.phase === 'Pending' &&
+              !pod.spec?.nodeName &&
+              !pod.metadata?.deletionTimestamp
+          );
+          if (unschedulable) return false;
+          return pods.every(podHealthy);
+        }
+        const pods = this._workloadPods(target);
         if (pods.length === 0) return podHealthy(target);
         return pods.every(podHealthy);
       }

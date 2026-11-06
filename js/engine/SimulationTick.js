@@ -67,6 +67,51 @@ const CSV_INSTALL_SECONDS = 5;
 const FAILED_CREATE_EVENT_SECONDS = 10;
 /** How long a container keeps retrying before the state reports ImagePullBackOff. */
 const IMAGE_PULL_RETRY_SECONDS = 2;
+/**
+ * In-cluster hostnames of the Kubernetes API server (issue #76 L16): a Pod's
+ * service-account token is addressed to `https://kubernetes.default.svc`, which
+ * resolves to the `default/kubernetes` Service ClusterIP (172.30.0.1) on OCP.
+ */
+const CLUSTER_API_HOSTS = new Set([
+  'kubernetes.default.svc',
+  'kubernetes.default.svc.cluster.local',
+  'kubernetes.default',
+  'kubernetes',
+  '172.30.0.1',
+  'api.cluster.example.com',
+  'api-int.cluster.example.com',
+]);
+
+/** Core/v1 resources the in-cluster API REST model can list/get (issue #76 L16). */
+const API_EXEC_RESOURCE_KINDS = {
+  pods: 'Pod',
+  services: 'Service',
+  configmaps: 'ConfigMap',
+  secrets: 'Secret',
+  serviceaccounts: 'ServiceAccount',
+  events: 'Event',
+  persistentvolumeclaims: 'PersistentVolumeClaim',
+};
+
+/**
+ * Kubelet CrashLoopBackOff schedule: the container restarts 10s after the first
+ * crash, then 20s, 40s … capped at 5 minutes (k8s v1.35 kubelet backoff).
+ */
+const CRASH_BACKOFF_BASE_SECONDS = 10;
+const CRASH_BACKOFF_MAX_SECONDS = 300;
+/**
+ * `APP_MODE` values the simulated demo application accepts. The game's demo app
+ * validates its config at startup, so any other static value makes the
+ * container exit 1 on the FIRST start (issues #75 L3 / #76 crashloop timing).
+ */
+const APP_MODE_ALLOWED_VALUES = new Set(['production', 'prod', 'development', 'dev']);
+/** Crash output the demo app writes for an invalid APP_MODE (matches #42-3). */
+const INVALID_APP_MODE_LOG_LINES = [
+  'Starting application...',
+  'FATAL: configuration validation failed (exit code 1)',
+  'Error: configuration validation failed: APP_MODE has an unsupported value',
+  'Process exited with status 1',
+];
 
 /**
  * Software catalog advertised by the simulated openshift-marketplace
@@ -75,11 +120,12 @@ const IMAGE_PULL_RETRY_SECONDS = 2;
  */
 const OLM_CATALOG = [
   {
-    // redhat-operators package name on OCP 4.x is `metallb-operator` (the CSV
-    // inside it is still metallb-operator.v0.14.9) — issue #18.
+    // The redhat-operators package on OCP 4.x is `metallb-operator`; its bundle
+    // follows the OCP minor (`metallb-operator.v4.22.x-<build>`), never the
+    // upstream `v0.14.9` release — issues #18/#76.
     name: 'metallb-operator',
     displayName: 'MetalLB Operator',
-    currentCSV: 'metallb-operator.v0.14.9',
+    currentCSV: 'metallb-operator.v4.22.0-202610281200',
     channel: 'stable',
     provider: 'Red Hat',
     description:
@@ -131,6 +177,13 @@ const OLM_CATALOG = [
 ];
 
 const OAUTH_ROLLOUT_SECONDS = 5;
+/**
+ * openshift-apiserver config-rollout duration after a
+ * `project.config.openshift.io/cluster` `spec.projectRequestTemplate` change
+ * (issue #76). `oc new-project` keeps using the PREVIOUS apiserver revision
+ * during this window; the new template becomes active afterwards.
+ */
+const PROJECT_TEMPLATE_ROLLOUT_SECONDS = 8;
 const PROJECT_TERMINATION_SECONDS = 2;
 /** Real nodes reserve kube/system resources, so allocatable < capacity. */
 const RESERVED_CPU_MILLICORES = 250;
@@ -271,6 +324,20 @@ function csvVersion(csvName) {
   return match ? match[1] : '1.0.0';
 }
 
+/**
+ * Decode a base64url JWT segment to text (used to read the service-account
+ * identity out of a Pod's projected token — issue #76 L16).
+ * @param {string} value
+ * @returns {string}
+ */
+function decodeBase64UrlText(value) {
+  const base64 = String(value || '')
+    .replace(/-/g, '+')
+    .replace(/_/g, '/');
+  const padded = base64 + '='.repeat((4 - (base64.length % 4)) % 4);
+  return atob(padded);
+}
+
 /** Parse an absolute/relative HTTP URL (the workstation curl front end). */
 function parseHttpUrl(rawUrl) {
   try {
@@ -369,6 +436,30 @@ export class SimulationTick {
       // {@link _noteOAuthConfigChange} filters those no-op re-seeds out.
       eventBus.on('cluster:added:OAuth', () => this._noteOAuthConfigChange());
       eventBus.on('cluster:modified:OAuth', () => this._noteOAuthConfigChange());
+
+      // project.config.openshift.io/cluster: changing
+      // `spec.projectRequestTemplate` makes the config observer start an
+      // openshift-apiserver rollout IMMEDIATELY (the ClusterOperator flips to
+      // Progressing=True before the next controller tick), then the tick
+      // controller tracks the rollout window (issue #76).
+      eventBus.on('cluster:modified:ProjectConfig', () => this._noteProjectTemplateConfigChange());
+      // ClusterState.clear() (mode/level start) re-seeds a fresh project config
+      // singleton: re-baseline the controller on the new object and drop any
+      // pending rollout (issue #76 — a stale baseline made templating instant).
+      eventBus.on('cluster:reset', () => {
+        const baseline = String(
+          this.cluster.getProjectConfig?.()?.spec?.projectRequestTemplate?.name || ''
+        );
+        this._projectTemplateSignature = baseline;
+        this._projectTemplateRollout = null;
+        this.cluster.setActiveProjectRequestTemplate?.(baseline);
+        this.cluster.setClusterOperatorState?.('openshift-apiserver', {
+          available: true,
+          progressing: false,
+          degraded: false,
+          message: 'All is well',
+        });
+      });
       for (const eventName of ['cluster:added:Secret', 'cluster:modified:Secret']) {
         eventBus.on(eventName, (data) => {
           const resource = data?.resource;
@@ -454,6 +545,17 @@ export class SimulationTick {
      * Secret DATA change differs from this signature and triggers a rollout.
      */
     this._oauthConfigSignature = this._oauthSignature();
+    /**
+     * `spec.projectRequestTemplate` value the running openshift-apiserver
+     * revision already serves. Null until the first tick adopts the startup
+     * value as the settled baseline (issue #76).
+     */
+    this._projectTemplateSignature = String(
+      this.cluster.getProjectConfig?.()?.spec?.projectRequestTemplate?.name || ''
+    );
+    this.cluster.setActiveProjectRequestTemplate?.(this._projectTemplateSignature);
+    /** Pending openshift-apiserver config rollout: `{target, remaining}`. */
+    this._projectTemplateRollout = null;
   }
 
   // ── Tick pipeline ───────────────────────────────────────────────────────
@@ -506,6 +608,7 @@ export class SimulationTick {
     this._tickOperatorEffects(dt);
     if (this.tickCount % 5 === 0) this.cluster.recalculateQuotaStatus(true);
     if (this.tickCount % 20 === 0) this._tickClusterHealth(dt);
+    this._tickProjectTemplateRollout(dt);
     this._tickOAuth(dt);
 
     this._recordMetrics();
@@ -588,14 +691,21 @@ export class SimulationTick {
         // NetworkUnavailable is managed by the network plugin (control plane),
         // not by the kubelet, so it keeps reporting the healthy OVN-K value.
         for (const conditionType of ['Ready', 'MemoryPressure', 'DiskPressure', 'PIDPressure']) {
-          node.setCondition(
+          // Do not re-write an already-latched Unknown condition: the kubelet
+          // stopped posting, so LastHeartbeatTime must FREEZE at the last post
+          // while LastTransitionTime marks the change (issue #76). Re-asserting
+          // an identical condition every tick would keep advancing the
+          // heartbeat — the exact bug the real node lifecycle controller avoids.
+          this._setNodeConditionIfChanged(
+            node,
             conditionType,
             'Unknown',
             'NodeStatusUnknown',
             'Kubelet stopped posting node status.'
           );
         }
-        node.setCondition(
+        this._setNodeConditionIfChanged(
+          node,
           'NetworkUnavailable',
           'False',
           'RouteCreated',
@@ -659,6 +769,32 @@ export class SimulationTick {
     if (!changed) return false;
     node.spec.taints = next;
     this.cluster.update(node.uid, node);
+    return true;
+  }
+
+  /**
+   * Set a Node condition only when its status/reason/message actually changes.
+   * Used for kubelet-posted conditions while the kubelet is unreachable: the
+   * controller must not refresh `lastHeartbeatTime` for a frozen post (issue
+   * #76 — heartbeat freezes, LastTransitionTime marks the change).
+   * @param {object} node
+   * @param {string} type
+   * @param {string} status
+   * @param {string} reason
+   * @param {string} message
+   * @returns {boolean} whether the condition was written
+   */
+  _setNodeConditionIfChanged(node, type, status, reason, message) {
+    const existing = typeof node.getCondition === 'function' ? node.getCondition(type) : null;
+    if (
+      existing &&
+      existing.status === status &&
+      existing.reason === reason &&
+      (existing.message || '') === (message || '')
+    ) {
+      return false;
+    }
+    node.setCondition(type, status, reason, message || '');
     return true;
   }
 
@@ -1584,6 +1720,20 @@ export class SimulationTick {
     if (!image) return { ok: false, image, message: 'invalid reference format: image is required' };
     const internal = this._parseInternalImageReference(image);
     if (internal) {
+      // A digest-qualified pull spec (`…/ns/stream@sha256:…`) is not an
+      // ImageStreamTag: the kubelet asks the registry for that exact digest.
+      // It is pullable iff the ImageStream's tag history still references it
+      // (issue #70 — a fresh S2I build's Deployment points at its output digest).
+      if (internal.digest) {
+        if (this._imageStreamHasDigest(internal.namespace, internal.name, internal.digest)) {
+          return { ok: true, image };
+        }
+        return {
+          ok: false,
+          image,
+          message: `reading manifest ${internal.digest} in repository ${internal.namespace}/${internal.name}: manifest unknown`,
+        };
+      }
       const resolved = this.cluster.resolveImageStreamTag(
         internal.namespace,
         internal.name,
@@ -1617,8 +1767,10 @@ export class SimulationTick {
 
   /**
    * Parse an internal-registry pull spec
-   * (`image-registry.openshift-image-registry.svc:5000/ns/stream:tag`).
-   * @returns {{namespace: string, name: string, tag: string}|null}
+   * (`image-registry.openshift-image-registry.svc:5000/ns/stream:tag` or
+   * `…/ns/stream@sha256:<hex>`). A digest reference is NOT a tag: the caller
+   * must resolve it against the ImageStream tag history (issue #70).
+   * @returns {{namespace: string, name: string, tag: string, digest: string}|null}
    */
   _parseInternalImageReference(image) {
     const hosts = [
@@ -1646,9 +1798,36 @@ export class SimulationTick {
         streamName = name.slice(0, colonIndex);
         tag = name.slice(colonIndex + 1);
       }
-      return { namespace, name: streamName, tag };
+      return { namespace, name: streamName, tag, digest };
     }
     return null;
+  }
+
+  /**
+   * Does the ImageStream tag history still reference `digest`? The internal
+   * registry keeps every pushed image; a digest pull spec resolves iff one of
+   * the tag history items carries that digest (issue #70).
+   * @param {string} namespace
+   * @param {string} name
+   * @param {string} digest `sha256:<hex>`
+   * @returns {boolean}
+   */
+  _imageStreamHasDigest(namespace, name, digest) {
+    const wanted = String(digest || '')
+      .trim()
+      .toLowerCase();
+    if (!wanted) return false;
+    const imageStream = this.cluster.getImageStream(namespace, name);
+    if (!imageStream) return false;
+    return (imageStream.status?.tags || []).some((entry) =>
+      (entry.items || []).some((item) => {
+        const image = String(item?.image || '')
+          .trim()
+          .toLowerCase();
+        const reference = String(item?.dockerImageReference || '');
+        return image === wanted || reference.includes(`@${digest}`);
+      })
+    );
   }
 
   _trackRescheduledPod(pod) {
@@ -1721,11 +1900,13 @@ export class SimulationTick {
     if (!node.isConditionTrue('Ready')) return 'node(s) were not ready';
     if (node.spec.unschedulable === true || node.isCordon) return 'node(s) were unschedulable';
     if (!node.matchesSelector(pod.spec.nodeSelector || {}))
-      return "node(s) didn't match Pod's node selector";
+      // k8s v1.35 node_affinity.go uses this single term for BOTH a
+      // nodeSelector and a required node-affinity mismatch (#73/#76).
+      return "node(s) didn't match Pod's node affinity/selector";
     const requiredAffinity =
       pod.spec.affinity?.nodeAffinity?.requiredDuringSchedulingIgnoredDuringExecution;
     if (requiredAffinity && !this._nodeMatchesRequiredAffinity(node, requiredAffinity))
-      return "node(s) didn't match Pod's node affinity";
+      return "node(s) didn't match Pod's node affinity/selector";
     const taint = this._firstUntoleratedNoScheduleTaint(pod, node);
     if (taint) return `node(s) had untolerated taint {${taint.key}: ${taint.value ?? ''}}`;
     const available = this._nodeAvailableForScheduling(node);
@@ -1973,18 +2154,42 @@ export class SimulationTick {
   }
 
   /**
-   * Model the kubelet-side crash of a known root image admitted under a non-root
-   * SCC: the container terminates (exit 1, Permission denied), the Pod keeps its
-   * Running phase with a CrashLoopBackOff container state, the restart count
-   * grows on every kubelet retry and the crash output is available to
-   * `oc logs` / `oc logs --previous` (issue #25).
+   * The simulated demo application validates `APP_MODE` at startup: an
+   * unsupported static value (`debug-invalid`) makes the container exit 1 on its
+   * FIRST start — it never "runs fine and crashes later" when the incident
+   * fires (issues #75 L3 / #76). Returns the crash persona or null.
+   * @param {object} container
+   * @returns {{exitCode: number, lastStateReason: string, logLines: string[]}|null}
    */
-  _crashKnownRootImageContainer(pod, status, failure) {
+  _knownEnvRuntimeFailure(container) {
+    for (const entry of container?.env || []) {
+      if (entry?.name !== 'APP_MODE' || entry.valueFrom) continue;
+      const value = String(entry.value ?? '').trim();
+      if (APP_MODE_ALLOWED_VALUES.has(value)) return null;
+      return { exitCode: 1, lastStateReason: 'Error', logLines: INVALID_APP_MODE_LOG_LINES };
+    }
+    return null;
+  }
+
+  /**
+   * Model a kubelet-side container crash: the process exits non-zero, the Pod
+   * keeps its Running phase with a CrashLoopBackOff container state, the kubelet
+   * restarts it on its real 10s/20s/40s… back-off and the crash output is
+   * available to `oc logs` / `oc logs --previous` (issues #25/#75/#76).
+   *
+   * `restartCount` tracks COMPLETED restarts (k8s semantics): right after the
+   * first crash the CLI shows RESTARTS 0 / CrashLoopBackOff and the first
+   * restart happens 10s later, so "RESTARTS 2 at AGE 5s" is impossible.
+   * @param {object} pod
+   * @param {object} status container status
+   * @param {{exitCode?: number, lastStateReason?: string, logLines?: string[]}} failure
+   * @returns {object}
+   */
+  _crashContainerWithFailure(pod, status, failure) {
     // The container will be restarted by the CrashLoopBackOff loop: clear the
     // kubelet probe window so initial delays/thresholds apply to the new start.
     this._resetProbeState(status);
     const now = new Date().toISOString();
-    status.restartCount = (status.restartCount || 0) + 1;
     status.ready = false;
     status.started = false;
     status.lastState = {
@@ -1995,7 +2200,6 @@ export class SimulationTick {
         finishedAt: now,
       },
     };
-    status.state = { waiting: { reason: 'CrashLoopBackOff' } };
     const lines = Array.isArray(failure.logLines) ? failure.logLines : [];
     if (lines.length > 0) {
       // The CLI renders these annotations for `oc logs`/`oc logs --previous`
@@ -2004,18 +2208,110 @@ export class SimulationTick {
       pod.setAnnotation('openshiftgames.io/logs-previous', JSON.stringify(lines));
       pod.setAnnotation('openshiftgames.io/logs-container', status.name);
     }
-    // Real kubelet BackOff events are aggregated; throttle duplicates the same
-    // way the FailedCreate recorder does.
-    const previousEventAt = pod._knownImageCrashEventAt;
-    if (typeof previousEventAt !== 'number' || this.gameSeconds - previousEventAt >= 10) {
-      pod._knownImageCrashEventAt = this.gameSeconds;
+    const restartPolicy = pod.spec.restartPolicy || 'Always';
+    if (restartPolicy === 'Never') {
+      // Job/batch Pods never restart: the container stays Terminated and the
+      // Pod becomes Failed (SIM-011).
+      status.state = {
+        terminated: {
+          exitCode: failure.exitCode ?? 1,
+          reason: failure.lastStateReason || 'Error',
+          finishedAt: now,
+        },
+      };
+      pod.status.phase = 'Failed';
+      pod.setCondition('ContainersReady', 'False', 'ContainersNotReady', 'container failed');
+      pod.setCondition('Ready', 'False', 'ContainersNotReady', 'container failed');
       pod.recordEvent(
         'Warning',
-        'BackOff',
-        `Back-off restarting failed container ${status.name} in pod ${pod.metadata.name}_${pod.metadata.namespace || 'default'}`
+        'Failed',
+        `Container ${status.name} failed with restartPolicy: Never`
       );
+      this.cluster.update(pod.uid, pod);
+      return status;
     }
+    status.state = { waiting: { reason: 'CrashLoopBackOff' } };
+    status._lastCrashAtGameSeconds = this.gameSeconds;
+    status._nextRestartAt =
+      this.gameSeconds + this._crashBackoffDelaySeconds(status.restartCount || 0);
+    // Real kubelet BackOff events are aggregated by the events recorder into the
+    // familiar `(x3 over 50s)` series.
+    pod.recordEvent(
+      'Warning',
+      'BackOff',
+      `Back-off restarting failed container ${status.name} in pod ${pod.metadata.name}_${pod.metadata.namespace || 'default'}`
+    );
     this.cluster.update(pod.uid, pod);
+    return status;
+  }
+
+  /** Kubelet delay before restart attempt number `restartCount + 1`. */
+  _crashBackoffDelaySeconds(restartCount) {
+    const exponent = Math.max(0, Number(restartCount) || 0);
+    return Math.min(CRASH_BACKOFF_MAX_SECONDS, CRASH_BACKOFF_BASE_SECONDS * 2 ** exponent);
+  }
+
+  /**
+   * Pod age (game seconds) at which the NEXT restart attempt happens for a
+   * container that has already completed `restartCount` restarts: the kubelet
+   * waits 10 s, then 20 s, 40 s … after each crash.
+   */
+  _nextRestartAgeSeconds(restartCount) {
+    let total = 0;
+    for (let index = 0; index <= restartCount; index += 1) {
+      total += this._crashBackoffDelaySeconds(index);
+    }
+    return total;
+  }
+
+  /** How many restarts the kubelet could physically have made in `ageSeconds`. */
+  _maxKubeletRestartsForAge(ageSeconds) {
+    let count = 0;
+    let total = 0;
+    while (count < 64) {
+      const delay = this._crashBackoffDelaySeconds(count);
+      if (total + delay > ageSeconds) break;
+      total += delay;
+      count += 1;
+    }
+    return count;
+  }
+
+  /** When a Pod was created in game seconds (controllers stamp this on create). */
+  _podCreatedAtGameSeconds(pod) {
+    if (typeof pod?._createdAtGameSeconds === 'number') return pod._createdAtGameSeconds;
+    // Seeded/legacy Pods exist from the moment the level starts (game time 0).
+    return 0;
+  }
+
+  /** Pod age in game seconds (the timeline every controller timer uses). */
+  _podAgeSeconds(pod) {
+    return Math.max(0, this.gameSeconds - this._podCreatedAtGameSeconds(pod));
+  }
+
+  /**
+   * Enforce physical consistency for a CrashLooping container (issue #76):
+   * RESTARTS can never exceed the kubelet back-off schedule possible within the
+   * Pod's AGE. Damaged/seeded Pods that claim impossible counts (e.g. RESTARTS 2
+   * at AGE 5s) are clamped, and the next restart attempt is pinned to the real
+   * schedule timestamp.
+   * @param {object} pod
+   * @param {object} status container status in waiting/CrashLoopBackOff
+   */
+  _reconcileCrashLoopState(pod, status) {
+    const age = this._podAgeSeconds(pod);
+    const maxRestarts = this._maxKubeletRestartsForAge(age);
+    if ((status.restartCount || 0) > maxRestarts) status.restartCount = maxRestarts;
+    if (typeof status._nextRestartAt !== 'number') {
+      const scheduledAt =
+        this._podCreatedAtGameSeconds(pod) + this._nextRestartAgeSeconds(status.restartCount || 0);
+      // Overdue attempts happen on the next tick; future ones at their real time.
+      status._nextRestartAt = Math.max(this.gameSeconds, scheduledAt);
+    }
+    status._nextRestartAt = Math.max(
+      status._nextRestartAt,
+      this.gameSeconds // never schedule a restart in the past
+    );
   }
 
   _tickPodLifecycle(dt) {
@@ -2031,16 +2327,19 @@ export class SimulationTick {
       for (let index = 0; index < pod.status.containerStatuses.length; index++) {
         const status = pod.status.containerStatuses[index];
         const container = containers[index] || {};
-        // Known root images admitted by a non-root SCC crash as soon as the
-        // container starts (issue #25): nginx is admitted under restricted-v2
-        // and immediately exits with Permission denied. The retry loop is the
-        // normal CrashLoopBackOff one; only actual start attempts crash.
-        const runtimeFailure = this._knownImageRuntimeFailure(pod, container);
+        // Container-level startup failures crash as soon as the container
+        // starts (the real kubelet never "runs fine then breaks later"):
+        //  - a static invalid APP_MODE makes the demo app exit 1 on first start
+        //    (#75 L3), and
+        //  - known root images admitted by a non-root SCC exit with Permission
+        //    denied (issue #25).
+        const runtimeFailure =
+          this._knownEnvRuntimeFailure(container) || this._knownImageRuntimeFailure(pod, container);
         if (
           runtimeFailure &&
           (status.state.running || status.state.waiting?.reason === 'ContainerCreating')
         ) {
-          this._crashKnownRootImageContainer(pod, status, runtimeFailure);
+          this._crashContainerWithFailure(pod, status, runtimeFailure);
           allReady = false;
           continue;
         }
@@ -2051,11 +2350,16 @@ export class SimulationTick {
             status.ready = false;
             pod.recordEvent('Normal', 'Started', `Started container ${status.name}`);
           } else if (status.state.waiting.reason === 'CrashLoopBackOff') {
-            const backoffTime = Math.max(1, Math.min(300, Math.pow(2, status.restartCount) * 10));
-            if (Math.random() < dt / backoffTime) {
+            this._reconcileCrashLoopState(pod, status);
+            if (this.gameSeconds >= status._nextRestartAt) {
+              // The kubelet's back-off expired: this is a COMPLETED restart, so
+              // RESTARTS increments now (never at crash time).
+              status.restartCount = (status.restartCount || 0) + 1;
               status.state = { running: { startedAt: new Date().toISOString() } };
               status.started = true;
               status.ready = false;
+              delete status._nextRestartAt;
+              pod.recordEvent('Normal', 'Started', `Started container ${status.name}`);
             }
             allReady = false;
             continue;
@@ -2122,10 +2426,9 @@ export class SimulationTick {
     // startup probe must succeed again (issue #67).
     this._resetProbeState(status);
     const now = new Date().toISOString();
-    status.restartCount = (status.restartCount || 0) + 1;
     status.ready = false;
     status.started = false;
-    status.lastState = { terminated: { exitCode, reason, finishedAt: now } };
+    status.lastState = { terminated: { exitCode, reason, startedAt: now, finishedAt: now } };
     const restartPolicy = pod.spec.restartPolicy || 'Always';
     if (restartPolicy === 'Never') {
       status.state = { terminated: { exitCode, reason, finishedAt: now } };
@@ -2149,6 +2452,9 @@ export class SimulationTick {
       );
     } else {
       status.state = { waiting: { reason: 'CrashLoopBackOff' } };
+      status._lastCrashAtGameSeconds = this.gameSeconds;
+      status._nextRestartAt =
+        this.gameSeconds + this._crashBackoffDelaySeconds(status.restartCount || 0);
       pod.recordEvent('Warning', 'BackOff', `Back-off restarting failed container ${status.name}`);
     }
     return status;
@@ -4089,7 +4395,9 @@ export class SimulationTick {
           finishJob(
             'Failed',
             'DeadlineExceeded',
-            `Job was active longer than specified deadline (${activeDeadlineSeconds}s)`
+            // The 1.35 job controller message is exactly this sentence; it does
+            // NOT append the deadline value (issue #75 L19).
+            'Job was active longer than specified deadline'
           );
           continue;
         }
@@ -4135,10 +4443,10 @@ export class SimulationTick {
         };
         this.cluster.updateMetadata(pod.uid, { labels: pod.metadata.labels });
         const container = job.spec?.template?.spec?.containers?.[0] || {};
-        const duration =
-          Math.max(1, Number(job.spec.estimatedDurationSeconds) || 30) *
-          (0.8 + Math.random() * 0.4);
-        pod._completionAtGameSeconds = this.gameSeconds + duration;
+        // Real kubelet: the container starts and exits as soon as the command
+        // finishes — `busybox sh -c "echo migrated"` takes ~1 s, not the old
+        // artificial 25 s (issue #75 L19/lab 12).
+        pod._completionAtGameSeconds = this.gameSeconds + this._estimateJobPodDuration(job);
         pod._jobUid = job.uid;
         pod._jobLogLines = this._jobContainerOutput(container);
         this._applyJobPodOutput(job, pod);
@@ -4232,6 +4540,38 @@ export class SimulationTick {
     // `date` / `date +<format>` prints an RFC-ish timestamp.
     if (/\bdate\b/.test(joined) && !lines.length) lines.push(new Date().toISOString());
     return lines.slice(0, 10);
+  }
+
+  /**
+   * Game-seconds a Job Pod's container runs before it exits 0.
+   *
+   * A real kubelet starts the container and it exits as soon as its command
+   * finishes: `busybox sh -c "echo migrated"` / `perl -e "print 42"` are
+   * ~2 s Jobs, not 25-30 s ones (issue #75). Authored long tasks keep their
+   * `spec.estimatedDurationSeconds`; the value is deterministic per Job name so
+   * `oc get job -w` is testable.
+   *
+   * @param {object} job
+   * @returns {number}
+   */
+  _estimateJobPodDuration(job) {
+    const explicit = Number(job?.spec?.estimatedDurationSeconds);
+    if (Number.isFinite(explicit) && explicit > 0) {
+      const jitter = (this._hashString(`${job.metadata?.name || 'job'}:duration`) % 401) / 1000;
+      return Math.max(1, explicit) * (0.8 + jitter);
+    }
+    const container = job?.spec?.template?.spec?.containers?.[0] || {};
+    const script = [...(container.command || []), ...(container.args || [])].map(String).join(' ');
+    // A `sleep N` (possibly inside `sh -c "…"`) dominates the process lifetime.
+    const sleepMatch = script.match(/\bsleep\s+(\d+(?:\.\d+)?)/);
+    if (sleepMatch) return Number(sleepMatch[1]) + 1;
+    // `perl -Mbignum=bpi … print bpi(2000)` really computes for several seconds.
+    if (/\bprint\s+bpi\(/.test(script)) return 6;
+    // Trivial commands (echo/print/date/true/printf/cat) or no command at all
+    // (the image's default CMD, e.g. the `busybox` shell) exit immediately.
+    if (!script.trim() || /\b(echo|print|date|true|printf|cat)\b/.test(script)) return 2;
+    // Unknown workload: keep the historical default of a 30 s task.
+    return 30;
   }
 
   /**
@@ -6006,7 +6346,12 @@ export class SimulationTick {
         ],
       };
       this._persistService(service);
-      service.recordEvent('Normal', 'EnsuredLoadBalancer', `Assigned external IP ${address}`);
+      // Canonical MetalLB controller event on the Service (issue #76): the
+      // speaker/controller reports `Assigned IP ["<ip>"]`, never the
+      // cloud-provider `Assigned external IP …` event. This is the SINGLE
+      // emission path for a LoadBalancer IP — resources/incidents must not add
+      // a second event.
+      service.recordEvent('Normal', 'IPAllocated', `Assigned IP ["${address}"]`);
       this.eventBus?.emit('service:external-ip', {
         service: service.metadata.name,
         namespace: service.metadata.namespace,
@@ -6365,7 +6710,14 @@ export class SimulationTick {
     if (output.kind === 'ImageStreamTag' && output.name) {
       const [imageStreamName, tag = 'latest'] = String(output.name).split(':');
       const namespace = output.namespace || build.metadata.namespace;
-      const result = this.cluster.updateImageStreamTag(namespace, imageStreamName, tag, {});
+      // Every successful build pushes a NEW image digest: the tag history item
+      // carries a digest derived from this build, exactly like a registry push
+      // (two builds of the same tag are different images — issue #70).
+      const result = this.cluster.updateImageStreamTag(namespace, imageStreamName, tag, {
+        image: `sha256:${this.cluster._fakeDigest(
+          `${build.metadata.name}:${imageStreamName}:${tag}`
+        )}`,
+      });
       build.status.output = {
         to: { kind: 'ImageStreamTag', name: `${imageStreamName}:${tag}` },
         imageDigest: result.tagEntry?.items?.[0]?.image || '',
@@ -7117,7 +7469,7 @@ export class SimulationTick {
 
       const podSpec = pod.spec || {};
       const container = podSpec.containers?.[0] || {};
-      const message = 'unable to validate against any security context constraint';
+      const message = this._sccAdmissionFailure(podSpec, pod.metadata.namespace, resolution);
       pod.setAnnotation('openshiftgames/scc-denied', 'true');
       pod.setAnnotation(
         'openshiftgames/denied-reason',
@@ -7176,7 +7528,7 @@ export class SimulationTick {
     if (resolution.candidates && resolution.candidates.length > 0) {
       return {
         ...resolution,
-        message: 'unable to validate against any security context constraint',
+        message: this._sccAdmissionFailure(podSpec, namespace, resolution),
       };
     }
 
@@ -7196,14 +7548,119 @@ export class SimulationTick {
       return {
         ...resolution,
         allowed: false,
-        message: 'unable to validate against any security context constraint',
+        message: this._sccAdmissionFailure(podSpec, namespace, resolution),
       };
     }
     const restricted = this.cluster.getSCC('restricted-v2') || this.cluster.getSCCs()[0] || null;
     if (restricted && this.cluster.sccAllowsPod(restricted, podSpec || {})) {
       return { allowed: true, scc: restricted, candidates: [restricted] };
     }
-    return { ...resolution, message: 'unable to validate against any security context constraint' };
+    return {
+      ...resolution,
+      message: this._sccAdmissionFailure(podSpec, namespace, resolution),
+    };
+  }
+
+  /**
+   * Real 4.22 SCC admission failure detail (issue #76): the aggregate lists
+   * every SCC the requesting identity cannot use (`provider "<name>": Forbidden:
+   * not usable by user or serviceaccount`) followed by the per-field validation
+   * reasons of the SCC(s) it CAN use, e.g.
+   *
+   *   unable to validate against any security context constraint: [provider
+   *   "anyuid": Forbidden: not usable by user or serviceaccount,
+   *   spec.containers[0].securityContext.privileged: Invalid value: true:
+   *   Privileged containers are not allowed]
+   *
+   * @param {object} podSpec candidate pod spec
+   * @param {string} namespace
+   * @param {{candidates?: object[]}} [resolution] resolved SCC candidates
+   * @returns {string}
+   */
+  _sccAdmissionFailure(podSpec, namespace, resolution = null) {
+    const prefix = 'unable to validate against any security context constraint';
+    const candidates =
+      resolution?.candidates ||
+      this.cluster.resolveSCCForPod({
+        metadata: { name: 'admission-candidate', namespace },
+        spec: podSpec || {},
+      }).candidates ||
+      [];
+    const usable = new Set(candidates.map((scc) => scc.metadata?.name));
+    const reasons = [];
+    for (const scc of this.cluster.getSCCs()) {
+      const name = scc.metadata?.name || '';
+      if (usable.has(name)) continue;
+      reasons.push(`provider "${name}": Forbidden: not usable by user or serviceaccount`);
+    }
+    const seen = new Set();
+    for (const scc of candidates) {
+      for (const detail of this._sccValidationDetails(scc, podSpec || {})) {
+        if (seen.has(detail)) continue;
+        seen.add(detail);
+        reasons.push(detail);
+      }
+    }
+    return reasons.length > 0 ? `${prefix}: [${reasons.join(', ')}]` : prefix;
+  }
+
+  /**
+   * Per-field reasons an SCC rejects a pod spec (subset of the 4.22 SCC
+   * validation: privileged, host namespaces, host ports, hostPath volumes).
+   * @param {object} scc
+   * @param {object} podSpec
+   * @returns {string[]}
+   */
+  _sccValidationDetails(scc, podSpec) {
+    const spec = scc?.spec || {};
+    const request = podSecurityRequest(podSpec || {});
+    const details = [];
+    const add = (path, value, detail) => {
+      details.push(`${path}: Invalid value: ${value}: ${detail}`);
+    };
+    if (!spec.allowPrivilegedContainer) {
+      (podSpec.containers || []).forEach((container, index) => {
+        if (container?.securityContext?.privileged === true) {
+          add(
+            `spec.containers[${index}].securityContext.privileged`,
+            'true',
+            'Privileged containers are not allowed'
+          );
+        }
+      });
+    }
+    if (!spec.allowHostNetwork && request.hostNetwork) {
+      add('spec.hostNetwork', 'true', 'Host network is not allowed to be used');
+    }
+    if (!spec.allowHostPID && request.hostPID) {
+      add('spec.hostPID', 'true', 'Host PID is not allowed to be used');
+    }
+    if (!spec.allowHostIPC && request.hostIPC) {
+      add('spec.hostIPC', 'true', 'Host IPC is not allowed to be used');
+    }
+    if (!spec.allowHostPorts) {
+      (podSpec.containers || []).forEach((container, index) => {
+        (container?.ports || []).forEach((port, portIndex) => {
+          if (!(Number(port?.hostPort) > 0)) return;
+          add(
+            `spec.containers[${index}].ports[${portIndex}].hostPort`,
+            String(port.hostPort),
+            'Host ports are not allowed to be used'
+          );
+        });
+      });
+    }
+    if (!spec.allowHostDirVolumePlugin) {
+      (podSpec.volumes || []).forEach((volume, index) => {
+        if (!volume?.hostPath) return;
+        add(
+          'spec.volumes[' + index + ']',
+          '"hostPath"',
+          'hostPath volumes are not allowed to be used'
+        );
+      });
+    }
+    return details;
   }
 
   /**
@@ -7275,9 +7732,10 @@ export class SimulationTick {
    *
    * The admission chain mirrors a real cluster (issue #31):
    *   1. basic PodSpec validation,
-   *   2. SCC admission (`restricted-v2` …),
-   *   3. LimitRange: defaults are APPLIED to the Pod spec, then min/max checked,
-   *   4. ResourceQuota: a compute quota with no LimitRange defaults rejects pods
+   *   2. ServiceAccount admission (missing SA => FailedCreate, no Pod, #75),
+   *   3. SCC admission (`restricted-v2` …),
+   *   4. LimitRange: defaults are APPLIED to the Pod spec, then min/max checked,
+   *   5. ResourceQuota: a compute quota with no LimitRange defaults rejects pods
    *      that omit requests ("failed quota: … must specify …"); a hard limit
    *      crossed rejects with the real "exceeded quota: …, requested: …, used:
    *      …, limited: …" wording. The Pod object is NEVER created for a rejected
@@ -7297,6 +7755,22 @@ export class SimulationTick {
       }
       if (!String(container.name || '').trim()) {
         return `is invalid: spec.containers[${index}].name: Required value`;
+      }
+    }
+    // ServiceAccount admission runs before SCC admission: a Pod that references
+    // a ServiceAccount that does not exist is never created (issue #75 lab 8).
+    // The real API-server error is exactly this lookup failure.
+    const serviceAccountName = String(
+      podSpec?.serviceAccountName || podSpec?.serviceAccount || ''
+    ).trim();
+    if (serviceAccountName && serviceAccountName !== 'default') {
+      const serviceAccount = this.cluster.getByName(
+        'ServiceAccount',
+        serviceAccountName,
+        namespace
+      );
+      if (!serviceAccount) {
+        return `is forbidden: error looking up service account ${namespace}/${serviceAccountName}: serviceaccount "${serviceAccountName}" not found`;
       }
     }
     const resolution = this._resolveAdmissionForSpec(podSpec, namespace);
@@ -7618,6 +8092,79 @@ export class SimulationTick {
     }
   }
 
+  /**
+   * Observe a `project.config.openshift.io/cluster` change and start the
+   * openshift-apiserver rollout (issue #76). Called synchronously from the
+   * cluster event bus (so `oc patch`/`oc edit` immediately shows
+   * `Progressing=True` on the ClusterOperator) and from the tick controller as
+   * a safety net.
+   * @param {string} [desired] current `.spec.projectRequestTemplate.name`
+   */
+  _noteProjectTemplateConfigChange(desired = null) {
+    const config = this.cluster.getProjectConfig?.();
+    const target = String(
+      desired === null ? config?.spec?.projectRequestTemplate?.name || '' : desired
+    );
+    if (target === this._projectTemplateSignature) return;
+    this._projectTemplateSignature = target;
+    this._projectTemplateRollout = {
+      target,
+      remaining: PROJECT_TEMPLATE_ROLLOUT_SECONDS,
+    };
+    this.cluster.setClusterOperatorState?.('openshift-apiserver', {
+      available: true,
+      progressing: true,
+      degraded: false,
+      message: 'Observed project.config.openshift.io/cluster change; rolling out new revision',
+    });
+  }
+
+  /**
+   * openshift-apiserver configuration rollout (issue #76).
+   *
+   * Setting `project.config.openshift.io/cluster .spec.projectRequestTemplate`
+   * does NOT take effect instantly on a real cluster: the config observer rolls
+   * out a new openshift-apiserver revision and project requests are templated by
+   * the OLD revision until the new one is available. Modelled deterministically
+   * (game clock, no wall time):
+   *   - the `openshift-apiserver` ClusterOperator reports
+   *     `Progressing=True` with `reason=Working` for
+   *     PROJECT_TEMPLATE_ROLLOUT_SECONDS (8) game seconds,
+   *   - during the window `oc new-project` still applies the PREVIOUS
+   *     project-request Template (none on a fresh cluster),
+   *   - afterwards `Progressing=False/AsExpected` and new projects are templated.
+   * Testable with `advanceSimulation(9)`; verified in browser-test §qa-issue70-76.
+   * @param {number} dt game seconds
+   */
+  _tickProjectTemplateRollout(dt) {
+    const config = this.cluster.getProjectConfig?.();
+    if (!config) return;
+    const desired = String(config.spec?.projectRequestTemplate?.name || '');
+    if (this._projectTemplateSignature === null) {
+      // First observation = settled cluster startup: adopt the seeded value
+      // without a spurious rollout (fresh clusters have no template).
+      this._projectTemplateSignature = desired;
+      this.cluster.setActiveProjectRequestTemplate?.(desired);
+      return;
+    }
+    if (desired !== this._projectTemplateSignature) {
+      this._noteProjectTemplateConfigChange(desired);
+    }
+    if (!this._projectTemplateRollout) return;
+    this._projectTemplateRollout.remaining -= dt;
+    if (this._projectTemplateRollout.remaining > 0) return;
+    const target = this._projectTemplateRollout.target;
+    this._projectTemplateRollout = null;
+    this.cluster.setActiveProjectRequestTemplate?.(target);
+    this.cluster.setClusterOperatorState?.('openshift-apiserver', {
+      available: true,
+      progressing: false,
+      degraded: false,
+      message: 'All is well',
+    });
+    this.eventBus?.emit('projecttemplate:active', { name: target });
+  }
+
   _tickOAuth(dt) {
     if (!this._oauthPending) return;
     this._oauthPending.remaining -= dt;
@@ -7802,6 +8349,8 @@ export class SimulationTick {
       status: { phase: 'Pending' },
     });
     if (!pod) return null;
+    // Timeline origin for kubelet-side timers (RESTARTS vs AGE consistency).
+    pod._createdAtGameSeconds = this.gameSeconds;
     this.cluster.addRelationship(parent.uid, pod.uid);
     // The Pod passed API-server admission (SCC + LimitRange + quota) BEFORE it
     // existed: record that fact so later quota edits never retroactively reject
@@ -8416,6 +8965,11 @@ export class SimulationTick {
         lines: [localDestination.body],
       };
     }
+    // In-cluster Kubernetes API request (`curl https://kubernetes.default.svc/…`
+    // from inside a Pod, issue #76 L16): the API server answers, not the
+    // generic external Hello page.
+    const clusterApi = this._clusterApiExecResponse(source, options);
+    if (clusterApi) return clusterApi;
     const destination = this._resolveTrafficDestination(options.target, { ...options, namespace });
     if (!destination) {
       return {
@@ -8496,6 +9050,342 @@ export class SimulationTick {
       reason: 'allowed',
       policy: null,
       lines: [`<html><body>Hello from ${app} (container ${container})</body></html>`],
+    };
+  }
+
+  /**
+   * Model an in-cluster request to the Kubernetes API server from inside a Pod
+   * (issue #76 L16):
+   *
+   *   oc exec deploy/api -- sh -c 'curl -sk -H "Authorization: Bearer $(cat
+   *     /var/run/secrets/kubernetes.io/serviceaccount/token)" \
+   *     https://kubernetes.default.svc/api/v1/namespaces/sa-lab/pods'
+   *
+   * honours the bearer token's ServiceAccount identity and the cluster RBAC: an
+   * authorised list returns a real `PodList` JSON body (curl exit 0), an
+   * unauthorised one returns the 403 `Status` JSON with the API server's
+   * message (`pods is forbidden: User "system:serviceaccount:<ns>:<sa>" cannot
+   * list resource "pods" in API group "" in the namespace "<ns>"`). A request
+   * without a token is anonymous; a malformed token is 401 Unauthorized.
+   *
+   * @param {object} source source Pod
+   * @param {{target?: string, scheme?: string, port?: number, path?: string,
+   *   headers?: object}} options
+   * @returns {object|null} trafficForExec-shaped response, or null when the
+   *   target is not the in-cluster API server
+   */
+  _clusterApiExecResponse(source, options = {}) {
+    const raw = String(options.target || '')
+      .trim()
+      .toLowerCase();
+    if (!raw) return null;
+    const host = raw
+      .replace(/^[a-z][a-z0-9+.-]*:\/\//, '')
+      .split('/')[0]
+      .split(':')[0];
+    if (!CLUSTER_API_HOSTS.has(host)) return null;
+    const scheme = String(options.scheme || 'https').toLowerCase();
+    const port = options.port === undefined || options.port === null ? 443 : Number(options.port);
+    const requestPath = String(options.path || '/') || '/';
+    if (scheme !== 'https' || port !== 443) {
+      // The API server only listens on 6443 (exposed as 443); a plain-HTTP or
+      // wrong-port request is a connection refusal, like any other Service.
+      return {
+        allowed: false,
+        reason: 'connection-refused',
+        policy: null,
+        lines: [
+          `curl: (7) Failed to connect to ${host} port ${port} after 0 ms: Connection refused`,
+        ],
+      };
+    }
+    const headers = options.headers || {};
+    const headerValue = (name) => {
+      for (const [key, value] of Object.entries(headers)) {
+        if (String(key).toLowerCase() === name) return String(value ?? '');
+      }
+      return '';
+    };
+    let userName = 'system:anonymous';
+    const authHeader = headerValue('authorization');
+    if (authHeader) {
+      const bearer = authHeader.match(/^Bearer\s+(\S+)$/i);
+      const subject = bearer ? this._decodeServiceAccountToken(bearer[1]) : null;
+      if (!subject) {
+        return this._apiStatusExecResponse(401, 'Unauthorized', 'Unauthorized');
+      }
+      userName = subject;
+    }
+
+    // Discovery/health endpoints a Pod may probe with curl.
+    if (requestPath === '/healthz' || requestPath === '/readyz' || requestPath === '/livez') {
+      return {
+        allowed: true,
+        reason: 'in-cluster-api',
+        policy: null,
+        status: 200,
+        headers: { 'content-type': 'text/plain; charset=utf-8' },
+        lines: ['ok'],
+      };
+    }
+    if (requestPath === '/version') {
+      return {
+        allowed: true,
+        reason: 'in-cluster-api',
+        policy: null,
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+        lines: [
+          JSON.stringify({
+            major: '1',
+            minor: '35',
+            gitVersion: 'v1.35.2',
+            gitCommit: '0000000000000000000000000000000000000000',
+            gitTreeState: 'clean',
+            buildDate: '2026-10-20T00:00:00Z',
+            goVersion: 'go1.24.6',
+            compiler: 'gc',
+            platform: 'linux/amd64',
+          }),
+        ],
+      };
+    }
+
+    const parsed = this._parseApiRequestPath(requestPath);
+    if (!parsed) {
+      return this._apiStatusExecResponse(
+        404,
+        'NotFound',
+        'the server could not find the requested resource',
+        {}
+      );
+    }
+    const { namespace, resource, name } = parsed;
+    if (!namespace) {
+      // Only the resources the L16 diagnostic needs are modelled for
+      // cluster-scoped requests.
+      const window = name ? `${resource} "${name}"` : resource;
+      const verb = name ? 'get' : 'list';
+      return this._apiStatusExecResponse(
+        403,
+        'Forbidden',
+        `${window} is forbidden: User "${userName}" cannot ${verb} resource "${resource}" ` +
+          'in API group "" at the cluster scope',
+        { kind: resource, ...(name ? { name } : {}) }
+      );
+    }
+    const verb = name ? 'get' : 'list';
+    const permission = this.cluster.canI(userName, verb, resource, namespace);
+    if (!permission.allowed) {
+      const window = name ? `${resource} "${name}"` : resource;
+      const message =
+        `${window} is forbidden: User "${userName}" cannot ${verb} resource "${resource}" ` +
+        `in API group "" in the namespace "${namespace}"`;
+      return this._apiStatusExecResponse(403, 'Forbidden', message, {
+        kind: resource,
+        ...(name ? { name } : {}),
+      });
+    }
+    if (name) {
+      const object = this._apiObjectByName(resource, name, namespace);
+      if (!object) {
+        return this._apiStatusExecResponse(404, 'NotFound', `${resource} "${name}" not found`, {
+          kind: resource,
+          name,
+        });
+      }
+      return this._apiJsonExecResponse(object);
+    }
+    const list = this._apiListForResource(resource, namespace);
+    if (!list) {
+      return this._apiStatusExecResponse(
+        404,
+        'NotFound',
+        'the server could not find the requested resource',
+        { kind: resource }
+      );
+    }
+    return this._apiJsonExecResponse(list);
+  }
+
+  /** Parse an API request path into `{namespace, resource, name}` (or null). */
+  _parseApiRequestPath(requestPath) {
+    const path = String(requestPath || '').split('?')[0];
+    // Core group, namespaced: /api/v1/namespaces/<ns>/<resource>[/<name>]
+    let match = path.match(/^\/api\/v1\/namespaces\/([^/]+)\/([a-z0-9]+)(?:\/([^/]+))?\/?$/);
+    if (match) {
+      return { namespace: match[1], resource: match[2], name: match[3] || '' };
+    }
+    // Core group, cluster-scoped: /api/v1/<resource>[/<name>]
+    match = path.match(/^\/api\/v1\/([a-z0-9]+)(?:\/([^/]+))?\/?$/);
+    if (match) {
+      return { namespace: '', resource: match[1], name: match[2] || '' };
+    }
+    // Named API group, namespaced: /apis/<group>/<version>/namespaces/<ns>/<resource>[/<name>]
+    match = path.match(/^\/apis\/[^/]+\/[^/]+\/namespaces\/([^/]+)\/([a-z0-9]+)(?:\/([^/]+))?\/?$/);
+    if (match) {
+      return { namespace: match[1], resource: match[2], name: match[3] || '' };
+    }
+    // Named API group, cluster-scoped: /apis/<group>/<version>/<resource>[/<name>]
+    match = path.match(/^\/apis\/[^/]+\/[^/]+\/([a-z0-9]+)(?:\/([^/]+))?\/?$/);
+    if (match) {
+      return { namespace: '', resource: match[1], name: match[2] || '' };
+    }
+    return null;
+  }
+
+  /**
+   * Validate a bound service-account token JWT and return its SA user name, or
+   * null when the token is not a real API-server credential.
+   *
+   * A real API server rejects an invalid/unknown/forged token with 401
+   * Unauthorized (NOT 403): the missing-token path is different — an
+   * unauthenticated request is authenticated as `system:anonymous` and then
+   * denied by RBAC with 403 (issue #76 L16). Validation checks the RS256
+   * header, the bound-token claims every projected token carries
+   * (aud/iss/exp/kubernetes pod+SA identity), a plausible signature segment and
+   * that the ServiceAccount still exists.
+   * @param {string} token
+   * @returns {string|null}
+   */
+  _decodeServiceAccountToken(token) {
+    const parts = String(token || '').split('.');
+    if (parts.length !== 3 || !parts[0] || !parts[1] || !parts[2]) return null;
+    try {
+      const header = JSON.parse(decodeBase64UrlText(parts[0]));
+      if (String(header?.alg || '') !== 'RS256') return null;
+      const payload = JSON.parse(decodeBase64UrlText(parts[1]));
+      const subject = String(payload?.sub || '');
+      const match = subject.match(/^system:serviceaccount:([^:]+):(.+)$/);
+      if (!match) return null;
+      const [, namespace, name] = match;
+      const audience = Array.isArray(payload?.aud) ? payload.aud : [payload?.aud];
+      if (!audience.includes('https://kubernetes.default.svc')) return null;
+      if (payload?.iss !== 'https://kubernetes.default.svc') return null;
+      if (!Number.isFinite(Number(payload?.exp))) return null;
+      const kubernetes = payload?.kubernetes || {};
+      if (String(kubernetes.namespace || '') !== namespace) return null;
+      if (String(kubernetes.serviceaccount?.name || '') !== name) return null;
+      if (!kubernetes.pod?.name) return null;
+      // RS256 signatures are long, base64url and non-empty; a truncated or
+      // fabricated signature is not a credential.
+      if (!/^[A-Za-z0-9_-]{100,}$/.test(String(parts[2]))) return null;
+      // The token must belong to a ServiceAccount that still exists.
+      if (!this.cluster.getByName('ServiceAccount', name, namespace)) return null;
+      return subject;
+    } catch {
+      return null;
+    }
+  }
+
+  /** ShellTools-shaped JSON body response for the in-cluster API model. */
+  _apiJsonExecResponse(object) {
+    return {
+      allowed: true,
+      reason: 'in-cluster-api',
+      policy: null,
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+      lines: [JSON.stringify(object)],
+    };
+  }
+
+  /** ShellTools-shaped API `Status` body (403/404/401 …); curl still exits 0. */
+  _apiStatusExecResponse(code, reason, message, details = {}) {
+    return {
+      allowed: true,
+      reason: 'in-cluster-api',
+      policy: null,
+      status: code,
+      headers: { 'content-type': 'application/json' },
+      lines: [
+        JSON.stringify({
+          kind: 'Status',
+          apiVersion: 'v1',
+          metadata: {},
+          status: 'Failure',
+          message,
+          reason,
+          details,
+          code,
+        }),
+      ],
+    };
+  }
+
+  /** API object for a named resource the simulated API server serves over REST. */
+  _apiObjectByName(resource, name, namespace) {
+    const kind = API_EXEC_RESOURCE_KINDS[resource];
+    if (!kind) return null;
+    const object = this.cluster.getByName(kind, name, namespace);
+    if (!object) return null;
+    return this._apiSerialise(kind, object);
+  }
+
+  /** API list object (`PodList`, `ServiceList`, …) for a namespaced resource. */
+  _apiListForResource(resource, namespace) {
+    const kind = API_EXEC_RESOURCE_KINDS[resource];
+    if (!kind) return null;
+    const items = this.cluster
+      .getByKindAndNamespace(kind, namespace)
+      .slice()
+      .sort((left, right) =>
+        String(left.metadata?.name || '').localeCompare(String(right.metadata?.name || ''))
+      )
+      .map((object) => this._apiSerialise(kind, object));
+    const resourceVersion = items.reduce(
+      (max, item) => Math.max(max, parseInt(item.metadata?.resourceVersion, 10) || 0),
+      0
+    );
+    return {
+      kind: `${kind}List`,
+      apiVersion: 'v1',
+      metadata: { resourceVersion: String(resourceVersion || 1) },
+      items,
+    };
+  }
+
+  /**
+   * Serialise a resource the way the real API server returns it: metadata +
+   * spec + status, no game-only fields. Secrets keep their base64 data.
+   */
+  _apiSerialise(kind, object) {
+    const metadata = {
+      name: object.metadata?.name || '',
+      namespace: object.metadata?.namespace || '',
+      uid: object.uid || object.metadata?.uid || '',
+      resourceVersion: String(object.metadata?.resourceVersion || '1'),
+      creationTimestamp: object.metadata?.creationTimestamp || null,
+      labels: deepClone(object.metadata?.labels || {}),
+    };
+    if (kind === 'Pod') {
+      const containers = (object.spec?.containers || []).map((container) => ({
+        name: container.name || 'main',
+        image: container.image || '',
+        ports: deepClone(container.ports || []),
+        ...(container.env ? { env: deepClone(container.env) } : {}),
+      }));
+      return {
+        metadata,
+        spec: {
+          containers,
+          restartPolicy: object.spec?.restartPolicy || 'Always',
+          serviceAccountName: object.spec?.serviceAccountName || 'default',
+          nodeName: object.spec?.nodeName || '',
+        },
+        status: {
+          phase: object.status?.phase || 'Pending',
+          podIP: object.status?.podIP || undefined,
+          hostIP: object.status?.hostIP || undefined,
+          conditions: deepClone(object.status?.conditions || []),
+          containerStatuses: deepClone(object.status?.containerStatuses || []),
+        },
+      };
+    }
+    return {
+      metadata,
+      spec: deepClone(object.spec || {}),
+      status: deepClone(object.status || {}),
     };
   }
 
@@ -8745,7 +9635,10 @@ export class SimulationTick {
     const image = String(container.image || '');
     const app = pod?.metadata?.labels?.app || options.fallbackApp || pod?.metadata?.name || 'app';
     if (/hello-openshift/.test(image)) {
-      return '<html><body>Hello OpenShift!</body></html>';
+      // The real origin hello-openshift handler is `fmt.Fprintln(w, "Hello
+      // OpenShift!")`: a plain-text body with a trailing newline, never HTML
+      // (issue #76).
+      return 'Hello OpenShift!\n';
     }
     if (/nginx/.test(image)) {
       return (
@@ -8827,6 +9720,32 @@ export class SimulationTick {
       listening,
       body: this._podHttpBody(source, { container: container || undefined }),
     };
+  }
+
+  /**
+   * Does a passthrough Route's backend actually terminate TLS on the routed
+   * port? TLS passthrough is a raw TCP splice: a plain-HTTP backend answers the
+   * ClientHello with HTTP bytes and the client's handshake fails (issue #75
+   * L12). Signals, in order:
+   *   - the Service carries a service-ca serving certificate annotation
+   *     (`service.beta.openshift.io/serving-cert-secret-name`), so it is a real
+   *     TLS endpoint; or
+   *   - an endpoint container exposes a port named `https`/`tls` (e.g. nginx on
+   *     containerPort 8443), the deterministic TLS-capable fixture.
+   * @param {object} service
+   * @param {object[]} [pods] resolved endpoints
+   * @returns {boolean}
+   */
+  _backendServesTls(service, pods = []) {
+    if (this._servingCertificateInfo(service)) return true;
+    for (const pod of pods || []) {
+      for (const container of pod?.spec?.containers || []) {
+        for (const port of container?.ports || []) {
+          if (/^(https|tls)(-|$)/i.test(String(port?.name || ''))) return true;
+        }
+      }
+    }
+    return false;
   }
 
   /**
@@ -8941,18 +9860,10 @@ export class SimulationTick {
         return respond404('passthrough-http');
       }
     } else if (termination === 'passthrough') {
-      // The client talks TLS end-to-end with the backend: it sees the backend
-      // serving certificate (service-ca signed for the Service DNS names).
-      const backendCert = this._servingCertificateInfo(this.cluster.getRouteService(route));
-      serverCert = backendCert
-        ? this._certificateView(backendCert)
-        : this._certificateView(
-            createSelfSignedCertificate({
-              commonName: `${route.spec?.to?.name}.${route.metadata.namespace}.svc`,
-              organization: 'OpenShift Games',
-              issuer: { commonName: 'service-ca', organization: 'OpenShift' },
-            }).info
-          );
+      // TLS passthrough gives the client a raw TCP splice to the backend — if
+      // the backend is not actually a TLS server the handshake fails later.
+      // The certificate is resolved after the backend checks below.
+      serverCert = null;
     } else if (termination === 'edge' || termination === 'reencrypt') {
       const configured = tls?.certificate ? parseCertificatePem(tls.certificate) : null;
       serverCert = configured
@@ -8982,6 +9893,37 @@ export class SimulationTick {
         if (!caInfo || !caInfo.isCA) return respond503('bad-destination-ca');
       }
       if (!this._servingCertificateInfo(service)) return respond503('backend-tls-verify');
+    }
+    if (termination === 'passthrough') {
+      // A passthrough Route to a plain-HTTP backend fails the TLS handshake at
+      // the client: HAProxy just proxies the ClientHello/response bytes, so
+      // curl reports the OpenSSL "wrong version number" TLS error (issue #75
+      // L12). Exact contract rendered by ShellTools: `curl: (35)
+      // error:0A00010B:SSL routines::wrong version number` (exit code 35).
+      if (!this._backendServesTls(service, pods)) {
+        return {
+          error: { code: 35, message: 'error:0A00010B:SSL routines::wrong version number' },
+          scheme,
+          host: routeBase.host,
+          port,
+          path: requestPath,
+          termination,
+          reason: 'backend-not-tls',
+        };
+      }
+      // The client talks TLS end-to-end with the backend: it sees the backend
+      // serving certificate (service-ca signed for the Service DNS names) or a
+      // synthetic certificate for an unannotated TLS fixture.
+      const backendCert = this._servingCertificateInfo(service);
+      serverCert = backendCert
+        ? this._certificateView(backendCert)
+        : this._certificateView(
+            createSelfSignedCertificate({
+              commonName: `${route.spec?.to?.name}.${route.metadata.namespace}.svc`,
+              organization: 'OpenShift Games',
+              issuer: { commonName: 'service-ca', organization: 'OpenShift' },
+            }).info
+          );
     }
     const reach = this.canRouterReach(route);
     if (!reach.allowed) return respond503(reach.reason, reach.policy);

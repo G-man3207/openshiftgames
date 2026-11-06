@@ -3022,6 +3022,10 @@ export class ClusterState {
         generation: 1,
       },
       spec: {},
+      // The apiserver revision serving a freshly cleared/re-seeded cluster is
+      // the one described by the seed spec: treat it as already rolled out so a
+      // mode reset does not start a spurious rollout (issue #76).
+      _activeProjectRequestTemplate: '',
     };
     return this._projectConfig;
   }
@@ -3034,6 +3038,32 @@ export class ClusterState {
    */
   getProjectConfig() {
     return this._projectConfig || null;
+  }
+
+  /**
+   * Project-request Template the openshift-apiserver revision in effect is
+   * using ('' when unset). On a real cluster a change to
+   * `.spec.projectRequestTemplate` only takes effect after the
+   * openshift-apiserver rollout — until then the old revision still templates
+   * project requests (issue #76). SimulationTick owns that rollout window.
+   * @returns {string}
+   */
+  getActiveProjectRequestTemplate() {
+    const active = this._projectConfig?._activeProjectRequestTemplate;
+    if (typeof active === 'string') return active;
+    return String(this._projectConfig?.spec?.projectRequestTemplate?.name || '');
+  }
+
+  /**
+   * Record the project-request Template the current openshift-apiserver
+   * revision serves (called by the SimulationTick rollout controller).
+   * @param {string} name Template name in openshift-config ('' = default)
+   * @returns {string}
+   */
+  setActiveProjectRequestTemplate(name) {
+    if (!this._projectConfig) this._seedProjectConfig();
+    this._projectConfig._activeProjectRequestTemplate = String(name || '');
+    return this._projectConfig._activeProjectRequestTemplate;
   }
 
   /**
@@ -3176,7 +3206,10 @@ export class ClusterState {
       };
     }
     const requester = String(options.requester || 'kubeadmin');
-    const templateName = this.getProjectConfig()?.spec?.projectRequestTemplate?.name || '';
+    // Template the CURRENT openshift-apiserver revision serves, not necessarily
+    // what the config singleton's spec says: the rollout is asynchronous
+    // (issue #76 — see SimulationTick._tickProjectTemplateRollout).
+    const templateName = this.getActiveProjectRequestTemplate();
     let templateProject = null;
     let templateObjects = [];
     if (templateName) {
@@ -3361,19 +3394,23 @@ export class ClusterState {
    */
   createIdentity(providerName, providerUserName, userName) {
     const identityName = `${providerName}:${providerUserName}`;
+    // Real OAuth identities link the User by name AND uid (`spec.user.uid` is
+    // the value `oc get identities` prints in its USER UID column). The uid is
+    // resolved on every login so a re-created User is re-linked (issue #76).
+    const user = this.getUser(userName);
+    const userRef = { name: userName, uid: user?.metadata?.uid || '' };
     let identity = this.getIdentity(identityName);
     if (!identity) {
       identity = this.addResource({
         kind: 'Identity',
         metadata: { name: identityName },
-        spec: { providerName, providerUserName, user: { name: userName } },
+        spec: { providerName, providerUserName, user: userRef },
         status: {},
       });
     } else {
-      identity.spec.user = { name: userName };
+      identity.spec.user = userRef;
       this.update(identity.uid, identity);
     }
-    const user = this.getUser(userName);
     if (user) {
       user.spec.identities = user.spec.identities || [];
       if (
