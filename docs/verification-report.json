@@ -1,19 +1,19 @@
 {
-  "timestamp": "2026-11-05T21:37:07.100Z",
+  "timestamp": "2026-11-06T01:20:22.315Z",
   "environment": {
     "node": "v26.10.0",
     "chrome": "Chrome/156.0.8078.79",
-    "baseUrl": "http://127.0.0.1:36371",
+    "baseUrl": "http://127.0.0.1:39205",
     "viewport": {
       "width": 1600,
       "height": 900
     },
     "puppeteerCore": "/tmp/verify-tools",
-    "startedAt": "2026-11-05T21:15:47.053Z",
-    "durationSeconds": 1280
+    "startedAt": "2026-11-06T00:54:28.291Z",
+    "durationSeconds": 1554
   },
   "summary": {
-    "passes": 2069,
+    "passes": 2219,
     "failures": 0,
     "warnings": 0,
     "consoleErrors": 0,
@@ -107,7 +107,7 @@
       "warnings": 0
     },
     "incidents: CrashLoopBackOff seed/fix contract (L3)": {
-      "passes": 9,
+      "passes": 10,
       "failures": 0,
       "warnings": 0
     },
@@ -117,7 +117,7 @@
       "warnings": 0
     },
     "qa-scenarios": {
-      "passes": 68,
+      "passes": 71,
       "failures": 0,
       "warnings": 0
     },
@@ -241,6 +241,11 @@
       "failures": 0,
       "warnings": 0
     },
+    "qa-issue70-76": {
+      "passes": 146,
+      "failures": 0,
+      "warnings": 0
+    },
     "draw": {
       "passes": 10,
       "failures": 0,
@@ -261,74 +266,74 @@
       "path": "screenshot.png",
       "width": 1600,
       "height": 900,
-      "bytes": 981234
+      "bytes": 982721
     },
     "ogImage": {
       "path": "og-image.png",
       "width": 1200,
       "height": 630,
-      "bytes": 205653
+      "bytes": 205560
     },
     "screenshots": [
       {
         "path": "docs/screenshots/menu.png",
         "width": 1600,
         "height": 900,
-        "bytes": 332154
+        "bytes": 331934
       },
       {
         "path": "docs/screenshots/exam-prep.png",
         "width": 1600,
         "height": 900,
-        "bytes": 210616
+        "bytes": 211018
       },
       {
         "path": "docs/screenshots/sandbox.png",
         "width": 1600,
         "height": 900,
-        "bytes": 981999
+        "bytes": 981788
       },
       {
         "path": "screenshot.png",
         "width": 1600,
         "height": 900,
-        "bytes": 981234
+        "bytes": 982721
       },
       {
         "path": "docs/screenshots/files-panel.png",
         "width": 1600,
         "height": 900,
-        "bytes": 244194
+        "bytes": 244113
       },
       {
         "path": "docs/screenshots/campaign-level-1.png",
         "width": 1600,
         "height": 900,
-        "bytes": 478882
+        "bytes": 478701
       },
       {
         "path": "docs/screenshots/regressions-minimap-collapsed.png",
         "width": 1600,
         "height": 900,
-        "bytes": 963436
+        "bytes": 961354
       },
       {
         "path": "docs/screenshots/regressions-campaign-restart.png",
         "width": 1600,
         "height": 900,
-        "bytes": 488719
+        "bytes": 488411
       },
       {
         "path": "docs/screenshots/draw.png",
         "width": 1600,
         "height": 900,
-        "bytes": 488698
+        "bytes": 487944
       },
       {
         "path": "og-image.png",
         "width": 1200,
         "height": 630,
-        "bytes": 205653
+        "bytes": 205560
       }
     ]
   },
@@ -3335,7 +3340,11 @@
     },
     {
       "section": "incidents: CrashLoopBackOff seed/fix contract (L3)",
-      "name": "qa-incidents: L3 starting Deployment carries the invalid APP_MODE seed"
+      "name": "qa-incidents: L3 starts healthy (bad APP_MODE is not in the template yet)"
+    },
+    {
+      "section": "incidents: CrashLoopBackOff seed/fix contract (L3)",
+      "name": "qa-incidents: the L3 incident seeds APP_MODE=debug-invalid into the live Deployment"
     },
     {
       "section": "incidents: CrashLoopBackOff seed/fix contract (L3)",
@@ -3399,11 +3408,15 @@
     },
     {
       "section": "qa-scenarios",
-      "name": "scenarios: L3 Deployment actually carries env APP_MODE=debug-invalid"
+      "name": "scenarios: L3 starts healthy (the incident seeds the faulty APP_MODE via rollout)"
     },
     {
       "section": "qa-scenarios",
       "name": "scenarios: L3 CrashLoopBackOff incident fires"
+    },
+    {
+      "section": "qa-scenarios",
+      "name": "scenarios: L3 Deployment actually carries env APP_MODE=debug-invalid after the incident rollout"
     },
     {
       "section": "qa-scenarios",
@@ -3575,11 +3588,19 @@
     },
     {
       "section": "qa-scenarios",
-      "name": "scenarios: lab 12 Job requests can be set"
+      "name": "scenarios: lab 12 `oc set resources job/...` is rejected (immutable pod template)"
     },
     {
       "section": "qa-scenarios",
-      "name": "scenarios: lab 12 Job completes after its requests are set"
+      "name": "scenarios: lab 12 broken Job can be deleted"
+    },
+    {
+      "section": "qa-scenarios",
+      "name": "scenarios: lab 12 Job is recreated from YAML with resources.requests"
+    },
+    {
+      "section": "qa-scenarios",
+      "name": "scenarios: lab 12 recreated Job completes with its requests"
     },
     {
       "section": "qa-scenarios",
@@ -3899,7 +3920,7 @@
     },
     {
       "section": "qa-cli",
-      "name": "qa-cli #36: passthrough Route PORT is the backend port"
+      "name": "qa-cli #36: passthrough Route PORT is the Service port name (443-tcp)"
     },
     {
       "section": "qa-cli",
@@ -3927,7 +3948,7 @@
     },
     {
       "section": "qa-cli",
-      "name": "qa-cli #36: describe quota columns align"
+      "name": "qa-cli #36: describe quota columns align (canonical Used quantity)"
     },
     {
       "section": "qa-cli",
@@ -4247,7 +4268,7 @@
     },
     {
       "section": "qa-workstation",
-      "name": "qa-workstation: curl -k https://<passthrough-route> passes TLS to the backend"
+      "name": "qa-workstation: passthrough TLS to a plain-HTTP backend fails the handshake (curl 35)"
     },
     {
       "section": "qa-workstation",
@@ -5587,7 +5608,7 @@
     },
     {
       "section": "qa-issue42",
-      "name": "#42: the L3 crash seed only injects the invalid APP_MODE env var"
+      "name": "#42: the L3 crash incident injects only the invalid APP_MODE env var (real rollout after trigger)"
     },
     {
       "section": "qa-issue42",
@@ -6543,7 +6564,7 @@
     },
     {
       "section": "qa-issue50-54",
-      "name": "#54: `oc exec deploy/webapp -- curl -s localhost:8080` returns the pod app's real body"
+      "name": "#54: `oc exec deploy/webapp -- curl -s localhost:8080` returns the pod app's real plain-text body"
     },
     {
       "section": "qa-issue50-54",
@@ -6771,7 +6792,7 @@
     },
     {
       "section": "qa-issue50-54",
-      "name": "#51: L20 exec localhost returns the pod app's real body (no \"container main\")"
+      "name": "#51: L20 exec localhost returns the pod app's real plain-text body (no \"container main\")"
     },
     {
       "section": "qa-issue50-54",
@@ -8331,7 +8352,7 @@
     },
     {
       "section": "qa-issue68",
-      "name": "#68: GET /v/1.13.0/js/engine/GameEngine.js returns 200 with the exact file body and `Cache-Control: public, max-age=31536000, immutable`"
+      "name": "#68: GET /v/1.14.0/js/engine/GameEngine.js returns 200 with the exact file body and `Cache-Control: public, max-age=31536000, immutable`"
     },
     {
       "section": "qa-issue68",
@@ -8347,11 +8368,11 @@
     },
     {
       "section": "qa-issue68",
-      "name": "#68: the served index.html import map maps \"./js/\" to \"./v/1.13.0/js/\""
+      "name": "#68: the served index.html import map maps \"./js/\" to \"./v/1.14.0/js/\""
     },
     {
       "section": "qa-issue68",
-      "name": "#68: the served OpenShift Draw page maps \"./js/\" to the same \"./v/1.13.0/js/\" prefix"
+      "name": "#68: the served OpenShift Draw page maps \"./js/\" to the same \"./v/1.14.0/js/\" prefix"
     },
     {
       "section": "qa-issue68",
@@ -8399,7 +8420,7 @@
     },
     {
       "section": "qa-issue68",
-      "name": "#68: the reload requested the new release module through /v/1.13.0-qa68/js/engine/GameEngine.js"
+      "name": "#68: the reload requested the new release module through /v/1.14.0-qa68/js/engine/GameEngine.js"
     },
     {
       "section": "qa-issue68",
@@ -8427,7 +8448,7 @@
     },
     {
       "section": "qa-issue68",
-      "name": "#68: _moduleExists() HEAD-probes the versioned URL /v/1.13.0/js/ui/ManifestPanel.js"
+      "name": "#68: _moduleExists() HEAD-probes the versioned URL /v/1.14.0/js/ui/ManifestPanel.js"
     },
     {
       "section": "qa-issue68",
@@ -8528,6 +8549,590 @@
     {
       "section": "qa-issue69",
       "name": "#69 P3: a real WebGL capability failure never shows the generic #init-error panel"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#70–#76: a fresh sandbox boots for the QA round section"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#70: `oc new-app <builder-image>~<git>` creates the webapp IS + BC + Deployment"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#70: the pre-build <ns>/webapp:latest pod is ImagePullBackOff until the first push (never Running early)"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#70: the S2I build reaches Complete"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#70: the image trigger rolls the Deployment to the built image digest (not a tag)"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#70: the new ReplicaSet pod pulls the built digest and reaches Running"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#70: no pod stays in ImagePullBackOff after the build pushed the digest"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#70: the built digest produces NO \"manifest unknown\" pull failure events"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#70: `oc start-build webapp` starts the next build"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#70: the second build produces a pullable digest and its rollout reaches Running"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#70: the Route serves the built application (the built pod answers, not a stale pod)"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#71: campaign L13 starts"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#71: L13 \"htpasswd Secret and reference it from the OAuth IdP\" starts false"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#71: L13 creates a Secret named `my-htp` (the objective must not require htpass-secret)"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#71: L13 applies an OAuth provider referencing the player-named Secret"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#71: L13 grades the referenced Secret STATE (my-htp passes, no hidden htpass-secret name)"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#71: L13 login as alice succeeds after the OAuth rollout"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#71: L13 login/user objectives tick from state"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#71: L13 extracts the rotated htpasswd file to /tmp"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#71: L13 rotates the hash with a player-chosen password"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#71: L13 writes the rotated hash back to the Secret"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#71: L13 rotated password MyRotated9! logs in after the OAuth rollout"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#71: L13 rotation objective is graded on the hash/login STATE (MyRotated9!, never the literal NewPassw0rd!)"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#71: L13 the old password is rejected after the rotation"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#71: lab 7 starts"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#71: lab 7 grades can-i STATE — a binding named dev-edit passes (edit name not required)"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#71: lab 7 \"developer can delete Pods\" ticks from the same state"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#71: lab 7 completes with the player-named binding"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#71: lab 7 hint command `add-role-to-group edit developers` succeeds with an existing dev-edit binding"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#71: lab 7 stays complete after the hint command reuses the existing binding"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#71: campaign L17 starts"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#71: L17 SCCForbidden is active and the rejected Pod is never created"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#71: L17 hand-written Role/RoleBinding (not oc adm policy) is created"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#71: L17 state-equivalent SCC grant flips can-i to yes and heals the incident"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#71: L17 privileged Pod is admitted Running with openshift.io/scc=privileged"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#71: L17 completes 3/3 with the hand-written Role (no generated roleRef required)"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#71: lab 8 starts"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#71: lab 8 applies the privileged-app manifest"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#71: lab 8 has no Pod while ServiceAccount priv-sa is missing (FailedCreate)"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#71: lab 8 accepts an equivalent RoleBinding (oc create rolebinding, not only oc adm policy)"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#71: lab 8 privileged Pod is admitted Running via the equivalent grant"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#71: lab 8 SCCForbidden incident activates and resolves from the equivalent state"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#71: lab 8 completes on the equivalent state grant (SCC + privileged Pod + incident resolve)"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#72: `oc create role --resource=securitycontextconstraints` writes apiGroups [security.openshift.io]"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#72: the `scc` short resource alias resolves to securitycontextconstraints.security.openshift.io"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#72: `oc create role --resource=routes` resolves apiGroups [route.openshift.io]"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#72: `oc create role --resource=imagestreamtags` resolves apiGroups [image.openshift.io]"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#72: `oc create role --resource=deployments` resolves apiGroups [apps]"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#72: core resources keep apiGroups [\"\"] (pods)"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#72: the resolved SCC \"use\" Role makes `oc auth can-i use scc/privileged` say yes"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#72: an SCC \"use\" custom-role grant admits a privileged Pod as the ServiceAccount"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#73: the QA fixture has 2 Running webapp pods before the incident"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#73: the PendingScheduling incident can be spawned on the Deployment"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#73: damage is a Deployment template nodeSelector patch (pod specs are immutable)"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#73: the incident never re-pends or mutates an already-Running pod (old pods keep serving)"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#73: the bad template rolls a NEW Pending pod (no nodeName) while the old pods serve"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#73: `oc describe pod` for the damaged pod shows Pending, Node: <none>, no Running container state"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#73: `oc get pods -o wide` NODE column shows <none> for the Pending pod (never a node InternalIP)"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#73: the scheduler emits the k8s v1.35 wording \"0/<N> nodes are available: <M> node(s) didn't match Pod's node affinity/selector.\""
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#73: the incident fabricates no kubelet \"Healed\" event"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#73: FailedScheduling retries never aggregate an impossible count over a zero-length window"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#73: deleting the Pending pod does not heal the bad template (a new Pending pod appears)"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#73: `oc rollout undo` removes the bad nodeSelector and restores 2 Running pods"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#73: `oc patch` removing the nodeSelector heals the rollout"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#73: `oc label node` with the required label heals the Pending rollout"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#74: the lab-12 project quota is created"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#74: the requestless Job is blocked by the quota with the real must-specify message"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#74: `oc set resources job/<name>` is rejected with the real immutable-template API error"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#74: the rejected command mutates nothing and the Job does not complete"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#74: `--dry-run=client -o yaml` names the container after the Job (kubectl create_job.go)"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#74: deleting the Job and recreating it from YAML with resources.requests completes"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#74: the recreated db-migrate Job logs its real output (migrated)"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#74: lab 12 starts to inspect its hint"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#74: lab 12 hint teaches delete/recreate from a manifest (never `oc set resources job/...`)"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#75: campaign L3 starts (healthy)"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#75: L3 starts healthy: 2 Running pods, no bad APP_MODE in the template yet"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#75: L3 CrashLoopBackOff incident fires"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#75: the incident seed writes APP_MODE=debug-invalid into the live Deployment (a real rollout)"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#75: L3 pods visibly CrashLoopBackOff"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#75: the crashing pods are a NEW ReplicaSet from the bad rollout — a Running pod is never mutated into CrashLoopBackOff"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#75: old L3 pods keep serving during the bad rollout (maxUnavailable)"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#75: kubelet back-off timing is honest — no pod shows RESTARTS >= 2 below AGE 30s"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#75: L3 crash logs report the invalid APP_MODE from the Pod's first start"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#75: correcting APP_MODE heals L3 from state"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#75: campaign L14 starts"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#75: L14 UnauthorizedAccess incident fires"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#75: L14 surfaces the real RBAC denial in `oc logs deploy/web` (403 Forbidden message)"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#75: L14 fabricates no Kubernetes events for RBAC denials (kubernetes emits none)"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#75: L14 resolves when the denied ServiceAccount really gets the view RoleBinding"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#75: campaign L16 starts"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#75: the L16 api Deployment has a Running Pod before exec"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#75: L16 exec with the default SA token but no RBAC returns the real 403 Status JSON (no fake Hello page)"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#75: L16 exec with an INVALID bearer token returns a 401 Unauthorized Status JSON (never the external Hello page)"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#75: L16 exec with the api-reader RBAC returns a real PodList JSON from the API"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#75: L16 API-access objectives tick from the real PodList outcome"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#75: campaign L19 starts"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#75: L19 `oc describe job report-batch` prints `Active Deadline Seconds:  8s`"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#75: the DeadlineExceeded event message is exactly \"Job was active longer than specified deadline\" (no \"(8s)\")"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#75: a fast busybox/perl Job completes promptly (no artificial 25 s)"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#75: campaign L12 starts"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#75: L12 seeds a TLS-serving fixture (nginx on 8443 named https, Service 443/https)"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#75: the L12 passthrough Route targets the Service port NAME (`spec.port.targetPort: https`)"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#75: the L12 TLS fixture Pod is Running/Ready so the passthrough Route has endpoints"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#75: curl -k against the L12 passthrough Route reaches the TLS backend (200 nginx body)"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#75: passthrough TLS to a plain-HTTP backend fails the handshake with curl (35) wrong version number"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#75: lab 8 starts"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#75: lab 8 with a missing ServiceAccount records \"error looking up service account secure/priv-sa: serviceaccount \\\"priv-sa\\\" not found\" and creates no Pod"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#75: campaign L7 starts for the pre-ticked objective check"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#75: L7 objectives start false — \"Mount a ConfigMap into a workload volume\" is not pre-ticked"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#75: campaign L11 starts for the pre-ticked objective check"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#75: L11 objectives start false — the Service-selector objective is not pre-ticked before Service web exists"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#75: lab 1 starts to inspect its hint"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#75: lab 1 hint teaches the real Route admission rule (host/path/cert; 503 without endpoints)"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#75: lab 3 starts to inspect its hint"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#75: lab 3 hint requires the real openssl flow (missing cert files now fail)"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#76: `oc explain deployment.spec.strategy` uses the kubectl 1.35 explain v2 header (GROUP/KIND/VERSION at col 13, blank line, FIELD)"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#76: explain v2 FIELDS list rollingUpdate <RollingUpdateDeployment> before type <string> with the strategy enum"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#76: top-level explain prints GROUP/KIND/VERSION + DESCRIPTION + tab-and-<Type> FIELDS (no per-field descriptions)"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#76: explain v2 omits GROUP for core kinds (Pod)"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#76: describe pod prints only Reason for a Waiting container (no invented Message line)"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#76: a Terminated Last State prints Started before Finished"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#76: a Running container describes with real cri-o Container ID + Image ID digest (never <none>)"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#76: jsonpath on a list field prints the bracketed JSON array (client-go jsonpath.go)"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#76: jsonpath on `{.spec.ports}` prints a JSON array"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#76: jsonpath scalars stay bare values"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#76: `oc kustomize` emits resources in Kustomize legacy sort order (Service before Deployment)"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#76: `oc apply -k` creates resources in legacy sort order too"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#76: `oc new-app` names the Service port \"8080-tcp\" (fmt.Sprintf(\"%d-%s\"))"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#76: the MySQL new-app Service port is \"3306-tcp\""
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#76: the Route PORT column shows the new-app Service port name \"8080-tcp\""
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#76: hello-openshift answers plain text \"Hello OpenShift!\\n\" (no HTML body)"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#76: a word-final $(...) expands (`curl http://$(oc get route … -o jsonpath={.spec.host})`)"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#76: `oc login` prints the real 4.22 project list (header, \"  * <current>\", 4-space others, Using project line)"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#76: `oc describe quota` prints canonical quantities (1000m→1, 1024Mi→1Gi)"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#76: `oc get all` lists resources sorted by name (shop before web, not creation order)"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#76: `oc get identities` populates the USER UID column"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#76: `helm list` UPDATED is the Go time.Time.String() timestamp (not \"0s\")"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#76: /tmp is a real virtual directory (redirect → ls → cat are consistent)"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#76: `echo` prints exactly one line (no trailing blank line)"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#76: the SCC FailedCreate message appends the per-provider reasons (Privileged containers are not allowed)"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#76: the installed MetalLB CSV is the redhat-operators OCP-minor bundle metallb-operator.v4.22.0-202610281200"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#76: MetalLB emits `Normal IPAllocated Assigned IP [\"<ip>\"]` (no cloud-provider EnsuredLoadBalancer)"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#76: a NotReady node keeps LastHeartbeatTime frozen at the last kubelet post (LastTransitionTime fixed at onset)"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#76: patching projectRequestTemplate starts an openshift-apiserver rollout (Progressing=True/Working)"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#76: during the 8 s rollout window `oc new-project` does NOT apply the new template yet"
+    },
+    {
+      "section": "qa-issue70-76",
+      "name": "#76: after the rollout completes the next `oc new-project` applies the configured template"
     },
     {
       "section": "draw",

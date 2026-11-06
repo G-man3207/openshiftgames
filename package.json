@@ -1,6 +1,6 @@
 {
   "name": "openshift-games",
-  "version": "1.13.0",
+  "version": "1.14.0",
   "private": true,
   "description": "OpenShift Games static site — dev tooling only (runtime is dependency-free/no-build)",
   "main": "index.html",

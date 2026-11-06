@@ -728,6 +728,14 @@ All handlers return `{error: boolean, message: string}` (some add extra fields).
 high-value conversion surface: add `route`, `buildconfig`, `imagestream`, `deploymentconfig`, `project`,
 `template`, `scc`, `subscription`, `csv`, `operatorgroup`, `poddisruptionbudget` stays, etc.
 
+**Output (1.14.0, issue #76):** the renderer now emits kubectl 1.35's explain v2 plaintext —
+a `GROUP:` line only for non-core API groups, `KIND:`/`VERSION:` aligned like kubectl's column 13,
+an optional `FIELD: <path> <Type>` line plus a wrapped 4-space `DESCRIPTION:`, and `FIELDS:` entries
+as `  <path>\t<Type>` in alphabetical order on one line (enums rendered, `rollingUpdate` added for
+the Deployment strategy). The curated `EXPLAIN_DATA` above is still the source and the descriptions
+stay the game's teaching text; the format/field structure is the contract. Locked by
+`qa-issue70-76` and `verify.mjs` §4k.
+
 ### 3.4 `GameEngine` API (`js/engine/GameEngine.js`)
 
 `GAME_MODES` L121–126 (`campaign/sandbox/chaos/challenge`), `GAME_STATES` L128–136.
@@ -929,6 +937,16 @@ replaces it), NetworkPolicy enforcement (only `evaluateIngress/Egress` helpers, 
 controller as an independent loop (folded into Deployments), Service→Pod endpoint `updateEndpoints`
 (`Service.updateEndpoints` uncalled).
 
+**1.14.0 additions (issues #70–#76):** image-pull resolution now parses
+`<registry>/<ns>/<name>@sha256:<digest>` references and resolves them against the ImageStream's
+`status.tags[].items[].image` tag history (`_resolveContainerImagePull`), with a pre-build `:latest`
+Pod honestly `ImagePullBackOff` until the first push. ServiceAccount admission rejects a missing
+`serviceAccountName` as a ReplicaSet `FailedCreate`; the MetalLB LoadBalancer path emits the
+controller's single canonical `Normal IPAllocated Assigned IP [...]` event with the OCP-minor CSV
+`metallb-operator.v4.22.0-202610281200`; changing the project-request template rolls the simulated
+openshift-apiserver for 8 game seconds before `oc new-project` applies it; and PendingScheduling
+damages through the Deployment template (see §4.3). Contracts in CONVERSION-SPEC §4.7.
+
 ### 4.3 Pod lifecycle state machine (as implemented)
 
 ```
@@ -949,6 +967,17 @@ Pod created (any path)              phase: Pending (from class ctor) or passed s
 Phases used in UI/status colors: `Pending, ContainerCreating (not a real phase), Running,
 CrashLoopBackOff, Succeeded, Failed, Terminating, Complete, Available, Progressing, Suspended, Bound,
 Released, Lost, Active, NotReady, Unknown` (`ResourceMeshes.STATUS_COLORS` L3–18).
+
+**1.14.0 lifecycle contracts (issues #73/#75/#76):** a bound Pod's spec is immutable, so the
+PendingScheduling incident patches the Deployment template instead (new ReplicaSet Pod Pending with
+a real v1.35 `FailedScheduling` event, old Pods serving; repair via `oc rollout undo`,
+`oc patch`/`oc edit` or `oc label node` — never only `oc delete pod`). CrashLoopBackOff restart
+timing follows the real kubelet back-off (10 s/20 s/40 s) against Pod AGE; an incident's crash seed
+rolls a new Deployment revision so new Pods crash from the first start while old Pods serve; a
+NotReady Node freezes `LastHeartbeatTime` at the last kubelet post while `LastTransitionTime`
+records the onset; and `oc describe pod` renders kubectl 1.35 container-state lines (Waiting prints
+only `Reason`, a Terminated `Last State` prints `Started:` before `Finished:`, a Running container
+prints `cri-o://<id>` + an image digest). Contracts in CONVERSION-SPEC §4.7.
 
 ### 4.4 Where OpenShift controllers must plug in
 
@@ -1125,6 +1154,16 @@ project self-provisioner denied, certificate expiry in `Route` edge TLS, `Operat
 Resolution for incidents must eventually mutate cluster state (currently doesn't — G9); EX280 missions
 should require the _player to actually fix the resource_, then the card resolves.
 
+**1.14.0 incident contracts (issues #73/#75/#76):** the shipped `PendingScheduling` incident now
+damages through the Deployment template (new ReplicaSet Pod `Pending`, real scheduler
+`FailedScheduling` wording, old Pods serving, `ProgressDeadlineExceeded` over time; no Pod-spec
+mutation, no `Normal Healed` reason, no impossible aggregated counts). `UnauthorizedAccess` emits no
+RBAC events — the denial is surfaced in `oc logs <workload>` — and the resolved `JobDeadlineExceeded`
+message is exactly `Job was active longer than specified deadline` (no appended duration) with
+`oc describe job` printing `Active Deadline Seconds:  <n>s`. MetalLB LoadBalancer events are the
+controller's `Normal IPAllocated Assigned IP [...]` (single canonical emitter). Contracts in
+CONVERSION-SPEC §4.7.
+
 ---
 
 ## 6. Campaign and objectives
@@ -1235,6 +1274,15 @@ level).
 - no `distribute/replicas/coverage/complete/update/rollback/verify/mount/envFrom/noConfigMap/bound/stable/
 resources/hpa?` (hpa included), and no default case.
 
+**1.14.0 state-based grading (issues #71/#75):** the evaluator now lives in
+`js/engine/ObjectiveEvaluator.js` and is shared by CampaignMode and ChallengeMode. Hidden-name
+objectives grade cluster state: L13 credits any OAuth-referenced htpasswd Secret that logs the user
+in (`oauthProvider.secretReferenced`); L13/lab 11 require the rotated hash + a successful login with
+the player's own password (`password.rotate`); lab 7 grades `can-i`-equivalent RBAC;
+L17/lab 8 grade an SCC grant usable by the subject (`getSCCsForSubject`) plus a Pod admitted with
+`openshift.io/scc=privileged` running as the SA (`privileged.serviceAccount`). L7/L11 objectives
+start false and flip only on real state. Contracts in CONVERSION-SPEC §4.7.
+
 ### 6.4 Stars, scoring, XP
 
 - `ScoringEngine.calculateStarRating(levelId, completionTime, efficiency, hadFailures)` **L277–292**: start
@@ -1326,6 +1374,15 @@ L291–687: `getChallenges` L308, `startChallenge` L329–369 (same setup patter
 **10 challenge titles:** Three-Tier Web App; Fix CrashLoopBackOff; Ingress with TLS; Network Segmentation;
 Black Friday Scaling; Node Failure Recovery; StatefulSet with PVC; RBAC Fortress; DNS Resolution Failure;
 Full Production Readiness.
+
+**1.14.0 challenge contracts (issues #71/#74/#75):** the shipped runner holds the 13 timed EX280
+labs. Labs 7/8/11 grade state-equivalent RBAC/password/SCC fixes through the shared
+`ObjectiveEvaluator` (no hidden binding names/literals); lab 12 seeds a self-consistent TLS fixture
+(UBI nginx on 8443 named `https`; passthrough Route serves 200) and teaches the immutable-Job
+delete/recreate (or LimitRange `defaultRequest`) flow instead of `oc set resources job`; L7/L11
+objectives start unticked; lab 1's Route-admission hint teaches host/path/certificate only; lab 3's
+hint generates real cert/key files with `openssl req -x509`; and lab 8's hint creates the missing
+`priv-sa` ServiceAccount. Contracts in CONVERSION-SPEC §4.7.
 
 ### 7.3 ChaosMode (`js/modes/ChaosMode.js`)
 

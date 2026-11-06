@@ -39,7 +39,18 @@ names are shown in EX280 Prep).
   `image info`, `process`, `helm` (repo/search/install/upgrade/history/rollback), `htpasswd`,
   `debug node` (interactive `chroot /host` + `systemctl`/`journalctl` kubelet troubleshooting),
   `--dry-run=client|server`, `<resource>.<group>` tokens, escaped jsonpath keys, `custom-columns`,
-  `events --field-selector`, pipes, redirects and `-f -` stdin. `oc describe` renders like kubectl:
+  `events --field-selector`, pipes, redirects and `-f -` stdin. `oc explain` prints kubectl 1.35's
+  explain v2 plaintext (`GROUP:` only for non-core groups, aligned `KIND:`/`VERSION:`, a
+  `FIELD: <path> <Type>` line for a field request, a wrapped `DESCRIPTION:` and alphabetical
+  tab-separated `FIELDS:`, including the Deployment strategy's `rollingUpdate`); `-o jsonpath`
+  marshals list/object fields as JSON (`{.spec.template.spec.containers[0].env}` →
+  `[{"name":"APP_ENV","value":"production"}]`); `oc get all` and every list output are sorted by
+  name like the API server; `helm list` UPDATED prints helm's real Go timestamp; `oc create
+role|clusterrole --resource=securitycontextconstraints|scc` resolves the real API group
+  (`security.openshift.io`, so a custom `use` Role grants the SCC); and `oc set resources
+job/<name>` is rejected like the API server (`The Job "<name>" is invalid: spec.template: …
+field is immutable`) while `create job|cronjob --dry-run=client -o yaml` names the container
+  after the object. `oc describe` renders like kubectl:
   env `valueFrom` entries print the `<set to the key 'DB_PASS' in secret 'db'>  Optional: false` /
   `<set to the key 'APP_LOG' of config map 'cfg'>  Optional: false` placeholders (fieldRef and
   resourceFieldRef forms too, never the raw JSON), Liveness/Readiness/Startup probes print in
@@ -49,7 +60,12 @@ names are shown in EX280 Prep).
   `Type:`/`Name:`/`Optional:` blocks for ConfigMap/Secret/emptyDir/PVC/hostPath/NFS/projected/
   downwardAPI/CSI sources (including the injected `kube-api-access-*` projected service-account
   volume) aligned per volume, and annotations print as sorted multiline `key: value` (labels stay
-  `key=value`). `oc set probe` honours `--initial-delay-seconds`, `--period-seconds`,
+  `key=value`). `oc describe pod` container states match kubectl 1.35 (a Waiting container prints
+  only `Reason`, a Terminated `Last State` prints `Started:` before `Finished:`, a Running container
+  prints `Container ID: cri-o://<id>` and an image digest), `oc describe job` prints
+  `Active Deadline Seconds:  8s`, `oc describe quota` prints canonical quantities (`1`, `1Gi`) and
+  `oc get identities` fills USER UID. `oc set probe` honours `--initial-delay-seconds`,
+  `--period-seconds`,
   `--timeout-seconds`, `--success-threshold` and `--failure-threshold` (only the supplied fields
   change; the handler and API-server defaults are preserved), `oc set probe … -- <command>` stores a
   real `exec` handler (verbatim argv), and the kubelet tick actually evaluates every player-set
@@ -91,7 +107,13 @@ names are shown in EX280 Prep).
   `grep`, `sed`, `tail`, `head`, `cut`, `wc`, `sort`, `base64 -d`, `openssl` (including real
   `req -x509` / `x509` PEM handling), `htpasswd`, `skopeo` — so exam workflows like writing YAML in
   the terminal,
-  decoding a Secret and `oc apply -f -` work as on a real workstation. Unsupported shell grammar
+  decoding a Secret and `oc apply -f -` work as on a real workstation. `$(...)` also works at the
+  end of a word (`curl -s http://$(oc get route webapp -o jsonpath={.spec.host})`), `/tmp` is one
+  real virtual directory (`oc get … > /tmp/webapp.yaml`, `cat /tmp/webapp.yaml`, `ls /tmp` and
+  `oc apply -f /tmp/…` agree), `echo` prints exactly one trailing newline, and `oc create secret tls
+x --cert=missing.crt --key=missing.key` fails with the real
+  `error: open missing.crt: no such file or directory` (the `openssl req -x509` flow is the taught
+  path). Unsupported shell grammar
   (loops, conditionals) is rejected with a clear simulator message instead of silently running part
   of the line. A workstation-side `curl`
   resolves Route hosts through the router model (edge/passthrough/reencrypt, http redirect and
@@ -119,7 +141,13 @@ names are shown in EX280 Prep).
   change triggers and rollouts, internal registry image references. In the paused pre-start sandbox
   the `oc new-app` ScalingReplicaSet event already prints the full deterministic
   `<name>-<10-char pod-template-hash>` ReplicaSet name, and starting the simulation creates exactly
-  that ReplicaSet (the `oc get rs` / `oc describe rs` output matches the event).
+  that ReplicaSet (the `oc get rs` / `oc describe rs` output matches the event). A build's digest
+  image (`…/<project>/<name>@sha256:<digest>`) resolves through the ImageStream tag history, so the
+  new Deployment's Pods start the code the build produced and the rollout completes; a pre-build
+  `:latest` Pod is `ImagePullBackOff` until the first successful push, then recovers. `oc new-app`
+  names Service ports `8080-tcp`/`3306-tcp` (newapp naming) and the Route PORT column follows, and
+  `oc create route passthrough <name> --service=<svc>` sets `spec.port.targetPort` to the Service
+  port name/number like real `oc`.
 - **Routes & networking** — `oc expose svc/...`, edge/passthrough/reencrypt TLS Routes, Route
   admission state, Services, NetworkPolicies, MetalLB `LoadBalancer` services with EXTERNAL-IP.
   Route admission follows the real 4.22 router rules: host/path ownership (`HostAlreadyClaimed`),
@@ -177,11 +205,17 @@ SingleStack`, `IP:`/`IPs:`, one `Port:`/`TargetPort:`/`Endpoints:` block per por
   `Image ID`, `State`, `Ready` or `Restart Count` lines until the Pod is bound — only
   Image/Port/Host Port/Environment/Mounts/Conditions), and FailedScheduling retries follow the real
   scheduler backoff (1 s doubling to 10 s max) so `oc describe`/`oc get events` show realistic
-  small counts like `(x4 over 7s)` instead of a zero-second burst.
+  small counts like `(x4 over 7s)` instead of a zero-second burst. hello-openshift answers plain
+  text `Hello OpenShift!`; a passthrough Route to a plain-HTTP backend fails the TLS handshake
+  (`curl: (35) error:0A00010B:SSL routines::wrong version number`, exit status 35) while lab 12's
+  TLS fixture serves 200; and MetalLB LoadBalancer Services emit the controller's
+  `Normal IPAllocated Assigned IP ["<ip>"]` event (no cloud-provider `EnsuredLoadBalancer` text).
 - **Declarative workflows** — a Files panel with editable YAML manifests, `oc apply -f`,
   Kustomize base/overlays (`oc apply -k`), OpenShift templates (`oc process -f … | oc apply -f -`),
   Helm charts (`helm install|upgrade|uninstall`), `--dry-run=client -o yaml` manifest skeletons,
-  terminal-authored YAML (heredocs/`vim`) and an `htpasswd` file for identity labs.
+  terminal-authored YAML (heredocs/`vim`) and an `htpasswd` file for identity labs. `oc
+kustomize`/`oc apply -k` render resources in Kustomize's legacy sort order (ConfigMap → Service →
+  Deployment).
 - **Security & identity** — HTPasswd identity provider + `oc login` (validated against the
   `htpass-secret` Secret, like a real cluster), users/groups/identities, RBAC evaluation
   (`oc auth can-i`, `oc adm policy …`, `oc policy …`) enforced on every command, OCP 4.x SCC grants
@@ -202,10 +236,19 @@ SingleStack`, `IP:`/`IPs:`, one `Port:`/`TargetPort:`/`Endpoints:` block per por
   The full exam identity lifecycle is practised: rotate the HTPasswd password through the
   `openshift-config/htpass-secret` (`oc extract` → `htpasswd` → `oc set data`) and wait for the
   OAuth rollout, then delete a departing user and its Identity (`oc delete user` leaves the Identity
-  behind).
+  behind). `oc login` also prints loginoptions.go's project text (`You have access to the following
+projects and can switch between them with 'oc project <projectname>':` with `  *` marking the
+  current project, or `You have one project on this server: "<name>"`). A Deployment whose
+  `serviceAccountName` does not exist gets no Pod — the ReplicaSet records `Error creating: … error
+looking up service account <project>/<sa>: serviceaccount "<sa>" not found` — and the SCC
+  `FailedCreate` message appends the per-provider reasons (`provider "anyuid": Forbidden: not usable
+by user or serviceaccount, spec.containers[0].securityContext.privileged: Invalid value: true:
+Privileged containers are not allowed, …`).
 - **Quotas & self-service** — Namespace/Project quotas, LimitRanges, ClusterResourceQuota, project
   templates (`oc adm create-bootstrap-project-template` + `project.config.openshift.io/cluster`) and
   the real `self-provisioners` ClusterRoleBinding (remove it and `oc new-project` returns Forbidden).
+  Changing `projectRequestTemplate` rolls out the simulated openshift-apiserver for 8 game seconds
+  (`Progressing=True reason=Working`) before the next `oc new-project` applies the template.
 - **Operators (OLM)** — a software catalog of PackageManifests, OperatorGroups, Subscriptions that
   move through InstallPlan and ClusterServiceVersion phases (`Installing → Succeeded`), real
   operator effects (e.g. the MetalLB operator creates its controller/speaker pods and serves
@@ -220,7 +263,8 @@ SingleStack`, `IP:`/`IPs:`, one `Port:`/`TargetPort:`/`Endpoints:` block per por
   The catalog package names follow OCP 4.x (`metallb-operator`); OLM resolves per namespace, so a
   Subscription for a package that is not in the catalog makes every Subscription in that namespace
   report `ResolutionFailed` (with no fake CSV, InstallPlan or install-plan conditions), while other
-  namespaces install normally.
+  namespaces install normally. The `metallb-operator` bundle follows redhat-operators' OCP-minor
+  versioning (`metallb-operator.v4.22.0-202610281200`) instead of upstream `v0.14.9`.
 - **Monitoring & alerting** — `oc get prometheusrules -A`, `oc describe prometheusrule`, live
   `Alertmanager` state (`oc get|describe alertmanager -n openshift-monitoring`): the Watchdog alert
   always fires and cluster state (crash-looping or unready Pods) surfaces the matching alert rules.
@@ -228,10 +272,21 @@ SingleStack`, `IP:`/`IPs:`, one `Port:`/`TargetPort:`/`Endpoints:` block per por
   Deploy & Expose → Identity, RBAC & Self-service → Security & Operations, ending in a production
   platform build whose capstone only completes once its scheduled incidents are resolved. The
   capstone's node failure is fixed the real way: `oc debug node/<n>` → `chroot /host` →
-  `systemctl restart kubelet` (the incidents drawer action remains as a fallback).
+  `systemctl restart kubelet` (the incidents drawer action remains as a fallback). Grading follows
+  state: L13's OAuth-referenced htpasswd Secret, the rotated password hash plus a successful login,
+  L17's admitted privileged Pod and equivalent RBAC/SCC grants are credited (lab 7/8/11 too),
+  PendingScheduling patches the Deployment template (the new ReplicaSet Pod stays Pending with a
+  real FailedScheduling event while old Pods serve; rollout undo, patch/edit or `oc label node`
+  fix it), L3 crashes from the first start, L14's denial shows in `oc logs deploy/web` (no invented
+  events), L16 proves in-cluster API access with a PodList/403, and L7/L11 objectives start
+  unticked.
 - **13 timed EX280 labs** — speed drills: three-tier app, CrashLoopBackOff, edge TLS Routes,
   Kustomize prod overlay, source-to-image, quota guardrail, RBAC onboarding, SCC, network isolation,
-  operator install, HTPasswd onboarding, production network policies and an EX280 speed run.
+  operator install, HTPasswd onboarding, production network policies and an EX280 speed run. Labs
+  7/8/11 grade state-equivalent RBAC/password/SCC fixes, lab 12 seeds a real TLS fixture (its
+  passthrough serves 200, while a plain-HTTP backend fails the handshake) and teaches the
+  immutable-Job delete/recreate (or LimitRange) flow, and the lab 1/3/8 hints match the real Route
+  admission, certificate and ServiceAccount behavior.
 - **EX280 Prep mode** — objective tracker for the official EX280V422 objective groups (with Red Hat
   docs links), quick command labs, a searchable `oc` cheat sheet, exam facts and an evidence-based
   study-coverage verdict (mastery requires the bullet’s own commands inside the linked drill run).

@@ -704,6 +704,152 @@ describe output contracts added in 1.13.0:
   `oc get svc dns-default -n openshift-dns -o jsonpath={.spec.trafficDistribution}`; the existing
   #58 platform-Service lock and the new `§4j`/`qa-issue69` checks cover it.
 
+### 4.7 S2I digest pulls, state-based grading and 1.14.0 CLI/simulation fidelity (issues #70–#76)
+
+The sixteenth QA pass closed issues #70–#76. These are the contracts added or changed in 1.14.0;
+each is locked by the permanent `qa-issue70-76` browser section and `scripts/verify.mjs` §4k:
+
+- **S2I digest references resolve through ImageStream tag history (issue #70).** A container image
+  `<registry>/<ns>/<name>@sha256:<digest>` is a digest reference, not a tag named `sha256:…`; it
+  resolves iff the digest matches an entry of the ImageStream's `status.tags[].items[].image`
+  (the entry's `image`/`dockerImageReference`), and a match pulls/starts the container with that
+  exact reference. Only an unmatched digest falls back to the real pull failure (`manifest unknown`
+  / ImagePullBackOff). A pre-build reference to `<ns>/<name>:latest` with no tag history is
+  honestly `ImagePullBackOff` until the first successful Build pushes the tag, then recovers and
+  the ImageChange rollout starts the built image — a Pod never reports Running before the tag
+  exists. L9 (`oc new-app openshift/nodejs:20-ubi9~https://…`) and lab 5
+  (`oc new-app https://…`) are end-to-end: build Complete → new ReplicaSet Pod Running with the
+  digest image → the Route serves the built code.
+- **Grading is by cluster state, never by hidden names/passwords/commands (issue #71).** L13's
+  htpasswd Secret objective credits any Secret the `oauth/cluster` identity provider references and
+  that actually logs the user in (a `my-htp` Secret works; `htpass-secret` is not required at
+  L13 — lab 11's own Secret-name objective is intentionally unchanged and its label states the
+  name). The L13/lab 11 password-rotation objective grades the real state: the user's htpasswd hash
+  changed after a successful login AND a fresh login with the player's new password succeeds (the
+  hinted literal `NewPassw0rd!` is not graded). Lab 7 grades `can-i`-equivalent RBAC for the subject
+  in `team-dev` (any binding whose Role/ClusterRole grants `edit` to group `developers`; adding edit
+  to an existing working binding must still satisfy it — the hint path does not dead-end). L17/lab 8
+  grade SCC state: any Role/RoleBinding with
+  `apiGroups: ["security.openshift.io"]`, `resourceNames: ["privileged"]`, `verbs: ["use"]` (or the
+  `system:openshift:scc:privileged` binding) usable by the subject, plus a Pod admitted with
+  `openshift.io:scc: privileged` running as `priv-sa`, resolves the incident within the normal heal
+  tick. The evaluator exposes the matching state objective types: `oauthProvider.secretReferenced`,
+  `password.rotate`, `privileged.serviceAccount` and `scc` resolved via `getSCCsForSubject`; no
+  command-history matching.
+- **`oc create role/clusterrole --resource=…` resolves API groups (issue #72).** Non-core resource
+  tokens resolve through the kind→API-group map instead of defaulting to `apiGroups: [""]`:
+  `securitycontextconstraints`/`scc` → `security.openshift.io`, routes → `route.openshift.io`,
+  imagestreams → `image.openshift.io`, buildconfigs → `build.openshift.io`, deployments → `apps`,
+  etc. Accepted forms: `--resource=scc`, `resource.group`, `resource/subresource`, comma lists and
+  `--api-group` override. A custom `use` Role then makes
+  `oc auth can-i use scc/privileged --as=system:serviceaccount:<ns>:<sa>` answer yes and admits the
+  privileged Pod; YAML with the same `apiGroups` keeps working.
+- **Job pod templates are immutable (issue #74).** `oc set resources job/<name>` (and CronJob pod
+  templates) is rejected with the API server's
+  `The Job "<name>" is invalid: spec.template: Invalid value: ...: field is immutable` and returns
+  failure without mutating or completing the Job; only a suspended Job's scheduling directives may
+  change (1.27+). `oc create job|cronjob … --dry-run=client -o yaml` names the container after the
+  object (kubectl `create_job.go`), not `main`. Graded hints for the Job/quota lab must teach
+  delete/recreate from an edited dry-run YAML with `resources.requests` (or a LimitRange
+  `defaultRequest` + recreate).
+- **PendingScheduling damages through a Deployment rollout (issue #73).** The incident patches the
+  Deployment template with a bad `nodeSelector` — never a bound Pod's immutable spec: a new
+  ReplicaSet Pod is `Pending` with the real v1.35 default-scheduler event
+  `0/<N> nodes are available: <M> node(s) didn't match Pod's node affinity/selector.`, the old Pods
+  keep serving within `maxUnavailable`, and the Deployment reaches `ProgressDeadlineExceeded` over
+  time. No `Normal Healed` kubelet reason and no impossible aggregated counts are emitted; scheduled
+  Pods' NODE column is a node name (never `status.hostIP`) and an unbound Pod shows `<none>`; its
+  `oc describe pod` is `Node: <none>`/`Pending` with no Running container state. `oc rollout undo`,
+  `oc patch`/`oc edit` removing the selector and `oc label node` all heal; `oc delete pod` is not the
+  expected fix.
+- **kubectl 1.35 `oc explain` v2 (issue #76).** Plaintext v2 template rendered from the shared
+  explain data: a `GROUP:` line only for non-core API groups, `KIND:`/`VERSION:` headers aligned to
+  kubectl's column 13, a blank line, `DESCRIPTION:` (wrapped at 76 columns, indented 4), a blank
+  line and `FIELDS:`/field self-description lines; FIELDS entries are `  <path>\t<Type>` in
+  alphabetical order on one line (enum values rendered), matching the issue's sample and the 1.35
+  template. A field request prints `FIELD: <path> <Type>` first and only that field's description
+  and children — e.g. `oc explain deployment.spec.strategy` lists `rollingUpdate` before `type`.
+  Descriptions remain the game's curated teaching text (not upstream OpenAPI prose); the format and
+  field structure are the contract.
+- **JSONPath list/object marshalling (issue #76).** `-o jsonpath` marshals slice and map values like
+  client-go `jsonpath.go`: `{.spec.template.spec.containers[0].env}` prints
+  `[{"name":"APP_ENV","value":"production"}]`, `{.spec.ports}` a bracketed array, while scalar and
+  list-of-scalars formatting, escaped keys, ranges and filters keep their kubectl shape.
+- **Kustomize legacy ordering (issue #76).** `oc kustomize` and `oc apply -k` render/apply resources
+  in Kustomize's `SortOrderTransformer` legacy order (ConfigMap → Service → Deployment, i.e. a
+  Service before a Deployment), deterministic across `-o yaml` and apply.
+- **`oc new-app` port names and Route targetPort (issue #76).** Service ports are named
+  `fmt.Sprintf("%d-%s", port, protocol)` (`8080-tcp`, `3306-tcp`, not `http`), and the Route PORT
+  column follows; `oc create route passthrough <name> --service=<svc>` sets
+  `spec.port.targetPort` to the Service port's name when named, else its number (never the Service's
+  targetPort number).
+- **`oc login` project text (issue #76).** Several projects: exact
+  `You have access to the following projects and can switch between them with 'oc project
+<projectname>':` + blank line + the current project `  * <name>` (two spaces) + the other
+  projects four-space indented + blank line + `Using project "<name>".`; exactly one project:
+  `You have one project on this server: "<name>"` + blank line + `Using project "<name>".`
+- **List ordering and helm timestamps (issue #76).** `oc get`, `oc get all` and list
+  serializations return names sorted by name (API-server order), never creation order, so tables
+  and `-o name/yaml/json` agree. `helm list` UPDATED prints helm's real Go timestamp form
+  (`YYYY-MM-DD HH:MM:SS.fffffffff +0000 UTC`), not an age like `0s`.
+- **Describe/status fidelity (issue #76).** `oc describe pod`: a Waiting container prints only
+  `Reason` (no `Message:`); a Terminated `Last State` prints `Started:` before `Finished:`; a
+  Running container prints `Container ID: cri-o://<id>` and a real `Image ID: …@sha256:…`
+  (deterministic per Pod/container, stable across describes/ticks). `oc describe job` prints
+  `Active Deadline Seconds:  <n>s` whenever the field is set (L19's diagnostic line);
+  `oc describe quota` prints canonical `resource.Quantity` (`1000m` → `1`, `1024Mi` → `1Gi`);
+  `oc get identities` fills USER UID. A NotReady Node's `LastHeartbeatTime` freezes at the last
+  kubelet post while `LastTransitionTime` records the onset (no advancing heartbeat under "Kubelet
+  stopped posting node status"); CrashLoopBackOff restart timing is physically consistent with Pod
+  AGE (kubelet 10 s/20 s/40 s back-off); fast busybox Jobs complete promptly (no artificial 25 s).
+  hello-openshift (and every app-body surface) answers the real plain text
+  `Hello OpenShift!` + newline, not an HTML wrapper.
+- **MetalLB controller contract and CSV versioning (issues #76).** With MetalLB installed, a
+  LoadBalancer Service gets the controller's single canonical
+  `Normal IPAllocated Assigned IP ["<ip>"]` event (e.g. `["192.168.150.200"]`); no
+  cloud-provider `EnsuredLoadBalancer` text is emitted by any path. The operator CSV follows the
+  redhat-operators OCP-minor bundle versioning
+  `metallb-operator.v4.22.0-202610281200` in the seed, install flow, hints and locks — not upstream
+  `v0.14.9`.
+- **In-cluster API access, incident signals and TLS content (issues #75/#76).** L16:
+  `oc exec … -- curl -sk -H "Authorization: Bearer <token>"
+https://kubernetes.default.svc/api/v1/namespaces/<ns>/pods` returns a single-line PodList JSON
+  when the ServiceAccount is authorised, the 403 `Status` JSON with
+  `pods is forbidden: User "system:serviceaccount:<ns>:<sa>" cannot list resource "pods" in API
+group "" in the namespace "<ns>"` for an unauthorised/anonymous request, and 401 Unauthorized for
+  an invalid token; the shell quoting and container `$(...)` support the exact one-liner. L14 emits
+  no RBAC events — the symptom is the real forbidden line in `oc logs deploy/web`. L19's
+  DeadlineExceeded message is exactly `Job was active longer than specified deadline`. L12 seeds a
+  UBI nginx TLS fixture (containerPort 8443 named `https`; Service port 443 named `https` →
+  targetPort 8443): the passthrough Route is admitted with `spec.port.targetPort: https` and
+  `curl -k https://<host>` returns 200, while a passthrough Route to a plain-HTTP backend fails the
+  handshake with `curl: (35) error:0A00010B:SSL routines::wrong version number` (exit status 35).
+- **ServiceAccount admission, SCC message and project-request template (issues #75/#76).** A
+  Deployment whose `serviceAccountName` does not exist gets no Pod: the ReplicaSet records
+  `Error creating: pods "<pod>" is forbidden: error looking up service account <project>/<sa>:
+serviceaccount "<sa>" not found`. The SCC `FailedCreate` message appends the per-provider reasons
+  (`unable to validate against any security context constraint: [provider "anyuid": Forbidden: not
+usable by user or serviceaccount, spec.containers[0].securityContext.privileged: Invalid value:
+true: Privileged containers are not allowed, ...]`). Changing
+  `project.config.openshift.io/cluster.spec.projectRequestTemplate` rolls out the simulated
+  openshift-apiserver for exactly 8 game seconds (ClusterOperator `Progressing=True reason=Working`)
+  before the next `oc new-project` applies the template.
+- **Shell/VFS contracts (issues #75/#76).** `/tmp/...` is one virtual directory shared by redirects,
+  `cat`, `ls`, `rm`, `oc apply -f` and the shell (no `~/tmp/` shadow tree); `echo` emits exactly one
+  trailing newline; `$(...)` at the end of a word expands cleanly and quote-aware
+  (`curl -s http://$(oc get route webapp -o jsonpath={.spec.host})`), with Route admission defaults
+  applied synchronously (`applyAdmissionDefaults`) so a just-admitted Route always has `spec.host`
+  when the substitution reads it.
+- **State-based content corrections (issues #71/#75).** L7's ConfigMap-volume objective and L11's
+  Service-selector objective start false; lab 1's Route-admission hint teaches host/path/certificate
+  only (endpoints do not gate admission — a missing endpoint set returns 503); lab 3/L11/EX280 TLS
+  hints generate real cert/key files first (`oc create secret tls … --cert=missing.crt` fails with
+  `error: open missing.crt: no such file or directory`) and use `openssl req -x509`; lab 8's hint
+  requires creating `priv-sa` (the shipped manifest creates none); L3's crash comes from a seeded
+  Deployment rollout to `APP_MODE=debug-invalid` (new Pods crash from the first start with honest
+  RESTARTS/AGE and `configuration validation failed: APP_MODE has an unsupported value`, old Pods
+  serve).
+
 ---
 
 ## 5. Controllers / simulation (SimulationTick.js)
