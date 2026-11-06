@@ -4886,6 +4886,1335 @@ if (seedMod?.ClusterState) {
   }
 }
 
+// ── 4k. Issue #70–#76 CLI/model fidelity locks (static) ────────────────────
+// The browser suite section `qa-issue70-76` proves these end-to-end. These
+// headless locks fail the fast static gate if a refactor silently reintroduces
+// a #70–#76 regression: S2I digest pulls (#70), SCC API-group resolution in
+// `oc create role` (#72), reactive Deployment-template damage / scheduler
+// wording (#73), immutable Job templates (#74), the kubectl-1.35 debug-signal
+// and output contracts (#75/#76) and the model invariants (heartbeat freeze,
+// DeadlineExceeded message, SCC/SA FailedCreate details, MetalLB IPAllocated).
+// One in-process sandbox fixture is shared so the gate stays fast (no browser,
+// no screenshots).
+{
+  const engineMod = await tryImport('js/engine/GameEngine.js');
+  const sandboxMod = await tryImport('js/modes/SandboxMode.js');
+  const commandBarMod = await tryImport('js/ui/CommandBar.js');
+  const manifestMod = await tryImport('js/engine/ManifestEngine.js');
+  const clusterStateMod = await tryImport('js/engine/ClusterState.js');
+  const incidentMod = await tryImport('js/engine/IncidentEngine.js');
+  if (
+    !engineMod?.GameEngine ||
+    !sandboxMod?.SandboxMode ||
+    !commandBarMod?.CommandBar ||
+    !manifestMod?.ManifestEngine ||
+    !clusterStateMod?.KUBEADMIN_PASSWORD ||
+    !incidentMod?.IncidentEngine
+  ) {
+    fail(
+      'fidelity',
+      '#70–#76: GameEngine/SandboxMode/CommandBar/ManifestEngine/ClusterState/IncidentEngine are not importable for the CLI fidelity locks'
+    );
+  } else {
+    const engine = new engineMod.GameEngine({ mode: 'sandbox' });
+    new sandboxMod.SandboxMode(engine, null).setupCluster(3);
+    const cluster = engine.cluster;
+    const simulation = engine.simulation;
+    const manifestEngine = new manifestMod.ManifestEngine({ cluster, gameEngine: engine });
+    globalThis.window = {
+      game: {
+        cluster,
+        gameEngine: engine,
+        engine: { emit() {}, on() {}, off() {} },
+        manifestEngine,
+      },
+    };
+    manifestEngine.game = globalThis.window.game;
+    const commandBar = new commandBarMod.CommandBar();
+    /** Run one oc/shell command headlessly and normalise the result shape. */
+    const cli = (raw) => {
+      try {
+        const out = commandBar.executeCommand(raw);
+        return {
+          error: Boolean(out?.error),
+          message: String(out?.message ?? ''),
+          normalized: String(out?.normalized ?? ''),
+        };
+      } catch (err) {
+        return { error: true, message: `THROW ${err?.message || err}`, normalized: '' };
+      }
+    };
+    /** Advance the controller clock only (0.05 s fixed steps). */
+    const tick = (seconds, incidentEngine = null) => {
+      const steps = Math.ceil(seconds / 0.05);
+      for (let step = 0; step < steps; step += 1) {
+        simulation.tick(0.05);
+        if (incidentEngine) incidentEngine.tick(0.05);
+      }
+    };
+    /** Tabwriter table split (3+ space columns). */
+    const tableCells = (line) =>
+      String(line)
+        .split(/\s{3,}/)
+        .map((cell) => cell.trim());
+    /** Table rows (header + data) of an oc/helm listing, ignoring blank lines. */
+    const tableRows = (message) =>
+      String(message)
+        .split('\n')
+        .filter((line) => line.trim() !== '')
+        .map((line) => tableCells(line));
+    try {
+      // ── #70 — S2I digest image pulls resolve against the IS tag history ───
+      try {
+        const registry = 'image-registry.openshift-image-registry.svc:5000';
+        const builtDigest = `sha256:${'a1b2c3d4e5f60718'.repeat(4)}`;
+        cluster.updateImageStreamTag('qa4k-build', 'webapp', 'latest', {
+          image: builtDigest,
+          dockerImageReference: `${registry}/qa4k-build/webapp@${builtDigest}`,
+        });
+        const builtPull = simulation._resolveContainerImagePull({
+          image: `${registry}/qa4k-build/webapp@${builtDigest}`,
+        });
+        if (builtPull?.ok === true) {
+          passed();
+        } else {
+          fail(
+            'fidelity',
+            `#70: the built digest reference must pull successfully once it appears in the ImageStream tag history: ${JSON.stringify(builtPull)}`
+          );
+        }
+        const unknownDigest = `sha256:${'0'.repeat(64)}`;
+        const unknownPull = simulation._resolveContainerImagePull({
+          image: `${registry}/qa4k-build/webapp@${unknownDigest}`,
+        });
+        if (unknownPull?.ok === false && /manifest unknown/.test(unknownPull.message || '')) {
+          passed();
+        } else {
+          fail(
+            'fidelity',
+            `#70: an @sha256 digest that is NOT in the tag history must fail with a real manifest-unknown pull error: ${JSON.stringify(unknownPull)}`
+          );
+        }
+        // Point 4: a pre-build :latest pod must be ImagePullBackOff until the
+        // first successful push creates the tag, then recover.
+        const latestRef = `${registry}/qa4k-nobuild/app:latest`;
+        const preBuildPull = simulation._resolveContainerImagePull({ image: latestRef });
+        cluster.updateImageStreamTag('qa4k-nobuild', 'app', 'latest', {});
+        const postBuildPull = simulation._resolveContainerImagePull({ image: latestRef });
+        if (preBuildPull?.ok === false && postBuildPull?.ok === true) {
+          passed();
+        } else {
+          fail(
+            'fidelity',
+            `#70: <ns>/<name>:latest must be unpullable before the first build push and pullable after it: ${JSON.stringify({ preBuildPull, postBuildPull })}`
+          );
+        }
+      } catch (err) {
+        fail('fidelity', `#70: S2I digest-pull lock could not run: ${err.message}`);
+      }
+
+      // ── #72 — `oc create role --resource=…` resolves the API group ───────
+      try {
+        const rbacProject = 'qa4k-rbac';
+        cli(`oc new-project ${rbacProject}`);
+        const roleRules = (name) => cluster.getByName('Role', name, rbacProject)?.rules || [];
+        const rulesEqual = (rules, expected) =>
+          rules.length === 1 && JSON.stringify(rules[0]) === JSON.stringify(expected);
+        const sccRole = cli(
+          `oc create role use-priv --verb=use --resource=securitycontextconstraints --resource-name=privileged -n ${rbacProject}`
+        );
+        const sccRules = roleRules('use-priv');
+        const sccExpected = {
+          apiGroups: ['security.openshift.io'],
+          resources: ['securitycontextconstraints'],
+          resourceNames: ['privileged'],
+          verbs: ['use'],
+        };
+        if (!sccRole.error && rulesEqual(sccRules, sccExpected)) {
+          passed();
+        } else {
+          fail(
+            'fidelity',
+            `#72: \`oc create role --resource=securitycontextconstraints\` must write apiGroups ["security.openshift.io"]: ${JSON.stringify({ error: sccRole.error, message: sccRole.message, rules: sccRules })}`
+          );
+        }
+        cli(
+          `oc create role use-scc-alias --verb=use --resource=scc --resource-name=privileged -n ${rbacProject}`
+        );
+        if (rulesEqual(roleRules('use-scc-alias'), sccExpected)) {
+          passed();
+        } else {
+          fail(
+            'fidelity',
+            `#72: the \`scc\` short resource name must resolve to securitycontextconstraints.security.openshift.io: ${JSON.stringify(roleRules('use-scc-alias'))}`
+          );
+        }
+        const nonCoreGroups = [
+          ['routes', ['route.openshift.io'], ['routes']],
+          ['imagestreamtags', ['image.openshift.io'], ['imagestreamtags']],
+          ['deployments', ['apps'], ['deployments']],
+        ];
+        for (const [resource, groups, resources] of nonCoreGroups) {
+          const name = `role-${resource}`;
+          cli(`oc create role ${name} --verb=get --resource=${resource} -n ${rbacProject}`);
+          const rules = roleRules(name);
+          if (
+            rules.length === 1 &&
+            JSON.stringify(rules[0].apiGroups) === JSON.stringify(groups) &&
+            JSON.stringify(rules[0].resources) === JSON.stringify(resources)
+          ) {
+            passed();
+          } else {
+            fail(
+              'fidelity',
+              `#72: \`oc create role --resource=${resource}\` must resolve to apiGroups ${JSON.stringify(groups)}/resources ${JSON.stringify(resources)}: ${JSON.stringify(rules)}`
+            );
+          }
+        }
+        const coreRole = cli(
+          `oc create role pod-reader --verb=get --resource=pods -n ${rbacProject}`
+        );
+        const coreRules = roleRules('pod-reader');
+        if (
+          !coreRole.error &&
+          coreRules.length === 1 &&
+          JSON.stringify(coreRules[0].apiGroups) === JSON.stringify(['']) &&
+          JSON.stringify(coreRules[0].resources) === JSON.stringify(['pods'])
+        ) {
+          passed();
+        } else {
+          fail(
+            'fidelity',
+            `#72: core resources must keep apiGroups [""] (pods): ${JSON.stringify(coreRules)}`
+          );
+        }
+        // The resolved grant must actually grant: can-i flips no → yes.
+        cli(`oc create sa priv-sa -n ${rbacProject}`);
+        const beforeGrant = cli(
+          `oc auth can-i use scc/privileged --as=system:serviceaccount:${rbacProject}:priv-sa -n ${rbacProject}`
+        );
+        cli(
+          `oc create rolebinding priv-sa-use-scc --role=use-priv --serviceaccount=${rbacProject}:priv-sa -n ${rbacProject}`
+        );
+        const afterGrant = cli(
+          `oc auth can-i use scc/privileged --as=system:serviceaccount:${rbacProject}:priv-sa -n ${rbacProject}`
+        );
+        if (beforeGrant.message.trim() === 'no' && afterGrant.message.trim() === 'yes') {
+          passed();
+        } else {
+          fail(
+            'fidelity',
+            `#72: a custom SCC "use" Role bound to the SA must flip \`oc auth can-i use scc/privileged\` from no to yes: ${JSON.stringify({ before: beforeGrant.message.trim(), prefix: beforeGrant.message.slice(0, 120), after: afterGrant.message.trim() })}`
+          );
+        }
+      } catch (err) {
+        fail('fidelity', `#72: oc create role API-group lock could not run: ${err.message}`);
+      }
+
+      // ── #73 — PendingScheduling damage is a template rollout, never a pod ──
+      try {
+        const incidentEngine = new incidentMod.IncidentEngine(engine);
+        incidentEngine.start('sandbox');
+        const pendingProject = 'qa4k-pending';
+        cli(`oc new-project ${pendingProject}`);
+        cli(
+          `oc create deployment webapp --replicas=2 --image=quay.io/openshift/origin-hello-openshift:latest -n ${pendingProject}`
+        );
+        tick(5, incidentEngine);
+        const snapshotPods = () =>
+          cluster.getByKindAndNamespace('Pod', pendingProject).map((pod) => ({
+            name: pod.metadata.name,
+            phase: pod.status?.phase || '',
+            ready: (pod.status?.containerStatuses || []).every((status) => status.ready),
+            nodeName: pod.spec?.nodeName || '',
+            nodeSelector: pod.spec?.nodeSelector || null,
+          }));
+        const beforePods = snapshotPods();
+        const runningBefore = beforePods.filter(
+          (pod) => pod.phase === 'Running' && pod.ready && pod.nodeName
+        );
+        const pendingDef = [...incidentEngine._defsById.values()].find(
+          (def) => def.name === 'PendingScheduling'
+        );
+        const pendingId = pendingDef
+          ? incidentEngine.spawnIncident(pendingDef, 'webapp', 3, {
+              exactTarget: true,
+              namespace: pendingProject,
+            })
+          : null;
+        tick(8, incidentEngine);
+        const deploymentAfter = cluster.getByName('Deployment', 'webapp', pendingProject);
+        const templateSelector = deploymentAfter?.spec?.template?.spec?.nodeSelector || null;
+        const afterPods = snapshotPods();
+        const newPods = afterPods.filter(
+          (pod) => !beforePods.some((before) => before.name === pod.name)
+        );
+        const pendingPod =
+          newPods.find((pod) => pod.phase === 'Pending') ||
+          afterPods.find((pod) => pod.phase === 'Pending');
+        const runningPodsIntact = runningBefore.every((before) => {
+          const now = afterPods.find((pod) => pod.name === before.name);
+          return (
+            now &&
+            now.phase === 'Running' &&
+            JSON.stringify(now.nodeSelector || null) === JSON.stringify(before.nodeSelector)
+          );
+        });
+        if (pendingId && templateSelector && Object.keys(templateSelector).length > 0) {
+          passed();
+        } else {
+          fail(
+            'fidelity',
+            `#73: PendingScheduling must patch the Deployment template nodeSelector (immutable pod specs), not mutate a Running pod: ${JSON.stringify({ pendingId, templateSelector })}`
+          );
+        }
+        if (runningPodsIntact) {
+          passed();
+        } else {
+          fail(
+            'fidelity',
+            `#73: pods already Running before the incident must never be re-pended or have their spec mutated: ${JSON.stringify({ beforePods, afterPods })}`
+          );
+        }
+        if (pendingPod && !pendingPod.nodeName) {
+          passed();
+        } else {
+          fail(
+            'fidelity',
+            `#73: the damaged rollout must leave a NEW unscheduled (Pending, no nodeName) pod while old pods serve: ${JSON.stringify({ newPods, afterPods })}`
+          );
+        }
+        const allPodEvents = cluster
+          .getByKind('Pod')
+          .flatMap((pod) =>
+            (pod.events || []).map((event) => ({ pod: pod.metadata.name, ...event }))
+          );
+        const failedScheduling = allPodEvents.find((event) => event.reason === 'FailedScheduling');
+        if (
+          failedScheduling &&
+          /^0\/3 nodes are available: \d+ node\(s\) didn't match Pod's node affinity\/selector\.$/.test(
+            String(failedScheduling.message || '')
+          )
+        ) {
+          passed();
+        } else {
+          fail(
+            'fidelity',
+            `#73: the Pending pod must carry the k8s v1.35 FailedScheduling wording "0/<N> nodes are available: <M> node(s) didn't match Pod's node affinity/selector.": ${JSON.stringify({ failedScheduling, events: allPodEvents.slice(0, 8) })}`
+          );
+        }
+        const healedEvents = [
+          ...allPodEvents,
+          ...cluster.getByKind('ReplicaSet').flatMap((rs) => rs.events || []),
+        ].filter((event) => /^Healed$/.test(String(event.reason || '')));
+        if (healedEvents.length === 0) {
+          passed();
+        } else {
+          fail(
+            'fidelity',
+            `#73: the incident must not fabricate a kubelet "Healed" event: ${JSON.stringify(healedEvents)}`
+          );
+        }
+        const widePods = cli(`oc get pods -o wide -n ${pendingProject}`).message;
+        const wideRows = tableRows(widePods);
+        const wideHeader = wideRows[0] || [];
+        const nodeColumn = wideHeader.indexOf('NODE');
+        const pendingRow = wideRows.find((row) => pendingPod && row[0] === pendingPod.name);
+        if (
+          nodeColumn >= 0 &&
+          pendingRow &&
+          pendingRow[nodeColumn] === '<none>' &&
+          !/^10\.|^192\.168\./.test(pendingRow[nodeColumn] || '')
+        ) {
+          passed();
+        } else {
+          fail(
+            'fidelity',
+            `#73: \`oc get pods -o wide\` NODE column for the Pending pod must be <none> (never a node InternalIP): ${JSON.stringify({ header: wideHeader, pendingRow, pendingPod })}`
+          );
+        }
+        // The documented fixes must heal the state (delete-pod is not the fix).
+        const undone = cli(`oc rollout undo deployment/webapp -n ${pendingProject}`);
+        tick(10, incidentEngine);
+        const healedPods = snapshotPods();
+        const healedSelector =
+          cluster.getByName('Deployment', 'webapp', pendingProject)?.spec?.template?.spec
+            ?.nodeSelector || null;
+        if (
+          !undone.error &&
+          healedPods.every((pod) => pod.phase === 'Running') &&
+          (!healedSelector || Object.keys(healedSelector).length === 0)
+        ) {
+          passed();
+        } else {
+          fail(
+            'fidelity',
+            `#73: \`oc rollout undo\` must remove the bad template nodeSelector and restore Running pods: ${JSON.stringify({ undone: undone.message, healedSelector, healedPods })}`
+          );
+        }
+      } catch (err) {
+        fail('fidelity', `#73: PendingScheduling rollout lock could not run: ${err.message}`);
+      }
+
+      // ── #74 — a Job pod template is immutable (real API-server rejection) ──
+      try {
+        const jobsProject = 'qa4k-jobs';
+        cli(`oc new-project ${jobsProject}`);
+        cli(
+          `oc create quota prod-quota --hard=pods=20,requests.cpu=4,requests.memory=8Gi -n ${jobsProject}`
+        );
+        cli(`oc create job db-migrate --image=busybox:latest -n ${jobsProject}`);
+        tick(4);
+        const rejected = cli(
+          `oc set resources job/db-migrate -n ${jobsProject} --requests=cpu=100m,memory=128Mi`
+        );
+        const job = cluster.getByName('Job', 'db-migrate', jobsProject);
+        const jobContainer = job?.spec?.template?.spec?.containers?.[0];
+        if (
+          rejected.error &&
+          /The Job "db-migrate" is invalid: spec\.template: Invalid value/.test(rejected.message) &&
+          /field is immutable/.test(rejected.message) &&
+          !jobContainer?.resources?.requests
+        ) {
+          passed();
+        } else {
+          fail(
+            'fidelity',
+            `#74: \`oc set resources job/<name>\` must be rejected with the real "spec.template: Invalid value: ...: field is immutable" error and must not mutate the Job: ${JSON.stringify({ error: rejected.error, message: rejected.message, resources: jobContainer?.resources })}`
+          );
+        }
+        tick(4);
+        const jobAfter = cluster.getByName('Job', 'db-migrate', jobsProject);
+        if (jobAfter?.status?.phase !== 'Complete' && jobAfter?.status?.phase !== 'Succeeded') {
+          passed();
+        } else {
+          fail(
+            'fidelity',
+            `#74: the rejected requestless Job must stay blocked by the quota (no completion): ${JSON.stringify(jobAfter?.status)}`
+          );
+        }
+        // Deployment pod templates stay mutable.
+        cli(
+          `oc create deployment web --image=quay.io/openshift/origin-hello-openshift:latest -n ${jobsProject}`
+        );
+        const deploymentUpdate = cli(
+          `oc set resources deployment/web --requests=cpu=100m,memory=128Mi -n ${jobsProject}`
+        );
+        if (!deploymentUpdate.error) {
+          passed();
+        } else {
+          fail(
+            'fidelity',
+            `#74: Deployment templates remain mutable, so \`oc set resources deployment/<name>\` must still work: ${deploymentUpdate.message}`
+          );
+        }
+        // The exam-correct fix: delete + recreate the Job from YAML with requests.
+        manifestEngine.writeFile(
+          'qa4k-job.yaml',
+          [
+            'apiVersion: batch/v1',
+            'kind: Job',
+            'metadata:',
+            '  name: db-migrate',
+            `  namespace: ${jobsProject}`,
+            'spec:',
+            '  template:',
+            '    spec:',
+            '      restartPolicy: Never',
+            '      containers:',
+            '        - name: db-migrate',
+            '          image: busybox:latest',
+            '          command: ["sh", "-c", "echo migrated"]',
+            '          resources:',
+            '            requests:',
+            '              cpu: 100m',
+            '              memory: 128Mi',
+          ].join('\n')
+        );
+        cli(`oc delete job db-migrate -n ${jobsProject}`);
+        const recreated = cli(`oc apply -f qa4k-job.yaml`);
+        let recreatedComplete = false;
+        for (let played = 0; played < 20; played += 1) {
+          tick(1);
+          const recreatedJob = cluster.getByName('Job', 'db-migrate', jobsProject);
+          if (recreatedJob && /^(Complete|Succeeded)$/.test(String(recreatedJob.status?.phase))) {
+            recreatedComplete = true;
+            break;
+          }
+        }
+        if (!recreated.error && recreatedComplete) {
+          passed();
+        } else {
+          fail(
+            'fidelity',
+            `#74: deleting the Job and recreating it from YAML with resources.requests must complete: ${JSON.stringify({ error: recreated.error, message: recreated.message, recreatedComplete })}`
+          );
+        }
+        const dryRunJob = cli(
+          `oc create job qa-dry-job --image=busybox:latest --dry-run=client -o yaml -n ${jobsProject}`
+        );
+        if (
+          !dryRunJob.error &&
+          /-\s+name:\s+qa-dry-job\b/.test(dryRunJob.message) &&
+          !/-\s+name:\s+main\b/.test(dryRunJob.message)
+        ) {
+          passed();
+        } else {
+          fail(
+            'fidelity',
+            `#74: \`oc create job --dry-run=client -o yaml\` must name the container after the Job (kubectl create_job.go), not "main": ${JSON.stringify(dryRunJob.message)}`
+          );
+        }
+      } catch (err) {
+        fail('fidelity', `#74: Job immutability lock could not run: ${err.message}`);
+      }
+
+      // ── #75 — debug signals: real cert errors, shell substitution, job
+      //    deadline wording and honest admission failure messages ────────────
+      try {
+        const shellProject = 'qa4k-shell';
+        cli(`oc new-project ${shellProject}`);
+        cli(
+          `oc create deployment web --image=quay.io/openshift/origin-hello-openshift:latest -n ${shellProject}`
+        );
+        tick(4);
+        // `oc create secret tls` must fail on missing files like real oc.
+        const missingCert = cli(
+          `oc create secret tls missing-tls --cert=missing.crt --key=missing.key -n ${shellProject}`
+        );
+        const missingSecret = cluster.getByName('Secret', 'missing-tls', shellProject);
+        if (
+          missingCert.error &&
+          /open missing\.crt: no such file or directory/.test(missingCert.message) &&
+          !missingSecret
+        ) {
+          passed();
+        } else {
+          fail(
+            'fidelity',
+            `#75: \`oc create secret tls x --cert=missing.crt --key=missing.key\` must fail with "open missing.crt: no such file or directory" and create no Secret: ${JSON.stringify({ error: missingCert.error, message: missingCert.message, created: Boolean(missingSecret) })}`
+          );
+        }
+        // The real openssl flow creates the files, so the Secret then exists.
+        cli(
+          'openssl req -x509 -newkey rsa:2048 -nodes -keyout tls.key -out tls.crt -days 365 -subj /CN=qa4k.example.com'
+        );
+        const tlsSecretResult = cli(
+          `oc create secret tls qa-tls --cert=tls.crt --key=tls.key -n ${shellProject}`
+        );
+        const tlsSecret = cluster.getByName('Secret', 'qa-tls', shellProject);
+        if (
+          !tlsSecretResult.error &&
+          tlsSecret?.data?.['tls.crt'] &&
+          tlsSecret?.data?.['tls.key']
+        ) {
+          passed();
+        } else {
+          fail(
+            'fidelity',
+            `#75: after the real openssl flow, \`oc create secret tls\` must succeed with tls.crt/tls.key: ${JSON.stringify({ error: tlsSecretResult.error, message: tlsSecretResult.message, keys: Object.keys(tlsSecret?.data || {}) })}`
+          );
+        }
+        // Word-final $(...) must expand (curl one-liner from the issue).
+        cli(`oc expose svc web -n ${shellProject} --hostname=web.qa4k.example.com`);
+        tick(3);
+        const substituted = cli(
+          `curl -s http://$(oc get route web -n ${shellProject} -o jsonpath={.spec.host})`
+        );
+        const trailingSlash = cli(
+          `curl -s http://$(oc get route web -n ${shellProject} -o jsonpath={.spec.host})/`
+        );
+        if (
+          !substituted.error &&
+          !/URL rejected|Malformed input/.test(substituted.message) &&
+          /Hello OpenShift!/.test(substituted.message) &&
+          !/URL rejected|Malformed input/.test(trailingSlash.message) &&
+          substituted.message === trailingSlash.message
+        ) {
+          passed();
+        } else {
+          fail(
+            'fidelity',
+            `#75: a word-final command substitution must expand (\`curl http://$(oc get route … -o jsonpath={.spec.host})\`): ${JSON.stringify({ substituted, trailingSlash })}`
+          );
+        }
+        // hello-openshift answers plain text (fmt.Fprintln), not an HTML body.
+        if (
+          /^Hello OpenShift!\n?$/.test(substituted.message) &&
+          !/<html>|<body>/i.test(substituted.message)
+        ) {
+          passed();
+        } else {
+          fail(
+            'fidelity',
+            `#76: hello-openshift must answer the plain-text body "Hello OpenShift!\\n" (real origin hello-openshift fmt.Fprintln): ${JSON.stringify(substituted.message)}`
+          );
+        }
+        // /tmp is a real virtual-filesystem directory: write/read/list/remove.
+        const redirected = cli(`oc get deployment web -n ${shellProject} > /tmp/webapp.yaml`);
+        const listTmp = cli('ls /tmp');
+        const catTmp = cli('cat /tmp/webapp.yaml');
+        const removeTmp = cli('rm /tmp/webapp.yaml');
+        const listAfterRemove = cli('ls /tmp');
+        if (
+          !redirected.error &&
+          !listTmp.error &&
+          /webapp\.yaml/.test(listTmp.message) &&
+          !catTmp.error &&
+          /deployment|kind|NAME|metadata/i.test(catTmp.message) &&
+          !removeTmp.error &&
+          !/webapp\.yaml/.test(listAfterRemove.message)
+        ) {
+          passed();
+        } else {
+          fail(
+            'fidelity',
+            `#76: /tmp must be a consistent virtual directory (redirect, ls, cat, rm): ${JSON.stringify({ redirected, listTmp, catTmp, removeTmp, listAfterRemove })}`
+          );
+        }
+        // L19: exact job-controller DeadlineExceeded message (no "(8s)" suffix).
+        cli(`oc create job slow --image=busybox:latest -n ${shellProject} -- sh -c "sleep 30"`);
+        cli(
+          `oc patch job/slow -n ${shellProject} -p '{"spec":{"activeDeadlineSeconds":2}}' --type=merge`
+        );
+        let deadlineMessage = '';
+        for (let played = 0; played < 30; played += 1) {
+          tick(1);
+          const slowJob = cluster
+            .getByKindAndNamespace('Job', shellProject)
+            .find((entry) => entry.metadata.name === 'slow');
+          const deadlineEvent = (slowJob?.events || []).find(
+            (event) => event.reason === 'DeadlineExceeded'
+          );
+          if (deadlineEvent) {
+            deadlineMessage = String(deadlineEvent.message || '');
+            break;
+          }
+        }
+        if (deadlineMessage === 'Job was active longer than specified deadline') {
+          passed();
+        } else {
+          fail(
+            'fidelity',
+            `#75: the DeadlineExceeded event message must be exactly "Job was active longer than specified deadline" (k8s v1.35 job controller), got ${JSON.stringify(deadlineMessage)}`
+          );
+        }
+        // lab 8: a Deployment whose ServiceAccount does not exist must not get
+        // a Running pod — ServiceAccount admission records FailedCreate.
+        const admissionProject = 'qa4k-admission';
+        cli(`oc new-project ${admissionProject}`);
+        engine.applyManifestObject({
+          apiVersion: 'apps/v1',
+          kind: 'Deployment',
+          metadata: { name: 'privileged-app', namespace: admissionProject },
+          spec: {
+            replicas: 1,
+            selector: { matchLabels: { app: 'privileged-app' } },
+            template: {
+              metadata: { labels: { app: 'privileged-app' } },
+              spec: {
+                serviceAccountName: 'priv-sa',
+                containers: [
+                  {
+                    name: 'main',
+                    image: 'quay.io/openshift/origin-hello-openshift:latest',
+                    securityContext: { privileged: true },
+                  },
+                ],
+              },
+            },
+          },
+        });
+        const admissionEvents = () =>
+          cluster
+            .getByKindAndNamespace('ReplicaSet', admissionProject)
+            .flatMap((rs) => rs.events || []);
+        let saMissingMessage = '';
+        for (let played = 0; played < 20 && !saMissingMessage; played += 1) {
+          tick(1);
+          saMissingMessage = String(
+            (
+              admissionEvents().find((event) =>
+                /serviceaccount "priv-sa" not found/.test(String(event.message || ''))
+              ) || {}
+            ).message || ''
+          );
+        }
+        if (
+          /error looking up service account qa4k-admission\/priv-sa: serviceaccount "priv-sa" not found/.test(
+            saMissingMessage
+          )
+        ) {
+          passed();
+        } else {
+          fail(
+            'fidelity',
+            `#75: a Deployment whose ServiceAccount does not exist must record the real ServiceAccount admission failure "error looking up service account <ns>/priv-sa: serviceaccount \\"priv-sa\\" not found": ${JSON.stringify({ saMissingMessage, events: admissionEvents().slice(0, 6) })}`
+          );
+        }
+        cli(`oc create sa priv-sa -n ${admissionProject}`);
+        let sccMessage = '';
+        for (let played = 0; played < 20 && !sccMessage; played += 1) {
+          tick(1);
+          sccMessage = String(
+            (
+              admissionEvents().find((event) =>
+                /unable to validate against any security context constraint/.test(
+                  String(event.message || '')
+                )
+              ) || {}
+            ).message || ''
+          );
+        }
+        if (
+          /^.*unable to validate against any security context constraint: \[provider "[a-z-]+": .*Privileged containers are not allowed/.test(
+            sccMessage
+          )
+        ) {
+          passed();
+        } else {
+          fail(
+            'fidelity',
+            `#76: the SCC FailedCreate message must append the per-provider reasons (provider + "Privileged containers are not allowed"): ${JSON.stringify({ sccMessage, events: admissionEvents().slice(0, 6) })}`
+          );
+        }
+        const admittedPods = cluster.getByKindAndNamespace('Pod', admissionProject);
+        if (
+          admittedPods.every(
+            (pod) =>
+              !(pod.spec?.containers || []).some(
+                (container) => container.securityContext?.privileged
+              )
+          )
+        ) {
+          passed();
+        } else {
+          fail(
+            'fidelity',
+            `#75: the privileged Deployment must not produce a Running pod before the SCC grant: ${JSON.stringify(admittedPods.map((pod) => ({ name: pod.metadata.name, phase: pod.status?.phase })))}`
+          );
+        }
+      } catch (err) {
+        fail('fidelity', `#75: debug-signal shell/admission lock could not run: ${err.message}`);
+      }
+
+      // ── #76 — kubectl-1.35 output fidelity (explain/jsonpath/kustomize/
+      //    new-app/lists/login/helm/describe) and MetalLB/heartbeat models ────
+      try {
+        // explain v2 plaintext template (real kubectl 1.35 / oc 4.22).
+        const explainStrategy = cli('oc explain deployment.spec.strategy').message;
+        const explainDeployment = cli('oc explain deployment').message;
+        const explainPod = cli('oc explain pod').message;
+        const strategyLines = explainStrategy.split('\n');
+        const strategyFieldsAt = strategyLines.findIndex((line) => line === 'FIELDS:');
+        const strategyHeaderOk =
+          /^GROUP: {6}apps$/m.test(explainStrategy) &&
+          /^KIND: {7}Deployment$/m.test(explainStrategy) &&
+          /^VERSION: {4}v1$/m.test(explainStrategy) &&
+          /^FIELD: strategy <DeploymentStrategy>$/m.test(explainStrategy) &&
+          strategyLines[3] === '' &&
+          strategyLines[5] === '';
+        if (strategyHeaderOk) {
+          passed();
+        } else {
+          fail(
+            'fidelity',
+            `#76: \`oc explain deployment.spec.strategy\` must use the kubectl-1.35 explain v2 header (GROUP/KIND/VERSION aligned at col 13, blank line, "FIELD: strategy <DeploymentStrategy>", blank line): ${JSON.stringify(explainStrategy.slice(0, 500))}`
+          );
+        }
+        const rollingUpdateLine = strategyLines.findIndex(
+          (line) => line === '  rollingUpdate\t<RollingUpdateDeployment>'
+        );
+        const typeLine = strategyLines.findIndex((line) => line === '  type\t<string>');
+        const descriptionAt = strategyLines.findIndex((line) => line === 'DESCRIPTION:');
+        const descriptionIndented = strategyLines
+          .slice(descriptionAt + 1, strategyFieldsAt)
+          .some((line) => /^ {4}\S/.test(line));
+        if (
+          descriptionAt >= 0 &&
+          descriptionIndented &&
+          rollingUpdateLine > strategyFieldsAt &&
+          typeLine > rollingUpdateLine &&
+          strategyFieldsAt > descriptionAt &&
+          strategyLines[strategyFieldsAt - 1] !== ''
+        ) {
+          passed();
+        } else {
+          fail(
+            'fidelity',
+            `#76: explain v2 FIELDS must list rollingUpdate before type (tab + <Type>, 2-space indent) right after the 4-space-indented DESCRIPTION, including the enum line: ${JSON.stringify(explainStrategy.slice(0, 900))}`
+          );
+        }
+        // (The FIELDS entries and enum are checked separately to keep each
+        // failure message actionable.)
+        if (
+          rollingUpdateLine >= 0 &&
+          typeLine > rollingUpdateLine &&
+          /^  enum: Recreate, RollingUpdate$/m.test(explainStrategy)
+        ) {
+          passed();
+        } else {
+          fail(
+            'fidelity',
+            `#76: explain v2 must include rollingUpdate <RollingUpdateDeployment>, type <string> and the "enum: Recreate, RollingUpdate" line: ${JSON.stringify({ rollingUpdateLine, typeLine, excerpt: explainStrategy.slice(-400) })}`
+          );
+        }
+        const deploymentFields = explainDeployment.split('\n');
+        const deploymentFidsAt = deploymentFields.findIndex((line) => line === 'FIELDS:');
+        const afterFields = deploymentFields.slice(deploymentFidsAt + 1);
+        const topLevelOk =
+          /^GROUP: {6}apps$/m.test(explainDeployment) &&
+          /^KIND: {7}Deployment$/m.test(explainDeployment) &&
+          !/^FIELD:[ \t]/m.test(explainDeployment) &&
+          deploymentFidsAt >= 0 &&
+          afterFields.some((line) => line === '  spec\t<DeploymentSpec>') &&
+          afterFields.some((line) => line === '  metadata\t<ObjectMeta>') &&
+          afterFields.some((line) => line === '  status\t<DeploymentStatus>') &&
+          afterFields.every(
+            (line) => line === '' || /^  \S+\t<.+>$/.test(line) || /^ {6}enum:/.test(line)
+          );
+        if (topLevelOk) {
+          passed();
+        } else {
+          fail(
+            'fidelity',
+            `#76: top-level \`oc explain deployment\` must print GROUP/KIND/VERSION + DESCRIPTION + an alphabetically sorted FIELDS list with tab + <Type> entries and no per-field descriptions: ${JSON.stringify(explainDeployment.slice(0, 900))}`
+          );
+        }
+        if (
+          !/^GROUP:/m.test(explainPod) &&
+          /^KIND: {7}Pod$/m.test(explainPod) &&
+          /^VERSION: {4}v1$/m.test(explainPod)
+        ) {
+          passed();
+        } else {
+          fail(
+            'fidelity',
+            `#76: explain v2 omits the GROUP line for core kinds (Pod): ${JSON.stringify(explainPod.slice(0, 400))}`
+          );
+        }
+
+        // jsonpath: object/slice values marshal like client-go (JSON, brackets).
+        const shellProject = 'qa4k-shell';
+        cli(`oc set env deployment/web -n ${shellProject} APP_ENV=production`);
+        const envJsonPath = cli(
+          `oc get deployment web -n ${shellProject} -o jsonpath={.spec.template.spec.containers[0].env}`
+        ).message.trim();
+        let envParsed = null;
+        try {
+          envParsed = JSON.parse(envJsonPath);
+        } catch {
+          envParsed = null;
+        }
+        if (
+          Array.isArray(envParsed) &&
+          envParsed[0]?.name === 'APP_ENV' &&
+          envParsed[0]?.value === 'production'
+        ) {
+          passed();
+        } else {
+          fail(
+            'fidelity',
+            `#76: jsonpath on a list field must marshal as a JSON array (\`{.spec.template.spec.containers[0].env}\` → [{"name":"APP_ENV","value":"production"}]): ${JSON.stringify(envJsonPath)}`
+          );
+        }
+        const portsJsonPath = cli(
+          `oc get svc web -n ${shellProject} -o jsonpath={.spec.ports}`
+        ).message.trim();
+        let portsParsed = null;
+        try {
+          portsParsed = JSON.parse(portsJsonPath);
+        } catch {
+          portsParsed = null;
+        }
+        if (
+          Array.isArray(portsParsed) &&
+          portsParsed.length >= 1 &&
+          Number(portsParsed[0].port) === 8080
+        ) {
+          passed();
+        } else {
+          fail(
+            'fidelity',
+            `#76: jsonpath on the Service ports slice must print a JSON array (client-go jsonpath.go), got ${JSON.stringify(portsJsonPath)}`
+          );
+        }
+        const scalarJsonPath = cli(
+          `oc get deployment web -n ${shellProject} -o jsonpath={.spec.replicas}`
+        ).message.trim();
+        if (scalarJsonPath === '1') {
+          passed();
+        } else {
+          fail(
+            'fidelity',
+            `#76: jsonpath scalar output must stay a bare value: ${JSON.stringify(scalarJsonPath)}`
+          );
+        }
+
+        // kustomize / apply -k: Kustomize legacy sort (Service before Deployment).
+        manifestEngine.writeFile(
+          'qa4k-kustomize/kustomization.yaml',
+          'resources:\n  - deployment.yaml\n  - service.yaml\n'
+        );
+        manifestEngine.writeFile(
+          'qa4k-kustomize/deployment.yaml',
+          [
+            'apiVersion: apps/v1',
+            'kind: Deployment',
+            'metadata:',
+            '  name: kd',
+            '  namespace: default',
+            'spec:',
+            '  replicas: 1',
+            '  selector:',
+            '    matchLabels: {app: kd}',
+            '  template:',
+            '    metadata:',
+            '      labels: {app: kd}',
+            '    spec:',
+            '      containers:',
+            '        - name: c',
+            '          image: quay.io/openshift/origin-hello-openshift:latest',
+          ].join('\n')
+        );
+        manifestEngine.writeFile(
+          'qa4k-kustomize/service.yaml',
+          [
+            'apiVersion: v1',
+            'kind: Service',
+            'metadata:',
+            '  name: ks',
+            '  namespace: default',
+            'spec:',
+            '  selector: {app: kd}',
+            '  ports:',
+            '    - port: 8080',
+          ].join('\n')
+        );
+        const rendered = cli('oc kustomize qa4k-kustomize').message;
+        const serviceAt = rendered.indexOf('kind: Service');
+        const deploymentAt = rendered.indexOf('kind: Deployment');
+        if (serviceAt >= 0 && deploymentAt > serviceAt) {
+          passed();
+        } else {
+          fail(
+            'fidelity',
+            `#76: \`oc kustomize\` must apply the Kustomize legacy sort (Service before Deployment): ${JSON.stringify({ serviceAt, deploymentAt, excerpt: rendered.slice(0, 500) })}`
+          );
+        }
+        const appliedKustomize = cli('oc apply -k qa4k-kustomize').message;
+        if (
+          appliedKustomize.indexOf('service/ks') >= 0 &&
+          appliedKustomize.indexOf('deployment.apps/kd') > appliedKustomize.indexOf('service/ks')
+        ) {
+          passed();
+        } else {
+          fail(
+            'fidelity',
+            `#76: \`oc apply -k\` must create resources in Kustomize legacy sort order (Service before Deployment): ${JSON.stringify(appliedKustomize)}`
+          );
+        }
+
+        // oc new-app Service port names are "%d-%s" (8080-tcp / 3306-tcp).
+        const portsProject = 'qa4k-ports';
+        cli(`oc new-project ${portsProject}`);
+        cli(
+          `oc new-app --image=quay.io/openshift/origin-hello-openshift:latest --name=api -n ${portsProject}`
+        );
+        const apiService = cluster.getByName('Service', 'api', portsProject);
+        if (apiService?.spec?.ports?.[0]?.name === '8080-tcp') {
+          passed();
+        } else {
+          fail(
+            'fidelity',
+            `#76: \`oc new-app\` must name Service ports fmt.Sprintf("%d-%s") → "8080-tcp", got ${JSON.stringify(apiService?.spec?.ports)}`
+          );
+        }
+        cli(
+          `oc new-app --image=registry.redhat.io/rhel9/mysql-80 --name=database -n ${portsProject}`
+        );
+        const mysqlService = cluster.getByName('Service', 'database', portsProject);
+        if (mysqlService?.spec?.ports?.[0]?.name === '3306-tcp') {
+          passed();
+        } else {
+          fail(
+            'fidelity',
+            `#76: the MySQL new-app Service port must be "3306-tcp", got ${JSON.stringify(mysqlService?.spec?.ports)}`
+          );
+        }
+        cli(`oc expose svc api -n ${portsProject}`);
+        const routeLines = cli(`oc get route api -n ${portsProject}`)
+          .message.split('\n')
+          .filter((line) => line.trim() !== '');
+        const routeDataLine = routeLines[1] || '';
+        if (/^api\s+\S+\s+\S+\s+8080-tcp(?:\s|$)/.test(routeDataLine)) {
+          passed();
+        } else {
+          fail(
+            'fidelity',
+            `#76: the Route PORT column must reflect the new-app Service port name "8080-tcp": ${JSON.stringify(routeDataLine)}`
+          );
+        }
+
+        // oc login project listing (loginoptions.go).
+        cli(`oc new-project qa4k-login-a`);
+        cli(`oc new-project qa4k-login-b`);
+        const login = cli(`oc login -u kubeadmin -p ${clusterStateMod.KUBEADMIN_PASSWORD}`).message;
+        const loginHeader =
+          "You have access to the following projects and can switch between them with 'oc project <projectname>':";
+        const loginLines = login.split('\n');
+        const loginHeaderAt = loginLines.indexOf(loginHeader);
+        const currentMarkerAt = loginLines.indexOf('  * qa4k-login-b');
+        const otherProjectAt = loginLines.findIndex((line) => /^ {4}default$/.test(line));
+        if (
+          !/You have access to \d+ projects/.test(login) &&
+          loginHeaderAt >= 0 &&
+          loginLines[loginHeaderAt + 1] === '' &&
+          currentMarkerAt > loginHeaderAt &&
+          otherProjectAt > loginHeaderAt &&
+          /^Using project "qa4k-login-b"\.$/m.test(login)
+        ) {
+          passed();
+        } else {
+          fail(
+            'fidelity',
+            `#76: \`oc login\` must print the real 4.22 project list ("You have access to the following projects and can switch between them with 'oc project <projectname>':", "  * <current>", 4-space others, "Using project \\"<x>\\"."): ${JSON.stringify(login.slice(0, 900))}`
+          );
+        }
+        const singleProjectText = allFiles
+          .filter((rel) => rel.startsWith('js/') && rel.endsWith('.js'))
+          .map((rel) => read(rel))
+          .some((src) => src.includes('You have one project on this server:'));
+        if (singleProjectText) {
+          passed();
+        } else {
+          fail(
+            'fidelity',
+            '#76: the exact-one-project login text `You have one project on this server: "<project>"` must exist in the CLI implementation'
+          );
+        }
+
+        // describe quota: canonical resource.Quantity strings.
+        const quotaProject = 'qa4k-quota';
+        cli(`oc new-project ${quotaProject}`);
+        cli(
+          `oc create quota q --hard=pods=10,requests.cpu=4,requests.memory=8Gi -n ${quotaProject}`
+        );
+        cli(
+          `oc create deployment web --image=quay.io/openshift/origin-hello-openshift:latest -n ${quotaProject}`
+        );
+        cli(
+          `oc set resources deployment/web --requests=cpu=1000m,memory=1024Mi -n ${quotaProject}`
+        );
+        tick(4);
+        const quotaDescribe = cli(`oc describe quota q -n ${quotaProject}`).message;
+        const quotaRows = quotaDescribe
+          .split('\n')
+          .filter((line) => line.trim() !== '')
+          .map((line) => line.split(/\s{2,}/).map((cell) => cell.trim()));
+        const cpuRow = quotaRows.find((row) => row[0] === 'requests.cpu') || [];
+        const memoryRow = quotaRows.find((row) => row[0] === 'requests.memory') || [];
+        if (
+          cpuRow[1] === '1' &&
+          cpuRow[2] === '4' &&
+          memoryRow[1] === '1Gi' &&
+          memoryRow[2] === '8Gi'
+        ) {
+          passed();
+        } else {
+          fail(
+            'fidelity',
+            `#76: \`oc describe quota\` Used values must be canonical quantities (1000m→1, 1024Mi→1Gi): ${JSON.stringify({ cpuRow, memoryRow, excerpt: quotaDescribe })}`
+          );
+        }
+
+        // oc get all: the API server returns lists sorted by name.
+        const orderProject = 'qa4k-order';
+        cli(`oc new-project ${orderProject}`);
+        cli(
+          `oc create deployment web --image=quay.io/openshift/origin-hello-openshift:latest -n ${orderProject}`
+        );
+        cli(`oc expose deployment web -n ${orderProject}`);
+        cli(
+          `oc create deployment shop --image=quay.io/openshift/origin-hello-openshift:latest -n ${orderProject}`
+        );
+        cli(`oc expose deployment shop -n ${orderProject}`);
+        const allList = cli(`oc get all -n ${orderProject}`).message;
+        const allLines = allList.split('\n');
+        const serviceOrder = allLines
+          .filter((line) => /^service\//.test(line))
+          .map((line) => line.split(/\s+/)[0]);
+        const deploymentOrder = allLines
+          .filter((line) => /^deployment\.apps\//.test(line))
+          .map((line) => line.split(/\s+/)[0]);
+        if (
+          JSON.stringify(serviceOrder) === JSON.stringify(['service/shop', 'service/web']) &&
+          JSON.stringify(deploymentOrder) ===
+            JSON.stringify(['deployment.apps/shop', 'deployment.apps/web'])
+        ) {
+          passed();
+        } else {
+          fail(
+            'fidelity',
+            `#76: \`oc get all\` must be name-sorted like the API server (shop before web): ${JSON.stringify({ serviceOrder, deploymentOrder })}`
+          );
+        }
+
+        // oc get identities: USER UID is populated (OpenShift always sets one).
+        // Use the real login/`createIdentity` path this time: a raw Identity
+        // manifest only references the user by name, which is the fallback edge.
+        cli('oc create user qa4k-user');
+        cluster.createIdentity('htpasswd', 'qa4k-user', 'qa4k-user');
+        const identities = tableRows(cli('oc get identities').message);
+        const identityRow =
+          identities.find((row) => row[0] === 'htpasswd:qa4k-user') ||
+          identities.find((row) => /htpasswd:qa4k-user/.test(String(row[0]))) ||
+          [];
+        if (
+          /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+            identityRow[identityRow.length - 1] || ''
+          )
+        ) {
+          passed();
+        } else {
+          fail(
+            'fidelity',
+            `#76: \`oc get identities\` must populate the USER UID column: ${JSON.stringify({ header: identities[0], row: identityRow })}`
+          );
+        }
+
+        // helm list: UPDATED is the Go time.Time.String() timestamp, not 0s.
+        const helmProject = 'qa4k-helm';
+        cli(`oc new-project ${helmProject}`);
+        cli('helm repo add bitnami https://charts.bitnami.com/bitnami');
+        const helmInstall = cli(`helm install webapp helm/webapp -n ${helmProject}`);
+        const helmList = tableRows(cli(`helm list -n ${helmProject}`).message);
+        const updatedColumn = (helmList[0] || []).indexOf('UPDATED');
+        const updatedValue = (helmList[1] || [])[updatedColumn] || '';
+        if (
+          !helmInstall.error &&
+          updatedColumn >= 0 &&
+          /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(\.\d{1,9})? \+0000 UTC$/.test(updatedValue) &&
+          updatedValue !== '0s'
+        ) {
+          passed();
+        } else {
+          fail(
+            'fidelity',
+            `#76: \`helm list\` UPDATED must be the Go time.Time.String() form (YYYY-MM-DD HH:MM:SS.fffffffff +0000 UTC), not "0s": ${JSON.stringify({ updatedColumn, updatedValue, rows: helmList.slice(0, 2), error: helmInstall.message })}`
+          );
+        }
+
+        // describe pod: Waiting prints only Reason; Terminated Last State shows
+        // Started before Finished; Running containers carry real IDs.
+        const podsProject = 'qa4k-pods';
+        cli(`oc new-project ${podsProject}`);
+        engine.applyManifestObject({
+          apiVersion: 'v1',
+          kind: 'Pod',
+          metadata: { name: 'qa4k-crash', namespace: podsProject },
+          spec: {
+            containers: [
+              {
+                name: 'main',
+                image: 'quay.io/openshift/origin-hello-openshift:latest',
+              },
+            ],
+          },
+        });
+        const crashPod = cluster.getByName('Pod', 'qa4k-crash', podsProject);
+        if (crashPod) {
+          crashPod.status = {
+            ...(crashPod.status || {}),
+            phase: 'CrashLoopBackOff',
+            containerStatuses: [
+              {
+                name: 'main',
+                image: 'quay.io/openshift/origin-hello-openshift:latest',
+                ready: false,
+                started: false,
+                restartCount: 2,
+                state: {
+                  waiting: {
+                    reason: 'CrashLoopBackOff',
+                    message: 'Back-off restarting failed container',
+                  },
+                },
+                lastState: {
+                  terminated: {
+                    exitCode: 1,
+                    reason: 'Error',
+                    startedAt: '2026-11-05T20:00:00Z',
+                    finishedAt: '2026-11-05T20:00:01Z',
+                  },
+                },
+              },
+            ],
+          };
+          cluster.update(crashPod.uid, crashPod);
+        }
+        const crashDescribe = cli(`oc describe pod qa4k-crash -n ${podsProject}`).message;
+        if (
+          crashPod &&
+          /^ {4}State: +Waiting$/m.test(crashDescribe) &&
+          /^ {6}Reason: +CrashLoopBackOff$/m.test(crashDescribe) &&
+          !/^ {6}Message: +Back-off restarting failed container/m.test(crashDescribe)
+        ) {
+          passed();
+        } else {
+          fail(
+            'fidelity',
+            `#76: describe pod must print only Reason for a Waiting container state (no "Message: Back-off restarting failed container"): ${JSON.stringify(crashDescribe.slice(0, 1100))}`
+          );
+        }
+        const crashLines = crashDescribe.split('\n');
+        const lastStateAt = crashLines.findIndex((line) =>
+          /^ {4}Last State: +Terminated$/.test(line)
+        );
+        const lastStateBlock = crashLines.slice(lastStateAt, lastStateAt + 8).join('\n');
+        const startedAtIdx = lastStateBlock.indexOf('Started:');
+        const finishedAtIdx = lastStateBlock.indexOf('Finished:');
+        if (lastStateAt >= 0 && startedAtIdx >= 0 && startedAtIdx < finishedAtIdx) {
+          passed();
+        } else {
+          fail(
+            'fidelity',
+            `#76: a Terminated Last State must print Started before Finished: ${JSON.stringify({ lastStateAt, block: lastStateBlock })}`
+          );
+        }
+        cli(
+          `oc create deployment run --image=quay.io/openshift/origin-hello-openshift:latest -n ${podsProject}`
+        );
+        tick(4);
+        const runPod = cluster
+          .getByKindAndNamespace('Pod', podsProject)
+          .find((pod) => /^run-/.test(pod.metadata.name));
+        const runningDescribe = runPod
+          ? cli(`oc describe pod ${runPod.metadata.name} -n ${podsProject}`).message
+          : '';
+        if (
+          /Container ID: +cri-o:\/\/[0-9a-f]{16,}/.test(runningDescribe) &&
+          /Image ID: +[^\n]*sha256:[0-9a-f]{64}/.test(runningDescribe) &&
+          !/Container ID: +<none>/.test(runningDescribe) &&
+          !/Image ID: +<none>/.test(runningDescribe)
+        ) {
+          passed();
+        } else {
+          fail(
+            'fidelity',
+            `#76: a Running container must describe with a real Container ID (cri-o://…) and Image ID digest, never <none>: ${JSON.stringify(runningDescribe.slice(0, 900))}`
+          );
+        }
+
+        // describe job prints Active Deadline Seconds whenever it is set.
+        const jobDescribeProject = 'qa4k-job-describe';
+        cli(`oc new-project ${jobDescribeProject}`);
+        cli(`oc create job deadline-job --image=busybox:latest -n ${jobDescribeProject}`);
+        cli(
+          `oc patch job/deadline-job -n ${jobDescribeProject} -p '{"spec":{"activeDeadlineSeconds":8}}' --type=merge`
+        );
+        const jobDescribe = cli(`oc describe job deadline-job -n ${jobDescribeProject}`).message;
+        if (/^Active Deadline Seconds: +8s$/m.test(jobDescribe)) {
+          passed();
+        } else {
+          fail(
+            'fidelity',
+            `#76: \`oc describe job\` must print "Active Deadline Seconds:  8s" whenever spec.activeDeadlineSeconds is set: ${JSON.stringify(jobDescribe.slice(0, 900))}`
+          );
+        }
+
+        // NotReady node: LastHeartbeatTime freezes at the last kubelet post.
+        const heartbeatEngine = new incidentMod.IncidentEngine(engine);
+        heartbeatEngine.start('sandbox');
+        const nodeNotReadyDef = [...heartbeatEngine._defsById.values()].find(
+          (def) => def.name === 'NodeNotReady'
+        );
+        heartbeatEngine.spawnIncident(nodeNotReadyDef, 'worker-1', 3, { exactTarget: true });
+        tick(2, heartbeatEngine);
+        const readReadyCondition = () => {
+          const node = cluster
+            .getByKind('Node')
+            .find((entry) => entry.metadata.name === 'worker-1');
+          return (node?.status?.conditions || []).find((condition) => condition.type === 'Ready');
+        };
+        const heartbeatOnset = readReadyCondition();
+        tick(10, heartbeatEngine);
+        const heartbeatLater = readReadyCondition();
+        if (
+          heartbeatOnset?.status === 'Unknown' &&
+          /Kubelet stopped posting node status/.test(String(heartbeatOnset?.message || '')) &&
+          heartbeatOnset.lastHeartbeatTime === heartbeatLater?.lastHeartbeatTime &&
+          heartbeatOnset.lastTransitionTime === heartbeatLater?.lastTransitionTime
+        ) {
+          passed();
+        } else {
+          fail(
+            'fidelity',
+            `#76: a NotReady node's LastHeartbeatTime must freeze at the kubelet's last post (it must not keep advancing), with LastTransitionTime fixed at onset: ${JSON.stringify({ onset: heartbeatOnset, later: heartbeatLater })}`
+          );
+        }
+
+        // MetalLB: redhat-operators OCP-minor CSV name and ONE canonical
+        // IPAllocated emitter (SimulationTick), no cloud-provider leftovers.
+        const jsSources = allFiles
+          .filter((rel) => rel.startsWith('js/') && rel.endsWith('.js'))
+          .map((rel) => ({ rel, src: read(rel) }));
+        const csvName = 'metallb-operator.v4.22.0-202610281200';
+        const newCsvRefs = jsSources
+          .filter(({ src }) => src.includes(csvName))
+          .map(({ rel }) => rel);
+        const oldCsvRefs = jsSources
+          .filter(({ src }) => src.includes('metallb-operator.v0.14.9'))
+          .map(({ rel }) => rel);
+        if (oldCsvRefs.length === 0 && newCsvRefs.length >= 3) {
+          passed();
+        } else {
+          fail(
+            'fidelity',
+            `#76: the MetalLB CSV must be the redhat-operators OCP-minor bundle "${csvName}" everywhere (seed + hints/labels), never metallb-operator.v0.14.9: ${JSON.stringify({ newCsvRefs, oldCsvRefs })}`
+          );
+        }
+        const ensuredLoadBalancerRefs = jsSources
+          .filter(({ src }) => /EnsuredLoadBalancer/.test(src))
+          .map(({ rel }) => rel);
+        if (ensuredLoadBalancerRefs.length === 0) {
+          passed();
+        } else {
+          fail(
+            'fidelity',
+            `#76: the cloud-provider EnsuredLoadBalancer event must be gone (MetalLB emits IPAllocated): ${JSON.stringify(ensuredLoadBalancerRefs)}`
+          );
+        }
+        const simulationSource = read('js/engine/SimulationTick.js');
+        const otherEmitters = jsSources
+          .filter(
+            ({ rel, src }) =>
+              /IPAllocated/.test(src) &&
+              rel !== 'js/engine/SimulationTick.js' &&
+              /^js\/(engine|resources)\//.test(rel)
+          )
+          .map(({ rel }) => rel);
+        if (
+          /IPAllocated/.test(simulationSource) &&
+          /Assigned IP/.test(simulationSource) &&
+          otherEmitters.length === 0
+        ) {
+          passed();
+        } else {
+          fail(
+            'fidelity',
+            `#76: MetalLB IPAllocated must have exactly ONE canonical emitter (SimulationTick, "Assigned IP [...]"); other emitters: ${JSON.stringify(otherEmitters)}`
+          );
+        }
+      } catch (err) {
+        fail('fidelity', `#76: CLI output/metallb/heartbeat lock could not run: ${err.message}`);
+      }
+    } finally {
+      delete globalThis.window;
+    }
+  }
+}
+
 // ── 5. Campaign, challenges, incidents and EX280 content ──────────────────
 const levelsMod = await tryImport('js/data/CampaignLevels.js');
 const challengesMod = await tryImport('js/modes/ChallengeMode.js');

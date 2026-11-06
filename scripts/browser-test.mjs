@@ -445,6 +445,22 @@ async function bootMenu() {
   await sleep(700);
   await closeOverlays();
 }
+/**
+ * Turn off the sandbox's random container-failure chaos for deterministic
+ * assertions (#43/#55/#56/#61–#67). Sections that explicitly assert the disable
+ * keep working; sections that test platform graphs, DNS pods, rollouts or CLI
+ * output would otherwise flake when a random failure lands mid-assertion.
+ */
+async function disableRandomFailures() {
+  try {
+    await evaluate(() => {
+      const sim = window.game?.gameEngine?.simulation;
+      if (sim) sim.randomFailureRate = 0;
+    });
+  } catch {
+    /* page may be navigating */
+  }
+}
 async function bootSandbox() {
   await goto('/?mode=sandbox&tutorial=0');
   const ok = await waitFor(
@@ -456,6 +472,7 @@ async function bootSandbox() {
   );
   await sleep(2000);
   await closeOverlays();
+  await disableRandomFailures();
   return ok;
 }
 async function bootCampaign(level = 1) {
@@ -466,6 +483,7 @@ async function bootCampaign(level = 1) {
   );
   await sleep(1500);
   await closeOverlays();
+  await disableRandomFailures();
   return ok;
 }
 async function launch(mode, id) {
@@ -502,6 +520,7 @@ async function launch(mode, id) {
     12000
   );
   await sleep(1200);
+  await disableRandomFailures();
   return ok;
 }
 async function returnToMenu() {
@@ -2479,7 +2498,11 @@ spec:
   await expectCmd('cli: oc get all', `oc get all -n ${project}`, /service|deployment/i);
   await expectCmd('cli: oc status', 'oc status', /In project|svc\/|deployment/i);
   await expectCmd('cli: oc projects', 'oc projects', /ex280-demo|default/);
-  await expectCmd('cli: oc explain', 'oc explain deployment', /KIND:|Deployment/i);
+  await expectCmd(
+    'cli: oc explain',
+    'oc explain deployment',
+    /GROUP: +apps[\s\S]*KIND: +Deployment[\s\S]*VERSION: +v1/
+  );
   await expectCmd('cli: oc api-resources', 'oc api-resources', /buildconfig|route|APIVERSION/i);
   await expectCmd(
     'cli: oc get events',
@@ -4280,6 +4303,9 @@ objects:
     'oc create -f followup-template.yaml -n openshift-config',
     /created|configured/
   );
+  // #76: changing projectRequestTemplate rolls openshift-apiserver out for
+  // ~8 game seconds; new projects created inside that window do NOT inherit it.
+  await advanceSimulation(9);
   await expectCmd(
     'followup: new-project uses the configured template',
     'oc new-project followup-check',
@@ -4788,6 +4814,13 @@ await runSection('qa-incidents', async () => {
             (pod.status?.conditions || []).find((condition) => condition.type === 'Ready')
               ?.status || null,
           scc: pod.metadata?.annotations?.['openshift.io/scc'] || null,
+          waiting: (pod.status?.containerStatuses || [])
+            .map((status) => status.state?.waiting?.reason)
+            .filter(Boolean),
+          restarts: (pod.status?.containerStatuses || []).reduce(
+            (sum, status) => sum + (status.restartCount || 0),
+            0
+          ),
           owner: (pod.metadata?.ownerReferences || []).map((ref) => ref.kind).join(','),
         }));
     }, namespace);
@@ -5371,21 +5404,43 @@ await runSection('qa-incidents', async () => {
       image: container.image,
     };
   });
+  // #75: the level starts healthy — the CrashLoopBackOff incident seeds the
+  // invalid APP_MODE through a real Deployment rollout, so the bad value is NOT
+  // in the template before it fires.
   assert(
-    l3Deploy.env.some((entry) => entry.name === 'APP_MODE' && entry.value === 'debug-invalid'),
-    'qa-incidents: L3 starting Deployment carries the invalid APP_MODE seed',
+    !l3Deploy.env.some((entry) => entry.name === 'APP_MODE' && entry.value === 'debug-invalid'),
+    'qa-incidents: L3 starts healthy (bad APP_MODE is not in the template yet)',
     JSON.stringify(l3Deploy.env)
   );
   await advanceGame(12);
   const l3Incident = await activeIncident('CrashLoopBackOff');
+  const l3SeededEnv = await evaluate(() => {
+    const deploy = (window.game?.cluster?.getByKind('Deployment') || []).find(
+      (entry) => entry.metadata?.name === 'web-app'
+    );
+    const container = deploy?.spec?.template?.spec?.containers?.[0] || {};
+    return (container.env || []).map((entry) => `${entry.name}=${entry.value}`);
+  });
+  assert(
+    l3SeededEnv.some((entry) => entry === 'APP_MODE=debug-invalid'),
+    'qa-incidents: the L3 incident seeds APP_MODE=debug-invalid into the live Deployment',
+    JSON.stringify(l3SeededEnv)
+  );
   assert(
     Boolean(l3Incident),
     'qa-incidents: L3 CrashLoopBackOff activates',
     JSON.stringify(await incidentNames())
   );
+  // #75: the incident rolls a new ReplicaSet; the kubelet container state is
+  // what carries CrashLoopBackOff, so accept either the pod phase or the
+  // container waiting reason.
   let l3Pods = await podsIn('ops-lab');
   assert(
-    l3Pods.length > 0 && l3Pods.some((pod) => pod.phase === 'CrashLoopBackOff'),
+    l3Pods.length > 0 &&
+      l3Pods.some(
+        (pod) =>
+          pod.phase === 'CrashLoopBackOff' || (pod.waiting || []).includes('CrashLoopBackOff')
+      ),
     'qa-incidents: L3 workload Pods are crash-looping',
     JSON.stringify(l3Pods)
   );
@@ -5516,6 +5571,10 @@ await runSection('qa-scenarios', async () => {
           waiting: (pod.status?.containerStatuses || [])
             .map((status) => status.state?.waiting?.reason)
             .filter(Boolean),
+          restarts: (pod.status?.containerStatuses || []).reduce(
+            (sum, status) => sum + (status.restartCount || 0),
+            0
+          ),
         })),
       namespace
     );
@@ -5566,11 +5625,12 @@ await runSection('qa-scenarios', async () => {
     'scenarios: L3 broken Deployment keeps a neutral image (#42-3)',
     l3Container?.image
   );
+  // #75: L3 starts healthy; the incident seed rolls the invalid APP_MODE in.
   assert(
-    (l3Container?.env || []).some(
+    !(l3Container?.env || []).some(
       (entry) => entry.name === 'APP_MODE' && entry.value === 'debug-invalid'
     ),
-    'scenarios: L3 Deployment actually carries env APP_MODE=debug-invalid',
+    'scenarios: L3 starts healthy (the incident seeds the faulty APP_MODE via rollout)',
     JSON.stringify(l3Container?.env)
   );
   const l3Fired = await advanceUntil(
@@ -5578,6 +5638,14 @@ await runSection('qa-scenarios', async () => {
     20
   );
   assert(l3Fired, 'scenarios: L3 CrashLoopBackOff incident fires');
+  const l3SeededContainer = await deploymentContainer('web-app', 'ops-lab');
+  assert(
+    (l3SeededContainer?.env || []).some(
+      (entry) => entry.name === 'APP_MODE' && entry.value === 'debug-invalid'
+    ),
+    'scenarios: L3 Deployment actually carries env APP_MODE=debug-invalid after the incident rollout',
+    JSON.stringify(l3SeededContainer?.env)
+  );
   const l3Pods = await podsIn('ops-lab');
   assert(
     l3Pods.some((pod) => pod.phase === 'CrashLoopBackOff') ||
@@ -5585,8 +5653,18 @@ await runSection('qa-scenarios', async () => {
     'scenarios: L3 Pods visibly CrashLoopBackOff',
     JSON.stringify(l3Pods)
   );
-  const l3PodName = l3Pods[0]?.name;
+  const l3CrashPod = l3Pods.find(
+    (pod) => (pod.waiting || []).includes('CrashLoopBackOff') || pod.phase === 'CrashLoopBackOff'
+  );
+  const l3PodName = l3CrashPod?.name || '';
   if (l3PodName) {
+    // Wait for at least one restart so the previous container instance exists.
+    await advanceUntil(
+      async () =>
+        ((await podsIn('ops-lab')).find((pod) => pod.name === l3PodName)?.restarts || 0) >= 1,
+      30,
+      1
+    );
     const previousLogs = await command(`oc logs ${l3PodName} -n ops-lab --previous`);
     assert(
       /configuration validation failed: APP_MODE has an unsupported value/.test(
@@ -5823,10 +5901,54 @@ await runSection('qa-scenarios', async () => {
     !(await findResource('Pod', 'p1', 'prod')),
     'scenarios: lab 12 forbidden direct Pod object was never created'
   );
+  // #74: a Job pod template is immutable — real API servers reject
+  // `oc set resources job/...`. The exam-correct fix is delete + recreate from
+  // a manifest (or a LimitRange with defaultRequest) and recreate the Job.
   const jobResources = await command(
     'oc set resources job/db-migrate -n prod --requests=cpu=100m,memory=128Mi'
   );
-  assert(!jobResources.error, 'scenarios: lab 12 Job requests can be set', jobResources.message);
+  assert(
+    jobResources.error &&
+      /The Job "db-migrate" is invalid: spec\.template: Invalid value/.test(jobResources.message) &&
+      /field is immutable/.test(jobResources.message),
+    'scenarios: lab 12 `oc set resources job/...` is rejected (immutable pod template)',
+    jobResources.message.slice(0, 400)
+  );
+  const deleteMigrate = await command('oc delete job db-migrate -n prod');
+  assert(
+    !deleteMigrate.error,
+    'scenarios: lab 12 broken Job can be deleted',
+    deleteMigrate.message
+  );
+  const recreateMigrate = await command(
+    [
+      'oc apply -f - <<EOF',
+      'apiVersion: batch/v1',
+      'kind: Job',
+      'metadata:',
+      '  name: db-migrate',
+      '  namespace: prod',
+      'spec:',
+      '  template:',
+      '    spec:',
+      '      restartPolicy: Never',
+      '      containers:',
+      '        - name: db-migrate',
+      '          image: busybox:latest',
+      '          command: ["sh", "-c", "echo migrated"]',
+      '          resources:',
+      '            requests:',
+      '              cpu: 100m',
+      '              memory: 128Mi',
+      'EOF',
+    ].join('\n'),
+    400
+  );
+  assert(
+    !recreateMigrate.error,
+    'scenarios: lab 12 Job is recreated from YAML with resources.requests',
+    recreateMigrate.message.slice(0, 300)
+  );
   const jobCompletes = await advanceUntil(async () => {
     const job = await liveJob('db-migrate', 'prod');
     return job?.phase === 'Complete';
@@ -5834,7 +5956,7 @@ await runSection('qa-scenarios', async () => {
   const completedMigration = await liveJob('db-migrate', 'prod');
   assert(
     jobCompletes,
-    'scenarios: lab 12 Job completes after its requests are set',
+    'scenarios: lab 12 recreated Job completes with its requests',
     JSON.stringify(completedMigration)
   );
   await returnToMenu();
@@ -6410,9 +6532,12 @@ await runSection('qa-cli', async () => {
   await runCmd('oc create service clusterip tls-app --tcp=443:8080');
   await runCmd('oc create route passthrough tls-app --service=tls-app');
   out = await runCmd('oc get route tls-app');
+  // #76: real oc sets spec.port.targetPort to the Service port NAME when the
+  // port is named (`443-tcp` for --tcp=443:8080), never the Service targetPort
+  // number; the PORT column reflects that value.
   assert(
-    /\s8080\s+passthrough\s/.test(out.message),
-    'qa-cli #36: passthrough Route PORT is the backend port',
+    /\s443-tcp\s+passthrough\s/.test(out.message) && !/\s8080\s+passthrough\s/.test(out.message),
+    'qa-cli #36: passthrough Route PORT is the Service port name (443-tcp)',
     out.message
   );
   await runCmd(
@@ -6460,18 +6585,21 @@ await runSection('qa-cli', async () => {
     out.message
   );
 
-  // Quota describe: aligned Resource/Used/Hard columns.
+  // Quota describe: aligned Resource/Used/Hard columns. #76: Used prints the
+  // canonical resource.Quantity ("0", never "0m").
   await runCmd('oc create quota q1 --hard=pods=10,requests.cpu=2,limits.memory=4Gi');
   out = await runCmd('oc describe quota');
   const quotaLines = String(out.message).split('\n');
   const quotaHeader = quotaLines.find((line) => /^Resource\s/.test(line)) || '';
   const quotaRow = quotaLines.find((line) => /^requests\.cpu\s/.test(line)) || '';
+  const quotaCells = quotaRow.split(/\s{2,}/).map((cell) => cell.trim());
   assert(
     /^Resource\s+Used\s+Hard$/.test(quotaHeader) &&
-      quotaHeader.indexOf('Used') === quotaRow.indexOf('0m') &&
-      quotaHeader.indexOf('Hard') === quotaRow.indexOf('2'),
-    'qa-cli #36: describe quota columns align',
-    JSON.stringify({ quotaHeader, quotaRow })
+      quotaCells[0] === 'requests.cpu' &&
+      quotaCells[1] === '0' &&
+      quotaCells[2] === '2',
+    'qa-cli #36: describe quota columns align (canonical Used quantity)',
+    JSON.stringify({ quotaHeader, quotaRow, quotaCells })
   );
 
   // CronJob TIMEZONE <none>.
@@ -7102,10 +7230,14 @@ await runSection('qa-workstation', async () => {
   );
   assert(await routeAdmitted('pt'), 'qa-workstation: passthrough Route admitted');
   await tick(10);
+  // #75: a passthrough Route forwards the raw TLS bytes, so a plain-HTTP
+  // backend (hello-openshift) cannot complete the handshake — -k does not help.
   const curlPassthrough = await runCmd(`curl -k https://${ptHost}`);
   assert(
-    !curlPassthrough.error && /Hello OpenShift/.test(curlPassthrough.message),
-    'qa-workstation: curl -k https://<passthrough-route> passes TLS to the backend',
+    curlPassthrough.error &&
+      /curl: \(35\)/.test(curlPassthrough.message) &&
+      /wrong version number|SSL routines/i.test(curlPassthrough.message),
+    'qa-workstation: passthrough TLS to a plain-HTTP backend fails the handshake (curl 35)',
     curlPassthrough.message.slice(0, 240)
   );
   const curlPassthroughHttp = await runCmd(`curl http://${ptHost}`);
@@ -8979,17 +9111,42 @@ spec:
     'coverage: L13 the rotated HTPasswd password works after the OAuth rollout',
     aliceRotatedLogin.message.slice(0, 220)
   );
+  const rotationProgress = () =>
+    evaluate(() =>
+      (window.game.app.modeInstance.objectiveProgress || [])
+        .filter((objective) => objective.type === 'password')
+        .map((objective) => ({ type: objective.type, completed: objective.completed }))
+    );
+  // Pump the campaign update loop deterministically (#71/#75): the password
+  // objective is state-graded, and a full-suite run must not depend on the live
+  // rAF cadence (a busy machine can starve the wall-clock waitFor below).
+  await evaluate(() => {
+    const engine = window.game?.gameEngine;
+    if (!engine) return;
+    for (let index = 0; index < 60; index += 1) {
+      engine._gameTime = (engine._gameTime || 0) + 50;
+      for (const callback of engine._updateCallbacks || []) {
+        try {
+          callback(0.05, engine._gameTime);
+        } catch {
+          /* a UI callback must not stop the deterministic pump */
+        }
+      }
+    }
+  });
+  const rotationDone = await waitFor(
+    async () => (await rotationProgress()).some((objective) => objective.completed),
+    15000
+  );
   assert(
-    await waitFor(
-      () =>
-        evaluate(() =>
-          (window.game.app.modeInstance.objectiveProgress || []).some(
-            (objective) => objective.type === 'password' && objective.completed
-          )
-        ),
-      15000
-    ),
-    'coverage: L13 password objective completes after rotation + login with the new password'
+    rotationDone,
+    'coverage: L13 password objective completes after rotation + login with the new password',
+    JSON.stringify({
+      progress: await rotationProgress(),
+      aliceLogins: await evaluate(() =>
+        (window.game.gameEngine.getLoginHistory?.() || []).filter((entry) => entry.user === 'alice')
+      ),
+    })
   );
 
   await runCmd(`oc login -u kubeadmin -p ${await kubeadminPassword()}`);
@@ -10064,6 +10221,14 @@ await runSection('qa-issue42', async () => {
       }
       return true;
     }, seconds);
+  /** Play up to `maxGameSeconds` until `predicate()` is true (#75). */
+  const advanceUntil = async (predicate, maxGameSeconds = 40, step = 2) => {
+    for (let played = 0; played < maxGameSeconds; played += step) {
+      await advanceGame(step);
+      if (await predicate()) return true;
+    }
+    return predicate();
+  };
 
   assert(await bootSandbox(), '#42: sandbox boots for builds/auth/exec checks');
   // The build failure injection is chaos, not Serial-queue semantics: disable it
@@ -10336,40 +10501,50 @@ await runSection('qa-issue42', async () => {
     app?.hidePause?.({ resume: true });
     app?.modeInstance?.resume?.();
   });
-  const crashState = await evaluate(() => {
-    const deployment = window.game.cluster.getByName('Deployment', 'web-app', 'ops-lab');
-    const container = deployment?.spec?.template?.spec?.containers?.[0] || {};
-    return { image: container.image || '', env: container.env || [] };
-  });
+  // #75: L3 starts healthy — the incident's `seed:` rolls the bad APP_MODE into
+  // the Deployment, so wait for the rollout and identify the crashing pod by
+  // its kubelet container state (real pods stay phase=Running with
+  // containerStatuses[*].state.waiting.reason=CrashLoopBackOff).
+  const crashPodState = () =>
+    evaluate(() => {
+      const pods = window.game.cluster.getByKindAndNamespace('Pod', 'ops-lab') || [];
+      const crashingPod = pods.find((pod) =>
+        (pod.status?.containerStatuses || []).some(
+          (status) => status.state?.waiting?.reason === 'CrashLoopBackOff'
+        )
+      );
+      const deployment = window.game.cluster.getByName('Deployment', 'web-app', 'ops-lab');
+      const container = deployment?.spec?.template?.spec?.containers?.[0] || {};
+      return {
+        image: container.image || '',
+        env: (container.env || []).map((entry) => `${entry.name}=${entry.value}`),
+        crashPod: crashingPod?.metadata.name || null,
+        crashPodRestarts: (crashingPod?.status?.containerStatuses || []).reduce(
+          (sum, status) => sum + (status.restartCount || 0),
+          0
+        ),
+      };
+    });
+  const crashSeeded = await advanceUntil(
+    async () => Boolean((await crashPodState()).crashPod),
+    40,
+    2
+  );
+  const crashState = await crashPodState();
   assert(
     !/v2-bad-config/.test(crashState.image),
     '#42: the L3 crash seed keeps a neutral image (no v2-bad-config)',
     crashState.image
   );
   assert(
-    crashState.env.some((entry) => entry.name === 'APP_MODE' && entry.value === 'debug-invalid'),
-    '#42: the L3 crash seed only injects the invalid APP_MODE env var',
+    crashSeeded && crashState.env.includes('APP_MODE=debug-invalid'),
+    '#42: the L3 crash incident injects only the invalid APP_MODE env var (real rollout after trigger)',
     JSON.stringify(crashState.env)
   );
-  for (let elapsed = 0; elapsed < 30; elapsed += 2) {
-    await advanceGame(2);
-    if (
-      await evaluate(() =>
-        (window.game.cluster.getByKindAndNamespace('Pod', 'ops-lab') || []).some((pod) =>
-          /CrashLoopBackOff/.test(pod.status?.phase || '')
-        )
-      )
-    ) {
-      break;
-    }
-  }
-  const crashPod = await evaluate(
-    () =>
-      (window.game.cluster.getByKindAndNamespace('Pod', 'ops-lab') || []).find((pod) =>
-        /CrashLoopBackOff/.test(pod.status?.phase || '')
-      )?.metadata.name || null
-  );
+  const crashPod = crashState.crashPod;
   assert(Boolean(crashPod), '#42: a CrashLoopBackOff pod exists in L3', String(crashPod));
+  // Wait for one terminated instance so `oc logs --previous` has its container.
+  await advanceUntil(async () => (await crashPodState()).crashPodRestarts >= 1, 30, 1);
   const crashLog = await runCmd(`oc logs ${crashPod} -n ops-lab`);
   const crashLogPrevious = await runCmd(`oc logs ${crashPod} -n ops-lab --previous`);
   for (const [label, text] of [
@@ -10393,7 +10568,9 @@ await runSection('qa-issue42', async () => {
   const crashResolved = await evaluate(() => ({
     active: window.game.app.incidentEngine.activeIncidents.size,
     crashed: (window.game.cluster.getByKindAndNamespace('Pod', 'ops-lab') || []).filter((pod) =>
-      /CrashLoopBackOff/.test(pod.status?.phase || '')
+      (pod.status?.containerStatuses || []).some(
+        (status) => status.state?.waiting?.reason === 'CrashLoopBackOff'
+      )
     ).length,
   }));
   assert(
@@ -12991,8 +13168,8 @@ await runSection('qa-issue50-54', async () => {
   // ── #54d: `oc exec … -- curl -s localhost:8080` hits the pod's own app ──
   result = await runCmd('oc exec deploy/webapp -n qa-route5054 -- curl -s localhost:8080');
   assert(
-    !result.error && result.message.trim() === '<html><body>Hello OpenShift!</body></html>',
-    "#54: `oc exec deploy/webapp -- curl -s localhost:8080` returns the pod app's real body",
+    !result.error && result.message.trim() === 'Hello OpenShift!',
+    "#54: `oc exec deploy/webapp -- curl -s localhost:8080` returns the pod app's real plain-text body",
     result.message.slice(0, 240)
   );
   assert(
@@ -13498,8 +13675,8 @@ await runSection('qa-issue50-54', async () => {
     if (options.checkExec) {
       result = await runCmd('oc exec deploy/webapp -n prod-platform -- curl -s localhost:8080');
       assert(
-        !result.error && result.message.trim() === '<html><body>Hello OpenShift!</body></html>',
-        `${label}: L20 exec localhost returns the pod app's real body (no "container main")`,
+        !result.error && result.message.trim() === 'Hello OpenShift!',
+        `${label}: L20 exec localhost returns the pod app's real plain-text body (no "container main")`,
         result.message.slice(0, 240)
       );
     }
@@ -13951,6 +14128,14 @@ await runSection('qa-issue55-56', async () => {
 
   // ═══ Round 1: #55A control-plane taint + scheduling (running sandbox) ═══
   assert(await bootSandbox(), '#55A: a fresh sandbox boots for the control-plane checks');
+  // The sandbox seeds a 0.002/container/s random-failure rate; this section
+  // asserts the deterministic platform graph (router/DNS/control-plane pods),
+  // so a transient random container failure would make the platform assertions
+  // flaky. Disable it for the section like the other deterministic CLI sections.
+  await evaluate(() => {
+    const sim = window.game?.gameEngine?.simulation;
+    if (sim) sim.randomFailureRate = 0;
+  });
 
   result = await runCmd('oc describe node master-0');
   assert(
@@ -19424,6 +19609,2478 @@ await runSection('qa-issue69', async () => {
     );
   } finally {
     await closeIsolatedPage(webglFailure);
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// QA ROUND 1.14.0 — issues #70–#76 permanent regression coverage
+// ═══════════════════════════════════════════════════════════════════════════
+await runSection('qa-issue70-76', async () => {
+  // Every assertion here is behavioural: it drives the same oc/shell commands a
+  // learner would and checks the cluster state + output a real OpenShift 4.22 /
+  // k8s 1.35 cluster would produce. Static twins live in scripts/verify.mjs §4k.
+  const booted = await bootSandbox();
+  assert(booted, '#70–#76: a fresh sandbox boots for the QA round section');
+
+  /** Advance BOTH the controller and incident clocks deterministically. */
+  const advanceGame = async (seconds) =>
+    evaluate((secs) => {
+      const sim = window.game?.gameEngine?.simulation;
+      const engine = window.game?.incidentEngine;
+      if (!sim || typeof sim.tick !== 'function') return false;
+      const steps = Math.ceil(secs / 0.05);
+      for (let index = 0; index < steps; index += 1) {
+        sim.tick(0.05);
+        if (engine && typeof engine.tick === 'function') engine.tick(0.05);
+      }
+      return true;
+    }, seconds);
+  /** Advance until predicate() is true (or maxSeconds of game time). */
+  const advanceUntil = async (predicate, maxSeconds = 120, step = 2) => {
+    for (let played = 0; played < maxSeconds; played += step) {
+      await advanceGame(step);
+      if (await predicate()) return true;
+    }
+    return false;
+  };
+  const command = (raw, wait = 150) => runCmd(raw, wait);
+  /** Non-empty output lines. */
+  const messageLines = (message) =>
+    String(message ?? '')
+      .split('\n')
+      .filter((line) => line.trim() !== '');
+  /** First top-level `<label>:` line of a describe output. */
+  const fieldLine = (message, label) =>
+    messageLines(message).find((line) => line.startsWith(`${label}:`)) || '';
+  /** Index of the first top-level `<label>:` line (-1 when absent). */
+  const fieldIndex = (message, label) =>
+    messageLines(message).findIndex((line) => line.startsWith(`${label}:`));
+  /** Live pods in a namespace (trimmed fields the assertions need). */
+  const podsIn = (namespace) =>
+    evaluate(
+      (ns) =>
+        (window.game.cluster.getByKindAndNamespace('Pod', ns) || []).map((pod) => ({
+          name: pod.metadata.name,
+          phase: pod.status?.phase || 'Pending',
+          nodeName: pod.spec?.nodeName || '',
+          images: (pod.spec?.containers || []).map((container) => container.image),
+          waiting: (pod.status?.containerStatuses || [])
+            .map((status) => status.state?.waiting?.reason)
+            .filter(Boolean),
+          restarts: (pod.status?.containerStatuses || []).reduce(
+            (sum, status) => sum + (status.restartCount || 0),
+            0
+          ),
+          scc: pod.metadata?.annotations?.['openshift.io/scc'] || null,
+          createdGameSeconds: pod._createdAtGameSeconds ?? null,
+        })),
+      namespace
+    );
+  /** Live Deployments in a namespace. */
+  const deploymentsIn = (namespace) =>
+    evaluate(
+      (ns) =>
+        (window.game.cluster.getByKindAndNamespace('Deployment', ns) || []).map((deployment) => ({
+          name: deployment.metadata.name,
+          replicas: deployment.spec?.replicas ?? 0,
+          images: (deployment.spec?.template?.spec?.containers || []).map(
+            (container) => container.image
+          ),
+          nodeSelector: deployment.spec?.template?.spec?.nodeSelector || null,
+          env: (deployment.spec?.template?.spec?.containers || []).flatMap((container) =>
+            (container.env || []).map((entry) => `${entry.name}=${entry.value}`)
+          ),
+          available: deployment.status?.availableReplicas ?? 0,
+          updated: deployment.status?.updatedReplicas ?? 0,
+        })),
+      namespace
+    );
+  /** ReplicaSet FailedCreate messages in a namespace. */
+  const replicaSetFailures = (namespace) =>
+    evaluate(
+      (ns) =>
+        (window.game.cluster.getByKindAndNamespace('ReplicaSet', ns) || []).flatMap((replicaSet) =>
+          (replicaSet.events || [])
+            .filter((event) => event.reason === 'FailedCreate')
+            .map((event) => String(event.message || ''))
+        ),
+      namespace
+    );
+  /** Incident names currently active. */
+  const incidentNames = () =>
+    evaluate(() =>
+      (window.game?.incidentEngine?.getActiveIncidents?.() || []).map((incident) => incident.name)
+    );
+  /** Live objective evaluation through the real ObjectiveEvaluator. */
+  const objectiveResults = () =>
+    evaluate(async () => {
+      const mode = window.game?.app?.modeInstance;
+      const def = mode?.currentChallengeDef || mode?.currentLevelDef;
+      if (!def) return [];
+      const { evaluateObjective } = await import('/js/engine/ObjectiveEvaluator.js');
+      const ctx = {
+        clusterState: window.game.cluster,
+        gameEngine: window.game.gameEngine,
+        incidentEngine: window.game.incidentEngine,
+        scoringEngine: window.game.scoringEngine,
+        manifestEngine: window.game.manifestEngine,
+        objectiveProgress: mode.objectiveProgress,
+        levelDef: def,
+      };
+      return def.objectives.map((objective) => ({
+        label: objective.label,
+        ...evaluateObjective(objective, ctx),
+      }));
+    });
+  const objectiveByLabel = (results, pattern) =>
+    results.find((entry) => pattern.test(entry.label || ''));
+  const writeVirtualFile = (path, text) =>
+    evaluate(({ filePath, fileText }) => window.game.manifestEngine.writeFile(filePath, fileText), {
+      filePath: path,
+      fileText: text,
+    });
+  const startCampaign = async (id) => {
+    await bootMenu();
+    const started = await launch('campaign', id);
+    await closeOverlays();
+    return started;
+  };
+  const startChallenge = async (id) => {
+    await bootMenu();
+    const started = await launch('challenge', id);
+    await closeOverlays();
+    await waitFor(() => evaluate(() => !!window.game?.manifestEngine), 8000);
+    await evaluate(() => window.game?.app?.modeInstance?.seedChallengeFiles?.());
+    await sleep(250);
+    return started;
+  };
+  const modeStatus = async () => {
+    // CampaignMode.update() runs on the wall clock; force one evaluation pass so
+    // getStatus() reflects the state the test just created.
+    await evaluate(() => window.game.app.modeInstance.update?.());
+    await sleep(300);
+    return evaluate(() => window.game.app.modeInstance.getStatus());
+  };
+  const kubeadminPw = await kubeadminPassword();
+
+  // ── #70 — S2I build output is pullable: digest refs resolve via IS tags ──
+  try {
+    const project = 'qa70-s2i';
+    await command(`oc new-project ${project}`, 200);
+    const newApp = await command(
+      'oc new-app openshift/nodejs:20-ubi9~https://github.com/openshift/nodejs-ex --name=webapp -n qa70-s2i',
+      700
+    );
+    assert(
+      !newApp.error &&
+        /imagestream\.image\.openshift\.io "webapp" created/.test(newApp.message) &&
+        /buildconfig\.build\.openshift\.io "webapp" created/.test(newApp.message) &&
+        /deployment\.apps "webapp" created/.test(newApp.message),
+      '#70: `oc new-app <builder-image>~<git>` creates the webapp IS + BC + Deployment',
+      newApp.message.slice(0, 400)
+    );
+    // Point 4: the pre-build :latest pod must NOT be Running before the first
+    // push — it is ImagePullBackOff until the build completes.
+    await advanceGame(3);
+    const preBuildPods = await podsIn(project);
+    const preBuildPullable = preBuildPods.some(
+      (pod) => pod.phase === 'Running' && pod.waiting.length === 0
+    );
+    assert(
+      preBuildPods.length === 0 ||
+        (!preBuildPullable && preBuildPods.every((pod) => pod.waiting.length > 0)),
+      '#70: the pre-build <ns>/webapp:latest pod is ImagePullBackOff until the first push (never Running early)',
+      JSON.stringify(preBuildPods)
+    );
+    const buildComplete = async () => {
+      const builds = await evaluate(
+        (ns) =>
+          (window.game.cluster.getByKindAndNamespace('Build', ns) || []).map((build) => ({
+            name: build.metadata.name,
+            phase: build.status?.phase,
+          })),
+        project
+      );
+      return builds.some((build) => build.phase === 'Complete');
+    };
+    assert(await advanceUntil(buildComplete, 120, 5), '#70: the S2I build reaches Complete');
+    const digestState = () =>
+      evaluate((ns) => {
+        const stream = window.game.cluster.getByName('ImageStream', 'webapp', ns);
+        const latest = (stream?.status?.tags || []).find((tag) => tag.tag === 'latest');
+        return {
+          digest: latest?.items?.[0]?.image || '',
+          dockerImageReference: latest?.items?.[0]?.dockerImageReference || '',
+          deploymentImages: (
+            window.game.cluster.getByName('Deployment', 'webapp', ns)?.spec?.template?.spec
+              ?.containers || []
+          ).map((container) => container.image),
+        };
+      }, project);
+    const digestReady = await advanceUntil(
+      async () => {
+        const state = await digestState();
+        return (
+          /@sha256:[0-9a-f]{64}/.test(String(state.deploymentImages[0] || '')) &&
+          String(state.deploymentImages[0] || '').includes(state.digest)
+        );
+      },
+      90,
+      3
+    );
+    const builtState = await digestState();
+    assert(
+      digestReady &&
+        /^sha256:[0-9a-f]{64}$/.test(builtState.digest) &&
+        String(builtState.deploymentImages[0] || '').includes(builtState.digest),
+      '#70: the image trigger rolls the Deployment to the built image digest (not a tag)',
+      JSON.stringify(builtState)
+    );
+    const runningWithDigest = await advanceUntil(
+      async () => {
+        const pods = await podsIn(project);
+        return pods.some(
+          (pod) =>
+            pod.phase === 'Running' &&
+            pod.waiting.length === 0 &&
+            pod.images.some((image) => /@sha256:[0-9a-f]{64}/.test(String(image)))
+        );
+      },
+      90,
+      3
+    );
+    let builtPods = await podsIn(project);
+    assert(
+      runningWithDigest,
+      '#70: the new ReplicaSet pod pulls the built digest and reaches Running',
+      JSON.stringify(builtPods)
+    );
+    assert(
+      !builtPods.some((pod) => pod.waiting.some((reason) => /ImagePull|ErrImage/.test(reason))),
+      '#70: no pod stays in ImagePullBackOff after the build pushed the digest',
+      JSON.stringify(builtPods)
+    );
+    const manifestUnknownEvents = await evaluate((ns) => {
+      const cluster = window.game.cluster;
+      const messages = [];
+      for (const kind of ['Pod', 'ReplicaSet']) {
+        for (const resource of cluster.getByKindAndNamespace(kind, ns) || []) {
+          for (const event of resource.events || []) messages.push(String(event.message || ''));
+        }
+      }
+      return messages.filter((message) => /manifest unknown/.test(message));
+    }, project);
+    assert(
+      manifestUnknownEvents.length === 0,
+      '#70: the built digest produces NO "manifest unknown" pull failure events',
+      JSON.stringify(manifestUnknownEvents.slice(0, 4))
+    );
+    // Point 3: a second build produces another pullable digest and rolls out.
+    const secondBuild = await command('oc start-build webapp -n qa70-s2i', 400);
+    assert(
+      !secondBuild.error && /started|build/i.test(secondBuild.message),
+      '#70: `oc start-build webapp` starts the next build',
+      secondBuild.message.slice(0, 240)
+    );
+    const secondDigestReady = await advanceUntil(
+      async () => {
+        const builds = await evaluate(
+          (ns) =>
+            (window.game.cluster.getByKindAndNamespace('Build', ns) || []).map(
+              (build) => build.status?.phase
+            ),
+          project
+        );
+        const state = await digestState();
+        return (
+          builds.filter((phase) => phase === 'Complete').length >= 2 &&
+          String(state.deploymentImages[0] || '').includes(state.digest)
+        );
+      },
+      150,
+      5
+    );
+    const secondState = await digestState();
+    const secondPodsRunning = await advanceUntil(
+      async () =>
+        (await podsIn(project)).some(
+          (pod) =>
+            pod.phase === 'Running' &&
+            pod.images.some((image) => /@sha256:[0-9a-f]{64}/.test(String(image)))
+        ),
+      90,
+      3
+    );
+    assert(
+      secondDigestReady &&
+        secondPodsRunning &&
+        String(secondState.deploymentImages[0] || '').includes(secondState.digest),
+      '#70: the second build produces a pullable digest and its rollout reaches Running',
+      JSON.stringify(secondState)
+    );
+    // The built app really serves: expose the Service and curl the Route.
+    await command(`oc expose svc webapp -n ${project}`, 300);
+    const routeReady = await advanceUntil(
+      async () => {
+        const route = await evaluate(
+          (ns) => window.game.cluster.getByName('Route', 'webapp', ns)?.spec?.host || '',
+          project
+        );
+        return Boolean(route);
+      },
+      30,
+      2
+    );
+    const appHost = routeReady
+      ? await evaluate(
+          (ns) => window.game.cluster.getByName('Route', 'webapp', ns)?.spec?.host || '',
+          project
+        )
+      : '';
+    await advanceGame(5);
+    const appCurl = appHost ? await command(`curl -s http://${appHost}`, 400) : { error: true };
+    assert(
+      routeReady &&
+        !appCurl.error &&
+        /Hello from webapp|Hello OpenShift!|container webapp/.test(String(appCurl.message)),
+      '#70: the Route serves the built application (the built pod answers, not a stale pod)',
+      String(appCurl.message || '').slice(0, 240)
+    );
+  } catch (err) {
+    fail('#70: S2I digest rollout block threw', err?.stack?.split('\n').slice(0, 4).join('\n'));
+  }
+
+  // ── #71 — grading is state-based (no hidden names/values) ────────────────
+  try {
+    // L13: a Secret whose NAME is the player's choice, referenced by OAuth.
+    assert(await startCampaign(13), '#71: campaign L13 starts');
+    await evaluate(() => window.game?.app?.hideTutorial?.());
+    await command('oc project identity-lab', 200);
+    let results = await objectiveResults();
+    const l13SecretObjective = objectiveByLabel(results, /htpasswd Secret and reference/i);
+    assert(
+      l13SecretObjective?.completed === false,
+      '#71: L13 "htpasswd Secret and reference it from the OAuth IdP" starts false',
+      JSON.stringify(l13SecretObjective)
+    );
+    await command('htpasswd -c -B -b htpasswd alice MyPass1!', 400);
+    const l13Secret = await command(
+      'oc create secret generic my-htp --from-file=htpasswd=htpasswd -n openshift-config',
+      500
+    );
+    assert(
+      !l13Secret.error && /secret\/my-htp created/.test(l13Secret.message),
+      '#71: L13 creates a Secret named `my-htp` (the objective must not require htpass-secret)',
+      l13Secret.message.slice(0, 240)
+    );
+    await writeVirtualFile(
+      'qa71-oauth.yaml',
+      [
+        'apiVersion: config.openshift.io/v1',
+        'kind: OAuth',
+        'metadata:',
+        '  name: cluster',
+        'spec:',
+        '  identityProviders:',
+        '    - name: htpasswd',
+        '      mappingMethod: claim',
+        '      type: HTPasswd',
+        '      htpasswd:',
+        '        fileData:',
+        '          name: my-htp',
+      ].join('\n')
+    );
+    const l13Apply = await command('oc apply -f qa71-oauth.yaml', 600);
+    assert(
+      !l13Apply.error && /oauth\.config\.openshift\.io\/cluster configured/.test(l13Apply.message),
+      '#71: L13 applies an OAuth provider referencing the player-named Secret',
+      l13Apply.message.slice(0, 240)
+    );
+    await advanceGame(9);
+    results = await objectiveResults();
+    assert(
+      objectiveByLabel(results, /htpasswd Secret and reference/i)?.completed === true,
+      '#71: L13 grades the referenced Secret STATE (my-htp passes, no hidden htpass-secret name)',
+      JSON.stringify(objectiveByLabel(results, /htpasswd Secret and reference/i))
+    );
+    const l13Login = await command('oc login -u alice -p MyPass1!', 600);
+    assert(
+      !l13Login.error && /Login successful/.test(l13Login.message),
+      '#71: L13 login as alice succeeds after the OAuth rollout',
+      l13Login.message.slice(0, 240)
+    );
+    results = await objectiveResults();
+    assert(
+      objectiveByLabel(results, /Log in to the CLI as alice/i)?.completed === true &&
+        objectiveByLabel(results, /User "alice" exists after first login/i)?.completed === true,
+      '#71: L13 login/user objectives tick from state',
+      JSON.stringify(results.map((entry) => [entry.label, entry.completed]))
+    );
+    // Rotation graded on state, with the player's OWN password (not the hint's
+    // literal "NewPassw0rd!").
+    await command(`oc login -u kubeadmin -p ${kubeadminPw}`, 500);
+    const extracted = await command(
+      'oc extract secret/my-htp -n openshift-config --to /tmp --confirm',
+      500
+    );
+    assert(
+      !extracted.error && /tmp\/htpasswd/.test(extracted.message),
+      '#71: L13 extracts the rotated htpasswd file to /tmp',
+      extracted.message.slice(0, 240)
+    );
+    const rotated = await command("htpasswd -bB /tmp/htpasswd alice 'MyRotated9!'", 500);
+    assert(
+      !rotated.error,
+      '#71: L13 rotates the hash with a player-chosen password',
+      rotated.message
+    );
+    const writeBack = await command(
+      'oc set data secret/my-htp -n openshift-config --from-file=htpasswd=/tmp/htpasswd',
+      500
+    );
+    assert(
+      !writeBack.error,
+      '#71: L13 writes the rotated hash back to the Secret',
+      writeBack.message
+    );
+    await command('oc login -u alice -p MyPass1!', 500);
+    await command(`oc login -u kubeadmin -p ${kubeadminPw}`, 500);
+    await advanceGame(9);
+    const newPasswordLogin = await command('oc login -u alice -p MyRotated9!', 600);
+    assert(
+      !newPasswordLogin.error && /Login successful/.test(newPasswordLogin.message),
+      '#71: L13 rotated password MyRotated9! logs in after the OAuth rollout',
+      newPasswordLogin.message.slice(0, 240)
+    );
+    await command(`oc login -u kubeadmin -p ${kubeadminPw}`, 500);
+    results = await objectiveResults();
+    const rotationObjective = objectiveByLabel(results, /Rotate alice/i);
+    assert(
+      rotationObjective?.completed === true,
+      '#71: L13 rotation objective is graded on the hash/login STATE (MyRotated9!, never the literal NewPassw0rd!)',
+      JSON.stringify(rotationObjective)
+    );
+    const oldPasswordLogin = await command('oc login -u alice -p MyPass1!', 500);
+    assert(
+      oldPasswordLogin.error && /Login failed/i.test(oldPasswordLogin.message),
+      '#71: L13 the old password is rejected after the rotation',
+      oldPasswordLogin.message.slice(0, 240)
+    );
+    await command(`oc login -u kubeadmin -p ${kubeadminPw}`, 500);
+
+    // Lab 7: a RoleBinding with the player's OWN name must satisfy the lab.
+    assert(await startChallenge(7), '#71: lab 7 starts');
+    await evaluate(() => window.game?.app?.hideTutorial?.());
+    await command('oc create user developer', 300);
+    await command('oc adm groups new developers developer', 300);
+    await command(
+      'oc create rolebinding dev-edit --clusterrole=edit --group=developers -n team-dev',
+      400
+    );
+    await command('oc auth can-i delete pods --as=developer -n team-dev', 400);
+    results = await objectiveResults();
+    assert(
+      objectiveByLabel(results, /RoleBinding grants edit in team-dev/i)?.completed === true,
+      '#71: lab 7 grades can-i STATE — a binding named dev-edit passes (edit name not required)',
+      JSON.stringify(objectiveByLabel(results, /RoleBinding grants edit in team-dev/i))
+    );
+    assert(
+      objectiveByLabel(results, /developer can delete Pods in team-dev/i)?.completed === true,
+      '#71: lab 7 "developer can delete Pods" ticks from the same state',
+      JSON.stringify(results.map((entry) => [entry.label, entry.completed]))
+    );
+    let lab7Status = await modeStatus();
+    assert(
+      lab7Status?.state === 'completed',
+      '#71: lab 7 completes with the player-named binding',
+      JSON.stringify({ state: lab7Status?.state, objectives: lab7Status?.objectives })
+    );
+    // The hint command must not dead-end when the player's binding already exists.
+    const reusableHint = await command(
+      'oc adm policy add-role-to-group edit developers -n team-dev',
+      500
+    );
+    assert(
+      !reusableHint.error,
+      '#71: lab 7 hint command `add-role-to-group edit developers` succeeds with an existing dev-edit binding',
+      reusableHint.message.slice(0, 300)
+    );
+    await command('oc auth can-i delete pods --as=developer -n team-dev', 400);
+    results = await objectiveResults();
+    lab7Status = await modeStatus();
+    assert(
+      objectiveByLabel(results, /RoleBinding grants edit in team-dev/i)?.completed === true &&
+        lab7Status?.state === 'completed',
+      '#71: lab 7 stays complete after the hint command reuses the existing binding',
+      JSON.stringify({ reusable: reusableHint.message.slice(0, 200), state: lab7Status?.state })
+    );
+
+    // L17: a hand-written Role (securitycontextconstraints "use") is enough.
+    assert(await startCampaign(17), '#71: campaign L17 starts');
+    await evaluate(() => window.game?.app?.hideTutorial?.());
+    await advanceGame(18);
+    const l17IncidentFired = (await incidentNames()).includes('SCCForbidden');
+    const l17PodsBefore = await podsIn('privileged-lab');
+    assert(
+      l17IncidentFired && l17PodsBefore.length === 0,
+      '#71: L17 SCCForbidden is active and the rejected Pod is never created',
+      JSON.stringify({ l17IncidentFired, l17PodsBefore })
+    );
+    const l17Role = await command(
+      'oc create role use-priv --verb=use --resource=securitycontextconstraints --resource-name=privileged -n privileged-lab',
+      400
+    );
+    const l17Binding = await command(
+      'oc create rolebinding priv-sa-use-priv --role=use-priv --serviceaccount=privileged-lab:priv-sa -n privileged-lab',
+      400
+    );
+    assert(
+      !l17Role.error && !l17Binding.error,
+      '#71: L17 hand-written Role/RoleBinding (not oc adm policy) is created',
+      JSON.stringify({ role: l17Role.message, binding: l17Binding.message })
+    );
+    const l17CanI = await command(
+      'oc auth can-i use scc/privileged --as=system:serviceaccount:privileged-lab:priv-sa -n privileged-lab',
+      400
+    );
+    const l17Healed = await advanceUntil(
+      async () => !(await incidentNames()).includes('SCCForbidden'),
+      30,
+      2
+    );
+    const l17Pods = await podsIn('privileged-lab');
+    assert(
+      l17CanI.message.trim() === 'yes' && l17Healed,
+      '#71: L17 state-equivalent SCC grant flips can-i to yes and heals the incident',
+      JSON.stringify({
+        canI: l17CanI.message.trim(),
+        l17Healed,
+        incidentNames: await incidentNames(),
+      })
+    );
+    assert(
+      l17Pods.some((pod) => pod.phase === 'Running' && pod.scc === 'privileged'),
+      '#71: L17 privileged Pod is admitted Running with openshift.io/scc=privileged',
+      JSON.stringify(l17Pods)
+    );
+    await sleep(1800); // CampaignMode.update() runs on the wall clock
+    results = await objectiveResults();
+    const l17Status = await modeStatus();
+    assert(
+      results.length === 3 &&
+        results.every((entry) => entry.completed === true) &&
+        l17Status?.state === 'completed',
+      '#71: L17 completes 3/3 with the hand-written Role (no generated roleRef required)',
+      JSON.stringify({
+        state: l17Status?.state,
+        objectives: results.map((entry) => [entry.label, entry.completed]),
+      })
+    );
+
+    // Lab 8: an equivalent RoleBinding to the SCC ClusterRole is graded on state.
+    assert(await startChallenge(8), '#71: lab 8 starts');
+    await evaluate(() => window.game?.app?.hideTutorial?.());
+    await command('oc project secure', 200);
+    const lab8Apply = await command('oc apply -f challenges/privileged-app.yaml -n secure', 600);
+    assert(
+      !lab8Apply.error,
+      '#71: lab 8 applies the privileged-app manifest',
+      lab8Apply.message.slice(0, 240)
+    );
+    await advanceGame(4);
+    const lab8SaFailures = await replicaSetFailures('secure');
+    assert(
+      (await podsIn('secure')).length === 0 &&
+        lab8SaFailures.some((message) => /serviceaccount "priv-sa" not found/.test(message)),
+      '#71: lab 8 has no Pod while ServiceAccount priv-sa is missing (FailedCreate)',
+      JSON.stringify({ pods: await podsIn('secure'), failures: lab8SaFailures.slice(0, 3) })
+    );
+    await command('oc create sa priv-sa -n secure', 400);
+    const lab8Equivalent = await command(
+      'oc create rolebinding priv-sa-use-scc --clusterrole=system:openshift:scc:privileged --serviceaccount=secure:priv-sa -n secure',
+      500
+    );
+    assert(
+      !lab8Equivalent.error,
+      '#71: lab 8 accepts an equivalent RoleBinding (oc create rolebinding, not only oc adm policy)',
+      lab8Equivalent.message.slice(0, 300)
+    );
+    const lab8Healed = await advanceUntil(
+      async () => (await podsIn('secure')).some((pod) => pod.phase === 'Running'),
+      60,
+      2
+    );
+    const lab8Pods = await podsIn('secure');
+    assert(
+      lab8Healed && lab8Pods.some((pod) => pod.scc === 'privileged'),
+      '#71: lab 8 privileged Pod is admitted Running via the equivalent grant',
+      JSON.stringify(lab8Pods)
+    );
+    const lab8IncidentResolved = await advanceUntil(
+      async () =>
+        evaluate(() =>
+          (window.game?.incidentEngine?.resolvedIncidents || []).some(
+            (incident) => incident.name === 'SCCForbidden'
+          )
+        ),
+      150,
+      3
+    );
+    assert(
+      lab8IncidentResolved,
+      '#71: lab 8 SCCForbidden incident activates and resolves from the equivalent state',
+      JSON.stringify(await incidentNames())
+    );
+    await sleep(1800);
+    results = await objectiveResults();
+    const lab8Status = await modeStatus();
+    assert(
+      objectiveByLabel(results, /Grant the privileged SCC/i)?.completed === true &&
+        objectiveByLabel(results, /privileged: true Pod admitted/i)?.completed === true &&
+        objectiveByLabel(results, /Resolve SCCForbidden/i)?.completed === true &&
+        lab8Status?.state === 'completed',
+      '#71: lab 8 completes on the equivalent state grant (SCC + privileged Pod + incident resolve)',
+      JSON.stringify({
+        state: lab8Status?.state,
+        objectives: results.map((entry) => [entry.label, entry.completed]),
+      })
+    );
+  } catch (err) {
+    fail('#71: state-based grading block threw', err?.stack?.split('\n').slice(0, 5).join('\n'));
+  }
+
+  // ── #72 — `oc create role --resource=…` resolves the real API group ──────
+  try {
+    await bootSandbox();
+    const project = 'qa72-rbac';
+    await command(`oc new-project ${project}`, 200);
+    const roleJson = async (name) => {
+      const out = await command(`oc get role ${name} -n ${project} -o json`, 300);
+      try {
+        return {
+          rules: JSON.parse(out.message).rules || [],
+          error: out.error,
+          message: out.message,
+        };
+      } catch {
+        return { rules: [], error: out.error, message: out.message };
+      }
+    };
+    const createRole = async (name, flags) =>
+      command(`oc create role ${name} ${flags} -n ${project}`, 400);
+    const sccCreate = await createRole(
+      'use-priv',
+      '--verb=use --resource=securitycontextconstraints --resource-name=privileged'
+    );
+    const sccRole = await roleJson('use-priv');
+    const sccRule = sccRole.rules[0] || {};
+    assert(
+      !sccCreate.error &&
+        JSON.stringify(sccRule.apiGroups) === JSON.stringify(['security.openshift.io']) &&
+        JSON.stringify(sccRule.resources) === JSON.stringify(['securitycontextconstraints']) &&
+        JSON.stringify(sccRule.resourceNames) === JSON.stringify(['privileged']) &&
+        JSON.stringify(sccRule.verbs) === JSON.stringify(['use']),
+      '#72: `oc create role --resource=securitycontextconstraints` writes apiGroups [security.openshift.io]',
+      JSON.stringify(sccRole)
+    );
+    await createRole('use-scc-alias', '--verb=use --resource=scc --resource-name=privileged');
+    const aliasRole = await roleJson('use-scc-alias');
+    assert(
+      JSON.stringify(aliasRole.rules[0]?.apiGroups) === JSON.stringify(['security.openshift.io']),
+      '#72: the `scc` short resource alias resolves to securitycontextconstraints.security.openshift.io',
+      JSON.stringify(aliasRole.rules)
+    );
+    const groups = [
+      ['route-reader', 'routes', 'route.openshift.io', 'routes'],
+      ['tag-reader', 'imagestreamtags', 'image.openshift.io', 'imagestreamtags'],
+      ['deploy-reader', 'deployments', 'apps', 'deployments'],
+    ];
+    for (const [name, resource, group, expectedResource] of groups) {
+      await createRole(name, `--verb=get --resource=${resource}`);
+      const role = await roleJson(name);
+      assert(
+        JSON.stringify(role.rules[0]?.apiGroups) === JSON.stringify([group]) &&
+          JSON.stringify(role.rules[0]?.resources) === JSON.stringify([expectedResource]),
+        `#72: \`oc create role --resource=${resource}\` resolves apiGroups [${group}]`,
+        JSON.stringify(role.rules)
+      );
+    }
+    await createRole('pod-reader', '--verb=get --resource=pods');
+    const coreRole = await roleJson('pod-reader');
+    assert(
+      JSON.stringify(coreRole.rules[0]?.apiGroups) === JSON.stringify(['']),
+      '#72: core resources keep apiGroups [""] (pods)',
+      JSON.stringify(coreRole.rules)
+    );
+    await command(`oc create sa priv-sa -n ${project}`, 300);
+    const before = await command(
+      `oc auth can-i use scc/privileged --as=system:serviceaccount:${project}:priv-sa -n ${project}`,
+      400
+    );
+    await command(
+      `oc create rolebinding priv-sa-use --role=use-priv --serviceaccount=${project}:priv-sa -n ${project}`,
+      500
+    );
+    const after = await command(
+      `oc auth can-i use scc/privileged --as=system:serviceaccount:${project}:priv-sa -n ${project}`,
+      400
+    );
+    assert(
+      before.message.trim() === 'no' && after.message.trim() === 'yes',
+      '#72: the resolved SCC "use" Role makes `oc auth can-i use scc/privileged` say yes',
+      JSON.stringify({ before: before.message.trim(), after: after.message.trim() })
+    );
+    const privilegedPod = await command(
+      'cat <<EOF | oc apply -f -\napiVersion: v1\nkind: Pod\nmetadata:\n  name: priv-probe\n  namespace: qa72-rbac\nspec:\n  serviceAccountName: priv-sa\n  containers:\n    - name: main\n      image: quay.io/openshift/origin-hello-openshift:latest\n      securityContext:\n        privileged: true\nEOF',
+      600
+    );
+    await advanceGame(4);
+    const privPods = await podsIn(project);
+    assert(
+      !privilegedPod.error &&
+        privPods.some(
+          (pod) => pod.name === 'priv-probe' && pod.phase === 'Running' && pod.scc === 'privileged'
+        ),
+      '#72: an SCC "use" custom-role grant admits a privileged Pod as the ServiceAccount',
+      JSON.stringify({ apply: privilegedPod.message.slice(0, 200), pods: privPods })
+    );
+  } catch (err) {
+    fail(
+      '#72: oc create role API-group block threw',
+      err?.stack?.split('\n').slice(0, 4).join('\n')
+    );
+  }
+
+  // ── #73 — PendingScheduling rollout damage + honest scheduler signals ────
+  try {
+    await bootSandbox();
+    await evaluate(() => window.game.incidentEngine.start('sandbox'));
+    const project = 'qa73-pending';
+    await command(`oc new-project ${project}`, 200);
+    await command(
+      `oc create deployment webapp --replicas=2 --image=quay.io/openshift/origin-hello-openshift:latest -n ${project}`,
+      500
+    );
+    await advanceGame(5);
+    const spawnPendingScheduling = () =>
+      evaluate((ns) => {
+        const engine = window.game.incidentEngine;
+        const def = [...(engine?._defsById?.values?.() || [])].find(
+          (entry) => entry.name === 'PendingScheduling'
+        );
+        if (!def) return null;
+        return engine.spawnIncident(def, 'webapp', 3, { exactTarget: true, namespace: ns });
+      }, project);
+    const beforePods = await podsIn(project);
+    const runningBefore = beforePods.filter((pod) => pod.phase === 'Running' && pod.nodeName);
+    assert(
+      runningBefore.length === 2,
+      '#73: the QA fixture has 2 Running webapp pods before the incident',
+      JSON.stringify(beforePods)
+    );
+    const incidentId = await spawnPendingScheduling();
+    assert(
+      Boolean(incidentId),
+      '#73: the PendingScheduling incident can be spawned on the Deployment'
+    );
+    const templatePatched = await advanceUntil(
+      async () => {
+        const deployment = (await deploymentsIn(project))[0];
+        return Boolean(deployment?.nodeSelector && Object.keys(deployment.nodeSelector).length > 0);
+      },
+      30,
+      2
+    );
+    const damagedDeployment = (await deploymentsIn(project))[0] || {};
+    assert(
+      templatePatched,
+      '#73: damage is a Deployment template nodeSelector patch (pod specs are immutable)',
+      JSON.stringify(damagedDeployment)
+    );
+    const afterDamagePods = await evaluate(
+      (ns) =>
+        (window.game.cluster.getByKindAndNamespace('Pod', ns) || []).map((pod) => ({
+          name: pod.metadata.name,
+          phase: pod.status?.phase,
+          nodeName: pod.spec?.nodeName || '',
+          nodeSelector: pod.spec?.nodeSelector || null,
+        })),
+      project
+    );
+    const runningIntact = runningBefore.every((before) => {
+      const now = afterDamagePods.find((pod) => pod.name === before.name);
+      return now && now.phase === 'Running' && now.nodeSelector === null;
+    });
+    assert(
+      runningIntact,
+      '#73: the incident never re-pends or mutates an already-Running pod (old pods keep serving)',
+      JSON.stringify({ runningBefore, afterDamagePods })
+    );
+    const pendingPod = afterDamagePods.find(
+      (pod) => pod.phase === 'Pending' && !runningBefore.some((before) => before.name === pod.name)
+    );
+    assert(
+      Boolean(pendingPod),
+      '#73: the bad template rolls a NEW Pending pod (no nodeName) while the old pods serve',
+      JSON.stringify(afterDamagePods)
+    );
+    const pendingName = pendingPod?.name || '';
+    const pendingDescribe = pendingName
+      ? await command(`oc describe pod ${pendingName} -n ${project}`, 500)
+      : { message: '' };
+    const pendingWide = await command(`oc get pods -o wide -n ${project}`, 400);
+    const wideRows = parseTable(pendingWide.message).rows;
+    const wideHeader = parseTable(pendingWide.message)
+      .header.split(/\s{3,}/)
+      .map((cell) => cell.trim());
+    const nodeColumn = wideHeader.indexOf('NODE');
+    const pendingWideRow = wideRows.find((row) => row[0] === pendingName) || [];
+    assert(
+      /^Status: +Pending$/m.test(pendingDescribe.message) &&
+        /^Node: +<none>$/m.test(pendingDescribe.message) &&
+        !/^ +State: +Running$/m.test(pendingDescribe.message),
+      '#73: `oc describe pod` for the damaged pod shows Pending, Node: <none>, no Running container state',
+      JSON.stringify({
+        status: fieldLine(pendingDescribe.message, 'Status'),
+        node: fieldLine(pendingDescribe.message, 'Node'),
+      })
+    );
+    assert(
+      nodeColumn >= 0 && pendingWideRow[nodeColumn] === '<none>',
+      '#73: `oc get pods -o wide` NODE column shows <none> for the Pending pod (never a node InternalIP)',
+      JSON.stringify({ header: wideHeader, pendingWideRow })
+    );
+    const pendingEvents = await evaluate(
+      ({ ns, name }) => {
+        const pod = window.game.cluster.getByName('Pod', name, ns);
+        return (pod?.events || []).map((event) => ({
+          reason: event.reason,
+          type: event.type,
+          message: event.message,
+          count: event.count,
+          firstTimestamp: event.firstTimestamp,
+          lastTimestamp: event.lastTimestamp,
+          source: event.source,
+        }));
+      },
+      { ns: project, name: pendingName }
+    );
+    const failedSchedulingEvent = pendingEvents.find(
+      (event) => event.reason === 'FailedScheduling'
+    );
+    assert(
+      Boolean(failedSchedulingEvent) &&
+        /^0\/3 nodes are available: \d+ node\(s\) didn't match Pod's node affinity\/selector\.$/.test(
+          String(failedSchedulingEvent.message)
+        ),
+      '#73: the scheduler emits the k8s v1.35 wording "0/<N> nodes are available: <M> node(s) didn\'t match Pod\'s node affinity/selector."',
+      JSON.stringify(failedSchedulingEvent)
+    );
+    const healedEvents = await evaluate((ns) => {
+      const cluster = window.game.cluster;
+      const events = [];
+      for (const kind of ['Pod', 'ReplicaSet', 'Deployment']) {
+        for (const resource of cluster.getByKindAndNamespace(kind, ns) || []) {
+          for (const event of resource.events || [])
+            events.push({ kind, reason: event.reason, message: event.message });
+        }
+      }
+      return events.filter((event) => /^Healed$/.test(String(event.reason || '')));
+    }, project);
+    assert(
+      healedEvents.length === 0,
+      '#73: the incident fabricates no kubelet "Healed" event',
+      JSON.stringify(healedEvents)
+    );
+    const impossibleCounts = await evaluate((ns) => {
+      const cluster = window.game.cluster;
+      for (const kind of ['Pod', 'ReplicaSet']) {
+        for (const resource of cluster.getByKindAndNamespace(kind, ns) || []) {
+          for (const event of resource.events || []) {
+            if (
+              event.reason === 'FailedScheduling' &&
+              Number(event.count) >= 2 &&
+              event.firstTimestamp &&
+              event.lastTimestamp &&
+              event.firstTimestamp === event.lastTimestamp
+            ) {
+              return [
+                {
+                  kind,
+                  count: event.count,
+                  first: event.firstTimestamp,
+                  last: event.lastTimestamp,
+                },
+              ];
+            }
+          }
+        }
+      }
+      return [];
+    }, project);
+    assert(
+      impossibleCounts.length === 0,
+      '#73: FailedScheduling retries never aggregate an impossible count over a zero-length window',
+      JSON.stringify(impossibleCounts)
+    );
+    // Deleting the pending Pod must NOT be the fix.
+    await command(`oc delete pod ${pendingName} -n ${project}`, 400);
+    await advanceGame(6);
+    const afterDeleteDeployment = (await deploymentsIn(project))[0] || {};
+    const podsAfterDelete = await podsIn(project);
+    assert(
+      afterDeleteDeployment.nodeSelector &&
+        Object.keys(afterDeleteDeployment.nodeSelector).length > 0 &&
+        podsAfterDelete.some((pod) => pod.phase === 'Pending'),
+      '#73: deleting the Pending pod does not heal the bad template (a new Pending pod appears)',
+      JSON.stringify({ nodeSelector: afterDeleteDeployment.nodeSelector, pods: podsAfterDelete })
+    );
+    // The real fixes: rollout undo, patch the selector out, or label a node.
+    const undo = await command(`oc rollout undo deployment/webapp -n ${project}`, 400);
+    const undoHealed = await advanceUntil(
+      async () => {
+        const deployment = (await deploymentsIn(project))[0];
+        const pods = await podsIn(project);
+        return (
+          !undo.error &&
+          (!deployment?.nodeSelector || Object.keys(deployment.nodeSelector).length === 0) &&
+          pods.filter((pod) => pod.phase === 'Running').length >= 2 &&
+          !pods.some((pod) => pod.phase === 'Pending')
+        );
+      },
+      30,
+      2
+    );
+    assert(
+      undoHealed,
+      '#73: `oc rollout undo` removes the bad nodeSelector and restores 2 Running pods',
+      JSON.stringify({ undo: undo.message, pods: await podsIn(project) })
+    );
+    // Re-damage, then fix by patching the template (oc patch) — the deployment
+    // must be healthily restored again.
+    await spawnPendingScheduling();
+    await advanceUntil(async () => Boolean((await deploymentsIn(project))[0]?.nodeSelector), 30, 2);
+    const selectorKey = Object.keys((await deploymentsIn(project))[0]?.nodeSelector || {})[0] || '';
+    const patchOut = await command(
+      `oc patch deployment webapp -n ${project} --type=json -p '[{"op":"remove","path":"/spec/template/spec/nodeSelector"}]'`,
+      500
+    );
+    if (patchOut.error) {
+      await command(
+        `oc patch deployment webapp -n ${project} --type=merge -p '{"spec":{"template":{"spec":{"nodeSelector":null}}}}'`,
+        500
+      );
+    }
+    const patchedHealed = await advanceUntil(
+      async () => {
+        const deployment = (await deploymentsIn(project))[0];
+        return (
+          (!deployment?.nodeSelector || Object.keys(deployment.nodeSelector).length === 0) &&
+          (await podsIn(project)).filter((pod) => pod.phase === 'Running').length >= 2
+        );
+      },
+      30,
+      2
+    );
+    assert(
+      patchedHealed,
+      '#73: `oc patch` removing the nodeSelector heals the rollout',
+      JSON.stringify({ selectorKey, patch: patchOut.message })
+    );
+    // Label-a-node fix: a new bad selector can be satisfied by labelling a node.
+    await spawnPendingScheduling();
+    const labelled = await advanceUntil(
+      async () => {
+        const deployment = (await deploymentsIn(project))[0];
+        return Boolean(deployment?.nodeSelector && Object.keys(deployment.nodeSelector).length > 0);
+      },
+      30,
+      2
+    );
+    const badSelector = (await deploymentsIn(project))[0]?.nodeSelector || {};
+    const labelKey = Object.keys(badSelector)[0];
+    const labelValue = labelKey ? String(badSelector[labelKey]) : '';
+    const nodeLabel = await command(`oc label node worker-0 ${labelKey}=${labelValue}`, 500);
+    const labelHealed = await advanceUntil(
+      async () => {
+        const pods = await podsIn(project);
+        return (
+          !nodeLabel.error &&
+          pods.some((pod) => pod.phase === 'Running' && pod.nodeName === 'worker-0') &&
+          !pods.some((pod) => pod.phase === 'Pending')
+        );
+      },
+      40,
+      2
+    );
+    assert(
+      labelled && labelHealed,
+      '#73: `oc label node` with the required label heals the Pending rollout',
+      JSON.stringify({ badSelector, label: nodeLabel.message, pods: await podsIn(project) })
+    );
+  } catch (err) {
+    fail(
+      '#73: PendingScheduling rollout block threw',
+      err?.stack?.split('\n').slice(0, 5).join('\n')
+    );
+  }
+
+  // ── #74 — a Job pod template is immutable; lab 12 teaches the real fix ───
+  try {
+    await bootSandbox();
+    const project = 'qa74-jobs';
+    await command(`oc new-project ${project}`, 200);
+    const quota = await command(
+      `oc create quota prod-quota --hard=pods=20,requests.cpu=4,requests.memory=8Gi -n ${project}`,
+      400
+    );
+    assert(!quota.error, '#74: the lab-12 project quota is created', quota.message.slice(0, 240));
+    await command(`oc create job db-migrate --image=busybox:latest -n ${project}`, 400);
+    await advanceGame(5);
+    const jobDescribeBlocked = await command(`oc describe job db-migrate -n ${project}`, 500);
+    const jobEventsBlocked = await evaluate(
+      (ns) =>
+        (window.game.cluster.getByName('Job', 'db-migrate', ns)?.events || []).map((event) =>
+          String(event.message || '')
+        ),
+      project
+    );
+    assert(
+      /failed quota: prod-quota: must specify requests\.cpu,requests\.memory/.test(
+        jobDescribeBlocked.message
+      ) || jobEventsBlocked.some((message) => /failed quota: prod-quota/.test(message)),
+      '#74: the requestless Job is blocked by the quota with the real must-specify message',
+      JSON.stringify({
+        describe: jobDescribeBlocked.message.slice(0, 300),
+        events: jobEventsBlocked.slice(0, 3),
+      })
+    );
+    const rejected = await command(
+      `oc set resources job/db-migrate -n ${project} --requests=cpu=100m,memory=128Mi`,
+      400
+    );
+    assert(
+      rejected.error &&
+        /The Job "db-migrate" is invalid: spec\.template: Invalid value/.test(rejected.message) &&
+        /field is immutable/.test(rejected.message),
+      '#74: `oc set resources job/<name>` is rejected with the real immutable-template API error',
+      rejected.message.slice(0, 400)
+    );
+    const jobAfterReject = await evaluate((ns) => {
+      const job = window.game.cluster.getByName('Job', 'db-migrate', ns);
+      return {
+        requests: job?.spec?.template?.spec?.containers?.[0]?.resources?.requests || null,
+        phase: job?.status?.phase,
+      };
+    }, project);
+    assert(
+      jobAfterReject.requests === null && jobAfterReject.phase !== 'Complete',
+      '#74: the rejected command mutates nothing and the Job does not complete',
+      JSON.stringify(jobAfterReject)
+    );
+    // The dry-run starting point names the container after the Job.
+    const dryRun = await command(
+      `oc create job qa74-dry --image=busybox:latest --dry-run=client -o yaml -n ${project}`,
+      400
+    );
+    assert(
+      !dryRun.error &&
+        /-\s+name:\s+qa74-dry\b/.test(dryRun.message) &&
+        !/-\s+name:\s+main\b/.test(dryRun.message),
+      '#74: `--dry-run=client -o yaml` names the container after the Job (kubectl create_job.go)',
+      dryRun.message.slice(0, 400)
+    );
+    // The exam-correct fix: delete + recreate from YAML with requests → Complete.
+    await command(`oc delete job db-migrate -n ${project}`, 400);
+    await writeVirtualFile(
+      'qa74-job.yaml',
+      [
+        'apiVersion: batch/v1',
+        'kind: Job',
+        `metadata:`,
+        `  name: db-migrate`,
+        `  namespace: ${project}`,
+        'spec:',
+        '  template:',
+        '    spec:',
+        '      restartPolicy: Never',
+        '      containers:',
+        '        - name: db-migrate',
+        '          image: busybox:latest',
+        '          command: ["sh", "-c", "echo migrated"]',
+        '          resources:',
+        '            requests:',
+        '              cpu: 100m',
+        '              memory: 128Mi',
+      ].join('\n')
+    );
+    const applyFixed = await command('oc apply -f qa74-job.yaml', 500);
+    const recreatedComplete = await advanceUntil(
+      async () => {
+        const job = await evaluate(
+          (ns) => window.game.cluster.getByName('Job', 'db-migrate', ns)?.status?.phase || '',
+          project
+        );
+        return /^(Complete|Succeeded)$/.test(job);
+      },
+      40,
+      2
+    );
+    assert(
+      !applyFixed.error && recreatedComplete,
+      '#74: deleting the Job and recreating it from YAML with resources.requests completes',
+      JSON.stringify({ apply: applyFixed.message.slice(0, 240), recreatedComplete })
+    );
+    const migrationLogs = await command(`oc logs job/db-migrate -n ${project}`, 400);
+    assert(
+      !migrationLogs.error && /migrated/.test(migrationLogs.message),
+      '#74: the recreated db-migrate Job logs its real output (migrated)',
+      migrationLogs.message.slice(0, 240)
+    );
+
+    // Lab 12's hint must teach delete+recreate, not the invalid set-resources.
+    assert(await startChallenge(12), '#74: lab 12 starts to inspect its hint');
+    const lab12Hints = await evaluate(() =>
+      (window.game.app.modeInstance?.currentChallengeDef?.hints || []).join('\n')
+    );
+    assert(
+      /immutable/i.test(lab12Hints) &&
+        /delete the Job and recreate/i.test(lab12Hints) &&
+        /dry-run=client -o yaml/.test(lab12Hints) &&
+        !/oc set resources job\/db-migrate -n prod --requests/.test(lab12Hints),
+      '#74: lab 12 hint teaches delete/recreate from a manifest (never `oc set resources job/...`)',
+      String(lab12Hints).slice(0, 700)
+    );
+  } catch (err) {
+    fail('#74: Job immutability block threw', err?.stack?.split('\n').slice(0, 5).join('\n'));
+  }
+
+  // ── #75 — debug signals: crash onset, RBAC logs, exec API, deadline, TLS ─
+  try {
+    // L3: the level starts healthy; the incident rolls the bad env into the
+    // template so the NEW pods crash from their first start (no late mutation
+    // of Running pods) with honest restart/age timing.
+    assert(await startCampaign(3), '#75: campaign L3 starts (healthy)');
+    await evaluate(() => window.game?.app?.hideTutorial?.());
+    await command('oc project ops-lab', 200);
+    await advanceGame(4);
+    const l3InitialPods = await podsIn('ops-lab');
+    const l3InitialNames = new Set(l3InitialPods.map((pod) => pod.name));
+    const l3InitialDeployment = (await deploymentsIn('ops-lab'))[0] || {};
+    assert(
+      l3InitialPods.filter((pod) => pod.phase === 'Running').length >= 2 &&
+        !l3InitialDeployment.env.some((entry) => /APP_MODE=debug-invalid/.test(entry)),
+      '#75: L3 starts healthy: 2 Running pods, no bad APP_MODE in the template yet',
+      JSON.stringify({ pods: l3InitialPods, env: l3InitialDeployment.env })
+    );
+    const l3Fired = await advanceUntil(
+      async () => (await incidentNames()).includes('CrashLoopBackOff'),
+      30,
+      2
+    );
+    assert(l3Fired, '#75: L3 CrashLoopBackOff incident fires');
+    const l3Deployment = (await deploymentsIn('ops-lab'))[0] || {};
+    assert(
+      l3Deployment.env.some((entry) => entry === 'APP_MODE=debug-invalid'),
+      '#75: the incident seed writes APP_MODE=debug-invalid into the live Deployment (a real rollout)',
+      JSON.stringify(l3Deployment.env)
+    );
+    const l3Crashed = await advanceUntil(
+      async () => {
+        const pods = await podsIn('ops-lab');
+        return pods.some(
+          (pod) => pod.phase === 'CrashLoopBackOff' || pod.waiting.includes('CrashLoopBackOff')
+        );
+      },
+      30,
+      2
+    );
+    const l3Pods = await podsIn('ops-lab');
+    const l3CrashPods = l3Pods.filter(
+      (pod) => pod.phase === 'CrashLoopBackOff' || pod.waiting.includes('CrashLoopBackOff')
+    );
+    assert(
+      l3Crashed && l3CrashPods.length > 0,
+      '#75: L3 pods visibly CrashLoopBackOff',
+      JSON.stringify(l3Pods)
+    );
+    assert(
+      l3CrashPods.every((pod) => !l3InitialNames.has(pod.name)),
+      '#75: the crashing pods are a NEW ReplicaSet from the bad rollout — a Running pod is never mutated into CrashLoopBackOff',
+      JSON.stringify({ initial: [...l3InitialNames], crashing: l3CrashPods.map((pod) => pod.name) })
+    );
+    const l3Survivors = l3Pods.filter(
+      (pod) => pod.phase === 'Running' && l3InitialNames.has(pod.name)
+    );
+    assert(
+      l3Survivors.length >= 1,
+      '#75: old L3 pods keep serving during the bad rollout (maxUnavailable)',
+      JSON.stringify(l3Pods.map((pod) => [pod.name, pod.phase]))
+    );
+    const parseAgeSeconds = (age) => {
+      const match = String(age || '').match(/^(\d+)([smhd])$/);
+      if (!match) return Number.POSITIVE_INFINITY;
+      const value = Number(match[1]);
+      return value * { s: 1, m: 60, h: 3600, d: 86400 }[match[2]];
+    };
+    const l3PodTable = await command('oc get pods -n ops-lab', 400);
+    const l3Table = parseTable(l3PodTable.message);
+    const l3Header = l3Table.header.split(/\s{3,}/).map((cell) => cell.trim());
+    const l3AgeColumn = l3Header.indexOf('AGE');
+    const l3RestartsColumn = l3Header.indexOf('RESTARTS');
+    const impossibleRestarts = l3Table.rows.filter((row) => {
+      const restarts = Number(row[l3RestartsColumn] || 0);
+      const age = parseAgeSeconds(row[l3AgeColumn]);
+      return restarts >= 2 && Number.isFinite(age) && age < 30;
+    });
+    assert(
+      l3AgeColumn >= 0 && l3RestartsColumn >= 0 && impossibleRestarts.length === 0,
+      '#75: kubelet back-off timing is honest — no pod shows RESTARTS >= 2 below AGE 30s',
+      JSON.stringify({ header: l3Header, impossibleRestarts })
+    );
+    const l3CrashPodName = l3CrashPods[0]?.name || '';
+    const l3PreviousLogs = l3CrashPodName
+      ? await command(`oc logs ${l3CrashPodName} -n ops-lab --previous`, 500)
+      : { message: '' };
+    assert(
+      /configuration validation failed: APP_MODE has an unsupported value/.test(
+        l3PreviousLogs.message
+      ),
+      "#75: L3 crash logs report the invalid APP_MODE from the Pod's first start",
+      l3PreviousLogs.message.slice(0, 300)
+    );
+    const l3Fix = await command(
+      'oc set env deployment/web-app APP_MODE=production -n ops-lab',
+      500
+    );
+    const l3Healed = await advanceUntil(
+      async () => {
+        const pods = await podsIn('ops-lab');
+        return (
+          !l3Fix.error &&
+          !(await incidentNames()).includes('CrashLoopBackOff') &&
+          pods.filter((pod) => pod.phase === 'Running').length >= 2 &&
+          !pods.some((pod) => pod.phase === 'CrashLoopBackOff')
+        );
+      },
+      45,
+      2
+    );
+    assert(l3Healed, '#75: correcting APP_MODE heals L3 from state');
+
+    // L14: RBAC denials show up in the app LOG, never as invented events.
+    assert(await startCampaign(14), '#75: campaign L14 starts');
+    await evaluate(() => window.game?.app?.hideTutorial?.());
+    await command('oc project rbac-lab', 200);
+    const l14Fired = await advanceUntil(
+      async () => (await incidentNames()).includes('UnauthorizedAccess'),
+      40,
+      2
+    );
+    assert(l14Fired, '#75: L14 UnauthorizedAccess incident fires');
+    const l14Logs = await command('oc logs deploy/web -n rbac-lab', 700);
+    assert(
+      !l14Logs.error &&
+        /pods is forbidden: User "system:serviceaccount:rbac-lab:default" cannot list resource "pods" in API group "" in the namespace "rbac-lab"/.test(
+          l14Logs.message
+        ),
+      '#75: L14 surfaces the real RBAC denial in `oc logs deploy/web` (403 Forbidden message)',
+      l14Logs.message.slice(0, 400)
+    );
+    const rbacEvents = await evaluate(() => {
+      const cluster = window.game.cluster;
+      const events = [];
+      for (const kind of ['Pod', 'ServiceAccount', 'Deployment']) {
+        for (const resource of cluster.getByKind(kind) || []) {
+          for (const event of resource.events || []) {
+            events.push({
+              kind,
+              reason: event.reason,
+              message: event.message,
+              object: resource.metadata?.name,
+            });
+          }
+        }
+      }
+      return events.filter((event) =>
+        /^(Forbidden|UnauthorizedAccess)$/.test(String(event.reason || ''))
+      );
+    });
+    assert(
+      rbacEvents.length === 0,
+      '#75: L14 fabricates no Kubernetes events for RBAC denials (kubernetes emits none)',
+      JSON.stringify(rbacEvents.slice(0, 4))
+    );
+    const l14Fix = await command('oc adm policy add-role-to-user view -z default -n rbac-lab', 500);
+    const l14Healed = await advanceUntil(
+      async () => !(await incidentNames()).includes('UnauthorizedAccess'),
+      30,
+      2
+    );
+    assert(
+      !l14Fix.error && l14Healed,
+      '#75: L14 resolves when the denied ServiceAccount really gets the view RoleBinding',
+      JSON.stringify({ fix: l14Fix.message.slice(0, 240), l14Healed })
+    );
+
+    // L16: `oc exec … curl https://kubernetes.default.svc` is the real API
+    // (403 Status JSON without RBAC, PodList JSON with it).
+    assert(await startCampaign(16), '#75: campaign L16 starts');
+    await evaluate(() => window.game?.app?.hideTutorial?.());
+    await command('oc project sa-lab', 200);
+    const l16PodsReady = await advanceUntil(
+      async () =>
+        (await podsIn('sa-lab')).some((pod) => pod.phase === 'Running' && pod.waiting.length === 0),
+      20,
+      2
+    );
+    assert(l16PodsReady, '#75: the L16 api Deployment has a Running Pod before exec');
+    const execApi = async (namespace) =>
+      command(
+        `oc exec deploy/api -n ${namespace} -- sh -c 'curl -sk -H "Authorization: Bearer $(cat /var/run/secrets/kubernetes.io/serviceaccount/token)" https://kubernetes.default.svc/api/v1/namespaces/${namespace}/pods'`,
+        1000
+      );
+    const parseJsonBody = (message) => {
+      try {
+        return JSON.parse(String(message || ''));
+      } catch {
+        return null;
+      }
+    };
+    const l16Forbidden = await execApi('sa-lab');
+    const l16ForbiddenBody = parseJsonBody(l16Forbidden.message);
+    assert(
+      l16ForbiddenBody?.kind === 'Status' &&
+        l16ForbiddenBody?.code === 403 &&
+        l16ForbiddenBody?.message ===
+          'pods is forbidden: User "system:serviceaccount:sa-lab:default" cannot list resource "pods" in API group "" in the namespace "sa-lab"',
+      '#75: L16 exec with the default SA token but no RBAC returns the real 403 Status JSON (no fake Hello page)',
+      l16Forbidden.message.slice(0, 500)
+    );
+    const l16InvalidToken = await command(
+      "oc exec deploy/api -n sa-lab -- curl -sk -H 'Authorization: Bearer invalid-token' https://kubernetes.default.svc/api/v1/namespaces/sa-lab/pods",
+      800
+    );
+    const l16InvalidBody = parseJsonBody(l16InvalidToken.message);
+    assert(
+      l16InvalidBody?.kind === 'Status' &&
+        l16InvalidBody?.code === 401 &&
+        l16InvalidBody?.reason === 'Unauthorized',
+      '#75: L16 exec with an INVALID bearer token returns a 401 Unauthorized Status JSON (never the external Hello page)',
+      l16InvalidToken.message.slice(0, 500)
+    );
+    const l16Sa = await command('oc create sa api-reader -n sa-lab', 400);
+    const l16Bind = await command(
+      'oc adm policy add-role-to-user view -z api-reader -n sa-lab',
+      500
+    );
+    const l16SetSa = await command('oc set sa deploy/api api-reader -n sa-lab', 500);
+    const l16SaRolled = await advanceUntil(
+      async () =>
+        evaluate(
+          (ns) =>
+            (window.game.cluster.getByKindAndNamespace('Pod', ns) || []).some(
+              (pod) =>
+                pod.spec?.serviceAccountName === 'api-reader' && pod.status?.phase === 'Running'
+            ),
+          'sa-lab'
+        ),
+      40,
+      2
+    );
+    await advanceGame(3);
+    const l16PodList = await execApi('sa-lab');
+    assert(
+      !l16Sa.error &&
+        !l16Bind.error &&
+        !l16SetSa.error &&
+        l16SaRolled &&
+        /"kind"\s*:\s*"PodList"/.test(l16PodList.message) &&
+        /"items"\s*:\s*\[/.test(l16PodList.message) &&
+        !/Hello from the Internet|container main/.test(l16PodList.message),
+      '#75: L16 exec with the api-reader RBAC returns a real PodList JSON from the API',
+      l16PodList.message.slice(0, 600)
+    );
+    const l16CanI = await command(
+      'oc auth can-i get pods --as=system:serviceaccount:sa-lab:api-reader -n sa-lab',
+      500
+    );
+    await sleep(400);
+    const l16Results = await objectiveResults();
+    assert(
+      l16CanI.message.trim() === 'yes' &&
+        objectiveByLabel(l16Results, /api-reader can list Pods via the Kubernetes API/i)
+          ?.completed === true &&
+        objectiveByLabel(l16Results, /Verify access with oc auth can-i/i)?.completed === true,
+      '#75: L16 API-access objectives tick from the real PodList outcome',
+      JSON.stringify(l16Results.map((entry) => [entry.label, entry.completed]))
+    );
+
+    // L19: describe prints Active Deadline Seconds; DeadlineExceeded is exact.
+    assert(await startCampaign(19), '#75: campaign L19 starts');
+    await evaluate(() => window.game?.app?.hideTutorial?.());
+    await command('oc project batch-lab', 200);
+    const l19Describe = await command('oc describe job report-batch -n batch-lab', 700);
+    assert(
+      /^Active Deadline Seconds: +8s$/m.test(l19Describe.message),
+      '#75: L19 `oc describe job report-batch` prints `Active Deadline Seconds:  8s`',
+      JSON.stringify(fieldLine(l19Describe.message, 'Active Deadline Seconds'))
+    );
+    const l19Failed = await advanceUntil(
+      async () => {
+        const phase = await evaluate(
+          () =>
+            window.game.cluster.getByName('Job', 'report-batch', 'batch-lab')?.status?.phase || '',
+          'batch-lab'
+        );
+        return phase === 'Failed';
+      },
+      40,
+      2
+    );
+    const l19Events = await evaluate(() => {
+      const job = window.game.cluster.getByName('Job', 'report-batch', 'batch-lab');
+      return (job?.events || []).map((event) => ({ reason: event.reason, message: event.message }));
+    });
+    const deadlineEvent = l19Events.find((event) => event.reason === 'DeadlineExceeded');
+    assert(
+      l19Failed &&
+        deadlineEvent &&
+        deadlineEvent.message === 'Job was active longer than specified deadline',
+      '#75: the DeadlineExceeded event message is exactly "Job was active longer than specified deadline" (no "(8s)")',
+      JSON.stringify({ l19Failed, deadlineEvent })
+    );
+    const l19FastJob = await command(
+      'oc create job report-job --image=perl -- perl -e "print 42" -n batch-lab',
+      500
+    );
+    const l19FastDone = await advanceUntil(
+      async () => {
+        const phase = await evaluate(
+          () =>
+            window.game.cluster.getByName('Job', 'report-job', 'batch-lab')?.status?.phase || '',
+          'batch-lab'
+        );
+        return /^(Complete|Succeeded)$/.test(phase);
+      },
+      12,
+      1
+    );
+    assert(
+      !l19FastJob.error && l19FastDone,
+      '#75: a fast busybox/perl Job completes promptly (no artificial 25 s)',
+      JSON.stringify({ create: l19FastJob.message.slice(0, 200), l19FastDone })
+    );
+
+    // L12: the seeded tls-app is TLS end-to-end; passthrough to a plain-HTTP
+    // backend fails the handshake with the real curl (35) error.
+    assert(await startCampaign(12), '#75: campaign L12 starts');
+    await evaluate(() => window.game?.app?.hideTutorial?.());
+    await command('oc project lb-lab', 200);
+    const l12Fixture = await evaluate(() => {
+      const cluster = window.game.cluster;
+      const service = cluster.getByName('Service', 'tls-app', 'lb-lab');
+      const deployment = cluster.getByName('Deployment', 'tls-app', 'lb-lab');
+      return {
+        servicePorts: service?.spec?.ports || [],
+        containerPorts: deployment?.spec?.template?.spec?.containers?.[0]?.ports || [],
+        image: deployment?.spec?.template?.spec?.containers?.[0]?.image || '',
+      };
+    });
+    assert(
+      l12Fixture.servicePorts.some(
+        (port) =>
+          port.name === 'https' &&
+          Number(port.port) === 443 &&
+          (String(port.targetPort) === '8443' || String(port.targetPort) === 'https')
+      ) &&
+        l12Fixture.containerPorts.some(
+          (port) => Number(port.containerPort) === 8443 && port.name === 'https'
+        ) &&
+        /nginx/i.test(l12Fixture.image),
+      '#75: L12 seeds a TLS-serving fixture (nginx on 8443 named https, Service 443/https)',
+      JSON.stringify(l12Fixture)
+    );
+    const l12Route = await command(
+      'oc create route passthrough tls-app --service=tls-app -n lb-lab',
+      500
+    );
+    const l12HostReady = await advanceUntil(
+      async () => {
+        const host = await evaluate(() => {
+          const route = window.game.cluster.getByName('Route', 'tls-app', 'lb-lab');
+          return route?.spec?.host || (route?.status?.ingress || [])[0]?.host || '';
+        });
+        return Boolean(host);
+      },
+      20,
+      2
+    );
+    const l12RouteSpec = await evaluate(() => {
+      const route = window.game.cluster.getByName('Route', 'tls-app', 'lb-lab');
+      return {
+        targetPort: route?.spec?.port?.targetPort,
+        termination: route?.spec?.tls?.termination,
+        host: route?.spec?.host || (route?.status?.ingress || [])[0]?.host || '',
+      };
+    });
+    assert(
+      !l12Route.error &&
+        l12RouteSpec.termination === 'passthrough' &&
+        l12RouteSpec.targetPort === 'https',
+      '#75: the L12 passthrough Route targets the Service port NAME (`spec.port.targetPort: https`)',
+      JSON.stringify(l12RouteSpec)
+    );
+    const l12PodsReady = await advanceUntil(
+      async () => {
+        const pods = await evaluate(() =>
+          (window.game.cluster.getByKindAndNamespace('Pod', 'lb-lab') || [])
+            .filter((pod) => (pod.metadata.labels?.app || '') === 'tls-app')
+            .map((pod) => ({
+              name: pod.metadata.name,
+              phase: pod.status?.phase,
+              ready: (pod.status?.containerStatuses || []).every((status) => status.ready),
+            }))
+        );
+        return pods.length >= 1 && pods.every((pod) => pod.phase === 'Running' && pod.ready);
+      },
+      40,
+      2
+    );
+    const l12Pods = await evaluate(() =>
+      (window.game.cluster.getByKindAndNamespace('Pod', 'lb-lab') || [])
+        .filter((pod) => (pod.metadata.labels?.app || '') === 'tls-app')
+        .map((pod) => ({
+          name: pod.metadata.name,
+          phase: pod.status?.phase,
+          ready: (pod.status?.containerStatuses || []).every((status) => status.ready),
+        }))
+    );
+    assert(
+      l12PodsReady &&
+        l12Pods.length >= 1 &&
+        l12Pods.every((pod) => pod.phase === 'Running' && pod.ready),
+      '#75: the L12 TLS fixture Pod is Running/Ready so the passthrough Route has endpoints',
+      JSON.stringify(l12Pods)
+    );
+    const l12HostJsonPath = await command(
+      "oc get route tls-app -n lb-lab -o jsonpath='{.spec.host}'",
+      400
+    );
+    const l12CurlHost = String(l12HostJsonPath.message || '').trim() || l12RouteSpec.host;
+    const l12Curl = await command(`curl -k https://${l12CurlHost}`, 700);
+    assert(
+      !l12Curl.error &&
+        !/wrong version number|SSL routines/i.test(l12Curl.message) &&
+        /nginx|Welcome/i.test(l12Curl.message),
+      '#75: curl -k against the L12 passthrough Route reaches the TLS backend (200 nginx body)',
+      l12Curl.message.slice(0, 400)
+    );
+    // A plain-HTTP backend behind a passthrough Route must fail the handshake.
+    await command(
+      'oc create deployment plain-http --image=quay.io/openshift/origin-hello-openshift:latest -n lb-lab',
+      500
+    );
+    await command('oc expose deployment plain-http -n lb-lab', 500);
+    await advanceGame(6);
+    const plainRoute = await command(
+      'oc create route passthrough plain-pt --service=plain-http -n lb-lab',
+      500
+    );
+    await advanceGame(4);
+    const plainHost = await evaluate(
+      () => window.game.cluster.getByName('Route', 'plain-pt', 'lb-lab')?.spec?.host || ''
+    );
+    const plainCurl = plainHost
+      ? await command(`curl -k https://${plainHost}`, 700)
+      : { error: false, message: '' };
+    assert(
+      !plainRoute.error &&
+        plainCurl.error &&
+        /curl: \(35\)/.test(plainCurl.message) &&
+        /wrong version number|SSL routines/i.test(plainCurl.message),
+      '#75: passthrough TLS to a plain-HTTP backend fails the handshake with curl (35) wrong version number',
+      JSON.stringify({
+        route: plainRoute.message.slice(0, 160),
+        curl: plainCurl.message.slice(0, 300),
+      })
+    );
+
+    // Lab 8: the missing ServiceAccount produces the real ServiceAccount
+    // admission FailedCreate (no Pod object).
+    assert(await startChallenge(8), '#75: lab 8 starts');
+    await evaluate(() => window.game?.app?.hideTutorial?.());
+    await command('oc project secure', 200);
+    await command('oc apply -f challenges/privileged-app.yaml -n secure', 600);
+    await advanceGame(4);
+    const lab8Failures = await replicaSetFailures('secure');
+    assert(
+      (await podsIn('secure')).length === 0 &&
+        lab8Failures.some((message) =>
+          /error looking up service account secure\/priv-sa: serviceaccount "priv-sa" not found/.test(
+            message
+          )
+        ),
+      '#75: lab 8 with a missing ServiceAccount records "error looking up service account secure/priv-sa: serviceaccount \\"priv-sa\\" not found" and creates no Pod',
+      JSON.stringify({ pods: await podsIn('secure'), failures: lab8Failures.slice(0, 3) })
+    );
+
+    // L7/L11 objectives must start false (never pre-ticked).
+    assert(await startCampaign(7), '#75: campaign L7 starts for the pre-ticked objective check');
+    await evaluate(() => window.game?.app?.hideTutorial?.());
+    let l7Results = await objectiveResults();
+    // The negative "No ConfigMap contains password/secret/token/key data"
+    // objective is vacuously true before any ConfigMap exists (real evaluator
+    // semantics); the positive work objectives must all start false.
+    const l7PositiveResults = l7Results.filter(
+      (entry) => !/No ConfigMap contains/i.test(entry.label)
+    );
+    assert(
+      l7Results.length >= 5 &&
+        objectiveByLabel(l7Results, /Mount a ConfigMap into a workload volume/i)?.completed ===
+          false &&
+        l7PositiveResults.every((entry) => entry.completed === false),
+      '#75: L7 objectives start false — "Mount a ConfigMap into a workload volume" is not pre-ticked',
+      JSON.stringify(l7Results.map((entry) => [entry.label, entry.completed]))
+    );
+    assert(await startCampaign(11), '#75: campaign L11 starts for the pre-ticked objective check');
+    await evaluate(() => window.game?.app?.hideTutorial?.());
+    const l11Results = await objectiveResults();
+    assert(
+      objectiveByLabel(l11Results, /Service selector matches the web workload/i)?.completed ===
+        false && objectiveByLabel(l11Results, /Create Service "web"/i)?.completed === false,
+      '#75: L11 objectives start false — the Service-selector objective is not pre-ticked before Service web exists',
+      JSON.stringify(l11Results.map((entry) => [entry.label, entry.completed]))
+    );
+
+    // Wrong hints corrected: lab 1 route admission, lab 3 real TLS material.
+    assert(await startChallenge(1), '#75: lab 1 starts to inspect its hint');
+    const lab1Hints = await evaluate(() =>
+      (window.game.app.modeInstance?.currentChallengeDef?.hints || []).join('\n')
+    );
+    assert(
+      !/only Admitted when its Service has ready endpoints/i.test(lab1Hints) &&
+        /Admitted on host\/path\/certificate validity/i.test(lab1Hints) &&
+        /503/.test(lab1Hints),
+      '#75: lab 1 hint teaches the real Route admission rule (host/path/cert; 503 without endpoints)',
+      String(lab1Hints).slice(0, 500)
+    );
+    assert(await startChallenge(3), '#75: lab 3 starts to inspect its hint');
+    const lab3Hints = await evaluate(() =>
+      (window.game.app.modeInstance?.currentChallengeDef?.hints || []).join('\n')
+    );
+    assert(
+      /openssl req -x509/.test(lab3Hints) &&
+        /no such file or directory/.test(lab3Hints) &&
+        !/simulated certificate/i.test(lab3Hints),
+      '#75: lab 3 hint requires the real openssl flow (missing cert files now fail)',
+      String(lab3Hints).slice(0, 500)
+    );
+  } catch (err) {
+    fail('#75: debug-signal block threw', err?.stack?.split('\n').slice(0, 5).join('\n'));
+  }
+
+  // ── #76 — CLI/output fidelity, MetalLB, heartbeat and project templates ──
+  try {
+    await bootSandbox();
+    // explain v2 plaintext template.
+    const explainStrategy = await command('oc explain deployment.spec.strategy', 400);
+    const explainDeployment = await command('oc explain deployment', 400);
+    const explainPod = await command('oc explain pod', 400);
+    const explainLines = explainStrategy.message.split('\n');
+    const fieldsAt = explainLines.indexOf('FIELDS:');
+    const rollingAt = explainLines.findIndex(
+      (line) => line === '  rollingUpdate\t<RollingUpdateDeployment>'
+    );
+    const typeAt = explainLines.findIndex((line) => line === '  type\t<string>');
+    assert(
+      /^GROUP: {6}apps$/m.test(explainStrategy.message) &&
+        /^KIND: {7}Deployment$/m.test(explainStrategy.message) &&
+        /^VERSION: {4}v1$/m.test(explainStrategy.message) &&
+        /^FIELD: strategy <DeploymentStrategy>$/m.test(explainStrategy.message) &&
+        explainLines[3] === '' &&
+        explainLines[5] === '',
+      '#76: `oc explain deployment.spec.strategy` uses the kubectl 1.35 explain v2 header (GROUP/KIND/VERSION at col 13, blank line, FIELD)',
+      JSON.stringify(explainStrategy.message.slice(0, 300))
+    );
+    assert(
+      fieldsAt >= 0 &&
+        rollingAt > fieldsAt &&
+        typeAt > rollingAt &&
+        /^  enum: Recreate, RollingUpdate$/m.test(explainStrategy.message),
+      '#76: explain v2 FIELDS list rollingUpdate <RollingUpdateDeployment> before type <string> with the strategy enum',
+      JSON.stringify(explainStrategy.message.slice(-300))
+    );
+    const deploymentFieldLines = explainDeployment.message
+      .split('\n')
+      .slice(explainDeployment.message.split('\n').indexOf('FIELDS:') + 1)
+      .filter((line) => line !== '');
+    assert(
+      /^KIND: {7}Deployment$/m.test(explainDeployment.message) &&
+        !/^FIELD:/m.test(explainDeployment.message) &&
+        deploymentFieldLines.some((line) => line === '  spec\t<DeploymentSpec>') &&
+        deploymentFieldLines.some((line) => line === '  metadata\t<ObjectMeta>') &&
+        deploymentFieldLines.every((line) => /^  \S+\t<.+>$/.test(line) || /^ {6}enum:/.test(line)),
+      '#76: top-level explain prints GROUP/KIND/VERSION + DESCRIPTION + tab-and-<Type> FIELDS (no per-field descriptions)',
+      JSON.stringify(deploymentFieldLines.slice(0, 10))
+    );
+    assert(
+      !/^GROUP:/m.test(explainPod.message) &&
+        /^KIND: {7}Pod$/m.test(explainPod.message) &&
+        /^VERSION: {4}v1$/m.test(explainPod.message),
+      '#76: explain v2 omits GROUP for core kinds (Pod)',
+      JSON.stringify(explainPod.message.slice(0, 200))
+    );
+
+    // describe pod state lines: Waiting only Reason, Last State Started before
+    // Finished, Running container real IDs.
+    const podsProject = 'qa76-pods';
+    await command(`oc new-project ${podsProject}`, 200);
+    await evaluate(
+      ({ namespace }) => {
+        window.game.manifestEngine.writeFile(
+          `qa76/q-pod.yaml`,
+          [
+            'apiVersion: v1',
+            'kind: Pod',
+            `metadata:`,
+            `  name: qa76-crash`,
+            `  namespace: ${namespace}`,
+            'spec:',
+            '  containers:',
+            '    - name: main',
+            '      image: quay.io/openshift/origin-hello-openshift:latest',
+          ].join('\n')
+        );
+        return true;
+      },
+      { namespace: podsProject }
+    );
+    await command('oc apply -f qa76/q-pod.yaml', 500);
+    await evaluate(
+      ({ namespace }) => {
+        const pod = window.game.cluster.getByName('Pod', 'qa76-crash', namespace);
+        pod.status = {
+          ...(pod.status || {}),
+          phase: 'CrashLoopBackOff',
+          containerStatuses: [
+            {
+              name: 'main',
+              image: 'quay.io/openshift/origin-hello-openshift:latest',
+              ready: false,
+              started: false,
+              restartCount: 2,
+              state: {
+                waiting: {
+                  reason: 'CrashLoopBackOff',
+                  message: 'Back-off restarting failed container',
+                },
+              },
+              lastState: {
+                terminated: {
+                  exitCode: 1,
+                  reason: 'Error',
+                  startedAt: '2026-11-01T10:00:00Z',
+                  finishedAt: '2026-11-01T10:00:01Z',
+                },
+              },
+            },
+          ],
+        };
+        window.game.cluster.update(pod.uid, pod);
+        return true;
+      },
+      { namespace: podsProject }
+    );
+    const crashDescribe = await command(`oc describe pod qa76-crash -n ${podsProject}`, 600);
+    assert(
+      /^ {4}State: +Waiting$/m.test(crashDescribe.message) &&
+        /^ {6}Reason: +CrashLoopBackOff$/m.test(crashDescribe.message) &&
+        !/^ {6}Message: +Back-off restarting failed container/m.test(crashDescribe.message),
+      '#76: describe pod prints only Reason for a Waiting container (no invented Message line)',
+      crashDescribe.message.slice(0, 900)
+    );
+    const crashDescribeLines = crashDescribe.message.split('\n');
+    const lastStateAt = crashDescribeLines.findIndex((line) =>
+      /^ {4}Last State: +Terminated$/.test(line)
+    );
+    const lastStateBlock = crashDescribeLines.slice(lastStateAt, lastStateAt + 8).join('\n');
+    assert(
+      lastStateAt >= 0 &&
+        lastStateBlock.indexOf('Started:') >= 0 &&
+        lastStateBlock.indexOf('Started:') < lastStateBlock.indexOf('Finished:'),
+      '#76: a Terminated Last State prints Started before Finished',
+      JSON.stringify(lastStateBlock)
+    );
+    await command(
+      `oc create deployment run --image=quay.io/openshift/origin-hello-openshift:latest -n ${podsProject}`,
+      500
+    );
+    await advanceGame(4);
+    const runningDescribe = await evaluate((ns) => {
+      const pod = (window.game.cluster.getByKindAndNamespace('Pod', ns) || []).find((entry) =>
+        /^run-/.test(entry.metadata.name)
+      );
+      return pod
+        ? {
+            name: pod.metadata.name,
+            containerID: pod.status?.containerStatuses?.[0]?.containerID || '',
+            imageID: pod.status?.containerStatuses?.[0]?.imageID || '',
+          }
+        : null;
+    }, podsProject);
+    const runningPodDescribe = runningDescribe
+      ? await command(`oc describe pod ${runningDescribe.name} -n ${podsProject}`, 600)
+      : { message: '' };
+    assert(
+      /Container ID: +cri-o:\/\/[0-9a-f]{16,}/.test(runningPodDescribe.message) &&
+        /Image ID: +[^\n]*sha256:[0-9a-f]{64}/.test(runningPodDescribe.message) &&
+        !/Container ID: +<none>/.test(runningPodDescribe.message) &&
+        !/Image ID: +<none>/.test(runningPodDescribe.message),
+      '#76: a Running container describes with real cri-o Container ID + Image ID digest (never <none>)',
+      JSON.stringify(
+        messageLines(runningPodDescribe.message).filter((line) =>
+          /Container ID:|Image ID:/.test(line)
+        )
+      )
+    );
+
+    // jsonpath slices marshal as JSON arrays like client-go.
+    const jsonProject = 'qa76-jsonpath';
+    await command(`oc new-project ${jsonProject}`, 200);
+    await command(
+      `oc create deployment web --image=quay.io/openshift/origin-hello-openshift:latest -n ${jsonProject}`,
+      500
+    );
+    await command(`oc set env deployment/web -n ${jsonProject} APP_ENV=production`, 500);
+    await command(`oc expose deployment web -n ${jsonProject}`, 500);
+    const envPath = await command(
+      `oc get deployment web -n ${jsonProject} -o jsonpath={.spec.template.spec.containers[0].env}`,
+      400
+    );
+    let envParsed = null;
+    try {
+      envParsed = JSON.parse(envPath.message.trim());
+    } catch {
+      envParsed = null;
+    }
+    assert(
+      Array.isArray(envParsed) &&
+        envParsed[0]?.name === 'APP_ENV' &&
+        envParsed[0]?.value === 'production',
+      '#76: jsonpath on a list field prints the bracketed JSON array (client-go jsonpath.go)',
+      envPath.message.slice(0, 300)
+    );
+    const portsPath = await command(
+      `oc get svc web -n ${jsonProject} -o jsonpath={.spec.ports}`,
+      400
+    );
+    let portsParsed = null;
+    try {
+      portsParsed = JSON.parse(portsPath.message.trim());
+    } catch {
+      portsParsed = null;
+    }
+    assert(
+      Array.isArray(portsParsed) && Number(portsParsed[0]?.port) === 8080,
+      '#76: jsonpath on `{.spec.ports}` prints a JSON array',
+      portsPath.message.slice(0, 300)
+    );
+    const scalarPath = await command(
+      `oc get deployment web -n ${jsonProject} -o jsonpath={.spec.replicas}`,
+      400
+    );
+    assert(
+      scalarPath.message.trim() === '1',
+      '#76: jsonpath scalars stay bare values',
+      JSON.stringify(scalarPath.message)
+    );
+
+    // kustomize legacy sort: Service before Deployment.
+    await writeVirtualFile(
+      'qa76/kustomize/kustomization.yaml',
+      'resources:\n  - deployment.yaml\n  - service.yaml\n'
+    );
+    await writeVirtualFile(
+      'qa76/kustomize/deployment.yaml',
+      [
+        'apiVersion: apps/v1',
+        'kind: Deployment',
+        'metadata:',
+        '  name: kd',
+        '  namespace: default',
+        'spec:',
+        '  replicas: 1',
+        '  selector:',
+        '    matchLabels: {app: kd}',
+        '  template:',
+        '    metadata:',
+        '      labels: {app: kd}',
+        '    spec:',
+        '      containers:',
+        '        - name: c',
+        '          image: quay.io/openshift/origin-hello-openshift:latest',
+      ].join('\n')
+    );
+    await writeVirtualFile(
+      'qa76/kustomize/service.yaml',
+      [
+        'apiVersion: v1',
+        'kind: Service',
+        'metadata:',
+        '  name: ks',
+        '  namespace: default',
+        'spec:',
+        '  selector: {app: kd}',
+        '  ports:',
+        '    - port: 8080',
+      ].join('\n')
+    );
+    const rendered = await command('oc kustomize qa76/kustomize', 500);
+    const serviceAt = rendered.message.indexOf('kind: Service');
+    const deploymentAt = rendered.message.indexOf('kind: Deployment');
+    assert(
+      serviceAt >= 0 && deploymentAt > serviceAt,
+      '#76: `oc kustomize` emits resources in Kustomize legacy sort order (Service before Deployment)',
+      JSON.stringify({ serviceAt, deploymentAt })
+    );
+    const appliedK = await command('oc apply -k qa76/kustomize', 600);
+    const serviceCreateAt = appliedK.message.indexOf('service/ks');
+    const deploymentCreateAt = appliedK.message.indexOf('deployment.apps/kd');
+    assert(
+      serviceCreateAt >= 0 && deploymentCreateAt > serviceCreateAt,
+      '#76: `oc apply -k` creates resources in legacy sort order too',
+      appliedK.message.slice(0, 300)
+    );
+
+    // oc new-app Service port names + Route PORT column.
+    const portsProject = 'qa76-ports';
+    await command(`oc new-project ${portsProject}`, 200);
+    await command(
+      `oc new-app --image=quay.io/openshift/origin-hello-openshift:latest --name=api -n ${portsProject}`,
+      600
+    );
+    const apiPorts = await evaluate(
+      (ns) => window.game.cluster.getByName('Service', 'api', ns)?.spec?.ports || [],
+      portsProject
+    );
+    assert(
+      apiPorts[0]?.name === '8080-tcp',
+      '#76: `oc new-app` names the Service port "8080-tcp" (fmt.Sprintf("%d-%s"))',
+      JSON.stringify(apiPorts)
+    );
+    await command(
+      `oc new-app --image=registry.redhat.io/rhel9/mysql-80 --name=database -n ${portsProject}`,
+      600
+    );
+    const mysqlPorts = await evaluate(
+      (ns) => window.game.cluster.getByName('Service', 'database', ns)?.spec?.ports || [],
+      portsProject
+    );
+    assert(
+      mysqlPorts[0]?.name === '3306-tcp',
+      '#76: the MySQL new-app Service port is "3306-tcp"',
+      JSON.stringify(mysqlPorts)
+    );
+    await command(`oc expose svc api -n ${portsProject}`, 400);
+    const routeRow = (await command(`oc get route api -n ${portsProject}`, 400)).message
+      .split('\n')
+      .filter((line) => line.trim() !== '')[1];
+    assert(
+      /^api\s+\S+\s+\S+\s+8080-tcp(?:\s|$)/.test(routeRow || ''),
+      '#76: the Route PORT column shows the new-app Service port name "8080-tcp"',
+      JSON.stringify(routeRow)
+    );
+
+    // hello-openshift body is plain text (fmt.Fprintln), not HTML.
+    const helloProject = 'qa76-hello';
+    await command(`oc new-project ${helloProject}`, 200);
+    await command(
+      `oc create deployment web --image=quay.io/openshift/origin-hello-openshift:latest -n ${helloProject}`,
+      500
+    );
+    await advanceGame(5);
+    await command(`oc expose svc web -n ${helloProject} --hostname=web.qa76.example.com`, 500);
+    // Wait for the Route's endpoints to become Ready before reading the body (a
+    // busy full-suite page can need an extra controller tick; the body/format is
+    // what this block asserts, not the rollout timing).
+    let helloCurl = await command('curl -s http://web.qa76.example.com', 500);
+    for (
+      let attempt = 0;
+      attempt < 10 && !/^Hello OpenShift!/.test(helloCurl.message);
+      attempt += 1
+    ) {
+      await advanceGame(2);
+      helloCurl = await command('curl -s http://web.qa76.example.com', 500);
+    }
+    assert(
+      !helloCurl.error && /^Hello OpenShift!\n?$/.test(helloCurl.message),
+      '#76: hello-openshift answers plain text "Hello OpenShift!\\n" (no HTML body)',
+      JSON.stringify(helloCurl.message)
+    );
+    // Word-final command substitution expands (the issue's one-liner).
+    let substituted = await command(
+      `curl -s http://$(oc get route web -n ${helloProject} -o jsonpath={.spec.host})`,
+      500
+    );
+    for (
+      let attempt = 0;
+      attempt < 10 && !/Hello OpenShift!/.test(substituted.message);
+      attempt += 1
+    ) {
+      await advanceGame(2);
+      substituted = await command(
+        `curl -s http://$(oc get route web -n ${helloProject} -o jsonpath={.spec.host})`,
+        500
+      );
+    }
+    assert(
+      !substituted.error &&
+        !/URL rejected|Malformed input/.test(substituted.message) &&
+        /Hello OpenShift!/.test(substituted.message),
+      '#76: a word-final $(...) expands (`curl http://$(oc get route … -o jsonpath={.spec.host})`)',
+      JSON.stringify(substituted.message)
+    );
+
+    // oc login project text (loginoptions.go).
+    await command('oc new-project qa76-login-a', 200);
+    await command('oc new-project qa76-login-b', 200);
+    const login = await command(`oc login -u kubeadmin -p ${kubeadminPw}`, 600);
+    const loginLines = login.message.split('\n');
+    const loginHeaderAt = loginLines.indexOf(
+      "You have access to the following projects and can switch between them with 'oc project <projectname>':"
+    );
+    assert(
+      loginHeaderAt >= 0 &&
+        loginLines[loginHeaderAt + 1] === '' &&
+        loginLines.includes('  * qa76-login-b') &&
+        loginLines.some((line) => /^ {4}default$/.test(line)) &&
+        /^Using project "qa76-login-b"\.$/m.test(login.message) &&
+        !/You have access to \d+ projects/.test(login.message),
+      '#76: `oc login` prints the real 4.22 project list (header, "  * <current>", 4-space others, Using project line)',
+      JSON.stringify(login.message.slice(0, 800))
+    );
+
+    // describe quota: canonical resource.Quantity values.
+    const quotaProject = 'qa76-quota';
+    await command(`oc new-project ${quotaProject}`, 200);
+    await command(
+      `oc create quota q --hard=pods=10,requests.cpu=4,requests.memory=8Gi -n ${quotaProject}`,
+      400
+    );
+    await command(
+      `oc create deployment web --image=quay.io/openshift/origin-hello-openshift:latest -n ${quotaProject}`,
+      500
+    );
+    await command(
+      `oc set resources deployment/web --requests=cpu=1000m,memory=1024Mi -n ${quotaProject}`,
+      500
+    );
+    await advanceGame(4);
+    const quotaDescribe = await command(`oc describe quota q -n ${quotaProject}`, 500);
+    const quotaRows = messageLines(quotaDescribe.message).map((line) =>
+      line.split(/\s{2,}/).map((cell) => cell.trim())
+    );
+    const cpuRow = quotaRows.find((row) => row[0] === 'requests.cpu') || [];
+    const memoryRow = quotaRows.find((row) => row[0] === 'requests.memory') || [];
+    assert(
+      cpuRow[1] === '1' && cpuRow[2] === '4' && memoryRow[1] === '1Gi' && memoryRow[2] === '8Gi',
+      '#76: `oc describe quota` prints canonical quantities (1000m→1, 1024Mi→1Gi)',
+      JSON.stringify({ cpuRow, memoryRow })
+    );
+
+    // oc get all is name-sorted (API server order).
+    const orderProject = 'qa76-order';
+    await command(`oc new-project ${orderProject}`, 200);
+    await command(
+      `oc create deployment web --image=quay.io/openshift/origin-hello-openshift:latest -n ${orderProject}`,
+      500
+    );
+    await command(`oc expose deployment web -n ${orderProject}`, 500);
+    await command(
+      `oc create deployment shop --image=quay.io/openshift/origin-hello-openshift:latest -n ${orderProject}`,
+      500
+    );
+    await command(`oc expose deployment shop -n ${orderProject}`, 500);
+    const allLines = (await command(`oc get all -n ${orderProject}`, 500)).message.split('\n');
+    const serviceOrder = allLines
+      .filter((line) => /^service\//.test(line))
+      .map((line) => line.split(/\s+/)[0]);
+    const deploymentOrder = allLines
+      .filter((line) => /^deployment\.apps\//.test(line))
+      .map((line) => line.split(/\s+/)[0]);
+    assert(
+      JSON.stringify(serviceOrder) === JSON.stringify(['service/shop', 'service/web']) &&
+        JSON.stringify(deploymentOrder) ===
+          JSON.stringify(['deployment.apps/shop', 'deployment.apps/web']),
+      '#76: `oc get all` lists resources sorted by name (shop before web, not creation order)',
+      JSON.stringify({ serviceOrder, deploymentOrder })
+    );
+
+    // oc get identities: USER UID populated. Use the real login path
+    // (`ClusterState.createIdentity`, also used by first login) instead of a raw
+    // manifest, which only references the User by name.
+    await command('oc create user qa76-user', 400);
+    await evaluate(() => {
+      window.game.cluster.createIdentity('htpasswd', 'qa76-user', 'qa76-user');
+      return true;
+    });
+    const identityRows = (await command('oc get identities', 400)).message
+      .split('\n')
+      .filter((line) => line.trim() !== '');
+    const identityRow = identityRows.find((line) => /^htpasswd:qa76-user\s/.test(line)) || '';
+    assert(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+        identityRow
+          .trim()
+          .split(/\s{2,}/)
+          .pop() || ''
+      ),
+      '#76: `oc get identities` populates the USER UID column',
+      JSON.stringify(identityRows.slice(0, 3))
+    );
+
+    // helm list UPDATED timestamp.
+    const helmProject = 'qa76-helm';
+    await command(`oc new-project ${helmProject}`, 200);
+    await command('helm repo add bitnami https://charts.bitnami.com/bitnami', 400);
+    const helmInstall = await command(`helm install webapp helm/webapp -n ${helmProject}`, 600);
+    const helmList = await command(`helm list -n ${helmProject}`, 400);
+    const helmRows = helmList.message
+      .split('\n')
+      .filter((line) => line.trim() !== '')
+      .map((line) => line.split(/\s{3,}/).map((cell) => cell.trim()));
+    const updatedColumn = (helmRows[0] || []).indexOf('UPDATED');
+    const updatedValue = (helmRows[1] || [])[updatedColumn] || '';
+    assert(
+      !helmInstall.error &&
+        updatedColumn >= 0 &&
+        /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(\.\d{1,9})? \+0000 UTC$/.test(updatedValue),
+      '#76: `helm list` UPDATED is the Go time.Time.String() timestamp (not "0s")',
+      JSON.stringify({ updatedColumn, updatedValue, rows: helmRows.slice(0, 2) })
+    );
+
+    // /tmp is a consistent virtual directory.
+    const redirect = await command(
+      `oc get deployment web -n ${helloProject} > /tmp/webapp.yaml`,
+      500
+    );
+    const lsTmp = await command('ls /tmp', 400);
+    const catTmp = await command('cat /tmp/webapp.yaml', 400);
+    assert(
+      !redirect.error &&
+        !lsTmp.error &&
+        /webapp\.yaml/.test(lsTmp.message) &&
+        !catTmp.error &&
+        /deployment|kind|name/i.test(catTmp.message),
+      '#76: /tmp is a real virtual directory (redirect → ls → cat are consistent)',
+      JSON.stringify({ ls: lsTmp.message.slice(0, 200), cat: catTmp.message.slice(0, 160) })
+    );
+    // echo output has no extra blank line (one terminal line).
+    await command('echo qa76-echo-line', 300);
+    const echoLine = await evaluate(() => {
+      const output = document.getElementById('cmd-output');
+      const last = output?.lastElementChild;
+      return last ? last.textContent : '';
+    });
+    assert(
+      echoLine === 'qa76-echo-line',
+      '#76: `echo` prints exactly one line (no trailing blank line)',
+      JSON.stringify(echoLine)
+    );
+
+    // SCC FailedCreate message details (provider reasons).
+    const sccProject = 'qa76-scc';
+    await command(`oc new-project ${sccProject}`, 200);
+    await command(`oc create sa priv-sa -n ${sccProject}`, 400);
+    await writeVirtualFile(
+      'qa76/priv-deploy.yaml',
+      [
+        'apiVersion: apps/v1',
+        'kind: Deployment',
+        'metadata:',
+        '  name: privileged-app',
+        `  namespace: ${sccProject}`,
+        'spec:',
+        '  replicas: 1',
+        '  selector:',
+        '    matchLabels: {app: privileged-app}',
+        '  template:',
+        '    metadata:',
+        '      labels: {app: privileged-app}',
+        '    spec:',
+        '      serviceAccountName: priv-sa',
+        '      containers:',
+        '        - name: main',
+        '          image: quay.io/openshift/origin-hello-openshift:latest',
+        '          securityContext:',
+        '            privileged: true',
+      ].join('\n')
+    );
+    await command('oc apply -f qa76/priv-deploy.yaml', 500);
+    await advanceGame(6);
+    const sccFailure = (await replicaSetFailures(sccProject)).find((message) =>
+      /security context constraint/.test(message)
+    );
+    assert(
+      /unable to validate against any security context constraint: \[provider "[a-z-]+": .*Privileged containers are not allowed/.test(
+        String(sccFailure || '')
+      ),
+      '#76: the SCC FailedCreate message appends the per-provider reasons (Privileged containers are not allowed)',
+      JSON.stringify(sccFailure)
+    );
+
+    // MetalLB: OCP-minor CSV name + the real IPAllocated event (no
+    // EnsuredLoadBalancer cloud-provider leftovers).
+    const metallb = 'metallb-system';
+    await command(`oc new-project ${metallb}`, 200);
+    await writeVirtualFile(
+      'qa76/metallb-og.yaml',
+      [
+        'apiVersion: operators.coreos.com/v1',
+        'kind: OperatorGroup',
+        'metadata:',
+        '  name: metallb-operatorgroup',
+        `  namespace: ${metallb}`,
+        'spec:',
+        '  targetNamespaces:',
+        `    - ${metallb}`,
+      ].join('\n')
+    );
+    await writeVirtualFile(
+      'qa76/metallb-sub.yaml',
+      [
+        'apiVersion: operators.coreos.com/v1alpha1',
+        'kind: Subscription',
+        'metadata:',
+        '  name: metallb-operator',
+        `  namespace: ${metallb}`,
+        'spec:',
+        '  channel: stable',
+        '  installPlanApproval: Automatic',
+        '  name: metallb-operator',
+        '  source: redhat-operators',
+        '  sourceNamespace: openshift-marketplace',
+      ].join('\n')
+    );
+    await command('oc apply -f qa76/metallb-og.yaml', 500);
+    await command('oc apply -f qa76/metallb-sub.yaml', 500);
+    const csvSucceeded = await advanceUntil(
+      async () => {
+        const rows = await evaluate(
+          (ns) =>
+            (window.game.cluster.getByKindAndNamespace('ClusterServiceVersion', ns) || []).map(
+              (csv) => ({ name: csv.metadata.name, phase: csv.status?.phase })
+            ),
+          metallb
+        );
+        return rows.some((row) => row.phase === 'Succeeded');
+      },
+      180,
+      3
+    );
+    const csvRows = await evaluate(
+      (ns) =>
+        (window.game.cluster.getByKindAndNamespace('ClusterServiceVersion', ns) || []).map(
+          (csv) => ({ name: csv.metadata.name, phase: csv.status?.phase })
+        ),
+      metallb
+    );
+    assert(
+      csvSucceeded && csvRows.some((row) => row.name === 'metallb-operator.v4.22.0-202610281200'),
+      '#76: the installed MetalLB CSV is the redhat-operators OCP-minor bundle metallb-operator.v4.22.0-202610281200',
+      JSON.stringify(csvRows)
+    );
+    await writeVirtualFile(
+      'qa76/metallb-cr.yaml',
+      [
+        'apiVersion: metallb.io/v1beta1',
+        'kind: MetalLB',
+        'metadata:',
+        '  name: metallb',
+        `  namespace: ${metallb}`,
+        '---',
+        'apiVersion: metallb.io/v1beta1',
+        'kind: IPAddressPool',
+        'metadata:',
+        '  name: metallb-pool',
+        `  namespace: ${metallb}`,
+        'spec:',
+        '  addresses:',
+        '    - 192.168.150.200-192.168.150.220',
+        '---',
+        'apiVersion: metallb.io/v1beta1',
+        'kind: L2Advertisement',
+        'metadata:',
+        '  name: metallb-l2',
+        `  namespace: ${metallb}`,
+        'spec:',
+        '  ipAddressPools:',
+        '    - metallb-pool',
+      ].join('\n')
+    );
+    await command('oc apply -f qa76/metallb-cr.yaml', 600);
+    await advanceGame(10);
+    await command(`oc project ${metallb}`, 200);
+    const lbService = await command(
+      `oc create service loadbalancer lb --tcp=443:443 -n ${metallb}`,
+      500
+    );
+    const lbAssigned = await advanceUntil(
+      async () => {
+        const externalIP = await evaluate(
+          (ns) =>
+            window.game.cluster.getByName('Service', 'lb', ns)?.status?.loadBalancer?.ingress?.[0]
+              ?.ip || '',
+          metallb
+        );
+        return Boolean(externalIP);
+      },
+      90,
+      3
+    );
+    const lbEvents = await evaluate((ns) => {
+      const service = window.game.cluster.getByName('Service', 'lb', ns);
+      return (service?.events || []).map((event) => ({
+        type: event.type,
+        reason: event.reason,
+        from: event.source,
+        message: event.message,
+      }));
+    }, metallb);
+    const ipAllocated = lbEvents.find((event) => event.reason === 'IPAllocated');
+    assert(
+      !lbService.error &&
+        lbAssigned &&
+        Boolean(ipAllocated) &&
+        /^Assigned IP \["\d+\.\d+\.\d+\.\d+"\]$/.test(String(ipAllocated.message)) &&
+        !lbEvents.some((event) => /EnsuredLoadBalancer/.test(String(event.reason || ''))),
+      '#76: MetalLB emits `Normal IPAllocated Assigned IP ["<ip>"]` (no cloud-provider EnsuredLoadBalancer)',
+      JSON.stringify({ lbAssigned, events: lbEvents.slice(0, 6) })
+    );
+
+    // NotReady node heartbeat freezes at the last kubelet post.
+    {
+      await evaluate(() => window.game.incidentEngine.start('sandbox'));
+      const spawnNodeIncident = await evaluate(() => {
+        const engine = window.game.incidentEngine;
+        const def = [...(engine?._defsById?.values?.() || [])].find(
+          (entry) => entry.name === 'NodeNotReady'
+        );
+        if (!def) return null;
+        return engine.spawnIncident(def, 'worker-1', 3, { exactTarget: true });
+      });
+      await advanceGame(3);
+      const readNodeCondition = () =>
+        evaluate(() => {
+          const node = (window.game.cluster.getByKind('Node') || []).find(
+            (entry) => entry.metadata.name === 'worker-1'
+          );
+          const ready = (node?.status?.conditions || []).find(
+            (condition) => condition.type === 'Ready'
+          );
+          return ready
+            ? {
+                status: ready.status,
+                reason: ready.reason,
+                message: ready.message,
+                lastHeartbeatTime: ready.lastHeartbeatTime,
+                lastTransitionTime: ready.lastTransitionTime,
+              }
+            : null;
+        });
+      const onset = await readNodeCondition();
+      await advanceGame(10);
+      const later = await readNodeCondition();
+      assert(
+        Boolean(spawnNodeIncident) &&
+          onset?.status === 'Unknown' &&
+          /Kubelet stopped posting node status/.test(String(onset?.message || '')) &&
+          onset.lastHeartbeatTime === later?.lastHeartbeatTime &&
+          onset.lastTransitionTime === later?.lastTransitionTime,
+        '#76: a NotReady node keeps LastHeartbeatTime frozen at the last kubelet post (LastTransitionTime fixed at onset)',
+        JSON.stringify({ onset, later })
+      );
+    }
+
+    // projectRequestTemplate: openshift-apiserver rolls out for 8 s before
+    // new projects inherit the configured template.
+    await evaluate(() => true);
+    const tplProject = 'qa76-template';
+    await command(
+      'oc patch project.config.openshift.io/cluster --type=merge -p \'{"spec":{"projectRequestTemplate":{"name":"project-request"}}}\'',
+      600
+    );
+    await writeVirtualFile(
+      'qa76/project-template.yaml',
+      [
+        'apiVersion: template.openshift.io/v1',
+        'kind: Template',
+        'metadata:',
+        '  name: project-request',
+        '  namespace: openshift-config',
+        'parameters:',
+        '  - name: PROJECT_NAME',
+        '    required: true',
+        'objects:',
+        '  - apiVersion: project.openshift.io/v1',
+        '    kind: Project',
+        '    metadata:',
+        '      name: ${PROJECT_NAME}',
+        '  - apiVersion: networking.k8s.io/v1',
+        '    kind: NetworkPolicy',
+        '    metadata:',
+        '      name: default-deny',
+        '      namespace: ${PROJECT_NAME}',
+        '    spec:',
+        '      podSelector: {}',
+        '      policyTypes: [Ingress, Egress]',
+      ].join('\n')
+    );
+    await command('oc create -f qa76/project-template.yaml -n openshift-config', 600);
+    // Drive the controller clock once so the config observer definitely sees
+    // the change (the rAF loop may be throttled in headless Chrome).
+    await advanceGame(1);
+    const apiserverWindow = await evaluate(() => {
+      const operator = (window.game.cluster.getByKind('ClusterOperator') || []).find(
+        (entry) => entry.metadata.name === 'openshift-apiserver'
+      );
+      const progressing = (operator?.status?.conditions || []).find(
+        (condition) => condition.type === 'Progressing'
+      );
+      return progressing ? { status: progressing.status, reason: progressing.reason } : null;
+    });
+    assert(
+      apiserverWindow?.status === 'True' && apiserverWindow?.reason === 'Working',
+      '#76: patching projectRequestTemplate starts an openshift-apiserver rollout (Progressing=True/Working)',
+      JSON.stringify(apiserverWindow)
+    );
+    await advanceGame(3);
+    const duringWindow = await command(`oc new-project ${tplProject}-during`, 500);
+    const duringTemplateApplied = await evaluate((name) => {
+      return (window.game.cluster.getByKind('NetworkPolicy') || []).some(
+        (policy) => policy.metadata.name === 'default-deny' && policy.metadata.namespace === name
+      );
+    }, `${tplProject}-during`);
+    assert(
+      !duringWindow.error && duringTemplateApplied === false,
+      '#76: during the 8 s rollout window `oc new-project` does NOT apply the new template yet',
+      JSON.stringify({ duringWindow: duringWindow.message.slice(0, 160), duringTemplateApplied })
+    );
+    await advanceGame(9);
+    const afterWindow = await command(`oc new-project ${tplProject}-after`, 500);
+    const afterTemplateApplied = await evaluate((name) => {
+      return (window.game.cluster.getByKind('NetworkPolicy') || []).some(
+        (policy) => policy.metadata.name === 'default-deny' && policy.metadata.namespace === name
+      );
+    }, `${tplProject}-after`);
+    assert(
+      !afterWindow.error && afterTemplateApplied === true,
+      '#76: after the rollout completes the next `oc new-project` applies the configured template',
+      JSON.stringify({ afterWindow: afterWindow.message.slice(0, 160), afterTemplateApplied })
+    );
+  } catch (err) {
+    fail('#76: CLI/output fidelity block threw', err?.stack?.split('\n').slice(0, 5).join('\n'));
   }
 });
 
