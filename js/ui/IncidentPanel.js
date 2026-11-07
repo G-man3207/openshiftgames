@@ -399,8 +399,16 @@ export class IncidentPanel {
       window.game?.gameEngine?.currentProject ||
       window.game?.cluster?.currentProject ||
       'default';
+    // RBAC/SCC incidents name the identity they damaged (a ServiceAccount such as
+    // `priv-sa`): `-z <serviceaccount>` must carry THAT name, not the workload's.
+    const subject = incident.damagedSubject || null;
+    const subjectName = (kind) =>
+      subject && subject.kind === kind && subject.name ? subject.name : target;
     return String(command || '')
       .replace(/<pod>/g, podTarget)
+      .replace(/<serviceaccount>/g, subjectName('ServiceAccount'))
+      .replace(/<user>/g, subjectName('User'))
+      .replace(/<group>/g, subjectName('Group'))
       .replace(new RegExp(`<(${TARGET_TOKENS.join('|')})>`, 'g'), target)
       .replace(new RegExp(`<(${NAMESPACE_TOKENS.join('|')})>`, 'g'), namespace);
   }
@@ -437,6 +445,7 @@ export class IncidentPanel {
       targetPod: payload.targetPod || null,
       namespace: payload.namespace || '',
       uid: payload.uid || null,
+      damagedSubject: payload.damagedSubject || null,
       message: payload.description || payload.message || def?.description || 'An incident occurred',
       docsUrl: payload.docsUrl || def?.docsUrl || null,
       steps,

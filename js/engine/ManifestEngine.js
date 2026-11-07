@@ -8,6 +8,7 @@
  *   oc apply -k <dir>             -> applyKustomize(dir)
  *   oc process -f <tpl> -p K=V    -> processTemplate(path, params) (render only)
  *   oc process ... | oc apply -f - -> applyObjects(objects, '<stdin>')
+ *   oc new-app -f <tpl> -p K=V    -> processTemplate() + markTemplateApplied(objects) (the CLI deploys)
  *   oc delete -f <file>           -> deleteFileObjects(path)
  *   helm install/upgrade/list/uninstall -> installHelm/upgradeHelm/listHelm/uninstallHelm
  *   htpasswd -c/-b/-D <file> user -> htpasswdAdd/htpasswdUpdate/htpasswdDelete
@@ -1203,17 +1204,8 @@ export class ManifestEngine {
     if (result.ok) {
       const templateMatch = this._matchPendingTemplate(docs);
       if (templateMatch) {
-        templateMatch.applied = true;
-        templateMatch.appliedAt = Date.now();
-        templateMatch.resources = [...result.created, ...result.updated].map((ref) => ({ ...ref }));
+        this._recordTemplateApplied(templateMatch, [...result.created, ...result.updated]);
         result.template = { path: templateMatch.path, name: templateMatch.name };
-        this._emit('template:processed', {
-          path: templateMatch.path,
-          name: templateMatch.name,
-          templateName: templateMatch.name,
-          params: { ...templateMatch.params },
-          resources: templateMatch.resources,
-        });
       }
       this.appliedFiles.push({
         path: norm,
@@ -1282,16 +1274,7 @@ export class ManifestEngine {
     if (result.ok) {
       const match = this._matchPendingTemplate(docs);
       if (match) {
-        match.applied = true;
-        match.appliedAt = Date.now();
-        match.resources = [...result.created, ...result.updated].map((ref) => ({ ...ref }));
-        this._emit('template:processed', {
-          path: match.path,
-          name: match.name,
-          templateName: match.name,
-          params: { ...match.params },
-          resources: match.resources,
-        });
+        this._recordTemplateApplied(match, [...result.created, ...result.updated]);
         result.template = { path: match.path, name: match.name };
       }
     }
@@ -1319,6 +1302,47 @@ export class ManifestEngine {
       message: processed.message,
       template: { path: normalizePath(path) },
     };
+  }
+
+  /**
+   * Flip a rendered template record to applied and announce it
+   * (`template:processed`), the same bookkeeping for every way of applying it.
+   * @param {object} record entry of `pendingTemplates` / `templates`
+   * @param {Array<object>} refs `{kind, name, namespace}` refs (or resources) it created/updated
+   */
+  _recordTemplateApplied(record, refs) {
+    record.applied = true;
+    record.appliedAt = Date.now();
+    record.resources = refs.map((ref) => ({
+      kind: ref?.kind,
+      name: ref?.name ?? ref?.metadata?.name,
+      namespace: ref?.namespace ?? ref?.metadata?.namespace ?? '',
+    }));
+    this._emit('template:processed', {
+      path: record.path,
+      name: record.name,
+      templateName: record.name,
+      params: { ...record.params },
+      resources: record.resources,
+    });
+  }
+
+  /**
+   * Record that a rendered template was deployed by something other than
+   * `oc apply -f` — `oc new-app -f <file>` creates the processed objects
+   * itself. Marks the matching pending template as applied and emits
+   * `template:processed`, exactly like `oc process ... | oc apply -f -`.
+   * Call it only after the objects were created successfully.
+   *
+   * @param {object[]} objects the objects `processTemplate()` rendered and the caller deployed
+   * @param {Array<object>} [resources] what the deploy created/updated (refs or resources)
+   * @returns {{path: string, name: string}|null} the template record, or null if none matched
+   */
+  markTemplateApplied(objects, resources = []) {
+    const match = this._matchPendingTemplate(objects);
+    if (!match) return null;
+    this._recordTemplateApplied(match, Array.isArray(resources) ? resources : []);
+    return { path: match.path, name: match.name };
   }
 
   _matchPendingTemplate(objects) {

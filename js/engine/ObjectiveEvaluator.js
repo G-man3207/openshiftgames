@@ -8,6 +8,7 @@
  * Contract (CONVERSION-SPEC §13):
  *   evaluateObjective(obj, ctx) -> { completed, current, target }
  *   ctx = { clusterState, gameEngine, incidentEngine, scoringEngine, manifestEngine }
+ *   explainObjective(obj, ctx) -> null | { code, text, ... }   (why an objective is unticked)
  *
  * Everything is defensive: the engine is being built in parallel with these
  * objectives, so every optional API is feature-detected and every evaluator
@@ -2590,14 +2591,30 @@ function evaluateEnvFrom(obj, c) {
   return result(using >= target, Math.min(using, target), target);
 }
 
+/**
+ * ConfigMaps that carry at least one key matching the sensitive-key pattern
+ * (password, token, key, …), with the offending keys. Shared by the
+ * `noConfigMap` grader and by its failure note so both always agree.
+ *
+ * @param {object} c resolved evaluation context
+ * @param {RegExp} [pattern] stateless (no `g`/`y` flag) key matcher
+ * @returns {Array<{configMap: object, keys: string[]}>}
+ */
+function sensitiveConfigMapLeaks(c, pattern = SENSITIVE_CONFIGMAP_KEY) {
+  const leaks = [];
+  for (const configMap of listKind(c.clusterState, 'ConfigMap')) {
+    const data = resourceSpec(configMap).data;
+    if (!data || typeof data !== 'object') continue;
+    const keys = Object.keys(data).filter((key) => pattern.test(key));
+    if (keys.length > 0) leaks.push({ configMap, keys });
+  }
+  return leaks;
+}
+
 function evaluateNoConfigMap(obj, c) {
   const sensitivePattern = obj.sensitive === false ? null : SENSITIVE_CONFIGMAP_KEY;
   if (!sensitivePattern) return bool(true);
-  const leaks = listKind(c.clusterState, 'ConfigMap').filter((configMap) => {
-    const data = resourceSpec(configMap).data;
-    if (!data || typeof data !== 'object') return false;
-    return Object.keys(data).some((key) => sensitivePattern.test(key));
-  });
+  const leaks = sensitiveConfigMapLeaks(c, sensitivePattern);
   return result(leaks.length === 0, leaks.length === 0 ? 1 : 0, 1);
 }
 
@@ -3130,6 +3147,218 @@ function evaluateByType(type, obj, c) {
   }
 }
 
+// ─── self-explaining objectives ────────────────────────────────────────────
+//
+// Grading is deliberately project-scoped (issue #30), which means a player who
+// follows the objective labels but forgets `oc project <lab>` sees a resource
+// in `oc get` and an objective that silently refuses to tick. An unticked
+// objective therefore carries a `note` that says why, computed from the same
+// helpers the graders use. Notes never change what ticks; they only explain.
+
+/**
+ * Objective types whose `name` is one namespaced resource that the evaluator
+ * only accepts inside `objectiveResourceNamespace()`. The value is the kind
+ * used when the objective carries no `kind` of its own (`null`: `kind` is
+ * required). Types that are NOT project-scoped by this helper (`update`,
+ * `resources`, `mount`, `quota`, …) are deliberately absent: a "this level
+ * checks project X" note for them could be false.
+ */
+const NAMED_RESOURCE_DEFAULT_KIND = new Map([
+  ['deploy', null],
+  ['label', null],
+  ['scale', 'Deployment'],
+  ['image', 'Deployment'],
+  ['complete', 'Job'],
+]);
+
+/** Types without a `kind` field whose `name` is always one resource of a fixed kind. */
+const NAMED_RESOURCE_FIXED_KIND = new Map([
+  ['route', 'Route'],
+  ['routeaccess', 'Route'],
+  ['imagestream', 'ImageStream'],
+  ['cronjob', 'CronJob'],
+  ['build', 'BuildConfig'],
+]);
+
+/** Kind/name of the single namespaced resource an objective is about, or null. */
+function namedResourceOf(objective, type) {
+  const name = typeof objective.name === 'string' ? objective.name : '';
+  if (!name) return null;
+  if (NAMED_RESOURCE_FIXED_KIND.has(type)) {
+    return { kind: NAMED_RESOURCE_FIXED_KIND.get(type), name };
+  }
+  if (!NAMED_RESOURCE_DEFAULT_KIND.has(type)) return null;
+  const kind =
+    typeof objective.kind === 'string' && objective.kind
+      ? canonicalKind(objective.kind)
+      : NAMED_RESOURCE_DEFAULT_KIND.get(type);
+  return kind ? { kind, name } : null;
+}
+
+/** `"a"`, `"a" and "b"`, `"a", "b" and "c"`; more than `max` items end in `N more`. */
+function quotedList(items, max) {
+  const shown = items.slice(0, max).map((item) => `"${item}"`);
+  const rest = items.length - shown.length;
+  if (rest > 0) shown.push(`${rest} more`);
+  if (shown.length < 2) return shown.join('');
+  return `${shown.slice(0, -1).join(', ')} and ${shown[shown.length - 1]}`;
+}
+
+/**
+ * `wrong-project` note: the objective's resource is missing from the project
+ * this level grades, but a resource of that kind and name exists in another
+ * project. Only emitted when the graded project exists, so `fix` is runnable.
+ */
+function explainWrongProject(objective, type, c) {
+  const target = namedResourceOf(objective, type);
+  if (!target || CLUSTER_SCOPED_KINDS.has(target.kind)) return null;
+  const expected = objectiveResourceNamespace(c, objective, target.kind);
+  if (!expected) return null;
+  if (findResource(c.clusterState, target.kind, target.name, expected)) return null;
+  const found = [
+    ...new Set(
+      listKind(c.clusterState, target.kind)
+        .filter((resource) => resourceName(resource) === target.name)
+        .map((resource) => resourceNamespace(resource))
+        .filter((namespace) => namespace && namespace !== expected)
+    ),
+  ].sort();
+  if (found.length === 0) return null;
+  if (!findResource(c.clusterState, 'Project', expected)) return null;
+  let text =
+    `${target.kind} "${target.name}" exists in project${found.length > 1 ? 's' : ''} ` +
+    `${quotedList(found, 3)}, but this objective is graded in project "${expected}".`;
+  // Already in the graded project: switching is a no-op, the thing must be re-created here.
+  if (getCurrentProject(c) === expected) {
+    text += ` You are in "${expected}" now: create it again here.`;
+  }
+  return { code: 'wrong-project', text, fix: `oc project ${expected}`, found, expected };
+}
+
+/** `sensitive-configmap-key` note: names (up to two) ConfigMaps that fail `noConfigMap`. */
+function explainSensitiveConfigMap(objective, c) {
+  if (objective.sensitive === false) return null;
+  const current = getCurrentProject(c);
+  const leaks = sensitiveConfigMapLeaks(c)
+    .map((leak) => ({ ...leak, namespace: resourceNamespace(leak.configMap) }))
+    // The ConfigMaps in the player's own project are the ones they can act on first.
+    .sort((a, b) => Number(b.namespace === current) - Number(a.namespace === current));
+  if (leaks.length === 0) return null;
+  const sentences = leaks.slice(0, 2).map(({ configMap, keys, namespace }) => {
+    const where = namespace && namespace !== current ? ` in project "${namespace}"` : '';
+    const noun = keys.length > 1 ? 'keys' : 'key';
+    return `ConfigMap "${resourceName(configMap)}"${where} has the ${noun} ${quotedList(keys, 2)}.`;
+  });
+  const more = leaks.length - sentences.length;
+  if (more > 0) {
+    sentences.push(
+      `${more} more ConfigMap${more === 1 ? '' : 's'} also ${more === 1 ? 'has' : 'have'} a sensitive key.`
+    );
+  }
+  sentences.push('Passwords, tokens and keys belong in a Secret, not a ConfigMap.');
+  return { code: 'sensitive-configmap-key', text: sentences.join(' ') };
+}
+
+/**
+ * Ready-to-run `oc process <source> -p K=V … | oc apply -f -` for a `template`
+ * objective (the parameters come from the objective itself).
+ */
+function templatePipeline(objective, source) {
+  const params =
+    objective.parameters && typeof objective.parameters === 'object' ? objective.parameters : {};
+  const flags = Object.entries(params).map(([key, value]) => `-p ${key}=${value}`);
+  return `oc process ${[source, ...flags].join(' ')} | oc apply -f -`;
+}
+
+/**
+ * Notes for an unticked `template` objective. The Files panel's primary
+ * "Apply -f" button on a Template file only STORES the Template, and
+ * `oc process` alone only PRINTS the objects; neither ticks the objective, and
+ * both look like success. Precedence: rendered-but-not-applied, then applied
+ * with other parameters, then stored-but-not-processed.
+ */
+function explainTemplate(objective, c) {
+  const wanted = String(objective.name || objective.template || '');
+  if (!wanted) return null;
+  const needle = wanted.toLowerCase();
+  const records = appliedTemplates(manifestState(c))
+    .filter((entry) => `${entry?.name || ''} ${entry?.path || ''}`.toLowerCase().includes(needle))
+    .sort((a, b) => asNumber(b?.at, 0) - asNumber(a?.at, 0));
+  const params =
+    objective.parameters && typeof objective.parameters === 'object' ? objective.parameters : null;
+  const namespace = objectiveResourceNamespace(c, objective, 'Template');
+  const stored = namespace ? findResource(c.clusterState, 'Template', wanted, namespace) : null;
+  const applied = records.filter((entry) => entry?.applied !== false);
+  const rendered = records.find((entry) => entry?.applied === false);
+
+  if (applied.length === 0 && rendered) {
+    return {
+      code: 'template-not-applied',
+      text: `You rendered "${wanted}" with oc process, but nothing was created yet. Pipe the output into oc apply -f -.`,
+      fix: templatePipeline(objective, stored ? wanted : `-f ${rendered.path}`),
+    };
+  }
+  if (applied.length > 0 && params) {
+    const latest = applied[0];
+    const wrong = Object.entries(params).filter(
+      ([key, value]) => !quantityMatches(latest?.params?.[key], value)
+    );
+    if (wrong.length > 0) {
+      const used = wrong
+        .map(([key]) => `${key}=${latest?.params?.[key] ?? '(not set)'}`)
+        .join(', ');
+      const needed = wrong.map(([key, value]) => `${key}=${value}`).join(', ');
+      return {
+        code: 'template-wrong-parameters',
+        text: `"${wanted}" was applied with ${used}, but this objective needs ${needed}.`,
+        fix: templatePipeline(objective, stored ? wanted : `-f ${latest.path}`),
+      };
+    }
+  }
+  if (applied.length === 0 && stored) {
+    return {
+      code: 'template-not-processed',
+      text: `Template "${wanted}" is stored in project "${namespace}", but it has not been processed yet. Applying a template file only saves the template.`,
+      fix: templatePipeline(objective, wanted),
+    };
+  }
+  return null;
+}
+
+/**
+ * Explain why an objective is not ticked, or return null when there is nothing
+ * useful to say. Pure and cheap (it runs every second for every unticked
+ * objective) and never throws. Call it for unticked objectives only: it
+ * describes the failing state, so on a satisfied objective it returns null.
+ *
+ * Note shapes:
+ *  - `{ code: 'wrong-project', text, fix, found, expected }` — the resource the
+ *    objective names exists only in other project(s) `found`, but this level
+ *    grades project `expected`; `fix` is `oc project <expected>`.
+ *  - `{ code: 'sensitive-configmap-key', text }` — a `noConfigMap` objective is
+ *    failing because of the ConfigMap key(s) named in `text`.
+ *  - `{ code: 'template-not-processed' | 'template-not-applied' |
+ *    'template-wrong-parameters', text, fix }` — a `template` objective: the
+ *    Template is only stored, only rendered, or was applied with other
+ *    parameters; `fix` is the `oc process … | oc apply -f -` pipeline to run.
+ *
+ * @param {object} objective campaign / challenge objective (or its progress object)
+ * @param {object} [ctx] same evaluation context as {@link evaluateObjective}
+ * @returns {{code: string, text: string, fix?: string, found?: string[], expected?: string}|null}
+ */
+export function explainObjective(objective, ctx = {}) {
+  if (!objective || typeof objective !== 'object') return null;
+  try {
+    const type = String(objective.type || '').toLowerCase();
+    const c = resolveContext(ctx);
+    if (type === 'noconfigmap') return explainSensitiveConfigMap(objective, c);
+    if (type === 'template') return explainTemplate(objective, c);
+    return explainWrongProject(objective, type, c);
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Evaluate a single objective.
  *
@@ -3189,7 +3418,8 @@ export function createObjectiveProgress(objectives) {
  * Evaluate all objectives and merge the results into progress objects.
  * Existing progress objects are reused (completed objectives are not
  * re-evaluated, matching the previous CampaignMode behaviour) unless
- * `options.recheckCompleted` is true.
+ * `options.recheckCompleted` is true. Every objective that is (re)evaluated also
+ * gets `note`: null when ticked, otherwise `explainObjective()` (or null).
  *
  * @param {object[]} objectives
  * @param {object} [ctx]
@@ -3218,6 +3448,16 @@ export function evaluateObjectives(objectives, ctx = {}, options = {}) {
     objective.current = evaluated.current;
     objective.target = evaluated.target;
     objective.completed = evaluated.completed;
+    // An unticked objective explains itself (`explainObjective`); a ticked one never carries a note.
+    let note = null;
+    if (!evaluated.completed) {
+      try {
+        note = explainObjective(objective, ctx) || null;
+      } catch {
+        note = null;
+      }
+    }
+    objective.note = note;
   }
   return progress;
 }
@@ -3246,6 +3486,7 @@ export default {
   OBJECTIVE_TYPES,
   evaluateObjective,
   evaluateObjectives,
+  explainObjective,
   createObjectiveProgress,
   getObjectiveSummary,
   hasCommand,

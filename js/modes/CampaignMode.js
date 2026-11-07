@@ -654,6 +654,45 @@ class CampaignMode {
     return hint;
   }
 
+  /**
+   * Reveal the authored how-to (`objective.how`) of one objective. It is the
+   * same help as a hint, so it counts as one (it never fails a level).
+   * @param {number} index objective index in the current level
+   * @returns {{explain?: string, run?: string[], check?: string}|null}
+   */
+  revealHow(index) {
+    const how = this.currentLevelDef?.objectives?.[index]?.how;
+    if (!how || typeof how !== 'object') return null;
+    this.usedHints = true;
+    this.emit('campaign:hint-used', {
+      levelId: this.currentLevel,
+      hintIndex: null,
+      objectiveIndex: index,
+      how,
+    });
+    return how;
+  }
+
+  /**
+   * The lab project the player is expected to work in, or null. Levels that
+   * seed exactly one Project are worked in that Project (the grader is
+   * project-scoped, so the same commands in `default` do not tick). A level
+   * opts out — or names another project — with an explicit `workProject`
+   * (string, or null when the project is not the work context).
+   * @param {object|null} [levelDef]
+   * @returns {string|null}
+   */
+  getWorkProject(levelDef = this.currentLevelDef) {
+    if (!levelDef) return null;
+    if (Object.prototype.hasOwnProperty.call(levelDef, 'workProject')) {
+      return levelDef.workProject || null;
+    }
+    const projects = (
+      Array.isArray(levelDef.startingResources) ? levelDef.startingResources : []
+    ).filter((resource) => resource && resource.kind === 'Project' && resource.name);
+    return projects.length === 1 ? projects[0].name : null;
+  }
+
   advanceTutorial() {
     if (!this.tutorialActive || !this.currentLevelDef?.tutorial) return null;
     const steps = this.currentLevelDef.tutorial.steps || [];
@@ -725,6 +764,7 @@ class CampaignMode {
       hasNextLevel: this.hasNextLevel(),
       campaignFinished: Boolean(this.campaignFinished),
       hints: this.currentLevelDef?.hints || [],
+      workProject: this.getWorkProject(),
       availableResources: this.currentLevelDef?.availableResources || [],
       examObjectives: this.currentLevelDef?.examObjectives || [],
       docsLinks: this.currentLevelDef?.docsLinks || [],

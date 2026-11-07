@@ -3871,18 +3871,19 @@ body.terminal-open #game-container #resource-palette {
 }
 /* Hint footer — outside the scrolling objectives body, so the "Show hint"
    affordance stays visible on short laptop viewports instead of hiding under
-   the terminal dock. The hint list scrolls internally when it grows. */
+   the terminal dock. Revealed hints are listed inside the scrolling body (one
+   scroll area, never a cramped nested one), see .hint-list. */
 .mission-hints {
   flex: 0 0 auto;
   display: flex;
   flex-direction: column;
   gap: var(--s2);
-  max-height: min(38vh, 340px);
   padding: var(--s3) var(--s4) var(--s4);
   background: var(--surface);
   border-top: 1px solid var(--line);
 }
-.mission-hints[style*='display: none'] {
+.mission-hints[style*='display: none'],
+.mission-hints:has(> .hint-btn[style*='display: none']) {
   display: none !important;
 }
 .hint-btn {
@@ -3915,25 +3916,17 @@ body.terminal-open #game-container #resource-palette {
 .hint-btn[style*='display: none'] {
   display: none !important;
 }
+/* Revealed hints live at the end of the scrolling card body: they used to sit in
+   their own 120px-tall scroller while the terminal was open, which cut every
+   long hint (the commands!) in half. */
 .hint-list {
   display: flex;
   flex-direction: column;
-  gap: var(--s2);
-  min-height: 0;
-  max-height: min(24vh, 200px);
-  overflow-y: auto;
-  overscroll-behavior: contain;
+  gap: var(--s3);
+  padding-top: var(--s2);
 }
 .hint-list:empty {
   display: none;
-}
-/* The panel shares the viewport with the dock: keep the expanded hint list on a
-   short leash so revealed hints never squeeze the objectives body to nothing. */
-body.terminal-open .hint-list {
-  max-height: min(14vh, 120px);
-}
-body.metrics-open .hint-list {
-  max-height: min(18vh, 160px);
 }
 .hint-row {
   display: flex;
@@ -3962,6 +3955,299 @@ body.metrics-open .hint-list {
   font-family: var(--font-mono);
   font-size: 0.94em;
   color: var(--text);
+}
+
+/* ───────────────────────────────────────────────────────────────────────────
+   Guidance — project row, "Next step" help, command blocks, objective notes.
+   Shared by the mission card and the help modal (#tutorial-overlay).
+   ─────────────────────────────────────────────────────────────────────────── */
+.mission-project {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+  margin-top: var(--s3);
+  padding: var(--s2) var(--s3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--raised);
+  color: var(--muted);
+  font-size: var(--fs-12);
+  line-height: 1.45;
+}
+.mission-project[hidden] {
+  display: none;
+}
+.mission-project.is-ok {
+  flex-direction: row;
+  align-items: center;
+}
+.mission-project.is-warn {
+  border-color: rgba(232, 163, 61, 0.45);
+  background: var(--warning-dim);
+  color: var(--text);
+}
+.project-dot {
+  flex: 0 0 auto;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--positive);
+}
+.mission-project b {
+  color: var(--text);
+  font-weight: 600;
+}
+.project-fix {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s1) var(--s2);
+}
+.project-fix-hint {
+  color: var(--muted);
+  font-size: var(--fs-11);
+}
+/* With the terminal open the card is short: clamp the description (click expands). */
+body.terminal-open .mission-goal:not(.is-expanded) {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  overflow: hidden;
+  cursor: pointer;
+}
+/* Short laptop windows (1366x768, 1280x720): a 308px dock left the card ~230px of
+   body, so "Next step" and its commands fell below the fold. Use a shorter dock and
+   drop the card's title/description while the terminal is open (the top bar shows
+   the level title and Help (H) has the full text). */
+@media (max-height: 820px) {
+  :root {
+    --dock-h: 256px;
+  }
+  body.terminal-open .mission-title,
+  body.terminal-open .mission-goal {
+    display: none;
+  }
+}
+.mission-project code,
+.mission-note code,
+.obj-note code,
+.how-explain code {
+  font-family: var(--font-mono);
+  font-size: 0.94em;
+  color: var(--text);
+}
+.how-explain code {
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: var(--surface);
+}
+code.nw {
+  white-space: nowrap;
+}
+
+/* Why an objective is not ticking (e.g. the right object in the wrong project). */
+.mission-note,
+.obj-note {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s1);
+  color: var(--text);
+  font-size: var(--fs-12);
+  line-height: 1.45;
+}
+.mission-note {
+  margin-top: var(--s1);
+  padding: var(--s2) var(--s3);
+  border-left: 2px solid var(--warning);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  background: var(--warning-dim);
+}
+.mission-note[hidden] {
+  display: none;
+}
+.obj-note {
+  color: var(--warning);
+  font-size: var(--fs-11);
+}
+.note-fix {
+  color: var(--muted);
+}
+.obj-main {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+/* "Show me how": the exact commands for the current step, opt-in. */
+.how-btn {
+  display: inline-flex;
+  align-self: flex-start;
+  align-items: center;
+  gap: var(--s2);
+  height: 28px;
+  margin-top: var(--s1);
+  padding: 0 var(--s3);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: var(--fs-12);
+  font-weight: 600;
+  cursor: pointer;
+  transition:
+    background-color 140ms ease,
+    border-color 140ms ease;
+}
+.how-btn[hidden] {
+  display: none;
+}
+.how-btn:hover {
+  border-color: var(--muted);
+  background: var(--surface);
+}
+.how-btn svg {
+  width: 13px;
+  height: 13px;
+}
+.how-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+  margin-top: var(--s2);
+  padding-top: var(--s3);
+  border-top: 1px solid var(--line);
+}
+.how-body[hidden] {
+  display: none;
+}
+.how-explain {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--fs-12);
+  line-height: 1.55;
+}
+.how-label {
+  color: var(--faint);
+  font-size: var(--fs-11);
+  font-weight: 600;
+}
+.how-check {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--s2);
+  font-size: var(--fs-12);
+}
+
+/* A command to run: readable monospace block with Copy / Put in terminal. */
+.cmd-block {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+  padding: var(--s2) var(--s3);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--ground);
+}
+.cmd-text {
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: var(--fs-11);
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.cmd-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--s2);
+}
+.cmd-btn {
+  height: 24px;
+  padding: 0 var(--s2);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+  font-family: var(--font-sans);
+  font-size: var(--fs-11);
+  font-weight: 600;
+  cursor: pointer;
+  transition:
+    color 120ms ease,
+    border-color 120ms ease,
+    background-color 120ms ease;
+}
+.cmd-btn:hover {
+  color: var(--text);
+  border-color: var(--muted);
+}
+.cmd-btn-primary {
+  color: var(--text);
+  background: var(--raised);
+}
+.cmd-btn-primary:hover {
+  border-color: var(--accent-soft);
+}
+/* Inline command inside a hint / step / note: one click puts it in the terminal. */
+.cmd-chip {
+  display: inline-block;
+  max-width: 100%;
+  margin: 0;
+  padding: 1px 5px;
+  border: 1px solid var(--line-strong);
+  border-radius: 3px;
+  background: var(--raised);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 0.94em;
+  line-height: 1.45;
+  text-align: left;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+  transition:
+    border-color 120ms ease,
+    background-color 120ms ease;
+}
+.mission-next .cmd-chip,
+.mission-project .cmd-chip,
+.mission-note .cmd-chip {
+  background: var(--surface);
+}
+.cmd-chip:hover {
+  border-color: var(--accent-soft);
+  background: var(--accent-dim);
+}
+.cmd-btn:focus-visible,
+.cmd-chip:focus-visible,
+.how-btn:focus-visible {
+  outline: 2px solid var(--accent-soft);
+  outline-offset: 2px;
+}
+
+/* Help modal: the current step and the done state of the checklist. */
+.intro-next {
+  margin: 0 0 var(--s2);
+  color: var(--text);
+  font-size: var(--fs-13);
+  font-weight: 600;
+  line-height: 1.45;
+}
+.intro-objectives li.is-done {
+  color: var(--faint);
+}
+.intro-done {
+  color: var(--positive);
+}
+.intro-block .mission-note {
+  margin-bottom: var(--s2);
+}
+.intro-steps li .cmd-chip {
+  margin-top: 2px;
 }
 
 /* ───────────────────────────────────────────────────────────────────────────

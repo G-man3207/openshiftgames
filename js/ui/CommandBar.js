@@ -3357,7 +3357,8 @@ export class CommandBar {
         this.selectedSuggestion = Math.max(0, this.selectedSuggestion - 1);
         this._renderSuggestions();
       } else {
-        this._navigateHistory(-1);
+        // `history` is newest-first: Up walks back to older commands, like a shell.
+        this._navigateHistory(1);
       }
     } else if (e.key === 'ArrowDown') {
       e.preventDefault();
@@ -3368,7 +3369,7 @@ export class CommandBar {
         );
         this._renderSuggestions();
       } else {
-        this._navigateHistory(1);
+        this._navigateHistory(-1);
       }
     }
   }
@@ -4191,11 +4192,28 @@ export class CommandBar {
     const ge = this.gameEngine;
     if (ge && typeof ge.recordCommand === 'function') {
       try {
-        ge.recordCommand(raw, success);
+        ge.recordCommand(this._recordedForm(raw, baseCommand), success);
       } catch {
         /* non-fatal */
       }
     }
+  }
+
+  /**
+   * The form of a typed line that is recorded for objective matching. The terminal
+   * says the `oc ` prefix is optional (`auth can-i …`, `apply -k …`, `project x`),
+   * and those lines run exactly like their prefixed twins, but objectives match
+   * `oc …` patterns against the recorded text: an unprefixed oc subcommand is
+   * therefore recorded as `oc <line>`. Shell commands (`cat`, `echo`, …) and lines
+   * that already carry `oc`/`kubectl` stay as typed.
+   * @param {string} raw typed line
+   * @param {string} baseCommand lower-cased first word of the line
+   * @returns {string}
+   */
+  _recordedForm(raw, baseCommand) {
+    const text = String(raw ?? '').trim();
+    if (!text || INPUT_PREFIX_WORD_RE.test(text)) return text;
+    return Object.prototype.hasOwnProperty.call(BASE_COMMANDS, baseCommand) ? `oc ${text}` : text;
   }
 
   _emit(event, payload) {
@@ -4407,13 +4425,17 @@ export class CommandBar {
 
   // ── Visibility ────────────────────────────────────────────────────────────
 
-  show() {
+  /**
+   * Open the terminal dock and (by default) focus the prompt.
+   * @param {{focus?: boolean}} [options] `focus: false` opens it without taking keyboard focus
+   */
+  show({ focus = true } = {}) {
     if (!this.container) return;
     this.visible = true;
     this._updateContextLabel();
     this.container.classList.add('is-open');
     document.body.classList.add('terminal-open');
-    requestAnimationFrame(() => this.input?.focus());
+    if (focus) requestAnimationFrame(() => this.input?.focus());
   }
 
   hide() {
@@ -4429,6 +4451,37 @@ export class CommandBar {
   toggle() {
     if (this.visible) this.hide();
     else this.show();
+  }
+
+  /**
+   * Put `text` on the terminal prompt WITHOUT running it (the "Insert in
+   * terminal" buttons). Opens the terminal when it is hidden, replaces whatever
+   * is typed, leaves history navigation, drops the suggestion list and moves the
+   * caret to the end. Does nothing while an `oc login` password prompt owns the
+   * input (the text would be taken for the password).
+   *
+   * @param {string} text command line to insert
+   * @param {{focus?: boolean}} [options] `focus: false` leaves the keyboard focus alone
+   * @returns {boolean} true when the text was inserted
+   */
+  prefill(text, { focus = true } = {}) {
+    const input = this.input;
+    if (typeof text !== 'string' || !input || !input.isConnected || this._pendingLogin) {
+      return false;
+    }
+    if (!this.visible) this.show({ focus });
+    input.value = text;
+    this.historyIndex = -1;
+    this.suggestions = [];
+    this.selectedSuggestion = -1;
+    this._renderSuggestions();
+    try {
+      input.setSelectionRange(text.length, text.length);
+    } catch {
+      /* the caret already sits at the end after assigning the value */
+    }
+    if (focus) input.focus();
+    return true;
   }
 
   destroy() {
@@ -15997,6 +16050,7 @@ Object.assign(CommandBar.prototype, {
         namespace,
         templateName: this._basename(file),
         name,
+        recordTemplate: true,
       });
     }
 
@@ -16177,7 +16231,24 @@ Object.assign(CommandBar.prototype, {
         resources.push(result.resource);
       }
     }
+    // Every object was created: `oc new-app -f <template-file>` has now applied the template.
+    if (context.recordTemplate) this._markTemplateDeployed(objects, resources);
     return this._ok(this._formatNewAppOutput({ resources }, context));
+  },
+
+  /**
+   * `oc new-app -f <template-file>` creates the processed objects itself instead of
+   * piping them through `oc apply -f -`, so tell the ManifestEngine the template was
+   * applied: the `template` campaign objective and the template counters read that record.
+   */
+  _markTemplateDeployed(objects, resources) {
+    const me = this.manifestEngine;
+    if (typeof me?.markTemplateApplied !== 'function') return;
+    try {
+      me.markTemplateApplied(objects, resources);
+    } catch {
+      /* bookkeeping only: never fail a deploy that already succeeded */
+    }
   },
 
   _cmdNewBuild(tokens) {

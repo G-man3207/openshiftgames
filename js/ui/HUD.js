@@ -985,7 +985,7 @@ export class HUD {
       <span class="hud-toast-body">
         <span class="hud-toast-kicker">Achievement unlocked</span>
         <span class="hud-toast-title">${this._escapeHTML(data.name)}</span>
-        <span class="hud-toast-meta">${this._escapeHTML(data.description)} +${data.xpReward ?? 0} XP</span>
+        <span class="hud-toast-meta">${this._escapeHTML(String(data.description ?? '').replace(/`/g, ''))} +${data.xpReward ?? 0} XP</span>
       </span>`;
     document.body.appendChild(toast);
     setTimeout(() => {

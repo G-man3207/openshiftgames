@@ -747,9 +747,28 @@
         <div id="obj-panel-body">
           <h2 id="obj-panel-title" class="mission-title">Level 1</h2>
           <p id="obj-panel-desc" class="mission-goal"></p>
+          <div class="mission-project" id="mission-project" hidden></div>
           <div class="mission-next" id="mission-next" hidden>
             <span class="mission-next-label">Next step</span>
             <span class="mission-next-text" id="mission-next-text"></span>
+            <div class="mission-note" id="mission-next-note" hidden></div>
+            <button id="btn-show-how" class="how-btn" type="button" hidden>
+              <svg
+                viewBox="0 0 16 16"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.5"
+                aria-hidden="true"
+              >
+                <path
+                  d="M2.5 3.5h11v9h-11zM5 6.5l2 1.5-2 1.5M8.5 10h2.5"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                />
+              </svg>
+              <span>Show me how</span>
+            </button>
+            <div class="how-body" id="mission-how" hidden></div>
           </div>
           <div class="mission-progress">
             <span id="obj-progress-label" class="mission-progress-label">0 / 0 objectives</span>
@@ -758,6 +777,7 @@
             </div>
           </div>
           <div id="obj-list" class="obj-list" role="list"></div>
+          <div id="hint-list" class="hint-list" aria-live="polite"></div>
         </div>
         <div id="hint-section" class="mission-hints">
           <button id="btn-show-hint" class="hint-btn" type="button" hidden>
@@ -775,7 +795,6 @@
             </svg>
             <span>Show hint</span>
           </button>
-          <div id="hint-list" class="hint-list" aria-live="polite"></div>
         </div>
       </section>
 
@@ -2506,9 +2525,155 @@
         }
 
         _inlineFormat(text) {
-          return escapeHtml(text)
-            .replace(/`([^`]+)`/g, '<code>$1</code>')
-            .replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>');
+          return (
+            escapeHtml(text)
+              // Short code (`-B`, `-n`, `/etc/app`) never wraps mid-token; long code wraps.
+              .replace(
+                /`([^`]+)`/g,
+                (match, code) => `<code${code.length <= 16 ? ' class="nw"' : ''}>${code}</code>`
+              )
+              .replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>')
+          );
+        }
+
+        // ── Guidance: commands the player can copy or put in the terminal ───────
+        /**
+         * True for a code span a player can type as-is: an `oc …` / `helm …` / shell
+         * command. Spans with placeholders (`<pod>`, `…`) are not runnable, so they
+         * stay plain code.
+         */
+        _isInsertableCommand(text) {
+          const value = String(text || '').trim();
+          if (!/^(oc|helm|cat|echo|htpasswd|openssl|curl|vi|vim|ls|export|skopeo)\s+\S/.test(value))
+            return false;
+          return !/<[A-Za-z][\w.-]*>|…|\.\.\./.test(value);
+        }
+
+        /** Inline command chip: one click puts the command in the terminal. */
+        _commandChipHtml(cmd) {
+          const safe = escapeHtml(cmd);
+          return `<button type="button" class="cmd-chip" data-cmd-action="insert" data-cmd="${safe}" title="Click to put this command in the terminal">${safe}</button>`;
+        }
+
+        /** Block for one command to run, with Copy and Put in terminal actions. */
+        _commandBlockHtml(cmd) {
+          const safe = escapeHtml(cmd);
+          return `<div class="cmd-block"><code class="cmd-text">${safe}</code><div class="cmd-actions"><button type="button" class="cmd-btn" data-cmd-action="copy" data-cmd="${safe}" title="Copy the command">Copy</button><button type="button" class="cmd-btn cmd-btn-primary" data-cmd-action="insert" data-cmd="${safe}" title="Put the command in the terminal, then press Enter">Put in terminal</button></div></div>`;
+        }
+
+        /**
+         * Hint/help text with `code` spans and **bold**. A code span that is a
+         * complete command becomes a clickable chip (see _isInsertableCommand).
+         */
+        _richFormat(text) {
+          const raw = String(text ?? '');
+          const bold = (part) => escapeHtml(part).replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>');
+          let html = '';
+          let last = 0;
+          for (const match of raw.matchAll(/`([^`]+)`/g)) {
+            html += bold(raw.slice(last, match.index));
+            html += this._isInsertableCommand(match[1])
+              ? this._commandChipHtml(match[1])
+              : `<code${match[1].length <= 16 ? ' class="nw"' : ''}>${escapeHtml(match[1])}</code>`;
+            last = match.index + match[0].length;
+          }
+          return html + bold(raw.slice(last));
+        }
+
+        /** The authored how-to of one objective: explanation, commands to run, a check. */
+        _howBodyHtml(how) {
+          if (!how || typeof how !== 'object') return '';
+          const run = Array.isArray(how.run) ? how.run.filter(Boolean) : [];
+          const parts = [];
+          if (how.explain)
+            parts.push(`<p class="how-explain">${this._inlineFormat(how.explain)}</p>`);
+          if (run.length > 0) {
+            parts.push(
+              `<div class="how-label">${run.length > 1 ? 'Run these in the terminal, in order' : 'Run this in the terminal'}</div>`,
+              ...run.map((cmd) => this._commandBlockHtml(cmd))
+            );
+          }
+          if (how.check)
+            parts.push(
+              `<div class="how-check"><span class="how-label">Check it</span>${this._commandChipHtml(how.check)}</div>`
+            );
+          return parts.join('');
+        }
+
+        /** Why an objective is not ticking (ObjectiveEvaluator note), with the fix command. */
+        _noteHtml(note) {
+          if (!note || !note.text) return '';
+          // "Switch project" is no fix once the player is in that project already
+          // (the note then says to create the object again there).
+          const alreadyThere =
+            note.code === 'wrong-project' &&
+            note.expected &&
+            (this.engine?.currentProject || 'default') === note.expected;
+          const fix = note.fix && !alreadyThere ? this._commandChipHtml(note.fix) : '';
+          return `<span class="note-text">${this._inlineFormat(note.text)}</span>${fix ? `<span class="note-fix">Fix: ${fix}</span>` : ''}`;
+        }
+
+        /** Put a command in the terminal input (the player still presses Enter). */
+        _insertCommand(cmd) {
+          // The help modal covers the terminal: close it so the player lands in the input.
+          if (document.getElementById('tutorial-overlay')) this.hideTutorial();
+          const bar = this.commandBar;
+          if (!bar) return false;
+          if (typeof bar.prefill === 'function') return bar.prefill(cmd);
+          bar.show?.();
+          if (bar.input) {
+            bar.input.value = cmd;
+            bar.input.focus();
+          }
+          return true;
+        }
+
+        /** Copy a command to the clipboard and flash the button label. */
+        async _copyCommand(cmd, button) {
+          let ok = false;
+          try {
+            await navigator.clipboard.writeText(cmd);
+            ok = true;
+          } catch {
+            /* insecure origin or denied permission: fall back below */
+          }
+          if (!ok) {
+            try {
+              const area = document.createElement('textarea');
+              area.value = cmd;
+              area.setAttribute('readonly', '');
+              area.style.cssText = 'position:fixed;opacity:0;pointer-events:none';
+              document.body.appendChild(area);
+              area.select();
+              ok = document.execCommand('copy');
+              area.remove();
+            } catch {
+              ok = false;
+            }
+          }
+          if (button) {
+            const label = button.dataset.label || button.textContent;
+            button.dataset.label = label;
+            button.textContent = ok ? 'Copied' : 'Copy failed';
+            setTimeout(() => {
+              button.textContent = label;
+            }, 1400);
+          }
+          return ok;
+        }
+
+        /** One delegated listener serves the mission card, hints and the help modal. */
+        _bindGuideActions() {
+          if (this._guideActionsBound) return;
+          this._guideActionsBound = true;
+          document.addEventListener('click', (event) => {
+            const target = event.target?.closest?.('[data-cmd-action]');
+            const cmd = target?.dataset?.cmd;
+            if (!target || !cmd) return;
+            event.preventDefault();
+            if (target.dataset.cmdAction === 'copy') this._copyCommand(cmd, target);
+            else this._insertCommand(cmd);
+          });
         }
 
         formatClock(totalSeconds) {
@@ -3898,7 +4063,7 @@
           try {
             skipTutorial = new URLSearchParams(window.location.search).get('tutorial') === '0';
           } catch {}
-          if (!skipTutorial) this.showTutorial(mode);
+          if (!skipTutorial) this.showTutorial(mode, { source: 'launch' });
 
           this._layoutClusterAfterModeStart();
 
@@ -3998,8 +4163,39 @@
           this._hintIndex = 0;
           this._panelCollapsed = false;
           this._objSig = '';
+          // Guidance state is per run: which objectives had "Show me how" opened, and the
+          // render signatures that keep the 500ms refresh from rebuilding unchanged DOM.
+          this._howOpen = new Set();
+          this._nextHelpSig = '';
+          this._projSig = '';
+          this._bindGuideActions();
           const hintList = document.getElementById('hint-list');
           if (hintList) hintList.innerHTML = '';
+          const howBtn = document.getElementById('btn-show-how');
+          if (howBtn) {
+            howBtn.onclick = () => {
+              const index = Number(howBtn.dataset.index);
+              if (!Number.isInteger(index) || index < 0) return;
+              // Counts as a hint (the same help); never fails the level.
+              if (!this.modeInstance?.revealHow?.(index)) return;
+              this._howOpen.add(index);
+              this._nextHelpSig = '';
+              this._updateObjectivesPanel(this.modeInstance.getStatus());
+              try {
+                // Bring the step and its commands to the top of the scrolling card.
+                document.getElementById('mission-next')?.scrollIntoView({ block: 'start' });
+              } catch {
+                /* jsdom */
+              }
+            };
+          }
+          // While the terminal covers the lower half of the screen the card is short:
+          // the description is clamped to a few lines and expands on click.
+          const descEl = document.getElementById('obj-panel-desc');
+          if (descEl) {
+            descEl.classList.remove('is-expanded');
+            descEl.onclick = () => descEl.classList.toggle('is-expanded');
+          }
           const body = document.getElementById('obj-panel-body');
           if (body) body.style.display = '';
           const toggle = document.getElementById('obj-panel-toggle');
@@ -4034,7 +4230,7 @@
                 const list = document.getElementById('hint-list');
                 const div = document.createElement('div');
                 div.className = 'hint-row';
-                div.innerHTML = `<span class="hint-index">${this._hintIndex + 1}</span><span class="hint-text">${escapeHtml(hint)}</span>`;
+                div.innerHTML = `<span class="hint-index">${this._hintIndex + 1}</span><span class="hint-text">${this._richFormat(hint)}</span>`;
                 list?.appendChild(div);
                 // On short laptop viewports the panel body scrolls (the terminal
                 // dock reserves its own space); make sure the revealed hint is
@@ -4124,7 +4320,15 @@
             : status.levelTitle
               ? `L${status.currentLevel || '?'} · ${status.levelTitle}`
               : `Level ${status.currentLevel || '?'}`;
-          if (descEl) descEl.innerHTML = this._inlineFormat(levelDef?.description || '');
+          if (descEl) {
+            descEl.innerHTML = this._inlineFormat(levelDef?.description || '');
+            // Only clamped (and clickable) while the terminal covers the lower screen.
+            descEl.title =
+              document.body.classList.contains('terminal-open') &&
+              !descEl.classList.contains('is-expanded')
+                ? 'Click to read the full description'
+                : '';
+          }
 
           const progressLabel = document.getElementById('obj-progress-label');
           if (progressLabel)
@@ -4135,9 +4339,13 @@
             fill.classList.toggle('is-complete', total > 0 && done === total);
           }
 
+          this._renderProjectRow(isChallenge ? null : status.workProject);
+
           const nextWrap = document.getElementById('mission-next');
           const nextText = document.getElementById('mission-next-text');
-          const pending = objectives.find((o) => !o.completed);
+          const pendingIndex = objectives.findIndex((o) => !o.completed);
+          const pending = pendingIndex >= 0 ? objectives[pendingIndex] : undefined;
+          this._renderNextStepHelp(this._challengeTimedOut ? null : pending, pendingIndex);
           if (nextWrap && nextText) {
             if (this._challengeTimedOut) {
               nextWrap.hidden = false;
@@ -4154,7 +4362,7 @@
             }
           }
 
-          const signature = `${isChallenge ? status.timeRemaining : ''}|${objectives.map((o) => `${o.completed ? 1 : 0}:${o.current || 0}`).join(',')}`;
+          const signature = `${isChallenge ? status.timeRemaining : ''}|${objectives.map((o) => `${o.completed ? 1 : 0}:${o.current || 0}:${o.completed ? '' : o.note?.text || ''}`).join(',')}`;
           if (listEl && signature !== this._objSig) {
             this._objSig = signature;
             listEl.innerHTML = '';
@@ -4167,13 +4375,15 @@
                 obj.target > 1 && !isDone
                   ? ` <span class="obj-count">${Math.min(obj.current || 0, obj.target)}/${obj.target}</span>`
                   : '';
+              // Why an unticked objective is not ticking (e.g. the right object in the wrong project).
+              const note = !isDone && obj.note?.text ? this._noteHtml(obj.note) : '';
               row.innerHTML = `
               <span class="obj-check" aria-hidden="true">${
                 isDone
                   ? '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="m3.5 8.5 3 3 6-7" stroke-linecap="round" stroke-linejoin="round"/></svg>'
                   : ''
               }</span>
-              <span class="obj-label">${escapeHtml(obj.label || obj.type || 'Objective')}${progress}</span>`;
+              <span class="obj-main"><span class="obj-label">${escapeHtml(obj.label || obj.type || 'Objective')}${progress}</span>${note ? `<span class="obj-note">${note}</span>` : ''}</span>`;
               listEl.appendChild(row);
             }
           }
@@ -4188,6 +4398,67 @@
             if (hintBtn) hintBtn.hidden = false;
             if (hintBtn && this._hintIndex < allHints.length) hintBtn.style.display = '';
           }
+        }
+
+        /**
+         * "Where am I working?" row. The grader is project-scoped, but players start
+         * in `default`, so the lab project is stated up front and a mismatch shows the
+         * one command that fixes it. Hidden when the level has no lab project.
+         */
+        _renderProjectRow(workProject) {
+          const el = document.getElementById('mission-project');
+          if (!el) return;
+          const work = typeof workProject === 'string' ? workProject : '';
+          if (!work) {
+            if (!el.hidden) {
+              el.hidden = true;
+              el.innerHTML = '';
+            }
+            this._projSig = '';
+            return;
+          }
+          const current = this.engine?.currentProject || 'default';
+          const signature = `${work}|${current}`;
+          if (signature === this._projSig) return;
+          this._projSig = signature;
+          const inLab = current === work;
+          el.hidden = false;
+          el.classList.toggle('is-ok', inLab);
+          el.classList.toggle('is-warn', !inLab);
+          el.setAttribute('role', 'status');
+          el.innerHTML = inLab
+            ? `<span class="project-dot" aria-hidden="true"></span><span class="project-text">Working in project <code>${escapeHtml(work)}</code></span>`
+            : `<span class="project-text"><b>You are in project <code>${escapeHtml(current)}</code>.</b> This level is graded in project <code>${escapeHtml(work)}</code>.</span><span class="project-fix">${this._commandChipHtml(`oc project ${work}`)}<span class="project-fix-hint">Click to put it in the terminal</span></span>`;
+        }
+
+        /**
+         * Help for the current "Next step": the note that explains why it is not
+         * ticking (when there is one) and the authored how-to behind "Show me how".
+         * Rebuilt only when something changed so the Copy feedback survives refreshes.
+         */
+        _renderNextStepHelp(pending, index) {
+          const noteEl = document.getElementById('mission-next-note');
+          const howBtn = document.getElementById('btn-show-how');
+          const howEl = document.getElementById('mission-how');
+          if (!noteEl || !howBtn || !howEl) return;
+          // "Show me how" is a hint (it hands over the commands and counts as one): a player
+          // who switched hints off in Settings does not get it. Notes and the project row are
+          // orientation, not hints, and stay.
+          const how =
+            this.settings?.showHints !== false && pending?.how && typeof pending.how === 'object'
+              ? pending.how
+              : null;
+          const open = Boolean(how) && Boolean(this._howOpen?.has(index));
+          const note = pending?.note?.text ? pending.note : null;
+          const signature = `${index}|${how ? 1 : 0}|${open ? 1 : 0}|${note ? `${note.text}|${note.fix || ''}` : ''}`;
+          if (signature === this._nextHelpSig) return;
+          this._nextHelpSig = signature;
+          noteEl.hidden = !note;
+          noteEl.innerHTML = note ? this._noteHtml(note) : '';
+          howBtn.hidden = !how || open;
+          howBtn.dataset.index = String(index);
+          howEl.hidden = !open;
+          howEl.innerHTML = open ? this._howBodyHtml(how) : '';
         }
 
         returnToMenu() {
@@ -4477,7 +4748,9 @@
           return true;
         }
 
-        showTutorial(mode) {
+        showTutorial(mode, { source = 'help' } = {}) {
+          // `source` is 'launch' for the automatic level intro and 'help' when the player
+          // opens the guide (H / Help button): mid-level that is a request for help.
           // A re-open replaces the current modal; the new overlay inherits the
           // clock-pause reason, so only its close handler may release it.
           document.getElementById('tutorial-overlay')?.remove();
@@ -4527,15 +4800,69 @@
             ],
           };
           const fallbackMoves = defaultMoves[mode] || defaultMoves.sandbox;
-          const formatHint = (hint) =>
-            escapeHtml(hint)
-              .replace(/`([^`]+)`/g, '<code>$1</code>')
-              .replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>');
-          const hintMoves = (levelDef?.hints || []).slice(0, 3).map(formatHint);
-          const moves = hintMoves.length > 0 ? hintMoves : fallbackMoves;
-          const objectiveLabels = (levelDef?.objectives || [])
-            .map((objective) => objective.label || objective.type)
-            .filter(Boolean);
+          // Levels with authored per-objective guidance (`objective.how`) get orientation
+          // steps at launch and a "where you are" view when the player asks for help;
+          // other levels keep their first three hints as "First moves".
+          const status = isCampaign ? this.modeInstance?.getStatus?.() : null;
+          const progressObjectives = status?.objectives || [];
+          const guided = Boolean(isCampaign && (levelDef.objectives || []).some((o) => o?.how));
+          const workProject = guided ? status?.workProject : null;
+          const hintMoves = (levelDef?.hints || [])
+            .slice(0, 3)
+            .map((hint) => this._richFormat(hint));
+          let moves = hintMoves.length > 0 ? hintMoves : fallbackMoves;
+          if (guided) {
+            moves = [
+              ...(workProject
+                ? [
+                    `Work in project <code>${escapeHtml(workProject)}</code>. Put this in the terminal first: ${this._commandChipHtml(`oc project ${workProject}`)}`,
+                  ]
+                : []),
+              'Press <kbd>/</kbd> to open the terminal, then work through the objectives from top to bottom. The <b>Next step</b> box on the mission card always shows what is next.',
+              ...(this.settings?.showHints !== false
+                ? [
+                    'Stuck? Click <b>Show me how</b> in the <b>Next step</b> box for the exact commands. It never fails the level.',
+                  ]
+                : []),
+            ];
+          }
+          const askingForHelp = isCampaign && source === 'help';
+          const objectiveItems = (levelDef?.objectives || [])
+            .map((objective, index) => ({
+              label: objective.label || objective.type,
+              done: askingForHelp && Boolean(progressObjectives[index]?.completed),
+            }))
+            .filter((item) => item.label);
+          // Mid-level help for a guided level: the current step, why it may not be
+          // ticking, and the opt-in "Show me how" (same help and same cost as the card's).
+          const helpIndex =
+            askingForHelp && guided ? progressObjectives.findIndex((o) => !o.completed) : -1;
+          const helpObjective = helpIndex >= 0 ? progressObjectives[helpIndex] : null;
+          const helpHow =
+            this.settings?.showHints !== false &&
+            helpObjective?.how &&
+            typeof helpObjective.how === 'object'
+              ? helpObjective.how
+              : null;
+          const helpHowOpen = Boolean(helpHow) && Boolean(this._howOpen?.has(helpIndex));
+          const nextStepBlock =
+            askingForHelp && guided
+              ? `<div class="intro-block">
+                <h3 class="intro-block-title">${helpObjective ? 'Next step' : 'All objectives complete'}</h3>
+                ${
+                  helpObjective
+                    ? `<p class="intro-next">${escapeHtml(helpObjective.label || helpObjective.type)}</p>`
+                    : '<p class="intro-note">Nice work. The level finishes by itself.</p>'
+                }
+                ${helpObjective?.note?.text ? `<div class="mission-note">${this._noteHtml(helpObjective.note)}</div>` : ''}
+                ${
+                  helpHow && !helpHowOpen
+                    ? `<button id="intro-show-how" class="how-btn" type="button"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M2.5 3.5h11v9h-11zM5 6.5l2 1.5-2 1.5M8.5 10h2.5" stroke-linecap="round" stroke-linejoin="round" /></svg><span>Show me how</span></button>`
+                    : ''
+                }
+                <div id="intro-how" class="how-body"${helpHowOpen ? '' : ' hidden'}>${helpHowOpen ? this._howBodyHtml(helpHow) : ''}</div>
+              </div>`
+              : '';
           const title = isCampaign
             ? `L${levelDef.id} · ${levelDef.title}`
             : isChallenge
@@ -4546,15 +4873,22 @@
             : isChallenge
               ? `Timed lab · ${Math.round((levelDef.timeLimit || 0) / 60)} minutes`
               : `${modeNames[mode] || mode} · OpenShift 4.22`;
-          const startLabel = isCampaign || isChallenge ? 'Start level' : 'Start exploring';
+          const startLabel =
+            isCampaign || isChallenge
+              ? source === 'help'
+                ? 'Back to the level'
+                : 'Start level'
+              : 'Start exploring';
           const objectivesBlock =
-            objectiveLabels.length > 0
+            objectiveItems.length > 0
               ? `<div class="intro-block">
                <h3 class="intro-block-title">Your objectives</h3>
                <ol class="intro-objectives">
-                 ${objectiveLabels
-                   .slice(0, 6)
-                   .map((label) => `<li>${escapeHtml(label)}</li>`)
+                 ${objectiveItems
+                   .map(
+                     (item) =>
+                       `<li${item.done ? ' class="is-done"' : ''}>${escapeHtml(item.label)}${item.done ? '<span class="intro-done"> · done</span>' : ''}</li>`
+                   )
                    .join('')}
                </ol>
              </div>`
@@ -4562,6 +4896,14 @@
                <h3 class="intro-block-title">What good looks like</h3>
                <p class="intro-note">${escapeHtml(modeGoals[mode] || '')}</p>
              </div>`;
+          const movesBlock =
+            nextStepBlock ||
+            `<div class="intro-block">
+                <h3 class="intro-block-title">First moves</h3>
+                <ol class="intro-steps">
+                  ${moves.map((move) => `<li>${move}</li>`).join('')}
+                </ol>
+              </div>`;
 
           const overlay = document.createElement('div');
           overlay.id = 'tutorial-overlay';
@@ -4570,16 +4912,11 @@
             <header class="intro-head">
               <div class="intro-kicker">${escapeHtml(kicker)}</div>
               <h2 id="tutorial-title" class="intro-title">${escapeHtml(title)}</h2>
-              <p class="intro-lede">${escapeHtml(levelDef?.description || modeGoals[mode] || '')}</p>
+              <p class="intro-lede">${this._inlineFormat(levelDef?.description || modeGoals[mode] || '')}</p>
             </header>
             <div class="intro-grid">
               ${objectivesBlock}
-              <div class="intro-block">
-                <h3 class="intro-block-title">First moves</h3>
-                <ol class="intro-steps">
-                  ${moves.map((move) => `<li>${move}</li>`).join('')}
-                </ol>
-              </div>
+              ${movesBlock}
             </div>
             <div class="intro-controls">
               <span><kbd>/</kbd> oc terminal</span>
@@ -4596,6 +4933,19 @@
             </footer>
           </div>`;
           document.body.appendChild(overlay);
+          this._bindGuideActions();
+          document.getElementById('intro-show-how')?.addEventListener('click', () => {
+            // Same help and same cost as the mission card's "Show me how".
+            if (!this.modeInstance?.revealHow?.(helpIndex)) return;
+            this._howOpen?.add(helpIndex);
+            this._nextHelpSig = '';
+            const howEl = document.getElementById('intro-how');
+            if (howEl) {
+              howEl.innerHTML = this._howBodyHtml(helpHow);
+              howEl.hidden = false;
+            }
+            document.getElementById('intro-show-how')?.remove();
+          });
           this._tutorialOpener = document.activeElement;
           requestAnimationFrame(() =>
             document.getElementById('tutorial-start')?.focus?.({ preventScroll: true })
@@ -4854,7 +5204,7 @@
             card.innerHTML = `
             <div class="achievement-icon">${ach.icon || '&#127942;'}</div>
             <div class="achievement-name">${escapeHtml(isUnlocked ? ach.name : '???')}</div>
-            <div class="achievement-desc">${escapeHtml(isUnlocked ? ach.description : 'Keep playing to unlock')}</div>`;
+            <div class="achievement-desc">${escapeHtml(isUnlocked ? String(ach.description).replace(/`/g, '') : 'Keep playing to unlock')}</div>`;
             grid.appendChild(card);
           });
         }

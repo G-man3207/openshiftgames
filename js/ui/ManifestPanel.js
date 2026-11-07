@@ -83,6 +83,7 @@ export class ManifestPanel {
     this.dirtyBadge = null;
     this.resultEl = null;
     this.errorEl = null;
+    this.tipEl = null;
     this.buttons = {};
     this.currentPath = null;
     this._drafts = new Map();
@@ -197,6 +198,7 @@ export class ManifestPanel {
     this.editor = null;
     this.resultEl = null;
     this.errorEl = null;
+    this.tipEl = null;
     this.buttons = {};
     this.initialized = false;
     if (typeof window !== 'undefined' && window.game) {
@@ -356,6 +358,10 @@ export class ManifestPanel {
         font-size: 11.5px; line-height: 1.5; color: #ff7b72; white-space: pre-wrap; word-break: break-word; }
       .ogmf-hint { font-size: 11px; color: var(--faint, #7C8590); display: flex; justify-content: space-between; gap: 10px; }
       .ogmf-hint code { color: var(--text-secondary, rgba(255,255,255,.6)); }
+      .ogmf-tip { margin: 0; padding: 8px 12px; border-left: 2px solid var(--warning, #E8A33D); border-radius: 0 8px 8px 0;
+        background: var(--warning-dim, rgba(232,163,61,.12)); color: var(--text, #ECEEF1); font-size: 12px; line-height: 1.55; }
+      .ogmf-tip[hidden] { display: none; }
+      .ogmf-tip code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px; overflow-wrap: anywhere; }
       @media (max-width: 760px) {
         .ogmf-body { grid-template-columns: 1fr; grid-template-rows: 180px minmax(0, 1fr); }
         .ogmf-sidebar { border-right: 0; border-bottom: 1px solid var(--border-subtle, rgba(255,255,255,.1)); }
@@ -465,6 +471,9 @@ export class ManifestPanel {
     this.errorEl = el('pre', { class: 'ogmf-error', 'data-testid': 'manifest-error' });
     const output = el('div', { class: 'ogmf-output' }, [this.resultEl, this.errorEl]);
     this.outputEl = output;
+    // Contextual note for files that Apply -f does not turn into a running app
+    // (Templates must be processed, Helm charts installed). See _fileTip().
+    this.tipEl = el('div', { class: 'ogmf-tip', 'data-testid': 'manifest-tip', hidden: true });
 
     const docs = el(
       'div',
@@ -505,6 +514,7 @@ export class ManifestPanel {
     const main = el('section', { class: 'ogmf-main' }, [
       toolbar,
       this.editor,
+      this.tipEl,
       output,
       el('div', { class: 'ogmf-hint' }, [
         el('span', {}, [
@@ -690,9 +700,60 @@ export class ManifestPanel {
     this._updateToolbar(false);
   }
 
+  /** Show or hide the contextual note for the open file. */
+  _updateTip() {
+    if (!this.tipEl) return;
+    const path = this.currentPath;
+    const text = path ? (this.editor?.value ?? this.manifestEngine.readFile(path) ?? '') : '';
+    const children = this._fileTip(path, text);
+    this.tipEl.replaceChildren(...(children || []));
+    this.tipEl.hidden = !children;
+  }
+
+  /**
+   * What the player needs to know before pressing Apply -f on this file:
+   * `oc apply -f` on a Template only stores it (it must be processed), and a
+   * Helm chart is installed as a whole, never file by file.
+   * @returns {Array<string|Node>|null}
+   */
+  _fileTip(path, text) {
+    if (!path) return null;
+    if (/^\s*kind:\s*Template\s*$/m.test(text)) {
+      return [
+        el('b', { text: 'This file is a Template. ' }),
+        'Apply -f only stores it; it does not create the app. Process it in the terminal: ',
+        el('code', { text: `oc process -f ${path} -p KEY=value | oc apply -f -` }),
+        ' (list its parameters with ',
+        el('code', { text: `oc process --parameters -f ${path}` }),
+        ').',
+      ];
+    }
+    const chartRoot = this._helmChartRoot(path);
+    if (chartRoot) {
+      return [
+        el('b', { text: 'Helm chart files are not applied one by one. ' }),
+        'Install the whole chart from the terminal: ',
+        el('code', { text: `helm install <release-name> ${chartRoot}` }),
+        '.',
+      ];
+    }
+    return null;
+  }
+
+  /** The nearest directory at or above `path` that holds a Chart.yaml. */
+  _helmChartRoot(path) {
+    let dir = path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : '';
+    while (dir) {
+      if (this.manifestEngine.exists(`${dir}/Chart.yaml`)) return dir;
+      dir = dir.includes('/') ? dir.slice(0, dir.lastIndexOf('/')) : '';
+    }
+    return null;
+  }
+
   _updateToolbar(renderTree = true) {
     if (!this.initialized) return;
     this.pathLabel.textContent = this.currentPath || 'no file selected';
+    this._updateTip();
     const dirty = this._dirty();
     this.dirtyBadge.style.display = dirty ? 'inline' : 'none';
     for (const key of [

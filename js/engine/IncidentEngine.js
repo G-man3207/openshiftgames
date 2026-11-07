@@ -435,11 +435,27 @@ class IncidentEngine {
           resolvedFrom,
           def,
           triggered: false,
+          // uid of the seeded object the incident names, so onset can tell it from a
+          // replacement the learner created under the same name (see _damageJob).
+          seedUid: this._seedUidOf(def, inc),
         };
       })
       .filter(Boolean)
       .sort((a, b) => (a.triggerTime || 0) - (b.triggerTime || 0));
     return this.scriptedQueue.length;
+  }
+
+  /**
+   * uid of the Job a scripted JobDeadlineExceeded incident names, when the level
+   * already seeded it (else null). A learner who deletes and recreates that Job
+   * before the incident fires has fixed the fault: onset must not break the NEW Job.
+   */
+  _seedUidOf(def, scripted) {
+    if (def?.name !== 'JobDeadlineExceeded') return null;
+    const target = scripted?.target;
+    if (!target || target === 'random' || target === 'multiple') return null;
+    const job = this._findResource('Job', target, scripted.namespace);
+    return job?.uid || job?.metadata?.uid || null;
   }
 
   start(mode) {
@@ -553,6 +569,7 @@ class IncidentEngine {
           // state-driven remediation (e.g. APP_MODE in allowed[]).
           seed: scripted.seed || null,
           fix: scripted.fix || null,
+          seedUid: scripted.seedUid || null,
         });
       }
     }
@@ -723,6 +740,7 @@ class IncidentEngine {
     // Per-incident seed/fix contract (#31 A1) authored in the level data.
     incident.seed = opts.seed || null;
     incident.fix = opts.fix || null;
+    incident.seedUid = opts.seedUid || null;
 
     // Scripted incidents name a concrete target from level/challenge data; do
     // not silently retarget a same-kind resource or fabricate `<kind>-incident-N`
@@ -2380,6 +2398,12 @@ class IncidentEngine {
       this._resolveTargetResource(incident) ||
       this._findResource('Job', incident.target, incident.namespace);
     if (!job) return { applied: false };
+    // The incident belongs to the seeded Job. If the learner already replaced it (delete +
+    // recreate with a longer deadline) the fault is fixed: leave the new Job alone. The
+    // incident then self-heals from state like any other fix made before onset.
+    if (incident.seedUid && job.uid && job.uid !== incident.seedUid) {
+      return { applied: true, kind: 'job', target: job.name, preempted: true };
+    }
     this._saveRestore(incident, {
       uid: job.uid,
       name: job.name,
