@@ -6578,6 +6578,94 @@ if (levels.length) {
       if (obj.kind === 'Namespace')
         fail('model', `${owner}: objective still references retired Namespace kind`);
     }
+
+    // ── Player guidance (per-objective `how`, level `workProject`) ─────────
+    // Players got stuck because the commands lived in sequential hints that did not match
+    // the objectives and the lab project was only mentioned in hint #1. Authored guidance
+    // is replayed in the browser suite (qa-guidance); these static locks keep it typeable.
+    const seededProjects = (level.startingResources || [])
+      .filter((resource) => resource.kind === 'Project')
+      .map((resource) => resource.name);
+    // The project the mission card's project row tells the player to switch to.
+    const rowProject = Object.prototype.hasOwnProperty.call(level, 'workProject')
+      ? level.workProject
+      : seededProjects.length === 1
+        ? seededProjects[0]
+        : null;
+    if (Object.prototype.hasOwnProperty.call(level, 'workProject')) {
+      const workProject = level.workProject;
+      if (
+        workProject !== null &&
+        (typeof workProject !== 'string' || !seededProjects.includes(workProject))
+      )
+        fail(
+          'guidance',
+          `${owner}: workProject must be null or a seeded Project (${seededProjects.join(', ') || 'none'}), got ${JSON.stringify(workProject)}`
+        );
+      else passed();
+    }
+    for (const [objectiveIndex, obj] of (level.objectives || []).entries()) {
+      if (obj.how === undefined) continue;
+      const where = `${owner}: objective ${objectiveIndex + 1} how`;
+      const how = obj.how;
+      if (!how || typeof how !== 'object' || Array.isArray(how)) {
+        fail('guidance', `${where} must be an object { explain, run?, check? }`);
+        continue;
+      }
+      const unknownFields = Object.keys(how).filter(
+        (field) => !['explain', 'run', 'check'].includes(field)
+      );
+      if (unknownFields.length > 0)
+        fail('guidance', `${where}: unknown field(s) ${unknownFields.join(', ')}`);
+      if (typeof how.explain !== 'string' || how.explain.trim().length < 20)
+        fail('guidance', `${where}.explain must be a plain-language sentence`);
+      else if (how.explain.length > 420)
+        fail(
+          'guidance',
+          `${where}.explain is ${how.explain.length} chars; keep it to 1–2 sentences`
+        );
+      if (how.run !== undefined && (!Array.isArray(how.run) || how.run.length === 0))
+        fail('guidance', `${where}.run must be a non-empty array of commands (or omitted)`);
+      if (how.check !== undefined && typeof how.check !== 'string')
+        fail('guidance', `${where}.check must be one command string`);
+      const typed = [...(Array.isArray(how.run) ? how.run : []), how.check].filter(
+        (command) => command !== undefined
+      );
+      for (const command of typed) {
+        if (
+          typeof command !== 'string' ||
+          !/^(oc|helm|cat|echo|htpasswd|openssl|curl|vi|vim|ls|export|skopeo|sed|grep|head|tail|cut|sort|wc|base64|rm|mkdir|touch)\s+\S/.test(
+            command
+          )
+        )
+          fail(
+            'guidance',
+            `${where}: "${String(command).slice(0, 60)}" is not a typeable terminal command`
+          );
+        else if (/<[A-Za-z][\w.-]*>|…|\.\.\./.test(command))
+          fail(
+            'guidance',
+            `${where}: "${command.slice(0, 60)}" contains a placeholder; use the concrete name`
+          );
+        else if (/[\r\n]/.test(command)) fail('guidance', `${where}: commands must be single-line`);
+        else if (rowProject && new RegExp(`^oc project ${rowProject}$`).test(command))
+          fail(
+            'guidance',
+            `${where}: "${command}" repeats the mission card's project row; leave it out of the step`
+          );
+        else passed();
+      }
+      for (const text of [how.explain, ...typed]) {
+        if (/\bkubectl\b/.test(text || ''))
+          fail(
+            'branding',
+            `${where}: player-facing guidance uses kubectl: ${String(text).slice(0, 80)}`
+          );
+        if (/\boc\s+export\b/.test(text || ''))
+          fail('content', `${where}: oc export was removed in OpenShift 4.x`);
+      }
+      passed();
+    }
   }
   const chapters = levelsMod.CHAPTERS || [];
   if (chapters.length !== 5) fail('campaign', `expected 5 chapters, found ${chapters.length}`);

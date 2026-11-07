@@ -1433,6 +1433,11 @@ try {
             ? { scrollHeight: body.scrollHeight, clientHeight: body.clientHeight }
             : null,
           bodyScrollable: Boolean(body && body.scrollHeight > body.clientHeight + 1),
+          // The card body is the one scroll container: whatever does not fit must scroll
+          // (the description is clamped while the terminal is open, so short levels fit).
+          bodyIsScroller: Boolean(
+            body && ['auto', 'scroll'].includes(getComputedStyle(body).overflowY)
+          ),
           hintVisible: Boolean(
             hint && getComputedStyle(hint).display !== 'none' && hr && hr.width > 0
           ),
@@ -1450,9 +1455,9 @@ try {
         `gap=${info.panelBottomAboveTerminal}px`
       );
       check(
-        'laptop: objectives body scrolls while the terminal is open',
-        info.bodyScrollable,
-        JSON.stringify(info.bodyScroll)
+        'laptop: objectives body is a scroll container while the terminal is open (content fits or scrolls)',
+        info.bodyIsScroller,
+        JSON.stringify({ ...info.bodyScroll, scrollable: info.bodyScrollable })
       );
       check(
         'laptop: Show hint button is visible and not covered',

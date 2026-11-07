@@ -21229,18 +21229,17 @@ await runSection('qa-issue70-76', async () => {
     assert(await startCampaign(7), '#75: campaign L7 starts for the pre-ticked objective check');
     await evaluate(() => window.game?.app?.hideTutorial?.());
     let l7Results = await objectiveResults();
-    // The negative "No ConfigMap contains password/secret/token/key data"
-    // objective is vacuously true before any ConfigMap exists (real evaluator
+    // The negative "Keep ConfigMaps free of sensitive keys …" rule objective
+    // is vacuously true before any ConfigMap exists (real evaluator
     // semantics); the positive work objectives must all start false.
     const l7PositiveResults = l7Results.filter(
-      (entry) => !/No ConfigMap contains/i.test(entry.label)
+      (entry) => !/Keep ConfigMaps free of sensitive keys/i.test(entry.label)
     );
     assert(
       l7Results.length >= 5 &&
-        objectiveByLabel(l7Results, /Mount a ConfigMap into a workload volume/i)?.completed ===
-          false &&
+        objectiveByLabel(l7Results, /Mount the ConfigMap "app-config"/i)?.completed === false &&
         l7PositiveResults.every((entry) => entry.completed === false),
-      '#75: L7 objectives start false — "Mount a ConfigMap into a workload volume" is not pre-ticked',
+      '#75: L7 objectives start false — the ConfigMap volume-mount objective is not pre-ticked',
       JSON.stringify(l7Results.map((entry) => [entry.label, entry.completed]))
     );
     assert(await startCampaign(11), '#75: campaign L11 starts for the pre-ticked objective check');
@@ -22081,6 +22080,844 @@ await runSection('qa-issue70-76', async () => {
     );
   } catch (err) {
     fail('#76: CLI/output fidelity block threw', err?.stack?.split('\n').slice(0, 5).join('\n'));
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// QA ROUND — player guidance ("I got stuck on level 7/8, the help was unclear")
+// ═══════════════════════════════════════════════════════════════════════════
+await runSection('qa-guidance', async () => {
+  // Behavioural twins of the static locks in scripts/verify.mjs (§ guidance):
+  // the mission card tells the player WHERE to work (project row), WHAT is next and
+  // HOW to do it (authored `objective.how`, opt-in "Show me how"), explains why an
+  // objective is not ticking, renders hints as readable commands, and the help
+  // modal answers "where am I" mid-level.
+  const advanceGame = async (seconds) =>
+    evaluate((secs) => {
+      const sim = window.game?.gameEngine?.simulation;
+      const engine = window.game?.incidentEngine;
+      if (!sim || typeof sim.tick !== 'function') return false;
+      const steps = Math.ceil(secs / 0.05);
+      for (let index = 0; index < steps; index += 1) {
+        sim.tick(0.05);
+        if (engine && typeof engine.tick === 'function') engine.tick(0.05);
+      }
+      return true;
+    }, seconds);
+  const command = (raw, wait = 150) => runCmd(raw, wait);
+  /** One evaluation pass + one mission-card refresh (the card polls every 500ms). */
+  const refreshCard = () =>
+    evaluate(() => {
+      const app = window.game.app;
+      app.modeInstance.update?.();
+      app._updateObjectivesPanel(app.modeInstance.getStatus());
+      return true;
+    });
+  const objectiveStates = () =>
+    evaluate(() =>
+      window.game.app.modeInstance.getStatus().objectives.map((objective) => ({
+        label: objective.label,
+        done: Boolean(objective.completed),
+        note: objective.note || null,
+      }))
+    );
+  /** What the player sees on the mission card right now. */
+  const cardFacts = () =>
+    evaluate(() => {
+      const visible = (el) => Boolean(el) && !el.hidden && getComputedStyle(el).display !== 'none';
+      const text = (el) => (el?.innerText || '').replace(/\s+/g, ' ').trim();
+      const project = document.getElementById('mission-project');
+      const how = document.getElementById('mission-how');
+      const howButton = document.getElementById('btn-show-how');
+      const note = document.getElementById('mission-next-note');
+      return {
+        projectVisible: visible(project),
+        projectClass: project?.className || '',
+        projectText: text(project),
+        projectChip: project?.querySelector('.cmd-chip')?.dataset.cmd || '',
+        nextText: text(document.getElementById('mission-next-text')),
+        howButtonVisible: visible(howButton),
+        howVisible: visible(how),
+        howCommands: [...(how?.querySelectorAll('.cmd-block .cmd-text') || [])].map((el) =>
+          el.textContent.trim()
+        ),
+        howCheck: how?.querySelector('.how-check .cmd-chip')?.dataset.cmd || '',
+        noteVisible: visible(note),
+        noteText: text(note),
+        noteFix: note?.querySelector('.cmd-chip')?.dataset.cmd || '',
+        rowNotes: [...document.querySelectorAll('#obj-list .obj-note')].map(text),
+        progressLabel: text(document.getElementById('obj-progress-label')),
+      };
+    });
+  const terminalFacts = () =>
+    evaluate(() => ({
+      open: window.game.app.commandBar?.visible === true,
+      value: document.getElementById('cmd-input')?.value ?? null,
+      focused: document.activeElement?.id === 'cmd-input',
+    }));
+  const clickVisible = (selector) =>
+    evaluate((sel) => {
+      const el = [...document.querySelectorAll(sel)].find((node) => node.offsetParent !== null);
+      if (!el) return false;
+      el.click();
+      return true;
+    }, selector);
+
+  // ── Level 7: the level intro (automatic) ────────────────────────────────
+  // Start from a clean URL: an earlier section may have left `?tutorial=0` in it, and
+  // launchGame() honours that flag by skipping the very intro this block inspects.
+  await goto('/');
+  await bootMenu();
+  assert(await launch('campaign', 7), 'guidance: campaign level 7 starts');
+  const intro = await evaluate(() => ({
+    lede: document.querySelector('#tutorial-overlay .intro-lede')?.innerHTML || '',
+    steps: [...document.querySelectorAll('#tutorial-overlay .intro-steps li')].map((li) =>
+      li.innerText.replace(/\s+/g, ' ').trim()
+    ),
+    chip: document.querySelector('#tutorial-overlay .intro-steps .cmd-chip')?.dataset.cmd || '',
+    objectives: [...document.querySelectorAll('#tutorial-overlay .intro-objectives li')].map((li) =>
+      li.innerText.replace(/\s+/g, ' ').trim()
+    ),
+    start: document.getElementById('tutorial-start')?.textContent?.trim() || '',
+  }));
+  assert(
+    !intro.lede.includes('`') && /<code[^>]*>config-lab<\/code>/.test(intro.lede),
+    'guidance: the level intro renders `code` in the description (no raw backticks)',
+    intro.lede.slice(0, 240)
+  );
+  assert(
+    intro.steps.length === 3 &&
+      intro.chip === 'oc project config-lab' &&
+      /Show me how/.test(intro.steps[2]) &&
+      !/--from=configmap/.test(intro.steps.join(' ')),
+    'guidance: L7 "First moves" are orientation steps (project, terminal, Show me how), not the first three hints',
+    JSON.stringify(intro.steps)
+  );
+  assert(
+    intro.objectives.length === 5 && intro.start === 'Start level',
+    'guidance: the launch intro lists all objectives and offers "Start level"',
+    JSON.stringify(intro)
+  );
+  await closeOverlays();
+  await refreshCard();
+
+  // ── Level 7: the project row ────────────────────────────────────────────
+  const wrongProject = await cardFacts();
+  assert(
+    wrongProject.projectVisible &&
+      /is-warn/.test(wrongProject.projectClass) &&
+      /default/.test(wrongProject.projectText) &&
+      /config-lab/.test(wrongProject.projectText) &&
+      wrongProject.projectChip === 'oc project config-lab',
+    'guidance: starting in `default`, the mission card says the level is graded in config-lab and offers `oc project config-lab`',
+    JSON.stringify(wrongProject)
+  );
+  assert(
+    wrongProject.howButtonVisible && !wrongProject.howVisible,
+    'guidance: "Show me how" is offered under Next step but the commands stay hidden until asked',
+    JSON.stringify(wrongProject)
+  );
+  assert(
+    (await evaluate(() => window.game.app.modeInstance.usedHints)) === false,
+    'guidance: nothing counts as a hint before the player asks for help'
+  );
+
+  // "Show me how" is a hint: with hints switched off in Settings it is not offered (the
+  // project row and the why-not-ticking notes are orientation and stay).
+  await evaluate(() => {
+    window.game.app.settings.showHints = false;
+    window.game.app._applyUiFromSettings();
+  });
+  await refreshCard();
+  const hintsOff = await cardFacts();
+  await evaluate(() => window.game.app.showTutorial('campaign', { source: 'launch' }));
+  await sleep(200);
+  const introHintsOff = await evaluate(() => ({
+    steps: [...document.querySelectorAll('#tutorial-overlay .intro-steps li')].length,
+    mentionsHow: /Show me how/.test(document.getElementById('tutorial-overlay')?.innerText || ''),
+  }));
+  await evaluate(() => window.game.app.showTutorial('campaign'));
+  await sleep(200);
+  const helpHintsOff = await evaluate(() => ({
+    showHow: Boolean(document.getElementById('intro-show-how')),
+    next: document.querySelector('#tutorial-overlay .intro-next')?.textContent?.trim() || '',
+  }));
+  await closeOverlays();
+  await evaluate(() => {
+    window.game.app.settings.showHints = true;
+    window.game.app._applyUiFromSettings();
+  });
+  await refreshCard();
+  const hintsOn = await cardFacts();
+  assert(
+    !hintsOff.howButtonVisible &&
+      hintsOff.projectVisible &&
+      introHintsOff.steps === 2 &&
+      !introHintsOff.mentionsHow &&
+      !helpHintsOff.showHow &&
+      /Create the ConfigMap "app-config"/.test(helpHintsOff.next) &&
+      hintsOn.howButtonVisible,
+    'guidance: with hints turned off "Show me how" is not offered (card, intro and help) but the project row stays; turning hints on restores it',
+    JSON.stringify({ hintsOff, introHintsOff, helpHintsOff, hintsOn: hintsOn.howButtonVisible })
+  );
+
+  // Putting the project command in the terminal does not run it.
+  await clickVisible('#mission-project .cmd-chip');
+  await sleep(300);
+  const filled = await terminalFacts();
+  assert(
+    filled.open &&
+      filled.value === 'oc project config-lab' &&
+      filled.focused &&
+      (await evaluate(() => window.game.gameEngine.currentProject)) === 'default',
+    'guidance: clicking the project command opens the terminal, fills the input and focuses it without running it',
+    JSON.stringify(filled)
+  );
+  await command('oc project config-lab', 200);
+  await refreshCard();
+  const rightProject = await cardFacts();
+  assert(
+    rightProject.projectVisible &&
+      /is-ok/.test(rightProject.projectClass) &&
+      /Working in project config-lab/.test(rightProject.projectText),
+    'guidance: once the player is in config-lab the project row turns into a quiet "Working in project" line',
+    JSON.stringify(rightProject)
+  );
+
+  // ── Level 7: Show me how ────────────────────────────────────────────────
+  await clickVisible('#btn-show-how');
+  await sleep(200);
+  const how1 = await cardFacts();
+  assert(
+    how1.howVisible &&
+      !how1.howButtonVisible &&
+      how1.howCommands.length === 1 &&
+      how1.howCommands[0] === 'oc create configmap app-config --from-literal=APP_MODE=production' &&
+      how1.howCheck === 'oc get configmap app-config',
+    'guidance: "Show me how" reveals the exact command and a check command for the current objective',
+    JSON.stringify(how1)
+  );
+  assert(
+    (await evaluate(() => window.game.app.modeInstance.usedHints)) === true,
+    'guidance: revealing the how-to counts as using a hint (it never fails the level)'
+  );
+  await clickVisible('#mission-how .cmd-btn-primary');
+  await sleep(300);
+  const pasted = await terminalFacts();
+  assert(
+    pasted.value === 'oc create configmap app-config --from-literal=APP_MODE=production' &&
+      pasted.focused,
+    'guidance: "Put in terminal" fills the terminal input with the full command',
+    JSON.stringify(pasted)
+  );
+  await command(pasted.value, 200);
+  await advanceGame(2);
+  await refreshCard();
+  const afterFirst = await cardFacts();
+  const afterFirstObjectives = await objectiveStates();
+  assert(
+    afterFirstObjectives[0].done &&
+      !afterFirst.howVisible &&
+      /Create the Secret "db-secret"/.test(afterFirst.nextText) &&
+      afterFirst.howButtonVisible,
+    'guidance: after the objective ticks, Next step moves on and the how-to is closed again for the next one',
+    JSON.stringify({ afterFirst, objectives: afterFirstObjectives.map((o) => o.done) })
+  );
+
+  // ── Level 7: hints are readable commands in ONE scroll area ─────────────
+  const hintCount = await evaluate(() => window.game.app.modeInstance.currentLevelDef.hints.length);
+  for (let index = 0; index < hintCount; index += 1) {
+    await clickVisible('#btn-show-hint');
+    await sleep(120);
+  }
+  const hints = await evaluate(() => {
+    const list = document.getElementById('hint-list');
+    const body = document.getElementById('obj-panel-body');
+    return {
+      text: list?.innerText || '',
+      chips: [...(list?.querySelectorAll('.cmd-chip') || [])].map((el) => el.dataset.cmd),
+      insideBody: Boolean(list && body && body.contains(list)),
+      ownScroller: list ? getComputedStyle(list).overflowY : '',
+      footerDisplay: getComputedStyle(document.getElementById('hint-section')).display,
+    };
+  });
+  assert(
+    !hints.text.includes('`') &&
+      hints.chips.includes('oc set volume deployment/app') &&
+      hints.insideBody &&
+      hints.ownScroller !== 'auto' &&
+      hints.ownScroller !== 'scroll',
+    'guidance: revealed hints show commands as code chips (no raw backticks) inside the card body, not a cramped nested scroller',
+    JSON.stringify({ ...hints, text: hints.text.slice(0, 200) })
+  );
+  assert(
+    hints.footerDisplay === 'none',
+    'guidance: the empty hint footer disappears once every hint is revealed',
+    hints.footerDisplay
+  );
+
+  // ── Level 7: the help modal mid-level answers "where am I" ──────────────
+  await command('oc create secret generic db-secret --from-literal=password=s3cret', 200);
+  await advanceGame(2);
+  await refreshCard();
+  await evaluate(() => window.game.app.showTutorial('campaign'));
+  await sleep(250);
+  const help = await evaluate(() => ({
+    next: document.querySelector('#tutorial-overlay .intro-next')?.textContent?.trim() || '',
+    done: [...document.querySelectorAll('#tutorial-overlay .intro-objectives li.is-done')].length,
+    showHow: Boolean(document.getElementById('intro-show-how')),
+    start: document.getElementById('tutorial-start')?.textContent?.trim() || '',
+    firstMoves: Boolean(document.querySelector('#tutorial-overlay .intro-steps')),
+  }));
+  assert(
+    /Mount the ConfigMap "app-config"/.test(help.next) &&
+      help.done === 3 &&
+      help.showHow &&
+      help.start === 'Back to the level' &&
+      !help.firstMoves,
+    'guidance: Help (H) mid-level shows the current step, the done objectives and a "Show me how" instead of the static intro',
+    JSON.stringify(help)
+  );
+  await clickVisible('#intro-show-how');
+  await sleep(200);
+  const helpHow = await evaluate(() => ({
+    commands: [...document.querySelectorAll('#intro-how .cmd-block .cmd-text')].map((el) =>
+      el.textContent.trim()
+    ),
+  }));
+  assert(
+    helpHow.commands.length === 1 &&
+      /^oc set volume deployment\/app --add /.test(helpHow.commands[0]),
+    'guidance: Help → Show me how reveals the exact `oc set volume` command for the mount objective',
+    JSON.stringify(helpHow)
+  );
+  await clickVisible('#tutorial-overlay .cmd-btn-primary');
+  await sleep(500);
+  const fromHelp = await evaluate(() => ({
+    modalOpen: Boolean(document.getElementById('tutorial-overlay')),
+    value: document.getElementById('cmd-input')?.value || '',
+  }));
+  assert(
+    !fromHelp.modalOpen && /^oc set volume deployment\/app --add /.test(fromHelp.value),
+    'guidance: "Put in terminal" from the help modal closes it and fills the terminal',
+    JSON.stringify(fromHelp)
+  );
+  await command(fromHelp.value, 200);
+  await command('oc set env deployment/app --from=secret/db-secret', 200);
+  await advanceGame(3);
+  await refreshCard();
+  assert(
+    (await objectiveStates()).every((objective) => objective.done),
+    'guidance: the level-7 guidance path completes all five objectives',
+    JSON.stringify(await objectiveStates())
+  );
+
+  // ── Notes: an unticked objective says WHY (ObjectiveEvaluator.explainObjective) ──
+  const freshLevel = async (id) => {
+    await bootMenu();
+    const started = await launch('campaign', id);
+    await closeOverlays();
+    return started;
+  };
+  const noteOf = (states, index) => states[index]?.note || null;
+
+  // The original stall: follow the labels, forget `oc project`, create everything in
+  // `default`. The resources are listed by `oc get`, the objectives stay unticked.
+  assert(await freshLevel(8), 'guidance: campaign level 8 starts');
+  await command(
+    'oc process -f templates/webapp-template.yaml -p APP_NAME=web | oc apply -f -',
+    300
+  );
+  await command('helm install shop helm/webapp', 300);
+  await advanceGame(3);
+  await refreshCard();
+  const inDefault = await objectiveStates();
+  assert(
+    inDefault[0].done &&
+      inDefault[2].done &&
+      !inDefault[1].done &&
+      !inDefault[3].done &&
+      noteOf(inDefault, 1)?.code === 'wrong-project' &&
+      noteOf(inDefault, 1)?.expected === 'template-lab' &&
+      JSON.stringify(noteOf(inDefault, 1)?.found) === '["default"]' &&
+      noteOf(inDefault, 1)?.fix === 'oc project template-lab' &&
+      /Deployment "web" exists in project "default"/.test(noteOf(inDefault, 1)?.text || '') &&
+      noteOf(inDefault, 3)?.code === 'wrong-project',
+    'guidance: L8 objectives created in `default` carry a wrong-project note (what exists where, and the fix)',
+    JSON.stringify(inDefault)
+  );
+  const inDefaultCard = await cardFacts();
+  assert(
+    inDefaultCard.noteVisible &&
+      /exists in project "default"/.test(inDefaultCard.noteText) &&
+      inDefaultCard.rowNotes.length === 2,
+    'guidance: the mission card shows the note under "Next step" and under each affected objective',
+    JSON.stringify(inDefaultCard)
+  );
+  // Recovery works: switch project, redo, everything ticks and the notes clear.
+  await command('oc project template-lab', 200);
+  await command(
+    'oc process -f templates/webapp-template.yaml -p APP_NAME=web | oc apply -f -',
+    300
+  );
+  await command('helm install shop helm/webapp', 300);
+  await advanceGame(3);
+  await refreshCard();
+  const recovered = await objectiveStates();
+  assert(
+    recovered.every((objective) => objective.done && objective.note === null),
+    'guidance: after switching to template-lab and redoing the steps all four objectives tick and no note remains',
+    JSON.stringify(recovered)
+  );
+
+  // Files panel: Apply -f on a Template only STORES it. It looks like success but no
+  // objective ticks, so the objective explains it and offers the pipeline that does.
+  assert(await freshLevel(8), 'guidance: campaign level 8 restarts');
+  await command('oc project template-lab', 200);
+  await command('oc apply -f templates/webapp-template.yaml', 300);
+  await advanceGame(3);
+  await refreshCard();
+  const stored = await objectiveStates();
+  assert(
+    !stored[0].done &&
+      noteOf(stored, 0)?.code === 'template-not-processed' &&
+      noteOf(stored, 0)?.fix === 'oc process webapp-template -p APP_NAME=web | oc apply -f -',
+    'guidance: a stored-but-unprocessed Template explains that applying the file only saves it',
+    JSON.stringify(noteOf(stored, 0))
+  );
+  await command(noteOf(stored, 0).fix, 300);
+  await advanceGame(3);
+  await refreshCard();
+  const processed = await objectiveStates();
+  assert(
+    processed[0].done && processed[1].done && processed[0].note === null,
+    'guidance: running the suggested pipeline ticks the template objective and clears the note',
+    JSON.stringify(processed)
+  );
+  assert(await freshLevel(8), 'guidance: campaign level 8 restarts (render only)');
+  await command('oc project template-lab', 200);
+  await command('oc process -f templates/webapp-template.yaml -p APP_NAME=web', 300);
+  await advanceGame(3);
+  await refreshCard();
+  const renderedOnly = await objectiveStates();
+  assert(
+    !renderedOnly[0].done &&
+      noteOf(renderedOnly, 0)?.code === 'template-not-applied' &&
+      /oc process -f templates\/webapp-template\.yaml -p APP_NAME=web \| oc apply -f -/.test(
+        noteOf(renderedOnly, 0)?.fix || ''
+      ),
+    'guidance: `oc process` alone (nothing applied) explains that the output must be piped into oc apply -f -',
+    JSON.stringify(noteOf(renderedOnly, 0))
+  );
+  assert(await freshLevel(8), 'guidance: campaign level 8 restarts (wrong parameter)');
+  await command('oc project template-lab', 200);
+  await command(
+    'oc process -f templates/webapp-template.yaml -p APP_NAME=shop | oc apply -f -',
+    300
+  );
+  await advanceGame(3);
+  await refreshCard();
+  const wrongParam = await objectiveStates();
+  assert(
+    !wrongParam[0].done &&
+      noteOf(wrongParam, 0)?.code === 'template-wrong-parameters' &&
+      /APP_NAME=shop/.test(noteOf(wrongParam, 0)?.text || '') &&
+      /APP_NAME=web/.test(noteOf(wrongParam, 0)?.text || ''),
+    'guidance: a template applied with other parameters names the parameter that is wrong',
+    JSON.stringify(noteOf(wrongParam, 0))
+  );
+
+  // `oc new-app -f <template-file>` is the one-step way to instantiate a template.
+  assert(await freshLevel(8), 'guidance: campaign level 8 restarts (new-app -f)');
+  await command('oc project template-lab', 200);
+  const missingParam = await command('oc new-app -f templates/webapp-template.yaml', 400);
+  await advanceGame(3);
+  await refreshCard();
+  assert(
+    missingParam.error && !(await objectiveStates())[0].done,
+    'guidance: `oc new-app -f` without the required parameter fails and does not tick the template objective',
+    JSON.stringify({ message: missingParam.message.slice(0, 120) })
+  );
+  const newApp = await command('oc new-app -f templates/webapp-template.yaml -p APP_NAME=web', 500);
+  await advanceGame(3);
+  await refreshCard();
+  const newAppStates = await objectiveStates();
+  assert(
+    !newApp.error && newAppStates[0].done && newAppStates[1].done,
+    'guidance: `oc new-app -f templates/webapp-template.yaml -p APP_NAME=web` counts as processing and applying the template',
+    JSON.stringify({ message: newApp.message.slice(0, 200), states: newAppStates })
+  );
+
+  // L7: a sensitive key in a ConfigMap is named, and the note clears when it is fixed.
+  assert(await freshLevel(7), 'guidance: campaign level 7 restarts');
+  await command('oc project config-lab', 200);
+  await command(
+    'oc create configmap app-config --from-literal=APP_MODE=production --from-literal=API_KEY=abc',
+    300
+  );
+  await advanceGame(2);
+  await refreshCard();
+  const leaking = await objectiveStates();
+  assert(
+    !leaking[4].done &&
+      noteOf(leaking, 4)?.code === 'sensitive-configmap-key' &&
+      /ConfigMap "app-config" has the key "API_KEY"/.test(noteOf(leaking, 4)?.text || ''),
+    'guidance: a sensitive ConfigMap key is named in the rule objective note',
+    JSON.stringify(noteOf(leaking, 4))
+  );
+  await command('oc delete configmap app-config', 200);
+  await command('oc create configmap app-config --from-literal=APP_MODE=production', 200);
+  await advanceGame(2);
+  await refreshCard();
+  assert(
+    (await objectiveStates())[4].done && (await objectiveStates())[4].note === null,
+    'guidance: removing the sensitive key clears the note and the rule is satisfied again'
+  );
+  // ConfigMap/Secret created in `default` no longer tick the lab-project objectives.
+  assert(await freshLevel(7), 'guidance: campaign level 7 restarts (wrong project)');
+  await command('oc create configmap app-config --from-literal=APP_MODE=production', 200);
+  await command('oc create secret generic db-secret --from-literal=password=s3cret', 200);
+  await advanceGame(2);
+  await refreshCard();
+  const l7Default = await objectiveStates();
+  assert(
+    !l7Default[0].done &&
+      !l7Default[1].done &&
+      noteOf(l7Default, 0)?.code === 'wrong-project' &&
+      noteOf(l7Default, 1)?.code === 'wrong-project',
+    'guidance: L7 ConfigMap/Secret created in `default` do not tick, and say which project the level checks',
+    JSON.stringify(l7Default.slice(0, 2))
+  );
+
+  // ── Files panel: a Template/Helm file says what Apply -f will NOT do ───────
+  assert(await freshLevel(8), 'guidance: campaign level 8 restarts (Files panel)');
+  assert(await openFilesPanel(), 'guidance: the Files panel opens on level 8');
+  const panelTip = () =>
+    evaluate(() => {
+      const tip = document.querySelector('[data-testid="manifest-tip"]');
+      return {
+        visible: Boolean(tip) && !tip.hidden && getComputedStyle(tip).display !== 'none',
+        text: (tip?.textContent || '').replace(/\s+/g, ' ').trim(),
+        path: window.game.manifestPanel.currentPath,
+      };
+    });
+  const templateTip = await panelTip();
+  assert(
+    templateTip.path === 'templates/webapp-template.yaml' &&
+      templateTip.visible &&
+      /This file is a Template/.test(templateTip.text) &&
+      /oc process -f templates\/webapp-template\.yaml -p KEY=value \| oc apply -f -/.test(
+        templateTip.text
+      ),
+    'guidance: the Template file explains that Apply -f only stores it and shows the oc process pipeline',
+    JSON.stringify(templateTip)
+  );
+  await evaluate(() => window.game.manifestPanel._selectFile('helm/webapp/values.yaml'));
+  const helmTip = await panelTip();
+  assert(
+    helmTip.visible &&
+      /Helm chart files are not applied one by one/.test(helmTip.text) &&
+      /helm install <release-name> helm\/webapp/.test(helmTip.text),
+    'guidance: a Helm chart file says to install the whole chart with helm install',
+    JSON.stringify(helmTip)
+  );
+  await evaluate(() => window.game.manifestPanel._selectFile('kustomize/base/deployment.yaml'));
+  assert(!(await panelTip()).visible, 'guidance: ordinary manifests get no tip');
+  await closeOverlays();
+
+  // ── Terminal: prefill() puts a command on the prompt without running it ────
+  await bootMenu();
+  assert(await launch('campaign', 1), 'guidance: campaign level 1 starts for the terminal checks');
+  await closeOverlays();
+  const prefilled = await evaluate(() => {
+    const bar = window.game.app.commandBar;
+    bar.hide();
+    const ok = bar.prefill('oc get pods');
+    return {
+      ok,
+      open: bar.visible === true,
+      value: document.getElementById('cmd-input').value,
+      history: bar.history.length,
+    };
+  });
+  assert(
+    prefilled.ok === true && prefilled.open && prefilled.value === 'oc get pods',
+    'guidance: commandBar.prefill() opens the terminal and fills the prompt without executing',
+    JSON.stringify(prefilled)
+  );
+  const duringLogin = await evaluate(() => {
+    const bar = window.game.app.commandBar;
+    bar.executeCommand('oc login -u kubeadmin');
+    const pending = Boolean(bar._pendingLogin);
+    const ok = bar.prefill('oc get nodes');
+    const value = document.getElementById('cmd-input').value;
+    bar.executeCommand('\u0003');
+    return { pending, ok, value };
+  });
+  assert(
+    duringLogin.pending && duringLogin.ok === false && duringLogin.value !== 'oc get nodes',
+    'guidance: prefill() never overwrites a pending `oc login` password prompt',
+    JSON.stringify(duringLogin)
+  );
+
+  // ── A scheduled incident never hijacks the fix the learner made first ─────
+  // L19 seeds a Job with a too-short deadline and fires JobDeadlineExceeded at t=15s. A
+  // learner (or a one-click "Put in terminal") who recreates the Job before onset used
+  // to get the NEW Job flipped to Failed and the incident stuck Active.
+  assert(await freshLevel(19), 'guidance: campaign level 19 starts');
+  await command('oc project batch-lab', 200);
+  await command('oc delete job report-batch', 200);
+  await command(
+    'oc create job report-batch --image=perl --active-deadline-seconds=600 -- perl -e "print 42"',
+    300
+  );
+  await advanceGame(3);
+  await advanceGame(25);
+  await refreshCard();
+  const earlyFix = await evaluate(() => ({
+    phase:
+      (window.game.cluster.getByKindAndNamespace('Job', 'batch-lab') || []).find(
+        (job) => job.metadata.name === 'report-batch'
+      )?.status?.phase || null,
+    active: [...(window.game.incidentEngine.activeIncidents?.values?.() || [])].map(
+      (incident) => incident.name
+    ),
+  }));
+  assert(
+    earlyFix.phase === 'Complete' && !earlyFix.active.includes('JobDeadlineExceeded'),
+    'guidance: a Job recreated before the scheduled JobDeadlineExceeded fires stays Complete and the incident does not stick',
+    JSON.stringify(earlyFix)
+  );
+  assert(
+    (await objectiveStates())[2].done,
+    'guidance: the "Resolve the JobDeadlineExceeded incident" objective ticks for the early fix',
+    JSON.stringify(await objectiveStates())
+  );
+
+  // ── The `oc ` prefix is optional in the terminal; objectives must not care ────
+  // The prompt says "the 'oc ' prefix is optional" and `apply -k …` runs exactly like
+  // `oc apply -k …`, but `command` objectives match `oc …` against the recorded text.
+  assert(await freshLevel(5), 'guidance: campaign level 5 starts (prefix-less commands)');
+  await command('project kustomize-lab', 200);
+  await command('apply -k kustomize/base', 400);
+  await advanceGame(3);
+  await refreshCard();
+  const bare = await objectiveStates();
+  assert(
+    bare.every((objective) => objective.done),
+    'guidance: `apply -k kustomize/base` typed WITHOUT `oc` ticks the "Use oc apply -k" command objective too',
+    JSON.stringify(bare.map((objective) => [objective.label, objective.done]))
+  );
+  await command('echo hello', 100);
+  await command('oc get pods', 100);
+  const recorded = await evaluate(() =>
+    window.game.gameEngine.getCommandHistory().map((entry) => entry.raw)
+  );
+  assert(
+    recorded.includes('oc apply -k kustomize/base') &&
+      recorded.includes('oc project kustomize-lab') &&
+      recorded.includes('echo hello') &&
+      recorded.includes('oc get pods') &&
+      !recorded.some((line) => /^oc (echo|oc) /.test(line)),
+    'guidance: unprefixed oc subcommands are recorded as `oc …`; shell commands and prefixed lines stay as typed',
+    JSON.stringify(recorded)
+  );
+
+  // ── Terminal history: ArrowUp recalls the previous command (it used to do nothing) ──
+  await evaluate(() => {
+    const bar = window.game.app.commandBar;
+    bar.show();
+    bar.input.value = '';
+    bar.input.focus();
+  });
+  await page.type('#cmd-input', 'oc get pods');
+  await page.keyboard.press('Enter');
+  await sleep(250);
+  await page.type('#cmd-input', 'oc get nodes');
+  await page.keyboard.press('Enter');
+  await sleep(250);
+  const recalled = [];
+  for (const key of ['ArrowUp', 'ArrowUp', 'ArrowDown', 'ArrowDown']) {
+    await page.keyboard.press(key);
+    recalled.push(await evaluate(() => document.getElementById('cmd-input').value));
+  }
+  assert(
+    JSON.stringify(recalled) ===
+      JSON.stringify(['oc get nodes', 'oc get pods', 'oc get nodes', '']),
+    'guidance: ArrowUp recalls the previous commands (newest first) and ArrowDown walks back to an empty prompt',
+    JSON.stringify(recalled)
+  );
+
+  // ── Incidents panel: suggested commands name the damaged ServiceAccount ─────
+  // The L17 panel used to suggest `-z privileged-app` (the Deployment) although the
+  // ServiceAccount that needs the SCC is `priv-sa`; the suggested grant ticked nothing.
+  assert(await freshLevel(17), 'guidance: campaign level 17 starts');
+  await advanceGame(22);
+  // The engine announces a Pod-kind incident after a short real-time poll for its Pod
+  // (SCCForbidden has none: the Pod is never admitted), so wait for the panel card.
+  await waitFor(
+    () => evaluate(() => (window.game.app.incidentPanel?.incidents?.length || 0) > 0),
+    8000
+  );
+  const panelCommands = await evaluate(() => {
+    const panel = window.game.app.incidentPanel;
+    const incident = panel?.incidents?.[0];
+    return (incident?.ocCommands || []).map((command) =>
+      panel._formatStepCommand(command, incident)
+    );
+  });
+  assert(
+    panelCommands.includes(
+      'oc adm policy add-scc-to-user privileged -z priv-sa -n privileged-lab'
+    ) &&
+      panelCommands.some((command) =>
+        command.endsWith('--as=system:serviceaccount:privileged-lab:priv-sa')
+      ) &&
+      !panelCommands.some((command) => /privileged-app:|-z privileged-app/.test(command)),
+    'guidance: the SCCForbidden incident panel suggests the grant for priv-sa, not for the Deployment name',
+    JSON.stringify(panelCommands)
+  );
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// QA ROUND — authored guidance is executable: replay every `objective.how.run`
+// ═══════════════════════════════════════════════════════════════════════════
+await runSection('qa-guidance-replay', async () => {
+  // The per-objective "Show me how" commands are authored data. This section is the
+  // guard that keeps them true: for every campaign level that carries guidance it starts
+  // the level, switches to the lab project the mission card names, runs each objective's
+  // `how.run` and `how.check` through the real command bar in objective order (letting
+  // the simulation and the incident clock run, like a player would) and requires the level
+  // to finish. A command that errors, or a level that does not complete, fails the build.
+  const advanceGame = async (seconds) =>
+    evaluate((secs) => {
+      const sim = window.game?.gameEngine?.simulation;
+      const engine = window.game?.incidentEngine;
+      if (!sim || typeof sim.tick !== 'function') return false;
+      const steps = Math.ceil(secs / 0.05);
+      for (let index = 0; index < steps; index += 1) {
+        sim.tick(0.05);
+        if (engine && typeof engine.tick === 'function') engine.tick(0.05);
+      }
+      window.game?.app?.modeInstance?.update?.();
+      return true;
+    }, seconds);
+  const incidentActive = (name) =>
+    evaluate(
+      (incidentName) =>
+        [...(window.game?.incidentEngine?.activeIncidents?.values?.() || [])].some(
+          (incident) => incident.name === incidentName
+        ),
+      name
+    );
+  /** Simulated seconds to let pass after a command (default) or after commands that need
+   *  OLM installs, builds, rollouts or an operator rollout to settle. */
+  const SETTLE_DEFAULT = 5;
+  const SETTLE_BY_LEVEL = {
+    13: [[/oc (patch|set data|apply)/, 12]],
+    18: [
+      [/oc (apply|create) -f|\| oc apply -f -/, 24],
+      [/oc patch installplan/, 24],
+      [/oc delete (subscription|sub|csv)/, 6],
+    ],
+    20: [
+      [/oc start-build/, 14],
+      [/oc (apply|create) -f/, 8],
+      [/oc new-project/, 3],
+    ],
+  };
+  const settleFor = (level, text) => {
+    for (const [pattern, seconds] of SETTLE_BY_LEVEL[level] || []) {
+      if (pattern.test(text)) return seconds;
+    }
+    return SETTLE_DEFAULT;
+  };
+
+  const plans = await evaluate(async () => {
+    const { CAMPAIGN_LEVELS } = await import('/js/data/CampaignLevels.js');
+    return CAMPAIGN_LEVELS.filter((level) =>
+      level.objectives.some((objective) => objective.how)
+    ).map((level) => {
+      const seeded = (level.startingResources || []).filter(
+        (resource) => resource.kind === 'Project'
+      );
+      const derived = seeded.length === 1 ? seeded[0].name : null;
+      return {
+        id: level.id,
+        title: level.title,
+        workProject: Object.prototype.hasOwnProperty.call(level, 'workProject')
+          ? level.workProject
+          : derived,
+        objectives: level.objectives.map((objective) => ({
+          type: objective.type,
+          incidentType: objective.incidentType || null,
+          label: objective.label,
+          run: objective.how?.run || [],
+          check: objective.how?.check || '',
+          hasHow: Boolean(objective.how),
+        })),
+      };
+    });
+  });
+  assert(
+    plans.length === 20,
+    'guidance replay: every one of the 20 campaign levels carries authored guidance',
+    JSON.stringify(plans.map((plan) => plan.id))
+  );
+  assert(
+    plans.every((plan) => plan.objectives.every((objective) => objective.hasHow)),
+    'guidance replay: every objective of every level has a how-to (explain, and run/check where it can be typed)',
+    JSON.stringify(
+      plans.flatMap((plan) =>
+        plan.objectives
+          .map((objective, index) => (objective.hasHow ? null : `${plan.id}.${index + 1}`))
+          .filter(Boolean)
+      )
+    )
+  );
+
+  for (const plan of plans) {
+    const failures = [];
+    const started = await (async () => {
+      await bootMenu();
+      const ok = await launch('campaign', plan.id);
+      await closeOverlays();
+      return ok;
+    })();
+    if (!started) {
+      assert(false, `guidance replay: L${plan.id} starts`);
+      continue;
+    }
+    if (plan.workProject) await runCmd(`oc project ${plan.workProject}`, 150);
+    for (const objective of plan.objectives) {
+      if (objective.type === 'resolve' && objective.incidentType) {
+        // A fix made before a scheduled incident fires is a different story: let the incident
+        // appear first, exactly like the how-to tells the player.
+        for (let waited = 0; waited < 150 && !(await incidentActive(objective.incidentType));) {
+          await advanceGame(2);
+          waited += 2;
+        }
+      }
+      for (const text of [...objective.run, ...(objective.check ? [objective.check] : [])]) {
+        const result = await runCmd(text, 90);
+        if (result.error) failures.push(`${text.slice(0, 80)} → ${result.message.slice(0, 120)}`);
+        await advanceGame(settleFor(plan.id, text));
+      }
+    }
+    // Scheduled incidents / timers may still be running: keep the clock going until the level ends.
+    let state = await evaluate(() => window.game.app.modeInstance.state);
+    for (let waited = 0; state !== 'completed' && waited < 140; waited += 2) {
+      await advanceGame(2);
+      state = await evaluate(() => window.game.app.modeInstance.state);
+    }
+    const ticks = await evaluate(() =>
+      window.game.app.modeInstance.getStatus().objectives.map((objective) => !!objective.completed)
+    );
+    assert(
+      failures.length === 0 && state === 'completed',
+      `guidance replay: L${plan.id} "${plan.title}" — the authored how-to commands complete the level`,
+      JSON.stringify({ state, failures, ticks: ticks.map((done) => (done ? 1 : 0)).join('') })
+    );
   }
 });
 
