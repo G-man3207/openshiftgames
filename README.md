@@ -280,6 +280,18 @@ Privileged containers are not allowed, …`).
   fix it), L3 crashes from the first start, L14's denial shows in `oc logs deploy/web` (no invented
   events), L16 proves in-cluster API access with a PodList/403, and L7/L11 objectives start
   unticked.
+- **Guided missions** — every campaign level says where to work and how to do each step. The
+  mission card's **project row** shows the lab project the level is graded in and, when you are
+  somewhere else (every level starts in `default`), the one command that fixes it; **Next step** has
+  an opt-in **Show me how** with the exact commands (plus what they do and a check command), each
+  with **Copy** and **Put in terminal**; revealed hints render commands as clickable chips in one
+  scrolling card (never a cramped nested scroller); and an unticked objective **explains itself**
+  — the right object in the wrong project, a Template that was only applied (not processed) or only
+  rendered, a password key in a ConfigMap. **Help (`H`)** mid-level is a "where am I" view (done
+  objectives, the current step, its how-to), and the Files panel says what **Apply -f** will not do
+  for a Template or a Helm chart. All of it is authored data (`objective.how`, `workProject`) that
+  the browser suite **replays** (`qa-guidance-replay`: every how-to command runs in a real browser
+  and the level must complete), so the guidance cannot silently rot.
 - **13 timed EX280 labs** — speed drills: three-tier app, CrashLoopBackOff, edge TLS Routes,
   Kustomize prod overlay, source-to-image, quota guardrail, RBAC onboarding, SCC, network isolation,
   operator install, HTPasswd onboarding, production network policies and an EX280 speed run. Labs
@@ -317,6 +329,9 @@ Privileged containers are not allowed, …`).
    match the objective name (e.g. `frontend`).
 3. Click a resource to inspect it (Overview / YAML / Describe / Events); right-click for actions.
 4. Press `/` to open the `oc` terminal, `F` for the Files panel, `?` for EX280 Prep, `H` for help.
+   In the campaign, read the mission card: its project row says where to work, **Next step** shows
+   what is next, and **Show me how** gives the exact commands (click one to put it in the terminal,
+   then press Enter).
 5. Handle incidents as they appear — diagnose with `oc describe`, `oc logs`, `oc get events` — and
    resolve them by fixing the resource state.
 

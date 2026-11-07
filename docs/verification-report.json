@@ -1,25 +1,25 @@
 {
-  "timestamp": "2026-11-06T01:20:22.315Z",
+  "timestamp": "2026-11-07T02:16:08.294Z",
   "environment": {
     "node": "v26.10.0",
     "chrome": "Chrome/156.0.8078.79",
-    "baseUrl": "http://127.0.0.1:39205",
+    "baseUrl": "http://127.0.0.1:46573",
     "viewport": {
       "width": 1600,
       "height": 900
     },
     "puppeteerCore": "/tmp/verify-tools",
-    "startedAt": "2026-11-06T00:54:28.291Z",
-    "durationSeconds": 1554
+    "startedAt": "2026-11-07T01:36:58.309Z",
+    "durationSeconds": 2350
   },
   "summary": {
-    "passes": 2219,
-    "failures": 0,
+    "passes": 2273,
+    "failures": 5,
     "warnings": 0,
-    "consoleErrors": 0,
+    "consoleErrors": 1,
     "pageErrors": 0
   },
-  "goNoGo": "GO",
+  "goNoGo": "NO-GO",
   "sections": {
     "menu": {
       "passes": 22,
@@ -142,8 +142,8 @@
       "warnings": 0
     },
     "qa-coverage": {
-      "passes": 92,
-      "failures": 0,
+      "passes": 91,
+      "failures": 1,
       "warnings": 0
     },
     "qa-issue37": {
@@ -182,8 +182,8 @@
       "warnings": 0
     },
     "qa-issue50-54": {
-      "passes": 151,
-      "failures": 0,
+      "passes": 149,
+      "failures": 2,
       "warnings": 0
     },
     "qa-issue55-56": {
@@ -232,8 +232,8 @@
       "warnings": 0
     },
     "qa-issue68": {
-      "passes": 26,
-      "failures": 0,
+      "passes": 6,
+      "failures": 1,
       "warnings": 0
     },
     "qa-issue69": {
@@ -246,94 +246,135 @@
       "failures": 0,
       "warnings": 0
     },
+    "qa-guidance": {
+      "passes": 56,
+      "failures": 0,
+      "warnings": 0
+    },
+    "qa-guidance-replay": {
+      "passes": 22,
+      "failures": 0,
+      "warnings": 0
+    },
     "draw": {
       "passes": 10,
       "failures": 0,
       "warnings": 0
     },
     "shots": {
-      "passes": 10,
-      "failures": 0,
+      "passes": 9,
+      "failures": 1,
       "warnings": 0
     }
   },
-  "failures": [],
+  "failures": [
+    {
+      "section": "qa-coverage",
+      "name": "coverage: Alertmanager surfaces an alert for the real broken workload",
+      "detail": "  Firing Alerts: |     Watchdog  (severity: none, state: firing) |   Normal   Watchdog   8s     Alertmanager   Watchdog alert is firing (dead man's switch) — the alerting pipeline is healthy"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#51: only the new-revision pods crash",
+      "detail": "[{\"name\":\"webapp-44cccb4465-gjbp4\",\"hash\":\"44cccb4465\",\"phase\":\"Pending\",\"ready\":false,\"env\":[\"APP_MODE=debug-invalid\"],\"waiting\":[]}]"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#51 --to-revision=1: only the new-revision pods crash",
+      "detail": "[{\"name\":\"webapp-44cccb4465-hzbmr\",\"hash\":\"44cccb4465\",\"phase\":\"Pending\",\"ready\":false,\"env\":[\"APP_MODE=debug-invalid\"],\"waiting\":[]}]"
+    },
+    {
+      "section": "qa-issue68",
+      "name": "qa-issue68: harness exception",
+      "detail": "TimeoutError: Navigation timeout of 60000 ms exceeded\n    at new Deferred (/tmp/verify-tools/node_modules/puppeteer-core/lib/cjs/puppeteer/util/Deferred.js:60:34)\n    at Deferred.create (/tmp/verify-tools/node_modules/puppeteer-core/lib/cjs/puppeteer/util/Deferred.js:21:16)\n    at new LifecycleWatcher (/tmp/verify-tools/node_modules/puppeteer-core/lib/cjs/puppeteer/cdp/LifecycleWatcher.js:69:60)\n    at CdpFrame.goto (/tmp/verify-tools/node_modules/puppeteer-core/lib/cjs/puppeteer/cdp/Frame.js:149:29)\n    at CdpFrame.<anonymous> (/tmp/verify-tools/node_modules/puppeteer-core/lib/cjs/puppeteer/util/decorators.js:109:27)"
+    },
+    {
+      "section": "shots",
+      "name": "console: unexpected console errors",
+      "detail": "[qa-issue70-76] Access to fetch at 'https://api.github.com/repos/G-man3207/openshiftgames' from origin 'http://127.0.0.1:46573' has been blocked by CORS policy: No 'Access-Control-Allow-Origin' header is present on the requested resource."
+    }
+  ],
   "warnings": [],
-  "consoleErrors": [],
+  "consoleErrors": [
+    {
+      "section": "qa-issue70-76",
+      "text": "Access to fetch at 'https://api.github.com/repos/G-man3207/openshiftgames' from origin 'http://127.0.0.1:46573' has been blocked by CORS policy: No 'Access-Control-Allow-Origin' header is present on the requested resource."
+    }
+  ],
   "pageErrors": [],
   "artifacts": {
     "screenshot": {
       "path": "screenshot.png",
       "width": 1600,
       "height": 900,
-      "bytes": 982721
+      "bytes": 983506
     },
     "ogImage": {
       "path": "og-image.png",
       "width": 1200,
       "height": 630,
-      "bytes": 205560
+      "bytes": 205850
     },
     "screenshots": [
       {
         "path": "docs/screenshots/menu.png",
         "width": 1600,
         "height": 900,
-        "bytes": 331934
+        "bytes": 331462
       },
       {
         "path": "docs/screenshots/exam-prep.png",
         "width": 1600,
         "height": 900,
-        "bytes": 211018
+        "bytes": 214021
       },
       {
         "path": "docs/screenshots/sandbox.png",
         "width": 1600,
         "height": 900,
-        "bytes": 981788
+        "bytes": 983186
       },
       {
         "path": "screenshot.png",
         "width": 1600,
         "height": 900,
-        "bytes": 982721
+        "bytes": 983506
       },
       {
         "path": "docs/screenshots/files-panel.png",
         "width": 1600,
         "height": 900,
-        "bytes": 244113
+        "bytes": 244141
       },
       {
         "path": "docs/screenshots/campaign-level-1.png",
         "width": 1600,
         "height": 900,
-        "bytes": 478701
+        "bytes": 477692
       },
       {
         "path": "docs/screenshots/regressions-minimap-collapsed.png",
         "width": 1600,
         "height": 900,
-        "bytes": 961354
+        "bytes": 963211
       },
       {
         "path": "docs/screenshots/regressions-campaign-restart.png",
         "width": 1600,
         "height": 900,
-        "bytes": 488411
+        "bytes": 487291
       },
       {
         "path": "docs/screenshots/draw.png",
         "width": 1600,
         "height": 900,
-        "bytes": 487944
+        "bytes": 488735
       },
       {
         "path": "og-image.png",
         "width": 1200,
         "height": 630,
-        "bytes": 205560
+        "bytes": 205850
       }
     ]
   },
@@ -4924,10 +4965,6 @@
     },
     {
       "section": "qa-coverage",
-      "name": "coverage: Alertmanager surfaces an alert for the real broken workload"
-    },
-    {
-      "section": "qa-coverage",
       "name": "coverage: Files/ManifestEngine ready for the kustomize drill"
     },
     {
@@ -6748,10 +6785,6 @@
     },
     {
       "section": "qa-issue50-54",
-      "name": "#51: only the new-revision pods crash"
-    },
-    {
-      "section": "qa-issue50-54",
       "name": "#51: the Service keeps serving the old pods while the rollout is broken"
     },
     {
@@ -6833,10 +6866,6 @@
     {
       "section": "qa-issue50-54",
       "name": "#51 --to-revision=1: old-revision pods keep Running/Ready and never crash (their template has no APP_MODE)"
-    },
-    {
-      "section": "qa-issue50-54",
-      "name": "#51 --to-revision=1: only the new-revision pods crash"
     },
     {
       "section": "qa-issue50-54",
@@ -8352,7 +8381,7 @@
     },
     {
       "section": "qa-issue68",
-      "name": "#68: GET /v/1.14.0/js/engine/GameEngine.js returns 200 with the exact file body and `Cache-Control: public, max-age=31536000, immutable`"
+      "name": "#68: GET /v/1.15.0/js/engine/GameEngine.js returns 200 with the exact file body and `Cache-Control: public, max-age=31536000, immutable`"
     },
     {
       "section": "qa-issue68",
@@ -8368,91 +8397,11 @@
     },
     {
       "section": "qa-issue68",
-      "name": "#68: the served index.html import map maps \"./js/\" to \"./v/1.14.0/js/\""
+      "name": "#68: the served index.html import map maps \"./js/\" to \"./v/1.15.0/js/\""
     },
     {
       "section": "qa-issue68",
-      "name": "#68: the served OpenShift Draw page maps \"./js/\" to the same \"./v/1.14.0/js/\" prefix"
-    },
-    {
-      "section": "qa-issue68",
-      "name": "#68: a fresh browser context boots the menu with the versioned import map"
-    },
-    {
-      "section": "qa-issue68",
-      "name": "#68: the / never sends fewer than 40 module requests through /v/<version>/js/"
-    },
-    {
-      "section": "qa-issue68",
-      "name": "#68: a fresh / visit makes ZERO unversioned /js/ module requests (no stale-code path)"
-    },
-    {
-      "section": "qa-issue68",
-      "name": "#68: the versioned / load produces no console/page errors"
-    },
-    {
-      "section": "qa-issue68",
-      "name": "#68: OpenShift Draw boots from the served /draw entry document"
-    },
-    {
-      "section": "qa-issue68",
-      "name": "#68: the Draw page loads its modules from /v/<version>/js/"
-    },
-    {
-      "section": "qa-issue68",
-      "name": "#68: the Draw page makes ZERO unversioned /js/ module requests"
-    },
-    {
-      "section": "qa-issue68",
-      "name": "#68: the versioned /draw load produces no console/page errors"
-    },
-    {
-      "section": "qa-issue68",
-      "name": "#68: the returning-visitor scenario first caches the shipped release"
-    },
-    {
-      "section": "qa-issue68",
-      "name": "#68: after a release the returning visitor reloads and boots the new release"
-    },
-    {
-      "section": "qa-issue68",
-      "name": "#68: after a release the returning visitor EXECUTES the new module (the old immutable URL was not reused)"
-    },
-    {
-      "section": "qa-issue68",
-      "name": "#68: the reload requested the new release module through /v/1.14.0-qa68/js/engine/GameEngine.js"
-    },
-    {
-      "section": "qa-issue68",
-      "name": "#68: the negative control first caches the shipped release"
-    },
-    {
-      "section": "qa-issue68",
-      "name": "#68: the negative control still boots on the old versioned module URLs"
-    },
-    {
-      "section": "qa-issue68",
-      "name": "#68: negative control — WITHOUT a version bump the changed module is NOT executed (immutable cache wins)"
-    },
-    {
-      "section": "qa-issue68",
-      "name": "#68: negative control — the old versioned module was answered from the HTTP cache (zero server hits)"
-    },
-    {
-      "section": "qa-issue68",
-      "name": "#68: negative control — response.fromCache() confirms the reload was served from the immutable HTTP cache"
-    },
-    {
-      "section": "qa-issue68",
-      "name": "#68: the lazily-required Files/Manifests panel still loads after the import-map change"
-    },
-    {
-      "section": "qa-issue68",
-      "name": "#68: _moduleExists() HEAD-probes the versioned URL /v/1.14.0/js/ui/ManifestPanel.js"
-    },
-    {
-      "section": "qa-issue68",
-      "name": "#68: _moduleExists() never probes the unversioned /js/ui/ManifestPanel.js path"
+      "name": "#68: the served OpenShift Draw page maps \"./js/\" to the same \"./v/1.15.0/js/\" prefix"
     },
     {
       "section": "qa-issue69",
@@ -8984,7 +8933,7 @@
     },
     {
       "section": "qa-issue70-76",
-      "name": "#75: L7 objectives start false — \"Mount a ConfigMap into a workload volume\" is not pre-ticked"
+      "name": "#75: L7 objectives start false — the ConfigMap volume-mount objective is not pre-ticked"
     },
     {
       "section": "qa-issue70-76",
@@ -9135,6 +9084,318 @@
       "name": "#76: after the rollout completes the next `oc new-project` applies the configured template"
     },
     {
+      "section": "qa-guidance",
+      "name": "guidance: campaign level 7 starts"
+    },
+    {
+      "section": "qa-guidance",
+      "name": "guidance: the level intro renders `code` in the description (no raw backticks)"
+    },
+    {
+      "section": "qa-guidance",
+      "name": "guidance: L7 \"First moves\" are orientation steps (project, terminal, Show me how), not the first three hints"
+    },
+    {
+      "section": "qa-guidance",
+      "name": "guidance: the launch intro lists all objectives and offers \"Start level\""
+    },
+    {
+      "section": "qa-guidance",
+      "name": "guidance: starting in `default`, the mission card says the level is graded in config-lab and offers `oc project config-lab`"
+    },
+    {
+      "section": "qa-guidance",
+      "name": "guidance: \"Show me how\" is offered under Next step but the commands stay hidden until asked"
+    },
+    {
+      "section": "qa-guidance",
+      "name": "guidance: nothing counts as a hint before the player asks for help"
+    },
+    {
+      "section": "qa-guidance",
+      "name": "guidance: with hints turned off \"Show me how\" is not offered (card, intro and help) but the project row stays; turning hints on restores it"
+    },
+    {
+      "section": "qa-guidance",
+      "name": "guidance: clicking the project command opens the terminal, fills the input and focuses it without running it"
+    },
+    {
+      "section": "qa-guidance",
+      "name": "guidance: once the player is in config-lab the project row turns into a quiet \"Working in project\" line"
+    },
+    {
+      "section": "qa-guidance",
+      "name": "guidance: \"Show me how\" reveals the exact command and a check command for the current objective"
+    },
+    {
+      "section": "qa-guidance",
+      "name": "guidance: revealing the how-to counts as using a hint (it never fails the level)"
+    },
+    {
+      "section": "qa-guidance",
+      "name": "guidance: \"Put in terminal\" fills the terminal input with the full command"
+    },
+    {
+      "section": "qa-guidance",
+      "name": "guidance: after the objective ticks, Next step moves on and the how-to is closed again for the next one"
+    },
+    {
+      "section": "qa-guidance",
+      "name": "guidance: revealed hints show commands as code chips (no raw backticks) inside the card body, not a cramped nested scroller"
+    },
+    {
+      "section": "qa-guidance",
+      "name": "guidance: the empty hint footer disappears once every hint is revealed"
+    },
+    {
+      "section": "qa-guidance",
+      "name": "guidance: Help (H) mid-level shows the current step, the done objectives and a \"Show me how\" instead of the static intro"
+    },
+    {
+      "section": "qa-guidance",
+      "name": "guidance: Help → Show me how reveals the exact `oc set volume` command for the mount objective"
+    },
+    {
+      "section": "qa-guidance",
+      "name": "guidance: \"Put in terminal\" from the help modal closes it and fills the terminal"
+    },
+    {
+      "section": "qa-guidance",
+      "name": "guidance: the level-7 guidance path completes all five objectives"
+    },
+    {
+      "section": "qa-guidance",
+      "name": "guidance: campaign level 8 starts"
+    },
+    {
+      "section": "qa-guidance",
+      "name": "guidance: L8 objectives created in `default` carry a wrong-project note (what exists where, and the fix)"
+    },
+    {
+      "section": "qa-guidance",
+      "name": "guidance: the mission card shows the note under \"Next step\" and under each affected objective"
+    },
+    {
+      "section": "qa-guidance",
+      "name": "guidance: after switching to template-lab and redoing the steps all four objectives tick and no note remains"
+    },
+    {
+      "section": "qa-guidance",
+      "name": "guidance: campaign level 8 restarts"
+    },
+    {
+      "section": "qa-guidance",
+      "name": "guidance: a stored-but-unprocessed Template explains that applying the file only saves it"
+    },
+    {
+      "section": "qa-guidance",
+      "name": "guidance: running the suggested pipeline ticks the template objective and clears the note"
+    },
+    {
+      "section": "qa-guidance",
+      "name": "guidance: campaign level 8 restarts (render only)"
+    },
+    {
+      "section": "qa-guidance",
+      "name": "guidance: `oc process` alone (nothing applied) explains that the output must be piped into oc apply -f -"
+    },
+    {
+      "section": "qa-guidance",
+      "name": "guidance: campaign level 8 restarts (wrong parameter)"
+    },
+    {
+      "section": "qa-guidance",
+      "name": "guidance: a template applied with other parameters names the parameter that is wrong"
+    },
+    {
+      "section": "qa-guidance",
+      "name": "guidance: campaign level 8 restarts (new-app -f)"
+    },
+    {
+      "section": "qa-guidance",
+      "name": "guidance: `oc new-app -f` without the required parameter fails and does not tick the template objective"
+    },
+    {
+      "section": "qa-guidance",
+      "name": "guidance: `oc new-app -f templates/webapp-template.yaml -p APP_NAME=web` counts as processing and applying the template"
+    },
+    {
+      "section": "qa-guidance",
+      "name": "guidance: campaign level 7 restarts"
+    },
+    {
+      "section": "qa-guidance",
+      "name": "guidance: a sensitive ConfigMap key is named in the rule objective note"
+    },
+    {
+      "section": "qa-guidance",
+      "name": "guidance: removing the sensitive key clears the note and the rule is satisfied again"
+    },
+    {
+      "section": "qa-guidance",
+      "name": "guidance: campaign level 7 restarts (wrong project)"
+    },
+    {
+      "section": "qa-guidance",
+      "name": "guidance: L7 ConfigMap/Secret created in `default` do not tick, and say which project the level checks"
+    },
+    {
+      "section": "qa-guidance",
+      "name": "guidance: campaign level 8 restarts (Files panel)"
+    },
+    {
+      "section": "qa-guidance",
+      "name": "guidance: the Files panel opens on level 8"
+    },
+    {
+      "section": "qa-guidance",
+      "name": "guidance: the Template file explains that Apply -f only stores it and shows the oc process pipeline"
+    },
+    {
+      "section": "qa-guidance",
+      "name": "guidance: a Helm chart file says to install the whole chart with helm install"
+    },
+    {
+      "section": "qa-guidance",
+      "name": "guidance: ordinary manifests get no tip"
+    },
+    {
+      "section": "qa-guidance",
+      "name": "guidance: campaign level 1 starts for the terminal checks"
+    },
+    {
+      "section": "qa-guidance",
+      "name": "guidance: commandBar.prefill() opens the terminal and fills the prompt without executing"
+    },
+    {
+      "section": "qa-guidance",
+      "name": "guidance: prefill() never overwrites a pending `oc login` password prompt"
+    },
+    {
+      "section": "qa-guidance",
+      "name": "guidance: campaign level 19 starts"
+    },
+    {
+      "section": "qa-guidance",
+      "name": "guidance: a Job recreated before the scheduled JobDeadlineExceeded fires stays Complete and the incident does not stick"
+    },
+    {
+      "section": "qa-guidance",
+      "name": "guidance: the \"Resolve the JobDeadlineExceeded incident\" objective ticks for the early fix"
+    },
+    {
+      "section": "qa-guidance",
+      "name": "guidance: campaign level 5 starts (prefix-less commands)"
+    },
+    {
+      "section": "qa-guidance",
+      "name": "guidance: `apply -k kustomize/base` typed WITHOUT `oc` ticks the \"Use oc apply -k\" command objective too"
+    },
+    {
+      "section": "qa-guidance",
+      "name": "guidance: unprefixed oc subcommands are recorded as `oc …`; shell commands and prefixed lines stay as typed"
+    },
+    {
+      "section": "qa-guidance",
+      "name": "guidance: ArrowUp recalls the previous commands (newest first) and ArrowDown walks back to an empty prompt"
+    },
+    {
+      "section": "qa-guidance",
+      "name": "guidance: campaign level 17 starts"
+    },
+    {
+      "section": "qa-guidance",
+      "name": "guidance: the SCCForbidden incident panel suggests the grant for priv-sa, not for the Deployment name"
+    },
+    {
+      "section": "qa-guidance-replay",
+      "name": "guidance replay: every one of the 20 campaign levels carries authored guidance"
+    },
+    {
+      "section": "qa-guidance-replay",
+      "name": "guidance replay: every objective of every level has a how-to (explain, and run/check where it can be typed)"
+    },
+    {
+      "section": "qa-guidance-replay",
+      "name": "guidance replay: L1 \"Your First Project\" — the authored how-to commands complete the level"
+    },
+    {
+      "section": "qa-guidance-replay",
+      "name": "guidance replay: L2 \"Query, Format, Filter\" — the authored how-to commands complete the level"
+    },
+    {
+      "section": "qa-guidance-replay",
+      "name": "guidance replay: L3 \"Logs, Events & Health\" — the authored how-to commands complete the level"
+    },
+    {
+      "section": "qa-guidance-replay",
+      "name": "guidance replay: L4 \"Declarative Manifests\" — the authored how-to commands complete the level"
+    },
+    {
+      "section": "qa-guidance-replay",
+      "name": "guidance replay: L5 \"Kustomize Base\" — the authored how-to commands complete the level"
+    },
+    {
+      "section": "qa-guidance-replay",
+      "name": "guidance replay: L6 \"Kustomize Overlays\" — the authored how-to commands complete the level"
+    },
+    {
+      "section": "qa-guidance-replay",
+      "name": "guidance replay: L7 \"Secrets & ConfigMaps\" — the authored how-to commands complete the level"
+    },
+    {
+      "section": "qa-guidance-replay",
+      "name": "guidance replay: L8 \"Templates & Helm\" — the authored how-to commands complete the level"
+    },
+    {
+      "section": "qa-guidance-replay",
+      "name": "guidance replay: L9 \"Images, Builds & Image Streams\" — the authored how-to commands complete the level"
+    },
+    {
+      "section": "qa-guidance-replay",
+      "name": "guidance replay: L10 \"Rolling Updates & Rollbacks\" — the authored how-to commands complete the level"
+    },
+    {
+      "section": "qa-guidance-replay",
+      "name": "guidance replay: L11 \"Services & Routes\" — the authored how-to commands complete the level"
+    },
+    {
+      "section": "qa-guidance-replay",
+      "name": "guidance replay: L12 \"Non-HTTP & Load Balancer\" — the authored how-to commands complete the level"
+    },
+    {
+      "section": "qa-guidance-replay",
+      "name": "guidance replay: L13 \"HTPasswd & Users\" — the authored how-to commands complete the level"
+    },
+    {
+      "section": "qa-guidance-replay",
+      "name": "guidance replay: L14 \"Groups & RBAC\" — the authored how-to commands complete the level"
+    },
+    {
+      "section": "qa-guidance-replay",
+      "name": "guidance replay: L15 \"Quotas, LimitRanges & Templates\" — the authored how-to commands complete the level"
+    },
+    {
+      "section": "qa-guidance-replay",
+      "name": "guidance replay: L16 \"Service Accounts & API Access\" — the authored how-to commands complete the level"
+    },
+    {
+      "section": "qa-guidance-replay",
+      "name": "guidance replay: L17 \"SCC & Privileged Apps\" — the authored how-to commands complete the level"
+    },
+    {
+      "section": "qa-guidance-replay",
+      "name": "guidance replay: L18 \"Operators\" — the authored how-to commands complete the level"
+    },
+    {
+      "section": "qa-guidance-replay",
+      "name": "guidance replay: L19 \"Jobs & CronJobs\" — the authored how-to commands complete the level"
+    },
+    {
+      "section": "qa-guidance-replay",
+      "name": "guidance replay: L20 \"EX280 Final: Production Platform\" — the authored how-to commands complete the level"
+    },
+    {
       "section": "draw",
       "name": "draw: page loads with palette"
     },
@@ -9177,10 +9438,6 @@
     {
       "section": "shots",
       "name": "console: no uncaught page errors"
-    },
-    {
-      "section": "shots",
-      "name": "console: no unexpected console errors"
     },
     {
       "section": "shots",

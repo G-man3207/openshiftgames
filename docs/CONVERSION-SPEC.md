@@ -1212,6 +1212,45 @@ CampaignMode must expose `getStatus()` unchanged in shape and pass `objectivePro
 objectives panel/HUD as today. New objective types must degrade gracefully if referenced resources
 are absent.
 
+### Player guidance — `how`, `workProject` and objective notes (1.15.0)
+
+A live play-test showed players stuck on levels whose commands lived only in sequential `hints[]` that
+did not map to the objectives, and whose lab project was mentioned only in hint #1 (the grader is
+project-scoped and every level starts in `default`). Levels therefore carry optional, additive guidance:
+
+```js
+{
+  workProject: 'config-lab' | null,  // project the mission card tells the player to work in.
+                                     // Default: the single seeded Project; `null` = no project row
+                                     // (the level is not worked in its seeded project).
+  objectives: [{
+    type, label, /* …grading fields… */
+    how: {                           // per objective; opt-in "Show me how" (counts as a hint)
+      explain: 'One or two plain sentences: what the step does and why.',
+      run:   ['exact command', …],   // typeable as-is, concrete names, one line each; no `oc project <lab>`
+      check: 'one read-only command that proves the step worked',
+    },
+  }],
+}
+```
+
+- **Mission card** (`index.html`): project row `#mission-project`, `Next step` with `#mission-next-note`
+  (why the objective is not ticking), `#btn-show-how` → `CampaignMode.revealHow(index)` and the revealed
+  `#mission-how` (commands render with **Copy** / **Put in terminal**, `CommandBar.prefill()`); revealed
+  hints render `` `commands` `` as clickable chips inside `#obj-panel-body`; the help modal (`H`) shows the
+  current step mid-level (`showTutorial(mode, { source: 'help' })`). `CampaignMode.getStatus()` exposes
+  `workProject`.
+- **`explainObjective(objective, ctx)`** (`js/engine/ObjectiveEvaluator.js`) returns `null` or a note
+  `{ code, text, fix?, … }`; `evaluateObjectives()` sets `objective.note` (`null` once ticked). Notes never
+  change what ticks. Codes: `wrong-project` (the resource exists in another project than the one graded),
+  `sensitive-configmap-key`, `template-not-processed`, `template-not-applied`, `template-wrong-parameters`.
+- **Recorded commands:** the `oc ` prefix is optional in the terminal, so an unprefixed oc subcommand is
+  recorded as `oc <line>` (`CommandBar._recordedForm`); `command` objectives match that text.
+- **Locks:** `scripts/verify.mjs` checks the schema (typeable commands, no placeholders, no `kubectl`,
+  `workProject` must be `null` or a seeded Project); the `qa-guidance` browser section covers the UI and the
+  notes; `qa-guidance-replay` runs every authored `how.run` in a real browser and requires each level to
+  complete.
+
 ---
 
 ## 10. Challenges — 13 timed labs (js/modes/ChallengeMode.js, reuse ObjectiveEvaluator)

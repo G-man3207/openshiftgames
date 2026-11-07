@@ -4,6 +4,94 @@ All notable changes to OpenShift Games are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 aims to follow [Semantic Versioning](https://semver.org/).
 
+## [1.15.0] — 2026-11-07
+
+Player-guidance pass after a live play-test: a learner got stuck on campaign level 7 or 8 and found the
+instructions and the help tooltips unclear. Reproduced in a real browser, the causes were structural, not
+specific to two levels. The commands lived in sequential hints that did not match the objectives; 18 of
+20 levels (L2–L19) start the player in `default` while the lab is graded in a seeded project — a precondition only
+hint #1 mentioned, and since the grader is deliberately project-scoped the right commands in the wrong
+project silently refused to tick; the level intro's "First moves" were just the first three hints (L7 told
+players to inject the ConfigMap as environment variables while the objective wanted a volume mount, and never
+showed the volume command); with the terminal open the hint list was a ~120 px scroller of raw backticks;
+the Files panel's primary **Apply -f** on a Template only stores it, with no objective ticking and no
+explanation; and `command` objectives never ticked when the optional `oc ` prefix was left out. 1.15.0 adds
+a guidance system to the mission card, authors a verified how-to for every objective of all 20 levels
+(110 objectives), makes unticked objectives explain themselves, and turns the how-tos into executable test
+data. The game stays no-build and dependency-free. The version is bumped to 1.15.0 (`package.json` and both import maps) because module URLs are
+versioned (`/v/<version>/js/…`, cached as immutable): returning players only receive these changes under
+the new prefix.
+
+### Added
+
+- **Mission card: where to work.** A project row names the lab project the level is graded in and, when
+  the player is somewhere else, shows the one command that fixes it (click it to put it in the terminal).
+  It is derived from the level's single seeded Project (15 levels); `workProject: null` opts a level out
+  (L6, L13 and L18 seed a project that is not where the work happens; L20 seeds none), so the row never
+  points anywhere wrong.
+- **Per-objective how-to ("Show me how").** `objective.how = { explain, run[], check }` on all 110
+  objectives: what the step does in plain language, the exact commands (each with **Copy** and **Put in
+  terminal**) and one read-only check command. It is opt-in under **Next step**, counts as a hint (it
+  never fails a level) and is authored data, not UI copy.
+- **Self-explaining objectives.** `explainObjective()` (`ObjectiveEvaluator.js`) attaches
+  `objective.note` to an unticked objective: `wrong-project` (the resource exists in another project than
+  the one graded, with `oc project <lab>`), `sensitive-configmap-key`, and for templates
+  `template-not-processed` (only stored by Apply -f), `template-not-applied` (only rendered by
+  `oc process`) and `template-wrong-parameters` — each with the pipeline that fixes it. Notes show under
+  Next step and under the objective row and never change what ticks.
+- **Help (`H`) is a "where am I" view mid-level.** For guided levels it shows the done objectives, the
+  current step, why it is not ticking and its how-to; the launch intro shows three orientation steps
+  (work in the project, open the terminal, Show me how) instead of the first three hints.
+- **Command chips.** `` `oc …` `` spans in hints, notes and steps are clickable chips that put the command
+  in the terminal (`CommandBar.prefill(text, { focus })`, which never overwrites a pending `oc login`
+  password prompt); `show({ focus })` can open the terminal without taking focus.
+- **Files panel tips.** A Template file says that **Apply -f** only stores it and shows the
+  `oc process … | oc apply -f -` pipeline; a Helm chart file says to `helm install` the whole chart.
+- **Executable guidance.** `scripts/verify.mjs` locks the schema (typeable single-line commands, no
+  placeholders, no `kubectl`, `workProject` must be `null` or a seeded Project; +319 checks); the new
+  `qa-guidance` browser section covers the UI, the notes and the engine changes below; `qa-guidance-replay`
+  replays every authored `how.run` / `how.check` for all 20 levels in a real browser (switching to the
+  lab project, waiting for scheduled incidents, letting operators/builds settle) and requires each level to
+  complete. `docs/guidance-qa-findings.md` records what the newcomer pass found and what is still open.
+
+### Changed
+
+- **Levels 7 and 8 rewritten first.** Plain-language descriptions, labels that name what and where,
+  hints reduced to genuine tips, and (L7/L8) the Secret/ConfigMap objectives graded in the lab project.
+  L8's Files-panel trap and the missing `--kustomize`/`-n`/`--output` command forms are covered too.
+  Other levels' descriptions, ambiguous labels and wrong hints were corrected where the replay found them
+  (L2–L6 project wording; L9–L12 MetalLB/Route hints; L13–L16 `oc edit` pause, FailedCreate on the
+  ReplicaSet, project-template rollout; L17–L20 SCC/Job/MetalLB hints; see the findings file).
+- **Hints are readable with the terminal open.** They render in the scrolling card body (no 120 px nested
+  scroller), commands as code, with the footer button hiding once all are shown. On short windows
+  (≤ 820 px high) the terminal dock is 256 px and the card hides its title/description while the terminal is
+  open (the top bar shows the title; Help has the full text); on taller screens the description clamps to
+  three lines and expands on click.
+- **Level intro.** Renders `` `code` `` in the description, lists every objective (it cut the list at 6) and
+  its button reads "Back to the level" when reopened mid-level.
+- **Project-scoped grading** for the L7 ConfigMap/Secret and L11 `web-tls` objectives (previously a
+  resource created in `default` ticked them and the next step failed with `not found`).
+- **`oc new-app -f <template-file> -p …`** counts as processing and applying the template (L8), through the
+  same record as `oc process … | oc apply -f -` (`ManifestEngine.markTemplateApplied`).
+- **Recorded commands.** The `oc ` prefix is optional in the terminal; an unprefixed oc subcommand is now
+  recorded as `oc <line>` so `command` objectives (`oc auth can-i`, `oc apply -k`, …) tick either way.
+  Shell commands and lines that already carry `oc`/`kubectl` stay as typed.
+- **Command objectives:** L2 accepts `oc -n <lab> get deployments`, `oc get all` and comma lists; L4 accepts
+  `--output yaml|json`; L5/L6 accept `oc apply --kustomize`.
+
+### Fixed
+
+- **L19 early-fix trap.** Recreating the failed `report-batch` Job before the scheduled
+  JobDeadlineExceeded incident (t=15 s) no longer gets the new Job flipped to Failed with the incident stuck
+  Active: the incident remembers the seeded Job's uid and leaves a replacement alone, then self-heals.
+- **L15 soft-lock.** The scheduled ResourceQuotaExceeded incident bound to `openshift-monitoring` when the
+  quota was created after t=20 s and could not be resolved from the CLI; it is now bound to `quota-lab`.
+- **L17 incidents panel** suggested the grant for the Deployment name (`-z privileged-app`) instead of the
+  damaged ServiceAccount (`priv-sa`); it now uses the incident's damaged subject.
+- **Terminal history:** ArrowUp does nothing and ArrowDown recalled the newest command; Up now walks back
+  and Down forward, like a shell.
+- **Raw backticks** in achievement toasts and the achievements panel.
+
 ## [1.14.0] — 2026-11-05
 
 Sixteenth QA pass on 1.13.0: closes all seven open issues of the 1.13.0 live retest (#70–#76) —
