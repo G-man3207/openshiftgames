@@ -414,7 +414,22 @@ async function closeIsolatedPage(handle) {
  * @param {number} [timeout]
  */
 async function gotoIsolated(handle, path, timeout = 60000) {
-  await handle.tab.goto(`${BASE}${path}`, { waitUntil: 'domcontentloaded', timeout });
+  // 1.16.0: a cold context re-fetches the third-party CDN assets (Tailwind,
+  // Google Fonts, three.js from unpkg) and DOMContentLoaded waits for all of
+  // them; one stalled CDN request made the 2026-11-07 full run fail qa-issue68
+  // with "Navigation timeout of 60000 ms exceeded" although the app itself was
+  // fine. Retry such a stall once (recorded as a warning); a second timeout
+  // still fails the section.
+  try {
+    await handle.tab.goto(`${BASE}${path}`, { waitUntil: 'domcontentloaded', timeout });
+  } catch (err) {
+    if (!/Navigation timeout/i.test(String(err?.message || err))) throw err;
+    warn(
+      'cold-context navigation stalled (third-party CDN?) — retrying once',
+      `${path}: ${String(err?.message || err).slice(0, 160)}`
+    );
+    await handle.tab.goto(`${BASE}${path}`, { waitUntil: 'domcontentloaded', timeout });
+  }
   await sleep(300);
 }
 /**
@@ -488,14 +503,21 @@ async function bootCampaign(level = 1) {
 }
 async function launch(mode, id) {
   await evaluate(
-    (m, i) => {
+    async (m, i) => {
       const app = window.game.app;
       if (m === 'campaign') {
         const progress = window.game?.scoringEngine?.progress;
         if (progress?.campaignProgress) {
-          for (let n = 1; n < (i || 1); n += 1) {
-            if (!progress.campaignProgress[n]?.completed)
-              progress.campaignProgress[n] = { completed: true, stars: 3 };
+          // 1.16.0: level ids are save keys and campaign ORDER comes from CHAPTERS
+          // (the capstone, id 20, follows ids 21/22; the Linux prelude 101–107 is
+          // its own track). Unlock a level by completing every earlier level of
+          // its own track, exactly like a player would have.
+          const campaign = await import('/js/data/CampaignLevels.js');
+          const track = campaign.isPreludeLevel(i) ? campaign.PRELUDE_ORDER : campaign.EX280_ORDER;
+          const position = track.indexOf(Number(i));
+          for (const earlier of position > 0 ? track.slice(0, position) : []) {
+            if (!progress.campaignProgress[earlier]?.completed)
+              progress.campaignProgress[earlier] = { completed: true, stars: 3 };
           }
         }
       }
@@ -1680,16 +1702,19 @@ await runSection('cli', async () => {
       'apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: fidelity-multi-cm\n  namespace: openshift-operators\n---\napiVersion: v1\nkind: Secret\nmetadata:\n  name: fidelity-multi-secret\n'
     );
   });
-  await expectCmd(
-    'cli: apply multi-doc -f -n overrides manifest namespaces',
+  // 1.16.0: `-n` never moves an object that names its own namespace — kubectl's
+  // resource builder (RequireNamespace) rejects the mismatch before any API
+  // call; the old assertion expected the lenient override.
+  await expectCmdError(
+    'cli: apply multi-doc -f -n rejects a manifest that names another namespace',
     'oc apply -f manifests/fidelity-multi.yaml -n openshift',
-    /created|configured|unchanged/i
+    /error: the namespace from the provided object "openshift-operators" does not match the namespace "openshift"\. You must pass '--namespace=openshift-operators' to perform this operation\./
   );
   const multiCm = await findResource('ConfigMap', 'fidelity-multi-cm', 'openshift');
   const multiSecret = await findResource('Secret', 'fidelity-multi-secret', 'openshift');
   assert(
-    !!multiCm && !!multiSecret,
-    'cli: multi-doc apply -f -n overrides manifest metadata.namespace'
+    !multiCm && !multiSecret,
+    'cli: the rejected multi-doc apply created nothing (not even the namespace-less Secret)'
   );
   await expectCmd(
     'cli: process | apply -f - -n retargets stdin objects',
@@ -2409,7 +2434,9 @@ spec:
     'oc create user bob --full-name="Bob User"',
     /user.*bob.*created/i
   );
-  await expectCmd('cli: oc create group', 'oc create group devs', /group.*created/i);
+  // 1.16.0: real oc has no `oc create group` (kubectl create answers
+  // `Unexpected args: [group devs]`); groups are created with `oc adm groups new`.
+  await expectCmd('cli: oc adm groups new', 'oc adm groups new devs', /group.*created/i);
   await expectCmd('cli: oc adm groups add-users', 'oc adm groups add-users devs bob', /added|bob/i);
   await expectCmd(
     'cli: oc adm policy add-role-to-user',
@@ -5778,12 +5805,15 @@ await runSection('qa-scenarios', async () => {
   );
   const deleteBroken = await command('oc delete job report-batch -n batch-lab');
   assert(!deleteBroken.error, 'scenarios: L19 broken Job can be deleted', deleteBroken.message);
+  // 1.16.0: real `oc create job` has no --active-deadline-seconds flag (only
+  // --image/--from) and everything after `--` is the container command, so the
+  // realistic repair is a plain Job (no deadline) with -n before `--`.
   const recreateBroken = await command(
-    'oc create job report-batch --image=perl --active-deadline-seconds=600 -- perl -e "print 42" -n batch-lab'
+    'oc create job report-batch --image=perl -n batch-lab -- perl -e "print 42"'
   );
   assert(
     !recreateBroken.error,
-    'scenarios: L19 broken Job recreated with a longer deadline',
+    'scenarios: L19 broken Job recreated without the too-short deadline',
     recreateBroken.message
   );
   const l19Healed = await advanceUntil(
@@ -6533,11 +6563,12 @@ await runSection('qa-cli', async () => {
   await runCmd('oc create route passthrough tls-app --service=tls-app');
   out = await runCmd('oc get route tls-app');
   // #76: real oc sets spec.port.targetPort to the Service port NAME when the
-  // port is named (`443-tcp` for --tcp=443:8080), never the Service targetPort
-  // number; the PORT column reflects that value.
+  // port is named, never the Service targetPort number; the PORT column
+  // reflects that value. 1.16.0: kubectl create_service.go names the port after
+  // the `--tcp` pair with ':' → '-' (`443-8080`), not `443-tcp`.
   assert(
-    /\s443-tcp\s+passthrough\s/.test(out.message) && !/\s8080\s+passthrough\s/.test(out.message),
-    'qa-cli #36: passthrough Route PORT is the Service port name (443-tcp)',
+    /\s443-8080\s+passthrough\s/.test(out.message) && !/\s8080\s+passthrough\s/.test(out.message),
+    'qa-cli #36: passthrough Route PORT is the Service port name (443-8080)',
     out.message
   );
   await runCmd(
@@ -7144,8 +7175,11 @@ await runSection('qa-workstation', async () => {
   );
   const curlHttpsPlain = await runCmd(`curl -k https://${appHost}`);
   assert(
-    !curlHttpsPlain.error && /404 Not Found/.test(curlHttpsPlain.message),
-    'qa-workstation: https against a plain HTTP Route is a router 404',
+    // 1.16.0: the OpenShift router has no backend for that scheme/host, so its
+    // default backend answers its own 503 page (openshift/router
+    // error-page-503.http), not a 404.
+    !curlHttpsPlain.error && /<h1>Application is not available<\/h1>/.test(curlHttpsPlain.message),
+    'qa-workstation: https against a plain HTTP Route is the router 503 "Application is not available" page',
     curlHttpsPlain.message.slice(0, 200)
   );
   const curlDns = await runCmd('curl no-such-host.example.com');
@@ -7242,8 +7276,9 @@ await runSection('qa-workstation', async () => {
   );
   const curlPassthroughHttp = await runCmd(`curl http://${ptHost}`);
   assert(
-    /404 Not Found/.test(curlPassthroughHttp.message),
-    'qa-workstation: a passthrough Route does not serve plain HTTP',
+    // 1.16.0: real router — default backend 503 page, not a 404.
+    /<h1>Application is not available<\/h1>/.test(curlPassthroughHttp.message),
+    'qa-workstation: a passthrough Route does not serve plain HTTP (router 503 page)',
     curlPassthroughHttp.message.slice(0, 200)
   );
 
@@ -7378,7 +7413,8 @@ await runSection('qa-workstation', async () => {
   await tick(5);
   const curlDenied = await runCmd(`curl -k http://${appHost}`);
   assert(
-    /503 Service Unavailable/.test(curlDenied.message),
+    // 1.16.0: the router's own 503 page (openshift/router error-page-503.http).
+    /<h1>Application is not available<\/h1>/.test(curlDenied.message),
     'qa-workstation: default-deny makes workstation curl fail with 503',
     curlDenied.message.slice(0, 200)
   );
@@ -7603,7 +7639,8 @@ await runSection('qa-workstation', async () => {
   await advanceSimulation(3);
   const l20Blocked = await runCmd(`curl -k https://${l20Host}`);
   assert(
-    /503 Service Unavailable/.test(l20Blocked.message),
+    // 1.16.0: the router's own 503 page (openshift/router error-page-503.http).
+    /<h1>Application is not available<\/h1>/.test(l20Blocked.message),
     'qa-workstation: L20 capstone default-deny blocks workstation curl (503)',
     l20Blocked.message.slice(0, 200)
   );
@@ -8680,19 +8717,25 @@ await runSection('qa-coverage', async () => {
 
   // Alerts are evaluated from live cluster state: a broken workload must fire
   // the matching rule, not just display static text.
+  // 1.16.0: the image used to be `…/missing-image:latest`, which the simulated
+  // registry happily pulls (only failure words in the TAG, or a `missing-repo`
+  // path segment, are unpullable), so qa-broken ran 1/1 and the check only passed
+  // while an UNRELATED pod (qa-web's nginx under restricted-v2) was caught in
+  // CrashLoopBackOff. Use a tag the registry model rejects and require the alert
+  // to name qa-broken's own Pod.
   await expectCmd(
     'coverage: create a broken workload for live alert evaluation',
-    'oc create deployment qa-broken --image=quay.io/coverage/missing-image:latest -n template-lab',
+    'oc create deployment qa-broken --image=quay.io/coverage/missing-image:does-not-exist -n template-lab',
     /created/i
   );
   await advanceSimulation(30);
   const firedAlerts = await runCmd('oc describe alertmanager main -n openshift-monitoring');
   assert(
-    /KubePod(NotReady|CrashLooping)/.test(firedAlerts.message),
+    /KubePodNotReady[^\n]*\n\s+Target:\s+pod\/qa-broken-/.test(firedAlerts.message),
     'coverage: Alertmanager surfaces an alert for the real broken workload',
     firedAlerts.message
       .split('\n')
-      .filter((line) => /Watchdog|KubePod|Firing/.test(line))
+      .filter((line) => /Watchdog|KubePod|Firing|Target/.test(line))
       .join(' | ')
   );
   await runCmd('oc delete deployment qa-broken -n template-lab');
@@ -8872,9 +8915,16 @@ await runSection('qa-coverage', async () => {
     'coverage: handover has closing copy about a real cluster',
     handover.title.slice(0, 160)
   );
+  // 1.16.0: the handover reports the EX280 track (its size comes from the level
+  // data: 22 levels since Network Policies and Nodes & Cluster Troubleshooting).
+  const ex280LevelCount = await evaluate(async () => {
+    const { EX280_ORDER } = await import('/js/data/CampaignLevels.js');
+    return EX280_ORDER.length;
+  });
   assert(
-    /20\/20/.test(handover.stats) && /60\/60/.test(handover.stats),
-    'coverage: handover stats show 20/20 levels and 60/60 stars',
+    new RegExp(`${ex280LevelCount}/${ex280LevelCount}`).test(handover.stats) &&
+      new RegExp(`${ex280LevelCount * 3}/${ex280LevelCount * 3}`).test(handover.stats),
+    `coverage: handover stats show ${ex280LevelCount}/${ex280LevelCount} EX280 levels and ${ex280LevelCount * 3}/${ex280LevelCount * 3} stars`,
     handover.stats.replace(/\n/g, ' | ').slice(0, 240)
   );
   assert(
@@ -9001,18 +9051,31 @@ await runSection('qa-coverage', async () => {
     JSON.stringify(l1Intro).slice(0, 260)
   );
   await returnToMenu();
-  assert(await launch('campaign', 3), 'coverage: campaign L3 starts for the trap-hint check');
-  await closeOverlays();
-  const l3Hint = await evaluate(() => {
-    const def = window.game.app.modeInstance.currentLevelDef;
-    return (def.hints || []).find((hint) => /ADMITTED by|admission/i.test(hint)) || '';
+  // 1.16.0 curriculum review: SCC jargon (restricted-v2, runAsUser: 0) is taught in L17,
+  // where SCCs are introduced. L1/L3 keep the plain runtime lesson (a root-expecting
+  // image crashes under OpenShift's random non-root UID) without admission details.
+  const trapHints = await evaluate(async () => {
+    const { getCampaignLevel } = await import('/js/data/CampaignLevels.js');
+    const hints = (id) => (getCampaignLevel(id)?.hints || []).join('\n');
+    return { l1: hints(1), l3: hints(3), l17: hints(17) };
   });
   assert(
-    /restricted-v2/.test(l3Hint) && /runAsUser: 0/.test(l3Hint),
-    'coverage: the admission-vs-runtime trap moved to the L3 troubleshooting hints',
-    l3Hint.slice(0, 220)
+    !/restricted-v2|runAsUser/.test(trapHints.l1) && !/restricted-v2|runAsUser/.test(trapHints.l3),
+    'coverage: L1/L3 hints teach the non-root crash without SCC admission jargon',
+    JSON.stringify({ l1: trapHints.l1.slice(0, 160), l3: trapHints.l3.slice(0, 160) })
   );
-  await returnToMenu();
+  assert(
+    /nginx/.test(trapHints.l3) && /Permission denied/.test(trapHints.l3),
+    'coverage: L3 troubleshooting hints still explain the nginx Permission denied crash',
+    trapHints.l3.slice(0, 220)
+  );
+  assert(
+    /restricted-v2/.test(trapHints.l17) &&
+      /runAsUser: 0/.test(trapHints.l17) &&
+      /ADMITTED/.test(trapHints.l17),
+    'coverage: the admission-vs-runtime trap is taught in L17, with the SCCs',
+    trapHints.l17.slice(0, 220)
+  );
 
   // ── #34 auth-passwords + auth-users: L13 rotation and cleanup ────────────
   assert(
@@ -11143,15 +11206,18 @@ await runSection('qa-issue43', async () => {
   result = await runCmd(
     'oc exec deploy/web -n qa-exec -- curl -s -w "%{remote_port}" -o /dev/null https://example.com'
   );
+  // 1.16.0: `oc exec` now propagates curl's real exit status, so a dropped connection
+  // ends with the real `command terminated with exit code 28` line after curl's output.
   assert(
-    result.message.trim() === '443',
+    result.message.trim() === '443\ncommand terminated with exit code 28',
     '#43: exec curl to an https URL uses the scheme-default port 443',
     JSON.stringify(result.message)
   );
   result = await runCmd('oc exec deploy/web -n qa-exec -- curl https://example.com');
   assert(
-    /^curl: \(28\) Connection timed out after 30000 milliseconds$/.test(result.message.trim()) &&
-      !/port 80/.test(result.message),
+    /^curl: \(28\) Connection timed out after 30000 milliseconds\ncommand terminated with exit code 28$/.test(
+      result.message.trim()
+    ) && !/port 80/.test(result.message),
     '#43: NetworkPolicy-dropped exec curl reports the real (28) connection timeout',
     result.message
   );
@@ -13103,7 +13169,10 @@ await runSection('qa-issue50-54', async () => {
   );
   result = await runCmd(`curl -k -s https://${routeHost}`);
   assert(
-    /503 Service Unavailable/.test(result.message),
+    // 1.16.0: the real OpenShift router body is its own error-page-503.http
+    // ("Application is not available"), not HAProxy's stock 503 text.
+    /<h1>Application is not available<\/h1>/.test(result.message) &&
+      !/No server is available to handle this request/.test(result.message),
     '#52: the 503 body is the real router response',
     result.message.slice(0, 240)
   );
@@ -13535,6 +13604,18 @@ await runSection('qa-issue50-54', async () => {
       80
     );
     assert(fired, `${label}: the scheduled CrashLoopBackOff incident fires on webapp`);
+    // 1.16.0: the seeded incident creates the new revision's Pod synchronously.
+    // When it fires on the LAST 0.05 s step of a 2 s advance chunk, the
+    // scheduler/kubelet have not run yet and that Pod is legitimately Pending
+    // with no container status (the 2026-11-07 full-suite NO-GO). Give the
+    // kubelet its tick before sampling; bounded, so a real regression still fails.
+    const badRevisionCrashing = async () => {
+      const bad = (await l20Snapshot()).pods.filter((pod) =>
+        pod.env.includes('APP_MODE=debug-invalid')
+      );
+      return bad.length > 0 && bad.every((pod) => pod.waiting.includes('CrashLoopBackOff'));
+    };
+    if (!(await badRevisionCrashing())) await advanceUntil(badRevisionCrashing, 4, 0.25);
     const crashed = await l20Snapshot();
     const badReplicaSet = crashed.replicas.find((replicaSet) =>
       replicaSet.templateEnv.some((entry) => entry.startsWith('APP_MODE=debug-invalid'))
@@ -22667,10 +22748,9 @@ await runSection('qa-guidance', async () => {
   assert(await freshLevel(19), 'guidance: campaign level 19 starts');
   await command('oc project batch-lab', 200);
   await command('oc delete job report-batch', 200);
-  await command(
-    'oc create job report-batch --image=perl --active-deadline-seconds=600 -- perl -e "print 42"',
-    300
-  );
+  // 1.16.0: `oc create job` has no --active-deadline-seconds flag (real oc:
+  // unknown flag); the plain Job carries no deadline at all.
+  await command('oc create job report-batch --image=perl -- perl -e "print 42"', 300);
   await advanceGame(3);
   await advanceGame(25);
   await refreshCard();
@@ -22814,6 +22894,9 @@ await runSection('qa-guidance-replay', async () => {
    *  OLM installs, builds, rollouts or an operator rollout to settle. */
   const SETTLE_DEFAULT = 5;
   const SETTLE_BY_LEVEL = {
+    // L12 (1.16.0): the seeded MetalLB Subscription needs a few game seconds before its
+    // CSV reads Succeeded, which is what the "check the operator" read must show.
+    12: [[/oc get subscription/, 8]],
     13: [[/oc (patch|set data|apply)/, 12]],
     18: [
       [/oc (apply|create) -f|\| oc apply -f -/, 24],
@@ -22833,6 +22916,9 @@ await runSection('qa-guidance-replay', async () => {
     return SETTLE_DEFAULT;
   };
 
+  // A targeted `--only=qa-guidance-replay` run starts on about:blank, where the
+  // absolute module URL below cannot resolve: load the app first.
+  await bootMenu();
   const plans = await evaluate(async () => {
     const { CAMPAIGN_LEVELS } = await import('/js/data/CampaignLevels.js');
     return CAMPAIGN_LEVELS.filter((level) =>
@@ -22859,9 +22945,13 @@ await runSection('qa-guidance-replay', async () => {
       };
     });
   });
+  const campaignLevelIds = await evaluate(async () => {
+    const { CAMPAIGN_LEVELS } = await import('/js/data/CampaignLevels.js');
+    return CAMPAIGN_LEVELS.map((level) => level.id);
+  });
   assert(
-    plans.length === 20,
-    'guidance replay: every one of the 20 campaign levels carries authored guidance',
+    plans.length === campaignLevelIds.length && campaignLevelIds.length >= 20,
+    `guidance replay: every one of the ${campaignLevelIds.length} campaign levels carries authored guidance`,
     JSON.stringify(plans.map((plan) => plan.id))
   );
   assert(
@@ -22876,7 +22966,16 @@ await runSection('qa-guidance-replay', async () => {
     )
   );
 
+  // `REPLAY_LEVELS=21,22 node scripts/browser-test.mjs --only=qa-guidance-replay` replays
+  // only those level ids (fast iteration while authoring); the default replays all.
+  const replayOnly = String(process.env.REPLAY_LEVELS || '')
+    .split(',')
+    .map((value) => Number(value.trim()))
+    .filter((value) => Number.isFinite(value) && value > 0);
+  if (replayOnly.length)
+    console.log(`  (guidance replay limited to levels ${replayOnly.join(', ')})`);
   for (const plan of plans) {
+    if (replayOnly.length && !replayOnly.includes(plan.id)) continue;
     const failures = [];
     const started = await (async () => {
       await bootMenu();
@@ -22889,6 +22988,11 @@ await runSection('qa-guidance-replay', async () => {
       continue;
     }
     if (plan.workProject) await runCmd(`oc project ${plan.workProject}`, 150);
+    // A player reads the mission card before typing, so the controllers have reconciled
+    // the seeded workloads. Without this the first command could race the seeded
+    // Deployment's first ReplicaSet on a loaded host (1.16.0: L10's `oc set image` then
+    // became revision 1 and `oc rollout undo` correctly found no history).
+    await advanceGame(2);
     for (const objective of plan.objectives) {
       if (objective.type === 'resolve' && objective.incidentType) {
         // A fix made before a scheduled incident fires is a different story: let the incident
@@ -22919,6 +23023,2761 @@ await runSection('qa-guidance-replay', async () => {
       JSON.stringify({ state, failures, ticks: ticks.map((done) => (done ? 1 : 0)).join('') })
     );
   }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 1.16.0 — campaign structure: stable ids, campaign order, prelude track, labels
+// ═══════════════════════════════════════════════════════════════════════════
+await runSection('qa-campaign-structure', async () => {
+  // Level ids are SAVE KEYS (progress is stored per id); CHAPTERS defines the order,
+  // the Linux & RHEL Foundations prelude (chapter 0, ids 101–107) is its own optional
+  // track and display numbers are positional (the capstone, id 20, is "Level 22").
+  await bootMenu();
+  const structure = await evaluate(async () => {
+    const campaign = await import('/js/data/CampaignLevels.js');
+    return {
+      prelude: campaign.PRELUDE_ORDER,
+      ex280: campaign.EX280_ORDER,
+      chapters: campaign.CHAPTERS.map((chapter) => ({
+        id: chapter.id,
+        name: chapter.name,
+        levels: chapter.levels,
+        prelude: Boolean(chapter.prelude),
+      })),
+    };
+  });
+  assert(
+    structure.chapters[0]?.id === 0 &&
+      structure.chapters[0]?.prelude &&
+      JSON.stringify(structure.prelude) === JSON.stringify([101, 102, 103, 104, 105, 106, 107]),
+    'campaign structure: chapter 0 is the seven-level Linux & RHEL Foundations prelude',
+    JSON.stringify(structure.chapters[0])
+  );
+  assert(
+    JSON.stringify(structure.ex280.slice(-3)) === JSON.stringify([21, 22, 20]) &&
+      structure.ex280.length === 22,
+    'campaign structure: Network Policies (21) and Nodes & Cluster Troubleshooting (22) come right before the capstone (20)',
+    JSON.stringify(structure.ex280)
+  );
+
+  const savedProgress = await evaluate(() =>
+    JSON.stringify(window.game.app.scoringEngine.progress.campaignProgress || {})
+  );
+  /** Render the level select for a saved-progress snapshot and read it back. */
+  const readSelect = (progress) =>
+    evaluate((snapshot) => {
+      const app = window.game.app;
+      app.scoringEngine.progress.campaignProgress = snapshot;
+      app.buildLevelSelect();
+      const chapters = [...document.querySelectorAll('#level-grid .chapter-block')].map(
+        (block) => ({
+          name: block.querySelector('.chapter-name')?.textContent.trim() || '',
+          prelude: block.classList.contains('chapter-prelude'),
+          cards: [...block.querySelectorAll('.level-card')].map((card) => ({
+            id: Number(card.dataset.level),
+            label: card.dataset.levelLabel,
+            number: card.querySelector('.level-number')?.textContent.trim() || '',
+            locked: card.classList.contains('locked'),
+            completed: card.classList.contains('completed'),
+            next: card.classList.contains('next'),
+          })),
+        })
+      );
+      return {
+        chapters,
+        continueText: document.getElementById('level-continue')?.textContent.trim() || '',
+        progressText: document.getElementById('level-select-progress')?.textContent.trim() || '',
+      };
+    }, progress);
+  const card = (view, id) =>
+    view.chapters.flatMap((chapter) => chapter.cards).find((entry) => entry.id === id) || {};
+  const completedSave = (ids, stamp = 1000) =>
+    Object.fromEntries(
+      ids.map((id, index) => [
+        String(id),
+        { completed: true, stars: 3, completedAt: stamp + index },
+      ])
+    );
+  try {
+    // A brand-new player: the prelude is offered first, Level 1 is open too.
+    const fresh = await readSelect({});
+    assert(
+      fresh.chapters[0]?.prelude && /Optional prelude/.test(fresh.chapters[0]?.name || ''),
+      'campaign structure: the level select shows the Linux prelude first, marked optional',
+      JSON.stringify(fresh.chapters.map((chapter) => chapter.name))
+    );
+    assert(
+      fresh.chapters[0]?.cards.map((entry) => entry.label).join(',') ===
+        '0.1,0.2,0.3,0.4,0.5,0.6,0.7',
+      'campaign structure: prelude cards are numbered 0.1–0.7',
+      JSON.stringify(fresh.chapters[0]?.cards)
+    );
+    assert(
+      !card(fresh, 101).locked && card(fresh, 101).next && card(fresh, 102).locked,
+      'campaign structure: a new player starts at 0.1 and the prelude unlocks in order',
+      JSON.stringify([card(fresh, 101), card(fresh, 102)])
+    );
+    assert(
+      !card(fresh, 1).locked && card(fresh, 2).locked,
+      'campaign structure: the prelude never gates Level 1 (it is open for a new player)',
+      JSON.stringify([card(fresh, 1), card(fresh, 2)])
+    );
+    assert(
+      fresh.continueText === 'Start campaign' && /^0 \/ 29 complete$/.test(fresh.progressText),
+      'campaign structure: a new player sees "Start campaign" and 0 / 29 complete',
+      JSON.stringify([fresh.continueText, fresh.progressText])
+    );
+    const lastChapter = fresh.chapters[fresh.chapters.length - 1];
+    assert(
+      lastChapter?.cards.map((entry) => `${entry.id}:${entry.label}`).join(',') ===
+        '17:17,18:18,19:19,21:20,22:21,20:22',
+      'campaign structure: chapter 5 lists ids 17,18,19,21,22,20 as Levels 17–22 (capstone last)',
+      JSON.stringify(lastChapter?.cards)
+    );
+
+    // A returning player who finished the old 20-level campaign keeps every level.
+    const old = await readSelect(completedSave([...Array(20).keys()].map((n) => n + 1)));
+    assert(
+      card(old, 20).completed && !card(old, 20).locked,
+      'campaign structure: an old save keeps the capstone completed and replayable',
+      JSON.stringify(card(old, 20))
+    );
+    assert(
+      !card(old, 21).locked && card(old, 21).next && card(old, 22).locked,
+      'campaign structure: an old save continues with the new Level 20 (Network Policies), then 21',
+      JSON.stringify([card(old, 21), card(old, 22)])
+    );
+    assert(
+      old.continueText === 'Continue · Level 20',
+      'campaign structure: an old save shows "Continue · Level 20" (the new Network Policies level)',
+      old.continueText
+    );
+    // Mid-campaign: Continue follows the EX280 track; prelude-only progress continues it.
+    const mid = await readSelect(completedSave([1, 2, 3, 4, 5, 6, 7, 8]));
+    assert(
+      mid.continueText === 'Continue · Level 9' && card(mid, 9).next,
+      'campaign structure: an EX280 player mid-campaign continues at their next level',
+      mid.continueText
+    );
+    const linux = await readSelect(completedSave([101, 102, 103]));
+    assert(
+      linux.continueText === 'Continue · Level 0.4',
+      'campaign structure: a player working through the prelude continues at its next level',
+      linux.continueText
+    );
+
+    // The start page primary action shares the rule.
+    const ctaLabel = await evaluate(
+      (snapshot) => {
+        window.game.app.scoringEngine.progress.campaignProgress = snapshot;
+        window.game.app.startMenu?._updatePrimaryLabel?.();
+        return document.getElementById('sp-cta-label')?.textContent.trim() || '';
+      },
+      completedSave([1, 2, 3, 4, 5, 6, 7, 8])
+    );
+    assert(
+      ctaLabel === 'Continue · level 9',
+      'campaign structure: the start page CTA continues at the same level',
+      ctaLabel
+    );
+    // The landing stats line follows the level data (22 EX280 levels, 7 Linux levels).
+    const landing = await evaluate(async () => {
+      const campaign = await import('/js/data/CampaignLevels.js');
+      return {
+        specs: document.querySelector('.sp-specs')?.innerText || '',
+        ex280: campaign.EX280_ORDER.length,
+        prelude: campaign.PRELUDE_ORDER.length,
+      };
+    });
+    assert(
+      new RegExp(`(^|\\n)${landing.ex280} EX280 levels(\\n|$)`).test(landing.specs) &&
+        new RegExp(`(^|\\n)${landing.prelude} Linux levels(\\n|$)`).test(landing.specs),
+      'campaign structure: the landing stats line matches the level data',
+      JSON.stringify(landing)
+    );
+
+    // The Continue button launches the prelude for a new player.
+    const podsBefore = await evaluate(
+      () => window.game.app.scoringEngine.progress.stats?.totalPodsDeployed ?? 0
+    );
+    await evaluate(() => {
+      window.game.app.scoringEngine.progress.campaignProgress = {};
+      window.game.app.buildLevelSelect();
+      document.getElementById('level-continue')?.click();
+    });
+    const startedPrelude = await waitFor(
+      () => evaluate(() => window.game?.app?.modeInstance?.currentLevel === 101),
+      12000
+    );
+    assert(startedPrelude, 'campaign structure: "Start campaign" opens Level 0.1');
+    await sleep(800);
+    await closeOverlays();
+    // The seeded Nodes' platform DaemonSet Pods are controller Pods, not the
+    // player's: they must not count as "your first Pod" (Pod Rookie popped here).
+    await advanceSimulation(6);
+    const podsAfter = await evaluate(
+      () => window.game.app.scoringEngine.progress.stats?.totalPodsDeployed ?? 0
+    );
+    assert(
+      podsAfter === podsBefore,
+      'campaign structure: starting a level never counts platform DaemonSet Pods as player Pods',
+      JSON.stringify({ podsBefore, podsAfter })
+    );
+    const preludeStatus = await evaluate(() => {
+      const status = window.game.app.modeInstance.getStatus();
+      window.game.app.hud?._updateMission?.();
+      return {
+        label: status.levelLabel,
+        prelude: status.prelude,
+        hud: document.getElementById('hud-level-name')?.textContent.trim() || '',
+      };
+    });
+    assert(
+      preludeStatus.label === '0.1' && preludeStatus.prelude && /^L0\.1 · /.test(preludeStatus.hud),
+      'campaign structure: the HUD names a prelude level "L0.1 · …"',
+      JSON.stringify(preludeStatus)
+    );
+    // Prelude labels carry `code` (paths, commands): the mission card renders it as
+    // code, never as literal backticks (objective list and Next step alike).
+    const missionLabels = await evaluate(() => {
+      const app = window.game.app;
+      app._objSig = null;
+      app._updateObjectivesPanel?.(app.modeInstance.getStatus());
+      const labels = [...document.querySelectorAll('#obj-list .obj-label')];
+      return {
+        count: labels.length,
+        backticks: labels.filter((el) => el.textContent.includes('`')).length,
+        codeSpans: labels.reduce((sum, el) => sum + el.querySelectorAll('code').length, 0),
+        next: document.getElementById('mission-next-text')?.innerHTML || '',
+      };
+    });
+    assert(
+      missionLabels.count >= 4 &&
+        missionLabels.backticks === 0 &&
+        missionLabels.codeSpans > 0 &&
+        !missionLabels.next.includes('`'),
+      'campaign structure: prelude objective labels render `code` as code, not literal backticks',
+      JSON.stringify(missionLabels)
+    );
+
+    // The capstone keeps id 20 but is displayed as the last level, 22.
+    await bootMenu();
+    assert(await launch('campaign', 20), 'campaign structure: the capstone (id 20) still launches');
+    await closeOverlays();
+    const capstone = await evaluate(() => {
+      window.game.app.hud?._updateMission?.();
+      return {
+        id: window.game.app.modeInstance.currentLevel,
+        label: window.game.app.modeInstance.getStatus().levelLabel,
+        hud: document.getElementById('hud-level-name')?.textContent.trim() || '',
+      };
+    });
+    assert(
+      capstone.id === 20 &&
+        capstone.label === '22' &&
+        /^L22 · EX280 Final: Production Platform$/.test(capstone.hud),
+      'campaign structure: the capstone is shown as "L22 · EX280 Final: Production Platform"',
+      JSON.stringify(capstone)
+    );
+
+    // Achievements show a glyph, never the raw icon key ("trophy", "graduation").
+    const achievementIcons = await evaluate(() => {
+      window.game.app.buildAchievements();
+      return [...document.querySelectorAll('#achievements-grid .achievement-icon')].map((el) =>
+        el.textContent.trim()
+      );
+    });
+    assert(
+      achievementIcons.length > 0 && achievementIcons.every((text) => /^[★☆]$/.test(text)),
+      'campaign structure: the achievements grid renders star glyphs, not icon key names',
+      JSON.stringify(achievementIcons.slice(0, 8))
+    );
+    const starsCell = await evaluate(() => {
+      window.game.app.buildStats();
+      return document.getElementById('stats-body')?.innerText || '';
+    });
+    assert(
+      /Campaign Stars\s*\n?\s*\d+ \/ 87/.test(starsCell),
+      'campaign structure: the stats panel counts 87 campaign stars (29 levels × 3)',
+      starsCell.replace(/\n/g, ' | ').slice(0, 300)
+    );
+  } finally {
+    await evaluate((raw) => {
+      window.game.app.scoringEngine.progress.campaignProgress = JSON.parse(raw);
+    }, savedProgress);
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 10z. 1.16.0 SIMULATOR FIXES (sim-fixer): root causes of the 2026-11-07
+//      full-run NO-GO (alert flicker + a test that sampled an unrelated pod,
+//      the seeded-incident fire moment, GitHub API calls off the production
+//      host) and the "Open — simulator fidelity" list of
+//      docs/guidance-qa-findings.md. Static twins: verify.mjs §4n.
+// ═══════════════════════════════════════════════════════════════════════════
+await runSection('qa-sim-1160', async () => {
+  /** Advance the simulation AND incident clocks deterministically (0.05 s). */
+  const advanceBoth = async (seconds) =>
+    evaluate((secs) => {
+      const sim = window.game?.gameEngine?.simulation;
+      const engine = window.game?.incidentEngine;
+      if (!sim || typeof sim.tick !== 'function') return false;
+      const steps = Math.ceil(secs / 0.05);
+      for (let index = 0; index < steps; index += 1) {
+        sim.tick(0.05);
+        if (engine && typeof engine.tick === 'function') engine.tick(0.05);
+      }
+      return true;
+    }, seconds);
+  const advanceUntil = async (predicate, maxSeconds = 60, step = 2) => {
+    for (let played = 0; played < maxSeconds; played += step) {
+      await advanceBoth(step);
+      if (await predicate()) return true;
+    }
+    return false;
+  };
+  let result;
+
+  // ── NO-GO 4: the start page never calls api.github.com off production ────
+  const githubRequests = [];
+  const onGithubRequest = (request) => {
+    if (/api\.github\.com/.test(request.url())) githubRequests.push(request.url());
+  };
+  page.on('request', onGithubRequest);
+  try {
+    await goto('/');
+    await bootMenu();
+    await sleep(1200);
+  } finally {
+    page.off('request', onGithubRequest);
+  }
+  assert(
+    githubRequests.length === 0,
+    'sim-1160: the start page does not call api.github.com off the production host (its 60/h rate limit answered without CORS headers = console error)',
+    JSON.stringify(githubRequests)
+  );
+
+  // ── NO-GO 1: live alerts name the broken pod and never blink off ─────────
+  assert(await bootSandbox(), 'sim-1160: sandbox boots for the alerting checks');
+  await runCmd('oc new-project sim1160-alerts');
+  await runCmd('oc create deployment crash --image=nginx:latest -n sim1160-alerts');
+  await runCmd(
+    'oc create deployment pull --image=quay.io/sim1160/app:does-not-exist -n sim1160-alerts'
+  );
+  await evaluate(() => window.game.gameEngine.pause?.());
+  const alertGaps = await evaluate(() => {
+    const sim = window.game.gameEngine.simulation;
+    const alertmanager = window.game.cluster.getByName(
+      'Alertmanager',
+      'main',
+      'openshift-monitoring'
+    );
+    const crashAlerts = () =>
+      (alertmanager?.getFiringAlerts?.() || []).filter(
+        (alert) => alert.name === 'KubePodCrashLooping' && /\/crash-/.test(alert.target || '')
+      ).length;
+    for (let step = 0; step < 20; step += 1) sim.tick(0.05);
+    const gaps = [];
+    // 45 s covers the restarts at ~10 s and ~30 s after the first crash.
+    for (let step = 0; step < 900; step += 1) {
+      sim.tick(0.05);
+      if (crashAlerts() === 0) gaps.push(step);
+    }
+    return { found: Boolean(alertmanager), gaps: gaps.slice(0, 8), count: gaps.length };
+  });
+  assert(
+    alertGaps.found && alertGaps.count === 0,
+    'sim-1160: KubePodCrashLooping stays firing through the kubelet restarts (real max_over_time[5m] rule; it used to blink off for one tick per restart)',
+    JSON.stringify(alertGaps)
+  );
+  result = await runCmd('oc describe alertmanager main -n openshift-monitoring');
+  assert(
+    /KubePodNotReady[^\n]*\n\s+Target:\s+pod\/pull-/.test(result.message) &&
+      /KubePodCrashLooping[^\n]*\n\s+Target:\s+pod\/crash-/.test(result.message),
+    'sim-1160: oc describe alertmanager names the ImagePullBackOff pod (KubePodNotReady) and the crash-looping pod (KubePodCrashLooping)',
+    result.message
+      .split('\n')
+      .filter((line) => /KubePod|Target/.test(line))
+      .join(' | ')
+  );
+  await evaluate(() => window.game.gameEngine.resume?.());
+
+  // ── NO-GO 2: seeded L20 incident firing on the LAST step of a 2 s chunk ──
+  await returnToMenu();
+  assert(await launch('campaign', 20), 'sim-1160: campaign L20 starts for the fire-moment check');
+  await closeOverlays();
+  await evaluate(() => {
+    window.game.app.hideTutorial?.();
+    window.game.gameEngine.pause?.();
+  });
+  await runCmd('oc new-project prod-platform');
+  await runCmd('oc apply -f manifests/deployment.yaml -n prod-platform');
+  await runCmd('oc apply -f manifests/service.yaml -n prod-platform');
+  const l20Pods = () =>
+    evaluate(() =>
+      (window.game.cluster.getByKindAndNamespace('Pod', 'prod-platform') || []).map((pod) => ({
+        bad: (pod.spec?.containers?.[0]?.env || []).some(
+          (entry) => entry.name === 'APP_MODE' && entry.value === 'debug-invalid'
+        ),
+        phase: pod.status?.phase || null,
+        node: pod.spec?.nodeName || null,
+        ready: (pod.status?.conditions || []).some(
+          (condition) => condition.type === 'Ready' && condition.status === 'True'
+        ),
+        waiting: (pod.status?.containerStatuses || []).map(
+          (status) => status.state?.waiting?.reason || 'running'
+        ),
+      }))
+    );
+  const ready = await advanceUntil(
+    async () => (await l20Pods()).filter((pod) => pod.phase === 'Running' && pod.ready).length >= 2,
+    20
+  );
+  assert(ready, 'sim-1160: L20 webapp is 2/2 Ready before the incident');
+  // Worst-case alignment: 60 s trigger − 56 s = exactly two 2 s chunks. Step
+  // and sample inside ONE evaluate so no real-time frame can tick in between.
+  const fireMoment = await evaluate(() => {
+    const engine = window.game.incidentEngine;
+    const sim = window.game.gameEngine.simulation;
+    if (!engine || engine.elapsedTime > 56000) return { aligned: false };
+    engine.elapsedTime = 56000;
+    let firedAtStep = null;
+    for (let step = 1; step <= 90 && firedAtStep === null; step += 1) {
+      sim.tick(0.05);
+      engine.tick(0.05);
+      if ([...engine.activeIncidents.values()].some((entry) => entry.name === 'CrashLoopBackOff'))
+        firedAtStep = step;
+    }
+    const pods = (window.game.cluster.getByKindAndNamespace('Pod', 'prod-platform') || []).map(
+      (pod) => ({
+        bad: (pod.spec?.containers?.[0]?.env || []).some(
+          (entry) => entry.name === 'APP_MODE' && entry.value === 'debug-invalid'
+        ),
+        phase: pod.status?.phase || null,
+        node: pod.spec?.nodeName || null,
+        statuses: (pod.status?.containerStatuses || []).length,
+      })
+    );
+    return { aligned: true, firedAtStep, pods };
+  });
+  const atFireBad = (fireMoment.pods || []).filter((pod) => pod.bad);
+  assert(
+    fireMoment.aligned &&
+      fireMoment.firedAtStep === 80 &&
+      atFireBad.length === 1 &&
+      atFireBad.every((pod) => pod.phase === 'Pending' && !pod.node && pod.statuses === 0),
+    'sim-1160: an incident firing on the last step of an advance chunk leaves the new revision Pod unscheduled for that instant (the #51 NO-GO sample)',
+    JSON.stringify(fireMoment)
+  );
+  await advanceBoth(0.25);
+  const afterTick = await l20Pods();
+  assert(
+    afterTick.filter((pod) => pod.bad).length === 1 &&
+      afterTick.filter((pod) => pod.bad).every((pod) => pod.waiting.includes('CrashLoopBackOff')) &&
+      afterTick.filter((pod) => !pod.bad && pod.phase === 'Running' && pod.ready).length === 2,
+    'sim-1160: a kubelet tick later the new revision crash-loops while both old Pods keep serving',
+    JSON.stringify(afterTick)
+  );
+  await evaluate(() => window.game.gameEngine.resume?.());
+
+  // ── Cosmetic: the incident's new Pod is never announced as "YOURS" (L3) ──
+  // The seeded CrashLoopBackOff rolls a new ReplicaSet + Pod of the level's own
+  // Deployment; they used to appear ownerless for one event and got the red
+  // ring plus the "YOU CREATED Pod … red ring marks it as yours" toast.
+  await returnToMenu();
+  assert(await launch('campaign', 3), 'sim-1160: campaign L3 starts for the spotlight check');
+  await closeOverlays();
+  await evaluate(() => {
+    window.game.app.hideTutorial?.();
+    window.game.gameEngine.pause?.();
+    window.__sim1160Toasts = [];
+    const observer = new MutationObserver(() => {
+      const toast = document.getElementById('resource-spotlight-toast');
+      if (toast?.innerText) window.__sim1160Toasts.push(toast.innerText.replace(/\s+/g, ' '));
+    });
+    observer.observe(document.body, { subtree: true, childList: true, characterData: true });
+    window.__sim1160ToastObserver = observer;
+  });
+  const l3Fired = await advanceUntil(
+    () =>
+      evaluate(() =>
+        [...(window.game.incidentEngine?.activeIncidents?.values?.() || [])].some(
+          (incident) => incident.name === 'CrashLoopBackOff'
+        )
+      ),
+    30,
+    1
+  );
+  await advanceBoth(4);
+  await sleep(600);
+  const spotlight = await evaluate(() => {
+    window.__sim1160ToastObserver?.disconnect?.();
+    const cluster = window.game.cluster;
+    return {
+      toasts: [...new Set(window.__sim1160Toasts || [])],
+      mine: [...(window.game.app?.hud?.spotlight?.mine || [])].map((uid) => {
+        const resource = cluster.getResource?.(uid);
+        return resource ? `${resource.kind}/${resource.metadata?.name}` : uid;
+      }),
+      newRevisionOwned: (cluster.getByKindAndNamespace('Pod', 'ops-lab') || []).every(
+        (pod) => (pod.metadata?.ownerReferences || []).length > 0
+      ),
+    };
+  });
+  assert(
+    l3Fired &&
+      spotlight.newRevisionOwned &&
+      spotlight.mine.length === 0 &&
+      !spotlight.toasts.some((text) => /you created/i.test(text)),
+    'sim-1160: L3’s incident-made ReplicaSet/Pod are level furniture — no "YOU CREATED Pod" toast, no red "yours" ring',
+    JSON.stringify(spotlight)
+  );
+  await evaluate(() => window.game.gameEngine.resume?.());
+
+  // ── L1 starts logged out: API commands are anonymous 403s, login works ──
+  await returnToMenu();
+  assert(await launch('campaign', 1), 'sim-1160: campaign L1 starts (logged out)');
+  await closeOverlays();
+  const l1Start = await evaluate(() => {
+    const mode = window.game.app.modeInstance;
+    window.game.app.commandBar?._updateContextLabel?.();
+    return {
+      user: window.game.gameEngine.currentUser ?? null,
+      firstObjective: mode?.currentLevelDef?.objectives?.[0]?.type || null,
+      firstLabel: mode?.currentLevelDef?.objectives?.[0]?.label || '',
+      context: document.getElementById('cmd-context')?.textContent || '',
+    };
+  });
+  assert(
+    l1Start.user === null &&
+      l1Start.firstObjective === 'login' &&
+      /oc login/.test(l1Start.firstLabel) &&
+      /^not logged in · /.test(l1Start.context),
+    'sim-1160: L1 starts logged out (terminal context says "not logged in") and its first objective tells the player to `oc login`',
+    JSON.stringify(l1Start)
+  );
+  result = await runCmd('oc get pods');
+  assert(
+    result.error &&
+      /^Error from server \(Forbidden\): pods is forbidden: User "system:anonymous" cannot list resource "pods" in API group "" in the namespace "default"$/.test(
+        result.message.trim()
+      ),
+    'sim-1160: logged out, `oc get pods` is the anonymous 403 (it used to list pods as kubeadmin)',
+    result.message
+  );
+  result = await runCmd('oc new-project first-project');
+  assert(
+    result.error && /You may not request a new project via this API\./.test(result.message),
+    'sim-1160: logged out, `oc new-project` is refused (no ProjectRequest for system:anonymous)',
+    result.message
+  );
+  result = await runCmd('oc login --token=sha256~made-up');
+  assert(
+    result.error && result.message.trim() === 'error: The token provided is invalid or expired.',
+    'sim-1160: `oc login --token=<anything>` no longer logs in as kubeadmin',
+    result.message
+  );
+  await expectCmd(
+    'sim-1160: L1 `oc login -u kubeadmin -p $(cat ~/auth/kubeadmin-password)` still works',
+    'oc login -u kubeadmin -p $(cat ~/auth/kubeadmin-password)',
+    /^Login successful\./
+  );
+  const l1Login = await evaluate(() => {
+    const mode = window.game.app.modeInstance;
+    mode.updateObjectives?.();
+    return mode.objectiveProgress?.[0]?.completed === true;
+  });
+  assert(l1Login, 'sim-1160: the L1 login objective ticks after the real login');
+  await expectCmd(
+    'sim-1160: L1 `oc new-project first-project` works after login',
+    'oc new-project first-project',
+    /Now using project "first-project"/
+  );
+
+  // ── L8: `oc new-app --template=<name>` counts as processing + applying it ─
+  await returnToMenu();
+  assert(
+    await launch('campaign', 8),
+    'sim-1160: campaign L8 starts for the new-app --template check'
+  );
+  await closeOverlays();
+  await runCmd('oc project template-lab');
+  result = await runCmd('oc new-app --template=webapp-template -p APP_NAME=web', 400);
+  const l8Template = await evaluate(() => {
+    const mode = window.game.app.modeInstance;
+    mode.updateObjectives?.();
+    const index = (mode.currentLevelDef?.objectives || []).findIndex(
+      (objective) => objective.type === 'template'
+    );
+    return index < 0 ? null : mode.objectiveProgress?.[index]?.completed === true;
+  });
+  assert(
+    !result.error && /--> Success/.test(result.message) && l8Template === true,
+    'sim-1160: L8 `oc new-app --template=webapp-template -p APP_NAME=web` ticks the template objective',
+    JSON.stringify({ message: result.message.slice(0, 300), l8Template })
+  );
+  result = await runCmd('oc new-app --template=webapp-template -p APP_NAME=web', 300);
+  assert(
+    result.error &&
+      /error: deployments\.apps "web" already exists/.test(result.message) &&
+      /--> Failed$/.test(result.message.trim()),
+    'sim-1160: re-running the same `oc new-app` is AlreadyExists + `--> Failed`, never `created` again',
+    result.message
+  );
+
+  // ── Node debug shell cue + oc edit pause cue (terminal UI) ───────────────
+  assert(await bootSandbox(), 'sim-1160: sandbox boots for the terminal cue checks');
+  await runCmd('oc debug node/worker-0', 200);
+  const debugCue = await evaluate(() => ({
+    context: document.getElementById('cmd-context')?.textContent || '',
+    placeholder: document.getElementById('cmd-input')?.placeholder || '',
+  }));
+  result = await runCmd('oc get pods');
+  await runCmd('exit');
+  const workstationCue = await evaluate(
+    () => document.getElementById('cmd-context')?.textContent || ''
+  );
+  assert(
+    /sh-5\.1# node\/worker-0/.test(debugCue.context) &&
+      /exit/.test(debugCue.placeholder) &&
+      /^sh: oc: command not found\n\nSimulator hint: this terminal is inside the debug shell of node\/worker-0/.test(
+        result.message
+      ) &&
+      !/sh-5\.1#/.test(workstationCue),
+    'sim-1160: inside `oc debug node/…` the terminal shows the node shell (sh-5.1#) and explains why `oc` is missing; `exit` restores the workstation cue',
+    JSON.stringify({ debugCue, inside: result.message, workstationCue })
+  );
+  assert(await ensureManifestEngine(), 'sim-1160: Files engine ready for the oc edit cue');
+  await runCmd(
+    'oc create deployment edit-me --image=quay.io/openshift/origin-hello-openshift:latest'
+  );
+  result = await runCmd('oc edit deployment/edit-me', 500);
+  const editPause = await evaluate(() => ({
+    panel: window.game?.manifestPanel?.visible === true,
+    filesPause: Boolean(window.game?.app?._clockPauseReasons?.has?.('files')),
+  }));
+  await closeOverlays();
+  assert(
+    !result.error &&
+      /the cluster is paused while the Files panel is open/.test(result.message) &&
+      editPause.panel &&
+      editPause.filesPause,
+    'sim-1160: `oc edit` opens the Files panel, which pauses the run — and the output now says so',
+    JSON.stringify({ message: result.message, editPause })
+  );
+
+  // DaemonSet semantics (k8s NodeShouldRunDaemonPod): an untolerated NoSchedule taint only
+  // stops NEW daemon pods; the running pod stays (reported as misscheduled) and nothing is
+  // recreated after the taint is removed. The old controller deleted it, which also made the
+  // #58 "no platform churn" check flaky right after its taint-grammar checks.
+  const dnsPods = () =>
+    evaluate(() =>
+      (window.game.cluster.getByKind('Pod') || [])
+        .filter(
+          (pod) =>
+            pod.metadata.namespace === 'openshift-dns' && /^dns-default-/.test(pod.metadata.name)
+        )
+        .map((pod) => `${pod.metadata.name}@${pod.spec.nodeName}`)
+        .sort()
+    );
+  await advanceSimulation(10);
+  const dnsBefore = await dnsPods();
+  await runCmd('oc adm taint node worker-0 dedicated=:NoSchedule');
+  await advanceSimulation(20);
+  const dnsTainted = await dnsPods();
+  const dsTainted = await evaluate(() => {
+    const ds = (window.game.cluster.getByKind('DaemonSet') || []).find(
+      (entry) => entry.metadata.name === 'dns-default'
+    );
+    return {
+      desired: ds?.status?.desiredNumberScheduled,
+      current: ds?.status?.currentNumberScheduled,
+      misscheduled: ds?.status?.numberMisscheduled,
+    };
+  });
+  await runCmd('oc adm taint node worker-0 dedicated-');
+  await advanceSimulation(20);
+  const dnsAfter = await dnsPods();
+  assert(
+    dnsBefore.some((entry) => entry.endsWith('@worker-0')) &&
+      JSON.stringify(dnsTainted) === JSON.stringify(dnsBefore) &&
+      JSON.stringify(dnsAfter) === JSON.stringify(dnsBefore),
+    'sim-1160: a NoSchedule taint keeps the running dns-default pod (no delete, no recreate)',
+    JSON.stringify({ dnsBefore, dnsTainted, dnsAfter })
+  );
+  assert(
+    dsTainted.misscheduled === 1 && dsTainted.current === dsTainted.desired,
+    'sim-1160: the tainted node’s daemon pod is reported as misscheduled, not current',
+    JSON.stringify(dsTainted)
+  );
+  await returnToMenu();
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// QA 1.16.0 — bridge levels: L21 Network Policies, L22 Nodes & Cluster
+// Troubleshooting, the L12 pre-installed MetalLB and the L11 Route certificate
+// ═══════════════════════════════════════════════════════════════════════════
+await runSection('qa-bridge-levels', async () => {
+  // 1.16.0 removed three "used before taught" jumps: NetworkPolicy and node troubleshooting
+  // got their own levels (ids 21/22, played before the capstone id 20) and L12 no longer
+  // installs an operator six levels before the Operators level. These checks play each level
+  // like a learner: the tempting WRONG moves must not tick (a default-deny that blocks the
+  // router, DNS on port 53, an unedited starter, an over-broad egress rule, cordon without
+  // drain, a drain without uncordon, a CSV read before it succeeded, an edge Route without the
+  // certificate), and the right state must.
+  const advanceGame = async (seconds) =>
+    evaluate((secs) => {
+      const sim = window.game?.gameEngine?.simulation;
+      const engine = window.game?.incidentEngine;
+      if (!sim || typeof sim.tick !== 'function') return false;
+      const steps = Math.ceil(secs / 0.05);
+      for (let index = 0; index < steps; index += 1) {
+        sim.tick(0.05);
+        if (engine && typeof engine.tick === 'function') engine.tick(0.05);
+      }
+      window.game?.app?.modeInstance?.update?.();
+      return true;
+    }, seconds);
+  /** Objective ticks (+ the self-explaining note) after one evaluation pass. */
+  const objectives = () =>
+    evaluate(() => {
+      const mode = window.game.app.modeInstance;
+      mode.update?.();
+      return mode.getStatus().objectives.map((objective) => ({
+        label: objective.label,
+        done: Boolean(objective.completed),
+        note: objective.note?.text || null,
+        fix: objective.note?.fix || null,
+      }));
+    });
+  const ticks = async () =>
+    (await objectives()).map((objective) => (objective.done ? 1 : 0)).join('');
+  const levelState = () => evaluate(() => window.game.app.modeInstance.state);
+  const startLevel = async (id) => {
+    await returnToMenu().catch(() => {});
+    await bootMenu();
+    const ok = await launch('campaign', id);
+    await closeOverlays();
+    return ok && (await evaluate(() => window.game.app.modeInstance.currentLevel)) === id;
+  };
+  const sh = (raw, wait = 120) => runCmd(raw, wait);
+  const ROUTE = 'https://frontend-netpol-lab.apps.cluster.example.com';
+
+  // ── Structure, chain and EX280 mapping ───────────────────────────────────
+  section('bridge: campaign chain and EX280 mapping');
+  await bootMenu();
+  const data = await evaluate(async () => {
+    const campaign = await import('/js/data/CampaignLevels.js');
+    const ex280 = await import('/js/data/EX280Objectives.js');
+    const level = (id) => campaign.getCampaignLevel(id);
+    const bullet = (id) =>
+      ex280.EX280_OBJECTIVE_GROUPS.flatMap((group) => group.bullets).find(
+        (entry) => entry.id === id
+      );
+    return {
+      next: [19, 21, 22].map((id) => level(id)?.nextLevel),
+      labels: [21, 22, 20].map((id) => campaign.levelLabel(id)),
+      titles: [21, 22].map((id) => level(id)?.title),
+      chapter: campaign.CHAPTERS.find((chapter) => chapter.id === 5)?.levels,
+      l12: {
+        workProject: level(12)?.workProject,
+        exam: level(12)?.examObjectives || [],
+        types: (level(12)?.objectives || []).map((objective) => objective.type),
+        projects: (level(12)?.startingResources || [])
+          .filter((resource) => resource.kind === 'Project')
+          .map((resource) => resource.name),
+      },
+      bullets: {
+        install: bullet('ops-install')?.levels,
+        netpol: bullet('net-network-policies')?.levels,
+        ingress: bullet('net-control-ingress')?.levels,
+        sdn: bullet('net-troubleshoot-sdn')?.levels,
+        examine: bullet('manage-examine-status')?.levels,
+        health: bullet('manage-assess-health')?.levels,
+        troubleshoot: bullet('manage-troubleshoot')?.levels,
+        templates: bullet('selfservice-project-templates')?.levels,
+      },
+      titlesMap: [ex280.EX280_LEVEL_TITLES[21], ex280.EX280_LEVEL_TITLES[22]],
+    };
+  });
+  assert(
+    JSON.stringify(data.next) === '[21,22,20]' &&
+      JSON.stringify(data.chapter) === '[17,18,19,21,22,20]' &&
+      JSON.stringify(data.labels) === '["20","21","22"]',
+    'bridge: 19 → 21 → 22 → 20, displayed as Levels 20, 21 and 22 before the capstone',
+    JSON.stringify(data)
+  );
+  assert(
+    data.titles[0] === 'Network Policies' &&
+      data.titles[1] === 'Nodes & Cluster Troubleshooting' &&
+      JSON.stringify(data.titlesMap) === JSON.stringify(data.titles),
+    'bridge: levels 21/22 carry their titles in the campaign data and in EX280_LEVEL_TITLES',
+    JSON.stringify({ titles: data.titles, titlesMap: data.titlesMap })
+  );
+  assert(
+    data.l12.workProject === 'lb-lab' &&
+      JSON.stringify(data.l12.projects) === '["lb-lab","metallb-system"]' &&
+      !data.l12.types.includes('operator') &&
+      !data.l12.exam.some((entry) => /Install an operator/.test(entry)),
+    'bridge: L12 no longer installs an operator (MetalLB seeded, no operator objective, no "Install an operator" bullet; project row lb-lab)',
+    JSON.stringify(data.l12)
+  );
+  const b = data.bullets;
+  assert(
+    JSON.stringify(b.install) === '[18]' &&
+      b.netpol.includes(21) &&
+      b.ingress.includes(21) &&
+      b.sdn.includes(21) &&
+      !b.sdn.includes(3) &&
+      [b.examine, b.health, b.troubleshoot].every((levels) => levels.includes(22)) &&
+      !b.templates.includes(8),
+    'bridge: EX280 mapping — ops-install is L18 only, 21 maps the network bullets, 22 the health/troubleshooting bullets (L3 off SDN, L8 off project templates)',
+    JSON.stringify(b)
+  );
+
+  // ── L21 Network Policies ─────────────────────────────────────────────────
+  section('bridge: L21 Network Policies');
+  assert(await startLevel(21), 'bridge: L21 starts');
+  await sh('oc project netpol-lab');
+  await advanceGame(4);
+  let route = await sh(`curl -k ${ROUTE}`);
+  assert(
+    /Welcome to nginx/.test(route.message) && (await ticks()) === '00000000',
+    'bridge L21: the Route answers before any policy, yet nothing is ticked — "router reaches the Route" needs isolation first',
+    `${route.message.slice(0, 120)} | ${await ticks()}`
+  );
+  await sh('oc get pods');
+  assert(
+    (await objectives())[0].done === false,
+    'bridge L21: `oc get pods` in netpol-lab does not count as finding the router Pods',
+    await ticks()
+  );
+  const routerPods = await sh('oc get pods -n openshift-ingress');
+  const nsLabels = await sh('oc get namespace openshift-ingress --show-labels');
+  const inPod = await sh('oc exec deploy/frontend -- curl -s http://backend:8080');
+  assert(
+    /router-default-/.test(routerPods.message) &&
+      /policy-group\.network\.openshift\.io\/ingress=/.test(nsLabels.message) &&
+      !inPod.error &&
+      /Hello/.test(inPod.message) &&
+      (await ticks()).startsWith('11'),
+    'bridge L21: router Pods in openshift-ingress, its policy-group label and an in-Pod frontend → backend call tick the two inspection steps',
+    JSON.stringify({
+      router: routerPods.message.slice(0, 120),
+      inPod: inPod.message,
+      ticks: await ticks(),
+    })
+  );
+
+  // The status code, not the body: the router's 503 page wording is the simulator's business.
+  const routeStatus = async () =>
+    (await sh(`curl -k -s -o /dev/null -w '%{http_code}' ${ROUTE}`)).message.trim();
+  await sh('oc apply -f netpol/deny-by-default.yaml');
+  await advanceGame(2);
+  let routeCode = await routeStatus();
+  let states = await objectives();
+  assert(
+    routeCode === '503' && states[2].done && !states[3].done && states[6].done,
+    'bridge L21: deny-by-default isolates ingress — the Route answers 503 and the router objective stays unticked (default-deny blocks the router)',
+    JSON.stringify({ routeCode, ticks: await ticks() })
+  );
+  const blockedCall = await sh('oc exec deploy/frontend -- curl -s http://backend:8080');
+  assert(
+    !/Hello/.test(blockedCall.message),
+    'bridge L21: after deny-by-default the in-Pod call to backend gets no answer',
+    blockedCall.message
+  );
+
+  // allow-same-namespace is the project's own Pods only: it must not let the router in.
+  await sh('oc apply -f netpol/allow-same-namespace.yaml');
+  await advanceGame(2);
+  routeCode = await routeStatus();
+  assert(
+    routeCode === '503' && !(await objectives())[3].done,
+    'bridge L21: allow-same-namespace does not admit the router (other projects stay locked out)',
+    `${routeCode} | ${await ticks()}`
+  );
+  await sh('oc apply -f netpol/allow-from-openshift-ingress.yaml');
+  await advanceGame(2);
+  route = await sh(`curl -k ${ROUTE}`);
+  assert(
+    /Welcome to nginx/.test(route.message) && (await objectives())[3].done,
+    'bridge L21: allow-from-openshift-ingress (policy-group.network.openshift.io/ingress) lets the router back in — the Route answers and ticks',
+    `${route.message.slice(0, 80)} | ${await ticks()}`
+  );
+
+  await sh('oc apply -f netpol/deny-all-egress.yaml');
+  await advanceGame(2);
+  let lookup = await sh('oc exec deploy/frontend -- nslookup backend');
+  states = await objectives();
+  assert(
+    lookup.error &&
+      /connection timed out/.test(lookup.message) &&
+      !states[4].done &&
+      !states[7].done,
+    'bridge L21: deny-all-egress breaks DNS — no tick for "keep DNS" and none for "away from the internet" (a DNS failure is not an egress block)',
+    JSON.stringify({ lookup: lookup.message, ticks: await ticks() })
+  );
+  // The classic OpenShift trap: the Service says 53, the dns-default Pods listen on 5353.
+  await sh(
+    "sed -e 's/name: allow-dns/name: allow-dns-53/' -e 's/5353/53/' netpol/allow-dns.yaml | oc apply -f -"
+  );
+  await advanceGame(2);
+  lookup = await sh('oc exec deploy/frontend -- nslookup backend');
+  assert(
+    lookup.error && !(await objectives())[4].done,
+    'bridge L21: an egress rule for port 53 does not unblock DNS (dns-default listens on 5353)',
+    JSON.stringify({ lookup: lookup.message, ticks: await ticks() })
+  );
+  await sh('oc apply -f netpol/allow-dns.yaml');
+  await sh('oc delete networkpolicy allow-dns-53');
+  await advanceGame(2);
+  lookup = await sh('oc exec deploy/frontend -- nslookup backend');
+  states = await objectives();
+  assert(
+    !lookup.error &&
+      /backend\.netpol-lab\.svc\.cluster\.local/.test(lookup.message) &&
+      states[4].done &&
+      states[7].done,
+    'bridge L21: UDP/TCP 5353 to openshift-dns restores DNS and the internet stays blocked',
+    JSON.stringify({ lookup: lookup.message, ticks: await ticks() })
+  );
+
+  // Over-broad egress (an egress copy of allow-same-namespace) reopens backend → frontend and
+  // breaks the project's isolation, so the guard and the isolation-based checks un-tick.
+  await sh(
+    "sed -e 's/allow-same-namespace/allow-egress-same-namespace/' -e 's/ingress:/egress:/' -e 's/from:/to:/' netpol/allow-same-namespace.yaml | oc apply -f -"
+  );
+  await advanceGame(2);
+  states = await objectives();
+  assert(
+    !states[6].done && !states[4].done && !states[5].done,
+    'bridge L21: an egress rule for every Pod un-ticks the one-way guard and the isolation-based checks',
+    await ticks()
+  );
+  await sh('oc delete networkpolicy allow-egress-same-namespace');
+  await advanceGame(2);
+  states = await objectives();
+  assert(
+    states[6].done && states[4].done,
+    'bridge L21: deleting the broad egress rule restores isolation (policies only ever add allows)',
+    await ticks()
+  );
+
+  // The starter applied unchanged selects app=SOURCE-APP: it opens nothing.
+  await sh('oc apply -f netpol/allow-frontend-to-backend.yaml');
+  await advanceGame(2);
+  assert(
+    !(await objectives())[5].done,
+    'bridge L21: the egress starter applied without filling SOURCE-APP/TARGET-APP opens nothing',
+    await ticks()
+  );
+  await sh(
+    "sed -e 's/SOURCE-APP/frontend/' -e 's/TARGET-APP/backend/' netpol/allow-frontend-to-backend.yaml | oc apply -f -"
+  );
+  const reopened = await sh('oc exec deploy/frontend -- curl -s http://backend:8080');
+  for (let waited = 0; waited < 6 && (await levelState()) !== 'completed'; waited += 1) {
+    await advanceGame(1);
+  }
+  assert(
+    /Hello/.test(reopened.message) &&
+      (await ticks()) === '11111111' &&
+      (await levelState()) === 'completed',
+    'bridge L21: the adapted egress rule reopens exactly frontend → backend:8080 — every objective ticks and the level completes',
+    JSON.stringify({ reopened: reopened.message, ticks: await ticks(), state: await levelState() })
+  );
+
+  // ── L22 Nodes & Cluster Troubleshooting ──────────────────────────────────
+  section('bridge: L22 Nodes & Cluster Troubleshooting');
+  assert(await startLevel(22), 'bridge: L22 starts');
+  await sh('oc project node-lab');
+  await advanceGame(4);
+  const webOnWorker0 = await evaluate(
+    () =>
+      window.game.cluster
+        .getByKindAndNamespace('Pod', 'node-lab')
+        .filter((pod) => pod.spec?.nodeName === 'worker-0').length
+  );
+  assert(
+    webOnWorker0 > 0 && (await ticks()) === '00000000',
+    'bridge L22: web runs on worker-0 at the start and nothing is ticked',
+    JSON.stringify({ webOnWorker0, ticks: await ticks() })
+  );
+  const missing = await sh('oc describe node worker-9');
+  assert(
+    missing.error && !(await objectives())[2].done,
+    'bridge L22: a failed `oc describe node` does not count as reading a node',
+    missing.message
+  );
+  for (const raw of [
+    'oc get nodes',
+    'oc adm top nodes',
+    'oc describe node worker-0',
+    'oc get clusteroperators',
+    'oc get clusterversion',
+  ])
+    await sh(raw);
+  assert(
+    (await ticks()).startsWith('1111'),
+    'bridge L22: get nodes / adm top / describe node / get clusteroperators tick the four inspection steps',
+    await ticks()
+  );
+
+  await sh('oc adm cordon worker-0');
+  await advanceGame(2);
+  let nodes = await sh('oc get nodes');
+  states = await objectives();
+  assert(
+    /worker-0\s+Ready,SchedulingDisabled/.test(nodes.message) &&
+      !states[4].done &&
+      /cordoned but still runs/.test(states[4].note || '') &&
+      /oc adm drain worker-0 --ignore-daemonsets --delete-emptydir-data/.test(states[4].fix || ''),
+    'bridge L22: cordon alone is not a drain — the objective stays unticked and its note names the drain command',
+    JSON.stringify({ nodes: nodes.message, note: states[4] })
+  );
+  const drained = await sh('oc adm drain worker-0 --ignore-daemonsets --delete-emptydir-data');
+  await advanceGame(10);
+  const afterDrain = await evaluate(() =>
+    window.game.cluster.getByKindAndNamespace('Pod', 'node-lab').map((pod) => ({
+      node: pod.spec?.nodeName,
+      phase: pod.status?.phase,
+    }))
+  );
+  states = await objectives();
+  assert(
+    !drained.error &&
+      /node\/worker-0 drained/.test(drained.message) &&
+      afterDrain.length === 4 &&
+      afterDrain.every((pod) => pod.node !== 'worker-0' && pod.phase === 'Running') &&
+      states[4].done &&
+      !states[5].done,
+    'bridge L22: the drain moves every web Pod off worker-0 and web stays fully available — drained, but not yet back in service',
+    JSON.stringify({ drained: drained.message.slice(0, 200), afterDrain, ticks: await ticks() })
+  );
+  assert(
+    /still cordoned/.test(states[5].note || '') && states[5].fix === 'oc adm uncordon worker-0',
+    'bridge L22: a drained node that is not uncordoned explains itself (fix: oc adm uncordon worker-0)',
+    JSON.stringify(states[5])
+  );
+  await sh('oc adm uncordon worker-0');
+  await advanceGame(2);
+  assert(
+    (await ticks()).startsWith('111111'),
+    'bridge L22: uncordon after the drain puts worker-0 back in service',
+    await ticks()
+  );
+
+  // The drain evidence belongs to one run: a restarted level starts unticked, and an uncordon
+  // without a drain never counts.
+  assert(await startLevel(22), 'bridge: L22 restarts');
+  await sh('oc project node-lab');
+  await advanceGame(3);
+  await sh('oc adm uncordon worker-0');
+  await advanceGame(2);
+  states = await objectives();
+  assert(
+    !states[4].done && !states[5].done,
+    'bridge L22: after a restart, `oc adm uncordon` without a drain ticks neither maintenance objective',
+    await ticks()
+  );
+  for (const raw of [
+    'oc get nodes',
+    'oc adm top pods',
+    'oc describe node master-0',
+    'oc get co',
+    'oc adm cordon worker-0',
+    'oc adm drain worker-0 --ignore-daemonsets --delete-emptydir-data',
+  ])
+    await sh(raw);
+  await advanceGame(10);
+  await sh('oc adm uncordon worker-0');
+  await advanceGame(2);
+  for (let waited = 0; waited < 150; waited += 2) {
+    const active = await evaluate(() =>
+      [...(window.game.incidentEngine.activeIncidents?.values?.() || [])].some(
+        (incident) => incident.name === 'NodeNotReady'
+      )
+    );
+    if (active) break;
+    await advanceGame(2);
+  }
+  nodes = await sh('oc get nodes');
+  states = await objectives();
+  assert(
+    /worker-1\s+NotReady/.test(nodes.message) && (await ticks()) === '11111100',
+    'bridge L22: about 120 s in worker-1 turns NotReady; the incident and cluster-health objectives are open',
+    JSON.stringify({ nodes: nodes.message, ticks: await ticks() })
+  );
+  let step = await sh('oc debug node/worker-1');
+  const beforeChroot = await sh('systemctl status kubelet');
+  await sh('chroot /host');
+  const status = await sh('systemctl status kubelet');
+  const journal = await sh('journalctl -u kubelet');
+  assert(
+    /sh-5\.1#/.test(step.message) &&
+      beforeChroot.error &&
+      /command not found/.test(beforeChroot.message) &&
+      /inactive \(dead\)/.test(status.message) &&
+      /Failed to start kubelet/.test(journal.message),
+    'bridge L22: oc debug node → host tools only after chroot /host; systemctl status / journalctl show the stopped kubelet',
+    JSON.stringify({ status: status.message, journal: journal.message.slice(0, 200) })
+  );
+  await advanceGame(4);
+  assert(
+    !(await objectives())[6].done,
+    'bridge L22: looking at the kubelet does not resolve the incident',
+    await ticks()
+  );
+  await sh('systemctl restart kubelet');
+  await sh('exit');
+  step = await sh('exit');
+  const back = await sh('oc get nodes');
+  for (let waited = 0; waited < 8 && (await levelState()) !== 'completed'; waited += 1) {
+    await advanceGame(1);
+  }
+  assert(
+    !back.error && /worker-1\s+Ready\s/.test(back.message) && (await levelState()) === 'completed',
+    'bridge L22: systemctl restart kubelet + exit twice → worker-1 Ready, incident resolved, cluster healthy, level complete',
+    JSON.stringify({ back: back.message, ticks: await ticks(), state: await levelState() })
+  );
+
+  // ── L12: MetalLB pre-installed, configured by the player ────────────────
+  section('bridge: L12 MetalLB pre-installed');
+  assert(await startLevel(12), 'bridge: L12 starts');
+  const early = await sh('oc get csv -n metallb-system');
+  assert(
+    !/Succeeded/.test(early.message) && !(await objectives())[0].done,
+    'bridge L12: a CSV read before OLM finished does not count as checking the operator',
+    `${early.message} | ${await ticks()}`
+  );
+  await sh('oc project lb-lab');
+  await advanceGame(10);
+  const csv = await sh('oc get csv -n metallb-system');
+  const olm = await evaluate(() => ({
+    status: window.game.app.modeInstance.getStatus().workProject,
+    sub: window.game.cluster.getByName('Subscription', 'metallb-operator', 'metallb-system')?.status
+      ?.installedCSV,
+    plans: (window.game.cluster.getByKindAndNamespace('InstallPlan', 'metallb-system') || []).map(
+      (plan) => plan.status?.phase
+    ),
+  }));
+  assert(
+    /metallb-operator\.v4\.22\.0-202610281200/.test(csv.message) &&
+      /Succeeded/.test(csv.message) &&
+      olm.sub === 'metallb-operator.v4.22.0-202610281200' &&
+      olm.plans.includes('Complete') &&
+      olm.status === 'lb-lab' &&
+      (await objectives())[0].done,
+    'bridge L12: the seeded Subscription installs MetalLB within seconds; reading the Succeeded CSV ticks the check (project row lb-lab)',
+    JSON.stringify({ csv: csv.message, olm, ticks: await ticks() })
+  );
+  await sh(
+    'oc expose deployment tls-app --type=LoadBalancer --name=tls-app-lb --port=443 --target-port=8443'
+  );
+  await advanceGame(4);
+  let lb = await sh('oc get service tls-app-lb');
+  assert(
+    /<pending>/.test(lb.message) && !(await objectives())[4].done,
+    'bridge L12: without the MetalLB resource, pool and advertisement the LoadBalancer stays <pending>',
+    `${lb.message} | ${await ticks()}`
+  );
+  await sh('oc apply -f examples/metallb.yaml');
+  await advanceGame(6);
+  lb = await sh('oc get service tls-app-lb');
+  const operands = await sh('oc get pods -n metallb-system');
+  assert(
+    /192\.168\.100\.2\d\d/.test(lb.message) &&
+      /controller-/.test(operands.message) &&
+      /speaker-/.test(operands.message) &&
+      (await ticks()).startsWith('11111'),
+    'bridge L12: examples/metallb.yaml starts the speakers and the LoadBalancer gets an EXTERNAL-IP from the pool',
+    JSON.stringify({
+      lb: lb.message,
+      operands: operands.message.slice(0, 300),
+      ticks: await ticks(),
+    })
+  );
+  await sh('oc delete l2advertisement metallb-l2 -n metallb-system');
+  await advanceGame(3);
+  // Real MetalLB: the controller assigns from a pool, the speakers only announce what an
+  // L2Advertisement covers — so only the advertisement objective is checked here.
+  assert(
+    !(await objectives())[3].done && (await levelState()) !== 'completed',
+    'bridge L12: deleting the L2Advertisement un-ticks the advertisement objective (a pool alone is not announced)',
+    await ticks()
+  );
+  await sh('oc apply -f examples/metallb.yaml');
+  await sh('oc create route passthrough tls-app --service=tls-app');
+  await advanceGame(4);
+  const host = await sh("oc get route tls-app -o jsonpath='{.spec.host}'");
+  const tlsCurl = await sh(
+    `curl -k -s -o /dev/null -w '%{http_code}' https://${host.message.trim()}`
+  );
+  for (let waited = 0; waited < 6 && (await levelState()) !== 'completed'; waited += 1) {
+    await advanceGame(1);
+  }
+  assert(
+    /200/.test(tlsCurl.message) && (await levelState()) === 'completed',
+    'bridge L12: the passthrough Route reaches the TLS backend (200) and the level completes',
+    JSON.stringify({ tlsCurl: tlsCurl.message, ticks: await ticks(), state: await levelState() })
+  );
+
+  // ── L11: the edge Route must serve the openssl certificate ───────────────
+  section('bridge: L11 edge Route with the openssl certificate');
+  assert(await startLevel(11), 'bridge: L11 starts');
+  for (const raw of [
+    'oc project route-lab',
+    'oc create service clusterip web --tcp=8080:8080',
+    'openssl req -x509 -newkey rsa:2048 -nodes -keyout tls.key -out tls.crt -days 365 -subj "/CN=web-route-lab.apps.cluster.example.com"',
+    'oc create secret tls web-tls --cert=tls.crt --key=tls.key',
+    'oc create route edge web --service=web',
+  ])
+    await sh(raw);
+  await advanceGame(3);
+  states = await objectives();
+  assert(
+    states[3].done && !states[4].done && (await levelState()) !== 'completed',
+    'bridge L11: an edge Route without --cert/--key is admitted but does not count as serving your certificate',
+    await ticks()
+  );
+  await sh('oc delete route web');
+  await sh('oc create route edge web --service=web --cert=tls.crt --key=tls.key');
+  for (let waited = 0; waited < 6 && (await levelState()) !== 'completed'; waited += 1) {
+    await advanceGame(1);
+  }
+  const served = await sh("oc get route web -o jsonpath='{.spec.tls.certificate}'");
+  assert(
+    /BEGIN CERTIFICATE/.test(served.message) && (await levelState()) === 'completed',
+    'bridge L11: the edge Route created with the openssl files serves that certificate and the level completes',
+    JSON.stringify({ served: served.message.slice(0, 60), ticks: await ticks() })
+  );
+  await returnToMenu();
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 1.16.0 — Linux & RHEL Foundations prelude (levels 101–107): grading truth
+// ═══════════════════════════════════════════════════════════════════════════
+await runSection('qa-linux-levels', async () => {
+  // The prelude is graded from the simulated RHEL workstation's STATE. qa-guidance-replay proves
+  // the authored how-tos complete every level; this section proves the opposite direction: the
+  // tempting WRONG moves of a newcomer never tick (copy vs move, `>` vs `>>`, `grep -i`, started
+  // but not enabled, runtime vs permanent firewall rules, root-owned files, `podman stop` without
+  // `rm`, …), the real RHEL error a learner reads on the way, and that each level still completes
+  // through an alternative correct path (not only the how-to's exact commands).
+  await bootMenu();
+  const sh = (command) => runCmd(command, 40);
+  const ticks = () =>
+    evaluate(() => {
+      const mode = window.game?.app?.modeInstance;
+      mode?.updateObjectives?.();
+      return (mode?.getStatus?.().objectives || []).map((objective) =>
+        Boolean(objective.completed)
+      );
+    });
+  const startLevel = async (id) => {
+    await bootMenu();
+    const ok = await launch('campaign', id);
+    await closeOverlays();
+    const started = ok && (await evaluate(() => window.game?.app?.modeInstance?.currentLevel));
+    assert(started === id, `linux L${id}: level starts`, String(started));
+    const atStart = await ticks();
+    assert(
+      atStart.length >= 4 && atStart.every((done) => !done),
+      `linux L${id}: no objective is ticked at level start`,
+      JSON.stringify(atStart)
+    );
+    return started === id;
+  };
+  /** Assert objective `index` (0-based) is ticked (`expected` true) or not after the last command. */
+  const expectTick = async (id, index, expected, name) => {
+    const now = await ticks();
+    assert(now[index] === expected, `linux L${id}: ${name}`, JSON.stringify(now));
+  };
+  const expectFails = async (id, command, pattern, name) => {
+    const result = await sh(command);
+    assert(
+      result.error && pattern.test(result.message),
+      `linux L${id}: ${name}`,
+      `${command} → error=${result.error} ${result.message.slice(0, 200)}`
+    );
+    return result;
+  };
+  const expectOutput = async (id, command, pattern, name) => {
+    const result = await sh(command);
+    assert(
+      !result.error && pattern.test(result.message),
+      `linux L${id}: ${name}`,
+      `${command} → error=${result.error} ${result.message.slice(0, 200)}`
+    );
+    return result;
+  };
+  const expectCompleted = async (id, name) => {
+    const state = await evaluate(() => {
+      const mode = window.game?.app?.modeInstance;
+      mode?.update?.();
+      return mode?.state;
+    });
+    assert(state === 'completed', `linux L${id}: ${name}`, String(state));
+  };
+
+  // ── 0.1 The Shell & the Filesystem ──────────────────────────────────────
+  // A FRESH page: the Files panel's ManifestEngine is created after the first level starts,
+  // which once brought the OpenShift lab files back into the prelude's clean home.
+  await goto('/?tutorial=0');
+  if (await startLevel(101)) {
+    await expectOutput(101, 'pwd', /^\/home\/student\s*$/, 'the shell starts in /home/student');
+    await expectOutput(
+      101,
+      'ls ~',
+      /^(?![\s\S]*\b(examples|manifests|kustomize|netpol|helm|templates)\b)[\s\S]*Downloads/,
+      'first launch on a fresh page: the home holds Downloads, not the OpenShift lab files'
+    );
+    // Tab completes the current word like bash: unique directory → `Downloads/`, the rest of
+    // the line stays (it used to be replaced by a deep `Downloads/deployment.yaml` path).
+    const tabbed = await evaluate(async () => {
+      window.game?.app?.commandBar?.show?.();
+      const input = document.getElementById('cmd-input');
+      if (!input) return null;
+      const results = [];
+      for (const typed of ['ls -l ~/Dow', 'cd Dow']) {
+        input.value = typed;
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        input.dispatchEvent(
+          new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true })
+        );
+        await new Promise((resolve) => setTimeout(resolve, 60));
+        results.push(input.value);
+      }
+      input.value = '';
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      return results;
+    });
+    assert(
+      Array.isArray(tabbed) &&
+        /^ls -l ~\/Downloads\/\s*$/.test(tabbed[0]) &&
+        /^cd Downloads\/\s*$/.test(tabbed[1]),
+      'linux L101: Tab completes `~/Dow` and `Dow` to `Downloads/` and keeps the command',
+      JSON.stringify(tabbed)
+    );
+    await sh('ls ~/Downloads');
+    await expectTick(101, 0, false, '`ls` without -l does not tick the long-listing objective');
+    await sh('ls -l');
+    await expectTick(101, 0, false, '`ls -l` of the home directory does not tick it either');
+    await sh('cd ~/Downloads');
+    await expectOutput(
+      101,
+      'pwd',
+      /^\/home\/student\/Downloads\s*$/,
+      '`cd ~/Downloads` moves the shell'
+    );
+    await sh('ls -l');
+    await expectTick(
+      101,
+      0,
+      true,
+      '`cd Downloads` then `ls -l` ticks (cwd-aware, like `ls -l ~/Downloads`)'
+    );
+    await sh('cd');
+    await expectFails(
+      101,
+      'mkdir ~/ex280/manifests',
+      /cannot create directory.*No such file or directory/,
+      'mkdir without -p fails like coreutils when the parent is missing'
+    );
+    await expectTick(101, 1, false, 'the failed mkdir does not tick');
+    await sh('mkdir -p ~/ex280/manifests');
+    await expectTick(101, 1, true, '`mkdir -p` creates the workspace');
+    await sh('mv ~/Downloads/*.yaml ~/ex280/manifests/');
+    await expectTick(
+      101,
+      2,
+      false,
+      'MOVING the manifests (originals gone) does not count as copying'
+    );
+    await sh('cp ~/ex280/manifests/*.yaml ~/Downloads/');
+    await expectTick(101, 2, true, 'with the originals back in Downloads the copy objective ticks');
+    await sh('cp ~/Downloads/ex280-notes.txt ~/ex280/notes.txt');
+    await expectTick(
+      101,
+      3,
+      false,
+      'COPYING the notes (the old file still in Downloads) is not a move'
+    );
+    await sh('rm ~/Downloads/ex280-notes.txt');
+    await expectTick(101, 3, true, 'removing the old copy completes the move');
+    await expectFails(
+      101,
+      'rm ~/Downloads/old-drafts',
+      /Is a directory/,
+      '`rm DIR` refuses a directory'
+    );
+    await expectFails(
+      101,
+      'rmdir ~/Downloads/old-drafts',
+      /Directory not empty/,
+      '`rmdir` refuses a non-empty directory'
+    );
+    await expectTick(101, 4, false, 'old-drafts still exists after the refused deletions');
+    await sh('rm -r ~/Downloads/old-drafts');
+    await expectTick(101, 4, true, '`rm -r` deletes the directory');
+    await expectCompleted(101, 'an alternative correct path completes the level');
+  }
+
+  // ── 0.2 Read, Search & Pipe Text ─────────────────────────────────────────
+  if (await startLevel(102)) {
+    await expectFails(
+      102,
+      'tail -n 5 shop.log',
+      /No such file or directory/,
+      'a relative name from the wrong directory fails'
+    );
+    await expectTick(102, 0, false, 'the failed tail does not tick the reading objective');
+    await sh('cd ~/ex280/logs');
+    await sh('tail -n 5 shop.log');
+    await expectTick(102, 0, true, '`tail` in ~/ex280/logs ticks');
+    await sh('grep -i error shop.log > errors.txt');
+    await expectTick(
+      102,
+      1,
+      false,
+      '`grep -i error` also catches a WARN line: not only the ERROR lines'
+    );
+    await sh('grep ERROR shop.log > errors.txt');
+    await expectTick(102, 1, true, '`grep ERROR > errors.txt` ticks');
+    await sh('grep -c ERROR shop.log > summary.txt');
+    await sh('grep -c WARN shop.log > summary.txt');
+    await expectOutput(102, 'cat summary.txt', /^4\s*$/, '`>` twice keeps only the last count');
+    await expectTick(102, 2, false, 'the overwritten summary does not tick');
+    await sh('grep -c ERROR shop.log > summary.txt');
+    await sh('grep -c WARN shop.log >> summary.txt');
+    await expectTick(102, 2, true, '`>` then `>>` writes both counts');
+    await sh("grep ERROR shop.log | cut -d' ' -f3 > failing-pods.txt");
+    await expectTick(102, 3, false, 'a list with repeated Pods (no sort -u) does not tick');
+    await sh("grep ERROR shop.log | cut -d' ' -f3 | sort | uniq -c > failing-pods.txt");
+    await expectTick(102, 3, true, '`sort | uniq -c` (counted, one line per Pod) is accepted');
+    await sh('grep healthz shop.log > shop-clean.log');
+    await expectTick(102, 4, false, 'keeping ONLY the healthz lines is the opposite of the task');
+    await sh('grep -v /healthz shop.log > shop-clean.log');
+    await expectTick(102, 4, true, '`grep -v` removes the probe noise');
+    await expectCompleted(102, 'an alternative correct path completes the level');
+  }
+
+  // ── 0.3 Edit Files & the Shell Environment — wrong moves first ──────────
+  if (await startLevel(103)) {
+    await sh(
+      "printf 'apiVersion: v1\\nkind: ConfigMap\\nmetadata:\\n\\tname: app-config\\ndata:\\n  APP_MODE: production\\n' > ~/ex280/manifests/configmap.yaml"
+    );
+    await expectTick(
+      103,
+      0,
+      false,
+      'a ConfigMap indented with a TAB does not parse and does not tick'
+    );
+    await sh(
+      "printf 'apiVersion: v1\\nkind: ConfigMap\\nmetadata:\\n  name: app-config\\ndata:\\n  APP_MODE: production\\n' > ~/ex280/manifests/configmap.yaml"
+    );
+    await expectTick(103, 0, true, 'the space-indented ConfigMap ticks');
+    await sh("sed -i 's/production/staging/' ~/ex280/manifests/configmap.yaml");
+    await expectTick(103, 0, false, '`sed -i` on the source rewrites production into staging');
+    await expectTick(103, 1, false, '…and still creates no staging copy');
+    await expectOutput(
+      103,
+      'cat -A ~/ex280/manifests/pod.yaml',
+      /\^Iimage:/,
+      '`cat -A` reveals the TAB as ^I'
+    );
+    await sh("echo 'export KUBE_EDITOR=vim' > ~/.bashrc");
+    await expectTick(103, 3, false, '`>` overwrote ~/.bashrc (skeleton gone): not ticked');
+    await sh('KUBE_EDITOR=vim');
+    await expectTick(
+      103,
+      4,
+      false,
+      'an unexported shell variable does not reach programs: not ticked'
+    );
+    await sh('export KUBE_EDITOR=vim');
+    await expectTick(103, 4, true, '`export` ticks the environment objective');
+    await sh('mkdir -p ~/bin');
+    await sh('echo "echo User: $(whoami)" > ~/bin/lab-info.sh');
+    await expectTick(
+      103,
+      5,
+      false,
+      'double quotes expanded $(whoami) at write time and no shebang'
+    );
+  }
+  // …then a clean run through an alternative correct path.
+  if (await startLevel(103)) {
+    await sh(
+      "printf 'apiVersion: v1\\nkind: ConfigMap\\nmetadata:\\n  name: app-config\\ndata:\\n  APP_MODE: production\\n' > ~/ex280/manifests/configmap.yaml"
+    );
+    await sh('cd ~/ex280/manifests');
+    await sh("sed 's/production/staging/' configmap.yaml > configmap-staging.yaml");
+    await expectTick(
+      103,
+      1,
+      true,
+      '`sed … > file` (redirect instead of tee) creates the staging copy'
+    );
+    await expectTick(103, 0, true, 'the production ConfigMap is untouched');
+    await sh("sed -i 's/\\t/  /' pod.yaml");
+    await expectTick(103, 2, true, '`sed -i` replaces the TAB and pod.yaml parses');
+    await sh("echo 'export KUBE_EDITOR=vim' >> ~/.bashrc");
+    await expectTick(103, 3, true, '`>>` appends to ~/.bashrc and keeps the skeleton');
+    await expectTick(103, 4, false, 'editing ~/.bashrc does not change the running shell');
+    await sh('source ~/.bashrc');
+    await expectTick(103, 4, true, '`source ~/.bashrc` loads KUBE_EDITOR');
+    await sh('mkdir -p ~/bin');
+    await sh(
+      `printf '#!/bin/bash\\necho "User: $(whoami) on $(hostname)"\\necho "Editor: $KUBE_EDITOR"\\n' > ~/bin/lab-info.sh`
+    );
+    await expectOutput(
+      103,
+      'cat ~/bin/lab-info.sh',
+      /^#!\/bin\/bash\n[\s\S]*\$\(whoami\)/,
+      'single quotes keep $(whoami) literal in the script'
+    );
+    await expectOutput(
+      103,
+      'bash ~/bin/lab-info.sh',
+      /User: student on workstation[\s\S]*Editor: vim/,
+      'bash runs the script: $(whoami) expands, the exported KUBE_EDITOR is visible'
+    );
+    await expectCompleted(103, 'an alternative correct path completes the level');
+  }
+
+  // ── 0.4 Users, Permissions & SELinux ─────────────────────────────────────
+  if (await startLevel(104)) {
+    await expectFails(
+      104,
+      'cat ~/.kube/config',
+      /cat: \/home\/student\/\.kube\/config: Permission denied/,
+      'student cannot read the root-owned 0640 kubeconfig'
+    );
+    await expectFails(
+      104,
+      'chmod 600 ~/.kube/config',
+      /Operation not permitted/,
+      'chmod on a file you do not own fails'
+    );
+    await expectFails(
+      104,
+      'chown student:student ~/.kube/config',
+      /Operation not permitted/,
+      'chown without sudo fails'
+    );
+    await expectTick(104, 1, false, 'the kubeconfig still belongs to root');
+    await sh('sudo chown student ~/.kube/config');
+    await expectTick(104, 1, false, 'owner student but group still root: not ticked');
+    await sh('sudo chgrp student ~/.kube/config');
+    await expectTick(104, 1, true, '`chown` + `chgrp` give owner and group to student');
+    await expectTick(104, 2, false, 'mode is still 0640 (group-readable)');
+    await sh('chmod 644 ~/.kube/config');
+    await expectTick(104, 2, false, 'a world-readable kubeconfig is not private');
+    await sh('chmod go-rwx ~/.kube/config');
+    await expectTick(104, 2, true, 'symbolic `go-rwx` from 644 leaves 600');
+    await expectFails(
+      104,
+      'lab-info.sh',
+      /Permission denied/,
+      'a script without the execute bit cannot run by name'
+    );
+    await sh('chmod 777 ~/bin/lab-info.sh');
+    await expectTick(104, 3, false, '777 is executable but world-writable: not ticked');
+    await sh('chmod 755 ~/bin/lab-info.sh');
+    await expectTick(104, 3, true, 'octal 755 is accepted');
+    await expectOutput(
+      104,
+      'lab-info.sh',
+      /User: student/,
+      'the script now runs by name from PATH'
+    );
+    await sh('whoami');
+    await expectTick(104, 0, false, '`whoami` alone does not show the groups');
+    await sh('id');
+    await expectTick(104, 0, true, '`id` ticks');
+    await expectOutput(104, 'getenforce', /^Enforcing\s*$/, 'SELinux is enforcing');
+    await expectTick(104, 4, true, '`getenforce` ticks');
+    await expectOutput(
+      104,
+      'ls -Z /var/www/html/index.html',
+      /admin_home_t/,
+      "the page moved from /root still carries root's home label admin_home_t"
+    );
+    await expectFails(
+      104,
+      'restorecon -v /var/www/html/index.html',
+      /Permission denied|Operation not permitted/,
+      'restorecon without sudo is refused'
+    );
+    await expectTick(104, 5, false, 'the label is still wrong');
+    await expectOutput(
+      104,
+      'sudo restorecon -v /var/www/html/index.html',
+      /Relabeled \/var\/www\/html\/index\.html from .*admin_home_t.* to .*httpd_sys_content_t/,
+      '`restorecon -v` reports the relabel like RHEL'
+    );
+    await expectTick(104, 5, true, 'the page has httpd_sys_content_t');
+    await expectCompleted(104, 'an alternative correct path completes the level');
+  }
+
+  // ── 0.5 Processes, Services & Logs ───────────────────────────────────────
+  if (await startLevel(105)) {
+    await expectOutput(
+      105,
+      'ps aux --sort=-%cpu | head -n 3',
+      /student\s+3871\s.*dd if=\/dev\/zero of=\/dev\/null/,
+      'the runaway dd tops `ps aux --sort=-%cpu`'
+    );
+    await expectFails(
+      105,
+      'kill 99999',
+      /No such process/,
+      'kill of a missing PID fails like bash'
+    );
+    await expectTick(105, 0, false, 'dd still runs');
+    await sh('pkill -x dd');
+    await expectTick(105, 0, true, '`pkill -x dd` stops it too');
+    await expectFails(
+      105,
+      'sudo systemctl restart httpd',
+      /Job for httpd\.service failed/,
+      'restarting httpd before the fix fails again'
+    );
+    await expectTick(105, 2, false, 'httpd is not running');
+    await expectOutput(
+      105,
+      'journalctl -u httpd --no-pager',
+      /line 5 of \/etc\/httpd\/conf\.d\/labfiles\.conf[\s\S]*Invalid command 'Requre'/,
+      'the journal names the file, line 5 and the misspelled directive'
+    );
+    await expectTick(105, 1, true, 'reading the httpd journal ticks');
+    await sh("sudo sed -i 's/Requre/Require/' /etc/httpd/conf.d/labfiles.conf");
+    await expectFails(
+      105,
+      'systemctl start httpd',
+      /Access denied|authentication required|Interactive authentication/i,
+      'systemctl start as student is refused by polkit'
+    );
+    await sh('sudo systemctl start httpd');
+    await expectTick(105, 2, true, 'httpd runs after the fix');
+    await expectTick(105, 3, false, 'STARTED but not ENABLED: the boot objective stays open');
+    await sh('sudo systemctl enable httpd');
+    await expectTick(105, 3, true, '`enable` ticks the boot objective');
+    await sh('sudo systemctl start chronyd');
+    await expectTick(105, 4, false, 'chronyd started but not enabled: not ticked');
+    await sh('sudo systemctl enable chronyd');
+    await expectTick(105, 4, true, 'chronyd running and enabled');
+    await expectCompleted(105, 'an alternative correct path completes the level');
+  }
+
+  // ── 0.6 Networking & the Firewall ────────────────────────────────────────
+  if (await startLevel(106)) {
+    await sh('ip addr');
+    await expectTick(106, 0, false, '`ip addr` alone does not show the default route');
+    await expectOutput(
+      106,
+      'ip route',
+      /default via 172\.25\.250\.254 dev eth0/,
+      'ip route shows the gateway'
+    );
+    await expectTick(106, 0, true, '`ip route` ticks');
+    await sh('dig api.cluster.example.com');
+    await expectTick(106, 1, false, 'resolving the API name is not the apps wildcard');
+    await expectOutput(
+      106,
+      'dig +short myapp-shop.apps.cluster.example.com',
+      /^192\.168\.50\.11\s*$/,
+      'any *.apps name resolves to the ingress VIP'
+    );
+    await expectTick(106, 1, true, 'resolving an apps name ticks');
+    await expectOutput(
+      106,
+      'getent hosts api.cluster.example.com',
+      /^192\.168\.50\.99\s+api\.cluster\.example\.com/,
+      '/etc/hosts wins over DNS for getent'
+    );
+    await expectFails(
+      106,
+      'ping -c 1 api.cluster.example.com',
+      /100% packet loss/,
+      'ping follows the stale /etc/hosts address and gets no answer'
+    );
+    await expectFails(
+      106,
+      "sed -i '/api.cluster.example.com/d' /etc/hosts",
+      /Permission denied/,
+      'editing /etc/hosts needs root'
+    );
+    await sh("sudo sed -i 's/192.168.50.99/192.168.50.98/' /etc/hosts");
+    await expectTick(
+      106,
+      2,
+      false,
+      'replacing the stale address with another wrong one does not tick'
+    );
+    await sh("sudo sed -i 's/^192.168.50.98/# 192.168.50.98/' /etc/hosts");
+    await expectTick(106, 2, true, 'commenting the line out removes the override');
+    await expectOutput(
+      106,
+      'curl -k https://api.cluster.example.com:6443/readyz',
+      /^ok\s*$/,
+      'the API answers once the name resolves through DNS'
+    );
+    await expectFails(
+      106,
+      'firewall-cmd --add-service=http',
+      /Authorization failed/,
+      'firewall-cmd as student is refused'
+    );
+    await sh('sudo firewall-cmd --permanent --add-service=http');
+    await expectTick(106, 4, true, '`--permanent` writes the saved configuration');
+    await expectTick(106, 3, false, '…but does not change the running firewall');
+    await sh('sudo firewall-cmd --reload');
+    await expectTick(106, 3, true, '`--reload` activates the saved rule');
+    await sh('sudo firewall-cmd --permanent --remove-service=http');
+    await sh('sudo firewall-cmd --reload');
+    await expectTick(106, 3, false, 'a reload drops a rule that is not permanent');
+    await sh('sudo firewall-cmd --add-service=http');
+    await expectTick(106, 4, false, 'a runtime-only rule is not permanent');
+    await sh('sudo firewall-cmd --runtime-to-permanent');
+    await expectTick(106, 4, true, '`--runtime-to-permanent` saves it');
+    await expectCompleted(106, 'an alternative correct path completes the level');
+  }
+
+  // ── 0.7 Packages & Containers ────────────────────────────────────────────
+  if (await startLevel(107)) {
+    await expectFails(
+      107,
+      'oc version --client',
+      /bash: oc: command not found/,
+      'a fresh RHEL machine has no oc until openshift-clients is installed'
+    );
+    await expectFails(
+      107,
+      'dnf install -y openshift-clients',
+      /This command has to be run with superuser privileges/,
+      'dnf install as student is refused'
+    );
+    await expectTick(107, 0, false, 'openshift-clients still missing');
+    await sh('sudo dnf install -y openshift-clients');
+    await expectTick(107, 0, true, 'openshift-clients installed');
+    await expectOutput(
+      107,
+      'oc version --client',
+      /Client Version: 4\.22/,
+      'the installed oc reports its client version'
+    );
+    await sh('podman stop old-test');
+    await expectTick(107, 1, false, 'a STOPPED container still exists');
+    await sh('podman rm old-test');
+    await expectTick(107, 1, true, '`podman rm` removes it');
+    await sh('podman run -d --name web registry.access.redhat.com/ubi9/httpd-24');
+    await expectTick(107, 2, false, 'without `-p 8080:8080` the port is not published');
+    await sh('podman rm -f web');
+    await sh(
+      'podman run -d --name web -p 8080:8080 registry.access.redhat.com/ubi9/httpd-24:latest'
+    );
+    await expectTick(107, 2, true, 'web runs with the published port');
+    await expectFails(
+      107,
+      'podman logs nope',
+      /no container with name or ID "nope" found/,
+      'logs of a missing container fail'
+    );
+    await expectTick(107, 3, false, 'the failed `podman logs` does not tick');
+    await sh('podman logs web');
+    await expectTick(107, 3, true, '`podman logs web` ticks');
+    await sh('echo latest > ~/ex280/httpd-24.digest');
+    await expectTick(107, 4, false, 'a tag is not a digest');
+    await sh(
+      "skopeo inspect --format '{{.Digest}}' docker://registry.access.redhat.com/ubi9/ubi-minimal:latest > ~/ex280/httpd-24.digest"
+    );
+    await expectTick(107, 4, false, 'the digest of ANOTHER image (ubi-minimal) does not count');
+    await sh(
+      'skopeo inspect docker://registry.access.redhat.com/ubi9/httpd-24:latest | grep Digest > ~/ex280/httpd-24.digest'
+    );
+    await expectTick(107, 4, true, 'the Digest line saved with grep is accepted');
+    await expectCompleted(107, 'an alternative correct path completes the level');
+  }
+  await returnToMenu();
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// QA ROUND 1.16.0 — objective grading fixes (docs/guidance-qa-findings.md)
+// ═══════════════════════════════════════════════════════════════════════════
+await runSection('qa-grading-1160', async () => {
+  // Every finding of the "Open — grading" list is reproduced here through the real
+  // command bar and the live mode: the old wrong tick must not happen, and the correct
+  // solution still ticks. Objectives are found by type/label, never by index (levels
+  // are being reordered by other 1.16.0 work).
+  await bootMenu();
+  /** Simulation + incident clocks, then one objective pass of the live mode. */
+  const advanceGame = (seconds) =>
+    evaluate((secs) => {
+      const sim = window.game?.gameEngine?.simulation;
+      const engine = window.game?.incidentEngine;
+      if (!sim || typeof sim.tick !== 'function') return false;
+      const steps = Math.ceil(secs / 0.05);
+      for (let index = 0; index < steps; index += 1) {
+        sim.tick(0.05);
+        if (engine && typeof engine.tick === 'function') engine.tick(0.05);
+      }
+      window.game?.app?.modeInstance?.update?.();
+      return true;
+    }, seconds);
+  const states = async () => {
+    await evaluate(() => window.game.app.modeInstance.update?.());
+    return evaluate(() =>
+      window.game.app.modeInstance.getStatus().objectives.map((objective) => ({
+        type: objective.type,
+        label: objective.label,
+        kind: objective.kind || null,
+        name: objective.name || null,
+        done: Boolean(objective.completed),
+        current: objective.current,
+        note: objective.note || null,
+      }))
+    );
+  };
+  const pick = (list, test) => list.find(test) || { done: null, note: null, missing: true };
+  const byLabel = (list, pattern) => pick(list, (objective) => pattern.test(objective.label || ''));
+  const cmd = (raw, wait = 120) => runCmd(raw, wait);
+  const start = async (mode, id) => {
+    await bootMenu();
+    const ok = await launch(mode, id);
+    await closeOverlays();
+    await evaluate(() => window.game.app.modeInstance.update?.());
+    return ok;
+  };
+  const MANIFEST = (text) => `cat <<EOF | oc apply -f -\n${text}\nEOF`;
+
+  // ── L9: "Build … reaches phase Complete" waits for Complete; reads must show something ──
+  assert(await start('campaign', 9), 'grading-1160: L9 starts');
+  await cmd('oc project build-lab', 150);
+  await cmd('oc get is', 150);
+  let list = await states();
+  assert(
+    byLabel(list, /Examine the ImageStream/).done === false &&
+      byLabel(list, /Examine the ImageStream/).note?.code === 'read-showed-nothing',
+    'grading-1160 L9: `oc get is` at level start ("No resources found") no longer ticks "Examine the ImageStream" and says why',
+    JSON.stringify(byLabel(list, /Examine the ImageStream/))
+  );
+  await cmd(
+    'oc new-app openshift/nodejs:20-ubi9~https://github.com/openshift/nodejs-ex --name=webapp',
+    400
+  );
+  await advanceGame(2);
+  const buildsRunning = await cmd('oc get builds', 150);
+  list = await states();
+  assert(
+    /webapp-1\s+Source\s+\S+\s+(New|Pending|Running)/.test(buildsRunning.message) &&
+      byLabel(list, /reaches phase Complete/).done === false &&
+      byLabel(list, /reaches phase Complete/).note?.code === 'build-not-complete',
+    'grading-1160 L9: the Build objective stays open while `oc get builds` says New/Pending/Running (no BuildConfig lastVersion shortcut)',
+    JSON.stringify({
+      builds: buildsRunning.message,
+      objective: byLabel(list, /reaches phase Complete/),
+    })
+  );
+  await cmd('oc get is -n openshift', 150);
+  list = await states();
+  assert(
+    byLabel(list, /Examine the ImageStream/).done === false,
+    'grading-1160 L9: a read of ImageStreams in another project does not tick the build-lab objective',
+    JSON.stringify(byLabel(list, /Examine the ImageStream/))
+  );
+  await advanceGame(16);
+  const buildsDone = await cmd('oc get builds', 150);
+  await cmd('oc -n build-lab get is', 150);
+  list = await states();
+  assert(
+    /Complete/.test(buildsDone.message) && byLabel(list, /reaches phase Complete/).done === true,
+    'grading-1160 L9: the Build objective ticks once the Build is Complete',
+    JSON.stringify({
+      builds: buildsDone.message,
+      objective: byLabel(list, /reaches phase Complete/),
+    })
+  );
+  assert(
+    byLabel(list, /Examine the ImageStream/).done === true,
+    'grading-1160 L9: `oc -n build-lab get is` (global flag before the verb) ticks "Examine the ImageStream"',
+    JSON.stringify(byLabel(list, /Examine the ImageStream/))
+  );
+
+  // ── L3: reads in `default` and the Incidents panel share ONE investigation matcher ──
+  assert(await start('campaign', 3), 'grading-1160: L3 starts');
+  await advanceGame(14);
+  await waitFor(
+    () => evaluate(() => (window.game.app.incidentPanel?.incidents?.length || 0) > 0),
+    8000
+  );
+  await cmd('oc get pods', 150);
+  await cmd('oc get events', 150);
+  await cmd('oc get events --sort-by=.lastTimestamp', 150);
+  await cmd('oc describe deployment/web-app', 150);
+  await cmd('oc logs pod/does-not-exist', 150);
+  const investigation = () =>
+    evaluate(() => {
+      const engine = window.game.incidentEngine;
+      const live = [...(engine.activeIncidents?.values?.() || [])].find(
+        (incident) => incident.name === 'CrashLoopBackOff'
+      );
+      const panel = window.game.app.incidentPanel;
+      panel?._renderList?.();
+      const card = panel?.incidents?.find((incident) => incident.name === 'CrashLoopBackOff');
+      const text = document.getElementById('incident-list')?.innerText || '';
+      return {
+        engine: live ? live.investigationSteps.filter((step) => step.completed).length : -1,
+        progress: live ? live.investigationProgress : -1,
+        panel: card ? card.completedSteps.size : -1,
+        counter: (text.match(/(\d+)\/(\d+) investigated/) || [])[1] ?? null,
+      };
+    });
+  let seen = await investigation();
+  list = await states();
+  assert(
+    seen.engine === 0 &&
+      seen.panel === 0 &&
+      byLabel(list, /Investigate the CrashLoopBackOff/).done === false,
+    'grading-1160 L3: `oc get pods`/`oc get events`/`oc describe` run in `default` (and a failed `oc logs`) investigate nothing — engine AND panel stay at 0',
+    JSON.stringify(seen)
+  );
+  assert(
+    byLabel(list, /Inspect Pods/).done === false &&
+      byLabel(list, /Inspect Pods/).note?.code === 'read-wrong-project',
+    'grading-1160 L3: `oc get pods` in `default` does not tick "Inspect Pods" and the note names ops-lab',
+    JSON.stringify(byLabel(list, /Inspect Pods/))
+  );
+  await cmd('oc project ops-lab', 150);
+  await cmd('oc get pods', 150);
+  await cmd('oc get events --sort-by=.lastTimestamp', 150);
+  await cmd('oc describe deployment/web-app', 150);
+  seen = await investigation();
+  list = await states();
+  assert(
+    seen.engine >= 2 && seen.panel === seen.engine && seen.counter === String(seen.engine),
+    'grading-1160 L3: in ops-lab the same reads complete investigation steps, and the panel counter shows exactly the engine count',
+    JSON.stringify(seen)
+  );
+  assert(
+    byLabel(list, /Inspect Pods/).done === true &&
+      byLabel(list, /Investigate the CrashLoopBackOff/).done === true,
+    'grading-1160 L3: "Inspect Pods" and "Investigate" tick from the reads in ops-lab',
+    JSON.stringify(list.map((objective) => [objective.label, objective.done]))
+  );
+
+  // ── L10: one `oc rollout undo` completes nothing; availability can turn red ──
+  assert(await start('campaign', 10), 'grading-1160: L10 starts');
+  await cmd('oc project rollout-lab', 150);
+  await advanceGame(5);
+  const replicas =
+    (await findResource('Deployment', 'api-server', 'rollout-lab'))?.spec?.replicas || 1;
+  await cmd('oc rollout undo deployment/api-server', 150);
+  await advanceGame(5);
+  list = await states();
+  assert(
+    byLabel(list, /Trigger a rolling update/).done === false &&
+      byLabel(list, /Roll the Deployment back/).done === false,
+    'grading-1160 L10: a lone `oc rollout undo` (single revision) ticks neither "update" nor "rollback"',
+    JSON.stringify(list.map((objective) => [objective.label, objective.done]))
+  );
+  await cmd('oc scale deployment/api-server --replicas=0', 150);
+  await advanceGame(4);
+  list = await states();
+  assert(
+    byLabel(list, /Keep availability/).done === false,
+    'grading-1160 L10: scaling api-server to 0 turns "Keep availability at 90%" red',
+    JSON.stringify(byLabel(list, /Keep availability/))
+  );
+  await cmd(`oc scale deployment/api-server --replicas=${replicas}`, 150);
+  await advanceGame(10);
+  list = await states();
+  assert(
+    byLabel(list, /Keep availability/).done === true,
+    'grading-1160 L10: availability recovers once the replicas are back',
+    JSON.stringify(byLabel(list, /Keep availability/))
+  );
+  await cmd(
+    'oc set image deployment/api-server main=quay.io/openshift/origin-hello-openshift:does-not-exist',
+    150
+  );
+  await advanceGame(5);
+  list = await states();
+  assert(
+    byLabel(list, /Trigger a rolling update/).done === true &&
+      byLabel(list, /Roll the Deployment back/).done === false &&
+      byLabel(list, /Keep availability/).done === true,
+    'grading-1160 L10: `oc set image` is the rolling update; the old Pods keep it available',
+    JSON.stringify(list.map((objective) => [objective.label, objective.done]))
+  );
+  await cmd('oc rollout undo deployment/api-server', 150);
+  await advanceGame(6);
+  list = await states();
+  assert(
+    list.every((objective) => objective.done) &&
+      (await evaluate(() => window.game.app.modeInstance.state)) === 'completed',
+    'grading-1160 L10: update + undo (the documented path) completes the level',
+    JSON.stringify(list.map((objective) => [objective.label, objective.done]))
+  );
+  // The level intro pauses the mode, so its FIRST evaluation can come after the player's
+  // first command: update/rollback must come from the Deployment's own history, not
+  // from a first-look baseline (the guidance replay failed this way).
+  // Relaunching the CURRENT level satisfies launch()'s wait at once, so wait for a NEW run
+  // (startTime changes) before typing — but type before any objective evaluation.
+  const previousRun = await evaluate(() => window.game.app.modeInstance?.startTime || 0);
+  await returnToMenu();
+  await bootMenu();
+  await launch('campaign', 10);
+  assert(
+    await waitFor(
+      () =>
+        evaluate(
+          (before) =>
+            (window.game.app.modeInstance?.startTime || 0) !== before &&
+            window.game.app.modeInstance?.currentLevel === 10,
+          previousRun
+        ),
+      10000
+    ),
+    'grading-1160: L10 restarts (no evaluation before typing)'
+  );
+  await closeOverlays();
+  // No objective evaluation until the update was typed: stop the mode's 1 s ticker, let
+  // only the Deployment controller roll the seeded template out (as it would during the
+  // seconds a player needs to type), then update.
+  await evaluate(() => window.game.app.modeInstance.stopTicking?.());
+  await evaluate(() => {
+    const sim = window.game.gameEngine.simulation;
+    for (let index = 0; index < 60; index += 1) sim.tick(0.05);
+  });
+  await cmd('oc project rollout-lab', 60);
+  await cmd(
+    'oc set image deployment/api-server main=quay.io/openshift/origin-hello-openshift:does-not-exist',
+    60
+  );
+  await advanceGame(5);
+  await cmd('oc rollout undo deployment/api-server', 150);
+  await advanceGame(6);
+  list = await states();
+  assert(
+    list.every((objective) => objective.done),
+    'grading-1160 L10: update + undo typed before the first objective evaluation still complete the level',
+    JSON.stringify(list.map((objective) => [objective.label, objective.done]))
+  );
+  await evaluate(() => window.game.app.modeInstance.startTicking?.());
+
+  // ── L11 / lab 3: the TLS Secret must be kubernetes.io/tls ──
+  assert(await start('campaign', 11), 'grading-1160: L11 starts');
+  await cmd('oc project route-lab', 150);
+  await cmd('oc create secret generic web-tls --from-literal=tls.crt=not-a-cert', 150);
+  list = await states();
+  const tlsSecret = (entries) =>
+    pick(entries, (objective) => objective.type === 'deploy' && objective.kind === 'Secret');
+  assert(
+    tlsSecret(list).done === false && tlsSecret(list).note?.code === 'secret-wrong-type',
+    'grading-1160 L11: an Opaque Secret named web-tls does not tick the TLS Secret objective (note says why)',
+    JSON.stringify(tlsSecret(list))
+  );
+  await cmd('oc delete secret web-tls', 150);
+  await cmd(
+    'openssl req -x509 -newkey rsa:2048 -nodes -keyout tls.key -out tls.crt -days 365 -subj "/CN=web.apps.cluster.example.com"',
+    200
+  );
+  await cmd('oc create secret tls web-tls --cert=tls.crt --key=tls.key', 150);
+  list = await states();
+  assert(
+    tlsSecret(list).done === true,
+    'grading-1160 L11: `oc create secret tls web-tls` ticks it',
+    JSON.stringify(tlsSecret(list))
+  );
+  // Route `targetPort` (the evaluator side of L12's "port name https").
+  await cmd(
+    MANIFEST(`apiVersion: v1
+kind: Service
+metadata:
+  name: tls-app
+  namespace: route-lab
+spec:
+  selector:
+    app: web
+  ports:
+    - name: https
+      port: 443
+      targetPort: 8443`),
+    300
+  );
+  await cmd('oc create route passthrough tls-a --service=tls-app --port=8443', 150);
+  await cmd('oc create route passthrough tls-b --service=tls-app', 150);
+  await advanceGame(3);
+  const routePorts = await evaluate(async () => {
+    const { evaluateObjective } = await import('/js/engine/ObjectiveEvaluator.js');
+    const ctx = { clusterState: window.game.cluster, gameEngine: window.game.gameEngine };
+    const objective = (name) => ({
+      type: 'route',
+      name,
+      namespace: 'route-lab',
+      termination: 'passthrough',
+      targetPort: 'https',
+    });
+    return {
+      numeric: evaluateObjective(objective('tls-a'), ctx).completed,
+      named: evaluateObjective(objective('tls-b'), ctx).completed,
+    };
+  });
+  assert(
+    routePorts.numeric === false && routePorts.named === true,
+    'grading-1160 L12 evaluator: `--port=8443` does not satisfy "targeting the Service port name https"; the default (first named port) does',
+    JSON.stringify(routePorts)
+  );
+
+  // ── L13: the htpasswd objective is the tool; the User comes from a first login ──
+  assert(await start('campaign', 13), 'grading-1160: L13 starts');
+  await cmd('oc create secret generic htpass-secret --from-file=htpasswd -n openshift-config', 150);
+  await cmd('oc create user alice', 150);
+  list = await states();
+  assert(
+    byLabel(list, /to the htpasswd file/).done === false,
+    'grading-1160 L13: `oc create secret … --from-file=htpasswd` does not tick "Add the user alice to the htpasswd file"',
+    JSON.stringify(byLabel(list, /to the htpasswd file/))
+  );
+  assert(
+    byLabel(list, /exists after first login/).done === false &&
+      byLabel(list, /exists after first login/).note?.code === 'user-not-logged-in',
+    'grading-1160 L13: `oc create user alice` (no login, no Identity) does not tick "User alice exists after first login"',
+    JSON.stringify(byLabel(list, /exists after first login/))
+  );
+  await cmd('oc delete user alice', 150);
+  await cmd('oc delete secret htpass-secret -n openshift-config', 150);
+  await cmd('htpasswd -c -B -b htpasswd alice redhat123', 200);
+  await cmd('oc create secret generic htpass-secret --from-file=htpasswd -n openshift-config', 200);
+  await cmd(
+    'oc patch oauth cluster --type=merge -p \'{"spec":{"identityProviders":[{"name":"htpasswd","mappingMethod":"claim","type":"HTPasswd","htpasswd":{"fileData":{"name":"htpass-secret"}}}]}}\'',
+    300
+  );
+  await advanceGame(12);
+  const aliceLogin = await cmd('oc login -u alice -p redhat123', 400);
+  list = await states();
+  assert(
+    !aliceLogin.error &&
+      byLabel(list, /to the htpasswd file/).done === true &&
+      byLabel(list, /exists after first login/).done === true,
+    'grading-1160 L13: `htpasswd -c -B -b htpasswd alice …` and a real first login tick both',
+    JSON.stringify({ login: aliceLogin.message.slice(0, 120), list })
+  );
+  await cmd(`oc login -u kubeadmin -p ${await kubeadminPassword()}`, 300);
+
+  // ── L14 / L16: a count-only RoleBinding needs the right subject AND role ──
+  assert(await start('campaign', 14), 'grading-1160: L14 starts');
+  await cmd('oc project rbac-lab', 150);
+  await cmd('oc adm groups new developers alice bob', 150);
+  await cmd('oc adm policy add-role-to-user view -z default -n rbac-lab', 150);
+  list = await states();
+  assert(
+    byLabel(list, /Bind a role \(edit\/view\)/).done === false &&
+      byLabel(list, /Bind a role \(edit\/view\)/).note?.code === 'rolebinding-wrong-grant',
+    'grading-1160 L14: the ServiceAccount binding (the incident fix) does not tick "Bind a role to the developers group"',
+    JSON.stringify(byLabel(list, /Bind a role \(edit\/view\)/))
+  );
+  await cmd('oc adm policy add-role-to-group edit developers -n rbac-lab', 150);
+  list = await states();
+  assert(
+    byLabel(list, /Bind a role \(edit\/view\)/).done === true,
+    'grading-1160 L14: edit → group developers ticks it',
+    JSON.stringify(byLabel(list, /Bind a role \(edit\/view\)/))
+  );
+  assert(await start('campaign', 16), 'grading-1160: L16 starts');
+  await cmd('oc project sa-lab', 150);
+  await cmd('oc create serviceaccount api-reader', 150);
+  await cmd('oc adm policy add-role-to-user view api-reader', 150);
+  await cmd('oc adm policy add-role-to-user edit -z api-reader', 150);
+  list = await states();
+  assert(
+    byLabel(list, /Bind the view role/).done === false,
+    'grading-1160 L16: a User binding (no -z) and an edit binding do not tick "Bind the view role to the ServiceAccount api-reader"',
+    JSON.stringify(byLabel(list, /Bind the view role/))
+  );
+  await cmd('oc adm policy add-role-to-user view -z api-reader', 150);
+  list = await states();
+  assert(
+    byLabel(list, /Bind the view role/).done === true,
+    'grading-1160 L16: view → ServiceAccount api-reader ticks it',
+    JSON.stringify(byLabel(list, /Bind the view role/))
+  );
+
+  // ── L15: project.config.openshift.io/cluster is graded on its state ──
+  assert(await start('campaign', 15), 'grading-1160: L15 starts');
+  await cmd('oc project quota-lab', 150);
+  await cmd('oc edit project.config.openshift.io/cluster', 300);
+  await closeOverlays();
+  list = await states();
+  assert(
+    byLabel(list, /Point project\.config/).done === false,
+    'grading-1160 L15: `oc edit project.config…` that saves nothing does not tick the project-template objective',
+    JSON.stringify(byLabel(list, /Point project\.config/))
+  );
+  await cmd('oc adm create-bootstrap-project-template -o yaml > template.yaml', 200);
+  await cmd('oc create -f template.yaml -n openshift-config', 200);
+  await cmd(
+    MANIFEST(`apiVersion: config.openshift.io/v1
+kind: Project
+metadata:
+  name: cluster
+spec:
+  projectRequestTemplate:
+    name: project-request`),
+    300
+  );
+  list = await states();
+  assert(
+    byLabel(list, /Point project\.config/).done === true,
+    'grading-1160 L15: `oc apply -f` reaching spec.projectRequestTemplate.name=project-request ticks it',
+    JSON.stringify(byLabel(list, /Point project\.config/))
+  );
+
+  // ── L17 / lab 8: the dedicated-ServiceAccount grant rejects over-broad grants ──
+  assert(await start('campaign', 17), 'grading-1160: L17 starts');
+  await cmd('oc project privileged-lab', 150);
+  await cmd('oc adm policy add-scc-to-group privileged system:serviceaccounts:privileged-lab', 150);
+  await advanceGame(22);
+  list = await states();
+  const sccGrant = (entries) => pick(entries, (objective) => objective.type === 'scc');
+  assert(
+    sccGrant(list).done === false &&
+      sccGrant(list).note?.code === 'scc-over-broad' &&
+      sccGrant(list).note?.fix ===
+        'oc adm policy remove-scc-from-group privileged system:serviceaccounts:privileged-lab',
+    'grading-1160 L17: `add-scc-to-group privileged system:serviceaccounts:privileged-lab` does not tick the dedicated-ServiceAccount grant; the note offers the removal',
+    JSON.stringify(sccGrant(list))
+  );
+  await cmd(sccGrant(list).note?.fix || 'oc whoami', 150);
+  await cmd('oc adm policy add-scc-to-user privileged -z priv-sa -n privileged-lab', 150);
+  await advanceGame(12);
+  list = await states();
+  assert(
+    sccGrant(list).done === true &&
+      (await evaluate(() => window.game.app.modeInstance.state)) === 'completed',
+    'grading-1160 L17: removing the group grant and granting `-z priv-sa` completes the level',
+    JSON.stringify(list.map((objective) => [objective.label, objective.done]))
+  );
+
+  // ── L18: uninstall = Subscription AND CSV; a re-created Subscription gets a new plan ──
+  assert(await start('campaign', 18), 'grading-1160: L18 starts');
+  await cmd('oc new-project metallb-system', 200);
+  await cmd('oc apply -f examples/operatorgroup.yaml', 200);
+  await cmd(
+    "sed 's/ansible-automation-platform-operator/metallb-operator/; s/openshift-operators/metallb-system/; s/stable-2.6/stable/' examples/subscription.yaml | oc apply -f -",
+    300
+  );
+  await advanceGame(24);
+  await cmd('oc delete subscription metallb-operator -n metallb-system', 150);
+  await advanceGame(3);
+  list = await states();
+  const uninstall = (entries) => byLabel(entries, /uninstall the operator/i);
+  assert(
+    uninstall(list).done === false && uninstall(list).note?.code === 'operator-csv-left',
+    'grading-1160 L18: deleting the Subscription alone does not tick the uninstall (the CSV still runs; note names it)',
+    JSON.stringify(uninstall(list))
+  );
+  await cmd('oc delete csv metallb-operator.v4.22.0-202610281200 -n metallb-system', 150);
+  await advanceGame(3);
+  list = await states();
+  assert(
+    uninstall(list).done === true,
+    'grading-1160 L18: deleting the CSV too ticks the uninstall',
+    JSON.stringify(uninstall(list))
+  );
+  // A first, Automatic install of cert-manager in openshift-operators, then removed …
+  await cmd(
+    MANIFEST(`apiVersion: operators.coreos.com/v1alpha1
+kind: Subscription
+metadata:
+  name: openshift-cert-manager-operator
+  namespace: openshift-operators
+spec:
+  channel: stable-v1
+  name: openshift-cert-manager-operator
+  source: redhat-operators
+  sourceNamespace: openshift-marketplace
+  installPlanApproval: Automatic`),
+    300
+  );
+  await advanceGame(24);
+  await cmd('oc delete subscription openshift-cert-manager-operator -n openshift-operators', 150);
+  await advanceGame(2);
+  const plansAfterDelete = await cmd('oc get installplan -n openshift-operators', 150);
+  assert(
+    /No resources found/.test(plansAfterDelete.message),
+    'grading-1160 L18: an InstallPlan is garbage-collected with its Subscription (owner reference)',
+    plansAfterDelete.message.slice(0, 300)
+  );
+  const leftoverCsvs = await evaluate(() =>
+    (
+      window.game.cluster.getByKindAndNamespace('ClusterServiceVersion', 'openshift-operators') ||
+      []
+    )
+      .filter((csv) => /cert-manager/.test(csv.metadata.name))
+      .map((csv) => csv.metadata.name)
+  );
+  for (const csvName of leftoverCsvs) {
+    await cmd(`oc delete csv ${csvName} -n openshift-operators`, 150);
+  }
+  await advanceGame(3);
+  // … then the level's Manual pinned Subscription: it must get its OWN plan to approve.
+  await cmd('oc apply -f examples/subscription-manual-pinned.yaml', 300);
+  await advanceGame(10);
+  const pinnedPlans = await cmd('oc get installplan -n openshift-operators', 150);
+  list = await states();
+  assert(
+    /cert-manager-operator\.v1\.16\.0\s+Manual\s+false/i.test(pinnedPlans.message) &&
+      byLabel(list, /Approve the Manual InstallPlan/).done === false,
+    'grading-1160 L18: a re-created Manual pinned Subscription gets a new unapproved v1.16.0 plan (no stale plan reuse)',
+    JSON.stringify({
+      plans: pinnedPlans.message,
+      objective: byLabel(list, /Approve the Manual InstallPlan/),
+    })
+  );
+  await cmd(
+    'oc patch installplan $(oc get installplan -n openshift-operators --no-headers | grep v1.16.0 | cut -d\' \' -f1) -n openshift-operators --type=merge -p \'{"spec":{"approved":true}}\'',
+    300
+  );
+  await advanceGame(24);
+  list = await states();
+  const installedPin = await evaluate(
+    () =>
+      (window.game.cluster.getByKindAndNamespace('Subscription', 'openshift-operators') || []).find(
+        (subscription) => subscription.metadata.name === 'openshift-cert-manager-operator'
+      )?.status?.installedCSV || null
+  );
+  assert(
+    installedPin === 'cert-manager-operator.v1.16.0' &&
+      byLabel(list, /Approve the Manual InstallPlan/).done === true &&
+      byLabel(list, /Pin the install/).done === true,
+    'grading-1160 L18: approving that plan installs the pinned v1.16.0 and ticks objectives 5 and 6',
+    JSON.stringify({
+      installedPin,
+      list: list.map((objective) => [objective.label, objective.done]),
+    })
+  );
+
+  // ── L20: Advisor rates prod-platform; the composite is the final gate; Build = Complete ──
+  assert(await start('campaign', 20), 'grading-1160: L20 starts');
+  await advanceGame(2);
+  list = await states();
+  assert(
+    byLabel(list, /Architecture Advisor score/).done === false &&
+      byLabel(list, /Composite drill score/).done === false,
+    'grading-1160 L20: neither the Advisor (prod-platform does not exist yet) nor the composite is ticked at level start',
+    JSON.stringify([
+      byLabel(list, /Architecture Advisor score/),
+      byLabel(list, /Composite drill score/),
+    ])
+  );
+  await cmd('oc new-project prod-platform', 200);
+  await cmd('oc apply -f manifests/deployment.yaml -n prod-platform', 300);
+  await cmd('oc apply -f examples/buildconfig.yaml -n prod-platform', 300);
+  await advanceGame(2);
+  const capstoneBuilds = await cmd('oc get builds -n prod-platform', 150);
+  list = await states();
+  assert(
+    !/Complete/.test(capstoneBuilds.message) && byLabel(list, /Complete a Build/).done === false,
+    'grading-1160 L20: "Complete a Build" is not ticked while the first build only runs',
+    JSON.stringify({ builds: capstoneBuilds.message, objective: byLabel(list, /Complete a Build/) })
+  );
+  await advanceGame(16);
+  list = await states();
+  assert(
+    byLabel(list, /Complete a Build/).done === true &&
+      byLabel(list, /Architecture Advisor score/).done === true,
+    'grading-1160 L20: the Build ticks when Complete; the Advisor passes 25 once webapp runs in prod-platform',
+    JSON.stringify([byLabel(list, /Complete a Build/), byLabel(list, /Architecture Advisor score/)])
+  );
+  const composite = await evaluate(async () => {
+    const { evaluateObjective } = await import('/js/engine/ObjectiveEvaluator.js');
+    const objective = { type: 'examScore', minScore: 75 };
+    const progress = (done) => [
+      ...Array.from({ length: 18 }, (_, index) => ({ type: 'deploy', completed: index < done })),
+      objective,
+    ];
+    const ctx = (done) => ({
+      clusterState: window.game.cluster,
+      gameEngine: window.game.gameEngine,
+      incidentEngine: window.game.incidentEngine,
+      scoringEngine: window.game.scoringEngine,
+      objectiveProgress: progress(done),
+      levelDef: { objectives: [] },
+    });
+    return {
+      seventeen: evaluateObjective(objective, ctx(17)),
+      all: evaluateObjective(objective, ctx(18)),
+    };
+  });
+  assert(
+    composite.seventeen.completed === false &&
+      composite.seventeen.current >= 75 &&
+      composite.all.completed === true,
+    'grading-1160 L20: the composite (≥ 75 already at 17/18) only completes once every other objective is done',
+    JSON.stringify(composite)
+  );
+
+  // ── Timed labs: same bug classes ──
+  assert(await start('challenge', 3), 'grading-1160: lab 3 starts');
+  await cmd('oc project web', 150);
+  await cmd('oc create secret generic app-tls --from-literal=tls.crt=x', 150);
+  list = await states();
+  assert(
+    pick(list, (objective) => objective.type === 'deploy' && objective.kind === 'Secret').done ===
+      false,
+    'grading-1160 lab 3: an Opaque app-tls does not tick "Create TLS Secret app-tls"',
+    JSON.stringify(list[0])
+  );
+  assert(await start('challenge', 10), 'grading-1160: lab 10 starts');
+  await advanceGame(6);
+  await cmd(
+    'oc delete subscription ansible-automation-platform-operator -n openshift-operators',
+    150
+  );
+  await advanceGame(3);
+  list = await states();
+  const aapUninstall = (entries) => byLabel(entries, /Uninstall the old AAP operator/);
+  assert(
+    aapUninstall(list).done === false,
+    'grading-1160 lab 10: deleting the AAP Subscription alone does not tick the uninstall',
+    JSON.stringify(aapUninstall(list))
+  );
+  await cmd('oc delete csv aap-operator.v2.6.0 -n openshift-operators', 150);
+  await advanceGame(3);
+  list = await states();
+  assert(
+    aapUninstall(list).done === true,
+    'grading-1160 lab 10: deleting its CSV (aap-operator.v2.6.0) too ticks it',
+    JSON.stringify(aapUninstall(list))
+  );
+  assert(await start('challenge', 11), 'grading-1160: lab 11 starts');
+  await cmd(
+    'oc create secret generic htpass-secret --from-file=htpasswd=htpasswd -n openshift-config',
+    150
+  );
+  list = await states();
+  assert(
+    byLabel(list, /Create an htpasswd entry/).done === false,
+    'grading-1160 lab 11: `oc create secret … --from-file=htpasswd=htpasswd` does not tick "Create an htpasswd entry"',
+    JSON.stringify(byLabel(list, /Create an htpasswd entry/))
+  );
+  assert(await start('challenge', 8), 'grading-1160: lab 8 starts');
+  await cmd('oc create sa priv-sa -n secure', 150);
+  await cmd('oc adm policy add-scc-to-group privileged system:serviceaccounts:secure', 150);
+  await advanceGame(2);
+  list = await states();
+  assert(
+    sccGrant(list).done === false,
+    'grading-1160 lab 8: a project-wide SCC group grant does not tick the dedicated-ServiceAccount grant',
+    JSON.stringify(sccGrant(list))
+  );
+  await cmd('oc adm policy remove-scc-from-group privileged system:serviceaccounts:secure', 150);
+  await cmd('oc adm policy add-scc-to-user privileged -z priv-sa -n secure', 150);
+  await advanceGame(2);
+  list = await states();
+  assert(
+    sccGrant(list).done === true,
+    'grading-1160 lab 8: `add-scc-to-user privileged -z priv-sa` ticks it',
+    JSON.stringify(sccGrant(list))
+  );
+  await returnToMenu();
+});
+
+await runSection('qa-linux-shell', async () => {
+  // 1.16.0 (linux-engine): the simulated RHEL 9 workstation behind the real command bar —
+  // the prompt + cwd model, regression locks proving the pre-1.16 file behaviour is
+  // unchanged at cwd = home (relative manifests, ~/auth, /tmp, redirects, heredocs,
+  // `oc apply -f -`), permissions/sudo, systemd → journal → fix, packages, firewalld,
+  // podman/skopeo, and Linux objectives graded from host state.
+  await bootSandbox();
+  await ensureManifestEngine();
+  const sh = (line, wait = 120) => runCmd(line, wait);
+  const status = () => evaluate(() => window.game.app.commandBar.shellTools.lastExitCode);
+  const promptText = () => evaluate(() => document.getElementById('cmd-prompt')?.textContent || '');
+  const grade = (objective) =>
+    evaluate(async (obj) => {
+      const { evaluateObjective } = await import('/js/engine/ObjectiveEvaluator.js');
+      return Boolean(evaluateObjective(obj, { gameEngine: window.game.gameEngine })?.completed);
+    }, objective);
+  await evaluate(() => {
+    window.game.gameEngine.linuxHost.reset(null);
+    window.game.app.commandBar.shellTools.resetSession();
+    window.game.app.commandBar.show({ focus: false });
+  });
+
+  // ── wiring + prompt ─────────────────────────────────────────────────────
+  const wiring = await evaluate(() => ({
+    host: Boolean(window.game.gameEngine?.linuxHost),
+    shared: window.game.linuxHost === window.game.gameEngine?.linuxHost,
+    prompt: window.game.app.commandBar.shellTools.prompt(),
+  }));
+  assert(
+    wiring.host && wiring.shared && wiring.prompt === '[student@workstation ~]$',
+    'qa-linux-shell: gameEngine.linuxHost exists, window.game.linuxHost is the same host, prompt is [student@workstation ~]$',
+    JSON.stringify(wiring)
+  );
+  let result = await sh('ls');
+  const lsLines = result.message.split('\n');
+  assert(
+    !result.error && lsLines.includes('manifests/') && lsLines.includes('htpasswd'),
+    'qa-linux-shell (regression): `ls` at home still lists the Files tree (manifests/, htpasswd)',
+    result.message
+  );
+  const echoed = await evaluate(() => document.getElementById('cmd-output')?.innerText || '');
+  assert(
+    /\[student@workstation ~\]\$ ls(\n|$)/.test(echoed),
+    'qa-linux-shell: the scrollback echoes the bash prompt `[student@workstation ~]$ ls`',
+    echoed.slice(-200)
+  );
+
+  // ── regression: identical file behaviour at cwd = home ──────────────────
+  const password = await evaluate(() =>
+    window.game.manifestEngine.readFile('auth/kubeadmin-password')
+  );
+  result = await sh('cat ~/auth/kubeadmin-password');
+  assert(
+    !result.error && password && result.message.trim() === String(password).trim(),
+    'qa-linux-shell (regression): `cat ~/auth/kubeadmin-password` reads the Files-panel file',
+    result.message
+  );
+  await sh('echo qa-linux > /tmp/qa-linux.txt');
+  const tmpKey = await evaluate(() => window.game.manifestEngine.readFile('tmp/qa-linux.txt'));
+  result = await sh('ls /tmp');
+  assert(
+    tmpKey === 'qa-linux\n' && /qa-linux\.txt/.test(result.message),
+    'qa-linux-shell (regression): `> /tmp/x` writes the Files key tmp/x and `ls /tmp` lists it',
+    JSON.stringify({ tmpKey, ls: result.message })
+  );
+  await sh(
+    'cat <<EOF > qa-linux-cm.yaml\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: qa-linux-cm\n  namespace: default\ndata:\n  A: b\nEOF'
+  );
+  const heredoc = await evaluate(() => window.game.manifestEngine.readFile('qa-linux-cm.yaml'));
+  assert(
+    /kind: ConfigMap/.test(String(heredoc)),
+    'qa-linux-shell (regression): a heredoc redirect writes the Files-panel file',
+    String(heredoc)
+  );
+  await expectCmd(
+    'qa-linux-shell (regression): `oc apply -f <relative file>` at home',
+    'oc apply -f qa-linux-cm.yaml',
+    /configmap\/qa-linux-cm (created|configured)/
+  );
+  await expectCmd(
+    'qa-linux-shell (regression): `cat file | oc apply -f -` still applies stdin',
+    'cat manifests/deployment.yaml | oc apply -f - --dry-run=client -n default',
+    /deployment\.apps\/webapp created \(dry run\)/
+  );
+  await expectCmd(
+    'qa-linux-shell (regression): `oc get … -o yaml > file` then `grep` reads it back',
+    'oc get configmap qa-linux-cm -n default -o yaml > qa-linux-out.yaml && grep -c "name: qa-linux-cm" qa-linux-out.yaml',
+    /^1$/
+  );
+
+  // ── cwd model ────────────────────────────────────────────────────────────
+  await sh('cd manifests');
+  assert(
+    (await promptText()) === '[student@workstation manifests]$',
+    'qa-linux-shell: the input prompt follows `cd` ([student@workstation manifests]$)',
+    await promptText()
+  );
+  await expectCmd(
+    'qa-linux-shell: `oc apply -f deployment.yaml` resolves against the cwd',
+    'oc apply -f deployment.yaml --dry-run=client -n default',
+    /deployment\.apps\/webapp created \(dry run\)/
+  );
+  await expectCmd('qa-linux-shell: `pwd` after cd', 'pwd', /^\/home\/student\/manifests$/);
+  await expectCmd('qa-linux-shell: `cd -` prints OLDPWD', 'cd -', /^\/home\/student$/);
+  result = await sh('cd /nope');
+  assert(
+    result.error &&
+      result.message === 'bash: cd: /nope: No such file or directory' &&
+      (await status()) === 1,
+    'qa-linux-shell: `cd` to a missing directory fails like bash (exit 1)',
+    result.message
+  );
+
+  // ── identity + permissions ───────────────────────────────────────────────
+  await expectCmd('qa-linux-shell: bare `whoami` is the Linux user', 'whoami', /^student$/);
+  await expectCmd(
+    'qa-linux-shell: `oc whoami` stays the OpenShift user',
+    'oc whoami',
+    /^kubeadmin$/
+  );
+  await expectCmd('qa-linux-shell: `$USER` is the Linux user', 'echo $USER', /^student$/);
+  result = await sh('cat /etc/shadow');
+  assert(
+    result.error &&
+      result.message === 'cat: /etc/shadow: Permission denied' &&
+      (await status()) === 1,
+    'qa-linux-shell: `cat /etc/shadow` as student is Permission denied',
+    result.message
+  );
+  result = await sh('echo x > /etc/hosts');
+  assert(
+    result.error && /bash: \/etc\/hosts: Permission denied/.test(result.message),
+    'qa-linux-shell: a redirect into a root-owned file is refused by bash',
+    result.message
+  );
+  await expectCmd(
+    'qa-linux-shell: `sudo` runs as root without a password prompt',
+    'sudo whoami',
+    /^root$/
+  );
+  await expectCmd(
+    'qa-linux-shell: `ls -l` prints real columns',
+    'ls -l /etc/hosts',
+    /^-rw-r--r--\. 1 root root +\d+ \w{3} [ \d]\d +(\d{4}|\d\d:\d\d) \/etc\/hosts$/
+  );
+  await sh('sudo -i');
+  assert(
+    (await promptText()) === '[root@workstation ~]#',
+    'qa-linux-shell: `sudo -i` opens a root login shell (prompt ends with #)',
+    await promptText()
+  );
+  await sh('exit');
+  assert(
+    (await promptText()) === '[student@workstation ~]$',
+    'qa-linux-shell: `exit` returns to the student shell',
+    await promptText()
+  );
+
+  // ── systemd failure → journal → fix, graded from state ──────────────────
+  await evaluate(() =>
+    window.game.gameEngine.linuxHost.reset({
+      packages: { install: ['httpd'] },
+      files: [
+        {
+          path: '/etc/httpd/conf.d/qa.conf',
+          content: '<Directory "/srv">\n    Requre all granted\n</Directory>\n',
+        },
+      ],
+      services: [{ name: 'httpd', failing: true }],
+      processes: [
+        {
+          name: 'dd',
+          command: 'dd if=/dev/zero of=/dev/null',
+          user: 'student',
+          pid: 4242,
+          cpu: 99.4,
+        },
+      ],
+    })
+  );
+  result = await sh('systemctl start httpd');
+  assert(
+    result.error && /Interactive authentication required/.test(result.message),
+    'qa-linux-shell: systemctl start as student is refused (polkit)',
+    result.message
+  );
+  result = await sh('sudo systemctl restart httpd');
+  assert(
+    result.error &&
+      /^Job for httpd\.service failed because the control process exited with error code\./.test(
+        result.message
+      ),
+    'qa-linux-shell: the broken httpd fails to start',
+    result.message
+  );
+  result = await sh('journalctl -u httpd -p err');
+  assert(
+    /Failed to start The Apache HTTP Server\./.test(result.message),
+    'qa-linux-shell: `journalctl -u httpd -p err` shows the failure',
+    result.message.slice(-300)
+  );
+  result = await sh('journalctl -u httpd -n 20');
+  assert(
+    /AH00526: Syntax error on line 2 of \/etc\/httpd\/conf\.d\/qa\.conf:/.test(result.message),
+    'qa-linux-shell: the journal names the config syntax error (AH00526)',
+    result.message.slice(-400)
+  );
+  assert(
+    (await grade({ type: 'service', name: 'httpd', active: true })) === false,
+    'qa-linux-shell: the service objective is not done while httpd is failed'
+  );
+  await sh("sudo sed -i 's/Requre/Require/' /etc/httpd/conf.d/qa.conf");
+  await expectCmd(
+    'qa-linux-shell: `enable --now` starts the fixed httpd',
+    'sudo systemctl enable --now httpd',
+    /Created symlink/
+  );
+  assert(
+    (await grade({ type: 'service', name: 'httpd', active: true, enabled: true })) === true,
+    'qa-linux-shell: the service objective ticks from unit state (active + enabled)'
+  );
+  await expectCmd(
+    'qa-linux-shell: curl reaches the local httpd',
+    'curl -s http://localhost',
+    /Test Page/
+  );
+  result = await sh('ps aux --sort=-%cpu | head -n 2');
+  assert(
+    /^student +4242 /m.test(result.message),
+    'qa-linux-shell: `ps aux --sort=-%cpu` shows the runaway process first',
+    result.message
+  );
+  await sh('kill 4242');
+  assert(
+    (await grade({ type: 'process', name: 'dd', running: false })) === true,
+    'qa-linux-shell: killing the process ticks the process objective'
+  );
+
+  // ── packages, firewall, containers ──────────────────────────────────────
+  await evaluate(() => window.game.gameEngine.linuxHost.reset(null));
+  result = await sh('dnf install -y tree');
+  assert(
+    result.error && /superuser privileges/.test(result.message),
+    'qa-linux-shell: dnf install as student is refused',
+    result.message
+  );
+  await expectCmd('qa-linux-shell: sudo dnf install -y', 'sudo dnf install -y tree', /Complete!$/);
+  await expectCmd('qa-linux-shell: rpm -q agrees', 'rpm -q tree', /^tree-1\.8\.0-10\.el9\.x86_64$/);
+  await sh('sudo firewall-cmd --add-service=http');
+  assert(
+    (await grade({ type: 'firewall', service: 'http', runtime: true })) === true &&
+      (await grade({ type: 'firewall', service: 'http', permanent: true })) === false,
+    'qa-linux-shell: a runtime-only firewall rule is not permanent'
+  );
+  await sh('sudo firewall-cmd --permanent --add-service=http');
+  await sh('sudo firewall-cmd --reload');
+  assert(
+    (await grade({ type: 'firewall', service: 'http', runtime: true, permanent: true })) === true,
+    'qa-linux-shell: --permanent + --reload makes it permanent and runtime'
+  );
+  await expectCmd(
+    'qa-linux-shell: rootless podman run -d -p',
+    'podman run -d --name web -p 8080:8080 registry.access.redhat.com/ubi9/httpd-24',
+    /^[0-9a-f]{64}$/m
+  );
+  assert(
+    (await grade({ type: 'container', name: 'web', running: true, publish: '8080:8080' })) === true,
+    'qa-linux-shell: the container objective reads podman state'
+  );
+  const digest = await sh(
+    "skopeo inspect --format '{{.Digest}}' docker://registry.access.redhat.com/ubi9/httpd-24:latest"
+  );
+  const inspected = await sh("podman inspect --format '{{.ImageDigest}}' web");
+  assert(
+    /^sha256:[0-9a-f]{64}$/.test(digest.message.trim()) &&
+      digest.message.trim() === inspected.message.trim(),
+    'qa-linux-shell: skopeo and podman agree on the image digest',
+    JSON.stringify({ skopeo: digest.message, podman: inspected.message })
+  );
+
+  // ── history: shell lines recorded as typed ───────────────────────────────
+  const history = await evaluate(() =>
+    window.game.gameEngine.getCommandHistory().map((entry) => entry.raw)
+  );
+  assert(
+    history.includes('whoami') &&
+      history.includes('cd manifests') &&
+      !history.some((raw) => /^oc (cd|ls|cp)\b/.test(raw)),
+    'qa-linux-shell: shell lines are recorded as typed (bare whoami is not `oc whoami`)',
+    JSON.stringify(history.slice(-8))
+  );
+  await evaluate(() => window.game.gameEngine.linuxHost.reset(null));
 });
 
 // ═══════════════════════════════════════════════════════════════════════════

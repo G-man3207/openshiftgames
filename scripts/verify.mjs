@@ -6215,6 +6215,1682 @@ if (seedMod?.ClusterState) {
   }
 }
 
+// ── 4l. Linux workstation model (1.16.0) ───────────────────────────────────
+// The simulated RHEL 9 workstation behind the terminal (js/engine/LinuxHost.js +
+// js/ui/LinuxCommands.js, wired through ShellTools/CommandBar, graded by the Linux
+// objective types). The browser section `qa-linux-shell` drives the real command bar;
+// these headless locks keep the contracts from regressing: the cwd path model (and
+// identical behaviour at cwd = home), permissions + real coreutils wording/exit codes,
+// sudo, systemd failure → journal → fix, processes, dnf/rpm, firewalld runtime vs
+// permanent, rootless podman + skopeo digests, objective evaluation from STATE, and
+// shell lines recorded as typed (never `oc …`).
+{
+  const linuxHostMod = await tryImport('js/engine/LinuxHost.js');
+  const linuxEngineMod = await tryImport('js/engine/GameEngine.js');
+  const linuxSandboxMod = await tryImport('js/modes/SandboxMode.js');
+  const linuxBarMod = await tryImport('js/ui/CommandBar.js');
+  const linuxManifestMod = await tryImport('js/engine/ManifestEngine.js');
+  const linuxEvalMod = await tryImport('js/engine/ObjectiveEvaluator.js');
+  const linuxClusterMod = await tryImport('js/engine/ClusterState.js');
+  const lock = (ok, message, detail) => {
+    if (ok) passed();
+    else fail('linux', `1.16.0 workstation: ${message}`, detail);
+  };
+  if (
+    !linuxHostMod?.LinuxHost ||
+    !linuxHostMod?.imageDigest ||
+    !linuxEngineMod?.GameEngine ||
+    !linuxSandboxMod?.SandboxMode ||
+    !linuxBarMod?.CommandBar ||
+    !linuxManifestMod?.ManifestEngine ||
+    !linuxEvalMod?.evaluateObjective
+  ) {
+    fail(
+      'linux',
+      '1.16.0 workstation: LinuxHost/GameEngine/CommandBar/ObjectiveEvaluator not importable'
+    );
+  } else {
+    const engine = new linuxEngineMod.GameEngine({ mode: 'sandbox' });
+    new linuxSandboxMod.SandboxMode(engine, null).setupCluster(3);
+    const manifestEngine = new linuxManifestMod.ManifestEngine({
+      cluster: engine.cluster,
+      gameEngine: engine,
+    });
+    globalThis.window = {
+      game: {
+        cluster: engine.cluster,
+        gameEngine: engine,
+        engine: { emit() {}, on() {}, off() {} },
+        manifestEngine,
+      },
+    };
+    manifestEngine.game = globalThis.window.game;
+    engine.setManifestEngine(manifestEngine);
+    const bar = new linuxBarMod.CommandBar();
+    const host = engine.linuxHost;
+    /** Run one line; returns {message, error, code} (code = the shell's `$?`). */
+    const sh = (line) => {
+      try {
+        const out = bar.executeCommand(line);
+        return {
+          message: String(out?.message ?? ''),
+          error: Boolean(out?.error),
+          code: bar.shellTools.lastExitCode,
+        };
+      } catch (err) {
+        return { message: `THROW ${err?.message || err}`, error: true, code: -1 };
+      }
+    };
+    const grade = (objective) =>
+      Boolean(
+        linuxEvalMod.evaluateObjective(objective, { gameEngine: engine, manifestEngine })?.completed
+      );
+    const freshHost = (seed = null) => {
+      manifestEngine.resetFiles();
+      host.reset(seed);
+      bar.shellTools.resetSession();
+    };
+    try {
+      // ── wiring + identity ────────────────────────────────────────────────
+      lock(
+        host instanceof linuxHostMod.LinuxHost && linuxEvalMod.OBJECTIVE_TYPES.includes('file'),
+        'GameEngine must own the LinuxHost (gameEngine.linuxHost) and OBJECTIVE_TYPES must export the Linux types'
+      );
+      freshHost();
+      let r = sh('whoami');
+      lock(
+        r.message === 'student' && r.code === 0,
+        'bare `whoami` is the Linux user (student)',
+        r.message
+      );
+      r = sh('oc whoami');
+      lock(r.message.trim() === 'kubeadmin', '`oc whoami` stays the OpenShift identity', r.message);
+      r = sh('echo $USER $HOME');
+      lock(
+        r.message === 'student /home/student',
+        '$USER is the Linux user, not the OpenShift user',
+        r.message
+      );
+      r = sh('id');
+      lock(
+        /^uid=1000\(student\) gid=1000\(student\) groups=1000\(student\),10\(wheel\) context=unconfined_u:unconfined_r:unconfined_t:s0-s0:c0\.c1023$/.test(
+          r.message
+        ),
+        '`id` prints the RHEL 9 coreutils line with the SELinux context',
+        r.message
+      );
+      r = sh('cat /etc/redhat-release');
+      lock(
+        r.message.trim() === 'Red Hat Enterprise Linux release 9.6 (Plow)',
+        '/etc/redhat-release is RHEL 9.6',
+        r.message
+      );
+      lock(
+        bar.shellTools.prompt() === '[student@workstation ~]$',
+        'prompt is `[student@workstation ~]$`',
+        bar.shellTools.prompt()
+      );
+
+      // ── cwd model + identical behaviour at cwd = home ────────────────────
+      r = sh('cat ~/auth/kubeadmin-password');
+      lock(
+        r.message.trim() === linuxClusterMod?.KUBEADMIN_PASSWORD,
+        '`cat ~/auth/kubeadmin-password` still reveals the installer password',
+        r.message
+      );
+      r = sh('ls');
+      lock(
+        r.message.split('\n').includes('manifests/') && r.message.split('\n').includes('htpasswd'),
+        '`ls` at home lists the Files panel tree (dirs marked with /)',
+        r.message
+      );
+      sh('echo qa4l > /tmp/qa4l.txt');
+      lock(
+        manifestEngine.readFile('tmp/qa4l.txt') === 'qa4l\n',
+        "`echo … > /tmp/x` still writes the Files-panel key tmp/x (with echo's newline)",
+        manifestEngine.readFile('tmp/qa4l.txt')
+      );
+      r = sh('cd manifests && oc apply -f deployment.yaml --dry-run=client');
+      lock(
+        !r.error && /created \(dry run\)/.test(r.message),
+        '`cd manifests && oc apply -f deployment.yaml` resolves the file against the cwd',
+        r.message
+      );
+      lock(
+        bar.shellTools.prompt() === '[student@workstation manifests]$',
+        'prompt follows cd (`[student@workstation manifests]$`)',
+        bar.shellTools.prompt()
+      );
+      r = sh('pwd');
+      lock(
+        r.message === '/home/student/manifests',
+        '`pwd` prints the logical working directory',
+        r.message
+      );
+      r = sh('cd -');
+      lock(
+        r.message === '/home/student' && sh('pwd').message === '/home/student',
+        '`cd -` prints and returns to OLDPWD',
+        r.message
+      );
+      r = sh('cd /nonexistent');
+      lock(
+        r.code === 1 && r.message === 'bash: cd: /nonexistent: No such file or directory',
+        '`cd` to a missing directory fails like bash',
+        JSON.stringify(r)
+      );
+
+      // ── permissions + coreutils wording ──────────────────────────────────
+      r = sh('cat /etc/shadow');
+      lock(
+        r.code === 1 && r.message === 'cat: /etc/shadow: Permission denied',
+        'non-root `cat /etc/shadow` is refused',
+        JSON.stringify(r)
+      );
+      r = sh('echo x > /etc/hosts');
+      lock(
+        r.error && r.message === 'bash: /etc/hosts: Permission denied',
+        'a redirect into a root-owned file fails in bash',
+        JSON.stringify(r)
+      );
+      r = sh('sudo cat /etc/shadow');
+      lock(
+        r.code === 0 && /^root:\$6\$/.test(r.message),
+        '`sudo cat /etc/shadow` runs as root (passwordless lab sudo)',
+        r.message.slice(0, 40)
+      );
+      r = sh('chmod 600 /etc/hosts');
+      lock(
+        r.code === 1 &&
+          r.message === "chmod: changing permissions of '/etc/hosts': Operation not permitted",
+        'chmod on a file you do not own is EPERM',
+        r.message
+      );
+      r = sh('chown student /etc/hosts');
+      lock(
+        r.code === 1 &&
+          r.message === "chown: changing ownership of '/etc/hosts': Operation not permitted",
+        'chown without root is EPERM',
+        r.message
+      );
+      sh('touch qa4l-mode && chmod 640 qa4l-mode && chmod u+x,g-r qa4l-mode');
+      r = sh('stat -c %a qa4l-mode');
+      lock(
+        r.message === '700',
+        'chmod octal + symbolic clauses compose (640 → u+x,g-r → 700)',
+        r.message
+      );
+      r = sh('ls -l /etc/hosts');
+      lock(
+        /^-rw-r--r--\. 1 root root \d+ [A-Z][a-z]{2} [ \d]\d +(\d{4}|\d\d:\d\d) \/etc\/hosts$/.test(
+          r.message
+        ),
+        '`ls -l` prints the real column layout (mode, links, owner, group, size, time)',
+        r.message
+      );
+      r = sh('mkdir qa4l/a/b');
+      lock(
+        r.code === 1 &&
+          /cannot create directory ‘qa4l\/a\/b’: No such file or directory/.test(r.message),
+        '`mkdir` without -p reports the missing parent',
+        r.message
+      );
+      lock(
+        !sh('mkdir -p qa4l/a/b').error && host.fileInfo('~/qa4l/a/b').type === 'dir',
+        '`mkdir -p` creates empty directories (kept by the host overlay)',
+        ''
+      );
+      r = sh('rm qa4l');
+      lock(
+        r.code === 1 && r.message === "rm: cannot remove 'qa4l': Is a directory",
+        '`rm DIR` refuses a directory',
+        r.message
+      );
+      r = sh('./qa4l-missing.sh');
+      lock(
+        r.code === 127 && r.message === 'bash: ./qa4l-missing.sh: No such file or directory',
+        'running a missing script path exits 127 like bash',
+        JSON.stringify(r)
+      );
+
+      // ── systemd failure → journal → fix ──────────────────────────────────
+      freshHost({
+        packages: { install: ['httpd'] },
+        files: [
+          {
+            path: '/etc/httpd/conf.d/qa.conf',
+            content: '<Directory "/srv">\n    Requre all granted\n</Directory>\n',
+          },
+        ],
+        services: [{ name: 'httpd', failing: true, enabled: false }],
+      });
+      r = sh('systemctl is-active httpd');
+      lock(
+        r.message === 'failed' && r.code === 3,
+        'a seeded failing unit reports `failed` (exit 3)',
+        JSON.stringify(r)
+      );
+      r = sh('systemctl start httpd');
+      lock(
+        r.code === 1 &&
+          /^Failed to start httpd\.service: Interactive authentication required\./.test(r.message),
+        'systemctl start as student is refused by polkit',
+        r.message
+      );
+      r = sh('sudo systemctl restart httpd');
+      lock(
+        r.code === 1 &&
+          /^Job for httpd\.service failed because the control process exited with error code\./.test(
+            r.message
+          ),
+        'starting a broken httpd fails like systemd',
+        r.message
+      );
+      r = sh('journalctl -u httpd -n 20');
+      lock(
+        /AH00526: Syntax error on line 2 of \/etc\/httpd\/conf\.d\/qa\.conf:/.test(r.message) &&
+          /Invalid command 'Requre'/.test(r.message),
+        'the journal names the httpd syntax error (AH00526, file and line)',
+        r.message.slice(-400)
+      );
+      r = sh('apachectl configtest');
+      lock(
+        r.code === 1 && /AH00526/.test(r.message),
+        '`apachectl configtest` agrees with the unit failure',
+        r.message
+      );
+      sh("sudo sed -i 's/Requre/Require/' /etc/httpd/conf.d/qa.conf");
+      r = sh('sudo systemctl enable --now httpd');
+      lock(
+        r.code === 0 &&
+          /Created symlink \/etc\/systemd\/system\/multi-user\.target\.wants\/httpd\.service → \/usr\/lib\/systemd\/system\/httpd\.service\./.test(
+            r.message
+          ),
+        '`enable --now` starts the fixed unit and prints the symlink',
+        r.message
+      );
+      lock(
+        grade({ type: 'service', name: 'httpd', active: true, enabled: true }),
+        'the `service` objective follows unit state (active + enabled)',
+        JSON.stringify(host.serviceState('httpd'))
+      );
+      r = sh('systemctl status httpd');
+      lock(
+        r.code === 0 &&
+          /● httpd\.service - The Apache HTTP Server/.test(r.message) &&
+          /Active: active \(running\)/.test(r.message),
+        '`systemctl status` renders the running unit',
+        r.message.slice(0, 300)
+      );
+      r = sh('curl -s http://localhost');
+      lock(
+        /Test Page/.test(r.message),
+        'curl to localhost reaches the running httpd (RHEL test page)',
+        r.message.slice(0, 120)
+      );
+
+      // ── processes ────────────────────────────────────────────────────────
+      freshHost({
+        processes: [
+          {
+            name: 'dd',
+            command: 'dd if=/dev/zero of=/dev/null',
+            user: 'student',
+            pid: 4242,
+            cpu: 99.5,
+          },
+        ],
+      });
+      r = sh('ps aux --sort=-%cpu | head -n 2');
+      lock(
+        /^student +4242 +\d+\.\d +\d+\.\d .* dd if=\/dev\/zero of=\/dev\/null$/m.test(r.message),
+        '`ps aux --sort=-%cpu` puts the runaway process first',
+        r.message
+      );
+      lock(
+        !grade({ type: 'process', name: 'dd', running: false }),
+        'a `process` running:false objective is not done while it runs',
+        ''
+      );
+      r = sh('kill 4242');
+      lock(
+        r.code === 0 && grade({ type: 'process', name: 'dd', running: false }),
+        '`kill PID` (SIGTERM) ends it and the objective ticks',
+        JSON.stringify(r)
+      );
+      r = sh('kill 4242');
+      lock(
+        r.code === 1 && r.message === 'bash: kill: (4242) - No such process',
+        'killing a missing PID fails like bash',
+        r.message
+      );
+
+      // ── packages ─────────────────────────────────────────────────────────
+      r = sh('dnf install -y tree');
+      lock(
+        r.code === 1 &&
+          r.message ===
+            'Error: This command has to be run with superuser privileges (under the root user on most systems).',
+        'dnf install as student is refused',
+        r.message
+      );
+      lock(
+        !grade({ type: 'package', name: 'tree', installed: true }),
+        'package objective is not done before the install',
+        ''
+      );
+      r = sh('sudo dnf install -y tree');
+      lock(
+        r.code === 0 &&
+          /Complete!$/.test(r.message) &&
+          sh('rpm -q tree').message === 'tree-1.8.0-10.el9.x86_64',
+        'sudo dnf install -y installs (rpm -q agrees)',
+        r.message.slice(-200)
+      );
+      lock(
+        grade({ type: 'package', name: 'tree', installed: true }),
+        'the `package` objective follows the RPM database',
+        ''
+      );
+      freshHost({ packages: { remove: ['bind-utils'] } });
+      r = sh('dig +short api.cluster.example.com');
+      lock(
+        r.code === 127 && r.message === 'bash: dig: command not found',
+        'a removed package removes its commands (exit 127)',
+        JSON.stringify(r)
+      );
+
+      // ── firewalld runtime vs permanent ───────────────────────────────────
+      freshHost();
+      r = sh('firewall-cmd --add-service=http');
+      lock(
+        r.code === 253 && /^Authorization failed\./.test(r.message),
+        'firewall-cmd changes need root',
+        r.message
+      );
+      sh('sudo firewall-cmd --add-service=http');
+      lock(
+        grade({ type: 'firewall', service: 'http', runtime: true }) &&
+          !grade({ type: 'firewall', service: 'http', permanent: true }),
+        'a runtime-only rule is not permanent',
+        ''
+      );
+      sh('sudo firewall-cmd --permanent --add-service=http');
+      sh('sudo firewall-cmd --reload');
+      lock(
+        grade({ type: 'firewall', service: 'http', runtime: true, permanent: true }),
+        'runtime + permanent after --permanent + --reload',
+        ''
+      );
+
+      // ── rootless podman + skopeo ─────────────────────────────────────────
+      r = sh('podman run -d --name web -p 8080:8080 registry.access.redhat.com/ubi9/httpd-24');
+      lock(
+        r.code === 0 && /^[0-9a-f]{64}$/m.test(r.message),
+        '`podman run -d` pulls the image and prints the container id',
+        r.message.slice(-120)
+      );
+      lock(
+        grade({
+          type: 'container',
+          name: 'web',
+          running: true,
+          image: 'ubi9/httpd-24',
+          publish: '8080:8080',
+        }),
+        'the `container` objective reads podman state (running, image, published port)',
+        ''
+      );
+      r = sh(
+        "skopeo inspect --format '{{.Digest}}' docker://registry.access.redhat.com/ubi9/httpd-24:latest"
+      );
+      lock(
+        r.message.trim() ===
+          linuxHostMod.imageDigest('registry.access.redhat.com/ubi9/httpd-24:latest'),
+        'skopeo prints the same digest podman pulled (imageDigest)',
+        r.message
+      );
+      r = sh('podman run -d --name low -p 80:8080 registry.access.redhat.com/ubi9/httpd-24');
+      lock(
+        r.code === 126 && /Failed to bind port 80 \(Permission denied\)/.test(r.message),
+        'rootless podman cannot publish ports < 1024',
+        r.message
+      );
+
+      // ── objectives graded from state, history recorded as typed ──────────
+      freshHost();
+      lock(
+        !grade({ type: 'ran', command: 'ls', flags: 'l', path: '/home/student/manifests' }),
+        '`ran` is not done before the command',
+        ''
+      );
+      sh('cd manifests');
+      sh('ls -la');
+      lock(
+        grade({ type: 'ran', command: 'ls', flags: 'l', path: '/home/student/manifests' }),
+        '`ran` matches `ls -la` run inside the directory (cwd-aware)',
+        JSON.stringify(host.execLog.slice(-1))
+      );
+      sh('KUBE_EDITOR=vim');
+      lock(
+        !grade({ type: 'env', name: 'KUBE_EDITOR', value: 'vim', exported: true }),
+        'an unexported variable does not satisfy `env exported:true`',
+        ''
+      );
+      sh('export KUBE_EDITOR');
+      lock(
+        grade({ type: 'env', name: 'KUBE_EDITOR', value: 'vim', exported: true }),
+        '`export NAME` exports the current value',
+        JSON.stringify(host.envVar('KUBE_EDITOR'))
+      );
+      sh("printf 'apiVersion: v1\\nkind: ConfigMap\\nmetadata:\\n  name: cm\\n' > ~/cm.yaml");
+      lock(
+        grade({
+          type: 'file',
+          path: '~/cm.yaml',
+          yaml: { kind: 'ConfigMap', 'metadata.name': 'cm' },
+          owner: 'student',
+          mode: '0644',
+        }),
+        '`file` objective: printf > file, YAML fields, owner and umask mode',
+        host.fileInfo('~/cm.yaml').content
+      );
+      const history = engine.getCommandHistory().map((entry) => entry.raw);
+      lock(
+        history.includes('ls -la') &&
+          history.includes('cd manifests') &&
+          history.includes('whoami') &&
+          !history.some((raw) => /^oc (ls|cd|cp|printf)\b/.test(raw)),
+        'shell lines are recorded as typed (never `oc …`)',
+        JSON.stringify(history.slice(-6))
+      );
+      host.reset(null);
+      lock(
+        host.session.cwd === '/home/student' &&
+          !host.isInstalled('tree') &&
+          host.listContainers({ all: true }).length === 0,
+        'reset(null) restores the default workstation',
+        ''
+      );
+    } catch (err) {
+      fail('linux', `1.16.0 workstation locks crashed: ${err?.stack || err}`);
+    } finally {
+      delete globalThis.window;
+    }
+  }
+}
+
+// ── 4m. Grading fixes (1.16.0) ─────────────────────────────────────────────
+// The browser section `qa-grading-1160` replays every "Open — grading" finding
+// of docs/guidance-qa-findings.md through the real UI. These headless locks keep
+// the evaluator contracts and the level data that carry the fixes from silently
+// regressing: Builds graded on phase Complete, reads that must show something in
+// the lab project, subject/role-aware RoleBindings, TLS Secret types, Route
+// target ports, first-login Users, Subscription+CSV uninstalls, exclusive SCC
+// grants, the project-config state, the capstone gates and ONE investigation
+// matcher shared by IncidentEngine and the Incidents panel.
+{
+  const gradingEvaluator = await tryImport('js/engine/ObjectiveEvaluator.js');
+  const gradingLevels = await tryImport('js/data/CampaignLevels.js');
+  const gradingChallenges = await tryImport('js/modes/ChallengeMode.js');
+  const lock = (ok, message, detail) => {
+    if (ok) passed();
+    else fail('grading', `1.16.0: ${message}`, detail);
+  };
+  if (
+    !gradingEvaluator?.evaluateObjective ||
+    !gradingEvaluator?.canonicalCommandText ||
+    !gradingEvaluator?.outputShowsSomething ||
+    !gradingLevels?.CAMPAIGN_LEVELS ||
+    !gradingChallenges?.CHALLENGES
+  ) {
+    fail(
+      'grading',
+      '1.16.0: ObjectiveEvaluator (evaluateObjective/canonicalCommandText/outputShowsSomething), CampaignLevels and ChallengeMode must be importable for the grading locks'
+    );
+  } else {
+    const { evaluateObjective, canonicalCommandText, outputShowsSomething } = gradingEvaluator;
+    const level = (id) => gradingLevels.CAMPAIGN_LEVELS.find((entry) => entry.id === id) || null;
+    const lab = (id) => gradingChallenges.CHALLENGES.find((entry) => entry.id === id) || null;
+    const objectiveOf = (owner, test) => (owner?.objectives || []).find(test) || null;
+    const byLabel = (owner, pattern) =>
+      objectiveOf(owner, (objective) => pattern.test(objective.label || ''));
+    /** Minimal ClusterState stand-in (the evaluator feature-detects its readers). */
+    const fakeCluster = (resources, extra = {}) => ({
+      getResourcesByKind: (kind) => resources.filter((resource) => resource.kind === kind),
+      getAllResources: () => resources,
+      ...extra,
+    });
+    const res = (kind, name, namespace, body = {}) => ({
+      kind,
+      metadata: { name, namespace, labels: {}, annotations: {}, ...(body.metadata || {}) },
+      spec: body.spec || {},
+      status: body.status || {},
+      ...(body.top || {}),
+    });
+    const levelDefFor = (project) => ({
+      objectives: [],
+      startingResources: project ? [{ kind: 'Project', name: project }] : [],
+    });
+    const run = (objective, ctx) => evaluateObjective({ ...objective }, ctx).completed;
+
+    // Builds: phase Complete only — no BuildConfig.status.lastVersion shortcut (L9/L20).
+    const buildConfig = res('BuildConfig', 'webapp', 'build-lab', { status: { lastVersion: 1 } });
+    const build = (phase) =>
+      res('Build', 'webapp-1', 'build-lab', {
+        metadata: { labels: { buildconfig: 'webapp' } },
+        status: { phase },
+      });
+    const buildObjective = { type: 'build', name: 'webapp', namespace: 'build-lab' };
+    lock(
+      run(buildObjective, { clusterState: fakeCluster([buildConfig, build('Running')]) }) ===
+        false &&
+        run(buildObjective, { clusterState: fakeCluster([buildConfig, build('Complete')]) }) ===
+          true,
+      'a `build` objective must wait for a Build in phase Complete (a created/running build with lastVersion 1 must not tick)'
+    );
+
+    // Reads: canonical form, output evidence, project scope (L3/L9).
+    lock(
+      canonicalCommandText('oc -n build-lab get is') === 'oc get is -n build-lab' &&
+        canonicalCommandText('oc --namespace=x describe pod y') ===
+          'oc describe pod y --namespace=x' &&
+        canonicalCommandText('oc get pods') === 'oc get pods',
+      'canonicalCommandText must move global flags typed before the verb behind it',
+      JSON.stringify([
+        canonicalCommandText('oc -n build-lab get is'),
+        canonicalCommandText('oc --namespace=x describe pod y'),
+      ])
+    );
+    const emptyYaml = 'apiVersion: v1\nkind: List\nmetadata:\n  resourceVersion: ""\nitems: []';
+    const emptyJson = '{\n  "apiVersion": "v1",\n  "kind": "List",\n  "items": []\n}';
+    lock(
+      outputShowsSomething('No resources found in default namespace.') === false &&
+        outputShowsSomething('') === false &&
+        outputShowsSomething(emptyYaml) === false &&
+        outputShowsSomething(emptyJson) === false &&
+        outputShowsSomething(
+          'Now using project "x" on server "https://api.cluster.example.com:6443".\nNo resources found in x namespace.'
+        ) === false &&
+        outputShowsSomething(
+          'Warning: apps.openshift.io/v1 DeploymentConfig is deprecated in v4.14+, unavailable in v4.10000+\nNo resources found in x namespace.'
+        ) === false &&
+        outputShowsSomething('NAME   READY\nweb    1/1') === true &&
+        outputShowsSomething(undefined) === true,
+      'outputShowsSomething must treat empty output, "No resources found" and empty Lists as nothing shown'
+    );
+    const l9 = level(9);
+    const examineIs = byLabel(l9, /Examine the ImageStream/);
+    const isOutput =
+      'NAME     IMAGE REPOSITORY                                                    TAGS     UPDATED\nwebapp   image-registry.openshift-image-registry.svc:5000/build-lab/webapp   latest   1s';
+    const historyCtx = (entries) => ({
+      clusterState: fakeCluster([]),
+      gameEngine: { getCommandHistory: () => entries },
+      levelDef: l9,
+    });
+    const entry = (raw, project, output) => ({ raw, success: true, project, output });
+    lock(
+      Boolean(examineIs) &&
+        examineIs.inspect === true &&
+        run(
+          examineIs,
+          historyCtx([
+            entry('oc get is', 'build-lab', 'No resources found in build-lab namespace.'),
+          ])
+        ) === false &&
+        run(examineIs, historyCtx([entry('oc get is', 'default', isOutput)])) === false &&
+        run(examineIs, historyCtx([entry('oc -n build-lab get is', 'default', isOutput)])) ===
+          true &&
+        run(examineIs, historyCtx([entry('oc get all', 'build-lab', isOutput)])) === true,
+      'L9 "Examine the ImageStream" must be an inspect read: "No resources found" and other projects do not count, `oc -n build-lab get is` and an `oc get all` that lists the stream do',
+      JSON.stringify(examineIs)
+    );
+    const l3 = level(3);
+    lock(
+      byLabel(l3, /Inspect Pods/)?.inspect === true &&
+        byLabel(l3, /container logs/)?.inspect === true,
+      'L3 "Inspect Pods" / "Read container logs" must be inspect reads (a read in `default` that saw nothing must not tick)'
+    );
+    const l18 = level(18);
+    lock(
+      byLabel(l18, /Verify the Subscription/)?.inspect === true &&
+        Boolean(byLabel(l18, /Verify the Subscription/)?.outputPattern),
+      'L18 "Verify the Subscription / CSV / InstallPlan" must require the read to show the operator objects'
+    );
+
+    // RoleBindings: right subject AND role (L14/L16/lab 11).
+    const binding = (name, roleName, subjects) =>
+      res('RoleBinding', name, 'rbac-lab', {
+        spec: { roleRef: { kind: 'ClusterRole', name: roleName }, subjects },
+      });
+    const l14Bind = byLabel(level(14), /Bind a role/);
+    const l14Ctx = (bindings) => ({
+      clusterState: fakeCluster(bindings),
+      levelDef: levelDefFor('rbac-lab'),
+    });
+    lock(
+      Boolean(l14Bind) &&
+        run(
+          l14Bind,
+          l14Ctx([
+            binding('view', 'view', [
+              { kind: 'ServiceAccount', name: 'default', namespace: 'rbac-lab' },
+            ]),
+          ])
+        ) === false &&
+        run(l14Bind, l14Ctx([binding('edit', 'edit', [{ kind: 'Group', name: 'developers' }])])) ===
+          true,
+      'L14 "Bind a role to the developers group" must reject the ServiceAccount binding and accept edit/view → Group developers',
+      JSON.stringify(l14Bind)
+    );
+    const l16Bind = byLabel(level(16), /Bind the view role/);
+    lock(
+      JSON.stringify(l16Bind?.subjects) === '["system:serviceaccount:sa-lab:api-reader"]' &&
+        JSON.stringify(l16Bind?.roles) === '["view"]' &&
+        Array.isArray(byLabel(lab(11), /Grant project access/)?.subjects),
+      'L16 binding objective must require view → ServiceAccount api-reader; lab 11 must name the subject'
+    );
+
+    // Secret types (L11, lab 3) and Route target ports (L12 evaluator).
+    const webTls = objectiveOf(level(11), (o) => o.type === 'deploy' && o.kind === 'Secret');
+    const appTls = objectiveOf(lab(3), (o) => o.type === 'deploy' && o.kind === 'Secret');
+    const secret = (type) => res('Secret', 'web-tls', 'route-lab', { top: { type } });
+    lock(
+      webTls?.secretType === 'kubernetes.io/tls' &&
+        appTls?.secretType === 'kubernetes.io/tls' &&
+        run(webTls, {
+          clusterState: fakeCluster([secret('Opaque')]),
+          levelDef: levelDefFor('route-lab'),
+        }) === false &&
+        run(webTls, {
+          clusterState: fakeCluster([secret('kubernetes.io/tls')]),
+          levelDef: levelDefFor('route-lab'),
+        }) === true,
+      'the L11/lab 3 TLS Secret objectives must require type kubernetes.io/tls'
+    );
+    const admitted = { ingress: [{ conditions: [{ type: 'Admitted', status: 'True' }] }] };
+    const route = (name, port) =>
+      res('Route', name, 'lb-lab', {
+        spec: {
+          to: { name: 'tls-app' },
+          tls: { termination: 'passthrough' },
+          ...(port ? { port: { targetPort: port } } : {}),
+        },
+        status: admitted,
+      });
+    const service = res('Service', 'tls-app', 'lb-lab', {
+      spec: { ports: [{ name: 'https', port: 443, targetPort: 8443 }] },
+    });
+    const routeObjective = {
+      type: 'route',
+      name: 'tls-app',
+      namespace: 'lb-lab',
+      targetPort: 'https',
+    };
+    lock(
+      run(routeObjective, { clusterState: fakeCluster([service, route('tls-app', '8443')]) }) ===
+        false &&
+        run(routeObjective, { clusterState: fakeCluster([service, route('tls-app', 'https')]) }) ===
+          true &&
+        run(routeObjective, { clusterState: fakeCluster([service, route('tls-app', null)]) }) ===
+          true,
+      'a route `targetPort` must reject --port=8443 and accept the named port (explicit or the Service default)'
+    );
+
+    // Users: a first login (Identity), not `oc create user` (L13, lab 11).
+    const l13 = level(13);
+    const firstLogin = byLabel(l13, /exists after first login/);
+    const alice = res('User', 'alice', '', { top: { identities: [] } });
+    const identity = res('Identity', 'htpasswd:alice', '', {
+      spec: { user: { name: 'alice' }, providerUserName: 'alice' },
+    });
+    lock(
+      firstLogin?.viaLogin === true &&
+        byLabel(lab(11), /created on first login/)?.viaLogin === true &&
+        run(firstLogin, { clusterState: fakeCluster([alice]) }) === false &&
+        run(firstLogin, { clusterState: fakeCluster([alice, identity]) }) === true,
+      '"User alice exists after first login" must need the Identity a login creates (L13, lab 11)'
+    );
+    // htpasswd: the tool adding alice, never the Secret command (L13, lab 11).
+    const htpasswdPatterns = [
+      new RegExp(byLabel(l13, /to the htpasswd file/)?.pattern || '^$', 'i'),
+      new RegExp(byLabel(lab(11), /Create an htpasswd entry/)?.pattern || '^$', 'i'),
+    ];
+    lock(
+      htpasswdPatterns.every(
+        (pattern) =>
+          pattern.test('htpasswd -c -B -b htpasswd alice redhat123') &&
+          pattern.test('oc htpasswd -c -B -b htpasswd alice redhat123') &&
+          pattern.test('htpasswd -bB /tmp/htpasswd alice newpass456') &&
+          !pattern.test(
+            'oc create secret generic htpass-secret --from-file=htpasswd -n openshift-config'
+          ) &&
+          !pattern.test(
+            'oc create secret generic htpass-secret --from-file=htpasswd=htpasswd -n openshift-config'
+          ) &&
+          !pattern.test('htpasswd -D htpasswd alice')
+      ),
+      'the htpasswd command objectives must match the htpasswd tool only (not `oc create secret … --from-file=htpasswd`, not -D)',
+      htpasswdPatterns.map(String).join(' | ')
+    );
+
+    // Uninstall = Subscription AND CSV (L18, lab 10).
+    const uninstall = { type: 'operator', name: 'metallb-operator', installed: false };
+    const sub = res('Subscription', 'metallb-operator', 'metallb-system', {
+      spec: { name: 'metallb-operator' },
+      status: { installedCSV: 'metallb-operator.v4.22.0-202610281200' },
+    });
+    const csv = res(
+      'ClusterServiceVersion',
+      'metallb-operator.v4.22.0-202610281200',
+      'metallb-system',
+      {
+        status: { phase: 'Succeeded' },
+      }
+    );
+    const uninstallCtx = (resources) => ({
+      clusterState: fakeCluster(resources),
+      levelDef: levelDefFor('operator-lab'),
+    });
+    const uninstallRun = { ...uninstall };
+    const uninstallSteps = [
+      evaluateObjective(uninstallRun, uninstallCtx([sub, csv])).completed,
+      evaluateObjective(uninstallRun, uninstallCtx([csv])).completed,
+      evaluateObjective(uninstallRun, uninstallCtx([])).completed,
+    ];
+    lock(
+      JSON.stringify(uninstallSteps) === '[false,false,true]' &&
+        /CSV/.test(byLabel(lab(10), /Uninstall the old AAP operator/)?.label || ''),
+      'an operator uninstall must need the Subscription AND its CSV deleted',
+      JSON.stringify(uninstallSteps)
+    );
+
+    // Exclusive SCC grants (L17, lab 8).
+    const sccObjective = byLabel(level(17), /Grant the privileged SCC/);
+    const scc = res('SecurityContextConstraints', 'privileged', '', {});
+    const sccBinding = (subjects) =>
+      res('RoleBinding', 'system:openshift:scc:privileged', 'privileged-lab', {
+        spec: {
+          roleRef: { kind: 'ClusterRole', name: 'system:openshift:scc:privileged' },
+          subjects,
+        },
+      });
+    const sa = (name) => ({ kind: 'ServiceAccount', name, namespace: 'privileged-lab' });
+    const sccRun = { ...(sccObjective || {}) };
+    const sccCtx = (resources) => ({
+      clusterState: fakeCluster(resources),
+      levelDef: levelDefFor('privileged-lab'),
+    });
+    const sccSteps = [
+      evaluateObjective(sccRun, sccCtx([scc])).completed,
+      evaluateObjective(sccRun, sccCtx([scc, sccBinding([sa('priv-sa'), sa('default')])]))
+        .completed,
+      evaluateObjective(sccRun, sccCtx([scc, sccBinding([sa('priv-sa')])])).completed,
+    ];
+    lock(
+      sccObjective?.exclusive === true &&
+        byLabel(lab(8), /Grant the privileged SCC/)?.exclusive === true &&
+        JSON.stringify(sccSteps) === '[false,false,true]',
+      'the dedicated-ServiceAccount SCC grant must reject a grant that also reaches `default` (L17, lab 8)',
+      JSON.stringify(sccSteps)
+    );
+
+    // L15: project.config.openshift.io/cluster state, not `oc edit` typed.
+    const l15 = level(15);
+    const projectTemplate = objectiveOf(l15, (o) => o.type === 'projectRequestTemplate');
+    const template = res('Template', 'project-request', 'openshift-config', {});
+    const configCtx = (name, resources) => ({
+      clusterState: fakeCluster(resources, {
+        getProjectConfig: () => ({ spec: name ? { projectRequestTemplate: { name } } : {} }),
+      }),
+    });
+    lock(
+      Boolean(projectTemplate) &&
+        !(l15?.objectives || []).some(
+          (o) => o.type === 'command' && /project\\?\.config/.test(String(o.pattern || ''))
+        ) &&
+        run(projectTemplate, configCtx('', [template])) === false &&
+        run(projectTemplate, configCtx('project-request', [])) === false &&
+        run(projectTemplate, configCtx('project-request', [template])) === true,
+      'L15 must grade spec.projectRequestTemplate.name (pointing at an existing openshift-config Template), not an `oc edit|patch project.config` regex'
+    );
+
+    // L10 rollouts from the Deployment's own ReplicaSet history (oldest first), on
+    // the FIRST evaluation — no first-look baseline (the level intro pauses the mode,
+    // so the first evaluation can come after the player's first command).
+    const hashMod = await tryImport('js/engine/TemplateHash.js');
+    if (hashMod?.templateHash) {
+      const templateFor = (image) => ({
+        metadata: { labels: { app: 'api-server' } },
+        spec: { containers: [{ name: 'main', image }] },
+      });
+      const good = templateFor('quay.io/openshift/origin-hello-openshift:latest');
+      const bad = templateFor('quay.io/openshift/origin-hello-openshift:does-not-exist');
+      const rsFor = (template) =>
+        res('ReplicaSet', `api-server-${hashMod.templateHash(template)}`, 'rollout-lab', {
+          metadata: { labels: { 'pod-template-hash': hashMod.templateHash(template) } },
+          spec: { template },
+        });
+      const rolloutCtx = (template, sets, rollbacks) => {
+        const deploymentRes = res('Deployment', 'api-server', 'rollout-lab', {
+          spec: { replicas: 3, template },
+          top: { uid: 'deploy-api-server' },
+        });
+        return {
+          clusterState: {
+            ...fakeCluster([deploymentRes, ...sets]),
+            getChildren: (uid) => (uid === 'deploy-api-server' ? sets : []),
+            _rollbackCount: rollbacks,
+          },
+          levelDef: levelDefFor('rollout-lab'),
+        };
+      };
+      const l10 = level(10);
+      const update = objectiveOf(l10, (o) => o.type === 'update');
+      const rollback = objectiveOf(l10, (o) => o.type === 'rollback');
+      const states = [
+        // one revision + a no-op undo: nothing
+        [rolloutCtx(good, [rsFor(good)], 1), false, false],
+        // updated to the bad image: update only
+        [rolloutCtx(bad, [rsFor(good), rsFor(bad)], 0), true, false],
+        // undone: the older ReplicaSet is active again
+        [rolloutCtx(good, [rsFor(good), rsFor(bad)], 1), true, true],
+        // undone twice: the bad (newest) template is back
+        [rolloutCtx(bad, [rsFor(good), rsFor(bad)], 2), true, false],
+      ].map(([ctx, wantUpdate, wantRollback]) => [
+        run(update, ctx) === wantUpdate,
+        run(rollback, ctx) === wantRollback,
+      ]);
+      lock(
+        Boolean(update && rollback) && states.every((pair) => pair.every(Boolean)),
+        'L10 update/rollback must follow the ReplicaSet history on the first evaluation (lone undo: nothing; update; undo re-activates the older set; second undo: no rollback)',
+        JSON.stringify(states)
+      );
+    } else {
+      fail('grading', '1.16.0: js/engine/TemplateHash.js must be importable for the rollout locks');
+    }
+
+    // L10 and L20 objective data.
+    const l10Uptime = objectiveOf(level(10), (o) => o.type === 'uptime');
+    const l20 = level(20);
+    lock(
+      l10Uptime?.name === 'api-server' &&
+        objectiveOf(l20, (o) => o.type === 'architectureScore')?.namespace === 'prod-platform' &&
+        objectiveOf(l20, (o) => o.type === 'examScore')?.namespace === 'prod-platform',
+      'L10 availability must grade api-server; L20 Advisor/composite must rate prod-platform'
+    );
+    const composite = { type: 'examScore', minScore: 75 };
+    const compositeCtx = (done) => ({
+      clusterState: fakeCluster([]),
+      objectiveProgress: [
+        ...Array.from({ length: 18 }, (_, index) => ({ type: 'deploy', completed: index < done })),
+        composite,
+      ],
+    });
+    lock(
+      evaluateObjective({ ...composite }, compositeCtx(17)).completed === false &&
+        evaluateObjective({ ...composite }, compositeCtx(18)).completed === true,
+      'the composite drill score must only complete once every other objective is done'
+    );
+
+    // One investigation matcher; output travels with the recorded command.
+    const panelSource = read('js/ui/IncidentPanel.js');
+    const incidentSource = read('js/engine/IncidentEngine.js');
+    const tickSource = read('js/engine/SimulationTick.js');
+    lock(
+      !/['"]command:(raw|executed)['"]/.test(panelSource) &&
+        !/\.completeStep\?*\.?\(/.test(panelSource) &&
+        /['"]incident:step-completed['"]/.test(panelSource),
+      'the Incidents panel must mirror IncidentEngine steps (incident:step-completed), never run its own command matcher'
+    );
+    lock(
+      /import \{ outputShowsSomething \} from '\.\/ObjectiveEvaluator\.js'/.test(incidentSource) &&
+        /_stepIsClusterScoped\(expectedWords\)/.test(incidentSource),
+      'IncidentEngine investigation must require output and the incident project for namespaced steps'
+    );
+    lock(
+      (tickSource.match(/_installPlanOwnedBy\(/g) || []).length >= 3 &&
+        (tickSource.match(/this\._adoptInstallPlan\(subscription, plan\)/g) || []).length >= 2,
+      'OLM InstallPlans must be owned by (and only adopted for) their own Subscription'
+    );
+    lock(
+      /this\._recordCommand\(raw, baseCommand, success, message\)/.test(
+        read('js/ui/CommandBar.js')
+      ) &&
+        /entry\.output = details\.output/.test(read('js/engine/GameEngine.js')) &&
+        /project: this\.currentProject/.test(read('js/engine/GameEngine.js')),
+      'command history entries must carry the output and the project they ran in'
+    );
+  }
+}
+
+// ── 4n. Simulator fixes (1.16.0) ───────────────────────────────────────────
+// Headless locks for the 1.16.0 simulator-fidelity pass (browser section
+// `qa-sim-1160` proves the same end-to-end): the 2026-11-07 NO-GO root causes
+// (alert flicker, incident fire-moment Pod state, GitHub API calls off the
+// production host) and the "Open — simulator fidelity" list of
+// docs/guidance-qa-findings.md. One in-process sandbox fixture, no browser.
+{
+  const engineMod = await tryImport('js/engine/GameEngine.js');
+  const sandboxMod = await tryImport('js/modes/SandboxMode.js');
+  const commandBarMod = await tryImport('js/ui/CommandBar.js');
+  const manifestMod = await tryImport('js/engine/ManifestEngine.js');
+  const incidentMod = await tryImport('js/engine/IncidentEngine.js');
+  if (
+    !engineMod?.GameEngine ||
+    !sandboxMod?.SandboxMode ||
+    !commandBarMod?.CommandBar ||
+    !manifestMod?.ManifestEngine ||
+    !incidentMod?.IncidentEngine
+  ) {
+    fail('sim-1160', '4n: engine/CommandBar modules are not importable for the 1.16.0 locks');
+  } else {
+    const engine = new engineMod.GameEngine({ mode: 'sandbox' });
+    new sandboxMod.SandboxMode(engine, null).setupCluster(3);
+    const cluster = engine.cluster;
+    const simulation = engine.simulation;
+    simulation.randomFailureRate = 0;
+    const manifestEngine = new manifestMod.ManifestEngine({ cluster, gameEngine: engine });
+    globalThis.window = {
+      game: {
+        cluster,
+        gameEngine: engine,
+        engine: { emit() {}, on() {}, off() {} },
+        manifestEngine,
+      },
+    };
+    manifestEngine.game = globalThis.window.game;
+    const commandBar = new commandBarMod.CommandBar();
+    const cli = (raw) => {
+      try {
+        const out = commandBar.executeCommand(raw);
+        return { error: Boolean(out?.error), message: String(out?.message ?? '') };
+      } catch (err) {
+        return { error: true, message: `THROW ${err?.message || err}` };
+      }
+    };
+    const tick = (seconds, incidentEngine = null) => {
+      const steps = Math.ceil(seconds / 0.05);
+      for (let step = 0; step < steps; step += 1) {
+        simulation.tick(0.05);
+        if (incidentEngine) incidentEngine.tick(0.05);
+      }
+    };
+    /** Record one lock: pass when `ok`, otherwise fail with the detail. */
+    const lock = (ok, message, detail) => {
+      if (ok) passed();
+      else fail('sim-1160', message, detail === undefined ? undefined : JSON.stringify(detail));
+    };
+    try {
+      // ── NO-GO 1: KubePodCrashLooping holds through the kubelet restart ─────
+      try {
+        cli('oc new-project qa4n-alerts');
+        cli('oc create deployment qa4n-crash --image=nginx:latest -n qa4n-alerts');
+        const alertmanager = cluster.getByName('Alertmanager', 'main', 'openshift-monitoring');
+        const crashAlerts = () =>
+          (alertmanager?.getFiringAlerts?.() || []).filter(
+            (alert) =>
+              alert.name === 'KubePodCrashLooping' && /qa4n-crash-/.test(alert.target || '')
+          ).length;
+        tick(1);
+        const gaps = [];
+        for (let step = 0; step < 20 * 45; step += 1) {
+          simulation.tick(0.05);
+          if (crashAlerts() === 0) gaps.push(Number((1.05 + step * 0.05).toFixed(2)));
+        }
+        lock(
+          alertmanager && gaps.length === 0,
+          '4n: KubePodCrashLooping must stay firing while the kubelet restarts a crash-looping container (max_over_time[5m] window), never blink off for one tick',
+          { gaps: gaps.slice(0, 8) }
+        );
+        cli(
+          'oc create deployment qa4n-pull --image=quay.io/qa4n/app:does-not-exist -n qa4n-alerts'
+        );
+        tick(5);
+        lock(
+          (alertmanager?.getFiringAlerts?.() || []).some(
+            (alert) => alert.name === 'KubePodNotReady' && /qa4n-pull-/.test(alert.target || '')
+          ),
+          '4n: an ImagePullBackOff Pod fires KubePodNotReady with its own pod target'
+        );
+      } catch (err) {
+        fail('sim-1160', `4n: alert lock could not run: ${err.message}`);
+      }
+
+      // ── NO-GO 2: seeded CrashLoopBackOff incident, fire-moment Pod state ───
+      try {
+        const incidentEngine = new incidentMod.IncidentEngine(engine);
+        incidentEngine.start('sandbox');
+        cli('oc new-project qa4n-crash');
+        cli(
+          'oc create deployment webapp --replicas=2 --image=quay.io/openshift/origin-hello-openshift:latest -n qa4n-crash'
+        );
+        tick(10, incidentEngine);
+        const crashDef = [...incidentEngine._defsById.values()].find(
+          (def) => def.name === 'CrashLoopBackOff'
+        );
+        incidentEngine.spawnIncident(crashDef, 'webapp', 2, {
+          exactTarget: true,
+          namespace: 'qa4n-crash',
+          seed: { env: { name: 'APP_MODE', value: 'debug-invalid' } },
+          fix: { env: { name: 'APP_MODE', allowed: ['production'] } },
+        });
+        const podStates = () =>
+          cluster.getByKindAndNamespace('Pod', 'qa4n-crash').map((pod) => ({
+            bad: (pod.spec?.containers?.[0]?.env || []).some(
+              (entry) => entry.name === 'APP_MODE' && entry.value === 'debug-invalid'
+            ),
+            phase: pod.status?.phase || '',
+            node: pod.spec?.nodeName || '',
+            waiting: (pod.status?.containerStatuses || []).map(
+              (status) => status.state?.waiting?.reason || 'running'
+            ),
+          }));
+        const atFire = podStates();
+        const atFireBad = atFire.filter((pod) => pod.bad);
+        lock(
+          atFireBad.length === 1 &&
+            atFireBad[0].phase === 'Pending' &&
+            !atFireBad[0].node &&
+            atFireBad[0].waiting.length === 0,
+          '4n: when the seeded incident fires, the new revision Pod exists but is still unscheduled (Pending, no container status) — the browser check must give the kubelet a tick',
+          atFire
+        );
+        tick(0.05, incidentEngine);
+        const oneTickLater = podStates();
+        lock(
+          oneTickLater
+            .filter((pod) => pod.bad)
+            .every((pod) => pod.waiting[0] === 'CrashLoopBackOff') &&
+            oneTickLater.filter((pod) => !pod.bad && pod.phase === 'Running').length === 2,
+          '4n: one kubelet tick later the new revision crash-loops while the 2 old Pods keep running',
+          oneTickLater
+        );
+      } catch (err) {
+        fail('sim-1160', `4n: incident fire-moment lock could not run: ${err.message}`);
+      }
+
+      // ── NO-GO 4: GitHub stars API only on the production host ─────────────
+      {
+        const indexSource = read('index.html');
+        const fetchAt = indexSource.indexOf('fetch(GITHUB_API');
+        const guardAt = indexSource.search(
+          /if \(\/\(\^\|\\\.\)shifting\\\.pro\$\/\.test\(window\.location\.hostname\)\) \{/
+        );
+        lock(
+          fetchAt > 0 && guardAt > 0 && guardAt < fetchAt && fetchAt - guardAt < 200,
+          '4n: index.html may only call api.github.com on the production host (local/test boots hit its rate limit and log a CORS console error)',
+          { fetchAt, guardAt }
+        );
+      }
+
+      // ── Open — simulator fidelity (docs/guidance-qa-findings.md) ──────────
+      /** `cli()` + the shell exit status `$?` the line left behind. */
+      const status = () => commandBar.shellTools?.lastExitCode;
+
+      // Scope: describe never falls back to another project; -n never moves an
+      // object that names its own namespace; new-app honours -n.
+      try {
+        cli('oc new-project qa4n-ops');
+        cli(
+          'oc create deployment web-app --image=quay.io/openshift/origin-hello-openshift:latest -n qa4n-ops'
+        );
+        cli('oc project default');
+        const described = cli('oc describe deployment web-app');
+        lock(
+          described.error &&
+            described.message.trim() ===
+              'Error from server (NotFound): deployments.apps "web-app" not found',
+          '4n: `oc describe deployment web-app` from default is NotFound like get/logs/set env (it used to print the qa4n-ops Deployment)',
+          described.message.slice(0, 160)
+        );
+        const kustomizeMismatch = cli('oc apply -k kustomize/overlays/dev -n default');
+        lock(
+          kustomizeMismatch.error &&
+            /^error: the namespace from the provided object "webapp-dev" does not match the namespace "default"\. You must pass '--namespace=webapp-dev' to perform this operation\.$/.test(
+              kustomizeMismatch.message.trim()
+            ) &&
+            !cluster.getByName('Deployment', 'dev-webapp', 'default'),
+          '4n: `oc apply -k <overlay> -n default` is kubectl’s namespace-mismatch error and creates nothing (it used to rewrite the overlay namespace)',
+          kustomizeMismatch.message
+        );
+        const fileMismatch = cli('oc apply -f examples/subscription.yaml -n default');
+        lock(
+          fileMismatch.error && /does not match the namespace "default"/.test(fileMismatch.message),
+          '4n: `oc apply -f <file naming openshift-operators> -n default` is the same mismatch error',
+          fileMismatch.message
+        );
+        cli('oc new-project qa4n-other');
+        cli('oc project qa4n-ops');
+        const newAppFile = cli(
+          'oc new-app -f templates/webapp-template.yaml -p APP_NAME=qa4n-file -n qa4n-other'
+        );
+        lock(
+          !newAppFile.error &&
+            cluster.getByName('Deployment', 'qa4n-file', 'qa4n-other') &&
+            !cluster.getByName('Deployment', 'qa4n-file', 'qa4n-ops'),
+          '4n: `oc new-app -f <template> -n other` creates the objects in `other`, not the current project',
+          newAppFile.message.slice(0, 200)
+        );
+      } catch (err) {
+        fail('sim-1160', `4n: scope locks could not run: ${err.message}`);
+      }
+
+      // Too lenient: new-app create-only semantics, builder argument, template record.
+      try {
+        cli('oc project qa4n-ops');
+        const first = cli('oc new-app php:8.2-ubi9 https://github.com/sclorg/cakephp-ex');
+        const buildConfig = cluster.getByName('BuildConfig', 'cakephp-ex', 'qa4n-ops');
+        lock(
+          !first.error &&
+            buildConfig?.spec?.strategy?.sourceStrategy?.from?.name === 'php:8.2-ubi9' &&
+            !cluster.getByName('Deployment', 'php', 'qa4n-ops'),
+          '4n: `oc new-app <builder> <repo>` (space) builds the repo with that builder like `<builder>~<repo>` (it used to deploy the builder image and build nothing)',
+          {
+            message: first.message.slice(0, 200),
+            from: buildConfig?.spec?.strategy?.sourceStrategy?.from,
+          }
+        );
+        const buildsBefore = cluster.getByKindAndNamespace('Build', 'qa4n-ops').length;
+        const rerun = cli('oc new-app php:8.2-ubi9 https://github.com/sclorg/cakephp-ex');
+        const buildsAfter = cluster.getByKindAndNamespace('Build', 'qa4n-ops').length;
+        lock(
+          rerun.error &&
+            status() === 1 &&
+            /error: buildconfigs\.build\.openshift\.io "cakephp-ex" already exists/.test(
+              rerun.message
+            ) &&
+            /--> Failed$/.test(rerun.message.trim()) &&
+            !/created/.test(rerun.message) &&
+            buildsAfter === buildsBefore,
+          '4n: re-running `oc new-app` is AlreadyExists per object + `--> Failed` (exit 1) and starts no second build',
+          { message: rerun.message, status: status(), buildsBefore, buildsAfter }
+        );
+        const fromTemplate = cli('oc new-app --template=webapp-template -p APP_NAME=qa4n-tpl');
+        const record = (manifestEngine.templates || []).find(
+          (entry) => entry.name === 'webapp-template' && entry.params?.APP_NAME === 'qa4n-tpl'
+        );
+        lock(
+          !fromTemplate.error && record?.applied === true,
+          '4n: `oc new-app --template=<name>` records the processed+applied template (L8 `template` objective)',
+          { message: fromTemplate.message.slice(0, 160), record: Boolean(record) }
+        );
+      } catch (err) {
+        fail('sim-1160', `4n: new-app locks could not run: ${err.message}`);
+      }
+
+      // Too lenient: required flags and subcommands that real oc does not have.
+      try {
+        const expectations = [
+          ['oc create deployment qa4n-x', /^error: required flag\(s\) "image" not set$/],
+          ['oc create job qa4n-j', /^error: either --image or --from must be specified$/],
+          ['oc create cronjob qa4n-c', /^error: required flag\(s\) "image", "schedule" not set$/],
+          [
+            'oc create job qa4n-j --image=perl --active-deadline-seconds=600 -- perl -e 1',
+            /^error: unknown flag: --active-deadline-seconds/,
+          ],
+          ['oc create service web', /^error: unknown command "web"/],
+          ['oc create subscription x', /^error: Unexpected args: \[subscription x\]/],
+          ['oc create networkpolicy x', /^error: Unexpected args: \[networkpolicy x\]/],
+          ['oc create group devs', /^error: Unexpected args: \[group devs\]/],
+          ['oc create secret mysecret --from-literal=a=b', /^error: unknown flag: --from-literal/],
+          [
+            'oc create secret generic qa4n-s --from-file=htpasswd=/tmp/qa4n-missing',
+            /^error: error reading \/tmp\/qa4n-missing: no such file or directory$/,
+          ],
+          ['oc create', /^error: must specify one of -f and -k$/],
+        ];
+        for (const [raw, pattern] of expectations) {
+          const out = cli(raw);
+          lock(
+            out.error && pattern.test(out.message.trim()),
+            `4n: \`${raw}\` fails like real oc (${pattern})`,
+            out.message.slice(0, 200)
+          );
+        }
+        lock(
+          !cluster.getByName('NetworkPolicy', 'x', 'qa4n-ops') &&
+            !cluster.getByName('Subscription', 'x', 'qa4n-ops') &&
+            !cluster.getByName('Deployment', 'qa4n-x', 'qa4n-ops'),
+          '4n: the rejected create commands created nothing (the fake NetworkPolicy used to satisfy the capstone objective)'
+        );
+        const service = cli('oc create service clusterip qa4n-svc --tcp=443:8080');
+        const created = cluster.getByName('Service', 'qa4n-svc', 'qa4n-ops');
+        lock(
+          !service.error &&
+            created?.spec?.ports?.[0]?.name === '443-8080' &&
+            created?.metadata?.labels?.app === 'qa4n-svc',
+          '4n: `oc create service clusterip` names the port after the --tcp pair (443-8080) and labels app=<name>',
+          created?.spec?.ports
+        );
+      } catch (err) {
+        fail('sim-1160', `4n: create locks could not run: ${err.message}`);
+      }
+
+      // Too lenient: InstallPlan spec.approved is a boolean; CRDs refuse
+      // strategic-merge patches.
+      try {
+        cli('oc apply -f examples/subscription-manual-pinned.yaml');
+        tick(12);
+        const plan = cluster.getByKindAndNamespace('InstallPlan', 'openshift-operators')[0];
+        const planName = plan?.metadata?.name || 'missing';
+        const stringPatch = cli(
+          `oc patch installplan ${planName} -n openshift-operators --type=merge -p '{"spec":{"approved":"true"}}'`
+        );
+        lock(
+          plan &&
+            stringPatch.error &&
+            stringPatch.message.trim() ===
+              `The InstallPlan "${planName}" is invalid: spec.approved: Invalid value: "string": spec.approved in body must be of type boolean: "string"` &&
+            plan.spec?.approved !== true,
+          '4n: `{"spec":{"approved":"true"}}` (a string) is rejected by the InstallPlan schema instead of being accepted and ignored',
+          stringPatch.message
+        );
+        const strategic = cli(`oc patch oauth cluster -p '{"spec":{}}'`);
+        lock(
+          strategic.error && /UnsupportedMediaType/.test(strategic.message),
+          '4n: `oc patch oauth cluster` without --type=merge is the API server’s 415 (CRDs have no strategic merge patch)',
+          strategic.message
+        );
+      } catch (err) {
+        fail('sim-1160', `4n: patch locks could not run: ${err.message}`);
+      }
+
+      // Too strict / missing: glued shorthands, logs -l, helm upgrade --install,
+      // JSONPath filters.
+      try {
+        cli('oc project qa4n-ops');
+        cli(
+          'oc create deployment qa4n-web --image=quay.io/openshift/origin-hello-openshift:latest --replicas=2'
+        );
+        tick(6);
+        const wide = cli('oc get pods -owide');
+        const yaml = cli('oc get deployment qa4n-web -oyaml');
+        lock(
+          !wide.error &&
+            /NOMINATED NODE/.test(wide.message) &&
+            !yaml.error &&
+            /^apiVersion: apps\/v1/.test(yaml.message),
+          '4n: glued shorthand values `-owide` / `-oyaml` parse like pflag (they used to be unknown shorthand flags)',
+          { wide: wide.message.slice(0, 120), yaml: yaml.message.slice(0, 60) }
+        );
+        const selected = cli('oc logs -l app=qa4n-web --prefix --tail=1');
+        const prefixed = selected.message
+          .split('\n')
+          .filter((line) => /^\[pod\/qa4n-web-[^/]+\/origin-hello-openshift\] /.test(line));
+        lock(
+          !selected.error && prefixed.length === 2,
+          '4n: `oc logs -l <selector> --prefix --tail=1` prints one prefixed line per matching Pod',
+          selected.message
+        );
+        const filter = cli(
+          `oc get pods -l app=qa4n-web -o jsonpath='{.items[?(@.status.phase=="Running")].metadata.name}'`
+        );
+        const nodeIp = cli(
+          `oc get nodes -o jsonpath='{.items[?(@.metadata.name=="worker-0")].status.addresses[?(@.type=="InternalIP")].address}'`
+        );
+        lock(
+          filter.message
+            .trim()
+            .split(/\s+/)
+            .filter((name) => /^qa4n-web-/.test(name)).length === 2 &&
+            /^\d+\.\d+\.\d+\.\d+$/.test(nodeIp.message.trim()),
+          '4n: JSONPath filter expressions `[?(@.a=="b")]` select matching items (they used to print nothing)',
+          { filter: filter.message, nodeIp: nodeIp.message }
+        );
+        const helmInstall = cli('helm upgrade --install qa4n-shop ./helm/webapp');
+        const helmUpgrade = cli(
+          'helm upgrade --install qa4n-shop ./helm/webapp --set replicaCount=2'
+        );
+        lock(
+          !helmInstall.error &&
+            /^Release "qa4n-shop" does not exist\. Installing it now\.\nNAME: qa4n-shop/.test(
+              helmInstall.message
+            ) &&
+            /REVISION: 1/.test(helmInstall.message) &&
+            !helmUpgrade.error &&
+            /^Release "qa4n-shop" has been upgraded\. Happy Helming!/.test(helmUpgrade.message) &&
+            /REVISION: 2/.test(helmUpgrade.message),
+          '4n: `helm upgrade --install` installs a missing release, then upgrades it (it used to be an unknown flag)',
+          {
+            helmInstall: helmInstall.message.slice(0, 120),
+            helmUpgrade: helmUpgrade.message.slice(0, 120),
+          }
+        );
+      } catch (err) {
+        fail('sim-1160', `4n: CLI parsing locks could not run: ${err.message}`);
+      }
+
+      // Cosmetic: describe oauth, debug-shell cue, oc edit pause cue, rollout
+      // undo/history, `oc get all` warning.
+      try {
+        cli(
+          `oc patch oauth cluster --type=merge -p '{"spec":{"identityProviders":[{"name":"htpasswd_provider","mappingMethod":"claim","type":"HTPasswd","htpasswd":{"fileData":{"name":"htpass-secret"}}}]}}'`
+        );
+        const oauth = cli('oc describe oauth cluster');
+        lock(
+          !/Mapping Method:claim/.test(oauth.message) &&
+            /\n    Mapping Method:\s+claim\n/.test(oauth.message) &&
+            /\n      File Data:\n        Name:\s+htpass-secret\n/.test(oauth.message),
+          '4n: `oc describe oauth cluster` uses the generic CRD describer (`Mapping Method:  claim`, `File Data:` block), never `Mapping Method:claim`',
+          oauth.message
+        );
+        const debug = cli('oc debug node/worker-0');
+        const insideRaw = commandBar.executeCommand('oc get pods');
+        const inside = {
+          error: Boolean(insideRaw?.error),
+          message: String(insideRaw?.message ?? ''),
+        };
+        const insideStatus = insideRaw?.exitCode;
+        cli('exit');
+        const back = cli('oc whoami');
+        lock(
+          /sh-5\.1#/.test(debug.message) &&
+            inside.error &&
+            /^sh: oc: command not found\n\nSimulator hint: this terminal is inside the debug shell of node\/worker-0 \(sh-5\.1#\)/.test(
+              inside.message
+            ) &&
+            insideStatus === 127 &&
+            !back.error,
+          '4n: `oc` inside `oc debug node/…` is `sh: oc: command not found` (exit 127) with a cue to `exit`, and `exit` returns to the workstation',
+          { inside: inside.message, insideStatus, back: back.message }
+        );
+        globalThis.window.game.manifestPanel = { show() {} };
+        const edit = cli('oc edit deployment/qa4n-web');
+        delete globalThis.window.game.manifestPanel;
+        lock(
+          !edit.error && /the cluster is paused while the Files panel is open/.test(edit.message),
+          '4n: `oc edit` that opens the Files panel says the simulation is paused while it is open',
+          edit.message
+        );
+        cli(
+          'oc create deployment qa4n-one --image=quay.io/openshift/origin-hello-openshift:latest'
+        );
+        tick(3);
+        const undo = cli('oc rollout undo deployment/qa4n-one');
+        const generation = cluster.getByName('Deployment', 'qa4n-one', 'qa4n-ops')?.metadata
+          ?.generation;
+        const missing = cli('oc rollout undo deployment/qa4n-one --to-revision=7');
+        lock(
+          undo.error &&
+            undo.message.trim() === 'error: no rollout history found for deployment "qa4n-one"' &&
+            Number(generation) === 1 &&
+            missing.message.trim() === 'error: unable to find specified revision 7 in history',
+          '4n: `oc rollout undo` without a previous revision is an error, not a no-op success that bumps the generation',
+          { undo: undo.message, generation, missing: missing.message }
+        );
+        const all = cli('oc get all');
+        lock(
+          /^Warning: apps\.openshift\.io\/v1 DeploymentConfig is deprecated in v4\.14\+, unavailable in v4\.10000\+\n/.test(
+            all.message
+          ),
+          '4n: `oc get all` prints the 4.14+ DeploymentConfig deprecation warning first',
+          all.message.slice(0, 160)
+        );
+      } catch (err) {
+        fail('sim-1160', `4n: cosmetic locks could not run: ${err.message}`);
+      }
+
+      // Nodes: cordon = taint (no label), drain filters, top -A; exec curl status.
+      try {
+        tick(2);
+        const cordon = cli('oc adm cordon worker-1');
+        const worker1 = cluster.getByName('Node', 'worker-1', '');
+        lock(
+          cordon.message.trim() === 'node/worker-1 cordoned' &&
+            (worker1?.spec?.taints || []).some(
+              (taint) =>
+                taint.key === 'node.kubernetes.io/unschedulable' && taint.effect === 'NoSchedule'
+            ) &&
+            !Object.prototype.hasOwnProperty.call(
+              worker1?.metadata?.labels || {},
+              'node.kubernetes.io/unschedulable'
+            ),
+          '4n: cordon adds the node.kubernetes.io/unschedulable:NoSchedule TAINT, never a label',
+          { taints: worker1?.spec?.taints, labels: worker1?.metadata?.labels }
+        );
+        cli('oc adm uncordon worker-1');
+        cli('oc run qa4n-bare --image=quay.io/openshift/origin-hello-openshift:latest -n qa4n-ops');
+        tick(3);
+        const bareNode =
+          cluster.getByName('Pod', 'qa4n-bare', 'qa4n-ops')?.spec?.nodeName || 'worker-0';
+        const podsBefore = cluster
+          .getByKind('Pod')
+          .filter((pod) => pod.spec?.nodeName === bareNode).length;
+        const plain = cli(`oc adm drain ${bareNode}`);
+        const plainStatus = status();
+        const podsAfterPlain = cluster
+          .getByKind('Pod')
+          .filter((pod) => pod.spec?.nodeName === bareNode).length;
+        lock(
+          plain.error &&
+            plainStatus === 1 &&
+            new RegExp(
+              `^node/${bareNode} cordoned\\nerror: unable to drain node "${bareNode}" due to error: `
+            ).test(plain.message) &&
+            /cannot delete DaemonSet-managed Pods \(use --ignore-daemonsets to ignore\): openshift-dns\//.test(
+              plain.message
+            ) &&
+            /There are pending nodes to be drained:/.test(plain.message) &&
+            podsAfterPlain === podsBefore &&
+            cluster.getByName('Node', bareNode, '')?.spec?.unschedulable === true,
+          '4n: `oc adm drain` without --ignore-daemonsets cordons, evicts NOTHING and fails with the real DaemonSet error (exit 1)',
+          { message: plain.message, plainStatus, podsBefore, podsAfterPlain }
+        );
+        const noForce = cli(`oc adm drain ${bareNode} --ignore-daemonsets --delete-emptydir-data`);
+        lock(
+          noForce.error &&
+            /cannot delete cannot delete Pods that declare no controller \(use --force to override\): qa4n-ops\/qa4n-bare/.test(
+              noForce.message
+            ),
+          '4n: a bare Pod needs --force (`cannot delete Pods that declare no controller`)',
+          noForce.message
+        );
+        const drained = cli(
+          `oc adm drain ${bareNode} --ignore-daemonsets --delete-emptydir-data --force`
+        );
+        lock(
+          !drained.error &&
+            /^Warning: .*ignoring DaemonSet-managed Pods: openshift-dns\//m.test(drained.message) &&
+            /^evicting pod qa4n-ops\/qa4n-bare$/m.test(drained.message) &&
+            /^pod\/qa4n-bare evicted$/m.test(drained.message) &&
+            new RegExp(`node/${bareNode} drained$`).test(drained.message.trim()) &&
+            !cluster.getByName('Pod', 'qa4n-bare', 'qa4n-ops'),
+          '4n: drain with --ignore-daemonsets --delete-emptydir-data --force warns, evicts and ends `node/<n> drained`',
+          drained.message
+        );
+        cli(`oc adm uncordon ${bareNode}`);
+        const top = cli('oc adm top pods -A');
+        lock(
+          /^NAMESPACE\s+NAME\s+CPU\(cores\)\s+MEMORY\(bytes\)/.test(top.message) &&
+            /\nopenshift-dns\s+/.test(top.message),
+          '4n: `oc adm top pods -A` lists every project with a NAMESPACE column',
+          top.message.slice(0, 160)
+        );
+        cli(
+          'oc create deployment qa4n-front --image=quay.io/openshift/origin-hello-openshift:latest'
+        );
+        cli(
+          'oc create deployment qa4n-back --image=quay.io/openshift/origin-hello-openshift:latest'
+        );
+        cli('oc expose deployment qa4n-back --port=8080');
+        tick(6);
+        manifestEngine.writeFile(
+          'qa4n/deny-ingress.yaml',
+          'apiVersion: networking.k8s.io/v1\nkind: NetworkPolicy\nmetadata:\n  name: qa4n-deny\nspec:\n  podSelector: {}\n  policyTypes:\n    - Ingress\n'
+        );
+        cli('oc apply -f qa4n/deny-ingress.yaml');
+        tick(1);
+        const curl = cli(
+          'oc exec deploy/qa4n-front -- curl -s http://qa4n-back:8080 && echo reached'
+        );
+        lock(
+          curl.error &&
+            /command terminated with exit code 28/.test(curl.message) &&
+            !/reached/.test(curl.message) &&
+            status() === 28,
+          '4n: a NetworkPolicy-blocked `oc exec … curl -s` exits 28 (`command terminated with exit code 28`) so `&&` stops',
+          { message: curl.message, status: status() }
+        );
+      } catch (err) {
+        fail('sim-1160', `4n: node/exec locks could not run: ${err.message}`);
+      }
+
+      // Controller children are created WITH their ownerReferences (the
+      // "YOU CREATED Pod …" toast claimed incident-made Pods as the player's).
+      try {
+        const ownerless = [];
+        const onAdded = (payload) => {
+          const resource = payload?.resource || payload;
+          if (!['ReplicaSet', 'Pod'].includes(resource?.kind)) return;
+          if (resource?.metadata?.namespace !== 'qa4n-ops') return;
+          if (!(resource?.metadata?.ownerReferences || []).length)
+            ownerless.push(resource.metadata.name);
+        };
+        engine.eventBus.on('cluster:added', onAdded);
+        cli(
+          'oc create deployment qa4n-owned --image=quay.io/openshift/origin-hello-openshift:latest'
+        );
+        tick(3);
+        engine.eventBus.off?.('cluster:added', onAdded);
+        lock(
+          ownerless.length === 0 &&
+            cluster
+              .getByKindAndNamespace('Pod', 'qa4n-ops')
+              .some((pod) => /^qa4n-owned-/.test(pod.metadata.name)),
+          '4n: Deployment ReplicaSets and their Pods carry the controller ownerReference in their first `cluster:added` event',
+          ownerless
+        );
+      } catch (err) {
+        fail('sim-1160', `4n: ownerReference lock could not run: ${err.message}`);
+      }
+
+      // describe networkpolicy = kubectl 1.35 describeNetworkPolicy; a seeded
+      // Subscription's package is its spec.name (no invented spec.packageName).
+      try {
+        cli('oc new-project qa4n-np');
+        cli('oc apply -f examples/allow-from-router.yaml -n qa4n-np');
+        const policy = cli('oc describe networkpolicy allow-from-router -n qa4n-np');
+        lock(
+          /^Name:         allow-from-router\nNamespace:    qa4n-np\nCreated on:   \d{4}-\d\d-\d\d \d\d:\d\d:\d\d \+0000 UTC\nLabels:       <none>\nAnnotations:  <none>\nSpec:\n  PodSelector:     <none> \(Allowing the specific traffic to all pods in this namespace\)\n  Allowing ingress traffic:\n    To Port: <any> \(traffic allowed to all ports\)\n    From:\n      NamespaceSelector: policy-group\.network\.openshift\.io\/ingress=\n  Not affecting egress traffic\n  Policy Types: Ingress$/.test(
+            policy.message
+          ),
+          '4n: `oc describe networkpolicy` prints the kubectl 1.35 layout (no `<all pods>`, no `Affected Pods`, no Events)',
+          policy.message
+        );
+        const seeded = cluster.addResource({
+          kind: 'Subscription',
+          metadata: { name: 'qa4n-metallb', namespace: 'openshift-operators' },
+          spec: {
+            name: 'metallb-operator',
+            channel: 'stable',
+            source: 'redhat-operators',
+            sourceNamespace: 'openshift-marketplace',
+          },
+        });
+        const subscriptions = cli('oc get subscription qa4n-metallb -n openshift-operators');
+        lock(
+          seeded &&
+            !Object.prototype.hasOwnProperty.call(seeded.spec || {}, 'packageName') &&
+            /qa4n-metallb\s+metallb-operator\s+redhat-operators\s+stable/.test(
+              subscriptions.message
+            ) &&
+            simulation._packageNameForSubscription(seeded) === 'metallb-operator',
+          '4n: a Subscription seeded with spec.name resolves THAT package (no default spec.packageName next to it)',
+          { spec: seeded?.spec, table: subscriptions.message }
+        );
+        cluster.remove(seeded?.uid);
+      } catch (err) {
+        fail('sim-1160', `4n: networkpolicy/subscription locks could not run: ${err.message}`);
+      }
+
+      // The OpenShift router answers every request it cannot route with its own
+      // error-page-503.http ("Application is not available"), never a 404 or
+      // HAProxy's stock "No server is available" text.
+      try {
+        const unknownHost = simulation.trafficForWorkstationCurl(
+          'http://qa4n-nothing.apps.cluster.example.com/'
+        );
+        lock(
+          unknownHost?.status === 503 &&
+            /<h1>Application is not available<\/h1>/.test(unknownHost?.body || '') &&
+            !/No server is available|404 Not Found/.test(unknownHost?.body || ''),
+          '4n: an unknown *.apps host gets the router’s 503 "Application is not available" page',
+          { status: unknownHost?.status, body: String(unknownHost?.body || '').slice(0, 120) }
+        );
+      } catch (err) {
+        fail('sim-1160', `4n: router error-page lock could not run: ${err.message}`);
+      }
+
+      // Logged out: anonymous 403s, real logout/whoami/project errors, token login.
+      try {
+        const token = cli('oc whoami -t').message.trim();
+        const logout = cli('oc logout');
+        const second = cli('oc logout');
+        const getPods = cli('oc get pods');
+        const run = cli('oc run qa4n-anon --image=quay.io/openshift/origin-hello-openshift:latest');
+        const whoami = cli('oc whoami');
+        const project = cli('oc project');
+        const bogus = cli('oc login --token=sha256~not-a-real-token');
+        lock(
+          logout.message.trim() ===
+            'Logged "kubeadmin" out on "https://api.cluster.example.com:6443"' &&
+            second.error &&
+            second.message.trim() === 'error: You must have a token in order to logout.',
+          '4n: `oc logout` prints the real `Logged "<user>" out on "<server>"`; a second logout has no token to revoke',
+          { logout: logout.message, second: second.message }
+        );
+        lock(
+          getPods.error &&
+            /^Error from server \(Forbidden\): pods is forbidden: User "system:anonymous" cannot list resource "pods" in API group "" in the namespace "/.test(
+              getPods.message.trim()
+            ) &&
+            run.error &&
+            /User "system:anonymous" cannot create resource "pods"/.test(run.message) &&
+            !cluster.getByName('Pod', 'qa4n-anon', 'qa4n-ops'),
+          '4n: logged out, `oc get` / `oc run` are anonymous 403s and create nothing (they used to work)',
+          { getPods: getPods.message, run: run.message }
+        );
+        lock(
+          whoami.error &&
+            /users\.user\.openshift\.io "~" is forbidden: User "system:anonymous"/.test(
+              whoami.message
+            ) &&
+            project.error &&
+            /you do not have rights to view project/.test(project.message) &&
+            bogus.error &&
+            bogus.message.trim() === 'error: The token provided is invalid or expired.',
+          '4n: logged out, whoami/project fail like real oc and `oc login --token=<garbage>` is rejected (it used to log in as kubeadmin)',
+          { whoami: whoami.message, project: project.message, bogus: bogus.message }
+        );
+        const clientDryRun = cli(
+          'oc create deployment qa4n-yaml --image=quay.io/openshift/origin-hello-openshift:latest --dry-run=client -o yaml'
+        );
+        lock(
+          !clientDryRun.error &&
+            /^apiVersion: apps\/v1\nkind: Deployment/.test(clientDryRun.message),
+          '4n: logged out, `oc create … --dry-run=client -o yaml` still renders locally (no API request is made)',
+          clientDryRun.message.slice(0, 160)
+        );
+        const tokenLogin = cli(`oc login --token=${token}`);
+        lock(
+          !tokenLogin.error &&
+            /^Logged into "https:\/\/api\.cluster\.example\.com:6443" as "kubeadmin" using the token provided\./.test(
+              tokenLogin.message
+            ) &&
+            cli('oc whoami').message.trim() === 'kubeadmin',
+          '4n: `oc login --token=$(oc whoami -t)` (a token the cluster issued) logs back in',
+          tokenLogin.message.slice(0, 160)
+        );
+      } catch (err) {
+        fail('sim-1160', `4n: logged-out locks could not run: ${err.message}`);
+      }
+    } finally {
+      delete globalThis.window;
+    }
+  }
+}
+
 // ── 5. Campaign, challenges, incidents and EX280 content ──────────────────
 const levelsMod = await tryImport('js/data/CampaignLevels.js');
 const challengesMod = await tryImport('js/modes/ChallengeMode.js');
@@ -6422,56 +8098,192 @@ function checkManifestRefs(owner, files) {
   }
 }
 
-const REQUIRED_LEVEL_TITLES = [
-  'Your First Project',
-  'Query, Format, Filter',
-  'Logs, Events & Health',
-  'Declarative Manifests',
-  'Kustomize Base',
-  'Kustomize Overlays',
-  'Secrets & ConfigMaps',
-  'Templates & Helm',
-  'Images, Builds & Image Streams',
-  'Rolling Updates & Rollbacks',
-  'Services & Routes',
-  'Non-HTTP & Load Balancer',
-  'HTPasswd & Users',
-  'Groups & RBAC',
-  'Quotas, LimitRanges & Templates',
-  'Service Accounts & API Access',
-  'SCC & Privileged Apps',
-  'Operators',
-  'Jobs & CronJobs',
-  'EX280 Final: Production Platform',
+// 1.16.0 campaign structure: level ids are stable SAVE KEYS (player progress is
+// stored per id), campaign ORDER comes from CHAPTERS, display numbers are
+// positional. Ids 1–20 keep their titles forever; new EX280 levels got new ids
+// (21, 22) placed before the capstone (id 20); the optional Linux & RHEL
+// Foundations prelude is chapter 0 with ids 101–107 (displayed 0.1–0.7).
+const REQUIRED_LEVEL_TITLES = {
+  1: 'Your First Project',
+  2: 'Query, Format, Filter',
+  3: 'Logs, Events & Health',
+  4: 'Declarative Manifests',
+  5: 'Kustomize Base',
+  6: 'Kustomize Overlays',
+  7: 'Secrets & ConfigMaps',
+  8: 'Templates & Helm',
+  9: 'Images, Builds & Image Streams',
+  10: 'Rolling Updates & Rollbacks',
+  11: 'Services & Routes',
+  12: 'Non-HTTP & Load Balancer',
+  13: 'HTPasswd & Users',
+  14: 'Groups & RBAC',
+  15: 'Quotas, LimitRanges & Templates',
+  16: 'Service Accounts & API Access',
+  17: 'SCC & Privileged Apps',
+  18: 'Operators',
+  19: 'Jobs & CronJobs',
+  20: 'EX280 Final: Production Platform',
+  21: 'Network Policies',
+  22: 'Nodes & Cluster Troubleshooting',
+};
+const REQUIRED_CHAPTER_STRUCTURE = [
+  { id: 0, name: 'Linux & RHEL Foundations', levels: [101, 102, 103, 104, 105, 106, 107] },
+  { id: 1, name: 'Manage OpenShift', levels: [1, 2, 3, 4] },
+  { id: 2, name: 'Declarative & Kustomize', levels: [5, 6, 7, 8] },
+  { id: 3, name: 'Deploy & Expose', levels: [9, 10, 11, 12] },
+  { id: 4, name: 'Identity, RBAC & Self-service', levels: [13, 14, 15, 16] },
+  { id: 5, name: 'Security & Operations', levels: [17, 18, 19, 21, 22, 20] },
 ];
-const REQUIRED_CHAPTERS = [
-  'Manage OpenShift',
-  'Declarative & Kustomize',
-  'Deploy & Expose',
-  'Identity, RBAC & Self-service',
-  'Security & Operations',
+const PRELUDE_CHAPTER = 0;
+/**
+ * Commands a how-to may tell the player to type: the `oc`/`helm` CLIs plus the
+ * simulated workstation shell (js/ui/ShellTools.js + the 1.16.0 RHEL host). A
+ * how-to step must start with one of them (no prose, no placeholders).
+ */
+const TYPEABLE_COMMANDS = [
+  'oc',
+  'helm',
+  'cat',
+  'echo',
+  'printf',
+  'htpasswd',
+  'openssl',
+  'curl',
+  'vi',
+  'vim',
+  'ls',
+  'cd',
+  'pwd',
+  'export',
+  'skopeo',
+  'sed',
+  'grep',
+  'head',
+  'tail',
+  'cut',
+  'sort',
+  'uniq',
+  'wc',
+  'tr',
+  'tee',
+  'less',
+  'find',
+  'stat',
+  'du',
+  'df',
+  'base64',
+  'rm',
+  'rmdir',
+  'mkdir',
+  'touch',
+  'cp',
+  'mv',
+  'ln',
+  'tar',
+  'whoami',
+  'id',
+  'groups',
+  'sudo',
+  'chmod',
+  'chown',
+  'chgrp',
+  'getenforce',
+  'sestatus',
+  'restorecon',
+  'semanage',
+  'timedatectl',
+  'bash',
+  // The interactive `oc debug node/<n>` session (chroot /host → systemctl → exit, exit).
+  'chroot',
+  'exit',
+  'hostname',
+  'uname',
+  'date',
+  'uptime',
+  'free',
+  'ps',
+  'pgrep',
+  'kill',
+  'pkill',
+  'top',
+  'systemctl',
+  'journalctl',
+  'ip',
+  'ss',
+  'ping',
+  'dig',
+  'host',
+  'nslookup',
+  'getent',
+  'firewall-cmd',
+  'dnf',
+  'rpm',
+  'podman',
+  'env',
+  'printenv',
+  'which',
+  'source',
 ];
+const TYPEABLE_COMMAND_RE = new RegExp(
+  `^(${TYPEABLE_COMMANDS.map((name) => name.replace(/[-]/g, '\\-')).join('|')})(\\s+\\S|$)`
+);
+/** The RHEL prelude may also run a shell script by name or path (`lab-info.sh`, `./x.sh`). */
+const PRELUDE_SCRIPT_RE = /^(\.\/|~\/|\/)?[\w./-]*[\w-]\.sh(\s+\S|$)/;
+/** A plain shell assignment (`API_IP=$(dig +short api.cluster.example.com)`) is typeable too. */
+const SHELL_ASSIGNMENT_RE = /^[A-Za-z_][A-Za-z0-9_]*=\S/;
+const REQUIRED_ORDER = REQUIRED_CHAPTER_STRUCTURE.flatMap((chapter) => chapter.levels);
+const REQUIRED_PRELUDE_ORDER = REQUIRED_CHAPTER_STRUCTURE[0].levels;
+const REQUIRED_EX280_ORDER = REQUIRED_CHAPTER_STRUCTURE.slice(1).flatMap(
+  (chapter) => chapter.levels
+);
+const chapterOfLevel = new Map(
+  REQUIRED_CHAPTER_STRUCTURE.flatMap((chapter) => chapter.levels.map((id) => [id, chapter]))
+);
 const levelIds = new Set();
 const levels = levelsMod?.CAMPAIGN_LEVELS || [];
 if (levels.length) {
-  if (levels.length !== 20) fail('campaign', `expected 20 levels, found ${levels.length}`);
+  if (levels.length !== REQUIRED_ORDER.length)
+    fail('campaign', `expected ${REQUIRED_ORDER.length} levels, found ${levels.length}`);
+  else passed();
+  const actualOrder = levels.map((level) => level.id);
+  if (JSON.stringify(actualOrder) !== JSON.stringify(REQUIRED_ORDER))
+    fail(
+      'campaign',
+      `CAMPAIGN_LEVELS must be in campaign order ${REQUIRED_ORDER.join(',')}, got ${actualOrder.join(',')}`
+    );
   else passed();
   for (const [i, level] of levels.entries()) {
     const owner = `level ${level.id} (${level.title})`;
+    if (levelIds.has(level.id)) fail('campaign', `${owner}: duplicate level id`);
     levelIds.add(level.id);
-    if (level.id !== i + 1)
-      fail('campaign', `${owner}: ids must be sequential (found ${level.id} at index ${i})`);
-    if (level.title !== REQUIRED_LEVEL_TITLES[i])
-      fail('campaign', `${owner}: title differs from spec "${REQUIRED_LEVEL_TITLES[i]}"`);
-    if (!(level.chapter >= 1 && level.chapter <= 5))
-      fail('campaign', `${owner}: chapter ${level.chapter} out of 1..5`);
-    if (level.chapterName !== REQUIRED_CHAPTERS[level.chapter - 1])
+    const isPrelude = level.chapter === PRELUDE_CHAPTER;
+    const expectedChapter = chapterOfLevel.get(level.id);
+    if (!expectedChapter) fail('campaign', `${owner}: id is not placed in any chapter`);
+    else if (level.chapter !== expectedChapter.id)
+      fail('campaign', `${owner}: chapter ${level.chapter} != ${expectedChapter.id}`);
+    else if (level.chapterName !== expectedChapter.name)
       fail(
         'campaign',
         `${owner}: chapterName "${level.chapterName}" does not match chapter ${level.chapter}`
       );
+    else passed();
+    if (REQUIRED_LEVEL_TITLES[level.id] && level.title !== REQUIRED_LEVEL_TITLES[level.id])
+      fail('campaign', `${owner}: title differs from spec "${REQUIRED_LEVEL_TITLES[level.id]}"`);
+    if (!isPrelude && !REQUIRED_LEVEL_TITLES[level.id])
+      fail('campaign', `${owner}: EX280 level has no pinned title in REQUIRED_LEVEL_TITLES`);
+    if (isPrelude && !(level.id >= 101 && level.id <= 199))
+      fail('campaign', `${owner}: prelude level ids live in 101–199`);
     if (!level.description) fail('campaign', `${owner}: missing description`);
-    if (!Array.isArray(level.examObjectives) || level.examObjectives.length === 0) {
+    if (isPrelude) {
+      // Prerequisite skills, not EX280 bullets: examObjectives may be empty, but
+      // anything listed must still be an official bullet (checked below).
+      if (!Array.isArray(level.examObjectives))
+        fail('campaign', `${owner}: examObjectives must be an array (may be empty)`);
+    }
+    if (isPrelude && Array.isArray(level.examObjectives) && level.examObjectives.length === 0) {
+      passed();
+    } else if (!Array.isArray(level.examObjectives) || level.examObjectives.length === 0) {
       fail('campaign', `${owner}: missing examObjectives`);
     } else if (ex280Mod) {
       const groupMap = new Map(
@@ -6495,27 +8307,37 @@ if (levels.length) {
     if (!Array.isArray(level.docsLinks) || level.docsLinks.length === 0)
       fail('campaign', `${owner}: no docsLinks`);
     else {
+      // EX280 levels link the OCP 4.22 docs; the Linux prelude links the RHEL docs.
+      const docsPattern = isPrelude
+        ? /^https:\/\/docs\.redhat\.com\/en\/documentation\/red_hat_enterprise_linux\/(9|10)\//
+        : /^https:\/\/docs\.redhat\.com\/en\/documentation\/openshift_container_platform\/4\.22\//;
       for (const url of level.docsLinks) {
-        if (
-          !/^https:\/\/docs\.redhat\.com\/en\/documentation\/openshift_container_platform\/4\.22\//.test(
-            url
-          )
-        ) {
-          fail('campaign', `${owner}: docsLink is not an OCP 4.22 docs page: ${url}`);
+        if (!docsPattern.test(url)) {
+          fail(
+            'campaign',
+            `${owner}: docsLink is not ${isPrelude ? 'a RHEL' : 'an OCP 4.22'} docs page: ${url}`
+          );
         }
       }
     }
     if (!Array.isArray(level.objectives) || level.objectives.length < 2)
       fail('campaign', `${owner}: needs 2+ objectives`);
     for (const obj of level.objectives || []) checkObjective(owner, obj);
-    if (!Array.isArray(level.startingResources) || level.startingResources.length === 0)
+    // The prelude happens on the RHEL workstation: it may seed no cluster objects.
+    if (
+      !Array.isArray(level.startingResources) ||
+      (!isPrelude && level.startingResources.length === 0)
+    )
       fail('campaign', `${owner}: no startingResources`);
     for (const res of level.startingResources || []) {
       if (registryKinds.size && !registryKinds.has(res.kind))
         fail('campaign', `${owner}: unknown startingResource kind ${res.kind}`);
       if (!res.name) fail('campaign', `${owner}: startingResource ${res.kind} missing name`);
     }
-    if (!Array.isArray(level.availableResources) || level.availableResources.length === 0)
+    if (
+      !Array.isArray(level.availableResources) ||
+      (!isPrelude && level.availableResources.length === 0)
+    )
       fail('campaign', `${owner}: no availableResources`);
     for (const kind of level.availableResources || []) {
       if (registryKinds.size && !registryKinds.has(kind))
@@ -6557,8 +8379,21 @@ if (levels.length) {
         }
       }
     }
-    if (i < levels.length - 1 && level.nextLevel !== level.id + 1)
-      fail('campaign', `${owner}: nextLevel ${level.nextLevel} != ${level.id + 1}`);
+    // nextLevel follows campaign order inside each track; the last prelude level
+    // hands over to Level 1 and the capstone (last EX280 level) ends the campaign.
+    {
+      const track = isPrelude ? REQUIRED_PRELUDE_ORDER : REQUIRED_EX280_ORDER;
+      const position = track.indexOf(level.id);
+      const expectedNext =
+        position >= 0 && position < track.length - 1
+          ? track[position + 1]
+          : isPrelude
+            ? REQUIRED_EX280_ORDER[0]
+            : null;
+      if ((level.nextLevel ?? null) !== expectedNext)
+        fail('campaign', `${owner}: nextLevel ${level.nextLevel} != ${expectedNext}`);
+      else passed();
+    }
     if (i === levels.length - 1 && level.nextLevel)
       fail('campaign', `${owner}: last level must not have nextLevel`);
     for (const field of [
@@ -6634,9 +8469,14 @@ if (levels.length) {
       for (const command of typed) {
         if (
           typeof command !== 'string' ||
-          !/^(oc|helm|cat|echo|htpasswd|openssl|curl|vi|vim|ls|export|skopeo|sed|grep|head|tail|cut|sort|wc|base64|rm|mkdir|touch)\s+\S/.test(
-            command
-          )
+          !(
+            TYPEABLE_COMMAND_RE.test(command) ||
+            SHELL_ASSIGNMENT_RE.test(command) ||
+            (isPrelude && PRELUDE_SCRIPT_RE.test(command))
+          ) ||
+          // A bare `oc`/`helm` is never a step; bare shell words (`pwd`, `id`, `exit`)
+          // are real commands (the prelude and the `oc debug` session use them).
+          /^(oc|helm)$/.test(command.trim())
         )
           fail(
             'guidance',
@@ -6668,25 +8508,919 @@ if (levels.length) {
     }
   }
   const chapters = levelsMod.CHAPTERS || [];
-  if (chapters.length !== 5) fail('campaign', `expected 5 chapters, found ${chapters.length}`);
+  if (chapters.length !== REQUIRED_CHAPTER_STRUCTURE.length)
+    fail(
+      'campaign',
+      `expected ${REQUIRED_CHAPTER_STRUCTURE.length} chapters (prelude + 5), found ${chapters.length}`
+    );
   else {
     for (const [i, chapter] of chapters.entries()) {
-      if (chapter.id !== i + 1) fail('campaign', `chapter ${chapter.id} is out of sequence`);
-      if (chapter.name !== REQUIRED_CHAPTERS[i])
+      const expected = REQUIRED_CHAPTER_STRUCTURE[i];
+      if (chapter.id !== expected.id) fail('campaign', `chapter ${chapter.id} is out of sequence`);
+      if (chapter.name !== expected.name)
+        fail('campaign', `chapter ${chapter.id} name "${chapter.name}" != "${expected.name}"`);
+      if (JSON.stringify(chapter.levels) !== JSON.stringify(expected.levels))
         fail(
           'campaign',
-          `chapter ${chapter.id} name "${chapter.name}" != "${REQUIRED_CHAPTERS[i]}"`
+          `chapter ${chapter.id} levels ${JSON.stringify(chapter.levels)} != ${JSON.stringify(expected.levels)}`
         );
-      if (!Array.isArray(chapter.levels) || chapter.levels.length !== 4)
-        fail('campaign', `chapter ${chapter.id} should have 4 levels`);
+      else passed();
+      if (Boolean(chapter.prelude) !== (expected.id === PRELUDE_CHAPTER))
+        fail('campaign', `chapter ${chapter.id}: only chapter 0 is the prelude`);
       for (const id of chapter.levels || [])
         if (!levelIds.has(id))
           fail('campaign', `chapter ${chapter.id} references unknown level ${id}`);
     }
   }
+
+  // Progress safety + display numbers (1.16.0). Saved progress is keyed by id, so
+  // these helpers are the only place order/unlock/labels may be derived from.
+  const campaignApi = levelsMod;
+  for (const name of [
+    'CAMPAIGN_ORDER',
+    'EX280_ORDER',
+    'PRELUDE_ORDER',
+    'continueLevelId',
+    'isLevelUnlocked',
+    'isCampaignComplete',
+    'levelLabel',
+    'levelOrdinal',
+    'previousLevelId',
+    'isPreludeLevel',
+    'getCampaignLevel',
+  ]) {
+    if (campaignApi[name] === undefined)
+      fail('campaign', `CampaignLevels.js must export ${name} (order/unlock/label helper)`);
+    else passed();
+  }
+  if (typeof campaignApi.levelLabel === 'function') {
+    const labelChecks = [
+      [1, '1'],
+      [19, '19'],
+      [21, '20'],
+      [22, '21'],
+      [20, '22'],
+      [101, '0.1'],
+      [107, '0.7'],
+    ];
+    for (const [id, label] of labelChecks) {
+      if (campaignApi.levelLabel(id) !== label)
+        fail(
+          'campaign',
+          `levelLabel(${id}) should be "${label}", got "${campaignApi.levelLabel(id)}"`
+        );
+      else passed();
+    }
+  }
+  if (typeof campaignApi.isLevelUnlocked === 'function') {
+    const done = (ids) => Object.fromEntries(ids.map((id) => [String(id), { completed: true }]));
+    const unlockChecks = [
+      // Level 1 and the first prelude level are always open; the prelude never gates Level 1.
+      ['L1 is open for a new player', campaignApi.isLevelUnlocked(1, {}), true],
+      ['L0.1 is open for a new player', campaignApi.isLevelUnlocked(101, {}), true],
+      ['L0.2 is locked for a new player', campaignApi.isLevelUnlocked(102, {}), false],
+      // The capstone now follows the new levels 21/22 ...
+      [
+        'capstone is locked after L19 until 21/22 are done',
+        campaignApi.isLevelUnlocked(20, done([...Array(19).keys()].map((n) => n + 1))),
+        false,
+      ],
+      [
+        'level 21 opens after L19',
+        campaignApi.isLevelUnlocked(21, done([...Array(19).keys()].map((n) => n + 1))),
+        true,
+      ],
+      // ... but a player who finished the old 20-level campaign keeps the capstone open.
+      [
+        'a completed capstone never re-locks',
+        campaignApi.isLevelUnlocked(20, done([...Array(20).keys()].map((n) => n + 1))),
+        true,
+      ],
+      ['an unknown id is never unlocked', campaignApi.isLevelUnlocked(999, {}), false],
+    ];
+    for (const [name, actual, expected] of unlockChecks) {
+      if (actual !== expected) fail('campaign', `unlock rule: ${name} (got ${actual})`);
+      else passed();
+    }
+  }
+  if (typeof campaignApi.continueLevelId === 'function') {
+    const at = (ids, stamp = 0) =>
+      Object.fromEntries(
+        ids.map((id, index) => [String(id), { completed: true, completedAt: stamp + index }])
+      );
+    const continueChecks = [
+      ['a new player starts with the Linux prelude', campaignApi.continueLevelId({}), 101],
+      [
+        'a returning EX280 player continues the EX280 track',
+        campaignApi.continueLevelId(at([1, 2, 3, 4, 5, 6, 7, 8])),
+        9,
+      ],
+      [
+        'finishing the prelude continues at Level 1',
+        campaignApi.continueLevelId(at(REQUIRED_PRELUDE_ORDER)),
+        1,
+      ],
+      [
+        'the old 20-level save continues at the new level 21',
+        campaignApi.continueLevelId(at([...Array(20).keys()].map((n) => n + 1))),
+        21,
+      ],
+    ];
+    for (const [name, actual, expected] of continueChecks) {
+      if (actual !== expected)
+        fail('campaign', `continue rule: ${name} (expected ${expected}, got ${actual})`);
+      else passed();
+    }
+  }
+  // Every launcher uses the helpers: no `levelId - 1` unlocking survives.
+  for (const rel of [
+    'index.html',
+    'js/modes/CampaignMode.js',
+    'js/ui/StartMenu.js',
+    'js/engine/ScoringEngine.js',
+  ]) {
+    const src = read(rel);
+    if (/campaignProgress\[\s*(?:level\.id|levelId|id)\s*-\s*1\s*\]/.test(src))
+      fail('campaign', `${rel}: unlocks by "id - 1"; use isLevelUnlocked() from CampaignLevels.js`);
+    else passed();
+  }
+  if (/\(level\.chapter \|\| 1\)/.test(read('index.html')))
+    fail('campaign', 'index.html: `level.chapter || 1` folds the chapter-0 prelude into chapter 1');
   note(`Campaign: ${levels.length} levels, ${chapters.length} chapters`);
 } else {
   fail('campaign', 'js/data/CampaignLevels.js missing or has no CAMPAIGN_LEVELS');
+}
+
+// ── 5L. Linux & RHEL Foundations levels (1.16.0) ───────────────────────────
+// Prelude-specific locks for js/data/LinuxLevels.js (levels 101–107). §5 checks the campaign
+// structure; this block keeps the RHEL content honest: verified RHEL 9 docs pages, a seed for the
+// simulated workstation, graded objective types, every command taught before it is used (the
+// chapter never jumps ahead), `sudo` exactly where real RHEL needs root, inspect objectives that
+// their own how-to ticks, and the L102 log fixture the grep lessons depend on. The how-to
+// commands themselves are replayed in the browser (qa-guidance-replay, qa-linux-levels).
+{
+  const linuxMod = await tryImport('js/data/LinuxLevels.js');
+  const LINUX = linuxMod?.LINUX_LEVELS || [];
+  const PRELUDE_TITLES = {
+    101: 'The Shell & the Filesystem',
+    102: 'Read, Search & Pipe Text',
+    103: 'Edit Files & the Shell Environment',
+    104: 'Users, Permissions & SELinux',
+    105: 'Processes, Services & Logs',
+    106: 'Networking & the Firewall',
+    107: 'Packages & Containers',
+  };
+  // RHEL 9 pages checked against the docs source (enterprise-docs rhel-9 titles and assembly ids,
+  // 2026-11-08). docs.redhat.com URLs: /html/<title>/index or /html/<title>/<assembly-id>_<context>.
+  const RHEL9 = 'https://docs.redhat.com/en/documentation/red_hat_enterprise_linux/9/html/';
+  const VERIFIED_RHEL_DOCS = new Set(
+    [
+      'configuring_basic_system_settings/index',
+      'configuring_basic_system_settings/assembly_troubleshooting-problems-using-log-files_configuring-basic-system-settings',
+      'configuring_basic_system_settings/managing-file-system-permissions_configuring-basic-system-settings',
+      'configuring_basic_system_settings/managing-sudo-access_configuring-basic-system-settings',
+      'configuring_basic_system_settings/managing-users-and-groups_configuring-basic-system-settings',
+      'configuring_basic_system_settings/managing-systemd_configuring-basic-system-settings',
+      'configuring_basic_system_settings/configuring-time-synchronization_configuring-basic-system-settings',
+      'using_selinux/index',
+      'deploying_web_servers_and_reverse_proxies/index',
+      'configuring_and_managing_networking/index',
+      'configuring_firewalls_and_packet_filters/index',
+      'managing_software_with_the_dnf_tool/index',
+      'building_running_and_managing_containers/index',
+    ].map((page) => `${RHEL9}${page}`)
+  );
+  // Objective types graded from the simulated workstation (LinuxHost) plus `command` for the few
+  // inspect steps. OpenShift-only types (deploy, route, …) make no sense on the workstation.
+  const LINUX_OBJECTIVE_TYPES = new Set([
+    'file',
+    'service',
+    'process',
+    'package',
+    'firewall',
+    'container',
+    'selinux',
+    'linuxuser',
+    'cwd',
+    'env',
+    'ran',
+    'command',
+  ]);
+  // The level that introduces each command: a how-to may use a command from that level on, never
+  // before (the chapter must not use a concept it has not taught yet). `script` = a script run by
+  // name (needs the execute bit, taught with chmod in 0.4).
+  const TAUGHT_IN = {
+    pwd: 101,
+    ls: 101,
+    cd: 101,
+    mkdir: 101,
+    cp: 101,
+    mv: 101,
+    rm: 101,
+    rmdir: 101,
+    touch: 101,
+    cat: 101,
+    echo: 101,
+    head: 102,
+    tail: 102,
+    less: 102,
+    grep: 102,
+    wc: 102,
+    sort: 102,
+    uniq: 102,
+    cut: 102,
+    printf: 103,
+    sed: 103,
+    tee: 103,
+    vim: 103,
+    vi: 103,
+    export: 103,
+    source: 103,
+    env: 103,
+    printenv: 103,
+    bash: 103,
+    assignment: 103,
+    whoami: 104,
+    id: 104,
+    groups: 104,
+    sudo: 104,
+    chmod: 104,
+    chown: 104,
+    chgrp: 104,
+    getenforce: 104,
+    sestatus: 104,
+    restorecon: 104,
+    script: 104,
+    ps: 105,
+    top: 105,
+    pgrep: 105,
+    pkill: 105,
+    kill: 105,
+    systemctl: 105,
+    journalctl: 105,
+    timedatectl: 105,
+    ip: 106,
+    hostname: 106,
+    ss: 106,
+    ping: 106,
+    dig: 106,
+    host: 106,
+    nslookup: 106,
+    getent: 106,
+    curl: 106,
+    'firewall-cmd': 106,
+    dnf: 107,
+    rpm: 107,
+    podman: 107,
+    skopeo: 107,
+    oc: 107,
+  };
+  /**
+   * Every simple command of one how-to line: pipeline stages, `;`/`&&`/`||` segments and `$(…)`
+   * substitutions (which run), but nothing inside single quotes (literal text, e.g. a script body
+   * written with printf). `sudo` is reported as a flag on the command it wraps.
+   */
+  const simpleCommands = (line) => {
+    const subs = [];
+    let text = String(line).replace(/'[^']*'/g, "'Q'");
+    text = text.replace(/\$\(([^()]*)\)/g, (_, inner) => {
+      subs.push(inner);
+      return 'SUBST';
+    });
+    text = text.replace(/"[^"]*"/g, '"Q"');
+    const out = [];
+    for (const part of [text, ...subs]) {
+      for (const segment of part.split(/\|\||&&|[|;]/)) {
+        const words = segment.trim().split(/\s+/).filter(Boolean);
+        if (words.length === 0) continue;
+        // `NAME=value` (a shell variable, taught with the environment in 0.3); the `$(…)` it
+        // may hold is checked as its own command above.
+        if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(words[0])) {
+          out.push({ name: 'assignment', args: words.slice(1), sudo: false, raw: segment.trim() });
+          continue;
+        }
+        const sudo = words[0] === 'sudo';
+        if (sudo) words.shift();
+        out.push({ name: words[0] || '', args: words.slice(1), sudo, raw: segment.trim() });
+      }
+    }
+    return out;
+  };
+  /** Commands that need root on RHEL 9 (true) — a how-to must run them with sudo. */
+  const needsRoot = ({ name, args }) => {
+    const joined = args.join(' ');
+    if (name === 'firewall-cmd')
+      return /--(add|remove|reload|permanent|runtime-to-permanent|set|new|delete)/.test(joined);
+    if (name === 'dnf')
+      return /^(install|remove|erase|upgrade|update|reinstall|downgrade|autoremove)\b/.test(joined);
+    if (name === 'systemctl')
+      return /^(start|stop|restart|reload|try-restart|enable|disable|mask|unmask|daemon-reload|isolate)\b/.test(
+        joined
+      );
+    if (
+      ['restorecon', 'semanage', 'setenforce', 'chcon', 'useradd', 'usermod', 'groupadd'].includes(
+        name
+      )
+    )
+      return true;
+    if (name === 'chown') return true;
+    // Writing a file outside the home directory and /tmp (in-place edit or tee).
+    if ((name === 'sed' && /(^|\s)-i\b/.test(joined)) || name === 'tee')
+      return args.some((arg) => /^\/(etc|var|srv|usr|opt)\//.test(arg));
+    return false;
+  };
+
+  if (!linuxMod) fail('linux-levels', 'js/data/LinuxLevels.js missing or failed to import');
+  else if (LINUX.length !== 7)
+    fail('linux-levels', `LINUX_LEVELS must hold the 7 prelude levels, found ${LINUX.length}`);
+  else passed();
+  const ids = LINUX.map((level) => level.id);
+  if (JSON.stringify(ids) !== JSON.stringify([101, 102, 103, 104, 105, 106, 107]))
+    fail('linux-levels', `LINUX_LEVELS ids must be 101..107 in order, got ${ids.join(',')}`);
+  else passed();
+  const campaignIds = (levelsMod?.CAMPAIGN_LEVELS || []).map((level) => level.id);
+  if (JSON.stringify(campaignIds.slice(0, 7)) !== JSON.stringify(ids))
+    fail('linux-levels', 'CAMPAIGN_LEVELS must start with the LINUX_LEVELS prelude');
+  else passed();
+
+  for (const level of LINUX) {
+    const owner = `prelude ${level.id} (${level.title})`;
+    if (level.title !== PRELUDE_TITLES[level.id])
+      fail('linux-levels', `${owner}: title must be "${PRELUDE_TITLES[level.id]}"`);
+    if (level.chapter !== 0 || level.chapterName !== 'Linux & RHEL Foundations')
+      fail('linux-levels', `${owner}: chapter 0 / "Linux & RHEL Foundations" expected`);
+    else passed();
+    const sentences = String(level.description || '')
+      .split(/[.!?](?:\s|$)/)
+      .filter((s) => s.trim());
+    if (!level.description || sentences.length > 3 || level.description.length > 400)
+      fail(
+        'linux-levels',
+        `${owner}: description must be plain and short (≤ 3 sentences, ≤ 400 chars; got ${sentences.length}/${String(level.description || '').length})`
+      );
+    else passed();
+    for (const url of level.docsLinks || []) {
+      if (!VERIFIED_RHEL_DOCS.has(url))
+        fail('linux-levels', `${owner}: docsLink is not a verified RHEL 9 docs page: ${url}`);
+      else passed();
+    }
+    if (level.workProject !== null)
+      fail(
+        'linux-levels',
+        `${owner}: workProject must be null (no lab project on the workstation)`
+      );
+    if (Array.isArray(level.incidents) && level.incidents.length > 0)
+      fail('linux-levels', `${owner}: prelude levels have no cluster incidents`);
+    if ((level.availableResources || []).length > 0)
+      fail('linux-levels', `${owner}: no palette resources on the workstation`);
+    for (const resource of level.startingResources || []) {
+      if (resource.kind !== 'Node')
+        fail(
+          'linux-levels',
+          `${owner}: only Nodes (3D backdrop) may be seeded, got ${resource.kind}`
+        );
+    }
+    // The workstation seed (js/engine/LinuxHost.js reset()).
+    const seed = level.linuxHost;
+    if (!seed || typeof seed !== 'object' || Array.isArray(seed))
+      fail('linux-levels', `${owner}: linuxHost seed object missing`);
+    else {
+      if (seed.cwd !== undefined && !String(seed.cwd).startsWith('/'))
+        fail('linux-levels', `${owner}: linuxHost.cwd must be absolute`);
+      for (const file of seed.files || []) {
+        if (!String(file.path || '').startsWith('/'))
+          fail('linux-levels', `${owner}: seed file path must be absolute: ${file.path}`);
+        else if (typeof file.content === 'string' && file.content && !file.content.endsWith('\n'))
+          fail('linux-levels', `${owner}: seed text file must end with a newline: ${file.path}`);
+        else passed();
+        if (file.mode !== undefined && !/^0?[0-7]{3,4}$/.test(String(file.mode)))
+          fail('linux-levels', `${owner}: seed file mode is not octal: ${file.path} ${file.mode}`);
+      }
+    }
+    const objectives = level.objectives || [];
+    if (objectives.length < 4 || objectives.length > 6)
+      fail('linux-levels', `${owner}: 4–6 objectives expected, got ${objectives.length}`);
+    else passed();
+    for (const [index, objective] of objectives.entries()) {
+      const where = `${owner}: objective ${index + 1}`;
+      const type = String(objective.type || '').toLowerCase();
+      if (!LINUX_OBJECTIVE_TYPES.has(type))
+        fail(
+          'linux-levels',
+          `${where}: type "${objective.type}" is not a workstation objective type`
+        );
+      else if (implementedTypes.size && !implementedTypes.has(type))
+        fail(
+          'linux-levels',
+          `${where}: type "${objective.type}" not implemented in ObjectiveEvaluator`
+        );
+      else passed();
+      for (const field of ['path', ...(objective.all || []).map((_, i) => `all.${i}.path`)]) {
+        const value =
+          field === 'path' ? objective.path : objective.all[Number(field.split('.')[1])].path;
+        if (value !== undefined && !String(value).startsWith('/'))
+          fail('linux-levels', `${where}: ${field} must be absolute, got ${value}`);
+      }
+      if (!objective.how || typeof objective.how.explain !== 'string')
+        fail('linux-levels', `${where}: every prelude objective needs a how-to`);
+      else passed();
+      const run = objective.how?.run || [];
+      if (type !== 'command' && run.length === 0)
+        fail('linux-levels', `${where}: a state objective must show the commands that reach it`);
+      if (type === 'command') {
+        let regex = null;
+        try {
+          regex = new RegExp(objective.pattern, 'i');
+        } catch (error) {
+          fail('linux-levels', `${where}: pattern does not compile: ${error.message}`);
+        }
+        // An inspect objective must be ticked by its own how-to (successful commands only).
+        if (regex && !run.some((command) => regex.test(command)))
+          fail(
+            'linux-levels',
+            `${where}: no how.run command matches its pattern ${objective.pattern}`
+          );
+        else if (regex) passed();
+      }
+      for (const line of [...run, ...(objective.how?.check ? [objective.how.check] : [])]) {
+        // The prelude never drives the cluster with oc (taught from Level 1); the one exception
+        // is 0.7 checking the freshly installed CLI, the hand-over to Level 1.
+        if (/^\s*oc\s/.test(line) && !(level.id === 107 && line === 'oc version --client'))
+          fail(
+            'linux-levels',
+            `${where}: "${line}" — the prelude never runs oc (taught from Level 1)`
+          );
+        if (/^\s*sudo\b[^|]*>{1,2}\s*\/(etc|var|srv|usr|opt)\//.test(line))
+          fail(
+            'linux-levels',
+            `${where}: "${line}" — the redirect runs as student, not root; use \`| sudo tee\``
+          );
+        for (const command of simpleCommands(line)) {
+          const key = /\.sh$/.test(command.name) ? 'script' : command.name;
+          const taught = TAUGHT_IN[key];
+          if (taught === undefined)
+            fail(
+              'linux-levels',
+              `${where}: "${command.name}" is not in TAUGHT_IN (which level teaches it?)`
+            );
+          else if (taught > level.id)
+            fail(
+              'linux-levels',
+              `${where}: "${command.name}" is used before level ${taught} teaches it`
+            );
+          else passed();
+          if (command.sudo && TAUGHT_IN.sudo > level.id)
+            fail(
+              'linux-levels',
+              `${where}: sudo is used before level ${TAUGHT_IN.sudo} teaches it`
+            );
+          if (needsRoot(command) && !command.sudo)
+            fail('linux-levels', `${where}: "${command.raw}" needs root on RHEL — prefix sudo`);
+          if (command.sudo && command.name === 'podman')
+            fail(
+              'linux-levels',
+              `${where}: podman runs rootless as student (sudo podman uses root's storage)`
+            );
+        }
+      }
+    }
+    const hints = level.hints || [];
+    if (hints.length < 3 || !hints.every((hint) => /`[^`]+`/.test(hint)))
+      fail('linux-levels', `${owner}: 3+ hints, each with a \`command\` in backticks`);
+    else passed();
+    const copy = [
+      level.description,
+      ...hints,
+      ...objectives.map((objective) => `${objective.label} ${objective.how?.explain || ''}`),
+    ].join(' ');
+    if (!/OpenShift|\boc\b|\bPods?\b|cluster|\bnode\b/.test(copy))
+      fail('linux-levels', `${owner}: say why the skill matters for OpenShift work`);
+    else passed();
+  }
+  // The prelude hands over to the EX280 track.
+  const last = LINUX[LINUX.length - 1];
+  if (last && last.nextLevel !== 1)
+    fail('linux-levels', '0.7 must point to Level 1 (nextLevel: 1)');
+  else if (last) passed();
+
+  // L102 log fixture: single-space fields (cut -d' ' -f3 is the Pod), exactly the counts the
+  // objectives expect, and the `grep -i error` trap (a WARN line that says "error").
+  const fixtures = linuxMod?.LINUX_LEVEL_FIXTURES;
+  const l102 = LINUX.find((level) => level.id === 102);
+  if (!fixtures || !l102) fail('linux-levels', 'LINUX_LEVEL_FIXTURES / level 102 missing');
+  else {
+    const lines = fixtures.shopLog.replace(/\n$/, '').split('\n');
+    const malformed = lines.filter(
+      (line) => !/^\S+Z (INFO|WARN|ERROR) [a-z0-9-]+ \S/.test(line) || /\s{2}/.test(line)
+    );
+    if (malformed.length) fail('linux-levels', `shop.log has malformed lines: ${malformed[0]}`);
+    else passed();
+    const errorLines = lines.filter((line) => line.split(' ')[1] === 'ERROR');
+    const objectiveFor = (path) => l102.objectives.find((objective) => objective.path === path);
+    const logs = '/home/student/ex280/logs';
+    const checks = [
+      [objectiveFor(`${logs}/errors.txt`)?.equals, `${errorLines.join('\n')}\n`, 'errors.txt'],
+      [
+        objectiveFor(`${logs}/summary.txt`)?.equals,
+        `${errorLines.length}\n${lines.filter((line) => line.split(' ')[1] === 'WARN').length}\n`,
+        'summary.txt',
+      ],
+      [
+        JSON.stringify(objectiveFor(`${logs}/failing-pods.txt`)?.lineSet),
+        JSON.stringify([...new Set(errorLines.map((line) => line.split(' ')[2]))].sort()),
+        'failing-pods.txt',
+      ],
+    ];
+    for (const [actual, expected, name] of checks) {
+      if (actual !== expected)
+        fail('linux-levels', `L102 ${name} expectation does not match the seeded shop.log`);
+      else passed();
+    }
+    if (!lines.some((line) => line.split(' ')[1] !== 'ERROR' && /error/i.test(line)))
+      fail(
+        'linux-levels',
+        'shop.log lost its `grep -i error` trap (a non-ERROR line saying "error")'
+      );
+    else passed();
+    if (!lines.some((line) => line.includes('/healthz')))
+      fail('linux-levels', 'shop.log needs /healthz probe lines for the grep -v lesson');
+    else passed();
+  }
+  note(
+    `Linux prelude: ${LINUX.length} levels, ${LINUX.reduce((n, l) => n + l.objectives.length, 0)} objectives`
+  );
+}
+
+// ── 5B. Bridge levels (1.16.0) ─────────────────────────────────────────────
+// The campaign used concepts before it taught them: the capstone (id 20) needed a
+// router-aware default-deny NetworkPolicy and an `oc debug` → `chroot /host` →
+// `systemctl restart kubelet` node repair that no level taught, and L12 installed the
+// MetalLB operator through OLM six levels before the Operators level. Levels 21 "Network
+// Policies" and 22 "Nodes & Cluster Troubleshooting" (new ids, played 19 → 21 → 22 → 20)
+// teach them; L12 uses an operator the platform team installed. These locks keep the
+// bridge in place; qa-bridge-levels and qa-guidance-replay play them in the browser.
+{
+  const bridgeLevel = (id) => levels.find((level) => level.id === id) || null;
+  const failBridge = (message) => fail('bridge-levels', message);
+  const l12 = bridgeLevel(12);
+  const l19 = bridgeLevel(19);
+  const l21 = bridgeLevel(21);
+  const l22 = bridgeLevel(22);
+  const l11 = bridgeLevel(11);
+  const files = manifestFilesMod?.MANIFEST_FILES || {};
+  const runOf = (objective) => (Array.isArray(objective?.how?.run) ? objective.how.run : []);
+  const seededProjects = (level) =>
+    (level?.startingResources || []).filter((r) => r.kind === 'Project').map((r) => r.name);
+
+  // Chain: 19 → 21 → 22 → 20 (the capstone stays last).
+  if (!l21 || !l22) failBridge('levels 21 and 22 must exist');
+  else if (l19?.nextLevel !== 21 || l21.nextLevel !== 22 || l22.nextLevel !== 20)
+    failBridge(
+      `chain must be 19 → 21 → 22 → 20 (got 19→${l19?.nextLevel}, 21→${l21.nextLevel}, 22→${l22.nextLevel})`
+    );
+  else passed();
+  for (const [level, title] of [
+    [l21, 'Network Policies'],
+    [l22, 'Nodes & Cluster Troubleshooting'],
+  ]) {
+    if (!level) continue;
+    if (
+      level.title !== title ||
+      level.chapter !== 5 ||
+      level.chapterName !== 'Security & Operations' ||
+      ex280Mod?.EX280_LEVEL_TITLES?.[level.id] !== title
+    )
+      failBridge(`level ${level.id} must be "${title}" in chapter 5 and in EX280_LEVEL_TITLES`);
+    else passed();
+    // The mission card's project row is derived from the single seeded Project.
+    if (seededProjects(level).length !== 1 || Object.hasOwn(level, 'workProject'))
+      failBridge(`level ${level.id} must seed exactly one Project and derive its workProject`);
+    else passed();
+  }
+
+  // L21: graded on reachability state with the proven lab 9/13 + capstone probes.
+  if (l21) {
+    const objectives21 = l21.objectives || [];
+    const probes = objectives21
+      .filter((objective) => objective.type === 'networkPolicy')
+      .map((objective) => objective.probe);
+    for (const probe of ['ingress-isolation', 'dns-egress', 'reach', 'deny', 'deny-external']) {
+      if (!probes.includes(probe))
+        failBridge(`L21 needs a networkPolicy "${probe}" probe objective`);
+      else passed();
+    }
+    if (
+      !objectives21.some(
+        (objective) => objective.type === 'routeAccess' && objective.requireIsolation === true
+      )
+    )
+      failBridge('L21 must grade the Route through the router with routeAccess requireIsolation');
+    else passed();
+    if (objectives21.some((objective) => objective.kind === 'NetworkPolicy'))
+      failBridge('L21 must not grade NetworkPolicy object names (behaviour only)');
+    else passed();
+    const reach = objectives21.find((objective) => objective.probe === 'reach');
+    if (reach?.source?.name !== 'frontend' || reach?.to?.name !== 'backend' || reach?.port !== 8080)
+      failBridge('L21 reach probe must be frontend → backend on port 8080');
+    else passed();
+    // Order teaches the path first, then ingress, the router, egress/DNS, the targeted allow.
+    const order = objectives21.map((objective) =>
+      objective.type === 'networkPolicy' ? objective.probe : objective.type
+    );
+    const position = (key) => order.indexOf(key);
+    if (!(
+      position('command') === 0 &&
+      position('ingress-isolation') < position('routeAccess') &&
+      position('routeAccess') < position('dns-egress') &&
+      position('dns-egress') < position('reach')
+    ))
+      failBridge(
+        `L21 objective order must teach path → deny ingress → router → DNS → targeted allow (got ${order.join(', ')})`
+      );
+    else passed();
+    for (const mapping of [
+      'Configure network security > Configure application network policies',
+      'Configure network security > Control cluster network ingress',
+    ]) {
+      if (!(l21.examObjectives || []).includes(mapping)) failBridge(`L21 must map "${mapping}"`);
+      else passed();
+    }
+    if (!(l21.docsLinks || []).some((url) => /\/network_security\/network-policy$/.test(url)))
+      failBridge('L21 must link the OCP 4.22 network-policy docs page');
+    else passed();
+    const frontend = (l21.startingResources || []).find(
+      (resource) => resource.kind === 'Deployment' && resource.name === 'frontend'
+    );
+    // The level execs curl/nslookup in frontend: hello-openshift has no shell or curl.
+    const frontendImage = frontend?.spec?.template?.spec?.containers?.[0]?.image || '';
+    if (!/^registry\.access\.redhat\.com\/ubi9\//.test(frontendImage))
+      failBridge(`L21 frontend must run a UBI image that ships curl (got ${frontendImage})`);
+    else passed();
+    if (
+      !(l21.startingResources || []).some(
+        (resource) => resource.kind === 'Route' && resource.name === 'frontend'
+      )
+    )
+      failBridge('L21 must seed the Route frontend the router policy is about');
+    else passed();
+    // Docs-verbatim policies + the starter the player adapts.
+    const policy = (name) => String(files[name] || '');
+    const checksFiles = [
+      [
+        'netpol/deny-by-default.yaml',
+        (text) =>
+          /name: deny-by-default/.test(text) &&
+          /podSelector: \{\}/.test(text) &&
+          /ingress: \[\]/.test(text),
+      ],
+      [
+        'netpol/allow-from-openshift-ingress.yaml',
+        (text) => /policy-group\.network\.openshift\.io\/ingress: ""/.test(text),
+      ],
+      [
+        'netpol/allow-same-namespace.yaml',
+        (text) => /name: allow-same-namespace/.test(text) && /- podSelector: \{\}/.test(text),
+      ],
+      [
+        'netpol/allow-dns.yaml',
+        (text) =>
+          /kubernetes\.io\/metadata\.name: openshift-dns/.test(text) &&
+          /protocol: UDP\s+port: 5353/.test(text) &&
+          /protocol: TCP\s+port: 5353/.test(text) &&
+          !/port: 53\s*$/m.test(text),
+      ],
+      ['netpol/deny-all-egress.yaml', (text) => /- Egress/.test(text) && !/egress:/.test(text)],
+      [
+        'netpol/allow-frontend-to-backend.yaml',
+        (text) => /app: SOURCE-APP/.test(text) && /app: TARGET-APP/.test(text),
+      ],
+    ];
+    for (const [name, check] of checksFiles) {
+      if (!(l21.manifestFiles || []).includes(name) || !check(policy(name)))
+        failBridge(`L21 manifest ${name} is missing or lost its documented shape`);
+      else passed();
+    }
+    if (
+      !objectives21.some((objective) =>
+        runOf(objective).some((command) =>
+          /SOURCE-APP.*TARGET-APP.*netpol\/allow-frontend-to-backend\.yaml \| oc apply -f -/.test(
+            command
+          )
+        )
+      )
+    )
+      failBridge('L21 how-to must adapt the starter policy (the player writes/adapts one policy)');
+    else passed();
+  }
+
+  // L22: node maintenance graded on Node state; the incident fixed from a debug shell.
+  if (l22) {
+    const objectives22 = l22.objectives || [];
+    const nodes = (l22.startingResources || []).filter((resource) => resource.kind === 'Node');
+    if (nodes.length !== 3) failBridge('L22 must seed 3 nodes (two workers and master-0)');
+    else passed();
+    const incident = (l22.incidents || []).find((entry) => entry.type === 'NodeNotReady');
+    if (!incident || incident.target !== 'worker-1' || !(incident.triggerTime >= 60))
+      failBridge('L22 must schedule NodeNotReady on worker-1 after the maintenance part');
+    else passed();
+    const nodeObjectives = objectives22.filter((objective) => objective.type === 'node');
+    if (
+      !nodeObjectives.some(
+        (objective) => objective.drained === true && objective.workloadsAvailable === true
+      ) ||
+      !nodeObjectives.some(
+        (objective) => objective.drained === true && objective.schedulable === true
+      )
+    )
+      failBridge(
+        'L22 must grade drained (+ workload available) and uncordoned-after-drain node state'
+      );
+    else passed();
+    if (!implementedTypes.has('node'))
+      failBridge('ObjectiveEvaluator must implement the `node` type');
+    else passed();
+    const drain =
+      objectives22.flatMap(runOf).find((command) => /^oc adm drain /.test(command)) || '';
+    if (!/--ignore-daemonsets/.test(drain) || !/--delete-emptydir-data/.test(drain))
+      failBridge(`L22 drain must use --ignore-daemonsets --delete-emptydir-data (got "${drain}")`);
+    else passed();
+    const fix = objectives22.find(
+      (objective) => objective.type === 'resolve' && objective.incidentType === 'NodeNotReady'
+    );
+    const fixRun = runOf(fix);
+    const debugAt = fixRun.indexOf('oc debug node/worker-1');
+    const chrootAt = fixRun.indexOf('chroot /host');
+    const restartAt = fixRun.indexOf('systemctl restart kubelet');
+    if (
+      !(debugAt >= 0 && debugAt < chrootAt && chrootAt < restartAt) ||
+      !fixRun.includes('journalctl -u kubelet') ||
+      fixRun.slice(-2).join('|') !== 'exit|exit'
+    )
+      failBridge(
+        'L22 must teach the interactive repair: oc debug node → chroot /host → systemctl/journalctl → restart kubelet → exit twice'
+      );
+    else passed();
+    const inspections = objectives22.filter((objective) => objective.type === 'command');
+    if (inspections.length < 4 || !inspections.every((objective) => objective.inspect === true))
+      failBridge(
+        'L22 inspection steps must be `inspect` command objectives (a read that showed something)'
+      );
+    else passed();
+    for (const pattern of [
+      /oc get nodes/,
+      /oc adm top nodes/,
+      /oc describe node /,
+      /oc get clusteroperators/,
+    ]) {
+      if (
+        !inspections.some((objective) => runOf(objective).some((command) => pattern.test(command)))
+      )
+        failBridge(`L22 inspection how-tos must include ${pattern}`);
+      else passed();
+    }
+  }
+
+  // L12: MetalLB pre-installed; the player verifies it and configures the operand.
+  if (l12) {
+    const seeded = l12.startingResources || [];
+    const subscription = seeded.find((resource) => resource.kind === 'Subscription');
+    const operatorGroup = seeded.find((resource) => resource.kind === 'OperatorGroup');
+    if (
+      JSON.stringify(seededProjects(l12)) !== '["lb-lab","metallb-system"]' ||
+      l12.workProject !== 'lb-lab' ||
+      subscription?.namespace !== 'metallb-system' ||
+      subscription?.spec?.name !== 'metallb-operator' ||
+      // A real Subscription names its package in spec.name; there is no spec.packageName.
+      Object.hasOwn(subscription?.spec || {}, 'packageName') ||
+      subscription?.spec?.channel !== 'stable' ||
+      operatorGroup?.namespace !== 'metallb-system'
+    )
+      failBridge(
+        'L12 must seed metallb-system + its OperatorGroup and a real metallb-operator Subscription (spec.name, no spec.packageName), workProject lb-lab'
+      );
+    else passed();
+    if (
+      seeded.some(
+        (resource) =>
+          ['Deployment', 'Service'].includes(resource.kind) && resource.namespace !== 'lb-lab'
+      )
+    )
+      failBridge('L12 seeds 2 Projects, so its Deployment/Service must name lb-lab explicitly');
+    else passed();
+    const objectives12 = l12.objectives || [];
+    if (objectives12.some((objective) => objective.type === 'operator'))
+      failBridge('L12 must not grade an operator install (taught in the Operators level)');
+    else passed();
+    if (
+      objectives12
+        .flatMap(runOf)
+        .some((command) =>
+          /subscription\.yaml|operatorgroup\.yaml|create namespace metallb-system|new-project metallb-system/.test(
+            command
+          )
+        )
+    )
+      failBridge('L12 how-tos must not install the operator');
+    else passed();
+    if ((l12.examObjectives || []).some((entry) => /Install an operator/.test(entry)))
+      failBridge('L12 must not map "Install an operator"');
+    else passed();
+    const verify = objectives12.find(
+      (objective) => objective.type === 'command' && objective.namespace === 'metallb-system'
+    );
+    if (verify?.inspect !== true || verify?.outputPattern !== 'Succeeded')
+      failBridge(
+        'L12 must grade reading the Succeeded CSV in metallb-system (inspect + outputPattern)'
+      );
+    else passed();
+    if (
+      objectives12.some(
+        (objective) =>
+          ['route', 'tls', 'serviceType'].includes(objective.type) &&
+          objective.namespace !== 'lb-lab'
+      )
+    )
+      failBridge('L12 route/tls/serviceType objectives must be graded in lb-lab explicitly');
+    else passed();
+    for (const kind of ['MetalLB', 'IPAddressPool', 'L2Advertisement']) {
+      if (
+        !objectives12.some(
+          (objective) =>
+            objective.type === 'deploy' &&
+            objective.kind === kind &&
+            objective.namespace === 'metallb-system'
+        )
+      )
+        failBridge(`L12 must grade the ${kind} configuration in metallb-system`);
+      else passed();
+    }
+  }
+
+  // L11: the edge Route serves the openssl certificate it teaches.
+  if (l11) {
+    const objectives11 = l11.objectives || [];
+    const secretAt = objectives11.findIndex(
+      (objective) => objective.kind === 'Secret' && objective.name === 'web-tls'
+    );
+    const routeAt = objectives11.findIndex((objective) => objective.type === 'route');
+    const tls = objectives11.find((objective) => objective.type === 'tls');
+    if (
+      !(secretAt >= 0 && secretAt < routeAt) ||
+      !runOf(objectives11[routeAt]).some((command) =>
+        /--cert=tls\.crt --key=tls\.key/.test(command)
+      ) ||
+      tls?.certificate !== true
+    )
+      failBridge(
+        'L11 must create the certificate before the Route and grade an edge Route that serves it'
+      );
+    else passed();
+  }
+
+  // EX280 mapping: the levels list the bullets they drill, and the bullets list them back.
+  const bullets = (ex280Mod?.EX280_OBJECTIVE_GROUPS || []).flatMap((group) =>
+    (group.bullets || []).map((bullet) => ({ ...bullet, group: group.title }))
+  );
+  const bulletById = (id) => bullets.find((bullet) => bullet.id === id);
+  if (JSON.stringify(bulletById('ops-install')?.levels) !== '[18]')
+    failBridge('ops-install must map only L18 (L12 no longer installs an operator)');
+  else passed();
+  for (const level of [l12, l21, l22].filter(Boolean)) {
+    const fromLevel = new Set(level.examObjectives || []);
+    const fromBullets = new Set(
+      bullets
+        .filter((bullet) => (bullet.levels || []).includes(level.id))
+        .map((bullet) => `${bullet.group} > ${bullet.title}`)
+    );
+    const missing = [...fromLevel].filter((entry) => !fromBullets.has(entry));
+    const extra = [...fromBullets].filter((entry) => !fromLevel.has(entry));
+    if (missing.length || extra.length)
+      failBridge(
+        `level ${level.id} examObjectives and EX280 bullet levels disagree (bullets missing the level: ${missing.join('; ') || '-'}; bullets listing it without the level naming them: ${extra.join('; ') || '-'})`
+      );
+    else passed();
+  }
+  if ((bulletById('net-troubleshoot-sdn')?.levels || []).includes(3))
+    failBridge('net-troubleshoot-sdn must not list L3 (no networking content)');
+  else passed();
+  if ((bulletById('selfservice-project-templates')?.levels || []).includes(8))
+    failBridge(
+      'selfservice-project-templates must not list L8 (app templates, not project templates)'
+    );
+  else passed();
+
+  // The `node` objective explains the missing maintenance step (cordon/drain/uncordon).
+  const evaluatorSrc = read('js/engine/ObjectiveEvaluator.js');
+  if (
+    !/function evaluateNode\(/.test(evaluatorSrc) ||
+    !/case 'node':\s*return evaluateNode\(obj, c\)/.test(evaluatorSrc) ||
+    !/if \(type === 'node'\) return explainNode\(objective, c\)/.test(evaluatorSrc)
+  )
+    failBridge('ObjectiveEvaluator must evaluate and explain the `node` objective type');
+  else passed();
+  note(
+    'Bridge levels: 21 Network Policies, 22 Nodes & Cluster Troubleshooting, L12 MetalLB pre-installed'
+  );
 }
 
 // ── Challenges ─────────────────────────────────────────────────────────────
