@@ -1,11 +1,11 @@
 # Verification report — OpenShift Games (OCP 4.22 / EX280V422)
 
-**Date:** 2026-11-07 (UTC)
-**Verified tree:** `main` + the 1.15.0 release changes (this report ships with them) in
+**Date:** 2026-11-08 (UTC)
+**Verified tree:** `main` + the 1.16.0 release changes (this report ships with them) in
 https://github.com/G-man3207/openshiftgames
 **Target:** Red Hat OpenShift Container Platform **4.22** · **EX280V422**
 **Canonical URL:** `https://shifting.pro` (current spec/README/index; `og:url`/`og:image` + `/draw`)
-**Verdict:** **Conditional GO** — guidance changes verified, one clean full-suite run on an idle machine still to be repeated (§3n) — 0 failures in static verification (1515 checks), 2273 of 2278 checks in the full browser suite (5 timing- or network-sensitive checks failed on a heavily loaded host; see §3n), visual QA `--strict`: 86 of 87 checks (the one failure is the metrics-dashboard slide-in exceeding the check's 6 s window under heavy load; re-checked in isolation, see §3n), a clean Prettier/Knip gate, and per-issue headless coverage for every GitHub issue #1–#76.
+**Verdict:** **GO, with one environment-dependent harness check** (§3o) — 0 failures in static verification (2476 checks), 2633 of 2635 checks in the final full browser suite with 0 console and 0 page errors (both failures are `qa-issue68` cold-context navigations delayed by the third-party Tailwind Play CDN late in the run; the section passes 28/28 on its own), all 29 campaign levels completed from their authored how-tos, visual QA `--strict` 94 of 94, a clean Prettier/Knip gate, and per-issue headless coverage for every GitHub issue #1–#76.
 
 Release 1.1.5 closed the original QA report (#1–#14): RBAC enforcement, 4.x identity/SCC models,
 real `oc`/`helm` fidelity, the OLM flow, timed-lab/capstone fixes and the incidents-drawer layout.
@@ -270,6 +270,19 @@ early-fix trap, L15 incident soft-lock, L17 panel commands, command patterns, te
 arrows, `oc new-app -f`, wrong MetalLB/Route/Job hints); and replays every authored command in a real
 browser (`qa-guidance-replay`) so the guidance cannot silently rot. What the pass found and
 deliberately left alone is in [`guidance-qa-findings.md`](guidance-qa-findings.md).
+
+**Release 1.16.0 is a curriculum and correctness pass (no GitHub issue)** — a review of the whole
+campaign found concepts used before they were taught (the capstone's default-deny NetworkPolicy and
+`oc debug node` kubelet repair, L12's OLM install six levels before Operators, SCC jargon on L1, no
+`--dry-run=client -o yaml` skeletons). 1.16.0 adds **Network Policies** (id 21, Level 20) and **Nodes &
+Cluster Troubleshooting** (id 22, Level 21) before the capstone (id 20, now Level 22), an optional
+seven-level **Linux & RHEL Foundations** prelude (ids 101–107, levels 0.1–0.7) on a simulated RHEL 9
+workstation (`LinuxHost.js` + ~110 commands in `LinuxCommands.js`), reworks L11/L12, and moves campaign
+order, unlocking and display numbers into data helpers (ids stay stable save keys, so saved progress keeps
+its meaning). It fixes every open grading finding, the open simulator-fidelity findings except those
+listed in [`guidance-qa-findings.md`](guidance-qa-findings.md), and the five checks of the 1.15.0 full run
+(§3n): a real `KubePodCrashLooping` blink, a test sampling an unscheduled Pod, a CDN navigation timeout,
+and the GitHub-stars CORS error. Details in §3o.
 
 ---
 
@@ -840,6 +853,43 @@ What was checked to separate "load" from "regression":
 A clean full run on an idle machine has not been possible on this host and should be repeated before tagging
 the release.
 
+## 3o. Curriculum, Linux prelude and fix-pass verification (1.16.0)
+
+| Area                                                                                     | Change                                                                                                                                                                                            | Covered by                                                                                   |
+| ---------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| Campaign order was `id - 1` everywhere; new levels had to go before the capstone         | `CHAPTERS` order + `isLevelUnlocked` / `continueLevelId` / `levelLabel` helpers; ids 1–20 unchanged, ids 21/22 before 20, prelude 101–107                                                         | `qa-campaign-structure` (25), `verify.mjs` §5 (order, labels, unlock, Continue, no `id - 1`) |
+| Capstone used NetworkPolicy and node repair never taught                                 | Level 20 Network Policies (reachability-graded), Level 21 Nodes & Cluster Troubleshooting (`node` objective type)                                                                                 | `qa-bridge-levels` (45), `verify.mjs` §5B, guidance replay                                   |
+| L12 installed an operator six levels before Operators; L11's TLS Secret was unused       | L12 configures a pre-installed MetalLB; L11's edge Route serves the openssl certificate                                                                                                           | `qa-bridge-levels`, `qa-issue70-76`, guidance replay                                         |
+| No Linux foundations for an exam that assumes them                                       | Linux & RHEL Foundations prelude (7 levels, 37 state-graded objectives) on the simulated RHEL 9 workstation                                                                                       | `qa-linux-levels` (142), `qa-linux-shell` (41), `verify.mjs` §4l/§5L, guidance replay        |
+| Open grading findings (L3/L9/L10/L11/L13–L18/L20, labs 2/3/5/8/10/11/12)                 | State-based grading (`inspect` reads, Build phase, ReplicaSet history, Secret type, RoleBinding subject+role, `projectRequestTemplate`, exclusive SCC grants, CSV removal, InstallPlan ownership) | `qa-grading-1160` (62), `verify.mjs` §4m                                                     |
+| Open simulator-fidelity findings + the 1.15.0 NO-GO checks                               | Logged-out anonymous 403, namespace conflicts, `oc create` validation, JSONPath filters, drain/cordon, router 503 page, alert rule window, ownerReferences at creation, …                         | `qa-sim-1160` (27), `verify.mjs` §4n                                                         |
+| Achievements printed icon keys; "Pod Rookie" unlocked by platform Pods; SCC jargon on L1 | Star glyphs; controller-owned/platform Pods not counted; trap moved to L17; L4 dry-run skeletons                                                                                                  | `qa-campaign-structure`, `qa-coverage`, guidance replay                                      |
+
+Shared gates for this pass (run on the final tree): `node scripts/verify.mjs` **2476/0** (0 warnings);
+`npx prettier --check .` **0** unformatted files; `npx knip` **0** issues; `node scripts/visual-qa.mjs
+--strict` **94/0** (31 informational warnings, 0 console or page errors); full browser suite run 1
+**2638 passed / 2 failed** — both failures were stale expectations in `qa-issue43` that predated the
+`oc exec` exit-status fix (real `oc exec` ends a failed remote command with `command terminated with exit
+code 28`); updated, `qa-issue43` passes 59/59. Run 2 was stopped after it exposed a real
+DaemonSet bug (an untolerated NoSchedule taint deleted a node's running `dns-default` pod — the cause of
+the intermittent `#58` churn failure, fixed with new `qa-sim-1160` checks; 230/0 on the platform
+sections). Run 3 (final game code): **2621 passed / 2 failed**, 0 console and 0 page errors — `qa-issue68`
+(a cold isolated context stalled on `/` twice for 60 s late in the run; the section passes **28/28** on its
+own, cold loads measure 2.7–3.3 s against 2.5–4.1 s for 1.15.0 on the same host, and it failed the same
+way in all three 1.15.0 runs: a third-party CDN that each cold context must re-download) and the L10
+replay, whose first command raced the seeded Deployment's first ReplicaSet on the loaded host (harness
+fix: the replay lets 2 game-seconds pass before the first command, as a player reading the mission
+does; L3/L10/L14/L19/L20 replay to completion). **Run 4 (final tree, the evidence shipped in
+`verification-report.json`): 2633 passed / 2 failed / 3 warnings, 0 console and 0 page errors, 2830 s**;
+all 29 campaign levels complete from their authored how-tos in `qa-guidance-replay`, and every new
+1.16.0 section passes. Both failures are `qa-issue68` again: its cold isolated contexts waited more than
+60 s for `DOMContentLoaded` while the app itself booted (`"rebooted": true`). `index.html` loads the
+Tailwind Play CDN as a parser-blocking `<script>` in `<head>`, so a slow third-party CDN late in a long
+run delays `DOMContentLoaded` for every cold context; there is no top-level `await` in the module graph,
+the section passes 28/28 on its own and cold loads are as fast as 1.15.0's. Recommended follow-up (not in
+this release): ship a prebuilt CSS file instead of the Play CDN, and self-host three.js, which would also
+remove these third-party single points of failure for players.
+
 ---
 
 ## 4. Screenshots and artifacts
@@ -1148,21 +1198,26 @@ Distribution:` after LoadBalancer Source Ranges, the shared tabwriter column at 
 
 ## 7. Release recommendation
 
-**Conditional GO.** Verification gates on the release tree; the one condition is a clean full-suite re-run on an idle machine (§3n):
+**GO (1.16.0), with one environment-dependent harness check.** Verification gates on the release tree (§3o):
 
-- static verifier: **1515 checks, 0 failures,
-  0 warnings** (56 JS modules + the full repository tree);
-- full browser suite: **2273 of 2278 checks** (2350 s, 1 console / 0 page errors); the 5 failing checks are timing- or network-sensitive and are analysed in §3n (control run on the unmodified 1.14.0 code under the same load, and what was and was not re-run in isolation);
-- visual QA `--strict`: **86 of 87** (the one failure is a slide-in animation exceeding the check's 6 s window under heavy load, see §3n);
+- static verifier: **2476 checks, 0 failures, 0 warnings** (59 JS modules + the full repository tree);
+- full browser suite: **2633 of 2635 checks** (2830 s, 0 console / 0 page errors); both failures are the
+  `qa-issue68` cold-context navigations delayed by the third-party Tailwind Play CDN late in the run
+  (28/28 on its own; analysed in §3o); all 29 campaign levels complete from their authored how-tos;
+- visual QA `--strict`: **94 of 94** (31 informational warnings, 0 console / 0 page errors);
 - dev tooling gate: `npx prettier --check .` **0** unformatted files and `npx knip` **0** issues,
   enforced by the husky pre-commit hook; `scripts/verify.mjs` enforces the dev-only contract;
-- every GitHub issue (#1–#76) has targeted headless coverage in addition to the full-suite
-  coverage (the load-sensitive ones, `#51` and `#58`, are listed in §3n), and the 1.15.0 guidance pass has its own sections (`qa-guidance`, `qa-guidance-replay`);
+- every GitHub issue (#1–#76) has targeted headless coverage in addition to the full-suite coverage,
+  the 1.15.0 guidance pass keeps its sections (`qa-guidance`, `qa-guidance-replay`) and 1.16.0 adds
+  `qa-campaign-structure`, `qa-linux-shell`, `qa-linux-levels`, `qa-bridge-levels`, `qa-grading-1160`
+  and `qa-sim-1160`;
 - all required screenshots and both hero/OG artifacts regenerated at the required dimensions;
 - content accuracy and EX280V422 coverage validated against the research ground truth;
-- no runtime dependency or build-step changes: the game stays dependency-free and no-build (1.15.0 is a feature release, so game code did change; every change is listed in the CHANGELOG).
+- no runtime dependency or build-step changes: the game stays dependency-free and no-build (1.16.0 is a
+  feature release, so game code did change; every change is listed in the CHANGELOG).
 
-The remaining items are the low-severity limitations in §6 and the guidance findings in [`guidance-qa-findings.md`](guidance-qa-findings.md); none blocks the release. The condition above is about evidence, not a known defect.
+The remaining items are the low-severity limitations in §6 and the open findings in
+[`guidance-qa-findings.md`](guidance-qa-findings.md); none blocks the release.
 
 ---
 

@@ -1,22 +1,22 @@
 {
-  "timestamp": "2026-11-07T02:16:08.294Z",
+  "timestamp": "2026-11-08T19:12:43.824Z",
   "environment": {
     "node": "v26.10.0",
     "chrome": "Chrome/156.0.8078.79",
-    "baseUrl": "http://127.0.0.1:46573",
+    "baseUrl": "http://127.0.0.1:44371",
     "viewport": {
       "width": 1600,
       "height": 900
     },
     "puppeteerCore": "/tmp/verify-tools",
-    "startedAt": "2026-11-07T01:36:58.309Z",
-    "durationSeconds": 2350
+    "startedAt": "2026-11-08T18:25:33.696Z",
+    "durationSeconds": 2830
   },
   "summary": {
-    "passes": 2273,
-    "failures": 5,
-    "warnings": 0,
-    "consoleErrors": 1,
+    "passes": 2633,
+    "failures": 2,
+    "warnings": 3,
+    "consoleErrors": 0,
     "pageErrors": 0
   },
   "goNoGo": "NO-GO",
@@ -142,8 +142,8 @@
       "warnings": 0
     },
     "qa-coverage": {
-      "passes": 91,
-      "failures": 1,
+      "passes": 93,
+      "failures": 0,
       "warnings": 0
     },
     "qa-issue37": {
@@ -182,8 +182,8 @@
       "warnings": 0
     },
     "qa-issue50-54": {
-      "passes": 149,
-      "failures": 2,
+      "passes": 151,
+      "failures": 0,
       "warnings": 0
     },
     "qa-issue55-56": {
@@ -232,9 +232,9 @@
       "warnings": 0
     },
     "qa-issue68": {
-      "passes": 6,
-      "failures": 1,
-      "warnings": 0
+      "passes": 17,
+      "failures": 2,
+      "warnings": 3
     },
     "qa-issue69": {
       "passes": 24,
@@ -252,7 +252,57 @@
       "warnings": 0
     },
     "qa-guidance-replay": {
-      "passes": 22,
+      "passes": 31,
+      "failures": 0,
+      "warnings": 0
+    },
+    "qa-campaign-structure": {
+      "passes": 23,
+      "failures": 0,
+      "warnings": 0
+    },
+    "qa-sim-1160": {
+      "passes": 27,
+      "failures": 0,
+      "warnings": 0
+    },
+    "bridge: campaign chain and EX280 mapping": {
+      "passes": 4,
+      "failures": 0,
+      "warnings": 0
+    },
+    "bridge: L21 Network Policies": {
+      "passes": 15,
+      "failures": 0,
+      "warnings": 0
+    },
+    "bridge: L22 Nodes & Cluster Troubleshooting": {
+      "passes": 14,
+      "failures": 0,
+      "warnings": 0
+    },
+    "bridge: L12 MetalLB pre-installed": {
+      "passes": 7,
+      "failures": 0,
+      "warnings": 0
+    },
+    "bridge: L11 edge Route with the openssl certificate": {
+      "passes": 3,
+      "failures": 0,
+      "warnings": 0
+    },
+    "qa-linux-levels": {
+      "passes": 140,
+      "failures": 0,
+      "warnings": 0
+    },
+    "qa-grading-1160": {
+      "passes": 60,
+      "failures": 0,
+      "warnings": 0
+    },
+    "qa-linux-shell": {
+      "passes": 42,
       "failures": 0,
       "warnings": 0
     },
@@ -262,119 +312,115 @@
       "warnings": 0
     },
     "shots": {
-      "passes": 9,
-      "failures": 1,
+      "passes": 10,
+      "failures": 0,
       "warnings": 0
     }
   },
   "failures": [
     {
-      "section": "qa-coverage",
-      "name": "coverage: Alertmanager surfaces an alert for the real broken workload",
-      "detail": "  Firing Alerts: |     Watchdog  (severity: none, state: firing) |   Normal   Watchdog   8s     Alertmanager   Watchdog alert is firing (dead man's switch) — the alerting pipeline is healthy"
-    },
-    {
-      "section": "qa-issue50-54",
-      "name": "#51: only the new-revision pods crash",
-      "detail": "[{\"name\":\"webapp-44cccb4465-gjbp4\",\"hash\":\"44cccb4465\",\"phase\":\"Pending\",\"ready\":false,\"env\":[\"APP_MODE=debug-invalid\"],\"waiting\":[]}]"
-    },
-    {
-      "section": "qa-issue50-54",
-      "name": "#51 --to-revision=1: only the new-revision pods crash",
-      "detail": "[{\"name\":\"webapp-44cccb4465-hzbmr\",\"hash\":\"44cccb4465\",\"phase\":\"Pending\",\"ready\":false,\"env\":[\"APP_MODE=debug-invalid\"],\"waiting\":[]}]"
+      "section": "qa-issue68",
+      "name": "#68: after a release the returning visitor reloads and boots the new release",
+      "detail": "{\"reloadError\":\"Navigation timeout of 60000 ms exceeded\",\"rebooted\":true}"
     },
     {
       "section": "qa-issue68",
       "name": "qa-issue68: harness exception",
       "detail": "TimeoutError: Navigation timeout of 60000 ms exceeded\n    at new Deferred (/tmp/verify-tools/node_modules/puppeteer-core/lib/cjs/puppeteer/util/Deferred.js:60:34)\n    at Deferred.create (/tmp/verify-tools/node_modules/puppeteer-core/lib/cjs/puppeteer/util/Deferred.js:21:16)\n    at new LifecycleWatcher (/tmp/verify-tools/node_modules/puppeteer-core/lib/cjs/puppeteer/cdp/LifecycleWatcher.js:69:60)\n    at CdpFrame.goto (/tmp/verify-tools/node_modules/puppeteer-core/lib/cjs/puppeteer/cdp/Frame.js:149:29)\n    at CdpFrame.<anonymous> (/tmp/verify-tools/node_modules/puppeteer-core/lib/cjs/puppeteer/util/decorators.js:109:27)"
+    }
+  ],
+  "warnings": [
+    {
+      "section": "qa-issue68",
+      "name": "cold-context navigation stalled (third-party CDN?) — retrying once",
+      "detail": "/: Navigation timeout of 60000 ms exceeded"
     },
     {
-      "section": "shots",
-      "name": "console: unexpected console errors",
-      "detail": "[qa-issue70-76] Access to fetch at 'https://api.github.com/repos/G-man3207/openshiftgames' from origin 'http://127.0.0.1:46573' has been blocked by CORS policy: No 'Access-Control-Allow-Origin' header is present on the requested resource."
-    }
-  ],
-  "warnings": [],
-  "consoleErrors": [
+      "section": "qa-issue68",
+      "name": "cold-context navigation stalled (third-party CDN?) — retrying once",
+      "detail": "/: Navigation timeout of 60000 ms exceeded"
+    },
     {
-      "section": "qa-issue70-76",
-      "text": "Access to fetch at 'https://api.github.com/repos/G-man3207/openshiftgames' from origin 'http://127.0.0.1:46573' has been blocked by CORS policy: No 'Access-Control-Allow-Origin' header is present on the requested resource."
+      "section": "qa-issue68",
+      "name": "cold-context navigation stalled (third-party CDN?) — retrying once",
+      "detail": "/: Navigation timeout of 60000 ms exceeded"
     }
   ],
+  "consoleErrors": [],
   "pageErrors": [],
   "artifacts": {
     "screenshot": {
       "path": "screenshot.png",
       "width": 1600,
       "height": 900,
-      "bytes": 983506
+      "bytes": 981556
     },
     "ogImage": {
       "path": "og-image.png",
       "width": 1200,
       "height": 630,
-      "bytes": 205850
+      "bytes": 205626
     },
     "screenshots": [
       {
         "path": "docs/screenshots/menu.png",
         "width": 1600,
         "height": 900,
-        "bytes": 331462
+        "bytes": 332096
       },
       {
         "path": "docs/screenshots/exam-prep.png",
         "width": 1600,
         "height": 900,
-        "bytes": 214021
+        "bytes": 210590
       },
       {
         "path": "docs/screenshots/sandbox.png",
         "width": 1600,
         "height": 900,
-        "bytes": 983186
+        "bytes": 981740
       },
       {
         "path": "screenshot.png",
         "width": 1600,
         "height": 900,
-        "bytes": 983506
+        "bytes": 981556
       },
       {
         "path": "docs/screenshots/files-panel.png",
         "width": 1600,
         "height": 900,
-        "bytes": 244141
+        "bytes": 243783
       },
       {
         "path": "docs/screenshots/campaign-level-1.png",
         "width": 1600,
         "height": 900,
-        "bytes": 477692
+        "bytes": 477834
       },
       {
         "path": "docs/screenshots/regressions-minimap-collapsed.png",
         "width": 1600,
         "height": 900,
-        "bytes": 963211
+        "bytes": 961689
       },
       {
         "path": "docs/screenshots/regressions-campaign-restart.png",
         "width": 1600,
         "height": 900,
-        "bytes": 487291
+        "bytes": 487251
       },
       {
         "path": "docs/screenshots/draw.png",
         "width": 1600,
         "height": 900,
-        "bytes": 488735
+        "bytes": 488473
       },
       {
         "path": "og-image.png",
         "width": 1200,
         "height": 630,
-        "bytes": 205850
+        "bytes": 205626
       }
     ]
   },
@@ -981,11 +1027,11 @@
     },
     {
       "section": "cli",
-      "name": "cli: apply multi-doc -f -n overrides manifest namespaces"
+      "name": "cli: apply multi-doc -f -n rejects a manifest that names another namespace"
     },
     {
       "section": "cli",
-      "name": "cli: multi-doc apply -f -n overrides manifest metadata.namespace"
+      "name": "cli: the rejected multi-doc apply created nothing (not even the namespace-less Secret)"
     },
     {
       "section": "cli",
@@ -1309,7 +1355,7 @@
     },
     {
       "section": "cli",
-      "name": "cli: oc create group"
+      "name": "cli: oc adm groups new"
     },
     {
       "section": "cli",
@@ -3549,7 +3595,7 @@
     },
     {
       "section": "qa-scenarios",
-      "name": "scenarios: L19 broken Job recreated with a longer deadline"
+      "name": "scenarios: L19 broken Job recreated without the too-short deadline"
     },
     {
       "section": "qa-scenarios",
@@ -3961,7 +4007,7 @@
     },
     {
       "section": "qa-cli",
-      "name": "qa-cli #36: passthrough Route PORT is the Service port name (443-tcp)"
+      "name": "qa-cli #36: passthrough Route PORT is the Service port name (443-8080)"
     },
     {
       "section": "qa-cli",
@@ -4245,7 +4291,7 @@
     },
     {
       "section": "qa-workstation",
-      "name": "qa-workstation: https against a plain HTTP Route is a router 404"
+      "name": "qa-workstation: https against a plain HTTP Route is the router 503 \"Application is not available\" page"
     },
     {
       "section": "qa-workstation",
@@ -4313,7 +4359,7 @@
     },
     {
       "section": "qa-workstation",
-      "name": "qa-workstation: a passthrough Route does not serve plain HTTP"
+      "name": "qa-workstation: a passthrough Route does not serve plain HTTP (router 503 page)"
     },
     {
       "section": "qa-workstation",
@@ -4965,6 +5011,10 @@
     },
     {
       "section": "qa-coverage",
+      "name": "coverage: Alertmanager surfaces an alert for the real broken workload"
+    },
+    {
+      "section": "qa-coverage",
       "name": "coverage: Files/ManifestEngine ready for the kustomize drill"
     },
     {
@@ -5041,7 +5091,7 @@
     },
     {
       "section": "qa-coverage",
-      "name": "coverage: handover stats show 20/20 levels and 60/60 stars"
+      "name": "coverage: handover stats show 22/22 EX280 levels and 66/66 stars"
     },
     {
       "section": "qa-coverage",
@@ -5093,11 +5143,15 @@
     },
     {
       "section": "qa-coverage",
-      "name": "coverage: campaign L3 starts for the trap-hint check"
+      "name": "coverage: L1/L3 hints teach the non-root crash without SCC admission jargon"
     },
     {
       "section": "qa-coverage",
-      "name": "coverage: the admission-vs-runtime trap moved to the L3 troubleshooting hints"
+      "name": "coverage: L3 troubleshooting hints still explain the nginx Permission denied crash"
+    },
+    {
+      "section": "qa-coverage",
+      "name": "coverage: the admission-vs-runtime trap is taught in L17, with the SCCs"
     },
     {
       "section": "qa-coverage",
@@ -6785,6 +6839,10 @@
     },
     {
       "section": "qa-issue50-54",
+      "name": "#51: only the new-revision pods crash"
+    },
+    {
+      "section": "qa-issue50-54",
       "name": "#51: the Service keeps serving the old pods while the rollout is broken"
     },
     {
@@ -6866,6 +6924,10 @@
     {
       "section": "qa-issue50-54",
       "name": "#51 --to-revision=1: old-revision pods keep Running/Ready and never crash (their template has no APP_MODE)"
+    },
+    {
+      "section": "qa-issue50-54",
+      "name": "#51 --to-revision=1: only the new-revision pods crash"
     },
     {
       "section": "qa-issue50-54",
@@ -8381,7 +8443,7 @@
     },
     {
       "section": "qa-issue68",
-      "name": "#68: GET /v/1.15.0/js/engine/GameEngine.js returns 200 with the exact file body and `Cache-Control: public, max-age=31536000, immutable`"
+      "name": "#68: GET /v/1.16.0/js/engine/GameEngine.js returns 200 with the exact file body and `Cache-Control: public, max-age=31536000, immutable`"
     },
     {
       "section": "qa-issue68",
@@ -8397,11 +8459,55 @@
     },
     {
       "section": "qa-issue68",
-      "name": "#68: the served index.html import map maps \"./js/\" to \"./v/1.15.0/js/\""
+      "name": "#68: the served index.html import map maps \"./js/\" to \"./v/1.16.0/js/\""
     },
     {
       "section": "qa-issue68",
-      "name": "#68: the served OpenShift Draw page maps \"./js/\" to the same \"./v/1.15.0/js/\" prefix"
+      "name": "#68: the served OpenShift Draw page maps \"./js/\" to the same \"./v/1.16.0/js/\" prefix"
+    },
+    {
+      "section": "qa-issue68",
+      "name": "#68: a fresh browser context boots the menu with the versioned import map"
+    },
+    {
+      "section": "qa-issue68",
+      "name": "#68: the / never sends fewer than 40 module requests through /v/<version>/js/"
+    },
+    {
+      "section": "qa-issue68",
+      "name": "#68: a fresh / visit makes ZERO unversioned /js/ module requests (no stale-code path)"
+    },
+    {
+      "section": "qa-issue68",
+      "name": "#68: the versioned / load produces no console/page errors"
+    },
+    {
+      "section": "qa-issue68",
+      "name": "#68: OpenShift Draw boots from the served /draw entry document"
+    },
+    {
+      "section": "qa-issue68",
+      "name": "#68: the Draw page loads its modules from /v/<version>/js/"
+    },
+    {
+      "section": "qa-issue68",
+      "name": "#68: the Draw page makes ZERO unversioned /js/ module requests"
+    },
+    {
+      "section": "qa-issue68",
+      "name": "#68: the versioned /draw load produces no console/page errors"
+    },
+    {
+      "section": "qa-issue68",
+      "name": "#68: the returning-visitor scenario first caches the shipped release"
+    },
+    {
+      "section": "qa-issue68",
+      "name": "#68: after a release the returning visitor EXECUTES the new module (the old immutable URL was not reused)"
+    },
+    {
+      "section": "qa-issue68",
+      "name": "#68: the reload requested the new release module through /v/1.16.0-qa68/js/engine/GameEngine.js"
     },
     {
       "section": "qa-issue69",
@@ -9309,11 +9415,39 @@
     },
     {
       "section": "qa-guidance-replay",
-      "name": "guidance replay: every one of the 20 campaign levels carries authored guidance"
+      "name": "guidance replay: every one of the 29 campaign levels carries authored guidance"
     },
     {
       "section": "qa-guidance-replay",
       "name": "guidance replay: every objective of every level has a how-to (explain, and run/check where it can be typed)"
+    },
+    {
+      "section": "qa-guidance-replay",
+      "name": "guidance replay: L101 \"The Shell & the Filesystem\" — the authored how-to commands complete the level"
+    },
+    {
+      "section": "qa-guidance-replay",
+      "name": "guidance replay: L102 \"Read, Search & Pipe Text\" — the authored how-to commands complete the level"
+    },
+    {
+      "section": "qa-guidance-replay",
+      "name": "guidance replay: L103 \"Edit Files & the Shell Environment\" — the authored how-to commands complete the level"
+    },
+    {
+      "section": "qa-guidance-replay",
+      "name": "guidance replay: L104 \"Users, Permissions & SELinux\" — the authored how-to commands complete the level"
+    },
+    {
+      "section": "qa-guidance-replay",
+      "name": "guidance replay: L105 \"Processes, Services & Logs\" — the authored how-to commands complete the level"
+    },
+    {
+      "section": "qa-guidance-replay",
+      "name": "guidance replay: L106 \"Networking & the Firewall\" — the authored how-to commands complete the level"
+    },
+    {
+      "section": "qa-guidance-replay",
+      "name": "guidance replay: L107 \"Packages & Containers\" — the authored how-to commands complete the level"
     },
     {
       "section": "qa-guidance-replay",
@@ -9393,7 +9527,1355 @@
     },
     {
       "section": "qa-guidance-replay",
+      "name": "guidance replay: L21 \"Network Policies\" — the authored how-to commands complete the level"
+    },
+    {
+      "section": "qa-guidance-replay",
+      "name": "guidance replay: L22 \"Nodes & Cluster Troubleshooting\" — the authored how-to commands complete the level"
+    },
+    {
+      "section": "qa-guidance-replay",
       "name": "guidance replay: L20 \"EX280 Final: Production Platform\" — the authored how-to commands complete the level"
+    },
+    {
+      "section": "qa-campaign-structure",
+      "name": "campaign structure: chapter 0 is the seven-level Linux & RHEL Foundations prelude"
+    },
+    {
+      "section": "qa-campaign-structure",
+      "name": "campaign structure: Network Policies (21) and Nodes & Cluster Troubleshooting (22) come right before the capstone (20)"
+    },
+    {
+      "section": "qa-campaign-structure",
+      "name": "campaign structure: the level select shows the Linux prelude first, marked optional"
+    },
+    {
+      "section": "qa-campaign-structure",
+      "name": "campaign structure: prelude cards are numbered 0.1–0.7"
+    },
+    {
+      "section": "qa-campaign-structure",
+      "name": "campaign structure: a new player starts at 0.1 and the prelude unlocks in order"
+    },
+    {
+      "section": "qa-campaign-structure",
+      "name": "campaign structure: the prelude never gates Level 1 (it is open for a new player)"
+    },
+    {
+      "section": "qa-campaign-structure",
+      "name": "campaign structure: a new player sees \"Start campaign\" and 0 / 29 complete"
+    },
+    {
+      "section": "qa-campaign-structure",
+      "name": "campaign structure: chapter 5 lists ids 17,18,19,21,22,20 as Levels 17–22 (capstone last)"
+    },
+    {
+      "section": "qa-campaign-structure",
+      "name": "campaign structure: an old save keeps the capstone completed and replayable"
+    },
+    {
+      "section": "qa-campaign-structure",
+      "name": "campaign structure: an old save continues with the new Level 20 (Network Policies), then 21"
+    },
+    {
+      "section": "qa-campaign-structure",
+      "name": "campaign structure: an old save shows \"Continue · Level 20\" (the new Network Policies level)"
+    },
+    {
+      "section": "qa-campaign-structure",
+      "name": "campaign structure: an EX280 player mid-campaign continues at their next level"
+    },
+    {
+      "section": "qa-campaign-structure",
+      "name": "campaign structure: a player working through the prelude continues at its next level"
+    },
+    {
+      "section": "qa-campaign-structure",
+      "name": "campaign structure: the start page CTA continues at the same level"
+    },
+    {
+      "section": "qa-campaign-structure",
+      "name": "campaign structure: the landing stats line matches the level data"
+    },
+    {
+      "section": "qa-campaign-structure",
+      "name": "campaign structure: \"Start campaign\" opens Level 0.1"
+    },
+    {
+      "section": "qa-campaign-structure",
+      "name": "campaign structure: starting a level never counts platform DaemonSet Pods as player Pods"
+    },
+    {
+      "section": "qa-campaign-structure",
+      "name": "campaign structure: the HUD names a prelude level \"L0.1 · …\""
+    },
+    {
+      "section": "qa-campaign-structure",
+      "name": "campaign structure: prelude objective labels render `code` as code, not literal backticks"
+    },
+    {
+      "section": "qa-campaign-structure",
+      "name": "campaign structure: the capstone (id 20) still launches"
+    },
+    {
+      "section": "qa-campaign-structure",
+      "name": "campaign structure: the capstone is shown as \"L22 · EX280 Final: Production Platform\""
+    },
+    {
+      "section": "qa-campaign-structure",
+      "name": "campaign structure: the achievements grid renders star glyphs, not icon key names"
+    },
+    {
+      "section": "qa-campaign-structure",
+      "name": "campaign structure: the stats panel counts 87 campaign stars (29 levels × 3)"
+    },
+    {
+      "section": "qa-sim-1160",
+      "name": "sim-1160: the start page does not call api.github.com off the production host (its 60/h rate limit answered without CORS headers = console error)"
+    },
+    {
+      "section": "qa-sim-1160",
+      "name": "sim-1160: sandbox boots for the alerting checks"
+    },
+    {
+      "section": "qa-sim-1160",
+      "name": "sim-1160: KubePodCrashLooping stays firing through the kubelet restarts (real max_over_time[5m] rule; it used to blink off for one tick per restart)"
+    },
+    {
+      "section": "qa-sim-1160",
+      "name": "sim-1160: oc describe alertmanager names the ImagePullBackOff pod (KubePodNotReady) and the crash-looping pod (KubePodCrashLooping)"
+    },
+    {
+      "section": "qa-sim-1160",
+      "name": "sim-1160: campaign L20 starts for the fire-moment check"
+    },
+    {
+      "section": "qa-sim-1160",
+      "name": "sim-1160: L20 webapp is 2/2 Ready before the incident"
+    },
+    {
+      "section": "qa-sim-1160",
+      "name": "sim-1160: an incident firing on the last step of an advance chunk leaves the new revision Pod unscheduled for that instant (the #51 NO-GO sample)"
+    },
+    {
+      "section": "qa-sim-1160",
+      "name": "sim-1160: a kubelet tick later the new revision crash-loops while both old Pods keep serving"
+    },
+    {
+      "section": "qa-sim-1160",
+      "name": "sim-1160: campaign L3 starts for the spotlight check"
+    },
+    {
+      "section": "qa-sim-1160",
+      "name": "sim-1160: L3’s incident-made ReplicaSet/Pod are level furniture — no \"YOU CREATED Pod\" toast, no red \"yours\" ring"
+    },
+    {
+      "section": "qa-sim-1160",
+      "name": "sim-1160: campaign L1 starts (logged out)"
+    },
+    {
+      "section": "qa-sim-1160",
+      "name": "sim-1160: L1 starts logged out (terminal context says \"not logged in\") and its first objective tells the player to `oc login`"
+    },
+    {
+      "section": "qa-sim-1160",
+      "name": "sim-1160: logged out, `oc get pods` is the anonymous 403 (it used to list pods as kubeadmin)"
+    },
+    {
+      "section": "qa-sim-1160",
+      "name": "sim-1160: logged out, `oc new-project` is refused (no ProjectRequest for system:anonymous)"
+    },
+    {
+      "section": "qa-sim-1160",
+      "name": "sim-1160: `oc login --token=<anything>` no longer logs in as kubeadmin"
+    },
+    {
+      "section": "qa-sim-1160",
+      "name": "sim-1160: L1 `oc login -u kubeadmin -p $(cat ~/auth/kubeadmin-password)` still works"
+    },
+    {
+      "section": "qa-sim-1160",
+      "name": "sim-1160: the L1 login objective ticks after the real login"
+    },
+    {
+      "section": "qa-sim-1160",
+      "name": "sim-1160: L1 `oc new-project first-project` works after login"
+    },
+    {
+      "section": "qa-sim-1160",
+      "name": "sim-1160: campaign L8 starts for the new-app --template check"
+    },
+    {
+      "section": "qa-sim-1160",
+      "name": "sim-1160: L8 `oc new-app --template=webapp-template -p APP_NAME=web` ticks the template objective"
+    },
+    {
+      "section": "qa-sim-1160",
+      "name": "sim-1160: re-running the same `oc new-app` is AlreadyExists + `--> Failed`, never `created` again"
+    },
+    {
+      "section": "qa-sim-1160",
+      "name": "sim-1160: sandbox boots for the terminal cue checks"
+    },
+    {
+      "section": "qa-sim-1160",
+      "name": "sim-1160: inside `oc debug node/…` the terminal shows the node shell (sh-5.1#) and explains why `oc` is missing; `exit` restores the workstation cue"
+    },
+    {
+      "section": "qa-sim-1160",
+      "name": "sim-1160: Files engine ready for the oc edit cue"
+    },
+    {
+      "section": "qa-sim-1160",
+      "name": "sim-1160: `oc edit` opens the Files panel, which pauses the run — and the output now says so"
+    },
+    {
+      "section": "qa-sim-1160",
+      "name": "sim-1160: a NoSchedule taint keeps the running dns-default pod (no delete, no recreate)"
+    },
+    {
+      "section": "qa-sim-1160",
+      "name": "sim-1160: the tainted node’s daemon pod is reported as misscheduled, not current"
+    },
+    {
+      "section": "bridge: campaign chain and EX280 mapping",
+      "name": "bridge: 19 → 21 → 22 → 20, displayed as Levels 20, 21 and 22 before the capstone"
+    },
+    {
+      "section": "bridge: campaign chain and EX280 mapping",
+      "name": "bridge: levels 21/22 carry their titles in the campaign data and in EX280_LEVEL_TITLES"
+    },
+    {
+      "section": "bridge: campaign chain and EX280 mapping",
+      "name": "bridge: L12 no longer installs an operator (MetalLB seeded, no operator objective, no \"Install an operator\" bullet; project row lb-lab)"
+    },
+    {
+      "section": "bridge: campaign chain and EX280 mapping",
+      "name": "bridge: EX280 mapping — ops-install is L18 only, 21 maps the network bullets, 22 the health/troubleshooting bullets (L3 off SDN, L8 off project templates)"
+    },
+    {
+      "section": "bridge: L21 Network Policies",
+      "name": "bridge: L21 starts"
+    },
+    {
+      "section": "bridge: L21 Network Policies",
+      "name": "bridge L21: the Route answers before any policy, yet nothing is ticked — \"router reaches the Route\" needs isolation first"
+    },
+    {
+      "section": "bridge: L21 Network Policies",
+      "name": "bridge L21: `oc get pods` in netpol-lab does not count as finding the router Pods"
+    },
+    {
+      "section": "bridge: L21 Network Policies",
+      "name": "bridge L21: router Pods in openshift-ingress, its policy-group label and an in-Pod frontend → backend call tick the two inspection steps"
+    },
+    {
+      "section": "bridge: L21 Network Policies",
+      "name": "bridge L21: deny-by-default isolates ingress — the Route answers 503 and the router objective stays unticked (default-deny blocks the router)"
+    },
+    {
+      "section": "bridge: L21 Network Policies",
+      "name": "bridge L21: after deny-by-default the in-Pod call to backend gets no answer"
+    },
+    {
+      "section": "bridge: L21 Network Policies",
+      "name": "bridge L21: allow-same-namespace does not admit the router (other projects stay locked out)"
+    },
+    {
+      "section": "bridge: L21 Network Policies",
+      "name": "bridge L21: allow-from-openshift-ingress (policy-group.network.openshift.io/ingress) lets the router back in — the Route answers and ticks"
+    },
+    {
+      "section": "bridge: L21 Network Policies",
+      "name": "bridge L21: deny-all-egress breaks DNS — no tick for \"keep DNS\" and none for \"away from the internet\" (a DNS failure is not an egress block)"
+    },
+    {
+      "section": "bridge: L21 Network Policies",
+      "name": "bridge L21: an egress rule for port 53 does not unblock DNS (dns-default listens on 5353)"
+    },
+    {
+      "section": "bridge: L21 Network Policies",
+      "name": "bridge L21: UDP/TCP 5353 to openshift-dns restores DNS and the internet stays blocked"
+    },
+    {
+      "section": "bridge: L21 Network Policies",
+      "name": "bridge L21: an egress rule for every Pod un-ticks the one-way guard and the isolation-based checks"
+    },
+    {
+      "section": "bridge: L21 Network Policies",
+      "name": "bridge L21: deleting the broad egress rule restores isolation (policies only ever add allows)"
+    },
+    {
+      "section": "bridge: L21 Network Policies",
+      "name": "bridge L21: the egress starter applied without filling SOURCE-APP/TARGET-APP opens nothing"
+    },
+    {
+      "section": "bridge: L21 Network Policies",
+      "name": "bridge L21: the adapted egress rule reopens exactly frontend → backend:8080 — every objective ticks and the level completes"
+    },
+    {
+      "section": "bridge: L22 Nodes & Cluster Troubleshooting",
+      "name": "bridge: L22 starts"
+    },
+    {
+      "section": "bridge: L22 Nodes & Cluster Troubleshooting",
+      "name": "bridge L22: web runs on worker-0 at the start and nothing is ticked"
+    },
+    {
+      "section": "bridge: L22 Nodes & Cluster Troubleshooting",
+      "name": "bridge L22: a failed `oc describe node` does not count as reading a node"
+    },
+    {
+      "section": "bridge: L22 Nodes & Cluster Troubleshooting",
+      "name": "bridge L22: get nodes / adm top / describe node / get clusteroperators tick the four inspection steps"
+    },
+    {
+      "section": "bridge: L22 Nodes & Cluster Troubleshooting",
+      "name": "bridge L22: cordon alone is not a drain — the objective stays unticked and its note names the drain command"
+    },
+    {
+      "section": "bridge: L22 Nodes & Cluster Troubleshooting",
+      "name": "bridge L22: the drain moves every web Pod off worker-0 and web stays fully available — drained, but not yet back in service"
+    },
+    {
+      "section": "bridge: L22 Nodes & Cluster Troubleshooting",
+      "name": "bridge L22: a drained node that is not uncordoned explains itself (fix: oc adm uncordon worker-0)"
+    },
+    {
+      "section": "bridge: L22 Nodes & Cluster Troubleshooting",
+      "name": "bridge L22: uncordon after the drain puts worker-0 back in service"
+    },
+    {
+      "section": "bridge: L22 Nodes & Cluster Troubleshooting",
+      "name": "bridge: L22 restarts"
+    },
+    {
+      "section": "bridge: L22 Nodes & Cluster Troubleshooting",
+      "name": "bridge L22: after a restart, `oc adm uncordon` without a drain ticks neither maintenance objective"
+    },
+    {
+      "section": "bridge: L22 Nodes & Cluster Troubleshooting",
+      "name": "bridge L22: about 120 s in worker-1 turns NotReady; the incident and cluster-health objectives are open"
+    },
+    {
+      "section": "bridge: L22 Nodes & Cluster Troubleshooting",
+      "name": "bridge L22: oc debug node → host tools only after chroot /host; systemctl status / journalctl show the stopped kubelet"
+    },
+    {
+      "section": "bridge: L22 Nodes & Cluster Troubleshooting",
+      "name": "bridge L22: looking at the kubelet does not resolve the incident"
+    },
+    {
+      "section": "bridge: L22 Nodes & Cluster Troubleshooting",
+      "name": "bridge L22: systemctl restart kubelet + exit twice → worker-1 Ready, incident resolved, cluster healthy, level complete"
+    },
+    {
+      "section": "bridge: L12 MetalLB pre-installed",
+      "name": "bridge: L12 starts"
+    },
+    {
+      "section": "bridge: L12 MetalLB pre-installed",
+      "name": "bridge L12: a CSV read before OLM finished does not count as checking the operator"
+    },
+    {
+      "section": "bridge: L12 MetalLB pre-installed",
+      "name": "bridge L12: the seeded Subscription installs MetalLB within seconds; reading the Succeeded CSV ticks the check (project row lb-lab)"
+    },
+    {
+      "section": "bridge: L12 MetalLB pre-installed",
+      "name": "bridge L12: without the MetalLB resource, pool and advertisement the LoadBalancer stays <pending>"
+    },
+    {
+      "section": "bridge: L12 MetalLB pre-installed",
+      "name": "bridge L12: examples/metallb.yaml starts the speakers and the LoadBalancer gets an EXTERNAL-IP from the pool"
+    },
+    {
+      "section": "bridge: L12 MetalLB pre-installed",
+      "name": "bridge L12: deleting the L2Advertisement un-ticks the advertisement objective (a pool alone is not announced)"
+    },
+    {
+      "section": "bridge: L12 MetalLB pre-installed",
+      "name": "bridge L12: the passthrough Route reaches the TLS backend (200) and the level completes"
+    },
+    {
+      "section": "bridge: L11 edge Route with the openssl certificate",
+      "name": "bridge: L11 starts"
+    },
+    {
+      "section": "bridge: L11 edge Route with the openssl certificate",
+      "name": "bridge L11: an edge Route without --cert/--key is admitted but does not count as serving your certificate"
+    },
+    {
+      "section": "bridge: L11 edge Route with the openssl certificate",
+      "name": "bridge L11: the edge Route created with the openssl files serves that certificate and the level completes"
+    },
+    {
+      "section": "qa-linux-levels",
+      "name": "linux L101: level starts"
+    },
+    {
+      "section": "qa-linux-levels",
+      "name": "linux L101: no objective is ticked at level start"
+    },
+    {
+      "section": "qa-linux-levels",
+      "name": "linux L101: the shell starts in /home/student"
+    },
+    {
+      "section": "qa-linux-levels",
+      "name": "linux L101: first launch on a fresh page: the home holds Downloads, not the OpenShift lab files"
+    },
+    {
+      "section": "qa-linux-levels",
+      "name": "linux L101: Tab completes `~/Dow` and `Dow` to `Downloads/` and keeps the command"
+    },
+    {
+      "section": "qa-linux-levels",
+      "name": "linux L101: `ls` without -l does not tick the long-listing objective"
+    },
+    {
+      "section": "qa-linux-levels",
+      "name": "linux L101: `ls -l` of the home directory does not tick it either"
+    },
+    {
+      "section": "qa-linux-levels",
+      "name": "linux L101: `cd ~/Downloads` moves the shell"
+    },
+    {
+      "section": "qa-linux-levels",
+      "name": "linux L101: `cd Downloads` then `ls -l` ticks (cwd-aware, like `ls -l ~/Downloads`)"
+    },
+    {
+      "section": "qa-linux-levels",
+      "name": "linux L101: mkdir without -p fails like coreutils when the parent is missing"
+    },
+    {
+      "section": "qa-linux-levels",
+      "name": "linux L101: the failed mkdir does not tick"
+    },
+    {
+      "section": "qa-linux-levels",
+      "name": "linux L101: `mkdir -p` creates the workspace"
+    },
+    {
+      "section": "qa-linux-levels",
+      "name": "linux L101: MOVING the manifests (originals gone) does not count as copying"
+    },
+    {
+      "section": "qa-linux-levels",
+      "name": "linux L101: with the originals back in Downloads the copy objective ticks"
+    },
+    {
+      "section": "qa-linux-levels",
+      "name": "linux L101: COPYING the notes (the old file still in Downloads) is not a move"
+    },
+    {
+      "section": "qa-linux-levels",
+      "name": "linux L101: removing the old copy completes the move"
+    },
+    {
+      "section": "qa-linux-levels",
+      "name": "linux L101: `rm DIR` refuses a directory"
+    },
+    {
+      "section": "qa-linux-levels",
+      "name": "linux L101: `rmdir` refuses a non-empty directory"
+    },
+    {
+      "section": "qa-linux-levels",
+      "name": "linux L101: old-drafts still exists after the refused deletions"
+    },
+    {
+      "section": "qa-linux-levels",
+      "name": "linux L101: `rm -r` deletes the directory"
+    },
+    {
+      "section": "qa-linux-levels",
+      "name": "linux L101: an alternative correct path completes the level"
+    },
+    {
+      "section": "qa-linux-levels",
+      "name": "linux L102: level starts"
+    },
+    {
+      "section": "qa-linux-levels",
+      "name": "linux L102: no objective is ticked at level start"
+    },
+    {
+      "section": "qa-linux-levels",
+      "name": "linux L102: a relative name from the wrong directory fails"
+    },
+    {
+      "section": "qa-linux-levels",
+      "name": "linux L102: the failed tail does not tick the reading objective"
+    },
+    {
+      "section": "qa-linux-levels",
+      "name": "linux L102: `tail` in ~/ex280/logs ticks"
+    },
+    {
+      "section": "qa-linux-levels",
+      "name": "linux L102: `grep -i error` also catches a WARN line: not only the ERROR lines"
+    },
+    {
+      "section": "qa-linux-levels",
+      "name": "linux L102: `grep ERROR > errors.txt` ticks"
+    },
+    {
+      "section": "qa-linux-levels",
+      "name": "linux L102: `>` twice keeps only the last count"
+    },
+    {
+      "section": "qa-linux-levels",
+      "name": "linux L102: the overwritten summary does not tick"
+    },
+    {
+      "section": "qa-linux-levels",
+      "name": "linux L102: `>` then `>>` writes both counts"
+    },
+    {
+      "section": "qa-linux-levels",
+      "name": "linux L102: a list with repeated Pods (no sort -u) does not tick"
+    },
+    {
+      "section": "qa-linux-levels",
+      "name": "linux L102: `sort | uniq -c` (counted, one line per Pod) is accepted"
+    },
+    {
+      "section": "qa-linux-levels",
+      "name": "linux L102: keeping ONLY the healthz lines is the opposite of the task"
+    },
+    {
+      "section": "qa-linux-levels",
+      "name": "linux L102: `grep -v` removes the probe noise"
+    },
+    {
+      "section": "qa-linux-levels",
+      "name": "linux L102: an alternative correct path completes the level"
+    },
+    {
+      "section": "qa-linux-levels",
+      "name": "linux L103: level starts"
+    },
+    {
+      "section": "qa-linux-levels",
+      "name": "linux L103: no objective is ticked at level start"
+    },
+    {
+      "section": "qa-linux-levels",
+      "name": "linux L103: a ConfigMap indented with a TAB does not parse and does not tick"
+    },
+    {
+      "section": "qa-linux-levels",
+      "name": "linux L103: the space-indented ConfigMap ticks"
+    },
+    {
+      "section": "qa-linux-levels",
+      "name": "linux L103: `sed -i` on the source rewrites production into staging"
+    },
+    {
+      "section": "qa-linux-levels",
+      "name": "linux L103: …and still creates no staging copy"
+    },
+    {
+      "section": "qa-linux-levels",
+      "name": "linux L103: `cat -A` reveals the TAB as ^I"
+    },
+    {
+      "section": "qa-linux-levels",
+      "name": "linux L103: `>` overwrote ~/.bashrc (skeleton gone): not ticked"
+    },
+    {
+      "section": "qa-linux-levels",
+      "name": "linux L103: an unexported shell variable does not reach programs: not ticked"
+    },
+    {
+      "section": "qa-linux-levels",
+      "name": "linux L103: `export` ticks the environment objective"
+    },
+    {
+      "section": "qa-linux-levels",
+      "name": "linux L103: double quotes expanded $(whoami) at write time and no shebang"
+    },
+    {
+      "section": "qa-linux-levels",
+      "name": "linux L103: level starts"
+    },
+    {
+      "section": "qa-linux-levels",
+      "name": "linux L103: no objective is ticked at level start"
+    },
+    {
+      "section": "qa-linux-levels",
+      "name": "linux L103: `sed … > file` (redirect instead of tee) creates the staging copy"
+    },
+    {
+      "section": "qa-linux-levels",
+      "name": "linux L103: the production ConfigMap is untouched"
+    },
+    {
+      "section": "qa-linux-levels",
+      "name": "linux L103: `sed -i` replaces the TAB and pod.yaml parses"
+    },
+    {
+      "section": "qa-linux-levels",
+      "name": "linux L103: `>>` appends to ~/.bashrc and keeps the skeleton"
+    },
+    {
+      "section": "qa-linux-levels",
+      "name": "linux L103: editing ~/.bashrc does not change the running shell"
+    },
+    {
+      "section": "qa-linux-levels",
+      "name": "linux L103: `source ~/.bashrc` loads KUBE_EDITOR"
+    },
+    {
+      "section": "qa-linux-levels",
+      "name": "linux L103: single quotes keep $(whoami) literal in the script"
+    },
+    {
+      "section": "qa-linux-levels",
+      "name": "linux L103: bash runs the script: $(whoami) expands, the exported KUBE_EDITOR is visible"
+    },
+    {
+      "section": "qa-linux-levels",
+      "name": "linux L103: an alternative correct path completes the level"
+    },
+    {
+      "section": "qa-linux-levels",
+      "name": "linux L104: level starts"
+    },
+    {
+      "section": "qa-linux-levels",
+      "name": "linux L104: no objective is ticked at level start"
+    },
+    {
+      "section": "qa-linux-levels",
+      "name": "linux L104: student cannot read the root-owned 0640 kubeconfig"
+    },
+    {
+      "section": "qa-linux-levels",
+      "name": "linux L104: chmod on a file you do not own fails"
+    },
+    {
+      "section": "qa-linux-levels",
+      "name": "linux L104: chown without sudo fails"
+    },
+    {
+      "section": "qa-linux-levels",
+      "name": "linux L104: the kubeconfig still belongs to root"
+    },
+    {
+      "section": "qa-linux-levels",
+      "name": "linux L104: owner student but group still root: not ticked"
+    },
+    {
+      "section": "qa-linux-levels",
+      "name": "linux L104: `chown` + `chgrp` give owner and group to student"
+    },
+    {
+      "section": "qa-linux-levels",
+      "name": "linux L104: mode is still 0640 (group-readable)"
+    },
+    {
+      "section": "qa-linux-levels",
+      "name": "linux L104: a world-readable kubeconfig is not private"
+    },
+    {
+      "section": "qa-linux-levels",
+      "name": "linux L104: symbolic `go-rwx` from 644 leaves 600"
+    },
+    {
+      "section": "qa-linux-levels",
+      "name": "linux L104: a script without the execute bit cannot run by name"
+    },
+    {
+      "section": "qa-linux-levels",
+      "name": "linux L104: 777 is executable but world-writable: not ticked"
+    },
+    {
+      "section": "qa-linux-levels",
+      "name": "linux L104: octal 755 is accepted"
+    },
+    {
+      "section": "qa-linux-levels",
+      "name": "linux L104: the script now runs by name from PATH"
+    },
+    {
+      "section": "qa-linux-levels",
+      "name": "linux L104: `whoami` alone does not show the groups"
+    },
+    {
+      "section": "qa-linux-levels",
+      "name": "linux L104: `id` ticks"
+    },
+    {
+      "section": "qa-linux-levels",
+      "name": "linux L104: SELinux is enforcing"
+    },
+    {
+      "section": "qa-linux-levels",
+      "name": "linux L104: `getenforce` ticks"
+    },
+    {
+      "section": "qa-linux-levels",
+      "name": "linux L104: the page moved from /root still carries root's home label admin_home_t"
+    },
+    {
+      "section": "qa-linux-levels",
+      "name": "linux L104: restorecon without sudo is refused"
+    },
+    {
+      "section": "qa-linux-levels",
+      "name": "linux L104: the label is still wrong"
+    },
+    {
+      "section": "qa-linux-levels",
+      "name": "linux L104: `restorecon -v` reports the relabel like RHEL"
+    },
+    {
+      "section": "qa-linux-levels",
+      "name": "linux L104: the page has httpd_sys_content_t"
+    },
+    {
+      "section": "qa-linux-levels",
+      "name": "linux L104: an alternative correct path completes the level"
+    },
+    {
+      "section": "qa-linux-levels",
+      "name": "linux L105: level starts"
+    },
+    {
+      "section": "qa-linux-levels",
+      "name": "linux L105: no objective is ticked at level start"
+    },
+    {
+      "section": "qa-linux-levels",
+      "name": "linux L105: the runaway dd tops `ps aux --sort=-%cpu`"
+    },
+    {
+      "section": "qa-linux-levels",
+      "name": "linux L105: kill of a missing PID fails like bash"
+    },
+    {
+      "section": "qa-linux-levels",
+      "name": "linux L105: dd still runs"
+    },
+    {
+      "section": "qa-linux-levels",
+      "name": "linux L105: `pkill -x dd` stops it too"
+    },
+    {
+      "section": "qa-linux-levels",
+      "name": "linux L105: restarting httpd before the fix fails again"
+    },
+    {
+      "section": "qa-linux-levels",
+      "name": "linux L105: httpd is not running"
+    },
+    {
+      "section": "qa-linux-levels",
+      "name": "linux L105: the journal names the file, line 5 and the misspelled directive"
+    },
+    {
+      "section": "qa-linux-levels",
+      "name": "linux L105: reading the httpd journal ticks"
+    },
+    {
+      "section": "qa-linux-levels",
+      "name": "linux L105: systemctl start as student is refused by polkit"
+    },
+    {
+      "section": "qa-linux-levels",
+      "name": "linux L105: httpd runs after the fix"
+    },
+    {
+      "section": "qa-linux-levels",
+      "name": "linux L105: STARTED but not ENABLED: the boot objective stays open"
+    },
+    {
+      "section": "qa-linux-levels",
+      "name": "linux L105: `enable` ticks the boot objective"
+    },
+    {
+      "section": "qa-linux-levels",
+      "name": "linux L105: chronyd started but not enabled: not ticked"
+    },
+    {
+      "section": "qa-linux-levels",
+      "name": "linux L105: chronyd running and enabled"
+    },
+    {
+      "section": "qa-linux-levels",
+      "name": "linux L105: an alternative correct path completes the level"
+    },
+    {
+      "section": "qa-linux-levels",
+      "name": "linux L106: level starts"
+    },
+    {
+      "section": "qa-linux-levels",
+      "name": "linux L106: no objective is ticked at level start"
+    },
+    {
+      "section": "qa-linux-levels",
+      "name": "linux L106: `ip addr` alone does not show the default route"
+    },
+    {
+      "section": "qa-linux-levels",
+      "name": "linux L106: ip route shows the gateway"
+    },
+    {
+      "section": "qa-linux-levels",
+      "name": "linux L106: `ip route` ticks"
+    },
+    {
+      "section": "qa-linux-levels",
+      "name": "linux L106: resolving the API name is not the apps wildcard"
+    },
+    {
+      "section": "qa-linux-levels",
+      "name": "linux L106: any *.apps name resolves to the ingress VIP"
+    },
+    {
+      "section": "qa-linux-levels",
+      "name": "linux L106: resolving an apps name ticks"
+    },
+    {
+      "section": "qa-linux-levels",
+      "name": "linux L106: /etc/hosts wins over DNS for getent"
+    },
+    {
+      "section": "qa-linux-levels",
+      "name": "linux L106: ping follows the stale /etc/hosts address and gets no answer"
+    },
+    {
+      "section": "qa-linux-levels",
+      "name": "linux L106: editing /etc/hosts needs root"
+    },
+    {
+      "section": "qa-linux-levels",
+      "name": "linux L106: replacing the stale address with another wrong one does not tick"
+    },
+    {
+      "section": "qa-linux-levels",
+      "name": "linux L106: commenting the line out removes the override"
+    },
+    {
+      "section": "qa-linux-levels",
+      "name": "linux L106: the API answers once the name resolves through DNS"
+    },
+    {
+      "section": "qa-linux-levels",
+      "name": "linux L106: firewall-cmd as student is refused"
+    },
+    {
+      "section": "qa-linux-levels",
+      "name": "linux L106: `--permanent` writes the saved configuration"
+    },
+    {
+      "section": "qa-linux-levels",
+      "name": "linux L106: …but does not change the running firewall"
+    },
+    {
+      "section": "qa-linux-levels",
+      "name": "linux L106: `--reload` activates the saved rule"
+    },
+    {
+      "section": "qa-linux-levels",
+      "name": "linux L106: a reload drops a rule that is not permanent"
+    },
+    {
+      "section": "qa-linux-levels",
+      "name": "linux L106: a runtime-only rule is not permanent"
+    },
+    {
+      "section": "qa-linux-levels",
+      "name": "linux L106: `--runtime-to-permanent` saves it"
+    },
+    {
+      "section": "qa-linux-levels",
+      "name": "linux L106: an alternative correct path completes the level"
+    },
+    {
+      "section": "qa-linux-levels",
+      "name": "linux L107: level starts"
+    },
+    {
+      "section": "qa-linux-levels",
+      "name": "linux L107: no objective is ticked at level start"
+    },
+    {
+      "section": "qa-linux-levels",
+      "name": "linux L107: a fresh RHEL machine has no oc until openshift-clients is installed"
+    },
+    {
+      "section": "qa-linux-levels",
+      "name": "linux L107: dnf install as student is refused"
+    },
+    {
+      "section": "qa-linux-levels",
+      "name": "linux L107: openshift-clients still missing"
+    },
+    {
+      "section": "qa-linux-levels",
+      "name": "linux L107: openshift-clients installed"
+    },
+    {
+      "section": "qa-linux-levels",
+      "name": "linux L107: the installed oc reports its client version"
+    },
+    {
+      "section": "qa-linux-levels",
+      "name": "linux L107: a STOPPED container still exists"
+    },
+    {
+      "section": "qa-linux-levels",
+      "name": "linux L107: `podman rm` removes it"
+    },
+    {
+      "section": "qa-linux-levels",
+      "name": "linux L107: without `-p 8080:8080` the port is not published"
+    },
+    {
+      "section": "qa-linux-levels",
+      "name": "linux L107: web runs with the published port"
+    },
+    {
+      "section": "qa-linux-levels",
+      "name": "linux L107: logs of a missing container fail"
+    },
+    {
+      "section": "qa-linux-levels",
+      "name": "linux L107: the failed `podman logs` does not tick"
+    },
+    {
+      "section": "qa-linux-levels",
+      "name": "linux L107: `podman logs web` ticks"
+    },
+    {
+      "section": "qa-linux-levels",
+      "name": "linux L107: a tag is not a digest"
+    },
+    {
+      "section": "qa-linux-levels",
+      "name": "linux L107: the digest of ANOTHER image (ubi-minimal) does not count"
+    },
+    {
+      "section": "qa-linux-levels",
+      "name": "linux L107: the Digest line saved with grep is accepted"
+    },
+    {
+      "section": "qa-linux-levels",
+      "name": "linux L107: an alternative correct path completes the level"
+    },
+    {
+      "section": "qa-grading-1160",
+      "name": "grading-1160: L9 starts"
+    },
+    {
+      "section": "qa-grading-1160",
+      "name": "grading-1160 L9: `oc get is` at level start (\"No resources found\") no longer ticks \"Examine the ImageStream\" and says why"
+    },
+    {
+      "section": "qa-grading-1160",
+      "name": "grading-1160 L9: the Build objective stays open while `oc get builds` says New/Pending/Running (no BuildConfig lastVersion shortcut)"
+    },
+    {
+      "section": "qa-grading-1160",
+      "name": "grading-1160 L9: a read of ImageStreams in another project does not tick the build-lab objective"
+    },
+    {
+      "section": "qa-grading-1160",
+      "name": "grading-1160 L9: the Build objective ticks once the Build is Complete"
+    },
+    {
+      "section": "qa-grading-1160",
+      "name": "grading-1160 L9: `oc -n build-lab get is` (global flag before the verb) ticks \"Examine the ImageStream\""
+    },
+    {
+      "section": "qa-grading-1160",
+      "name": "grading-1160: L3 starts"
+    },
+    {
+      "section": "qa-grading-1160",
+      "name": "grading-1160 L3: `oc get pods`/`oc get events`/`oc describe` run in `default` (and a failed `oc logs`) investigate nothing — engine AND panel stay at 0"
+    },
+    {
+      "section": "qa-grading-1160",
+      "name": "grading-1160 L3: `oc get pods` in `default` does not tick \"Inspect Pods\" and the note names ops-lab"
+    },
+    {
+      "section": "qa-grading-1160",
+      "name": "grading-1160 L3: in ops-lab the same reads complete investigation steps, and the panel counter shows exactly the engine count"
+    },
+    {
+      "section": "qa-grading-1160",
+      "name": "grading-1160 L3: \"Inspect Pods\" and \"Investigate\" tick from the reads in ops-lab"
+    },
+    {
+      "section": "qa-grading-1160",
+      "name": "grading-1160: L10 starts"
+    },
+    {
+      "section": "qa-grading-1160",
+      "name": "grading-1160 L10: a lone `oc rollout undo` (single revision) ticks neither \"update\" nor \"rollback\""
+    },
+    {
+      "section": "qa-grading-1160",
+      "name": "grading-1160 L10: scaling api-server to 0 turns \"Keep availability at 90%\" red"
+    },
+    {
+      "section": "qa-grading-1160",
+      "name": "grading-1160 L10: availability recovers once the replicas are back"
+    },
+    {
+      "section": "qa-grading-1160",
+      "name": "grading-1160 L10: `oc set image` is the rolling update; the old Pods keep it available"
+    },
+    {
+      "section": "qa-grading-1160",
+      "name": "grading-1160 L10: update + undo (the documented path) completes the level"
+    },
+    {
+      "section": "qa-grading-1160",
+      "name": "grading-1160: L10 restarts (no evaluation before typing)"
+    },
+    {
+      "section": "qa-grading-1160",
+      "name": "grading-1160 L10: update + undo typed before the first objective evaluation still complete the level"
+    },
+    {
+      "section": "qa-grading-1160",
+      "name": "grading-1160: L11 starts"
+    },
+    {
+      "section": "qa-grading-1160",
+      "name": "grading-1160 L11: an Opaque Secret named web-tls does not tick the TLS Secret objective (note says why)"
+    },
+    {
+      "section": "qa-grading-1160",
+      "name": "grading-1160 L11: `oc create secret tls web-tls` ticks it"
+    },
+    {
+      "section": "qa-grading-1160",
+      "name": "grading-1160 L12 evaluator: `--port=8443` does not satisfy \"targeting the Service port name https\"; the default (first named port) does"
+    },
+    {
+      "section": "qa-grading-1160",
+      "name": "grading-1160: L13 starts"
+    },
+    {
+      "section": "qa-grading-1160",
+      "name": "grading-1160 L13: `oc create secret … --from-file=htpasswd` does not tick \"Add the user alice to the htpasswd file\""
+    },
+    {
+      "section": "qa-grading-1160",
+      "name": "grading-1160 L13: `oc create user alice` (no login, no Identity) does not tick \"User alice exists after first login\""
+    },
+    {
+      "section": "qa-grading-1160",
+      "name": "grading-1160 L13: `htpasswd -c -B -b htpasswd alice …` and a real first login tick both"
+    },
+    {
+      "section": "qa-grading-1160",
+      "name": "grading-1160: L14 starts"
+    },
+    {
+      "section": "qa-grading-1160",
+      "name": "grading-1160 L14: the ServiceAccount binding (the incident fix) does not tick \"Bind a role to the developers group\""
+    },
+    {
+      "section": "qa-grading-1160",
+      "name": "grading-1160 L14: edit → group developers ticks it"
+    },
+    {
+      "section": "qa-grading-1160",
+      "name": "grading-1160: L16 starts"
+    },
+    {
+      "section": "qa-grading-1160",
+      "name": "grading-1160 L16: a User binding (no -z) and an edit binding do not tick \"Bind the view role to the ServiceAccount api-reader\""
+    },
+    {
+      "section": "qa-grading-1160",
+      "name": "grading-1160 L16: view → ServiceAccount api-reader ticks it"
+    },
+    {
+      "section": "qa-grading-1160",
+      "name": "grading-1160: L15 starts"
+    },
+    {
+      "section": "qa-grading-1160",
+      "name": "grading-1160 L15: `oc edit project.config…` that saves nothing does not tick the project-template objective"
+    },
+    {
+      "section": "qa-grading-1160",
+      "name": "grading-1160 L15: `oc apply -f` reaching spec.projectRequestTemplate.name=project-request ticks it"
+    },
+    {
+      "section": "qa-grading-1160",
+      "name": "grading-1160: L17 starts"
+    },
+    {
+      "section": "qa-grading-1160",
+      "name": "grading-1160 L17: `add-scc-to-group privileged system:serviceaccounts:privileged-lab` does not tick the dedicated-ServiceAccount grant; the note offers the removal"
+    },
+    {
+      "section": "qa-grading-1160",
+      "name": "grading-1160 L17: removing the group grant and granting `-z priv-sa` completes the level"
+    },
+    {
+      "section": "qa-grading-1160",
+      "name": "grading-1160: L18 starts"
+    },
+    {
+      "section": "qa-grading-1160",
+      "name": "grading-1160 L18: deleting the Subscription alone does not tick the uninstall (the CSV still runs; note names it)"
+    },
+    {
+      "section": "qa-grading-1160",
+      "name": "grading-1160 L18: deleting the CSV too ticks the uninstall"
+    },
+    {
+      "section": "qa-grading-1160",
+      "name": "grading-1160 L18: an InstallPlan is garbage-collected with its Subscription (owner reference)"
+    },
+    {
+      "section": "qa-grading-1160",
+      "name": "grading-1160 L18: a re-created Manual pinned Subscription gets a new unapproved v1.16.0 plan (no stale plan reuse)"
+    },
+    {
+      "section": "qa-grading-1160",
+      "name": "grading-1160 L18: approving that plan installs the pinned v1.16.0 and ticks objectives 5 and 6"
+    },
+    {
+      "section": "qa-grading-1160",
+      "name": "grading-1160: L20 starts"
+    },
+    {
+      "section": "qa-grading-1160",
+      "name": "grading-1160 L20: neither the Advisor (prod-platform does not exist yet) nor the composite is ticked at level start"
+    },
+    {
+      "section": "qa-grading-1160",
+      "name": "grading-1160 L20: \"Complete a Build\" is not ticked while the first build only runs"
+    },
+    {
+      "section": "qa-grading-1160",
+      "name": "grading-1160 L20: the Build ticks when Complete; the Advisor passes 25 once webapp runs in prod-platform"
+    },
+    {
+      "section": "qa-grading-1160",
+      "name": "grading-1160 L20: the composite (≥ 75 already at 17/18) only completes once every other objective is done"
+    },
+    {
+      "section": "qa-grading-1160",
+      "name": "grading-1160: lab 3 starts"
+    },
+    {
+      "section": "qa-grading-1160",
+      "name": "grading-1160 lab 3: an Opaque app-tls does not tick \"Create TLS Secret app-tls\""
+    },
+    {
+      "section": "qa-grading-1160",
+      "name": "grading-1160: lab 10 starts"
+    },
+    {
+      "section": "qa-grading-1160",
+      "name": "grading-1160 lab 10: deleting the AAP Subscription alone does not tick the uninstall"
+    },
+    {
+      "section": "qa-grading-1160",
+      "name": "grading-1160 lab 10: deleting its CSV (aap-operator.v2.6.0) too ticks it"
+    },
+    {
+      "section": "qa-grading-1160",
+      "name": "grading-1160: lab 11 starts"
+    },
+    {
+      "section": "qa-grading-1160",
+      "name": "grading-1160 lab 11: `oc create secret … --from-file=htpasswd=htpasswd` does not tick \"Create an htpasswd entry\""
+    },
+    {
+      "section": "qa-grading-1160",
+      "name": "grading-1160: lab 8 starts"
+    },
+    {
+      "section": "qa-grading-1160",
+      "name": "grading-1160 lab 8: a project-wide SCC group grant does not tick the dedicated-ServiceAccount grant"
+    },
+    {
+      "section": "qa-grading-1160",
+      "name": "grading-1160 lab 8: `add-scc-to-user privileged -z priv-sa` ticks it"
+    },
+    {
+      "section": "qa-linux-shell",
+      "name": "qa-linux-shell: gameEngine.linuxHost exists, window.game.linuxHost is the same host, prompt is [student@workstation ~]$"
+    },
+    {
+      "section": "qa-linux-shell",
+      "name": "qa-linux-shell (regression): `ls` at home still lists the Files tree (manifests/, htpasswd)"
+    },
+    {
+      "section": "qa-linux-shell",
+      "name": "qa-linux-shell: the scrollback echoes the bash prompt `[student@workstation ~]$ ls`"
+    },
+    {
+      "section": "qa-linux-shell",
+      "name": "qa-linux-shell (regression): `cat ~/auth/kubeadmin-password` reads the Files-panel file"
+    },
+    {
+      "section": "qa-linux-shell",
+      "name": "qa-linux-shell (regression): `> /tmp/x` writes the Files key tmp/x and `ls /tmp` lists it"
+    },
+    {
+      "section": "qa-linux-shell",
+      "name": "qa-linux-shell (regression): a heredoc redirect writes the Files-panel file"
+    },
+    {
+      "section": "qa-linux-shell",
+      "name": "qa-linux-shell (regression): `oc apply -f <relative file>` at home"
+    },
+    {
+      "section": "qa-linux-shell",
+      "name": "qa-linux-shell (regression): `cat file | oc apply -f -` still applies stdin"
+    },
+    {
+      "section": "qa-linux-shell",
+      "name": "qa-linux-shell (regression): `oc get … -o yaml > file` then `grep` reads it back"
+    },
+    {
+      "section": "qa-linux-shell",
+      "name": "qa-linux-shell: the input prompt follows `cd` ([student@workstation manifests]$)"
+    },
+    {
+      "section": "qa-linux-shell",
+      "name": "qa-linux-shell: `oc apply -f deployment.yaml` resolves against the cwd"
+    },
+    {
+      "section": "qa-linux-shell",
+      "name": "qa-linux-shell: `pwd` after cd"
+    },
+    {
+      "section": "qa-linux-shell",
+      "name": "qa-linux-shell: `cd -` prints OLDPWD"
+    },
+    {
+      "section": "qa-linux-shell",
+      "name": "qa-linux-shell: `cd` to a missing directory fails like bash (exit 1)"
+    },
+    {
+      "section": "qa-linux-shell",
+      "name": "qa-linux-shell: bare `whoami` is the Linux user"
+    },
+    {
+      "section": "qa-linux-shell",
+      "name": "qa-linux-shell: `oc whoami` stays the OpenShift user"
+    },
+    {
+      "section": "qa-linux-shell",
+      "name": "qa-linux-shell: `$USER` is the Linux user"
+    },
+    {
+      "section": "qa-linux-shell",
+      "name": "qa-linux-shell: `cat /etc/shadow` as student is Permission denied"
+    },
+    {
+      "section": "qa-linux-shell",
+      "name": "qa-linux-shell: a redirect into a root-owned file is refused by bash"
+    },
+    {
+      "section": "qa-linux-shell",
+      "name": "qa-linux-shell: `sudo` runs as root without a password prompt"
+    },
+    {
+      "section": "qa-linux-shell",
+      "name": "qa-linux-shell: `ls -l` prints real columns"
+    },
+    {
+      "section": "qa-linux-shell",
+      "name": "qa-linux-shell: `sudo -i` opens a root login shell (prompt ends with #)"
+    },
+    {
+      "section": "qa-linux-shell",
+      "name": "qa-linux-shell: `exit` returns to the student shell"
+    },
+    {
+      "section": "qa-linux-shell",
+      "name": "qa-linux-shell: systemctl start as student is refused (polkit)"
+    },
+    {
+      "section": "qa-linux-shell",
+      "name": "qa-linux-shell: the broken httpd fails to start"
+    },
+    {
+      "section": "qa-linux-shell",
+      "name": "qa-linux-shell: `journalctl -u httpd -p err` shows the failure"
+    },
+    {
+      "section": "qa-linux-shell",
+      "name": "qa-linux-shell: the journal names the config syntax error (AH00526)"
+    },
+    {
+      "section": "qa-linux-shell",
+      "name": "qa-linux-shell: the service objective is not done while httpd is failed"
+    },
+    {
+      "section": "qa-linux-shell",
+      "name": "qa-linux-shell: `enable --now` starts the fixed httpd"
+    },
+    {
+      "section": "qa-linux-shell",
+      "name": "qa-linux-shell: the service objective ticks from unit state (active + enabled)"
+    },
+    {
+      "section": "qa-linux-shell",
+      "name": "qa-linux-shell: curl reaches the local httpd"
+    },
+    {
+      "section": "qa-linux-shell",
+      "name": "qa-linux-shell: `ps aux --sort=-%cpu` shows the runaway process first"
+    },
+    {
+      "section": "qa-linux-shell",
+      "name": "qa-linux-shell: killing the process ticks the process objective"
+    },
+    {
+      "section": "qa-linux-shell",
+      "name": "qa-linux-shell: dnf install as student is refused"
+    },
+    {
+      "section": "qa-linux-shell",
+      "name": "qa-linux-shell: sudo dnf install -y"
+    },
+    {
+      "section": "qa-linux-shell",
+      "name": "qa-linux-shell: rpm -q agrees"
+    },
+    {
+      "section": "qa-linux-shell",
+      "name": "qa-linux-shell: a runtime-only firewall rule is not permanent"
+    },
+    {
+      "section": "qa-linux-shell",
+      "name": "qa-linux-shell: --permanent + --reload makes it permanent and runtime"
+    },
+    {
+      "section": "qa-linux-shell",
+      "name": "qa-linux-shell: rootless podman run -d -p"
+    },
+    {
+      "section": "qa-linux-shell",
+      "name": "qa-linux-shell: the container objective reads podman state"
+    },
+    {
+      "section": "qa-linux-shell",
+      "name": "qa-linux-shell: skopeo and podman agree on the image digest"
+    },
+    {
+      "section": "qa-linux-shell",
+      "name": "qa-linux-shell: shell lines are recorded as typed (bare whoami is not `oc whoami`)"
     },
     {
       "section": "draw",
@@ -9438,6 +10920,10 @@
     {
       "section": "shots",
       "name": "console: no uncaught page errors"
+    },
+    {
+      "section": "shots",
+      "name": "console: no unexpected console errors"
     },
     {
       "section": "shots",

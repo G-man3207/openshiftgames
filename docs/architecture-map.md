@@ -1168,6 +1168,15 @@ CONVERSION-SPEC §4.7.
 
 ## 6. Campaign and objectives
 
+> **1.16.0 update.** The campaign is now an optional Linux & RHEL Foundations prelude (chapter 0, ids
+> 101–107 in `js/data/LinuxLevels.js`, played on the simulated RHEL 9 workstation `js/engine/LinuxHost.js`
+>
+> - `js/ui/LinuxCommands.js`) plus 22 EX280 levels: ids 21 (Network Policies) and 22 (Nodes & Cluster
+>   Troubleshooting) sit before the capstone (id 20, displayed as Level 22). Level ids are stable save keys;
+>   order, unlocking, the Continue rule and display numbers come from the helpers in
+>   `js/data/CampaignLevels.js` — see `docs/CONVERSION-SPEC.md` §9 "Campaign structure, new levels and the
+>   Linux prelude (1.16.0)". The inventory below describes the original 20-level conversion target.
+
 ### 6.1 `CampaignLevels` schema (`js/data/CampaignLevels.js`)
 
 ```js

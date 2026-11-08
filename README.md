@@ -129,6 +129,19 @@ x --cert=missing.crt --key=missing.key` fails with the real
   `cat /etc/resolv.conf` inside a Pod prints the cluster DNS configuration
   (`search <project>.svc.cluster.local svc.cluster.local cluster.local`, `nameserver 172.30.0.10`,
   `options ndots:5`).
+- **A simulated RHEL 9 workstation** (`js/engine/LinuxHost.js` + `js/ui/LinuxCommands.js`) — the
+  terminal is `[student@workstation ~]$` on `workstation.lab.example.com` (RHEL 9.6, SELinux
+  enforcing, `student` in `wheel` with lab sudo). It models a filesystem with modes, owners,
+  SELinux contexts and symlinks (home and `/tmp` files stay the same files the Files panel and
+  `oc apply -f` use), users and groups, processes, systemd units with a journal (a unit can fail to
+  start until its config is fixed; httpd and sshd validate their real config files), dnf/rpm
+  packages, the network (`ip`, `ss`, `ping`, `/etc/hosts` before DNS, `dig`/`host` for the lab
+  cluster names), firewalld runtime vs `--permanent` and rootless podman. About 110 commands with
+  real RHEL output and exit codes: `cd`/`pwd` with a cwd every command honours, `ls -l` (with the
+  SELinux `.`), `cp -r`, `mv`, `rm -rf`, globbing and brace expansion, `find`, `tee`, `tar`,
+  `chmod`/`chown`/`sudo`/`id`, `getenforce`/`restorecon`/`ls -Z`, `ps`/`kill`/`top -b`,
+  `systemctl`/`journalctl`, `firewall-cmd`, `dnf`/`rpm`, `podman`, scripts with a shebang run by
+  name — and permission errors where RHEL gives them (`bash: /etc/hosts: Permission denied`).
 - **First-class OpenShift resources** — Project, Pod, Deployment, ReplicaSet, StatefulSet, DaemonSet,
   Job, CronJob, Service, Route, Ingress, NetworkPolicy, ConfigMap, Secret, PVC, PV, StorageClass,
   HPA, PDB, ResourceQuota, LimitRange, ClusterResourceQuota, ServiceAccount, Role, RoleBinding,
@@ -157,7 +170,8 @@ x --cert=missing.crt --key=missing.key` fails with the real
   The service-ca controller issues Service serving certificates
   (`service.beta.openshift.io/serving-cert-secret-name`) and injects CA bundles
   (`inject-cabundle`) for reencrypt Routes; a default-deny policy really blocks a project's Route
-  until an ingress NetworkPolicy admits the router namespace (the L20 capstone teaches the fix).
+  until an ingress NetworkPolicy admits the router namespace (the Network Policies level teaches the
+  fix and the capstone requires it).
   The platform namespaces are populated by real controllers like a real install: `openshift-ingress`
   runs `deployment.apps/router-default` (2/2 Ready) with its ReplicaSet and two shared-hash router
   pods, and `openshift-dns` runs the `daemonset.apps/dns-default` + `daemonset.apps/node-resolver`
@@ -268,11 +282,20 @@ Privileged containers are not allowed, …`).
 - **Monitoring & alerting** — `oc get prometheusrules -A`, `oc describe prometheusrule`, live
   `Alertmanager` state (`oc get|describe alertmanager -n openshift-monitoring`): the Watchdog alert
   always fires and cluster state (crash-looping or unready Pods) surfaces the matching alert rules.
-- **20-level EX280 campaign (5 chapters)** — Manage OpenShift → Declarative & Kustomize →
-  Deploy & Expose → Identity, RBAC & Self-service → Security & Operations, ending in a production
-  platform build whose capstone only completes once its scheduled incidents are resolved. The
-  capstone's node failure is fixed the real way: `oc debug node/<n>` → `chroot /host` →
-  `systemctl restart kubelet` (the incidents drawer action remains as a fallback). Grading follows
+- **22-level EX280 campaign (5 chapters) + an optional Linux & RHEL Foundations prelude** — the
+  prelude (levels 0.1–0.7) runs on a simulated RHEL 9 workstation; then Manage OpenShift →
+  Declarative & Kustomize → Deploy & Expose → Identity, RBAC & Self-service → Security & Operations,
+  which teaches NetworkPolicies (default-deny, the router allow, DNS egress) and node troubleshooting
+  (`oc adm top`, `oc describe node`, cordon/drain/uncordon, `oc debug node` → `chroot /host` →
+  `systemctl`/`journalctl`) before the production platform build (Level 22) whose capstone only
+  completes once its scheduled incidents are resolved. Nothing is used before it is taught: Level 12
+  configures a MetalLB operator the platform team already installed (Level 18 teaches OLM installs),
+  Level 4 teaches `--dry-run=client -o yaml > file` skeletons, and SCC admission details wait for
+  Level 17. Level ids are stable save keys — campaign order comes from the chapter table and the
+  numbers players see are positional — so inserting levels never moves anyone's progress (the
+  capstone keeps id 20 and is displayed as Level 22). The capstone's node failure is fixed the real
+  way: `oc debug node/<n>` → `chroot /host` → `systemctl restart kubelet` (the incidents drawer
+  action remains as a fallback). Grading follows
   state: L13's OAuth-referenced htpasswd Secret, the rotated password hash plus a successful login,
   L17's admitted privileged Pod and equivalent RBAC/SCC grants are credited (lab 7/8/11 too),
   PendingScheduling patches the Deployment template (the new ReplicaSet Pod stays Pending with a
@@ -324,7 +347,9 @@ Privileged containers are not allowed, …`).
 
 1. Pick a mode on the start page — **Campaign**, **Timed Labs**, **Sandbox**, **Chaos** — or open
    **EX280 Prep** for the objective tracker. The start page also maps each EX280 objective group to
-   the campaign level and timed lab that drills it.
+   the campaign level and timed lab that drills it. New to the Linux command line? The campaign
+   starts with the optional **Linux & RHEL Foundations** prelude (0.1–0.7); if you already live in a
+   RHEL shell, Level 1 is open from the start.
 2. Create resources from the left palette or with the `oc` terminal (`/`). The name prompt lets you
    match the objective name (e.g. `frontend`).
 3. Click a resource to inspect it (Overview / YAML / Describe / Events); right-click for actions.
@@ -364,21 +389,24 @@ The game is organised around the official EX280V422 objective groups. Campaign l
 tracker maps every bullet to its campaign levels, timed labs and quick labs. The table below is
 derived from that same data (9 objective groups, 55 bullets; _timed labs_ are the 13 challenge drills):
 
-| EX280V422 objective group                                                  | Where it is practiced                                                                                                                                                             | Levels                    | Timed labs          | Quick lab                                  |
-| -------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------- | ------------------- | ------------------------------------------ |
-| Manage OpenShift Container Platform (projects, `oc` CLI, querying, health) | Campaign ch. 1, Sandbox, `oc` terminal                                                                                                                                            | 1, 2, 3, 4, 9, 10, 15, 20 | 1, 2, 4, 5, 9, 12   | Projects & the oc CLI                      |
-| Declarative Resource Management (manifests, Kustomize, secrets/configmaps) | Files panel, `oc apply -f/-k`, `oc process`                                                                                                                                       | 4, 5, 6, 7, 10, 11        | 1, 3, 4, 10, 11, 12 | Kustomize prod overlay                     |
-| Deploy applications (templates, Helm, builds, rollouts, Services, Routes)  | Builds/ImageStream controllers, `oc new-app`, `oc start-build`, `oc rollout`                                                                                                      | 2, 8, 10, 11, 12          | 1, 3, 5, 9, 10, 12  | Route with edge TLS                        |
-| Manage authentication and authorization (HTPasswd, users, groups, RBAC)    | `oc login`, users/groups, `oc adm policy`, `oc auth can-i`                                                                                                                        | 13, 14, 16                | 7, 11, 12           | HTPasswd users & login                     |
-| Configure network security (Services, Routes, NetworkPolicy, TLS)          | Route admission, TLS edge/passthrough/reencrypt, service serving certs, default-deny + router-ingress NetworkPolicy                                                               | 3, 11, 12, 20             | 3, 8, 9, 10, 13     | Service serving cert → reencrypt Route     |
-| Expose non-HTTP/SNI Applications                                           | passthrough Routes, LoadBalancer services                                                                                                                                         | 12                        | 10                  | —                                          |
-| Enable developer self-service (quotas, LimitRanges, project templates)     | ResourceQuota/LimitRange/ClusterResourceQuota; project-request template flow (generate → edit → create in `openshift-config` → point `project.config.openshift.io/cluster` at it) | 8, 15, 20                 | 6, 12               | ResourceQuota + LimitRange                 |
-| Manage OpenShift operators (OLM)                                           | Subscription → CSV phases, operator effects, uninstall                                                                                                                            | 12, 18                    | 10                  | Install an operator                        |
-| Configure application security (SCCs, service accounts, jobs/cronjobs)     | SCC grants/denials, `oc set serviceaccount`, `oc debug`, Jobs/CronJobs                                                                                                            | 7, 16, 17, 19             | 3, 7, 8, 12         | Service account + SCC grant; Job + CronJob |
+| EX280V422 objective group                                                  | Where it is practiced                                                                                                                                                             | Levels                        | Timed labs          | Quick lab                                  |
+| -------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------- | ------------------- | ------------------------------------------ |
+| Manage OpenShift Container Platform (projects, `oc` CLI, querying, health) | Campaign ch. 1, Sandbox, `oc` terminal                                                                                                                                            | 1, 2, 3, 4, 9, 10, 15, 21, 22 | 1, 2, 4, 5, 9, 12   | Projects & the oc CLI                      |
+| Declarative Resource Management (manifests, Kustomize, secrets/configmaps) | Files panel, `oc apply -f/-k`, `oc process`                                                                                                                                       | 4, 5, 6, 7, 10, 11            | 1, 3, 4, 10, 11, 12 | Kustomize prod overlay                     |
+| Deploy applications (templates, Helm, builds, rollouts, Services, Routes)  | Builds/ImageStream controllers, `oc new-app`, `oc start-build`, `oc rollout`                                                                                                      | 2, 8, 10, 11, 12, 20          | 1, 3, 5, 9, 10, 12  | Route with edge TLS                        |
+| Manage authentication and authorization (HTPasswd, users, groups, RBAC)    | `oc login`, users/groups, `oc adm policy`, `oc auth can-i`                                                                                                                        | 13, 14, 16                    | 7, 11, 12           | HTPasswd users & login                     |
+| Configure network security (Services, Routes, NetworkPolicy, TLS)          | Route admission, TLS edge/passthrough/reencrypt, service serving certs, default-deny + router-ingress NetworkPolicy                                                               | 11, 12, 20, 22                | 3, 8, 9, 10, 13     | Service serving cert → reencrypt Route     |
+| Expose non-HTTP/SNI Applications                                           | passthrough Routes, LoadBalancer services                                                                                                                                         | 12                            | 10                  | —                                          |
+| Enable developer self-service (quotas, LimitRanges, project templates)     | ResourceQuota/LimitRange/ClusterResourceQuota; project-request template flow (generate → edit → create in `openshift-config` → point `project.config.openshift.io/cluster` at it) | 15, 22                        | 6, 12               | ResourceQuota + LimitRange                 |
+| Manage OpenShift operators (OLM)                                           | Subscription → CSV phases, operator effects, uninstall                                                                                                                            | 18                            | 10                  | Install an operator                        |
+| Configure application security (SCCs, service accounts, jobs/cronjobs)     | SCC grants/denials, `oc set serviceaccount`, `oc debug`, Jobs/CronJobs                                                                                                            | 7, 16, 17, 19, 22             | 3, 7, 8, 12         | Service account + SCC grant; Job + CronJob |
 
-Cross-cutting drills (not a separate V422 objective group): troubleshooting/operations content —
-logs, events, `oc adm top`, `oc adm cordon|drain`, Jobs/CronJobs — appears in levels 3, 19, 20 and
-timed labs 2, 6, 12, plus Chaos mode.
+Level numbers are the in-game display numbers (Level 20 is Network Policies, Level 21 Nodes &
+Cluster Troubleshooting, Level 22 the capstone). Cross-cutting drills (not a separate V422 objective
+group): troubleshooting/operations content — logs, events, `oc adm top`, `oc adm cordon|drain`,
+`oc debug node`, Jobs/CronJobs — appears in levels 3, 19, 21 and 22 and timed labs 2, 6, 12, plus
+Chaos mode. The Linux & RHEL Foundations prelude (0.1–0.7) drills the workstation skills these
+objectives assume.
 
 Official sources (verify against these before your exam):
 
@@ -512,6 +540,16 @@ The repo is a static site and deploys to any static host. The canonical demo is 
   diagnostics (`nslookup`/`dig`/`getent hosts`) and verbose `curl` use the engine's NetworkPolicy
   evaluation, and `oc exec`/`oc rsh` propagate remote exit statuses (unmodelled binaries terminate
   with exit code 127).
+- **RHEL workstation** — `js/engine/LinuxHost.js` is the workstation model (filesystem metadata
+  overlay on the ManifestEngine store, users, processes, systemd + journal, packages, network,
+  firewalld, SELinux, rootless podman) with `reset(seed)` for a level's `linuxHost` seed;
+  `js/ui/LinuxCommands.js` mixes its ~110 commands into ShellTools. One cwd-aware path resolver
+  serves the shell and `oc` file arguments, and the Linux objective types (`file`, `service`,
+  `process`, `package`, `firewall`, `container`, `selinux`, `linuxUser`, `cwd`, `env`, `ran`) read
+  host state in `js/engine/ObjectiveEvaluator.js`.
+- **Campaign structure** — `js/data/CampaignLevels.js` owns campaign order (`CHAPTERS`), unlocking
+  (`isLevelUnlocked`), the Continue rule (`continueLevelId`) and display numbers (`levelLabel`).
+  Level ids are stable save keys: never renumber a level; add a new id and place it in `CHAPTERS`.
 - **Declarative engine** — `js/engine/YamlParser.js` + `js/engine/ManifestEngine.js` provide a
   virtual file system, YAML manifests, Kustomize overlays, OpenShift templates, Helm charts and
   HTPasswd file operations; `js/ui/ManifestPanel.js` is the Files panel.
@@ -519,8 +557,9 @@ The repo is a static site and deploys to any static host. The canonical demo is 
   scroll reveals), HUD, Inspector, ContextMenu, Metrics, Settings, Incidents, Minimap, docked `oc`
   terminal and pause overlay; `index.html` wires the shell and the palette (generated from the
   registry); `draw.html` is the whiteboard.
-- **Data** — `js/data/CampaignLevels.js`, `js/data/IncidentDefs.js`, `js/data/Achievements.js`,
-  `js/data/EX280Objectives.js`, `js/data/ManifestFiles.js`.
+- **Data** — `js/data/CampaignLevels.js` (EX280 levels + campaign structure),
+  `js/data/LinuxLevels.js` (the Linux & RHEL Foundations prelude), `js/data/IncidentDefs.js`,
+  `js/data/Achievements.js`, `js/data/EX280Objectives.js`, `js/data/ManifestFiles.js`.
 
 Repo layout:
 
@@ -530,14 +569,14 @@ draw.html             OpenShift Draw whiteboard
 style.css             in-game design system and shell styling
 start.css             start page styling (dark editorial, one accent)
 img/start/            product captures used by the start page
-js/data/              kind registry, campaign levels, incidents, achievements, EX280 objectives,
-                      manifest files
+js/data/              kind registry, campaign levels (+ Linux prelude), incidents, achievements,
+                      EX280 objectives, manifest files
 js/engine/            GameEngine, ClusterState, SimulationTick, IncidentEngine, ScoringEngine,
-                      YamlParser, ManifestEngine, ObjectiveEvaluator, RBAC helpers
+                      YamlParser, ManifestEngine, ObjectiveEvaluator, RBAC helpers, LinuxHost
 js/resources/         ResourceBase + per-kind classes (OpenShift + legacy)
 js/rendering/         Three.js renderer, meshes, connection lines, particles, label layer
-js/ui/                CommandBar, ShellTools, HUD, Inspector, ContextMenu, Metrics, IncidentPanel,
-                      Minimap, Settings, ManifestPanel, StartMenu
+js/ui/                CommandBar, ShellTools, LinuxCommands, HUD, Inspector, ContextMenu, Metrics,
+                      IncidentPanel, Minimap, Settings, ManifestPanel, StartMenu
 js/modes/             CampaignMode, ChallengeMode, ChaosMode, SandboxMode, ExamPrepMode
 scripts/              verify / browser-test / visual-qa harnesses, local dev server, Knip entry mirror
 vercel.json           static hosting: /draw + versioned /v/ module rewrites, cache/bot headers

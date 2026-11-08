@@ -4,6 +4,175 @@ All notable changes to OpenShift Games are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 aims to follow [Semantic Versioning](https://semver.org/).
 
+## [1.16.0] — 2026-11-08
+
+Curriculum and correctness release. A review of the whole campaign found concepts used before they
+were taught: the capstone required a default-deny NetworkPolicy that still admits the router and an
+`oc debug node` → `chroot /host` → `systemctl restart kubelet` repair that no level taught, Level 12
+installed the MetalLB operator through OLM six levels before the Operators level, Level 1 explained SCC
+admission sixteen levels before SCCs, and the EX280 staple `--dry-run=client -o yaml > file` was never
+taught. 1.16.0 adds two EX280 levels before the capstone (**Network Policies** and **Nodes & Cluster
+Troubleshooting**), an optional seven-level **Linux & RHEL Foundations** prelude played on a simulated
+RHEL 9 workstation, reworks Levels 11 and 12, fixes every open grading finding and the open simulator
+fidelity findings, and closes the five checks that made the last full browser run NO-GO. Saved progress
+keeps its meaning: level ids are stable save keys, campaign order comes from the chapter table and
+display numbers are positional (the capstone keeps id 20 and is shown as Level 22). The game stays
+no-build and dependency-free. The version is bumped to 1.16.0 (`package.json` and both import maps)
+because module URLs are versioned (`/v/<version>/js/…`, cached as immutable).
+
+### Added
+
+- **Linux & RHEL Foundations prelude (chapter 0, levels 0.1–0.7).** Optional and never gating Level 1;
+  a new player's "Start campaign" opens 0.1 and 0.7 hands over to Level 1. Seven short, realistic tasks
+  on the lab workstation, each tied to OpenShift work: 0.1 The Shell & the Filesystem (organise an
+  `~/ex280` workspace), 0.2 Read, Search & Pipe Text (pull ERROR lines, counts and failing Pods out of a
+  saved `oc logs` file), 0.3 Edit Files & the Shell Environment (write and fix YAML, `sed`, heredocs,
+  `KUBE_EDITOR`, `$(…)`, quoting, a script with a shebang), 0.4 Users, Permissions & SELinux (take back a
+  root-owned `~/.kube/config`, `chmod 600`, `getenforce`, `restorecon`), 0.5 Processes, Services & Logs
+  (kill a runaway process, read a failed httpd's journal, fix it, start ≠ enable, `chronyd`), 0.6
+  Networking & the Firewall (routes, DNS for `*.apps`, a stale `/etc/hosts` entry that beats DNS,
+  firewalld runtime vs `--permanent`) and 0.7 Packages & Containers (install the missing OpenShift CLI
+  with `dnf`, rootless `podman`, logs, image digests with `skopeo`). Every objective is graded from workstation state and has an authored
+  how-to that the browser suite replays. New achievement: **Linux Foundations**.
+- **Simulated RHEL 9 workstation** (`js/engine/LinuxHost.js`, `js/ui/LinuxCommands.js`):
+  `[student@workstation ~]$` on RHEL 9.6 with SELinux enforcing; a filesystem with modes, owners,
+  SELinux contexts and symlinks (home and `/tmp` file contents stay in the Files-panel store, so
+  `oc apply -f` and the panel see the same files), users/groups, processes, systemd units with a journal
+  and config-validated failures (httpd/sshd, generic `failWhen` hooks), dnf/rpm, the network
+  (`/etc/hosts` before DNS, lab DNS for the cluster names), firewalld runtime/permanent and rootless
+  podman. About 110 commands with real RHEL output and exit codes, a shell cwd honoured by every command
+  (including `oc apply -f` relative paths), globbing/brace expansion and real permission errors. Lab
+  sudo is passwordless (the terminal cannot answer a password prompt). Level seeds (`levelDef.linuxHost`)
+  are applied by `CampaignMode.seedLinuxHost()`; host-state objective types `file`, `service`,
+  `process`, `package`, `firewall`, `container`, `selinux`, `linuxUser`, `cwd`, `env` and `ran`.
+- **Level 20 — Network Policies** (id 21, project `netpol-lab`): trace Route → router → Service → Pod,
+  deny all ingress, let the OpenShift router back in (`policy-group.network.openshift.io/ingress`),
+  deny egress but keep DNS on 5353, reopen exactly frontend → backend on 8080, with guards that keep
+  backend → frontend and frontend → internet blocked. Graded by real reachability, never by policy
+  names; the OpenShift docs policies ship in the Files panel under `netpol/`.
+- **Level 21 — Nodes & Cluster Troubleshooting** (id 22, project `node-lab`): `oc get nodes`,
+  `oc adm top`, `oc describe node`, ClusterOperators/ClusterVersion, cordon → drain → uncordon, and a
+  NodeNotReady incident fixed the real way (`oc debug node/worker-1` → `chroot /host` →
+  `systemctl status kubelet` / `journalctl -u kubelet` → `systemctl restart kubelet`). New `node`
+  objective type (ready / schedulable / drained / workloads available) with self-explaining notes.
+- **Campaign structure with stable ids.** `js/data/CampaignLevels.js` exports the order, unlock, Continue
+  and label helpers every launcher now uses (`CAMPAIGN_ORDER`, `EX280_ORDER`, `PRELUDE_ORDER`,
+  `isLevelUnlocked`, `continueLevelId`, `levelLabel`, …): a level unlocks when the previous level of its
+  own track is completed or it was completed before (an inserted level never re-locks finished work), and
+  "Continue" follows the track the player worked in most recently. The level select, start page, EX280
+  Prep chips, HUD, pause and intro cards, scoring, achievements and the post-campaign handover use them
+  instead of `id - 1`.
+- **Level 4** now teaches `oc create … --dry-run=client -o yaml > manifests/api.yaml` and applying the
+  generated manifest.
+- **Tests.** New browser sections `qa-campaign-structure`, `qa-linux-shell`, `qa-linux-levels`,
+  `qa-bridge-levels`, `qa-grading-1160` and `qa-sim-1160`; new static blocks §4l (Linux workstation),
+  §4m (grading), §4n (simulator), §5L (prelude levels) and §5B (bridge levels) in `scripts/verify.mjs`,
+  whose campaign checks were rewritten for the new structure (order, labels, unlock and Continue rules,
+  no `id - 1` unlocking left). `REPLAY_LEVELS=<ids>` limits the guidance replay while authoring; the
+  replay now lets 2 game-seconds pass before a level's first command (a first command could race the
+  seeded Deployment's first ReplicaSet on a loaded host) and loads the app before a targeted run; two
+  `qa-issue43` expectations now include the real `command terminated with exit code 28` line.
+
+### Changed
+
+- **Level 12** configures a MetalLB operator the platform team already installed (its OperatorGroup and
+  Subscription are seeded; the player verifies the CSV, then creates the MetalLB/IPAddressPool/
+  L2Advertisement operand, a LoadBalancer Service with `oc expose deployment … --type=LoadBalancer` and the
+  passthrough Route). Level 18 remains where OLM installs are taught.
+- **Level 11**: the openssl certificate and the `web-tls` Secret come first, and the edge Route must serve
+  that certificate (`oc create route edge web --service=web --cert=tls.crt --key=tls.key`).
+- **Curriculum order fixes:** SCC admission details (`restricted-v2`, `runAsUser: 0`) moved from L1/L3 to
+  L17 (L1/L3 keep the plain "root-expecting images crash" lesson); L8 explains the Service and Route its
+  template creates; L13 introduces `oc create user`; L14 explains `-z default`; L15's project-template
+  guardrail is a LimitRange (NetworkPolicies come later).
+- **EX280 mapping:** ids 21/22 added to their bullets, `ops-install` is Level 18 only, L3 is off
+  "Troubleshoot software defined networking" and L8 off "Configure project templates"; the cheat sheet
+  gained a Network policies group and node-maintenance commands.
+- **Mission card:** objective labels render `code`, and Linux commands in hints and how-tos become
+  "put in terminal" chips like `oc` commands. Prelude level numbers render as pills.
+- **Achievements and stats** derive their totals from the level data ("Campaign Graduate" counts the 22
+  EX280 levels, "Star Master" all campaign stars, chapters exclude the optional prelude).
+- `CampaignMode` only gives seeded application objects the default `app=<name>` label (a Node showed
+  `app=worker-0`).
+
+### Fixed
+
+- **Grading follows state everywhere** (every item from `docs/guidance-qa-findings.md` "Open — grading"):
+  - L9/L20 and labs 5/12: "Build … Complete" ticked when a Build was created (the BuildConfig counter);
+    now only a Build of that BuildConfig in phase Complete counts.
+  - Read-command objectives (L2, L3, L4, L9, L18, lab 2) matched typed text and ticked on empty output
+    or in the wrong project; an `inspect` read now counts only if it succeeded, ran in the lab project
+    (or `-A`) and printed something. The terminal records each command's output and project, and global
+    flags before the verb (`oc -n x get is`) match.
+  - L3: the Incidents panel had its own pre-execution matcher (failures counted); one matcher in
+    IncidentEngine now feeds the engine and the panel.
+  - L10: one `oc rollout undo` ticked update and rollback, and availability could never turn red; both
+    now read the Deployment's ReplicaSet history and availability is the api-server's own replicas.
+  - L11/lab 3 accepted any Secret named `web-tls` (now `kubernetes.io/tls`); the L12 Route port is checked.
+  - L13/lab 11: the `htpasswd` pattern matched the Secret command, and `oc create user` counted as a
+    login (a User now needs the Identity a real login creates).
+  - L14/L16/lab 11: any RoleBinding counted; it must grant the right role to the right subject.
+  - L15 objective 8 graded the typed `oc edit`; a new `projectRequestTemplate` type reads the config.
+  - L17/lab 8: a project-wide group SCC grant counted as "dedicated"; a grant that also reaches the
+    `default` ServiceAccount no longer does (the note offers the remove command).
+  - L18/lab 10: deleting the Subscription alone counted as an uninstall (the CSV must go too); a
+    re-created Subscription reused a stale InstallPlan — plans are now owned by their Subscription and
+    garbage-collected with it, so a pinned Manual install gets a fresh plan.
+  - L20: the Architecture Advisor objective was ticked at level start and the composite score after
+    14 of 18 objectives; both now score `prod-platform` only and the composite ticks last.
+  - Unticked objectives explain the new rules (read-wrong-project, read-showed-nothing,
+    build-not-complete, secret-wrong-type, rolebinding-wrong-grant, scc-over-broad, operator-csv-left,
+    user-not-logged-in, exam-score-gated).
+- **Last full run's NO-GO checks:** `KubePodCrashLooping` blinked off for one tick at every kubelet
+  restart (the real rule is `max_over_time(…[5m])`; the coverage test also used a pullable image); the #51
+  checks sampled a new-revision Pod on its unscheduled first tick (bounded wait); a stalled CDN download
+  timed out a cold isolated page (one retry, logged); the GitHub-stars fetch now runs only on
+  `shifting.pro` (no CORS console error elsewhere).
+- **Simulator fidelity** (every "Open — simulator fidelity" item but the ones listed as open in
+  `docs/guidance-qa-findings.md`):
+  - `oc describe`/`exec`/`rsh` no longer fall back to another project's object; `-n` that disagrees with a
+    manifest's namespace gives kubectl's mismatch error (`apply|create|replace|delete -f`/`-k`);
+    `oc new-app -f|--template` honours `-n`.
+  - After `oc logout` API calls run as `system:anonymous` and get the real Forbidden; `logout`, `whoami`,
+    `whoami -t`, `project` and `version` print the real logged-out output; `oc login --token` accepts
+    only tokens the cluster issued.
+  - `oc create` requires `--image`/`--schedule` like real `oc`; forms real `oc` lacks (`create service
+web`, `create subscription|networkpolicy|group|pod`) fail with its errors; a missing `--from-file` is
+    an error; `"approved":"true"` (a string) is rejected by InstallPlan validation; `oc new-app <builder>
+<repo>` builds the repo with that builder and a re-run fails with `already exists`.
+  - Added glued `-owide`/`-oyaml`, `oc logs -l` (+`--prefix`/`--tail`/`--all-containers`),
+    `helm upgrade --install`, JSONPath filters/slices/unions; `oc new-app --template` ticks L8.
+  - Controllers create ReplicaSets/Pods/Jobs with their ownerReferences (no "YOU CREATED Pod" toast for
+    an incident's Pod); `oc describe oauth` uses the real layout; `oc debug node` shows `sh-5.1#` and
+    how to leave; `oc edit` says the run is paused while the Files panel is open.
+  - `oc rollout undo` on a single revision errors like real `oc`; `oc adm drain` follows kubectl 1.35
+    (DaemonSet/emptyDir/`--force` filters), cordon is the unschedulable taint, `alertmanager-main-N` is
+    StatefulSet-owned; `oc adm top pods -A`; `oc exec … curl` exit codes; `oc describe networkpolicy`
+    layout; a Subscription's `spec.name` is its package; the router answers with OpenShift's real
+    "Application is not available" 503 page.
+- **DaemonSet pods vs taints:** an untolerated NoSchedule taint deleted a node's running
+  `dns-default`/`node-resolver` pods (and they were recreated on untaint). Like Kubernetes'
+  `NodeShouldRunDaemonPod`, NoSchedule now only blocks new daemon pods — the running one stays and is
+  reported in `numberMisscheduled`; only a selector mismatch or an untolerated NoExecute taint removes it.
+  This was also the cause of the intermittent `#58` "no platform churn" failure.
+- **"Pod Rookie" unlocked at level start:** platform DaemonSet Pods of a level's seeded Nodes were counted
+  as the player's Pods; controller-owned and platform-namespace Pods no longer count.
+- **Achievements panel** printed the icon key ("trophy", "graduation") as text above every achievement;
+  it now shows a star glyph like the unlock toast.
+- **Terminal:** Tab completion replaced the whole input line with a deep path (it now completes the
+  current word, one path segment at a time); `$USER` was the OpenShift user instead of the Linux user
+  `student`; a bare shell command such as `cp` was recorded as `oc cp` (so `command` objectives and EX280
+  evidence for `htpasswd …` never matched) and was RBAC-checked like an `oc` command.
+- **Targeted guidance replay** (`--only=qa-guidance-replay`) failed on `about:blank` before loading the app.
+
+### Known gaps
+
+- Still open, with notes in `docs/guidance-qa-findings.md`: Pods on a NotReady node stay Ready (no
+  eviction), MetalLB withholds an address until an L2Advertisement exists (real MetalLB assigns it and only
+  announces it later), the FROM column of `oc get bc|builds`, client dry runs that print server defaults,
+  and Chaos mode can aim a CronJob incident at a Pod. `vim FILE` opens the Files panel editor rather than
+  an in-terminal vim, and lab `sudo` never prompts for a password.
+
 ## [1.15.0] — 2026-11-07
 
 Player-guidance pass after a live play-test: a learner got stuck on campaign level 7 or 8 and found the

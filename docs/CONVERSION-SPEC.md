@@ -1088,7 +1088,7 @@ Route/Build/Subscription names.
 
 ---
 
-## 9. Campaign curriculum — 20 levels, 5 chapters (js/data/CampaignLevels.js + CampaignMode.js)
+## 9. Campaign curriculum — 22 EX280 levels in 5 chapters + a 7-level Linux prelude (js/data/CampaignLevels.js + CampaignMode.js)
 
 Schema per level:
 
@@ -1250,6 +1250,33 @@ project-scoped and every level starts in `default`). Levels therefore carry opti
   `workProject` must be `null` or a seeded Project); the `qa-guidance` browser section covers the UI and the
   notes; `qa-guidance-replay` runs every authored `how.run` in a real browser and requires each level to
   complete.
+
+### Campaign structure, new levels and the Linux prelude (1.16.0)
+
+The chapter/level table above is the 1.0 curriculum; 1.16.0 extends it without renumbering anything.
+
+- **Ids are save keys, order is data.** Player progress is stored per level id, so ids 1–20 keep their
+  meaning forever. `CHAPTERS` in `js/data/CampaignLevels.js` defines campaign ORDER; `CAMPAIGN_LEVELS` is
+  sorted by it. Helpers: `CAMPAIGN_ORDER`, `EX280_ORDER`, `PRELUDE_ORDER`, `getCampaignLevel(id)`,
+  `previousLevelId(id)`, `isLevelUnlocked(id, progress)` (previous level of the same track completed, or
+  the level itself completed — an inserted level never re-locks finished work), `continueLevelId(progress)`
+  (new player → first prelude level; otherwise the track completed in most recently), `isCampaignComplete`,
+  `levelLabel(id)` / `levelOrdinal(id)` (positional display numbers). Never use `id - 1` or `id` as a
+  position; `scripts/verify.mjs` locks this.
+- **Chapters:** 0 Linux & RHEL Foundations (prelude, `prelude: true`, ids 101–107, labels 0.1–0.7, optional:
+  never gates Level 1; 107 → 1), 1 Manage OpenShift [1–4], 2 Declarative & Kustomize [5–8], 3 Deploy &
+  Expose [9–12], 4 Identity, RBAC & Self-service [13–16], 5 Security & Operations [17, 18, 19, 21, 22, 20]
+  — id 21 Network Policies (Level 20), id 22 Nodes & Cluster Troubleshooting (Level 21), id 20 the capstone
+  (Level 22). `19 → 21 → 22 → 20`.
+- **Prelude levels** live in `js/data/LinuxLevels.js`, run on the simulated RHEL 9 workstation
+  (`js/engine/LinuxHost.js`, seeded per level from `levelDef.linuxHost` by `CampaignMode.seedLinuxHost`
+  after the Files panel reset) and are graded by host-state objective types (`file`, `service`, `process`,
+  `package`, `firewall`, `container`, `selinux`, `linuxUser`, `cwd`, `env`, `ran`). They may have empty
+  `examObjectives`, link the RHEL docs and use bare workstation commands in their how-tos.
+- **Curriculum rule:** a level may not require a concept a later level teaches. 1.16.0 fixed the known
+  violations: L12 configures a pre-installed MetalLB operator (L18 teaches OLM installs), the capstone's
+  NetworkPolicy and `oc debug node` repair are taught in ids 21/22, SCC admission details moved from L1/L3
+  to L17, L4 teaches `--dry-run=client -o yaml > file`, the L15 project-template guardrail is a LimitRange.
 
 ---
 
