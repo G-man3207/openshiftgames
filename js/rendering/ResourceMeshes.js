@@ -4,7 +4,7 @@ import { RESOURCE_KINDS, normalizeKind } from '../data/kindRegistry.js';
 import { visualStatusFor } from './ResourceStatus.js';
 
 /**
- * Kind → 3D model registry for OpenShift Games — "instrument diorama" language.
+ * Kind → 3D model registry for shifting.pro — "instrument diorama" language.
  *
  * ART DIRECTION (see ClusterRenderer.js header for the full document)
  * ----------------------------------------------------------------

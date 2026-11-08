@@ -1,19 +1,19 @@
-# EX280V422 Practical Study Guide — Commands, One-Screen Labs, and Game Mapping
+# EX280V422 Practical Study Guide - Commands, One-Screen Labs, and Game Mapping
 
 **Verified 2026-11-03** against OpenShift Container Platform **4.22** docs and the official EX280V422 objectives. Companion to `ex280-objectives.md`; machine-readable data in `exam-facts.json`.
 
-- Exam: **EX280V422 — Red Hat Certified Specialist in OpenShift Administration** (redhat.com page still says "Red Hat Certified System Administrator in OpenShift"), **3.0 h**, performance-based, based on **OCP 4.22**, configs must persist across reboot.
+- Exam: **EX280V422 - Red Hat Certified Specialist in OpenShift Administration** (redhat.com page still says "Red Hat Certified System Administrator in OpenShift"), **3.0 h**, performance-based, based on **OCP 4.22**, configs must persist across reboot.
 - Official objectives: <https://www.redhat.com/en/services/training/red-hat-certified-openshift-administrator-exam> (accessed 2026-11-03)
 - Objectives-by-version PDF (`EX280V422`): <https://training-lms.redhat.com/public_content/redhat/training/Red%20Hat%20Certification%20Exam%20Objectives%20by%20Version.pdf> (accessed 2026-11-03)
 - Product docs base: <https://docs.redhat.com/en/documentation/openshift_container_platform/4.22>
 
-Verification legend: commands without a marker come from OCP 4.22 documentation modules (openshift-docs branch `enterprise-4.22`) and docs pages were fetched HTTP 200 on 2026-11-03. Commands marked **†** are standard Kubernetes/`oc` patterns that did not appear verbatim in the fetched 4.22 doc modules — they are safe, but the game should not claim them as doc-verified.
+Verification legend: commands without a marker come from OCP 4.22 documentation modules (openshift-docs branch `enterprise-4.22`) and docs pages were fetched HTTP 200 on 2026-11-03. Commands marked **†** are standard Kubernetes/`oc` patterns that did not appear verbatim in the fetched 4.22 doc modules - they are safe, but the game should not claim them as doc-verified.
 
 ---
 
 ## 1. How this guide maps to the game
 
-The game target (internal design, see `docs/CONVERSION-SPEC.md` §9–11) is 20 campaign levels in 5 chapters, 13 challenges, and an EX280 Prep mode that tracks all 9 groups / 55 bullets with `docsUrl` links. Current repository data already provides the real sandbox scenarios: the shipped **20 OpenShift campaign levels**, **13 timed challenge labs**, and **36 incident definitions** in `js/data/IncidentDefs.js` (e.g. `CrashLoopBackOff`, `ImagePullBackOff`, `ResourceQuotaExceeded`, `LoadBalancerPending`, `RouteTLSCertificateError`, `UnauthorizedAccess`, `NetworkPolicyBlocking`, `RouteNotAdmitted`, `SecretExposed`, `JobDeadlineExceeded`, `CronJobMissedSchedule`; pre-conversion names such as `CertificateExpiry` and `IngressMisconfigured` still resolve through `LEGACY_INCIDENT_ALIASES`).
+The game target (internal design, see `docs/CONVERSION-SPEC.md` §9-11) is 20 campaign levels in 5 chapters, 13 challenges, and an EX280 Prep mode that tracks all 9 groups / 55 bullets with `docsUrl` links. Current repository data already provides the real sandbox scenarios: the shipped **20 OpenShift campaign levels**, **13 timed challenge labs**, and **36 incident definitions** in `js/data/IncidentDefs.js` (e.g. `CrashLoopBackOff`, `ImagePullBackOff`, `ResourceQuotaExceeded`, `LoadBalancerPending`, `RouteTLSCertificateError`, `UnauthorizedAccess`, `NetworkPolicyBlocking`, `RouteNotAdmitted`, `SecretExposed`, `JobDeadlineExceeded`, `CronJobMissedSchedule`; pre-conversion names such as `CertificateExpiry` and `IngressMisconfigured` still resolve through `LEGACY_INCIDENT_ALIASES`).
 
 | EX280V422 group                         | Campaign levels                                                                                            | Timed labs                                                          | Useful incidents / game concepts                                                                       |
 | --------------------------------------- | ---------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
@@ -37,16 +37,16 @@ The game target (internal design, see `docs/CONVERSION-SPEC.md` §9–11) is 20 
 
 | Session | Focus                                                                                                   | Game content                                                      |
 | ------- | ------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------- |
-| 1       | CLI, projects, web console, querying/formatting/filtering                                               | Levels 1–2                                                        |
+| 1       | CLI, projects, web console, querying/formatting/filtering                                               | Levels 1-2                                                        |
 | 2       | Logs, events, cluster health, troubleshooting workflow                                                  | Level 3; Fix CrashLoopBackOff challenge                           |
 | 3       | Manifests, apply/update, export/import, labels/selectors, rollouts/rollbacks                            | Levels 4, 10; EX280 Speed Run (segment)                           |
 | 4       | Secrets & ConfigMaps; consuming them via env/volumes                                                    | Level 7                                                           |
-| 5       | Kustomize base + overlays                                                                               | Levels 5–6; Kustomize Prod Overlay challenge                      |
+| 5       | Kustomize base + overlays                                                                               | Levels 5-6; Kustomize Prod Overlay challenge                      |
 | 6       | Templates (parameters, process/apply) and Helm charts                                                   | Level 8                                                           |
 | 7       | Images, ImageStreams, tags/digests, builds, triggers                                                    | Level 9; Build & Deploy from Source challenge                     |
-| 8       | Services, routes, TLS edge/passthrough/reencrypt, route admission, non-HTTP LB/NodePort                 | Levels 11–12; Route with Edge TLS challenge                       |
-| 9       | HTPasswd provider, users, groups, passwords, RBAC                                                       | Levels 13–14; HTPasswd Onboarding + RBAC challenges               |
-| 10      | SCCs, privileged apps, service accounts, Kubernetes API access                                          | Levels 16–17; SCC for a Privileged Workload challenge             |
+| 8       | Services, routes, TLS edge/passthrough/reencrypt, route admission, non-HTTP LB/NodePort                 | Levels 11-12; Route with Edge TLS challenge                       |
+| 9       | HTPasswd provider, users, groups, passwords, RBAC                                                       | Levels 13-14; HTPasswd Onboarding + RBAC challenges               |
+| 10      | SCCs, privileged apps, service accounts, Kubernetes API access                                          | Levels 16-17; SCC for a Privileged Workload challenge             |
 | 11      | ClusterResourceQuota/ResourceQuota/LimitRange/project templates/self-service; jobs + cronjobs           | Levels 15, 19, 20; Quota Guardrail + Network Isolation challenges |
 | 12      | Operators; full timed mock (project→quota→template→build→route TLS→networkpolicy→RBAC→SCC→operator→job) | Level 20; EX280 Speed Run                                         |
 
@@ -272,7 +272,7 @@ spec:
           port: 8080
 ```
 
-Allow ingress-controller traffic (verified label key in docs project-template example uses `policy-group.network.openshift.io/ingress`; older label is `network.openshift.io/policy-group: ingress` — check the exact label for your cluster with `oc get ns openshift-ingress --show-labels` **†** and do not hand-apply reserved labels to custom namespaces):
+Allow ingress-controller traffic (verified label key in docs project-template example uses `policy-group.network.openshift.io/ingress`; older label is `network.openshift.io/policy-group: ingress` - check the exact label for your cluster with `oc get ns openshift-ingress --show-labels` **†** and do not hand-apply reserved labels to custom namespaces):
 
 ```yaml
 kind: NetworkPolicy
@@ -289,7 +289,7 @@ spec:
               policy-group.network.openshift.io/ingress: ''
 ```
 
-DNS egress after default-deny (common OVN-K pattern; the DNS namespaces are `openshift-dns`/`openshift-dns-operator`, docs describe their own deny-by-default policies — this policy shape is a convention †):
+DNS egress after default-deny (common OVN-K pattern; the DNS namespaces are `openshift-dns`/`openshift-dns-operator`, docs describe their own deny-by-default policies - this policy shape is a convention †):
 
 ```yaml
 kind: NetworkPolicy
@@ -313,7 +313,7 @@ spec:
 
 **One-screen lab.** Isolate project `backend` with default-deny, allow only `frontend` pods to reach it on port 8080, allow its own DNS egress, prove with in-cluster `curl`/`wget` from both namespaces, then expose a service with an edge TLS route and verify the route is Admitted and serves HTTPS.
 
-**Common traps.** Applying default-deny without DNS egress breaks resolution ("name resolution fails" after an isolation change); `namespaceSelector` matches namespace labels (use `kubernetes.io/metadata.name` for a named namespace); NetworkPolicy is additive only; passthrough routes cannot use path-based routing; edge routes need cert+key, reencrypt needs `destinationCACertificate`; `oc expose svc` creates an unsecured route (or uses a default cert only if cluster config says so) — secure routes need `oc create route`.
+**Common traps.** Applying default-deny without DNS egress breaks resolution ("name resolution fails" after an isolation change); `namespaceSelector` matches namespace labels (use `kubernetes.io/metadata.name` for a named namespace); NetworkPolicy is additive only; passthrough routes cannot use path-based routing; edge routes need cert+key, reencrypt needs `destinationCACertificate`; `oc expose svc` creates an unsecured route (or uses a default cert only if cluster config says so) - secure routes need `oc create route`.
 
 **Docs:** Network security <https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/network_security/index> · Network policy <https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/network_security/network-policy> · Routes <https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/ingress_and_load_balancing/routes>
 
@@ -347,7 +347,7 @@ spec:
 
 **One-screen lab.** Expose a non-HTTP TCP service two ways: NodePort, then LoadBalancer. On a bare-metal cluster, install MetalLB via the OperatorHub/Subscription route first so `LoadBalancer` gets an EXTERNAL-IP; verify with `oc get svc -o wide` and connect from outside the cluster. Also expose a TLS server with a passthrough route and confirm the client sees the backend certificate.
 
-**Common traps.** Routes only handle HTTP/HTTPS/SNI — TCP/UDP needs NodePort/LoadBalancer/ExternalIP; NodePort range 30000–32767; `oc expose svc` is the wrong tool for non-HTTP; MetalLB is required for LoadBalancer on on-prem/bare metal; source-range restrictions may need the IngressController's allowed source ranges rather than `loadBalancerSourceRanges` (docs note).
+**Common traps.** Routes only handle HTTP/HTTPS/SNI - TCP/UDP needs NodePort/LoadBalancer/ExternalIP; NodePort range 30000-32767; `oc expose svc` is the wrong tool for non-HTTP; MetalLB is required for LoadBalancer on on-prem/bare metal; source-range restrictions may need the IngressController's allowed source ranges rather than `loadBalancerSourceRanges` (docs note).
 
 **Docs:** Ingress and load balancing <https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/ingress_and_load_balancing/index> · Operators <https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/operators/index>
 
@@ -390,7 +390,7 @@ spec:
 
 **One-screen lab.** Cap a project with a compute ResourceQuota, deploy above the quota and read the admission error, then add a LimitRange so pods get default requests/limits automatically. Create a ClusterResourceQuota for all projects with a label, then generate a custom project template (`oc adm create-bootstrap-project-template -o yaml`), add a NetworkPolicy object, create it in `openshift-config`, wire it through `project.config.openshift.io/cluster` and prove a new project inherits it. Finally disable self-provisioning and confirm `oc new-project` is denied for a normal user.
 
-**Common traps.** Once a compute quota exists, pods must set requests/limits (or a LimitRange default must supply them); quota admission errors mention the exceeded resource; scopes (`BestEffort`, `NotTerminating`, `Terminating`) matter; ClusterResourceQuota is cluster-scoped and selected by project labels/annotations; a fresh 4.22 cluster has no stored project template — generate one with `oc adm create-bootstrap-project-template`, create it in `openshift-config`, and point `project.config.openshift.io/cluster` at it (`spec.projectRequestTemplate.name`); self-provisioner role binding is protected — patch the binding annotation before removing subjects.
+**Common traps.** Once a compute quota exists, pods must set requests/limits (or a LimitRange default must supply them); quota admission errors mention the exceeded resource; scopes (`BestEffort`, `NotTerminating`, `Terminating`) matter; ClusterResourceQuota is cluster-scoped and selected by project labels/annotations; a fresh 4.22 cluster has no stored project template - generate one with `oc adm create-bootstrap-project-template`, create it in `openshift-config`, and point `project.config.openshift.io/cluster` at it (`spec.projectRequestTemplate.name`); self-provisioner role binding is protected - patch the binding annotation before removing subjects.
 
 **Docs:** Using quotas and limit ranges <https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/scalability_and_performance/compute-resource-quotas> · Building applications <https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/building_applications/index>
 
@@ -541,7 +541,7 @@ spec:
 
 **One-screen lab.** Create SA `robot`, bind a `view` Role, create a token, use it against the API (`oc auth can-i` / `curl -H "Authorization: Bearer …"`), then deploy an app that needs root: observe the `Forbidden … security context constraint` error, grant an appropriate SCC (`anyuid`/custom), verify the pod's `openshift.io/scc` annotation, and clean up by removing the SCC from the SA (or deleting the SA). Finish by running a one-time Job and a CronJob and proving Job completion.
 
-**Common traps.** `privileged: true` only works if an SCC allows it — grant to the workload's service account, not `default`, when possible; do not edit default SCCs (upgrade overwrites); `restricted-v2` is granted to all authenticated users; adding a securityContext that violates the SCC gives admission failures, not image errors; long-lived SA token Secrets no longer auto-created since 4.16 — use `oc create token`/projected tokens; Jobs need `restartPolicy: Never|OnFailure`; a Job with `activeDeadlineSeconds` that fires gets failed; CronJob `startingDeadlineSeconds`/`suspend`/history limits are common edits.
+**Common traps.** `privileged: true` only works if an SCC allows it - grant to the workload's service account, not `default`, when possible; do not edit default SCCs (upgrade overwrites); `restricted-v2` is granted to all authenticated users; adding a securityContext that violates the SCC gives admission failures, not image errors; long-lived SA token Secrets no longer auto-created since 4.16 - use `oc create token`/projected tokens; Jobs need `restartPolicy: Never|OnFailure`; a Job with `activeDeadlineSeconds` that fires gets failed; CronJob `startingDeadlineSeconds`/`suspend`/history limits are common edits.
 
 **Docs:** Authentication and authorization (SCC, service accounts) <https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/authentication_and_authorization/index> · Service accounts <https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/authentication_and_authorization/understanding-and-creating-service-accounts> · Nodes (jobs/cronjobs) <https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/nodes/index>
 
@@ -640,11 +640,11 @@ spec:
 
 ## 6. Not on EX280V422 (don't over-invest)
 
-- **Storage deep dive** (PV/PVC lifecycle, storage classes, CSI details, StatefulSets as a study section) — removed as an explicit objective vs V412K. Keep only what manifests need (e.g. a PVC referenced by a template, a ConfigMap/Secret volume).
-- **Reliability deep dive** (standalone health probes, HPA, compute limits as their own section) — removed as an explicit section vs V412K; probes/requests may still appear inside manifests.
-- **Cluster updates** (OCP upgrade, deprecated-API audit, operator updates) — removed from V422; DO280's older chapter on updates is not an exam objective.
-- **Building custom S2I builder images, Jenkins, Pipelines, GitOps** — not in the objective text; do not prioritize.
-- **Advanced ingress**: router sharding, HSTS policies, gateway API, MetalLB BGP/VRF — beyond the objective wording; know only the basics needed for "load balancer service" and "external application access".
+- **Storage deep dive** (PV/PVC lifecycle, storage classes, CSI details, StatefulSets as a study section) - removed as an explicit objective vs V412K. Keep only what manifests need (e.g. a PVC referenced by a template, a ConfigMap/Secret volume).
+- **Reliability deep dive** (standalone health probes, HPA, compute limits as their own section) - removed as an explicit section vs V412K; probes/requests may still appear inside manifests.
+- **Cluster updates** (OCP upgrade, deprecated-API audit, operator updates) - removed from V422; DO280's older chapter on updates is not an exam objective.
+- **Building custom S2I builder images, Jenkins, Pipelines, GitOps** - not in the objective text; do not prioritize.
+- **Advanced ingress**: router sharding, HSTS policies, gateway API, MetalLB BGP/VRF - beyond the objective wording; know only the basics needed for "load balancer service" and "external application access".
 
 ---
 
@@ -652,6 +652,6 @@ spec:
 
 - All docs links above were fetched 2026-11-03; guide index pages and the specific chapter pages linked in the table returned HTTP 200. Some deeper topics link the guide index rather than a chapter because published chapter slugs are not always the source filename.
 - Commands marked **†** are standard `oc`/`kubectl` patterns not found verbatim in the fetched OCP 4.22 modules; they are safe to teach but the game's "verified from docs" claim should exclude them.
-- Passing score/validity: not published on the exam page; program guide could not be extracted — see `exam-facts.json.scoring_and_validity`.
+- Passing score/validity: not published on the exam page; program guide could not be extracted - see `exam-facts.json.scoring_and_validity`.
 - Current official DO280 outline could not be fetched (redhat.com DO280 page 404, 2026-11-03); partner outline (OCP 4.14-based) was used only as a sanity check and is flagged as stale.
 - The game mapping table is based on the internal `docs/CONVERSION-SPEC.md` curriculum contract, not an external source; if the Lead changes level/challenge IDs, only that table needs updating.

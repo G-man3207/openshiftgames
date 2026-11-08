@@ -1,4 +1,4 @@
-# Declarative engine — manifests, Kustomize, Helm, templates & HTPasswd
+# Declarative engine - manifests, Kustomize, Helm, templates & HTPasswd
 
 Status: implemented for the OpenShift 4.22 / EX280V422 conversion.
 Owner (write scope): **manifests-dev**.
@@ -103,8 +103,8 @@ import {
 
 | Export           | Signature                                  | Returns                                                                   |
 | ---------------- | ------------------------------------------ | ------------------------------------------------------------------------- |
-| `parseYaml`      | `(text, {file?} = {})`                     | `Array<object>` — one entry per non-empty `---` document                  |
-| `parseDocument`  | `(text, {file?} = {})`                     | `object                                                                   | null` — first document (`null` when empty) |
+| `parseYaml`      | `(text, {file?} = {})`                     | `Array<object>` - one entry per non-empty `---` document                  |
+| `parseDocument`  | `(text, {file?} = {})`                     | `object                                                                   | null` - first document (`null` when empty) |
 | `parseYamlSafe`  | `(text, {file?} = {})`                     | `{ok: boolean, docs: object[], errors: [{line, message, file?}]}`         |
 | `stringifyYaml`  | `(value)`                                  | `string` (single YAML document, trailing newline)                         |
 | `toYamlError`    | `(err)`                                    | `{line, message, file?}`                                                  |
@@ -230,7 +230,7 @@ engine.applyTemplate(path, { APP_NAME: 'web' });
 // processTemplate() + applyObjects() in one call (returns the apply result + objects/message).
 ```
 
-### 4.3 `oc apply -k` — Kustomize
+### 4.3 `oc apply -k` - Kustomize
 
 ```js
 engine.applyKustomize('kustomize/overlays/prod');
@@ -262,7 +262,7 @@ Missing kustomization directory/file:
 JSON6902 patches, `configMapGenerator`/`secretGenerator`, `replacements`, `components`, remote bases
 and `patchesJson6902` are not implemented.
 
-### 4.4 OpenShift templates — `oc process`
+### 4.4 OpenShift templates - `oc process`
 
 ```js
 const t = engine.processTemplate('templates/webapp-template.yaml', {
@@ -487,7 +487,7 @@ a clean declarative objective history (the cluster is reset separately by the mo
 Environment: Node v26.10.0, Chrome (puppeteer-core from `/tmp/verify-tools`). Test scripts live in
 `/tmp` (not committed; the repo stays dependency-free).
 
-1. **Syntax** — `node --input-type=module --check` for each file:
+1. **Syntax** - `node --input-type=module --check` for each file:
 
    ```
    js/engine/YamlParser.js     OK
@@ -496,7 +496,7 @@ Environment: Node v26.10.0, Chrome (puppeteer-core from `/tmp/verify-tools`). Te
    js/data/ManifestFiles.js    OK
    ```
 
-2. **Parser self-test** — `YamlParser.selfTest()`:
+2. **Parser self-test** - `YamlParser.selfTest()`:
 
    ```json
    { "ok": true, "failures": [] }
@@ -507,7 +507,7 @@ Environment: Node v26.10.0, Chrome (puppeteer-core from `/tmp/verify-tools`). Te
    stringify round-trips (maps, sequences, tricky strings, multi-doc), realistic Deployment, root
    scalars, empty collections.
 
-3. **Model flow harness** — `/tmp/declarative-test.mjs` with a stubbed `window.game`
+3. **Model flow harness** - `/tmp/declarative-test.mjs` with a stubbed `window.game`
    (fake `ClusterState`, event recorder): **75 assertions, 0 failures**. Covers:
    every default file parses · file tree shape · apply deployment (create/update) · invalid YAML
    rejected without cluster changes (line 5 reported) · missing file · Service/Route apply · delete -f
@@ -520,14 +520,14 @@ Environment: Node v26.10.0, Chrome (puppeteer-core from `/tmp/verify-tools`). Te
    `gameEngine.applyManifestObject` path (create + update) · `resetFiles` · `deepMerge` list
    replacement · embedded parser self-test.
 
-4. **Real CommandBar integration harness** — `/tmp/cli-integration-test.mjs` imports the actual
+4. **Real CommandBar integration harness** - `/tmp/cli-integration-test.mjs` imports the actual
    `js/ui/CommandBar.js` from cli-dev and drives its delegated helpers: **23 assertions, 0 failures**:
    `oc apply -f` create/update, invalid YAML error surfaced through `result.error`, `oc apply -k`,
    `oc process`, `oc process | oc apply -f -` (template marked applied, event emitted), missing
    required template parameter, `oc delete -f` (NotFound + success), Helm install/list/uninstall
    error strings, HTPasswd add/list/verify/duplicate error.
 
-5. **Browser panel harness** — `/tmp/panel-browser-test.mjs` (headless Chrome, module served from a
+5. **Browser panel harness** - `/tmp/panel-browser-test.mjs` (headless Chrome, module served from a
    temporary static server): **28 assertions, 0 failures**, no console/page errors:
    module loads without DOM at import, `init()` creates globals/testids, hidden initially, 19 files in
    the tree, default file selected, `show()` opens the overlay, `setContext` focus+highlight,
@@ -537,7 +537,7 @@ Environment: Node v26.10.0, Chrome (puppeteer-core from `/tmp/verify-tools`). Te
    reports the YAML line, Reset restores saved content, `show(resource)` opens
    `.oc/edit-deployment-webapp.yaml` and applies it, Esc closes, `destroy()` removes DOM/globals.
 
-6. **Default-file round-trip** — all 18 YAML files in `MANIFEST_FILES`:
+6. **Default-file round-trip** - all 18 YAML files in `MANIFEST_FILES`:
    `parse → stringifyYaml → parse` is deep-equal, and all parse without warnings.
 
 7. **Real `index.html` smoke test** (headless Chrome, `app.showFiles()`): Files panel becomes visible
@@ -570,7 +570,7 @@ Environment: Node v26.10.0, Chrome (puppeteer-core from `/tmp/verify-tools`). Te
   `namespaces "x" not found`; levels can disable this with
   `new ManifestEngine(game, {autoCreateProjects: false})`.
 - No API-server validation of selectors, immutable fields, quota admission, SCC, or RBAC for
-  declarative applies — those belong to the simulation/engine layers. Kind/apiVersion are validated
+  declarative applies - those belong to the simulation/engine layers. Kind/apiVersion are validated
   against `kindRegistry`; unknown kinds are rejected.
 - Kustomize: no generators (`configMapGenerator`, `secretGenerator`), `replacements`, `components`,
   JSON6902 patches, remote resources, or `$patch` directives. Strategic merge replaces lists

@@ -1,5 +1,5 @@
 /**
- * Achievements — OpenShift-themed unlockable achievements for OpenShift Games.
+ * Achievements — OpenShift-themed unlockable achievements for shifting.pro.
  *
  * Achievement conditions receive the ScoringEngine `stats` contract from
  * CONVERSION-SPEC §12. The ScoringEngine is owned by modes-dev and is being
@@ -466,7 +466,7 @@ const ACHIEVEMENTS = [
   {
     id: 'oc-alias',
     name: 'Say It With oc',
-    description: 'Run 25 commands with the oc CLI — the command the exam asks for.',
+    description: 'Run 25 commands with the oc CLI - the command the exam asks for.',
     icon: 'terminal',
     category: 'Secret',
     condition: (stats) => stat(stats, 'commandsExecuted') >= 25,

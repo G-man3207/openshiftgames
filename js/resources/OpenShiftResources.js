@@ -1,7 +1,7 @@
 /**
  * OpenShift-specific resource classes (OpenShift 4.22 / EX280).
  *
- * These kinds are first-class in OpenShift Games: they appear in the palette,
+ * These kinds are first-class in shifting.pro: they appear in the palette,
  * the 3D renderer, the inspector, `oc` output and YAML export. All classes
  * extend ResourceBase and follow the same contract:
  *   - constructor accepts just `{ name }` (namespace defaults are applied by

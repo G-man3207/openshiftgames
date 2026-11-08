@@ -834,7 +834,7 @@ data:
     this._drafts.delete(path);
     this.currentPath = this.manifestEngine.exists(path) ? path : null;
     this.refresh();
-    this._showSuccess(`Created ${path} — edit it, then Apply -f`);
+    this._showSuccess(`Created ${path} - edit it, then Apply -f`);
     return true;
   }
 
@@ -859,7 +859,7 @@ data:
       this.currentPath = path;
       this.refresh();
       this._showSuccess(
-        `Imported ${path} (${text.split('\n').length} lines) — apply with Apply -f`
+        `Imported ${path} (${text.split('\n').length} lines) - apply with Apply -f`
       );
     };
     reader.readAsText(file);

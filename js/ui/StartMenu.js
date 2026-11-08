@@ -1,5 +1,5 @@
 /**
- * StartMenu — start page behaviour for OpenShift Games.
+ * StartMenu — start page behaviour for shifting.pro.
  *
  * The start page markup lives in index.html (`#main-menu.sp`); this module adds
  * the live parts: the 3D cluster diorama in the hero stage (the canvas is
@@ -39,11 +39,11 @@ function compressNumbers(values) {
       prev = value;
       continue;
     }
-    parts.push(start === prev ? String(start) : `${start}–${prev}`);
+    parts.push(start === prev ? String(start) : `${start}-${prev}`);
     start = value;
     prev = value;
   }
-  if (start !== null) parts.push(start === prev ? String(start) : `${start}–${prev}`);
+  if (start !== null) parts.push(start === prev ? String(start) : `${start}-${prev}`);
   return parts.join(', ');
 }
 
@@ -156,7 +156,7 @@ export class StartMenu {
       }
       window.dispatchEvent(new Event('resize'));
     } catch (err) {
-      console.warn('OpenShift Games: start page scene resize failed', err);
+      console.warn('shifting.pro: start page scene resize failed', err);
     }
   }
 
@@ -217,7 +217,7 @@ export class StartMenu {
       this._updatePrimaryLabel();
       window.scrollTo(0, this._savedScroll || 0);
     } catch (err) {
-      console.warn('OpenShift Games: start page scene failed', err);
+      console.warn('shifting.pro: start page scene failed', err);
     }
   }
 
@@ -231,7 +231,7 @@ export class StartMenu {
       this.detachStage();
       window.scrollTo(0, 0);
     } catch (err) {
-      console.warn('OpenShift Games: start page scene teardown failed', err);
+      console.warn('shifting.pro: start page scene teardown failed', err);
     }
   }
 
@@ -296,7 +296,7 @@ export class StartMenu {
       try {
         cluster.addResource(resource);
       } catch (err) {
-        console.warn('OpenShift Games: showcase resource failed', resource.kind, err);
+        console.warn('shifting.pro: showcase resource failed', resource.kind, err);
       }
     }
   }

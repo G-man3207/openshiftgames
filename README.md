@@ -1,16 +1,16 @@
-# OpenShift Games
+# shifting.pro
 
 **Learn Red Hat OpenShift by playing. Built for EX280.**
 
-OpenShift Games is a browser-based 3D OpenShift cluster simulator. Create Projects with real
+shifting.pro is a browser-based 3D OpenShift cluster simulator. Create Projects with real
 `oc` commands, deploy applications, expose Routes, run S2I builds, configure SCCs, RBAC, quotas and
-Operators — then investigate and fix realistic production incidents. No install, no signup, no build
+Operators - then investigate and fix realistic production incidents. No install, no signup, no build
 step: every lab runs client-side in your browser.
 
 **Play:** https://shifting.pro · **Draw:** https://shifting.pro/draw
 
 **Documentation:** the learner-facing guides live in the
-[GitHub wiki](https://github.com/G-man3207/openshiftgames/wiki) — start with the
+[GitHub wiki](https://github.com/G-man3207/openshiftgames/wiki) - start with the
 [EX280 Study Guide](https://github.com/G-man3207/openshiftgames/wiki/EX280-Study-Guide) and the
 [EX280 Prep mode](https://github.com/G-man3207/openshiftgames/wiki/Exam-Prep) reference. The engineering
 docs (architecture map, conversion spec, declarative engine, research notes, verification report) stay in
@@ -18,23 +18,23 @@ docs (architecture map, conversion spec, declarative engine, research notes, ver
 
 Target platform: **Red Hat OpenShift Container Platform 4.22** (Kubernetes 1.35, CRI-O) · Exam: **EX280V422**
 (“Red Hat Certified System Administrator in OpenShift exam” on redhat.com; the LMS objectives PDF lists
-the credential as “Red Hat Certified Specialist in OpenShift Administration” — same objectives, both
+the credential as “Red Hat Certified Specialist in OpenShift Administration” - same objectives, both
 names are shown in EX280 Prep).
 
-![OpenShift Games — 3D OpenShift cluster simulation in the browser](screenshot.png)
+![shifting.pro - 3D OpenShift cluster simulation in the browser](screenshot.png)
 
 ---
 
 ## Features
 
-- **`oc` terminal** — a simulated OpenShift CLI with `get`, `describe`, `apply -f`, `create`,
+- **`oc` terminal** - a simulated OpenShift CLI with `get`, `describe`, `apply -f`, `create`,
   `new-app`, `new-project`, `expose`, `create route`, `start-build`, `set env|image|resources|volume`,
   `rollout` (`status --timeout|history|undo`; `status --timeout` blocks like real `oc` and exits 1
   with `error: timed out waiting for the condition` on a stalled rollout, so `&&` chains stop),
   `logs` (Pods, Deployments, Jobs), `exec`, `rsh`, `cp`, `wait`,
   `diff -f`, `patch --type=strategic|merge|json`, `adm policy` (RBAC + SCC), `auth can-i`,
   `adm top`, `adm cordon|drain`, `adm taint` (all real forms, including kubectl's empty-value
-  `key=:Effect`), `create quota|clusterquota` (LimitRanges are declarative —
+  `key=:Effect`), `create quota|clusterquota` (LimitRanges are declarative -
   `oc apply -f`, there is no `oc create limitrange` subcommand), `create token`,
   `image info`, `process`, `helm` (repo/search/install/upgrade/history/rollback), `htpasswd`,
   `debug node` (interactive `chroot /host` + `systemctl`/`journalctl` kubelet troubleshooting),
@@ -75,7 +75,7 @@ field is immutable`) while `create job|cronjob --dry-run=client -o yaml` names t
   probe restarts the container (`Container <name> failed liveness probe, will be restarted`, RESTARTS
   climbs, then CrashLoopBackOff); exec probes run in the same simulated container filesystem as
   `oc exec` (`cat /tmp/healthy` → `No such file or directory`), and `oc describe deployment` lists only
-  the Deployment's own `ScalingReplicaSet` events — `Scaled up replica set <rs> to <n>` per rollout
+  the Deployment's own `ScalingReplicaSet` events - `Scaled up replica set <rs> to <n>` per rollout
   and `Scaled down replica set <old> to 0 from <n>` when one is retired, at their real rollout times
   (ReplicaSet-controller events stay on `oc describe rs`). `oc adm top nodes` is sorted by NAME with
   a realistically busy control plane and per-node worker variance. Container names follow real `oc`
@@ -95,17 +95,17 @@ field is immutable`) while `create job|cronjob --dry-run=client -o yaml` names t
   `Name: web.<ns>.svc.cluster.local`; `dig +short` prints just the Service ClusterIP and `dig` has
   its own header/ANSWER/SERVER format; `getent hosts` prints the glibc `IP  canonical` line) and
   fail with `;; connection timed out; no servers could be reached` plus the real exit status when
-  an egress policy blocks DNS — the lab 13 diagnostic flow. Verbose `curl` prints
+  an egress policy blocks DNS - the lab 13 diagnostic flow. Verbose `curl` prints
   `Trying`/`Connected` only in the real order (never before a name resolves, never `Connected` on a
   failed connection). RBAC is genuinely enforced: a plain user gets the real
   `Error from server (Forbidden): …` for reads and writes they are not allowed to perform.
   `oc` is the taught command; a leading `kubectl` is accepted as an alias with an educational hint.
-- **A real shell around `oc`** — `vim`/`vi` (opens the manifest editor), `cat`, `echo` with
+- **A real shell around `oc`** - `vim`/`vi` (opens the manifest editor), `cat`, `echo` with
   `>`/`>>` redirects, heredocs, command substitution, `;`/`&&`/`||` sequencing, session variables
   (`export NS=default`, `$NS`/`${NS}` expansion), bash's `$?`/`${?}` exit-status parameter
   (`oc exec … -- ls /nope; echo rc=$?` → `rc=2`, `false; echo $?` → `1`) and pipes through
   `grep`, `sed`, `tail`, `head`, `cut`, `wc`, `sort`, `base64 -d`, `openssl` (including real
-  `req -x509` / `x509` PEM handling), `htpasswd`, `skopeo` — so exam workflows like writing YAML in
+  `req -x509` / `x509` PEM handling), `htpasswd`, `skopeo` - so exam workflows like writing YAML in
   the terminal,
   decoding a Secret and `oc apply -f -` work as on a real workstation. `$(...)` also works at the
   end of a word (`curl -s http://$(oc get route webapp -o jsonpath={.spec.host})`), `/tmp` is one
@@ -125,11 +125,11 @@ x --cert=missing.crt --key=missing.key` fails with the real
   (`sh -c "exit 3"; echo rc=$?` → `command terminated with exit code 3` + `rc=3`),
   `id -u`/`-g`/`-un` print bare IDs like coreutils, `;`/`&&`/`||`/pipes follow the real exit-status
   rules, and a double-quoted `$APP_MODE` is still expanded by the workstation shell first
-  (`oc exec -- exit 3` stays the authentic missing-binary 127 — `exit` is only a shell builtin).
+  (`oc exec -- exit 3` stays the authentic missing-binary 127 - `exit` is only a shell builtin).
   `cat /etc/resolv.conf` inside a Pod prints the cluster DNS configuration
   (`search <project>.svc.cluster.local svc.cluster.local cluster.local`, `nameserver 172.30.0.10`,
   `options ndots:5`).
-- **A simulated RHEL 9 workstation** (`js/engine/LinuxHost.js` + `js/ui/LinuxCommands.js`) — the
+- **A simulated RHEL 9 workstation** (`js/engine/LinuxHost.js` + `js/ui/LinuxCommands.js`) - the
   terminal is `[student@workstation ~]$` on `workstation.lab.example.com` (RHEL 9.6, SELinux
   enforcing, `student` in `wheel` with lab sudo). It models a filesystem with modes, owners,
   SELinux contexts and symlinks (home and `/tmp` files stay the same files the Files panel and
@@ -141,8 +141,8 @@ x --cert=missing.crt --key=missing.key` fails with the real
   SELinux `.`), `cp -r`, `mv`, `rm -rf`, globbing and brace expansion, `find`, `tee`, `tar`,
   `chmod`/`chown`/`sudo`/`id`, `getenforce`/`restorecon`/`ls -Z`, `ps`/`kill`/`top -b`,
   `systemctl`/`journalctl`, `firewall-cmd`, `dnf`/`rpm`, `podman`, scripts with a shebang run by
-  name — and permission errors where RHEL gives them (`bash: /etc/hosts: Permission denied`).
-- **First-class OpenShift resources** — Project, Pod, Deployment, ReplicaSet, StatefulSet, DaemonSet,
+  name - and permission errors where RHEL gives them (`bash: /etc/hosts: Permission denied`).
+- **First-class OpenShift resources** - Project, Pod, Deployment, ReplicaSet, StatefulSet, DaemonSet,
   Job, CronJob, Service, Route, Ingress, NetworkPolicy, ConfigMap, Secret, PVC, PV, StorageClass,
   HPA, PDB, ResourceQuota, LimitRange, ClusterResourceQuota, ServiceAccount, Role, RoleBinding,
   ClusterRole, ClusterRoleBinding, SCC, BuildConfig, Build, ImageStream, Template, Subscription,
@@ -150,7 +150,7 @@ x --cert=missing.crt --key=missing.key` fails with the real
   ClusterOperator, ClusterVersion, IPAddressPool, L2Advertisement, PrometheusRule, Alertmanager.
   A single central registry (`js/data/kindRegistry.js`) drives the palette, 3D renderer, inspector,
   command bar, minimap and YAML export.
-- **S2I builds & ImageStreams** — `oc new-app`, BuildConfig → Build → ImageStream lifecycle, image
+- **S2I builds & ImageStreams** - `oc new-app`, BuildConfig → Build → ImageStream lifecycle, image
   change triggers and rollouts, internal registry image references. In the paused pre-start sandbox
   the `oc new-app` ScalingReplicaSet event already prints the full deterministic
   `<name>-<10-char pod-template-hash>` ReplicaSet name, and starting the simulation creates exactly
@@ -161,10 +161,10 @@ x --cert=missing.crt --key=missing.key` fails with the real
   names Service ports `8080-tcp`/`3306-tcp` (newapp naming) and the Route PORT column follows, and
   `oc create route passthrough <name> --service=<svc>` sets `spec.port.targetPort` to the Service
   port name/number like real `oc`.
-- **Routes & networking** — `oc expose svc/...`, edge/passthrough/reencrypt TLS Routes, Route
+- **Routes & networking** - `oc expose svc/...`, edge/passthrough/reencrypt TLS Routes, Route
   admission state, Services, NetworkPolicies, MetalLB `LoadBalancer` services with EXTERNAL-IP.
   Route admission follows the real 4.22 router rules: host/path ownership (`HostAlreadyClaimed`),
-  external-certificate validation and target checks — a Service with no ready endpoints does **not**
+  external-certificate validation and target checks - a Service with no ready endpoints does **not**
   reject the Route; the router answers 503 and `oc describe route` shows `Endpoints: <none>`, so the
   player debugs the selector/endpoints instead of chasing a fake admission failure.
   The service-ca controller issues Service serving certificates
@@ -176,7 +176,7 @@ x --cert=missing.crt --key=missing.key` fails with the real
   runs `deployment.apps/router-default` (2/2 Ready) with its ReplicaSet and two shared-hash router
   pods, and `openshift-dns` runs the `daemonset.apps/dns-default` + `daemonset.apps/node-resolver`
   DaemonSets with one owned Pod per Node (the `dns-default` Pods report READY `2/2`). DNS pods run
-  on the pod network (`10.128.x`–`10.131.x` — each Pod IP is allocated inside its Node's
+  on the pod network (`10.128.x`-`10.131.x` - each Pod IP is allocated inside its Node's
   `spec.podCIDR` `/23`, `hostNetwork: false`) while `node-resolver` and the router stay
   hostNetwork, both DNS DaemonSets show the real `kubernetes.io/os=linux` NODE SELECTOR in
   `oc get ds -n openshift-dns`, and the router pods carry
@@ -196,7 +196,7 @@ x --cert=missing.crt --key=missing.key` fails with the real
   Status is the real `{loadBalancer: {}}` subresource (no invented phase/conditions/endpoint
   counters), `oc describe svc` prints the kubectl 1.35 / OCP 4.22 shape (`IP Family Policy:
 SingleStack`, `IP:`/`IPs:`, one `Port:`/`TargetPort:`/`Endpoints:` block per port,
-  `Session Affinity: None`, `Internal Traffic Policy:  Cluster`, and — when the operator sets it —
+  `Session Affinity: None`, `Internal Traffic Policy:  Cluster`, and - when the operator sets it -
   `Traffic Distribution:` at the shared tabwriter column), `oc get endpoints` truncates the
   ENDPOINTS cell like kubectl
   (`ip:port,ip:port,ip:port + N more...`), and `nslookup` answers a Service name with its own
@@ -208,15 +208,15 @@ SingleStack`, `IP:`/`IPs:`, one `Port:`/`TargetPort:`/`Endpoints:` block per por
   `oc get svc dns-default -n openshift-dns -o jsonpath={.spec.trafficDistribution}`; `oc describe`
   aligns its `Events: <none>` placeholder like kubectl's single tabwriter (column 27 for ClusterIP
   Services), and each Pod's `/etc/hosts` is the kubelet-managed file
-  (`# Kubernetes-managed hosts file.`, the loopback/localnet lines and `<podIP>\t<podName>` — no
+  (`# Kubernetes-managed hosts file.`, the loopback/localnet lines and `<podIP>\t<podName>` - no
   Service entry), so `oc exec … cat /etc/hosts` matches a real Pod. The control-plane Node carries
   the real
   `node-role.kubernetes.io/master:NoSchedule` taint, so application workloads schedule onto the
-  workers while the tolerated DaemonSet pods keep running on the master — the taints/tolerations and
+  workers while the tolerated DaemonSet pods keep running on the master - the taints/tolerations and
   "why is my Pod on the wrong node / Pending" troubleshooting flows behave like 4.22: an
   unschedulable Pod reports `0/1 Pending` (`ContainerCreating` only after it is bound),
   `oc describe pod` prints `Node: <none>` and no fabricated kubelet detail (no `Container ID`,
-  `Image ID`, `State`, `Ready` or `Restart Count` lines until the Pod is bound — only
+  `Image ID`, `State`, `Ready` or `Restart Count` lines until the Pod is bound - only
   Image/Port/Host Port/Environment/Mounts/Conditions), and FailedScheduling retries follow the real
   scheduler backoff (1 s doubling to 10 s max) so `oc describe`/`oc get events` show realistic
   small counts like `(x4 over 7s)` instead of a zero-second burst. hello-openshift answers plain
@@ -224,13 +224,13 @@ SingleStack`, `IP:`/`IPs:`, one `Port:`/`TargetPort:`/`Endpoints:` block per por
   (`curl: (35) error:0A00010B:SSL routines::wrong version number`, exit status 35) while lab 12's
   TLS fixture serves 200; and MetalLB LoadBalancer Services emit the controller's
   `Normal IPAllocated Assigned IP ["<ip>"]` event (no cloud-provider `EnsuredLoadBalancer` text).
-- **Declarative workflows** — a Files panel with editable YAML manifests, `oc apply -f`,
+- **Declarative workflows** - a Files panel with editable YAML manifests, `oc apply -f`,
   Kustomize base/overlays (`oc apply -k`), OpenShift templates (`oc process -f … | oc apply -f -`),
   Helm charts (`helm install|upgrade|uninstall`), `--dry-run=client -o yaml` manifest skeletons,
   terminal-authored YAML (heredocs/`vim`) and an `htpasswd` file for identity labs. `oc
 kustomize`/`oc apply -k` render resources in Kustomize's legacy sort order (ConfigMap → Service →
   Deployment).
-- **Security & identity** — HTPasswd identity provider + `oc login` (validated against the
+- **Security & identity** - HTPasswd identity provider + `oc login` (validated against the
   `htpass-secret` Secret, like a real cluster), users/groups/identities, RBAC evaluation
   (`oc auth can-i`, `oc adm policy …`, `oc policy …`) enforced on every command, OCP 4.x SCC grants
   (RBAC bindings to `system:openshift:scc:<name>`, with the SCC users/groups lists left untouched
@@ -238,7 +238,7 @@ kustomize`/`oc apply -k` render resources in Kustomize's legacy sort order (Conf
   `runAsUser: 0`, `privileged: true` or `hostNetwork` is rejected as a ReplicaSet `FailedCreate`
   and no Pod is created. The classic exam trap is modelled the way real OCP behaves: a bare
   `nginx:latest` (no `securityContext`) is **admitted** under `restricted-v2` and then crash-loops
-  with `mkdir() "/var/cache/nginx/client_temp" failed (13: Permission denied)` in `oc logs` — the
+  with `mkdir() "/var/cache/nginx/client_temp" failed (13: Permission denied)` in `oc logs` - the
   `ServiceAccount` + `anyuid` grant + `oc set serviceaccount` flow, or an explicit non-root
   `runAsUser`, is the escape hatch. `htpasswd -B` writes real-shaped bcrypt hashes and login
   validates bcrypt and legacy `{SHA}` entries. The installer-side kubeadmin password is discoverable
@@ -253,24 +253,24 @@ kustomize`/`oc apply -k` render resources in Kustomize's legacy sort order (Conf
   behind). `oc login` also prints loginoptions.go's project text (`You have access to the following
 projects and can switch between them with 'oc project <projectname>':` with `  *` marking the
   current project, or `You have one project on this server: "<name>"`). A Deployment whose
-  `serviceAccountName` does not exist gets no Pod — the ReplicaSet records `Error creating: … error
-looking up service account <project>/<sa>: serviceaccount "<sa>" not found` — and the SCC
+  `serviceAccountName` does not exist gets no Pod - the ReplicaSet records `Error creating: … error
+looking up service account <project>/<sa>: serviceaccount "<sa>" not found` - and the SCC
   `FailedCreate` message appends the per-provider reasons (`provider "anyuid": Forbidden: not usable
 by user or serviceaccount, spec.containers[0].securityContext.privileged: Invalid value: true:
 Privileged containers are not allowed, …`).
-- **Quotas & self-service** — Namespace/Project quotas, LimitRanges, ClusterResourceQuota, project
+- **Quotas & self-service** - Namespace/Project quotas, LimitRanges, ClusterResourceQuota, project
   templates (`oc adm create-bootstrap-project-template` + `project.config.openshift.io/cluster`) and
   the real `self-provisioners` ClusterRoleBinding (remove it and `oc new-project` returns Forbidden).
   Changing `projectRequestTemplate` rolls out the simulated openshift-apiserver for 8 game seconds
   (`Progressing=True reason=Working`) before the next `oc new-project` applies the template.
-- **Operators (OLM)** — a software catalog of PackageManifests, OperatorGroups, Subscriptions that
+- **Operators (OLM)** - a software catalog of PackageManifests, OperatorGroups, Subscriptions that
   move through InstallPlan and ClusterServiceVersion phases (`Installing → Succeeded`), real
   operator effects (e.g. the MetalLB operator creates its controller/speaker pods and serves
   LoadBalancer IPs only once the MetalLB CR, IPAddressPool and L2Advertisement exist), and a correct
   two-step uninstall: deleting the Subscription keeps the CSV; deleting the CSV removes the operands.
   Operator install variants are modelled: AllNamespaces installs through the global OperatorGroup
   into `openshift-operators`, Manual `installPlanApproval` waits for the
-  `oc patch installplan … approved:true` step, and `startingCSV` pins the installed version — after a
+  `oc patch installplan … approved:true` step, and `startingCSV` pins the installed version - after a
   pinned install OLM immediately resolves the channel head into a second, unapproved Manual
   InstallPlan (`InstallPlanPending True RequiresApproval`, `currentCSV` head / `installedCSV` pin), so
   the real exam decision "Manual and why" is playable end to end.
@@ -279,11 +279,11 @@ Privileged containers are not allowed, …`).
   report `ResolutionFailed` (with no fake CSV, InstallPlan or install-plan conditions), while other
   namespaces install normally. The `metallb-operator` bundle follows redhat-operators' OCP-minor
   versioning (`metallb-operator.v4.22.0-202610281200`) instead of upstream `v0.14.9`.
-- **Monitoring & alerting** — `oc get prometheusrules -A`, `oc describe prometheusrule`, live
+- **Monitoring & alerting** - `oc get prometheusrules -A`, `oc describe prometheusrule`, live
   `Alertmanager` state (`oc get|describe alertmanager -n openshift-monitoring`): the Watchdog alert
   always fires and cluster state (crash-looping or unready Pods) surfaces the matching alert rules.
-- **22-level EX280 campaign (5 chapters) + an optional Linux & RHEL Foundations prelude** — the
-  prelude (levels 0.1–0.7) runs on a simulated RHEL 9 workstation; then Manage OpenShift →
+- **22-level EX280 campaign (5 chapters) + an optional Linux & RHEL Foundations prelude** - the
+  prelude (levels 0.1-0.7) runs on a simulated RHEL 9 workstation; then Manage OpenShift →
   Declarative & Kustomize → Deploy & Expose → Identity, RBAC & Self-service → Security & Operations,
   which teaches NetworkPolicies (default-deny, the router allow, DNS egress) and node troubleshooting
   (`oc adm top`, `oc describe node`, cordon/drain/uncordon, `oc debug node` → `chroot /host` →
@@ -291,8 +291,8 @@ Privileged containers are not allowed, …`).
   completes once its scheduled incidents are resolved. Nothing is used before it is taught: Level 12
   configures a MetalLB operator the platform team already installed (Level 18 teaches OLM installs),
   Level 4 teaches `--dry-run=client -o yaml > file` skeletons, and SCC admission details wait for
-  Level 17. Level ids are stable save keys — campaign order comes from the chapter table and the
-  numbers players see are positional — so inserting levels never moves anyone's progress (the
+  Level 17. Level ids are stable save keys - campaign order comes from the chapter table and the
+  numbers players see are positional - so inserting levels never moves anyone's progress (the
   capstone keeps id 20 and is displayed as Level 22). The capstone's node failure is fixed the real
   way: `oc debug node/<n>` → `chroot /host` → `systemctl restart kubelet` (the incidents drawer
   action remains as a fallback). Grading follows
@@ -303,52 +303,52 @@ Privileged containers are not allowed, …`).
   fix it), L3 crashes from the first start, L14's denial shows in `oc logs deploy/web` (no invented
   events), L16 proves in-cluster API access with a PodList/403, and L7/L11 objectives start
   unticked.
-- **Guided missions** — every campaign level says where to work and how to do each step. The
+- **Guided missions** - every campaign level says where to work and how to do each step. The
   mission card's **project row** shows the lab project the level is graded in and, when you are
   somewhere else (every level starts in `default`), the one command that fixes it; **Next step** has
   an opt-in **Show me how** with the exact commands (plus what they do and a check command), each
   with **Copy** and **Put in terminal**; revealed hints render commands as clickable chips in one
   scrolling card (never a cramped nested scroller); and an unticked objective **explains itself**
-  — the right object in the wrong project, a Template that was only applied (not processed) or only
-  rendered, a password key in a ConfigMap. **Help (`H`)** mid-level is a "where am I" view (done
-  objectives, the current step, its how-to), and the Files panel says what **Apply -f** will not do
-  for a Template or a Helm chart. All of it is authored data (`objective.how`, `workProject`) that
-  the browser suite **replays** (`qa-guidance-replay`: every how-to command runs in a real browser
-  and the level must complete), so the guidance cannot silently rot.
-- **13 timed EX280 labs** — speed drills: three-tier app, CrashLoopBackOff, edge TLS Routes,
+  - the right object in the wrong project, a Template that was only applied (not processed) or only
+    rendered, a password key in a ConfigMap. **Help (`H`)** mid-level is a "where am I" view (done
+    objectives, the current step, its how-to), and the Files panel says what **Apply -f** will not do
+    for a Template or a Helm chart. All of it is authored data (`objective.how`, `workProject`) that
+    the browser suite **replays** (`qa-guidance-replay`: every how-to command runs in a real browser
+    and the level must complete), so the guidance cannot silently rot.
+- **13 timed EX280 labs** - speed drills: three-tier app, CrashLoopBackOff, edge TLS Routes,
   Kustomize prod overlay, source-to-image, quota guardrail, RBAC onboarding, SCC, network isolation,
   operator install, HTPasswd onboarding, production network policies and an EX280 speed run. Labs
   7/8/11 grade state-equivalent RBAC/password/SCC fixes, lab 12 seeds a real TLS fixture (its
   passthrough serves 200, while a plain-HTTP backend fails the handshake) and teaches the
   immutable-Job delete/recreate (or LimitRange) flow, and the lab 1/3/8 hints match the real Route
   admission, certificate and ServiceAccount behavior.
-- **EX280 Prep mode** — objective tracker for the official EX280V422 objective groups (with Red Hat
+- **EX280 Prep mode** - objective tracker for the official EX280V422 objective groups (with Red Hat
   docs links), quick command labs, a searchable `oc` cheat sheet, exam facts and an evidence-based
   study-coverage verdict (mastery requires the bullet’s own commands inside the linked drill run).
-- **Chaos mode** — endless incident survival; **Sandbox** — free build scored 0–100 by the
+- **Chaos mode** - endless incident survival; **Sandbox** - free build scored 0-100 by the
   Architecture Advisor (HA, security, networking, storage, scaling, RBAC, quotas, probes, config, cost).
-- **A start page worth opening** — a dark, premium landing screen with the live 3D cluster in the
+- **A start page worth opening** - a dark, premium landing screen with the live 3D cluster in the
   hero: a banded mode launcher, an interactive EX280 objective→drill picker built from the real
   objective data, real product captures, and a light colophon that credits K8s Games by Rohit
   (Apache-2.0), the project this one is a derivative of. Native page scrolling, 390px responsive,
   `prefers-reduced-motion` support and a progress-aware primary action.
-- **3D cluster view** — Three.js r152 diorama with redesigned models for all 47 kinds, studio
+- **3D cluster view** - Three.js r152 diorama with redesigned models for all 47 kinds, studio
   lighting, floor tier zones, camera fit-to-view, a screen-space label layer with collision culling,
   ownership/network/traffic connections, project floor planes, minimap, inspector, live metrics and
   an importable/exportable YAML view, and a visible paused state (HUD chip + pause glyph) whenever
   an overlay freezes the run. The renderer boots as the start-page hero and expands to full screen
   when a mode launches.
-- **OpenShift Draw** (`/draw`) — a 3D architecture whiteboard: drag OpenShift resources, draw
+- **OpenShift Draw** (`/draw`) - a 3D architecture whiteboard: drag OpenShift resources, draw
   connections, edit properties, auto-layout, export YAML/PNG and share via URL.
 
 ---
 
 ## How to play
 
-1. Pick a mode on the start page — **Campaign**, **Timed Labs**, **Sandbox**, **Chaos** — or open
+1. Pick a mode on the start page - **Campaign**, **Timed Labs**, **Sandbox**, **Chaos** - or open
    **EX280 Prep** for the objective tracker. The start page also maps each EX280 objective group to
    the campaign level and timed lab that drills it. New to the Linux command line? The campaign
-   starts with the optional **Linux & RHEL Foundations** prelude (0.1–0.7); if you already live in a
+   starts with the optional **Linux & RHEL Foundations** prelude (0.1-0.7); if you already live in a
    RHEL shell, Level 1 is open from the start.
 2. Create resources from the left palette or with the `oc` terminal (`/`). The name prompt lets you
    match the objective name (e.g. `frontend`).
@@ -357,7 +357,7 @@ Privileged containers are not allowed, …`).
    In the campaign, read the mission card: its project row says where to work, **Next step** shows
    what is next, and **Show me how** gives the exact commands (click one to put it in the terminal,
    then press Enter).
-5. Handle incidents as they appear — diagnose with `oc describe`, `oc logs`, `oc get events` — and
+5. Handle incidents as they appear - diagnose with `oc describe`, `oc logs`, `oc get events` - and
    resolve them by fixing the resource state.
 
 ### Controls
@@ -371,7 +371,7 @@ Privileged containers are not allowed, …`).
 | `Space`     | Pause / resume the simulation                                                                              |
 | `M`         | Metrics dashboard                                                                                          |
 | `Esc`       | Close the topmost panel/overlay; with nothing open, open the pause menu (Resume, Restart level, Main menu) |
-| `1–9`       | Quick-place a resource from the palette (opens the name prompt)                                            |
+| `1-9`       | Quick-place a resource from the palette (opens the name prompt)                                            |
 | Left-click  | Select resource                                                                                            |
 | Left-drag   | Move resource or rotate camera                                                                             |
 | Right-click | Context menu (Expose, Start Build, Scale, Rollout, Delete, …)                                              |
@@ -396,16 +396,16 @@ derived from that same data (9 objective groups, 55 bullets; _timed labs_ are th
 | Deploy applications (templates, Helm, builds, rollouts, Services, Routes)  | Builds/ImageStream controllers, `oc new-app`, `oc start-build`, `oc rollout`                                                                                                      | 2, 8, 10, 11, 12, 20          | 1, 3, 5, 9, 10, 12  | Route with edge TLS                        |
 | Manage authentication and authorization (HTPasswd, users, groups, RBAC)    | `oc login`, users/groups, `oc adm policy`, `oc auth can-i`                                                                                                                        | 13, 14, 16                    | 7, 11, 12           | HTPasswd users & login                     |
 | Configure network security (Services, Routes, NetworkPolicy, TLS)          | Route admission, TLS edge/passthrough/reencrypt, service serving certs, default-deny + router-ingress NetworkPolicy                                                               | 11, 12, 20, 22                | 3, 8, 9, 10, 13     | Service serving cert → reencrypt Route     |
-| Expose non-HTTP/SNI Applications                                           | passthrough Routes, LoadBalancer services                                                                                                                                         | 12                            | 10                  | —                                          |
+| Expose non-HTTP/SNI Applications                                           | passthrough Routes, LoadBalancer services                                                                                                                                         | 12                            | 10                  | -                                          |
 | Enable developer self-service (quotas, LimitRanges, project templates)     | ResourceQuota/LimitRange/ClusterResourceQuota; project-request template flow (generate → edit → create in `openshift-config` → point `project.config.openshift.io/cluster` at it) | 15, 22                        | 6, 12               | ResourceQuota + LimitRange                 |
 | Manage OpenShift operators (OLM)                                           | Subscription → CSV phases, operator effects, uninstall                                                                                                                            | 18                            | 10                  | Install an operator                        |
 | Configure application security (SCCs, service accounts, jobs/cronjobs)     | SCC grants/denials, `oc set serviceaccount`, `oc debug`, Jobs/CronJobs                                                                                                            | 7, 16, 17, 19, 22             | 3, 7, 8, 12         | Service account + SCC grant; Job + CronJob |
 
 Level numbers are the in-game display numbers (Level 20 is Network Policies, Level 21 Nodes &
 Cluster Troubleshooting, Level 22 the capstone). Cross-cutting drills (not a separate V422 objective
-group): troubleshooting/operations content — logs, events, `oc adm top`, `oc adm cordon|drain`,
-`oc debug node`, Jobs/CronJobs — appears in levels 3, 19, 21 and 22 and timed labs 2, 6, 12, plus
-Chaos mode. The Linux & RHEL Foundations prelude (0.1–0.7) drills the workstation skills these
+group): troubleshooting/operations content - logs, events, `oc adm top`, `oc adm cordon|drain`,
+`oc debug node`, Jobs/CronJobs - appears in levels 3, 19, 21 and 22 and timed labs 2, 6, 12, plus
+Chaos mode. The Linux & RHEL Foundations prelude (0.1-0.7) drills the workstation skills these
 objectives assume.
 
 Official sources (verify against these before your exam):
@@ -414,7 +414,7 @@ Official sources (verify against these before your exam):
 - OpenShift Container Platform 4.22 documentation: <https://docs.redhat.com/en/documentation/openshift_container_platform/4.22>
 - OpenShift 4.22 release notes: <https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/release_notes>
 
-> OpenShift Games is a study aid, not an exam dump. It simplifies cluster behaviour for teaching, and
+> shifting.pro is a study aid, not an exam dump. It simplifies cluster behaviour for teaching, and
 > it is not affiliated with or endorsed by Red Hat.
 
 ---
@@ -424,7 +424,7 @@ Official sources (verify against these before your exam):
 There is **no build step** and no runtime dependencies to install. The app is plain ES modules
 served statically (Three.js and Tailwind are loaded from CDNs; an internet connection is required
 for those, and a WebGL-capable browser is required for the 3D view). The only optional `npm`
-install is the dev-only formatting/linting toolchain — see
+install is the dev-only formatting/linting toolchain - see
 [Development tooling](#development-tooling).
 
 ```bash
@@ -435,11 +435,11 @@ node scripts/dev-server.mjs
 ```
 
 `npm run dev` is the same zero-dependency server (Node built-ins only; port `8080`, or pass
-`--port 9000`). It emulates the production Vercel rewrites — the `/draw` page and the versioned
-`/v/<version>/js/*` module prefix — with `Cache-Control: no-store`, so the ES-module graph loads
+`--port 9000`). It emulates the production Vercel rewrites - the `/draw` page and the versioned
+`/v/<version>/js/*` module prefix - with `Cache-Control: no-store`, so the ES-module graph loads
 exactly as deployed and local edits are never stale.
 
-> Serve over HTTP (not `file://`) — ES modules, import maps and the optional Files/EX280 Prep panels
+> Serve over HTTP (not `file://`) - ES modules, import maps and the optional Files/EX280 Prep panels
 > rely on HTTP semantics. A plain `python3 -m http.server` cannot resolve the import-map URLs:
 > `/v/<version>/js/*` is a production rewrite, not a directory on disk, so the module requests would 404.
 
@@ -450,7 +450,7 @@ toolchain (Prettier 3, Knip 5, husky 9) that keeps the tree clean. It is not nee
 or deploy the app, and `node_modules/` is gitignored.
 
 ```bash
-npm install          # dev tooling only — no runtime dependencies
+npm install          # dev tooling only - no runtime dependencies
 npm run dev          # zero-dependency local server: /draw + versioned /v/ module rewrite (no-store)
 npm run format       # Prettier: rewrite all text files
 npm run format:check # Prettier: strict check (same as the pre-commit gate)
@@ -458,7 +458,7 @@ npm run knip         # Knip: dead files, unused/unlisted deps, unresolved import
 npm run lint         # both gates
 ```
 
-- **Release bump rule** — a release bumps `package.json` and the import-map module prefixes in
+- **Release bump rule** - a release bumps `package.json` and the import-map module prefixes in
   `index.html` + `draw.html` together (`"./js/": "./v/<pkg.version>/js/"`). `scripts/verify.mjs`
   fails the fast gate when the three drift, and the browser sections prove the versioned URLs load.
 
@@ -470,7 +470,7 @@ npm run lint         # both gates
   type and enum-member rules are **off by design**. This is a no-build vanilla-ESM app: much of its
   API is consumed from the inline `<script type="module">` blocks in `index.html`/`draw.html`, from
   the `window.game` runtime and from browser-context dynamic imports, which static analysis cannot
-  trace — enforcing unused-export strictness would mean deleting legitimate, used code, so that
+  trace - enforcing unused-export strictness would mean deleting legitimate, used code, so that
   cleanup is deliberately deferred. `scripts/knip-entrypoints.mjs` mirrors every import of the
   inline HTML modules so dead-file detection still works, and `scripts/verify.mjs` fails if the
   mirror drifts. `three` (browser import map) and `puppeteer-core` (installed out-of-repo for the
@@ -493,13 +493,13 @@ The repo is a static site and deploys to any static host. The canonical demo is 
   release bumps the import-map module prefix in `index.html` and `draw.html`
   (`"./js/": "./v/<package.json version>/js/"`) together with `package.json`, and the whole ES-module
   graph then loads from `/v/<version>/js/...` served
-  `Cache-Control: public, max-age=31536000, immutable` — a returning visitor's old cache entries are
+  `Cache-Control: public, max-age=31536000, immutable` - a returning visitor's old cache entries are
   never requested by the new entry document. `index.html`, the import map, CSS, `/` and `/draw` still
   revalidate (`public, max-age=0, must-revalidate`), so a direct unversioned request always sees the
   current release; only images/fonts keep the long-lived
   `max-age=86400, s-maxage=604800, stale-while-revalidate=2592000` cache. `scripts/verify.mjs` fails
   when `package.json` and either import map drift. **Any deploy that changes a file under `js/` or
-  the entry documents must bump the version (and both import maps) in the same commit** — an
+  the entry documents must bump the version (and both import maps) in the same commit** - an
   unchanged `/v/<version>/` prefix can keep serving a whole year of old cached modules.
 - Deploy with the Vercel dashboard (import the repo), add `shifting.pro` as the project domain, or use
   `vercel deploy` (Vercel CLI, optional).
@@ -508,7 +508,7 @@ The repo is a static site and deploys to any static host. The canonical demo is 
 
 ## Architecture & tech
 
-- **No build step** — vanilla ES modules + import maps. No bundler, no framework, no npm runtime
+- **No build step** - vanilla ES modules + import maps. No bundler, no framework, no npm runtime
   dependencies. Each entry page's import map resolves `./js/` to a versioned
   `/v/<package.json version>/js/` prefix that `vercel.json` rewrites to the real `/js/` tree and
   serves `immutable`, so a release changes every module URL without a build step (and the
@@ -516,14 +516,14 @@ The repo is a static site and deploys to any static host. The canonical demo is 
   is loaded from the CDN for utility classes; custom styling lives in `style.css` (in-game shell)
   and `start.css` (start page). Type is set in Schibsted Grotesk with JetBrains Mono reserved for
   real terminal/YAML code. An optional Prettier + Knip + husky dev
-  toolchain guards repo hygiene — see [Development tooling](#development-tooling).
+  toolchain guards repo hygiene - see [Development tooling](#development-tooling).
 - **Three.js r152** (`https://unpkg.com/three@0.152.0/...`, pinned in the import map) powers the 3D
   cluster view and the whiteboard; WebGL is required.
-- **Central kind registry** — `js/data/kindRegistry.js` is the single source of truth for kinds,
+- **Central kind registry** - `js/data/kindRegistry.js` is the single source of truth for kinds,
   apiVersions, scope, aliases, `oc get` columns, palette metadata, default specs, owner chains,
   explain text, minimap sizes and the shared manifest serializer. Adding a kind means adding one
   registry entry + a resource class + a mesh creator (+ optional controller/data changes).
-- **Simulation** — `js/engine/SimulationTick.js` runs fixed-step OpenShift controllers: scheduler
+- **Simulation** - `js/engine/SimulationTick.js` runs fixed-step OpenShift controllers: scheduler
   (real retry backoff + unschedulable-Pod `Pending` display), Pod lifecycle, Deployments/ReplicaSets,
   StatefulSets, DaemonSets, Jobs/CronJobs, HPA, PVC binding, Pod-network IP allocation inside each
   Node's `spec.podCIDR` (OpenShift's `10.128.0.0/14` clusterNetwork, `/23` per node), Services and
@@ -533,31 +533,31 @@ The repo is a static site and deploys to any static host. The canonical demo is 
   BuildConfig→Build→ImageStream,
   Subscriptions/operators, MetalLB LoadBalancer IPs, SCC enforcement,
   LimitRange/ResourceQuota/ClusterResourceQuota, OAuth/HTPasswd, ClusterOperator health.
-- **Command layer** — `js/ui/CommandBar.js` parses `oc` commands (with pipes/redirects and tab
+- **Command layer** - `js/ui/CommandBar.js` parses `oc` commands (with pipes/redirects and tab
   completion), runs them through the RBAC authorization gate and drives the same engine APIs as the
   UI; `js/ui/ShellTools.js` is the simulated shell (heredocs, redirects, cat/echo/grep/tail/head/wc/
   vim/openssl/skopeo/htpasswd/…) that shares the ManifestEngine virtual filesystem. Cluster-DNS
   diagnostics (`nslookup`/`dig`/`getent hosts`) and verbose `curl` use the engine's NetworkPolicy
   evaluation, and `oc exec`/`oc rsh` propagate remote exit statuses (unmodelled binaries terminate
   with exit code 127).
-- **RHEL workstation** — `js/engine/LinuxHost.js` is the workstation model (filesystem metadata
+- **RHEL workstation** - `js/engine/LinuxHost.js` is the workstation model (filesystem metadata
   overlay on the ManifestEngine store, users, processes, systemd + journal, packages, network,
   firewalld, SELinux, rootless podman) with `reset(seed)` for a level's `linuxHost` seed;
   `js/ui/LinuxCommands.js` mixes its ~110 commands into ShellTools. One cwd-aware path resolver
   serves the shell and `oc` file arguments, and the Linux objective types (`file`, `service`,
   `process`, `package`, `firewall`, `container`, `selinux`, `linuxUser`, `cwd`, `env`, `ran`) read
   host state in `js/engine/ObjectiveEvaluator.js`.
-- **Campaign structure** — `js/data/CampaignLevels.js` owns campaign order (`CHAPTERS`), unlocking
+- **Campaign structure** - `js/data/CampaignLevels.js` owns campaign order (`CHAPTERS`), unlocking
   (`isLevelUnlocked`), the Continue rule (`continueLevelId`) and display numbers (`levelLabel`).
   Level ids are stable save keys: never renumber a level; add a new id and place it in `CHAPTERS`.
-- **Declarative engine** — `js/engine/YamlParser.js` + `js/engine/ManifestEngine.js` provide a
+- **Declarative engine** - `js/engine/YamlParser.js` + `js/engine/ManifestEngine.js` provide a
   virtual file system, YAML manifests, Kustomize overlays, OpenShift templates, Helm charts and
   HTPasswd file operations; `js/ui/ManifestPanel.js` is the Files panel.
-- **UI** — StartMenu (the start page: live diorama stage, mode launcher, EX280 objective picker,
+- **UI** - StartMenu (the start page: live diorama stage, mode launcher, EX280 objective picker,
   scroll reveals), HUD, Inspector, ContextMenu, Metrics, Settings, Incidents, Minimap, docked `oc`
   terminal and pause overlay; `index.html` wires the shell and the palette (generated from the
   registry); `draw.html` is the whiteboard.
-- **Data** — `js/data/CampaignLevels.js` (EX280 levels + campaign structure),
+- **Data** - `js/data/CampaignLevels.js` (EX280 levels + campaign structure),
   `js/data/LinuxLevels.js` (the Linux & RHEL Foundations prelude), `js/data/IncidentDefs.js`,
   `js/data/Achievements.js`, `js/data/EX280Objectives.js`, `js/data/ManifestFiles.js`.
 
@@ -580,7 +580,7 @@ js/ui/                CommandBar, ShellTools, LinuxCommands, HUD, Inspector, Con
 js/modes/             CampaignMode, ChallengeMode, ChaosMode, SandboxMode, ExamPrepMode
 scripts/              verify / browser-test / visual-qa harnesses, local dev server, Knip entry mirror
 vercel.json           static hosting: /draw + versioned /v/ module rewrites, cache/bot headers
-og-image.html         OpenGraph card source (1200×630) — PNG regenerated by the verifier
+og-image.html         OpenGraph card source (1200×630) - PNG regenerated by the verifier
 package.json          dev-only toolchain (Prettier/Knip/husky) + dev server script; no runtime deps
 knip.jsonc            Knip "real garbage only" configuration (documented rules)
 .husky/pre-commit     pre-commit gate: prettier --check + knip
@@ -606,14 +606,14 @@ bundler; dev tooling is limited to Prettier, Knip and husky behind the pre-commi
 
 ## Credits & license
 
-OpenShift Games is a derivative work of **K8s Games** by Rohit (`rohitg00`), used under the
+shifting.pro is a derivative work of **K8s Games** by Rohit (`rohitg00`), used under the
 Apache License 2.0.
 
 - Original project: <https://github.com/rohitg00/k8sgames>
 - Original copyright: **K8s Games, Copyright (c) Rohit G / rohitg00**, Apache-2.0.
 - See the [NOTICE](NOTICE) file for the derivative-work statement and full attribution.
 
-This project is licensed under the **Apache License 2.0** — see [LICENSE](LICENSE). The original
+This project is licensed under the **Apache License 2.0** - see [LICENSE](LICENSE). The original
 license and copyright notices are preserved. It is an independent, unofficial study project: it is
 not affiliated with, sponsored or endorsed by Red Hat, Inc. OpenShift, Red Hat and the Red Hat logo
 are trademarks of Red Hat, Inc. Kubernetes is a trademark of The Linux Foundation.

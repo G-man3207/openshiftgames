@@ -1,5 +1,5 @@
 /**
- * ManifestSerializer — the single shared manifest / YAML serializer for OpenShift Games.
+ * ManifestSerializer — the single shared manifest / YAML serializer for shifting.pro.
  *
  * Every resource class (`js/resources/*.js`), the central kind registry
  * (`js/data/kindRegistry.js`) and the CLI/YAML export/Inspector must use this module

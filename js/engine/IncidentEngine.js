@@ -453,7 +453,7 @@ class IncidentEngine {
         }
         if (!def) {
           // eslint-disable-next-line no-console
-          console.warn(`[incidents] unknown scripted incident type "${requested}" — skipped.`);
+          console.warn(`[incidents] unknown scripted incident type "${requested}" - skipped.`);
           return null;
         }
         return {

@@ -1,5 +1,5 @@
 /**
- * SettingsPanel — in-game OpenShift Games preferences (OCP 4.22 / EX280).
+ * SettingsPanel — in-game shifting.pro preferences (OCP 4.22 / EX280).
  *
  * Storage contract (shared with the app shell, see index.html):
  *   - `openshiftgames_settings` is the single settings key.
@@ -29,7 +29,7 @@ const PLATFORM_LABEL = 'OpenShift 4.22';
 const DIFFICULTY_PRESETS = {
   easy: {
     label: 'Easy',
-    description: 'Guided practice — slower incidents, extra cluster headroom',
+    description: 'Guided practice - slower incidents, extra cluster headroom',
     failureRate: 0.5,
     resourceMultiplier: 1.5,
   },
@@ -41,13 +41,13 @@ const DIFFICULTY_PRESETS = {
   },
   hard: {
     label: 'Hard',
-    description: 'Exam pace — faster incidents, tighter capacity',
+    description: 'Exam pace - faster incidents, tighter capacity',
     failureRate: 2.0,
     resourceMultiplier: 0.75,
   },
   nightmare: {
     label: 'Nightmare',
-    description: 'Production fire drill — relentless OpenShift incidents',
+    description: 'Production fire drill - relentless OpenShift incidents',
     failureRate: 3.0,
     resourceMultiplier: 0.5,
   },
@@ -87,7 +87,7 @@ export class SettingsPanel {
     this.container.setAttribute('data-testid', 'settings-panel');
     this.container.setAttribute('role', 'dialog');
     this.container.setAttribute('aria-modal', 'true');
-    this.container.setAttribute('aria-label', 'OpenShift Games settings');
+    this.container.setAttribute('aria-label', 'shifting.pro settings');
     this.container.innerHTML = this._buildHTML();
     document.body.appendChild(this.container);
     this.container.addEventListener('click', this._boundClick);
@@ -311,7 +311,7 @@ export class SettingsPanel {
               <h2 class="text-white/90 text-base font-semibold">Settings</h2>
               <span class="px-2 py-0.5 rounded-full text-[10px] font-semibold text-openshift bg-openshift/10 border border-openshift/30">${PLATFORM_LABEL}</span>
             </div>
-            <p class="text-white/30 text-[11px] mt-1">OpenShift Games preferences · stored in this browser · EX280 simulation</p>
+            <p class="text-white/30 text-[11px] mt-1">shifting.pro preferences · stored in this browser · EX280 simulation</p>
           </div>
           <button data-action="close" data-testid="settings-close" class="p-1 text-white/30 hover:text-white/60 transition-colors" aria-label="Close settings">
             <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -472,7 +472,7 @@ export class SettingsPanel {
 
   _resetProgress() {
     const message =
-      'Reset ALL OpenShift Games progress (campaign stars, timed labs, EX280 Prep, achievements) and reload? This cannot be undone.';
+      'Reset ALL shifting.pro progress (campaign stars, timed labs, EX280 Prep, achievements) and reload? This cannot be undone.';
     let confirmed = true;
     try {
       if (typeof window.confirm === 'function') confirmed = window.confirm(message);
@@ -517,7 +517,7 @@ export class SettingsPanel {
     const investigation =
       this._readStorageJSON(INVESTIGATION_KEYS[0]) || this._readStorageJSON(INVESTIGATION_KEYS[1]);
     const payload = {
-      app: 'OpenShift Games',
+      app: 'shifting.pro',
       platform: PLATFORM_LABEL,
       exam: 'EX280V422',
       exportedAt: new Date().toISOString(),

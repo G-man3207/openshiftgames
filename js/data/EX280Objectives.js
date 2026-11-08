@@ -163,7 +163,7 @@ export const EX280_OBJECTIVE_GROUPS = [
         id: 'manage-web-console',
         title: 'Use the web console to manage and configure an OpenShift cluster',
         summary:
-          'Navigate the Administrator and Developer perspectives: create projects, deploy from an image or Git, inspect workloads, manage users/operators and check cluster health. The simulator has no web-console UI — use the docs link for the console walkthrough and drill the equivalent oc commands here.',
+          'Navigate the Administrator and Developer perspectives: create projects, deploy from an image or Git, inspect workloads, manage users/operators and check cluster health. The simulator has no web-console UI - use the docs link for the console walkthrough and drill the equivalent oc commands here.',
         docsUrl: DOCS.webConsole,
         levels: [1, 3, 20],
         challenges: [12],
@@ -1102,7 +1102,7 @@ export const EX280_QUICK_LABS = [
     docsUrl: DOCS.cliTools,
     mode: 'sandbox',
     summary:
-      'Create a project, deploy a workload into it and clean it up again — the fundamental exam loop.',
+      'Create a project, deploy a workload into it and clean it up again - the fundamental exam loop.',
     setup: { startingResources: [], manifestFiles: [] },
     check: [
       { type: 'project', name: 'ex280-lab' },
@@ -1198,7 +1198,7 @@ export const EX280_QUICK_LABS = [
       { type: 'tls', enabled: true, termination: 'edge' },
     ],
     hints: [
-      'Create real TLS files first with openssl — `oc create secret tls` reads them from the virtual filesystem and fails with `error: open tls.crt: no such file or directory` when they are missing.',
+      'Create real TLS files first with openssl - `oc create secret tls` reads them from the virtual filesystem and fails with `error: open tls.crt: no such file or directory` when they are missing.',
       'Create a kubernetes.io/tls secret with tls.crt and tls.key before the edge route.',
       'oc create route edge needs --service and a certificate/key pair.',
     ],
@@ -1241,9 +1241,9 @@ export const EX280_QUICK_LABS = [
     ],
     hints: [
       'The service-ca controller watches the Service annotation: service.beta.openshift.io/serving-cert-secret-name=<secret> creates a kubernetes.io/tls secret (<secret>) with tls.crt and tls.key.',
-      'A ConfigMap annotated with service.beta.openshift.io/inject-cabundle=true gets the service-ca.crt trust bundle injected — extract it with the same oc extract flow.',
+      'A ConfigMap annotated with service.beta.openshift.io/inject-cabundle=true gets the service-ca.crt trust bundle injected - extract it with the same oc extract flow.',
       'Reencrypt Routes validate the backend certificate against --dest-ca-cert=service-ca.crt; the router terminates TLS and re-encrypts to the Service.',
-      'After oc apply -f examples/default-deny.yaml the Route turns 503 even though it is still Admitted — re-open only the router path with examples/allow-from-router.yaml (namespaceSelector policy-group.network.openshift.io/ingress: "").',
+      'After oc apply -f examples/default-deny.yaml the Route turns 503 even though it is still Admitted - re-open only the router path with examples/allow-from-router.yaml (namespaceSelector policy-group.network.openshift.io/ingress: "").',
     ],
     steps: [
       { command: `oc new-project serving-cert`, text: 'Create the project for the app.' },
@@ -1527,7 +1527,7 @@ export const EX280_CHEATSHEET = [
     items: [
       {
         cmd: `oc login -u <user> -p '<password>'`,
-        note: 'Log in. Omit -p and oc prompts for the password; the installer stores the kubeadmin password in ~/auth/kubeadmin-password. The kube-system/kubeadmin secret holds only a bcrypt hash (oc extract prints $2a$10$…), so it cannot recover the password — its exam use is removing kubeadmin once another cluster-admin exists: oc delete secret kubeadmin -n kube-system.',
+        note: 'Log in. Omit -p and oc prompts for the password; the installer stores the kubeadmin password in ~/auth/kubeadmin-password. The kube-system/kubeadmin secret holds only a bcrypt hash (oc extract prints $2a$10$…), so it cannot recover the password - its exam use is removing kubeadmin once another cluster-admin exists: oc delete secret kubeadmin -n kube-system.',
       },
       { cmd: `oc whoami`, note: 'Current user.' },
       { cmd: `oc status`, note: 'Quick overview of the current project.' },
@@ -1592,7 +1592,7 @@ export const EX280_CHEATSHEET = [
       },
       {
         cmd: `oc create secret generic <name> --from-file=<key>=<path> --dry-run=client -o yaml -n <ns> | oc replace -f -`,
-        note: 'Alternative rotate pipeline — one correctly piped command.',
+        note: 'Alternative rotate pipeline - one correctly piped command.',
       },
       {
         cmd: `oc create secret generic <name> --from-literal=K=V --from-file=<key>=<path>`,

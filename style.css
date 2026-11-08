@@ -1735,7 +1735,7 @@ body {
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
-   OpenShift Games — brand + shell additions
+   shifting.pro — brand + shell additions
    OpenShift red accents (existing layout preserved), palette scroll for the
    full kind registry, EX280 Prep / Files panel hooks, level tutorial coach marks.
    Owner: brand-dev (index.html / style.css)
@@ -2300,7 +2300,7 @@ body {
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
-   OpenShift Games — IN-GAME UI SYSTEM (v2)
+   shifting.pro — IN-GAME UI SYSTEM (v2)
    Owner: gamefeel. Flat ops-console surfaces, one radius, one spacing scale.
    The start page is owned by the lead (start.css); menu-only rules above stay
    untouched for now so nothing regresses while the new start page lands.

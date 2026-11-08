@@ -1,4 +1,4 @@
-# OpenShift Games — https://shifting.pro
+# shifting.pro
 # Humans + agents welcome. Training crawlers + SEO scrapers blocked.
 # No sitemap is generated for this static demo.
 

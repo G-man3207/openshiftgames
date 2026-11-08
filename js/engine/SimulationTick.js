@@ -1,5 +1,5 @@
 /**
- * SimulationTick.js — fixed-step controller loop for OpenShift Games.
+ * SimulationTick.js — fixed-step controller loop for shifting.pro.
  *
  * Extends the original Kubernetes simulation with OpenShift 4.22 controllers:
  *   - Project lifecycle (Active → Terminating → purged)
@@ -10126,7 +10126,7 @@ export class SimulationTick {
         : this._certificateView(
             createSelfSignedCertificate({
               commonName: `${route.spec?.to?.name}.${route.metadata.namespace}.svc`,
-              organization: 'OpenShift Games',
+              organization: 'shifting.pro',
               issuer: { commonName: 'service-ca', organization: 'OpenShift' },
             }).info
           );

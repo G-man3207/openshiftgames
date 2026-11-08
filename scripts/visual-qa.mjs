@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * OpenShift Games — visual QA + responsive regression harness.
+ * shifting.pro — visual QA + responsive regression harness.
  *
  * Captures the start page at five viewports, walks its sections, captures every
  * major in-game UI state at 1600x900, and records console/page errors, layout

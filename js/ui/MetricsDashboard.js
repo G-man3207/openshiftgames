@@ -574,7 +574,7 @@ export class MetricsDashboard {
         .map(
           ({ pod, cpu, memory }) => `<tr class="border-t border-white/5">
         <td class="px-1 py-0.5 text-white/70 truncate max-w-[110px]" title="${this._escapeHTML(pod.metadata?.name)}">${this._escapeHTML(pod.metadata?.name)}</td>
-        <td class="px-1 py-0.5 text-white/35 truncate max-w-[80px]" title="${this._escapeHTML(pod.metadata?.namespace)}">${this._escapeHTML(pod.metadata?.namespace || '—')}</td>
+        <td class="px-1 py-0.5 text-white/35 truncate max-w-[80px]" title="${this._escapeHTML(pod.metadata?.namespace)}">${this._escapeHTML(pod.metadata?.namespace || '-')}</td>
         <td class="px-1 py-0.5 text-right text-blue-300">${this._escapeHTML(formatCpu(cpu))}</td>
         <td class="px-1 py-0.5 text-right text-purple-300">${this._escapeHTML(formatMemory(memory))}</td>
       </tr>`

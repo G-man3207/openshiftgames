@@ -1,5 +1,5 @@
 /**
- * MergePatch.js — Kubernetes patch strategies for the OpenShift Games engine.
+ * MergePatch.js — Kubernetes patch strategies for the shifting.pro engine.
  *
  * Implements the three patch formats the real API server accepts from
  * `oc patch` (`--type=strategic|merge|json`), plus the validation the API

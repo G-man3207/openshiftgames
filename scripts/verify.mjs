@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * OpenShift Games — static verification harness (no runtime dependencies).
+ * shifting.pro — static verification harness (no runtime dependencies).
  *
  * Usage:  node scripts/verify.mjs [--verbose]
  * Exit code 0 = all checks passed, 1 = failures.
@@ -10057,7 +10057,7 @@ if (ogShot) {
 }
 const indexSrc = read('index.html');
 const title = indexSrc.match(/<title>([^<]+)<\/title>/)?.[1] || '';
-if (title !== 'OpenShift Games — Learn OpenShift by Playing (EX280)')
+if (title !== 'shifting.pro - Learn OpenShift by Playing (EX280)')
   fail('branding', `index title is "${title}"`);
 else passed();
 const requiredMeta = [
@@ -10071,8 +10071,8 @@ for (const [needle, value] of requiredMeta) {
   if (!indexSrc.includes(needle) || !indexSrc.includes(value))
     fail('branding', `index.html missing ${needle} / ${value}`);
 }
-if (!indexSrc.includes('OpenShift Games'))
-  fail('branding', 'index.html does not contain OpenShift Games branding');
+if (!indexSrc.includes('shifting.pro'))
+  fail('branding', 'index.html does not contain shifting.pro branding');
 if (!indexSrc.includes('menu-logo')) fail('branding', 'index.html menu logo element missing');
 if (!/OpenShift 4\.22 Cluster Simulation · Built for EX280/.test(indexSrc))
   fail('branding', 'menu subtitle does not match spec');
@@ -10111,7 +10111,7 @@ if (!/cdn\.tailwindcss\.com\/3\.4\.1/.test(indexSrc))
 if (!/<meta name="viewport"/.test(indexSrc)) fail('branding', 'index.html missing viewport meta');
 const drawTitle = read('draw.html').match(/<title>([^<]+)<\/title>/)?.[1] || '';
 if (!/OpenShift Draw/.test(drawTitle)) fail('branding', `draw title is "${drawTitle}"`);
-if (!/OpenShift Games (?:·|&middot;) \/draw/.test(read('draw.html')))
+if (!/shifting.pro (?:·|&middot;) \/draw/.test(read('draw.html')))
   fail('branding', 'draw watermark missing');
 if (!/shifting\.pro/.test(indexSrc) || !/shifting\.pro/.test(read('README.md'))) {
   fail('branding', 'canonical shifting.pro URL missing from index/README');
@@ -10119,7 +10119,7 @@ if (!/shifting\.pro/.test(indexSrc) || !/shifting\.pro/.test(read('README.md')))
 
 const readme = read('README.md');
 const readmeChecks = [
-  [/^# OpenShift Games/m, 'README title'],
+  [/^# shifting.pro/m, 'README title'],
   [/## EX280 coverage/i, 'README EX280 coverage heading'],
   [/## Credits & license/i, 'README credits heading'],
   [/rohitg00\/k8sgames/, 'README original-project attribution'],
@@ -10665,7 +10665,7 @@ if (
 // ── Report ─────────────────────────────────────────────────────────────────
 const sep = '─'.repeat(74);
 console.log(sep);
-console.log('OpenShift Games — static verification');
+console.log('shifting.pro — static verification');
 console.log(sep);
 if (VERBOSE) {
   for (const n of notes) console.log(`  note: ${n}`);

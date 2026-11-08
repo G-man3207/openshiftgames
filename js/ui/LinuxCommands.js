@@ -1713,7 +1713,7 @@ export const LINUX_COMMAND_METHODS = {
       );
     }
     return fail(
-      `Changing password for user ${target}.\nNew password: \npasswd: Authentication token manipulation error\n(simulator: the terminal cannot answer password prompts — use: echo 'NewPassw0rd' | sudo passwd --stdin ${target})`
+      `Changing password for user ${target}.\nNew password: \npasswd: Authentication token manipulation error\n(simulator: the terminal cannot answer password prompts - use: echo 'NewPassw0rd' | sudo passwd --stdin ${target})`
     );
   },
 
@@ -1860,7 +1860,7 @@ export const LINUX_COMMAND_METHODS = {
       );
     if (this._user() !== 'root') {
       return fail(
-        'Password: \nsu: Authentication failure\n(simulator: the terminal cannot answer password prompts — student has passwordless sudo: use sudo -i or sudo su -)'
+        'Password: \nsu: Authentication failure\n(simulator: the terminal cannot answer password prompts - student has passwordless sudo: use sudo -i or sudo su -)'
       );
     }
     if (commandIndex >= 0) {
@@ -3233,7 +3233,7 @@ export const LINUX_COMMAND_METHODS = {
             `Call to ${verb === 'reboot' ? 'Reboot' : 'PowerOff'} failed: Interactive authentication required.`
           );
         return fail(
-          `(simulator) ${verb} is disabled on the lab workstation — the level state would be lost.`
+          `(simulator) ${verb} is disabled on the lab workstation - the level state would be lost.`
         );
       default:
         return fail(`Unknown command verb ${verb}.`);
@@ -4303,7 +4303,7 @@ export const LINUX_COMMAND_METHODS = {
             [
               ...out,
               'Is this ok [y/N]: Operation aborted.',
-              '(simulator: the terminal cannot answer prompts — re-run with -y)',
+              '(simulator: the terminal cannot answer prompts - re-run with -y)',
             ].join('\n')
           );
         out.push('Downloading Packages:');
@@ -4400,7 +4400,7 @@ export const LINUX_COMMAND_METHODS = {
             [
               ...out,
               'Is this ok [y/N]: Operation aborted.',
-              '(simulator: the terminal cannot answer prompts — re-run with -y)',
+              '(simulator: the terminal cannot answer prompts - re-run with -y)',
             ].join('\n')
           );
         out.push(
@@ -5311,7 +5311,7 @@ export const LINUX_COMMAND_METHODS = {
     if (interactive && !detach && !command.length) {
       host.removeContainer(container, { user, force: true });
       return fail(
-        `${out.length ? `${out.join('\n')}\n` : ''}(simulator: interactive container shells are not supported — run it detached, e.g. podman run -d --name test ${ref} sleep infinity, then podman exec test <command>)`,
+        `${out.length ? `${out.join('\n')}\n` : ''}(simulator: interactive container shells are not supported - run it detached, e.g. podman run -d --name test ${ref} sleep infinity, then podman exec test <command>)`,
         1
       );
     }
@@ -5340,7 +5340,7 @@ export const LINUX_COMMAND_METHODS = {
         [
           ...out,
           ...container.logs,
-          '(simulator: the container keeps running in the foreground on a real system — use -d to detach)',
+          '(simulator: the container keeps running in the foreground on a real system - use -d to detach)',
         ].join('\n')
       );
     }
@@ -6240,7 +6240,7 @@ export const LINUX_COMMAND_METHODS = {
       return fail(`"${path}" [Permission Denied]`);
     if (found.ok && !host._can(found.node, identity, 2)) {
       return fail(
-        `"${path}" [readonly]\nE45: 'readonly' option is set (add ! to override)\n(${user} cannot write ${path} — run: sudo ${editor} ${path})`
+        `"${path}" [readonly]\nE45: 'readonly' option is set (add ! to override)\n(${user} cannot write ${path} - run: sudo ${editor} ${path})`
       );
     }
     if (!found.ok) {
@@ -6261,7 +6261,7 @@ export const LINUX_COMMAND_METHODS = {
         store.writeFile(panelKey, content);
         host.mirrors.set(panelKey, { path: abs, synced: content });
       }
-      note = ` (editable copy ${panelKey} — saved changes are written back to ${abs})`;
+      note = ` (editable copy ${panelKey} - saved changes are written back to ${abs})`;
     }
     this._refreshFilesPanel();
     if (panel && typeof panel.openFile === 'function') {
@@ -6914,7 +6914,7 @@ function parseScript(text) {
         /^[A-Za-z_]\w*\(\)/.test(item.text)
       ) {
         return {
-          error: `(simulator) \`${word}\` is not supported in scripts — use if/for and simple commands`,
+          error: `(simulator) \`${word}\` is not supported in scripts - use if/for and simple commands`,
           line: item.line,
         };
       }

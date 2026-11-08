@@ -1,16 +1,16 @@
-# OpenShift 4.22 — Networking, Routes, Storage, Scheduling, Security/RBAC/SCC
+# OpenShift 4.22 - Networking, Routes, Storage, Scheduling, Security/RBAC/SCC
 
 **Research reference for the k8sgames → OpenShift/EX280 conversion.**
-Feeds campaign levels, incident definitions, and command-bar verbs. RESEARCH ONLY — no game code was modified.
+Feeds campaign levels, incident definitions, and command-bar verbs. RESEARCH ONLY - no game code was modified.
 
 | Field                       | Value                                                                                                                                                                                                                                                                                           |
 | --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Document                    | `docs/research/openshift-networking-security-storage.md`                                                                                                                                                                                                                                        |
 | Research date / access date | **2026-11-03**                                                                                                                                                                                                                                                                                  |
 | Primary doc set             | **OpenShift Container Platform 4.22** on docs.redhat.com (latest 4.x; `4.23` returns 404)                                                                                                                                                                                                       |
-| Exam targeted               | **EX280V422** — Red Hat Certified Specialist in OpenShift Administration (the version ID comes from Red Hat's public _Exam Objectives by Version_ PDF)                                                                                                                                          |
+| Exam targeted               | **EX280V422** - Red Hat Certified Specialist in OpenShift Administration (the version ID comes from Red Hat's public _Exam Objectives by Version_ PDF)                                                                                                                                          |
 | Exam objectives source      | <https://training-lms.redhat.com/public_content/redhat/training/Red%20Hat%20Certification%20Exam%20Objectives%20by%20Version.pdf> (downloaded and text-extracted 2026-11-03; EX280V422 section)                                                                                                 |
-| Exact-text verification     | Red Hat docs source branch `enterprise-4.22` of `openshift/openshift-docs` (commit `a1ea307ec1ff90d82126e21f229a0c1142a9565d`): <https://github.com/openshift/openshift-docs/tree/enterprise-4.22> — used to quote command/YAML exactly where the docs.redhat.com SPA could not be text-fetched |
+| Exact-text verification     | Red Hat docs source branch `enterprise-4.22` of `openshift/openshift-docs` (commit `a1ea307ec1ff90d82126e21f229a0c1142a9565d`): <https://github.com/openshift/openshift-docs/tree/enterprise-4.22> - used to quote command/YAML exactly where the docs.redhat.com SPA could not be text-fetched |
 | Confidence                  | **High** for command syntax/YAML/API versions and SCC list (verbatim doc source). **Medium** for a few operational nuances flagged ⚠️ (lab-dependent; verify on the exam-like cluster).                                                                                                         |
 | Deliberate exclusions       | Builds/ImageStreams/Deployments/DFC/operators → sibling task (`openshift-workloads-builds.md`); EX280 objectives overview → sibling task (`ex280-objectives.md`)                                                                                                                                |
 
@@ -29,14 +29,14 @@ Objective bullets below are quoted (lightly normalised) from the EX280V422 secti
 | 2   | …**Troubleshoot software defined networking**                                                                                                                                     | §5.7, §11             | L3, L5         |
 | 3   | …**Create and edit external routes**                                                                                                                                              | §2                    | L1, L2         |
 | 4   | …**Control cluster network ingress**                                                                                                                                              | §3, §4, §5            | L3, L7         |
-| 5   | …**Secure external and internal traffic using TLS certificates**                                                                                                                  | §2.3–§2.8, §3.4, §6.3 | L1, L2         |
+| 5   | …**Secure external and internal traffic using TLS certificates**                                                                                                                  | §2.3-§2.8, §3.4, §6.3 | L1, L2         |
 | 6   | …**Configure application network policies**                                                                                                                                       | §5                    | L5             |
-| 7   | Expose non-HTTP/SNI applications → **Configure a load balancer service**                                                                                                          | §4.1–§4.4             | L7             |
+| 7   | Expose non-HTTP/SNI applications → **Configure a load balancer service**                                                                                                          | §4.1-§4.4             | L7             |
 | 8   | …**Configure external application access**                                                                                                                                        | §1, §2.1, §4          | L1, L7         |
-| 9   | Manage authentication and authorization → **HTPasswd identity provider; create/delete users; modify user passwords; create/manage groups; modify user and group permissions**     | §6.4–§7.6             | L4             |
+| 9   | Manage authentication and authorization → **HTPasswd identity provider; create/delete users; modify user passwords; create/manage groups; modify user and group permissions**     | §6.4-§7.6             | L4             |
 | 10  | Enable developer self-service → **cluster resource quotas; project quotas; project resource requirements; project limit ranges; project templates**                               | §8                    | L6             |
 | 11  | Configure application security → **service accounts; run privileged applications; SCC permissions; secrets; Kubernetes API access; Jobs; CronJobs**                               | §6, §8.6, §9.4        | L4, L6         |
-| 12  | Manage OpenShift Container Platform (**cluster health, events, logs, projects**) — implied by "be prepared to perform all tasks of a Red Hat Certified Technologist in OpenShift" | §3.7, §11             | L3             |
+| 12  | Manage OpenShift Container Platform (**cluster health, events, logs, projects**) - implied by "be prepared to perform all tasks of a Red Hat Certified Technologist in OpenShift" | §3.7, §11             | L3             |
 
 **Not explicit in EX280V422** (still included because the game should remain truthful / because sibling objectives use them):
 
@@ -55,7 +55,7 @@ OpenShift is Kubernetes: `Service` is `v1` (core), `EndpointSlice` is `discovery
 | Type                  | apiVersion/kind                     | What it gives you                                      | Cluster exposure path   | Typical EX280 use                        |
 | --------------------- | ----------------------------------- | ------------------------------------------------------ | ----------------------- | ---------------------------------------- |
 | `ClusterIP` (default) | `v1/Service`                        | Stable virtual IP inside the cluster only              | nothing external        | app-to-app, then `oc expose svc` → Route |
-| `NodePort`            | `v1/Service`                        | Same, plus `nodePort` in **30000–32767** on every node | node IP:nodePort        | non-HTTP/SNI access, simple labs         |
+| `NodePort`            | `v1/Service`                        | Same, plus `nodePort` in **30000-32767** on every node | node IP:nodePort        | non-HTTP/SNI access, simple labs         |
 | `LoadBalancer`        | `v1/Service`                        | Cloud LB or **MetalLB**-assigned external IP           | external IP 80/443 etc. | non-HTTP/SNI access; objective 7         |
 | `ExternalName`        | `v1/Service`                        | DNS CNAME to external hostname                         | DNS only                | pointing to outside DB/service           |
 | Headless              | `v1/Service` with `clusterIP: None` | Per-pod A/AAAA DNS, no VIP                             | endpoints only          | StatefulSets, direct pod addressing      |
@@ -111,7 +111,7 @@ That one line is the best mental model for the game's connection lines: **Route 
 
 ---
 
-## 2. Routes (`route.openshift.io/v1`) — the core OpenShift exposure object
+## 2. Routes (`route.openshift.io/v1`) - the core OpenShift exposure object
 
 Canonical docs: **Routes** chapter of the _Ingress and load balancing_ book [R2], with the _Configuring ingress cluster traffic_ chapter [R3]; API schema [R21].
 
@@ -171,11 +171,11 @@ spec:
 | `spec.tls.termination` | TLS ends at                           | Router needs cert/key?                                                                          | Backend traffic              | `insecureEdgeTerminationPolicy`                  | Create with                       |
 | ---------------------- | ------------------------------------- | ----------------------------------------------------------------------------------------------- | ---------------------------- | ------------------------------------------------ | --------------------------------- |
 | _(none)_               | nowhere (plain HTTP)                  | no                                                                                              | plain HTTP                   | n/a                                              | `oc expose svc`                   |
-| `edge`                 | IngressController (HAProxy)           | **yes** — `tls.certificate`+`tls.key` (route or default cert)                                   | HTTP (decrypted)             | `None` (default), `Redirect`, `Allow`            | `oc create route edge ...`        |
+| `edge`                 | IngressController (HAProxy)           | **yes** - `tls.certificate`+`tls.key` (route or default cert)                                   | HTTP (decrypted)             | `None` (default), `Redirect`, `Allow`            | `oc create route edge ...`        |
 | `passthrough`          | backend pod                           | no (only `tls.termination` required)                                                            | still **TLS**, SNI forwarded | `None`/`Redirect` (Allow is edge/reencrypt-only) | `oc create route passthrough ...` |
 | `reencrypt`            | router **and** re-encrypts to backend | yes (`cert`/`key` on router side) + trust for backend (`destinationCACertificate` / service CA) | TLS again                    | `None`, `Redirect`, `Allow`                      | `oc create route reencrypt ...`   |
 
-`insecureEdgeTerminationPolicy` semantics are explicit in the Route API: _Allow — traffic is sent to the server on the insecure port (edge/reencrypt terminations only); None — no traffic on insecure port (default); Redirect — clients redirected to secure port._ [R21]
+`insecureEdgeTerminationPolicy` semantics are explicit in the Route API: _Allow - traffic is sent to the server on the insecure port (edge/reencrypt terminations only); None - no traffic on insecure port (default); Redirect - clients redirected to secure port._ [R21]
 
 ### 2.3 Create edge route with a custom certificate
 
@@ -494,11 +494,11 @@ oc expose svc <service-name> --hostname <route-name>.apps-sharded.basedomain.exa
 oc get route <route-name> -o yaml     # check status.ingress conditions: Admitted per shard
 ```
 
-The **default** Ingress Controller has no selectors, so it admits the new shard's routes too unless you also give it selectors — a classic lab/troubleshooting detail. [R3]
+The **default** Ingress Controller has no selectors, so it admits the new shard's routes too unless you also give it selectors - a classic lab/troubleshooting detail. [R3]
 
 ### 3.6 Route creation via Ingress objects / editing routes through Ingress
 
-`oc expose` and `oc create route` are the EX280 path; if the task says "create an Ingress", use `oc create -f` with the YAML above, then `oc get ingress` and `oc describe route` — the generated Route is visible. Editing the Route directly is also fine (the Ingress may re-reconcile). [R3]
+`oc expose` and `oc create route` are the EX280 path; if the task says "create an Ingress", use `oc create -f` with the YAML above, then `oc get ingress` and `oc describe route` - the generated Route is visible. Editing the Route directly is also fine (the Ingress may re-reconcile). [R3]
 
 ### 3.7 Cluster ingress health (used by "control cluster network ingress" + cluster health)
 
@@ -600,7 +600,7 @@ spec:
   ports:
     - port: 8080
       targetPort: 8080
-      nodePort: 30327 # optional; 30000–32767 assigned if omitted
+      nodePort: 30327 # optional; 30000-32767 assigned if omitted
 ```
 
 ```bash
@@ -619,8 +619,8 @@ oc get svc
 oc explain service.spec.externalIPs
 ```
 
-- `spec.externalIPs: [ "192.0.2.10" ]` on a ClusterIP service makes the service reachable on that IP if routing exists — no router involved.
-- `ExternalName` (`oc create service externalname my-ns --external-name bar.com`) returns a CNAME — useful to present an external DB "inside" the project.
+- `spec.externalIPs: [ "192.0.2.10" ]` on a ClusterIP service makes the service reachable on that IP if routing exists - no router involved.
+- `ExternalName` (`oc create service externalname my-ns --external-name bar.com`) returns a CNAME - useful to present an external DB "inside" the project.
 - Headless (`clusterIP: None`) for direct pod DNS (StatefulSet stable DNS names).
 
 ### 4.4 What "configure external application access" means in practice
@@ -630,7 +630,7 @@ For a non-HTTP workload the exam-realistic chain is: Deployment/StatefulSet → 
 **Game hooks**
 
 - Incident: `EXTERNAL-IP: <pending>` forever (MetalLB operator not installed, no address pool, `autoAssign: false` and no annotation).
-- Level: "expose the database (TCP/5432) to the demo client" — correct answer is LB/NodePort, a Route is wrong.
+- Level: "expose the database (TCP/5432) to the demo client" - correct answer is LB/NodePort, a Route is wrong.
 - Command bar: `oc create service loadbalancer|nodeport|externalname`, `oc get svc`, `oc get ipaddresspool -n metallb-system`, `oc get l2advertisement -n metallb-system`.
 
 ---
@@ -642,8 +642,8 @@ For a non-HTTP workload the exam-realistic chain is: Deployment/StatefulSet → 
 - **OVN-Kubernetes is the default network provider** for OpenShift 4.22 (overlay, OVS on each node). [R5][R34]
 - **OpenShift SDN is no longer supported in 4.22**: installation supports only `OVNKubernetes`; the docs note SDN was removed in 4.17. For the exam: answer OVN-Kubernetes; do not try to "migrate to SDN". [R5][R34]
 - Cluster-wide network config:
-  - `oc describe network.config/cluster` — `spec.networkType`, `clusterNetwork`, `serviceNetwork`, MTU status (verified documented command). [R5][R25][R34]
-  - `oc get network.operators.operator.openshift.io cluster -o yaml` (fully qualified resource; the shorter `oc get network.operator cluster -o yaml` also resolves on 4.x) — operator view: `operator.openshift.io/v1` Network named `cluster`; `spec.defaultNetwork.type: OVNKubernetes`. [R22][R34]
+  - `oc describe network.config/cluster` - `spec.networkType`, `clusterNetwork`, `serviceNetwork`, MTU status (verified documented command). [R5][R25][R34]
+  - `oc get network.operators.operator.openshift.io cluster -o yaml` (fully qualified resource; the shorter `oc get network.operator cluster -o yaml` also resolves on 4.x) - operator view: `operator.openshift.io/v1` Network named `cluster`; `spec.defaultNetwork.type: OVNKubernetes`. [R22][R34]
   - `oc get co network -o yaml` / `oc get co/network -o json` for status. [R16]
 - Caveats: `clusterNetwork` can be expanded post-install; `serviceNetwork` cannot be changed post-install; `defaultNetwork.type` is set at install. [R5]
 
@@ -659,7 +659,7 @@ oc get co network
 `NetworkPolicy` is `networking.k8s.io/v1`. Objects are **additive** and **default-allow until selected**: every pod not matched by any policy stays fully open; a pod matched by one or more policies only accepts what at least one policy allows. [R5][R28]
 
 - Policy selects pods in its **own namespace only** (`spec.podSelector`); `ingress.from` can combine `podSelector` (same ns), `namespaceSelector` (other ns by labels), `ipBlock`.
-- `namespaceSelector` matches namespace labels — note the implicit `kubernetes.io/metadata.name: <ns>` label; this is a very common exam shortcut.
+- `namespaceSelector` matches namespace labels - note the implicit `kubernetes.io/metadata.name: <ns>` label; this is a very common exam shortcut.
 - `policyTypes: [Ingress]`, `[Egress]` or both; an **empty `ingress: []` denies all ingress** to selected pods.
 - Egress policies must allow **DNS** (`kube-dns` in `openshift-dns` namespace, port 53/udp+tcp) or pods lose name resolution.
 - OVN-Kubernetes enforces policies in the OVN pipeline; the previous "multitenant" OpenShift-SDN mode is now emulated with policies (see multitenant-isolation docs). [R5]
@@ -716,7 +716,7 @@ spec:
               kubernetes.io/metadata.name: namespace-y
 ```
 
-4. Allow ingress from the **OpenShift router only** (label `policy-group.network.openshift.io/ingress: ""` on `openshift-ingress` namespace) — needed when default-deny breaks external Routes. [R5]
+4. Allow ingress from the **OpenShift router only** (label `policy-group.network.openshift.io/ingress: ""` on `openshift-ingress` namespace) - needed when default-deny breaks external Routes. [R5]
 
 ```yaml
 apiVersion: networking.k8s.io/v1
@@ -792,7 +792,7 @@ oc apply -f policy.yaml -n myproject
 
 Policies can be injected into **every new project** via the project template (the same mechanism as quotas): edit the template in `openshift-config` and add the NetworkPolicy objects. [R5][R35]
 
-⚠️ **4.22 change:** OCP 4.22 now ships default `NetworkPolicy` objects in _some platform namespaces_ (cluster DNS and Ingress components install and maintain "deny-all" policies). Do **not** run custom pods in `openshift-dns`, `openshift-ingress`, `openshift-dns-operator`, or `openshift-ingress-operator` — their deny-by-default model will block them. Do not modify the platform's own policies. [R5]
+⚠️ **4.22 change:** OCP 4.22 now ships default `NetworkPolicy` objects in _some platform namespaces_ (cluster DNS and Ingress components install and maintain "deny-all" policies). Do **not** run custom pods in `openshift-dns`, `openshift-ingress`, `openshift-dns-operator`, or `openshift-ingress-operator` - their deny-by-default model will block them. Do not modify the platform's own policies. [R5]
 
 - `AdminNetworkPolicy` / `BaselineAdminNetworkPolicy` (`policy.networking.k8s.io/v1alpha1`) exist for cluster-wide admin policies; awareness only for EX280. [R5][R21]
 
@@ -839,7 +839,7 @@ oc adm inspect clusteroperator/network
 
 **Game hooks**
 
-- Incident: "Namespace isolated after adding default-deny — everyone now gets 503/timeouts" → player must add the same-namespace/allow-router/DNS policies.
+- Incident: "Namespace isolated after adding default-deny - everyone now gets 503/timeouts" → player must add the same-namespace/allow-router/DNS policies.
 - Incident: "DNS resolution failures after egress policy" → add port 53 UDP/TCP egress rule.
 - Incident: "custom pod in openshift-ingress cannot reach anything" (4.22 platform deny-all behavior) → move the pod to a normal project.
 - Command bar: `oc get networkpolicy`, `oc describe networkpolicy`, `oc apply -f`, `oc run --rm -i -t --image=alpine`, `oc debug node`, `oc adm must-gather`, `oc adm inspect ns/...`.
@@ -861,7 +861,7 @@ From the 4.22 `oc get scc` example and the default-SCC table: [R20]
 | SCC                             | What it adds / allows                                                                                                 | Notes                                                                                                                                                                                                          |
 | ------------------------------- | --------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `restricted-v2`                 | restricted + all capabilities dropped + `NET_BIND_SERVICE` only + `runtime/default` seccomp + no privilege escalation | **default for authenticated users on 4.11+ installs**                                                                                                                                                          |
-| `restricted-v3`                 | like restricted-v2 plus **pod-level Linux user namespaces required** (`hostUsers: false`)                             | most restrictive default SCC in 4.22; docs state it is the default for authenticated users in new installs — ⚠️ verify with `oc get scc` / `oc adm policy who-can use scc restricted-v3` on the target cluster |
+| `restricted-v3`                 | like restricted-v2 plus **pod-level Linux user namespaces required** (`hostUsers: false`)                             | most restrictive default SCC in 4.22; docs state it is the default for authenticated users in new installs - ⚠️ verify with `oc get scc` / `oc adm policy who-can use scc restricted-v3` on the target cluster |
 | `restricted`                    | legacy restricted (not granted to users on 4.11+ new installs)                                                        | present for upgraded clusters                                                                                                                                                                                  |
 | `nonroot`, `nonroot-v2`         | any non-root UID                                                                                                      | v2 drops ALL caps / seccomp default                                                                                                                                                                            |
 | `anyuid`                        | run as any UID/GID                                                                                                    | **cluster-admin priority by default**                                                                                                                                                                          |
@@ -903,7 +903,7 @@ oc create role scc-privileged --verb=use --resource=scc --resource-name=privileg
 oc create rolebinding scc-privileged --role=scc-privileged --serviceaccount=myproject:myapp -n myproject
 ```
 
-### 6.4 SCC vs securityContext — how to run a privileged app (V422: "Run privileged applications")
+### 6.4 SCC vs securityContext - how to run a privileged app (V422: "Run privileged applications")
 
 Pod/workload YAML must **ask** for the privilege; the SA/user must be **granted** the SCC:
 
@@ -943,7 +943,7 @@ oc get pod <pod> -o jsonpath='{.metadata.annotations.openshift\.io/scc}{"\n"}'  
 
 Key rules:
 
-- `privileged: true` alone does **not** select the privileged SCC — the available SCC set must contain one with `allowPrivilegedContainer: true` and the user/SA must be allowed to use it. [R20]
+- `privileged: true` alone does **not** select the privileged SCC - the available SCC set must contain one with `allowPrivilegedContainer: true` and the user/SA must be allowed to use it. [R20]
 - **SCC is admission**: if nothing matches, pod creation fails with a `Forbidden: unable to validate against any security context constraint` error listing each SCC's reason. The fix is either request less (drop `privileged`, `runAsUser`, `hostPath`…) **or** grant a matching SCC to the SA. [R20] (⚠️ exact error text varies by OCP minor; game should show the _shape_: `Error creating: pods ... is forbidden: unable to validate against any security context constraint: [provider restricted-v2: ...]`.)
 - `runAsUser`/`fsGroup` explicit values must fall inside the namespace's `openshift.io/sa.scc.uid-range` / `*-supplemental-groups` annotations for `restricted-v2` (`MustRunAsRange`). Get them with `oc get ns <ns> -o yaml`. [R20]
 - Pin a workload to an SCC with the annotation (4.22-supported): [R20]
@@ -1051,7 +1051,7 @@ data:
 
 **Game hooks**
 
-- Incident: "Pod Forbidden — SCC" with player choice: grant `anyuid` to SA vs set `runAsUser` to allowed UID-range value vs runAsNonRoot. Correct fix depends on task wording; teach both.
+- Incident: "Pod Forbidden - SCC" with player choice: grant `anyuid` to SA vs set `runAsUser` to allowed UID-range value vs runAsNonRoot. Correct fix depends on task wording; teach both.
 - Incident: "App cannot pull image from internal registry" → missing/incorrect image pull secret or SA lacking pull rights (`oc secrets link ... --for=pull`, `oc get sa default -o yaml`).
 - Incident: "App's API calls return 403" → SA missing role binding; fix with `oc adm policy add-role-to-user view -z <sa>`; teach `oc create token` instead of legacy token secret (4.16+ behavior is a common trap).
 - Command bar: `oc get scc`, `oc describe scc`, `oc adm policy add-scc-to-user`, `oc get sa`, `oc create sa`, `oc create token`, `oc set env --from`, `oc create secret ...`.
@@ -1060,13 +1060,13 @@ data:
 
 ## 7. RBAC, users, groups, HTPasswd (V422: "Manage authentication and authorization")
 
-Canonical: _Authentication and authorization_ book [R7] — _Using RBAC to define and apply permissions_ [R8]; _Configuring identity providers_ (htpasswd) [R9]; service-account docs [R10]. API: `rbac.authorization.k8s.io/v1` for Role/ClusterRole/RoleBinding/ClusterRoleBinding; `user.openshift.io/v1` for User/Identity/Group; `config.openshift.io/v1` OAuth.
+Canonical: _Authentication and authorization_ book [R7] - _Using RBAC to define and apply permissions_ [R8]; _Configuring identity providers_ (htpasswd) [R9]; service-account docs [R10]. API: `rbac.authorization.k8s.io/v1` for Role/ClusterRole/RoleBinding/ClusterRoleBinding; `user.openshift.io/v1` for User/Identity/Group; `config.openshift.io/v1` OAuth.
 
 ### 7.1 Object model in one table
 
 | Object             | Scope     | apiVersion/kind                                   | Purpose                                                            |
 | ------------------ | --------- | ------------------------------------------------- | ------------------------------------------------------------------ |
-| Rule               | —         | (inside Role/ClusterRole `rules[]`)               | verbs × resources × resourceNames                                  |
+| Rule               | -         | (inside Role/ClusterRole `rules[]`)               | verbs × resources × resourceNames                                  |
 | Role               | namespace | `rbac.authorization.k8s.io/v1 Role`               | project-scoped permission set                                      |
 | ClusterRole        | cluster   | `rbac.authorization.k8s.io/v1 ClusterRole`        | cluster-wide permission set (also bindable locally)                |
 | RoleBinding        | namespace | `rbac.authorization.k8s.io/v1 RoleBinding`        | binds Role **or** ClusterRole to users/groups/SAs in one namespace |
@@ -1107,7 +1107,7 @@ subjects:
 
 ### 7.2 Default cluster roles (bind these instead of inventing new ones)
 
-`cluster-admin` (super-user), `admin` (project manager, everything except quota in the project when bound locally), `edit` (modify most objects, not roles/bindings), `view` (read-only, not roles/bindings), `cluster-reader`, `cluster-status`, `basic-user`, `self-provisioner` (create own projects). The `admin`/`edit`/`view`/`cluster-reader` ClusterRoles are **aggregated** — new API resources can add rules to them. [R8]
+`cluster-admin` (super-user), `admin` (project manager, everything except quota in the project when bound locally), `edit` (modify most objects, not roles/bindings), `view` (read-only, not roles/bindings), `cluster-reader`, `cluster-status`, `basic-user`, `self-provisioner` (create own projects). The `admin`/`edit`/`view`/`cluster-reader` ClusterRoles are **aggregated** - new API resources can add rules to them. [R8]
 
 ### 7.3 The command set (verbatim from the RBAC docs)
 
@@ -1186,7 +1186,7 @@ oc delete identity my_htpasswd_provider:ajones
 
 Groups are `user.openshift.io/v1 Group` objects; the `users` list on the Group is the authoritative membership. When you delete a user, also delete its Identity (otherwise stale mapping/tokens). [R9]
 
-### 7.5 HTPasswd identity provider — full lab flow (V422 explicit)
+### 7.5 HTPasswd identity provider - full lab flow (V422 explicit)
 
 Provider CR: `config.openshift.io/v1 OAuth` named **cluster**, in namespace `openshift-config`. [R9]
 
@@ -1195,7 +1195,7 @@ Provider CR: `config.openshift.io/v1 OAuth` named **cluster**, in namespace `ope
 htpasswd -c -B -b users.htpasswd alice 'ChangeMe123!'
 htpasswd -B -b users.htpasswd bob   'ChangeMe456!'
 
-# 2) secret in openshift-config — the key MUST be "htpasswd"
+# 2) secret in openshift-config - the key MUST be "htpasswd"
 oc create secret generic htpass-secret \
   --from-file=htpasswd=users.htpasswd -n openshift-config
 
@@ -1221,7 +1221,7 @@ oc login -u alice -p 'ChangeMe123!'
 oc whoami
 ```
 
-**Modify a user's password** (the exam objective!): you do not edit a User object — you update the htpasswd file/secret and optionally the Identity: [R9]
+**Modify a user's password** (the exam objective!): you do not edit a User object - you update the htpasswd file/secret and optionally the Identity: [R9]
 
 ```bash
 # pull current file out of the secret, change it, push it back
@@ -1253,7 +1253,7 @@ Kubeadmin (lab detail, optional): `oc get secrets -n kube-system | grep kubeadmi
 
 **Game hooks**
 
-- Level: "Onboard the dev team" — htpasswd file + secret + OAuth + group + `add-role-to-user edit` + password rotation; final check `oc login` as each user and `oc auth can-i`.
+- Level: "Onboard the dev team" - htpasswd file + secret + OAuth + group + `add-role-to-user edit` + password rotation; final check `oc login` as each user and `oc auth can-i`.
 - Incident: "alice can't see her project" (no RoleBinding), "password rotation keeps old login working" (secret not replaced), "group has right role but user missing from group" (`oc get group -o yaml`).
 - Command bar: `htpasswd`, `oc create secret generic htpasswd...`, `oc apply oauth`, `oc adm groups *`, `oc adm policy add-role-to-*`, `oc auth can-i`, `oc whoami`, `oc login`.
 
@@ -1272,9 +1272,9 @@ Canonical: quotas in the _Building applications_ book [R35]; LimitRange in the _
 | `LimitRange`           | namespace        | `v1 LimitRange`                                                                                                             | per-container/pod **min/max/default/defaultRequest/ratio**; injects defaults                   |
 | project template       | cluster (config) | `template.openshift.io/v1 Template` referenced by `project.config.openshift.io/v1 Project.spec.projectRequestTemplate.name` | objects created automatically in every new project (quota + limitrange + networkpolicy + RBAC) |
 
-Quota mechanism: when a ResourceQuota exists, every **new** pod must specify requests/limits (or a LimitRange must supply defaults) — otherwise admission rejects it with `FailedCreate ... must specify limits/requests`. This interaction is the most common exam trap for "project resource requirements". [R23]
+Quota mechanism: when a ResourceQuota exists, every **new** pod must specify requests/limits (or a LimitRange must supply defaults) - otherwise admission rejects it with `FailedCreate ... must specify limits/requests`. This interaction is the most common exam trap for "project resource requirements". [R23]
 
-### 8.2 ResourceQuota — commands + YAML
+### 8.2 ResourceQuota - commands + YAML
 
 ```bash
 oc create quota my-quota --hard=cpu=1,memory=1G,pods=2,services=3,secrets=5,persistentvolumeclaims=10
@@ -1325,7 +1325,7 @@ spec:
 
 Scopes: `Terminating`, `NotTerminating`, `BestEffort`, `NotBestEffort`, `PriorityClass`, `CrossNamespacePodAffinity`. [R23]
 
-### 8.3 ClusterResourceQuota (multi-project quota) — V422 explicit
+### 8.3 ClusterResourceQuota (multi-project quota) - V422 explicit
 
 Select projects by annotation (e.g. the default `openshift.io/requester` used by project requests) or label: [R23]
 
@@ -1360,9 +1360,9 @@ spec:
     labels: null
 ```
 
-⚠️ For a user to create projects, the cluster must still allow self-provisioning (`self-provisioner` ClusterRole bound to `system:authenticated:oauth` — the default). [R35]
+⚠️ For a user to create projects, the cluster must still allow self-provisioning (`self-provisioner` ClusterRole bound to `system:authenticated:oauth` - the default). [R35]
 
-### 8.4 LimitRange — commands + YAML
+### 8.4 LimitRange - commands + YAML
 
 ```bash
 oc create -f limitrange.yaml -n myproject
@@ -1469,14 +1469,14 @@ spec:
 
 **Game hooks**
 
-- Incident: "New pods Pending/FailedCreate after quota" — show `oc describe quota` Used/Hard and the admission error; fix = right-size requests or raise quota/limitrange.
-- Incident: "Project has quota but no LimitRange → default app can't deploy" — the classic missing-requests trap.
-- Level: "Onboard a new tenant automatically" — project template with quota+limitrange+networkpolicy + ClusterResourceQuota by requester annotation.
+- Incident: "New pods Pending/FailedCreate after quota" - show `oc describe quota` Used/Hard and the admission error; fix = right-size requests or raise quota/limitrange.
+- Incident: "Project has quota but no LimitRange → default app can't deploy" - the classic missing-requests trap.
+- Level: "Onboard a new tenant automatically" - project template with quota+limitrange+networkpolicy + ClusterResourceQuota by requester annotation.
 - Command bar: `oc create quota`, `oc create clusterquota`, `oc create -f limitrange.yaml`, `oc describe quota`, `oc get appliedclusterresourcequota`, `oc adm create-bootstrap-project-template`, `oc edit project.config.openshift.io/cluster`.
 
 ---
 
-## 9. Storage — BACKGROUND ONLY (not an explicit EX280V422 objective)
+## 9. Storage - BACKGROUND ONLY (not an explicit EX280V422 objective)
 
 > **Status:** Storage (PV/PVC/StorageClass/CSI) is **not** in the EX280V422 objective list (verified 2026-11-03). It is included because the game already simulates volumes, project templates often carry PVCs, and StatefulSet/template levels need it. Keep this section one screen; don't build primary campaign content on it. [R14][R15][R29]
 
@@ -1586,7 +1586,7 @@ StatefulSet pods get stable names/ordinals and stable DNS via the headless `serv
 
 ---
 
-## 10. Scheduling — SUPPORTING (not in the EX280V422 objective list)
+## 10. Scheduling - SUPPORTING (not in the EX280V422 objective list)
 
 > **Status:** the EX280V422 list has no "configure pod scheduling" domain (it existed in older versions). Keep it as supporting knowledge: it appears indirectly in `IngressController.spec.nodePlacement`, node maintenance/drain, resource/limit work, and any "why is my pod Pending" incident. Commands/YAML below are from the 4.22 _Nodes → Controlling pod placement_ chapter. [R13]
 
@@ -1629,7 +1629,7 @@ spec:
 
 Operators: `In`, `NotIn`, `Exists`, `DoesNotExist`, `Lt`, `Gt` (`nodeSelector` and `nodeAffinity` combine with AND; multiple `nodeSelectorTerms` OR; multiple `matchExpressions` AND). [R13]
 
-Pod affinity/anti-affinity (co-locate or spread relative to other pods) — `podAffinity`/`podAntiAffinity` with `topologyKey` (e.g. `kubernetes.io/hostname`, `topology.kubernetes.io/zone`). Topology spread constraints are the modern spread mechanism. Keep to concept + one example for the game. [R13]
+Pod affinity/anti-affinity (co-locate or spread relative to other pods) - `podAffinity`/`podAntiAffinity` with `topologyKey` (e.g. `kubernetes.io/hostname`, `topology.kubernetes.io/zone`). Topology spread constraints are the modern spread mechanism. Keep to concept + one example for the game. [R13]
 
 ### 10.3 Taints / tolerations
 
@@ -1669,19 +1669,19 @@ oc describe node <node>
 
 ### 10.5 MachineConfig / MachineConfigPool (awareness only)
 
-Node-level changes (kernel args, registries, kubelet) flow through `MachineConfig` (`machineconfiguration.openshift.io/v1`) applied to `MachineConfigPool`s (`oc get mcp`), which cordon/drain/reboot per pool and roll out with `oc get mcp` showing DEGRADED/UPDATING/UPDATED. The Machine Config Operator is a cluster operator (`oc get co machine-config`). Not an EX280V422 objective — one-liner in the game's "cluster health" docs is enough. [R12]
+Node-level changes (kernel args, registries, kubelet) flow through `MachineConfig` (`machineconfiguration.openshift.io/v1`) applied to `MachineConfigPool`s (`oc get mcp`), which cordon/drain/reboot per pool and roll out with `oc get mcp` showing DEGRADED/UPDATING/UPDATED. The Machine Config Operator is a cluster operator (`oc get co machine-config`). Not an EX280V422 objective - one-liner in the game's "cluster health" docs is enough. [R12]
 
 **Game hooks**
 
-- Incident: "Pod Pending — node selector typo / taint not tolerated / insufficient CPU" — inspect `oc describe pod` events (Scheduler section).
-- Incident: "Drain worker before maintenance — half the app goes down" → teach `oc adm drain --ignore-daemonsets` + PDB awareness.
+- Incident: "Pod Pending - node selector typo / taint not tolerated / insufficient CPU" - inspect `oc describe pod` events (Scheduler section).
+- Incident: "Drain worker before maintenance - half the app goes down" → teach `oc adm drain --ignore-daemonsets` + PDB awareness.
 - Reuse existing scheduling game content; re-label as supporting.
 
 ---
 
 ## 11. Monitoring and troubleshooting (cluster health, events, logs, probes, failure states)
 
-Canonical: _Support_ book — Gathering data [R16], Troubleshooting chapter [R17]; CLI reference for commands ([R18] book, [R19] by-example pages); pod error states page [R17].
+Canonical: _Support_ book - Gathering data [R16], Troubleshooting chapter [R17]; CLI reference for commands ([R18] book, [R19] by-example pages); pod error states page [R17].
 
 ### 11.1 Everyday observability commands
 
@@ -1800,7 +1800,7 @@ oc get events -A --sort-by=.lastTimestamp    # timeline before collecting
 
 **Game hooks**
 
-- Build incidents around 4–6 canonical states above; reward the _exact_ diagnostic command (`oc describe pod` first, then `oc logs --previous`, then events).
+- Build incidents around 4-6 canonical states above; reward the _exact_ diagnostic command (`oc describe pod` first, then `oc logs --previous`, then events).
 - Show live "Events:" lines in the Inspector panel (Kubernetes event objects ↔ `oc get events`).
 - Command bar: add `oc events`, `oc adm top pod|node`, `oc adm must-gather`, `oc adm inspect`, `oc debug node`, `oc logs --previous`, `oc set probe`.
 
@@ -1810,7 +1810,7 @@ oc get events -A --sort-by=.lastTimestamp    # timeline before collecting
 
 Each flow lists the exact command sequence. These are designed to become campaign levels; they are ordered by dependency (L1 → L7).
 
-### L1 — HTTP app + edge route with a self-signed certificate (EX280 core)
+### L1 - HTTP app + edge route with a self-signed certificate (EX280 core)
 
 1. `oc new-project demo`
 2. Deploy app: `oc create deployment hello --image=registry.access.redhat.com/ubi9/httpd-24:latest --replicas=1` (or `oc new-app`), then `oc expose deployment/hello --port=8080 --name=hello` (creates Service + Route; simpler: `oc expose deploy hello --port=8080` then `oc expose svc hello`).
@@ -1820,16 +1820,16 @@ Each flow lists the exact command sequence. These are designed to become campaig
 6. Verify: `oc get route`, `oc describe route hello` (Admitted=True), `curl -k https://hello.apps.example.com`, `openssl s_client ...`.
 7. Break/fix variant: change host to an already-claimed hostname → observe host-claim error; fix with `namespaceOwnership: InterNamespaceAllowed` or a new host.
 
-### L2 — Route variants: path, passthrough, reencrypt, edit
+### L2 - Route variants: path, passthrough, reencrypt, edit
 
 1. Two services (`frontend`, `api`) in one project.
 2. `oc expose svc frontend --hostname=www.example.com`; `oc expose svc api --hostname=www.example.com --path=/api`.
 3. `oc create route passthrough secure --service=backend --hostname=secure.example.com` (backend serves TLS itself; no path allowed).
 4. `oc create route reencrypt reenc --service=backend2 --cert=tls.crt --key=tls.key --dest-ca-cert=destca.crt --hostname=reenc.example.com`.
-5. `oc get routes` — compare TERMINATION column.
+5. `oc get routes` - compare TERMINATION column.
 6. Practice edit: `oc edit route api`, change path; `oc get route api -o yaml`.
 
-### L3 — Cluster health + ingress control
+### L3 - Cluster health + ingress control
 
 1. `oc get co`, `oc get nodes`, `oc get clusterversion`, `oc get pods -n openshift-ingress`.
 2. `oc describe clusteroperator/ingress`.
@@ -1838,7 +1838,7 @@ Each flow lists the exact command sequence. These are designed to become campaig
 5. `oc get events -A --sort-by=.lastTimestamp | tail`.
 6. Collect `oc adm must-gather --dest-dir=/tmp/mg` (or explain when to use).
 
-### L4 — HTPasswd users/groups + RBAC + password rotation
+### L4 - HTPasswd users/groups + RBAC + password rotation
 
 1. `htpasswd -c -B -b users.htpasswd alice 'Passw0rd1!'`; add bob.
 2. `oc create secret generic htpass-secret --from-file=htpasswd=users.htpasswd -n openshift-config`.
@@ -1849,7 +1849,7 @@ Each flow lists the exact command sequence. These are designed to become campaig
 7. Rotate alice's password via htpasswd secret replace; delete bob user/identity; verify old login fails.
 8. Test `oc auth can-i`, `oc adm policy who-can edit`.
 
-### L5 — Default-deny NetworkPolicy + allow + DNS egress + verification
+### L5 - Default-deny NetworkPolicy + allow + DNS egress + verification
 
 1. Two projects `demo` and `backend`, each with labeled apps.
 2. Apply `deny-by-default` in demo → test from backend pod: blocked.
@@ -1858,7 +1858,7 @@ Each flow lists the exact command sequence. These are designed to become campaig
 5. Verify with `oc run test --rm -i -t --image=alpine -- sh`; `oc describe networkpolicy`.
 6. Break/fix: remove DNS egress rule → curl fails → restore.
 
-### L6 — Developer self-service: quota + limitrange + ClusterResourceQuota + project template
+### L6 - Developer self-service: quota + limitrange + ClusterResourceQuota + project template
 
 1. `oc adm create-bootstrap-project-template -o yaml > template.yaml`; edit to add ResourceQuota + LimitRange + NetworkPolicy; `oc create -f template.yaml -n openshift-config`; `oc edit project.config.openshift.io/cluster` to set `projectRequestTemplate.name`.
 2. `oc new-project selfservice` → `oc get quota,limitrange,networkpolicy -n selfservice` shows inherited objects.
@@ -1867,7 +1867,7 @@ Each flow lists the exact command sequence. These are designed to become campaig
 5. `oc create clusterquota per-user --project-annotation-selector=openshift.io/requester=alice --hard=pods=5`; `oc get appliedclusterresourcequota -n selfservice`.
 6. (Optional) Job/CronJob with quota: `oc create job`, `oc create cronjob`, verify counts in `oc describe quota`.
 
-### L7 — Non-HTTP exposure with MetalLB/NodePort
+### L7 - Non-HTTP exposure with MetalLB/NodePort
 
 1. Deploy a TCP app (e.g. `registry.access.redhat.com/ubi9/ubi-minimal` running `nc`) or use HTTP on a LoadBalancer for the plumbing.
 2. Ensure MetalLB Operator + `IPAddressPool` + `L2Advertisement` exist (§4.1).
@@ -1927,7 +1927,7 @@ oc apply -f - (heredoc/YAML editor) | oc create -f file
 Command behaviours the game should simulate faithfully (these are the "gotchas"):
 
 - `oc get route` shows `TERMINATION` and `WILDCARD` columns; default host is generated; `Admitted` condition lives in `status.ingress[].conditions`.
-- `oc create route edge` without `--cert/--key` is legal (router uses default cert) — the cert files are only needed for a _custom_ cert. [R32]
+- `oc create route edge` without `--cert/--key` is legal (router uses default cert) - the cert files are only needed for a _custom_ cert. [R32]
 - `oc create route passthrough` has **no `--path`** flag. [R32]
 - `oc create route reencrypt` without `--dest-ca-cert` defaults to the service CA. [R32]
 - `oc adm policy add-role-to-user ... -z SA` (SA in current project) vs `-n` for namespace. [R19]
@@ -1948,7 +1948,7 @@ Command behaviours the game should simulate faithfully (these are the "gotchas")
 | Shard miss              | route label doesn't match `routeSelector`           | fix route label or shard selector; check `Admitted`                       | 3.5       |
 | Router Pending on node  | drain removed router pods; nodePlacement too strict | fix nodePlacement tolerations/selectors; replicas                         | 3.2, 10.4 |
 | LB pending              | no MetalLB operator/pool                            | install operator, create IPAddressPool+L2Advertisement, annotate svc      | 4.1       |
-| Wrong service type      | player uses Route for TCP DB                        | recreate as LoadBalancer/NodePort                                         | 4.2–4.4   |
+| Wrong service type      | player uses Route for TCP DB                        | recreate as LoadBalancer/NodePort                                         | 4.2-4.4   |
 | Default-deny break      | policy added, all traffic dies                      | add same-ns/router/DNS allow policies                                     | 5.3       |
 | DNS blocked             | egress default-deny without 53                      | add UDP/TCP 53 egress                                                     | 5.3       |
 | Forbidden SCC           | privileged pod as default SA                        | grant SCC to SA or adjust securityContext                                 | 6.4       |
@@ -1956,7 +1956,7 @@ Command behaviours the game should simulate faithfully (these are the "gotchas")
 | Registry auth           | imagePullSecret missing / SA not linked             | `oc create secret docker-registry` + `oc secrets link --for=pull`         | 6.5       |
 | User no access          | login succeeds, RBAC missing                        | `oc adm policy add-role-to-user` / group binding                          | 7.3       |
 | Password stuck          | htpasswd file edited but secret not replaced        | replace `htpass-secret`, delete stale user if removed                     | 7.5       |
-| Quota deadlock          | quota exists, no LimitRange defaults                | add LimitRange defaults or requests/limits                                | 8.1–8.4   |
+| Quota deadlock          | quota exists, no LimitRange defaults                | add LimitRange defaults or requests/limits                                | 8.1-8.4   |
 | Tenant quotas           | per-user ClusterResourceQuota missing               | create ClusterResourceQuota by requester annotation                       | 8.3       |
 | No-inherit project      | template not wired to `projectRequestTemplate`      | fix project config / recreate project                                     | 8.5       |
 | Pod Pending scheduler   | taint/selector/resources                            | inspect events, fix                                                       | 10, 11.4  |
@@ -1992,15 +1992,15 @@ Command behaviours the game should simulate faithfully (these are the "gotchas")
 | HAProxy 2.8.18 in the router (4.22)                                                                                                                             | Just flavor text; TLS/cipher behaviour unchanged for lab                                                                                               | [R33]      |
 | MetalLB `ConfigurationState` CR reports config health (4.22)                                                                                                    | Optional extra incident: check `oc get configurationstate -n metallb-system`                                                                           | [R33]      |
 | Route external certificates (`.spec.tls.externalCertificate`) supported                                                                                         | Advanced route TLS level; needs RBAC Role+RoleBinding for `openshift-ingress:router`                                                                   | [R2]       |
-| `restricted-v3` SCC documented as default for authenticated users in new 4.22 installs (user namespaces) — while `restricted-v2` remains the well-known default | ⚠️ Don't hard-code ONE answer in the game; display the SCC set from `oc get scc`; exam labs typically show restricted-v2. Verify on the target cluster | [R20]      |
+| `restricted-v3` SCC documented as default for authenticated users in new 4.22 installs (user namespaces) - while `restricted-v2` remains the well-known default | ⚠️ Don't hard-code ONE answer in the game; display the SCC set from `oc get scc`; exam labs typically show restricted-v2. Verify on the target cluster | [R20]      |
 | OpenShift SDN removed (since 4.17); OVN-Kubernetes only                                                                                                         | Remove any "OpenShift SDN" answer from quiz content; SDN troubleshooting = OVN/OVS pods + `oc debug node`                                              | [R5][R34]  |
 | No auto long-lived SA token secret (since 4.16)                                                                                                                 | Use `oc create token`; old-style token-secret levels are traps                                                                                         | [R10]      |
 | SCC admission errors and PSA coexistence                                                                                                                        | Show platform-realistic error shapes; don't invent exact text; support both gates                                                                      | [R20][R11] |
 
 ### 14.3 Confidence levels
 
-- **High**: all command syntax/YAML in §§1–8 (verbatim from `enterprise-4.22` docs source and `openshift/oc release-4.22` flag definitions); API `apiVersion`/`kind` (docs API reference books); default SCC list and mechanics; HTPasswd flow; quota/limitrange/template flows; Route/IngressController fields; RBAC commands; troubleshooting command set; exam objective list (official PDF).
-- **Medium** (flagged ⚠️ in text): exact SCC error-message wording (varies by OCP minor/build); whether the target exam cluster defaults to `restricted-v2` vs `restricted-v3`; the precise DNS egress policy form for the exam cluster's DNS service; MetalLB operator availability (depends on the exam/lab platform — cloud clusters use the platform LB, bare metal uses MetalLB).
+- **High**: all command syntax/YAML in §§1-8 (verbatim from `enterprise-4.22` docs source and `openshift/oc release-4.22` flag definitions); API `apiVersion`/`kind` (docs API reference books); default SCC list and mechanics; HTPasswd flow; quota/limitrange/template flows; Route/IngressController fields; RBAC commands; troubleshooting command set; exam objective list (official PDF).
+- **Medium** (flagged ⚠️ in text): exact SCC error-message wording (varies by OCP minor/build); whether the target exam cluster defaults to `restricted-v2` vs `restricted-v3`; the precise DNS egress policy form for the exam cluster's DNS service; MetalLB operator availability (depends on the exam/lab platform - cloud clusters use the platform LB, bare metal uses MetalLB).
 - **Out of scope / delegated**: builds/S2I/ImageStreams/DeploymentConfigs (task-2), full exam objectives doc/study guide (task-1), kustomize/helm/operators (task-2/other), UI specifics.
 - **Not tested against a live cluster**: no `oc` binary/cluster was used in this research. Everything is doc-derived (plus local `openssl` validation of the self-signed cert recipe). Lab validation before content freeze is recommended.
 
@@ -2016,36 +2016,36 @@ Command behaviours the game should simulate faithfully (these are the "gotchas")
 | R2  | Routes (chapter): <https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/ingress_and_load_balancing/routes>                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | R3  | Configuring ingress cluster traffic (chapter): <https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/ingress_and_load_balancing/configuring-ingress-cluster-traffic>                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | R4  | Load balancing with MetalLB (chapter): <https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/ingress_and_load_balancing/load-balancing-with-metallb>                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| R5  | Network security (book, whole-book single page): <https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html-single/network_security/index> — includes the Network policy chapter <https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/network_security/network-policy>, network policy APIs, admin network policy, egress firewall                                                                                                                                                                                                                                                                                                                                                  |
-| R7  | Authentication and authorization (book): <https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/authentication_and_authorization/index> — includes Using RBAC <https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/authentication_and_authorization/using-rbac>, identity providers <https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/authentication_and_authorization/configuring-identity-providers>, service accounts <https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/authentication_and_authorization/understanding-and-creating-service-accounts>, project creation templates (Building applications book) |
+| R5  | Network security (book, whole-book single page): <https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html-single/network_security/index> - includes the Network policy chapter <https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/network_security/network-policy>, network policy APIs, admin network policy, egress firewall                                                                                                                                                                                                                                                                                                                                                  |
+| R7  | Authentication and authorization (book): <https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/authentication_and_authorization/index> - includes Using RBAC <https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/authentication_and_authorization/using-rbac>, identity providers <https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/authentication_and_authorization/configuring-identity-providers>, service accounts <https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/authentication_and_authorization/understanding-and-creating-service-accounts>, project creation templates (Building applications book) |
 | R8  | Using RBAC to define and apply permissions (chapter): <https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/authentication_and_authorization/using-rbac>                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 | R9  | Configuring identity providers (chapter; HTPasswd): <https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/authentication_and_authorization/configuring-identity-providers>                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | R10 | Understanding and creating service accounts (chapter): <https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/authentication_and_authorization/understanding-and-creating-service-accounts>                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | R11 | Understanding and managing pod security admission (chapter): <https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/authentication_and_authorization/understanding-and-managing-pod-security-admission>                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| R12 | Nodes (book): <https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/nodes/index> — includes scheduling chapter <https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/nodes/controlling-pod-placement-onto-nodes-scheduling> and LimitRange content                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| R12 | Nodes (book): <https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/nodes/index> - includes scheduling chapter <https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/nodes/controlling-pod-placement-onto-nodes-scheduling> and LimitRange content                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | R13 | Controlling pod placement onto nodes (scheduling) (chapter): <https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/nodes/controlling-pod-placement-onto-nodes-scheduling>                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | R14 | Storage (book): <https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/storage/index>                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | R15 | Understanding persistent storage (chapter): <https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/storage/understanding-persistent-storage>                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| R16 | Support (book): <https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/support/index> — includes Gathering data about your cluster <https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/support/gathering-cluster-data>                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| R17 | Troubleshooting (chapter): <https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/support/troubleshooting> — includes Investigating pod issues (pod error states) and Troubleshooting network issues sections                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| R16 | Support (book): <https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/support/index> - includes Gathering data about your cluster <https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/support/gathering-cluster-data>                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| R17 | Troubleshooting (chapter): <https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/support/troubleshooting> - includes Investigating pod issues (pod error states) and Troubleshooting network issues sections                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | R18 | CLI tools (book): <https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/cli_tools/index>                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 | R19 | OpenShift CLI command references (administrator + developer "by example" content, published in the CLI tools book): developer commands <https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/cli_tools/index>; source text verified from `enterprise-4.22` `modules/oc-by-example-content.adoc` and `modules/oc-adm-by-example-content.adoc`                                                                                                                                                                                                                                                                                                                                                               |
 | R20 | Managing security context constraints (SCC chapter, in Authentication and authorization book): <https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html-single/authentication_and_authorization/index>                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| R21 | Network APIs (API reference): Route `route.openshift.io/v1` — <https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html-single/network_apis/index#route-route-openshift-io-v1>; NetworkPolicy `networking.k8s.io/v1`; AdminNetworkPolicy `policy.networking.k8s.io/v1alpha1`                                                                                                                                                                                                                                                                                                                                                                                                                                   |
-| R22 | Operator APIs (API reference): IngressController `operator.openshift.io/v1` — <https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html-single/operator_apis/index#ingresscontroller-operator-openshift-io-v1>; Network `operator.openshift.io/v1`                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| R21 | Network APIs (API reference): Route `route.openshift.io/v1` - <https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html-single/network_apis/index#route-route-openshift-io-v1>; NetworkPolicy `networking.k8s.io/v1`; AdminNetworkPolicy `policy.networking.k8s.io/v1alpha1`                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| R22 | Operator APIs (API reference): IngressController `operator.openshift.io/v1` - <https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html-single/operator_apis/index#ingresscontroller-operator-openshift-io-v1>; Network `operator.openshift.io/v1`                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | R23 | Schedule and quota APIs + quota docs (API reference + Building applications quota chapters): <https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html-single/schedule_and_quota_apis/index#clusterresourcequota-quota-openshift-io-v1>; ResourceQuota `v1`, LimitRange `v1`, ClusterResourceQuota `quota.openshift.io/v1`                                                                                                                                                                                                                                                                                                                                                                                     |
-| R24 | Security APIs (API reference): SecurityContextConstraints `security.openshift.io/v1`, ServiceAccount `v1` — <https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html-single/security_apis/index#securitycontextconstraints-security-openshift-io-v1>                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| R25 | Config APIs (API reference): Network `config.openshift.io/v1` — <https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html-single/config_apis/index#network-config-openshift-io-v1>; Project `config.openshift.io/v1`, OAuth `config.openshift.io/v1`                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| R33 | OpenShift Container Platform 4.22 release notes (book): <https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/release_notes/index> — 4.22 notable/deprecated/removed changes (dedicated platform SAs, HAProxy 2.8.18, MetalLB ConfigurationState, platform NetworkPolicy defaults). Source text verified from `release_notes/ocp-4-22-release-notes.adoc` and `modules/rn-ocp-*-4-22*` on `enterprise-4.22`.                                                                                                                                                                                                                                                                                               |
-| R34 | Networking Operators (book): <https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/networking_operators/index> — Cluster Network Operator, DNS Operator, Ingress Operator; OVN-Kubernetes network plugin material verified from `networking/ovn_kubernetes_network_provider/about-ovn-kubernetes.adoc` on `enterprise-4.22`                                                                                                                                                                                                                                                                                                                                                                                |
-| R35 | Building applications (book): <https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/building_applications/index> — project creation/self-provisioning/project templates, quotas (per-project and ClusterResourceQuota), Secrets/ConfigMaps usage. Source: `applications/**` on `enterprise-4.22`                                                                                                                                                                                                                                                                                                                                                                                                           |
-| R26 | Kubernetes — Service: <https://kubernetes.io/docs/concepts/services-networking/service/>                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| R27 | Kubernetes — EndpointSlices: <https://kubernetes.io/docs/concepts/services-networking/endpoint-slices/>                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| R28 | Kubernetes — Network Policies: <https://kubernetes.io/docs/concepts/services-networking/network-policies/>                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| R29 | Kubernetes — StatefulSets: <https://kubernetes.io/docs/concepts/workloads/controllers/statefulset/>                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
-| R30 | Kubernetes — Secrets: <https://kubernetes.io/docs/concepts/configuration/secret/>                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| R31 | Kubernetes — ConfigMaps: <https://kubernetes.io/docs/concepts/configuration/configmap/>                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| R32 | OpenShift CLI source (release-4.22), route subcommand flags: `pkg/cli/create/routeedge.go`, `routepassthrough.go`, `routereenecrypt.go` — <https://github.com/openshift/oc/tree/release-4.22/pkg/cli/create>                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| R24 | Security APIs (API reference): SecurityContextConstraints `security.openshift.io/v1`, ServiceAccount `v1` - <https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html-single/security_apis/index#securitycontextconstraints-security-openshift-io-v1>                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| R25 | Config APIs (API reference): Network `config.openshift.io/v1` - <https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html-single/config_apis/index#network-config-openshift-io-v1>; Project `config.openshift.io/v1`, OAuth `config.openshift.io/v1`                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| R33 | OpenShift Container Platform 4.22 release notes (book): <https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/release_notes/index> - 4.22 notable/deprecated/removed changes (dedicated platform SAs, HAProxy 2.8.18, MetalLB ConfigurationState, platform NetworkPolicy defaults). Source text verified from `release_notes/ocp-4-22-release-notes.adoc` and `modules/rn-ocp-*-4-22*` on `enterprise-4.22`.                                                                                                                                                                                                                                                                                               |
+| R34 | Networking Operators (book): <https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/networking_operators/index> - Cluster Network Operator, DNS Operator, Ingress Operator; OVN-Kubernetes network plugin material verified from `networking/ovn_kubernetes_network_provider/about-ovn-kubernetes.adoc` on `enterprise-4.22`                                                                                                                                                                                                                                                                                                                                                                                |
+| R35 | Building applications (book): <https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/building_applications/index> - project creation/self-provisioning/project templates, quotas (per-project and ClusterResourceQuota), Secrets/ConfigMaps usage. Source: `applications/**` on `enterprise-4.22`                                                                                                                                                                                                                                                                                                                                                                                                           |
+| R26 | Kubernetes - Service: <https://kubernetes.io/docs/concepts/services-networking/service/>                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| R27 | Kubernetes - EndpointSlices: <https://kubernetes.io/docs/concepts/services-networking/endpoint-slices/>                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| R28 | Kubernetes - Network Policies: <https://kubernetes.io/docs/concepts/services-networking/network-policies/>                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| R29 | Kubernetes - StatefulSets: <https://kubernetes.io/docs/concepts/workloads/controllers/statefulset/>                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| R30 | Kubernetes - Secrets: <https://kubernetes.io/docs/concepts/configuration/secret/>                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| R31 | Kubernetes - ConfigMaps: <https://kubernetes.io/docs/concepts/configuration/configmap/>                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| R32 | OpenShift CLI source (release-4.22), route subcommand flags: `pkg/cli/create/routeedge.go`, `routepassthrough.go`, `routereenecrypt.go` - <https://github.com/openshift/oc/tree/release-4.22/pkg/cli/create>                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 
 Additional verification corpus (not individually cited above but used for exact-text checking): official docs AsciiDoc source branch <https://github.com/openshift/openshift-docs/tree/enterprise-4.22> (commit `a1ea307ec1ff90d82126e21f229a0c1142a9565d`): `networking/**`, `authentication/**`, `nodes/**`, `storage/**`, `support/**`, `applications/quotas/**`, `cli_reference/**`, `rest_api/**`, `release_notes/**`, `maps/ocp-jobs/**`.
 
@@ -2057,7 +2057,7 @@ Additional verification corpus (not individually cited above but used for exact-
 
 ---
 
-## Appendix A — One-page command cheat sheet (this research area)
+## Appendix A - One-page command cheat sheet (this research area)
 
 ```bash
 # --- expose HTTP ---

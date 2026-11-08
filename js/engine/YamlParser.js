@@ -1,5 +1,5 @@
 /**
- * YamlParser — dependency-free YAML parser/stringifier for OpenShift Games.
+ * YamlParser — dependency-free YAML parser/stringifier for shifting.pro.
  *
  * Implements the practical YAML subset used by OpenShift/Kubernetes manifests:
  *   - block mappings and sequences (any indentation, sequence-of-mappings)

@@ -1,6 +1,6 @@
 /**
  * LinuxHost — the simulated RHEL 9.6 workstation (`workstation.lab.example.com`) behind the
- * OpenShift Games terminal (1.16.0, "Linux & RHEL Foundations" prelude).
+ * shifting.pro terminal (1.16.0, "Linux & RHEL Foundations" prelude).
  *
  * The terminal has always been a workstation shell: `oc`, `cat`, `vim`, heredocs and redirects
  * run "on" it. This module is that machine, so Linux commands behave like RHEL 9:

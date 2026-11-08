@@ -1,5 +1,5 @@
 /**
- * CommandBar — the OpenShift Games `oc` terminal (OCP 4.22 / EX280).
+ * CommandBar — the shifting.pro `oc` terminal (OCP 4.22 / EX280).
  *
  * A dependency-free, largely self-contained simulation of the `oc` CLI. It
  * renders the bottom terminal panel, parses shell-like input (optional leading
@@ -828,7 +828,7 @@ export const OC_CONSOLE_URL = 'https://console-openshift-console.apps.cluster.ex
 
 /** Educational note appended to `oc edit` (the simulator uses a manifest editor). */
 const EDIT_TEACHING_LINE =
-  '(On a real cluster oc edit launches $EDITOR — vi/vim by default — in your terminal; this simulator opens the manifest editor.)';
+  '(On a real cluster oc edit launches $EDITOR - vi/vim by default - in your terminal; this simulator opens the manifest editor.)';
 
 /**
  * 1.16.0: the Files panel freezes the simulation, incident and mission clocks
@@ -836,7 +836,7 @@ const EDIT_TEACHING_LINE =
  * looked stuck. Say so whenever `oc edit` opens the panel.
  */
 const EDIT_PAUSE_LINE =
-  '(Simulator: the cluster is paused while the Files panel is open — save, then close the panel so controllers, rollouts and the mission clock continue.)';
+  '(Simulator: the cluster is paused while the Files panel is open - save, then close the panel so controllers, rollouts and the mission clock continue.)';
 
 /**
  * CommandBar-local `oc get` column overrides that differ from the shared kind
@@ -3438,7 +3438,7 @@ export class CommandBar {
     this._bindEvents();
     this._updateContextLabel();
     this._appendOutput(
-      `oc terminal ready — OpenShift 4.22. Type 'oc --help' for commands, '/' toggles the terminal.`,
+      `oc terminal ready - OpenShift 4.22. Type 'oc --help' for commands, '/' toggles the terminal.`,
       'text-white/30'
     );
   }
@@ -3465,7 +3465,7 @@ export class CommandBar {
         <div id="cmd-output" class="term-output" role="log" aria-live="polite"></div>
         <div class="term-prompt-row">
           <span class="term-prompt" id="cmd-prompt" aria-hidden="true">[student@workstation ~]$</span>
-          <input id="cmd-input" type="text" class="term-input" placeholder="Type a command — the 'oc ' prefix is optional" autocomplete="off" spellcheck="false" autocapitalize="off" />
+          <input id="cmd-input" type="text" class="term-input" placeholder="Type a command - the 'oc ' prefix is optional" autocomplete="off" spellcheck="false" autocapitalize="off" />
         </div>
         <div id="cmd-suggestions" class="term-suggestions" hidden></div>
       </div>
@@ -3504,8 +3504,8 @@ export class CommandBar {
     }
     if (this.input && !this._pendingLogin) {
       this.input.placeholder = active
-        ? `sh-5.1# on node/${this._debugSession.name} — type exit to return to the workstation`
-        : "Type a command — the 'oc ' prefix is optional";
+        ? `sh-5.1# on node/${this._debugSession.name} - type exit to return to the workstation`
+        : "Type a command - the 'oc ' prefix is optional";
     }
   }
 
@@ -4489,7 +4489,7 @@ export class CommandBar {
     }
     if (usedKubectl) {
       this._appendOutput(
-        'tip: on OpenShift, use oc — the oc command line is the supported interface.',
+        'tip: on OpenShift, use oc - the oc command line is the supported interface.',
         'text-amber-400/80'
       );
     }
@@ -5257,7 +5257,7 @@ Object.assign(CommandBar.prototype, {
 
   _manifestNotReady() {
     return this._err(
-      'error: Files engine not ready — manifests/kustomize/helm require the declarative engine.\n' +
+      'error: Files engine not ready - manifests/kustomize/helm require the declarative engine.\n' +
         'Open the Files panel or wait for it to initialise, then retry.'
     );
   },
@@ -8984,7 +8984,7 @@ Object.assign(CommandBar.prototype, {
     }
 
     const deprecationWarning = ['dc', 'deploymentconfig', 'deploymentconfigs'].includes(lower)
-      ? 'warning: DeploymentConfig (dc) is deprecated in OpenShift 4.x — showing Deployments instead.\n'
+      ? 'warning: DeploymentConfig (dc) is deprecated in OpenShift 4.x - showing Deployments instead.\n'
       : '';
     // Real oc prefixes the NAME cell with `deployment.apps/`, `job.batch/`, … when
     // more than one resource type is requested (#43).
@@ -10176,7 +10176,7 @@ Object.assign(CommandBar.prototype, {
       `${stamps[1]} Server listening on port ${port}`,
       `${stamps[2]} GET /healthz 200 3ms`,
       `${stamps[3]} GET / 200 12ms`,
-      `${stamps[4]} Health check passed — ready to serve traffic`,
+      `${stamps[4]} Health check passed - ready to serve traffic`,
     ];
   },
 
@@ -10305,7 +10305,7 @@ Object.assign(CommandBar.prototype, {
       'STEP 3/5: RUN npm install',
     ];
     if (phase === 'New' || phase === 'Pending') {
-      lines.push('info: build is queued — no logs produced yet');
+      lines.push('info: build is queued - no logs produced yet');
       return lines;
     }
     if (phase === 'Running') {
@@ -10628,7 +10628,7 @@ Object.assign(CommandBar.prototype, {
     this._pendingLogin = null;
     if (this.input) {
       this.input.type = 'text';
-      this.input.placeholder = "Type a command — the 'oc ' prefix is optional";
+      this.input.placeholder = "Type a command - the 'oc ' prefix is optional";
       this.input.value = '';
     }
   },
@@ -18561,7 +18561,7 @@ Object.assign(CommandBar.prototype, {
     const projects = this._resources('Project').length || 12;
     return this._ok(
       [
-        'The must-gather tool is simulated in OpenShift Games.',
+        'The must-gather tool is simulated in shifting.pro.',
         `Gathering data for all namespaces and cluster-scoped resources ...`,
         `  - collecting project "${this.currentProject}"`,
         `  - collecting clusteroperators, clusterversion, nodes, scc, routes, builds`,
@@ -18974,7 +18974,7 @@ Object.assign(CommandBar.prototype, {
       const exits = session?.chroot ? 'type `exit` twice' : 'type `exit`';
       lines.push(
         '',
-        `Simulator hint: this terminal is inside the debug shell of node/${session?.name || 'node'} (sh-5.1#), where oc is not installed — ${exits} to return to your workstation prompt.`
+        `Simulator hint: this terminal is inside the debug shell of node/${session?.name || 'node'} (sh-5.1#), where oc is not installed - ${exits} to return to your workstation prompt.`
       );
     }
     return { message: lines.join('\n'), error: true, exitCode: 127 };
@@ -19285,7 +19285,7 @@ Object.assign(CommandBar.prototype, {
         versions: ['0.1.0'],
         appVersion: '1.0.0',
         description:
-          'A Helm chart for OpenShift Games sample web applications (bundled simulator chart)',
+          'A Helm chart for shifting.pro sample web applications (bundled simulator chart)',
       },
       {
         name: 'postgresql',
@@ -19943,7 +19943,7 @@ Object.assign(CommandBar.prototype, {
         ['Files, Charts & Config', ['helm', 'htpasswd', 'config', 'version']],
         ['Help', ['help']],
       ];
-      const lines = ['OpenShift Client — oc (OpenShift Games, OpenShift 4.22)', ''];
+      const lines = ['OpenShift Client - oc (shifting.pro, OpenShift 4.22)', ''];
       for (const [heading, commands] of groups) {
         lines.push(`${heading}:`);
         for (const command of commands) {
@@ -19966,7 +19966,7 @@ Object.assign(CommandBar.prototype, {
       const commands = SUBCOMMANDS[`${topic[0]} ${topic[1]}`];
       return this._ok(
         [
-          `${topic[0]} ${topic[1]} — available subcommands:`,
+          `${topic[0]} ${topic[1]} - available subcommands:`,
           '',
           ...commands.map((command) => `  ${command}`),
           '',
@@ -20696,7 +20696,7 @@ Object.assign(CommandBar.prototype, {
       resource: object,
     });
     return this._ok(
-      `${toYamlDocument(object)}\n${EDIT_TEACHING_LINE}\n(No manifest editor is available — edit this object and apply it with oc apply -f -.)`
+      `${toYamlDocument(object)}\n${EDIT_TEACHING_LINE}\n(No manifest editor is available - edit this object and apply it with oc apply -f -.)`
     );
   },
 });
@@ -21059,7 +21059,7 @@ Object.assign(CommandBar.prototype, {
         ...lines,
         '',
         `(pod/${pod.metadata?.name}) $`,
-        '(interactive shell is simulated — run `oc exec ' +
+        '(interactive shell is simulated - run `oc exec ' +
           `${kind === 'Pod' ? pod.metadata?.name : `${this._resourceRef(kind)}/${name}`}` +
           ' -- <command>` to execute commands)',
       ].join('\n')

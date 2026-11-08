@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * OpenShift Games — zero-dependency local dev server.
+ * shifting.pro — zero-dependency local dev server.
  *
  * The game is still a no-build, no-runtime-dependency static site, but since
  * issue #68 its ES-module graph is served from a versioned URL prefix
@@ -32,7 +32,7 @@ const ROOT = resolve(fileURLToPath(new URL('.', import.meta.url)), '..');
 
 const args = process.argv.slice(2);
 if (args.includes('--help') || args.includes('-h')) {
-  console.log('OpenShift Games dev server');
+  console.log('shifting.pro dev server');
   console.log('  node scripts/dev-server.mjs [--port <n>]   (default 8080, or $PORT)');
   process.exit(0);
 }
@@ -198,7 +198,7 @@ server.on('error', (err) => {
 });
 
 server.listen(PORT, () => {
-  console.log('OpenShift Games — local dev server (no build step, no npm install)');
+  console.log('shifting.pro — local dev server (no build step, no npm install)');
   console.log(`  game:       http://localhost:${PORT}/`);
   console.log(`  whiteboard: http://localhost:${PORT}/draw`);
   console.log(

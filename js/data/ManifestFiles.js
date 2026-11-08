@@ -393,7 +393,7 @@ message: "Application \${APP_NAME} has been created from template webapp-templat
   // ─── Helm chart: helm install webapp helm/webapp ──────────────────────────
   'helm/webapp/Chart.yaml': `apiVersion: v2
 name: webapp
-description: A Helm chart for the OpenShift Games web application
+description: A Helm chart for the shifting.pro web application
 type: application
 version: 0.1.0
 appVersion: "1.0.0"
@@ -521,7 +521,7 @@ spec:
 
   'examples/default-deny.yaml': `# Default-deny ingress and egress for every Pod in the project.
 # NetworkPolicies are additive: add explicit allow rules for required traffic
-# (for example DNS egress on UDP/TCP 5353 to the openshift-dns namespace — the
+# (for example DNS egress on UDP/TCP 5353 to the openshift-dns namespace - the
 # dns-default Pods listen on 5353, not on port 53).
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -574,7 +574,7 @@ spec:
 
   'netpol/allow-from-openshift-ingress.yaml': `# Let the OpenShift router reach the Pods behind your Routes. The router Pods
 # run in the openshift-ingress namespace, which the ingress operator labels
-# policy-group.network.openshift.io/ingress: "" — the documented 4.x selector.
+# policy-group.network.openshift.io/ingress: "" - the documented 4.x selector.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -606,7 +606,7 @@ spec:
 `,
 
   'netpol/deny-all-egress.yaml': `# Deny all egress by default: Pods of the project may not open any
-# connection — not even a DNS lookup — until an egress rule allows it.
+# connection - not even a DNS lookup - until an egress rule allows it.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:

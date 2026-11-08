@@ -1,4 +1,4 @@
-# OpenShift Games — pre-commit gate (husky v9; no shebang needed, run with `sh`).
+# shifting.pro — pre-commit gate (husky v9; no shebang needed, run with `sh`).
 # The game itself is no-build/dependency-free; this dev-only gate keeps the repo clean by
 # requiring strict Prettier formatting and a zero-issue soft Knip run ("real garbage only").
 #

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * OpenShift Games — browser smoke/E2E verification harness.
+ * shifting.pro — browser smoke/E2E verification harness.
  *
  * The repo stays dependency-free: this script loads puppeteer-core from an
  * out-of-repo install. Prepare once with:
@@ -788,12 +788,12 @@ await runSection('menu', async () => {
     importmap: document.querySelector('script[type="importmap"]')?.textContent || '',
   }));
   assert(
-    menu.title === 'OpenShift Games — Learn OpenShift by Playing (EX280)',
+    menu.title === 'shifting.pro - Learn OpenShift by Playing (EX280)',
     'menu: exact page title',
     menu.title
   );
   assert(menu.menuVisible, 'menu: main menu visible');
-  assert(menu.logo === 'OpenShift Games', 'menu: OpenShift Games logo', menu.logo);
+  assert(menu.logo === 'shifting.pro', 'menu: shifting.pro logo', menu.logo);
   assert(
     /OpenShift 4\.22 Cluster Simulation · Built for EX280/.test(menu.subtitle),
     'menu: OpenShift 4.22 / EX280 subtitle',
@@ -1308,11 +1308,7 @@ await runSection('sandbox', async () => {
     'sandbox: default ImageStreams seeded',
     `got ${state.imageStreams}`
   );
-  assert(
-    state.hudLogo === 'OpenShift Games',
-    'sandbox: HUD logo is OpenShift Games',
-    state.hudLogo
-  );
+  assert(state.hudLogo === 'shifting.pro', 'sandbox: HUD logo is shifting.pro', state.hudLogo);
   assert(
     /OpenShift 4\.22/.test(state.hudMode),
     'sandbox: HUD mode label is OpenShift 4.22',
@@ -8933,11 +8929,11 @@ await runSection('qa-coverage', async () => {
     handover.checklist.slice(0, 240)
   );
   assert(
-    /L5 — /.test(handover.checklist) &&
-      /L9 — /.test(handover.checklist) &&
-      /L13 — /.test(handover.checklist) &&
-      /L14 — /.test(handover.checklist) &&
-      /L17 — /.test(handover.checklist),
+    /L5 - /.test(handover.checklist) &&
+      /L9 - /.test(handover.checklist) &&
+      /L13 - /.test(handover.checklist) &&
+      /L14 - /.test(handover.checklist) &&
+      /L17 - /.test(handover.checklist),
     'coverage: handover checklist redo list covers L5/L9/L13/L14/L17',
     handover.checklist.replace(/\n/g, ' | ').slice(0, 240)
   );
@@ -25822,8 +25818,8 @@ await runSection('draw', async () => {
     'draw: Route/Project/BuildConfig in palette'
   );
   assert(
-    /OpenShift Games/.test(draw.watermark) && /\/draw/.test(draw.watermark),
-    'draw: OpenShift Games /draw watermark',
+    /shifting.pro/.test(draw.watermark) && /\/draw/.test(draw.watermark),
+    'draw: shifting.pro /draw watermark',
     draw.watermark
   );
   assert(draw.hasApp, 'draw: app instance exposed');

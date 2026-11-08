@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to OpenShift Games are documented here.
+All notable changes to shifting.pro are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 aims to follow [Semantic Versioning](https://semver.org/).
 
@@ -1524,7 +1524,7 @@ false`) gets the real projected `kube-api-access-*` volume and read-only mount, 
   reports `curl: (28) Connection timed out after 30000 milliseconds` while genuine refusals stay
   `(7) … Connection refused` (also inside `oc exec … -- curl`). `openssl x509 -noout -enddate`
   prints `notAfter=`, and a leaf certificate's subject no longer gains an invented
-  `O = OpenShift Games`.
+  `O = shifting.pro`.
 - **State-graded capstone (issue #37).** L20 now accepts **any** ResourceQuota / LimitRange in
   `prod-platform` and any NetworkPolicy that selects all Pods for Ingress with no allow rules — the
   hidden `compute-quota`/`resource-limits`/`default-deny` names are gone. The “Route reachable from
@@ -2273,7 +2273,7 @@ study game.
 
 ### Changed
 
-- Complete rebrand from the upstream Kubernetes game to **OpenShift Games** (UI, docs, metadata,
+- Complete rebrand from the upstream Kubernetes game to **shifting.pro** (UI, docs, metadata,
   storage keys with best-effort migration of legacy progress/settings, canonical links).
 - Repository detached from the upstream project: fresh standalone git history, Apache-2.0 preserved,
   attribution retained in NOTICE/README.

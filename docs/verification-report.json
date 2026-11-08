@@ -1,25 +1,25 @@
 {
-  "timestamp": "2026-11-08T19:12:43.824Z",
+  "timestamp": "2026-11-08T20:57:48.501Z",
   "environment": {
     "node": "v26.10.0",
     "chrome": "Chrome/156.0.8078.79",
-    "baseUrl": "http://127.0.0.1:44371",
+    "baseUrl": "http://127.0.0.1:42511",
     "viewport": {
       "width": 1600,
       "height": 900
     },
     "puppeteerCore": "/tmp/verify-tools",
-    "startedAt": "2026-11-08T18:25:33.696Z",
-    "durationSeconds": 2830
+    "startedAt": "2026-11-08T20:15:23.336Z",
+    "durationSeconds": 2545
   },
   "summary": {
-    "passes": 2633,
-    "failures": 2,
-    "warnings": 3,
+    "passes": 2642,
+    "failures": 0,
+    "warnings": 0,
     "consoleErrors": 0,
     "pageErrors": 0
   },
-  "goNoGo": "NO-GO",
+  "goNoGo": "GO",
   "sections": {
     "menu": {
       "passes": 22,
@@ -232,9 +232,9 @@
       "warnings": 0
     },
     "qa-issue68": {
-      "passes": 17,
-      "failures": 2,
-      "warnings": 3
+      "passes": 26,
+      "failures": 0,
+      "warnings": 0
     },
     "qa-issue69": {
       "passes": 24,
@@ -317,35 +317,8 @@
       "warnings": 0
     }
   },
-  "failures": [
-    {
-      "section": "qa-issue68",
-      "name": "#68: after a release the returning visitor reloads and boots the new release",
-      "detail": "{\"reloadError\":\"Navigation timeout of 60000 ms exceeded\",\"rebooted\":true}"
-    },
-    {
-      "section": "qa-issue68",
-      "name": "qa-issue68: harness exception",
-      "detail": "TimeoutError: Navigation timeout of 60000 ms exceeded\n    at new Deferred (/tmp/verify-tools/node_modules/puppeteer-core/lib/cjs/puppeteer/util/Deferred.js:60:34)\n    at Deferred.create (/tmp/verify-tools/node_modules/puppeteer-core/lib/cjs/puppeteer/util/Deferred.js:21:16)\n    at new LifecycleWatcher (/tmp/verify-tools/node_modules/puppeteer-core/lib/cjs/puppeteer/cdp/LifecycleWatcher.js:69:60)\n    at CdpFrame.goto (/tmp/verify-tools/node_modules/puppeteer-core/lib/cjs/puppeteer/cdp/Frame.js:149:29)\n    at CdpFrame.<anonymous> (/tmp/verify-tools/node_modules/puppeteer-core/lib/cjs/puppeteer/util/decorators.js:109:27)"
-    }
-  ],
-  "warnings": [
-    {
-      "section": "qa-issue68",
-      "name": "cold-context navigation stalled (third-party CDN?) — retrying once",
-      "detail": "/: Navigation timeout of 60000 ms exceeded"
-    },
-    {
-      "section": "qa-issue68",
-      "name": "cold-context navigation stalled (third-party CDN?) — retrying once",
-      "detail": "/: Navigation timeout of 60000 ms exceeded"
-    },
-    {
-      "section": "qa-issue68",
-      "name": "cold-context navigation stalled (third-party CDN?) — retrying once",
-      "detail": "/: Navigation timeout of 60000 ms exceeded"
-    }
-  ],
+  "failures": [],
+  "warnings": [],
   "consoleErrors": [],
   "pageErrors": [],
   "artifacts": {
@@ -353,74 +326,74 @@
       "path": "screenshot.png",
       "width": 1600,
       "height": 900,
-      "bytes": 981556
+      "bytes": 981385
     },
     "ogImage": {
       "path": "og-image.png",
       "width": 1200,
       "height": 630,
-      "bytes": 205626
+      "bytes": 204066
     },
     "screenshots": [
       {
         "path": "docs/screenshots/menu.png",
         "width": 1600,
         "height": 900,
-        "bytes": 332096
+        "bytes": 331307
       },
       {
         "path": "docs/screenshots/exam-prep.png",
         "width": 1600,
         "height": 900,
-        "bytes": 210590
+        "bytes": 213336
       },
       {
         "path": "docs/screenshots/sandbox.png",
         "width": 1600,
         "height": 900,
-        "bytes": 981740
+        "bytes": 982253
       },
       {
         "path": "screenshot.png",
         "width": 1600,
         "height": 900,
-        "bytes": 981556
+        "bytes": 981385
       },
       {
         "path": "docs/screenshots/files-panel.png",
         "width": 1600,
         "height": 900,
-        "bytes": 243783
+        "bytes": 243514
       },
       {
         "path": "docs/screenshots/campaign-level-1.png",
         "width": 1600,
         "height": 900,
-        "bytes": 477834
+        "bytes": 476705
       },
       {
         "path": "docs/screenshots/regressions-minimap-collapsed.png",
         "width": 1600,
         "height": 900,
-        "bytes": 961689
+        "bytes": 961124
       },
       {
         "path": "docs/screenshots/regressions-campaign-restart.png",
         "width": 1600,
         "height": 900,
-        "bytes": 487251
+        "bytes": 487425
       },
       {
         "path": "docs/screenshots/draw.png",
         "width": 1600,
         "height": 900,
-        "bytes": 488473
+        "bytes": 487821
       },
       {
         "path": "og-image.png",
         "width": 1200,
         "height": 630,
-        "bytes": 205626
+        "bytes": 204066
       }
     ]
   },
@@ -435,7 +408,7 @@
     },
     {
       "section": "menu",
-      "name": "menu: OpenShift Games logo"
+      "name": "menu: shifting.pro logo"
     },
     {
       "section": "menu",
@@ -767,7 +740,7 @@
     },
     {
       "section": "sandbox",
-      "name": "sandbox: HUD logo is OpenShift Games"
+      "name": "sandbox: HUD logo is shifting.pro"
     },
     {
       "section": "sandbox",
@@ -8503,11 +8476,47 @@
     },
     {
       "section": "qa-issue68",
+      "name": "#68: after a release the returning visitor reloads and boots the new release"
+    },
+    {
+      "section": "qa-issue68",
       "name": "#68: after a release the returning visitor EXECUTES the new module (the old immutable URL was not reused)"
     },
     {
       "section": "qa-issue68",
       "name": "#68: the reload requested the new release module through /v/1.16.0-qa68/js/engine/GameEngine.js"
+    },
+    {
+      "section": "qa-issue68",
+      "name": "#68: the negative control first caches the shipped release"
+    },
+    {
+      "section": "qa-issue68",
+      "name": "#68: the negative control still boots on the old versioned module URLs"
+    },
+    {
+      "section": "qa-issue68",
+      "name": "#68: negative control — WITHOUT a version bump the changed module is NOT executed (immutable cache wins)"
+    },
+    {
+      "section": "qa-issue68",
+      "name": "#68: negative control — the old versioned module was answered from the HTTP cache (zero server hits)"
+    },
+    {
+      "section": "qa-issue68",
+      "name": "#68: negative control — response.fromCache() confirms the reload was served from the immutable HTTP cache"
+    },
+    {
+      "section": "qa-issue68",
+      "name": "#68: the lazily-required Files/Manifests panel still loads after the import-map change"
+    },
+    {
+      "section": "qa-issue68",
+      "name": "#68: _moduleExists() HEAD-probes the versioned URL /v/1.16.0/js/ui/ManifestPanel.js"
+    },
+    {
+      "section": "qa-issue68",
+      "name": "#68: _moduleExists() never probes the unversioned /js/ui/ManifestPanel.js path"
     },
     {
       "section": "qa-issue69",
@@ -10895,7 +10904,7 @@
     },
     {
       "section": "draw",
-      "name": "draw: OpenShift Games /draw watermark"
+      "name": "draw: shifting.pro /draw watermark"
     },
     {
       "section": "draw",

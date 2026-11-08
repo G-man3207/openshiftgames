@@ -352,7 +352,7 @@ spec:
     // write the DNS-egress and directional gateway -> ledger allow rules. This
     // fixes the old lab-9 complaint that the provided file gave full marks.
     'challenges/payments-networkpolicy.yaml': `# Zero-trust starting point: isolate the payments project first.
-# NetworkPolicies are additive — add the DNS egress and the gateway -> ledger
+# NetworkPolicies are additive - add the DNS egress and the gateway -> ledger
 # allow rules yourself. This lab grades traffic behaviour, not object names.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -437,7 +437,7 @@ const CHALLENGES = [
     hints: [
       'Create both projects first: oc new-project frontend && oc new-project backend',
       'Deploy the frontend and backend tiers with oc new-app --image=quay.io/openshift/origin-hello-openshift:latest --name=<tier> -n <project> (frontend in frontend; backend in backend).',
-      'Deploy the database tier from the real MySQL image: oc new-app --image=registry.redhat.io/rhel9/mysql-80 --name=database -n backend. It CrashLoopBackOffs until credentials are supplied — oc get pods -n backend shows CrashLoopBackOff and oc logs <pod> -n backend prints "You must either specify the following environment variables: MYSQL_USER, MYSQL_PASSWORD, MYSQL_DATABASE or MYSQL_ROOT_PASSWORD". Fix it the exam way: oc set env deployment/database -n backend MYSQL_ROOT_PASSWORD=secretpw MYSQL_DATABASE=appdb, then watch the new Pods become Running.',
+      'Deploy the database tier from the real MySQL image: oc new-app --image=registry.redhat.io/rhel9/mysql-80 --name=database -n backend. It CrashLoopBackOffs until credentials are supplied - oc get pods -n backend shows CrashLoopBackOff and oc logs <pod> -n backend prints "You must either specify the following environment variables: MYSQL_USER, MYSQL_PASSWORD, MYSQL_DATABASE or MYSQL_ROOT_PASSWORD". Fix it the exam way: oc set env deployment/database -n backend MYSQL_ROOT_PASSWORD=secretpw MYSQL_DATABASE=appdb, then watch the new Pods become Running.',
       'oc new-app creates both a Deployment and a Service; the generated Service exposes the image port (3306/TCP for MySQL, 8080 for the hello-openshift image). Verify with oc get deploy,svc -n frontend and -n backend',
       'Expose the frontend Service: oc expose svc/frontend -n frontend (or oc create route edge...)',
       'A Route is Admitted on host/path/certificate validity, not on backend health: with no ready endpoints the Route is still Admitted=True while requests from the workstation fail with 503 and the router logs an error. Verify both: oc get route frontend -n frontend -o wide and curl -k https://<route-host>.',
@@ -447,7 +447,7 @@ const CHALLENGES = [
     id: 2,
     title: 'Fix CrashLoopBackOff',
     description:
-      'The payment-service Deployment is crash looping: image `quay.io/example/payments:v2-bad-config` pulls fine but the app exits with status 1 on an invalid configuration. Read the crash output with oc logs/describe on the real Pods, fix the workload (image/command/env — restarting does not help), and restore health to at least 90%.',
+      'The payment-service Deployment is crash looping: image `quay.io/example/payments:v2-bad-config` pulls fine but the app exits with status 1 on an invalid configuration. Read the crash output with oc logs/describe on the real Pods, fix the workload (image/command/env - restarting does not help), and restore health to at least 90%.',
     timeLimit: 240,
     docsLinks: [DOCS.health, DOCS.cli],
     objectives: [
@@ -489,7 +489,7 @@ const CHALLENGES = [
     availableResources: ['Pod', 'Deployment', 'Service', 'ConfigMap', 'Secret'],
     hints: [
       'Open the incident bell (the suggested commands use the real Pod name), or list the replicas first: oc get pods -l app=payment-service',
-      'Read the crash output: oc logs deployment/payment-service --previous — the app exits with status 1 because :v2-bad-config ships an invalid configuration. The image pulls fine, so this is a CrashLoopBackOff, not ImagePullBackOff.',
+      'Read the crash output: oc logs deployment/payment-service --previous - the app exits with status 1 because :v2-bad-config ships an invalid configuration. The image pulls fine, so this is a CrashLoopBackOff, not ImagePullBackOff.',
       'Describe the workload: oc describe deployment/payment-service; the Pods show CrashLoopBackOff and a growing restart count, and the Events show Back-off restarting failed container (not Failed to pull image).',
       'Fix the root cause, not the symptom: oc set image deployment/payment-service main=quay.io/openshift/origin-hello-openshift:latest (or use the incident panel). oc delete pod / oc rollout restart alone only brings the same bad configuration back.',
       'Confirm recovery: oc get pods -l app=payment-service (all Running, 0 restarts) and check the health bar is back to 90%+.',
@@ -535,7 +535,7 @@ const CHALLENGES = [
     ],
     availableResources: ['Secret', 'Route', 'Service', 'Deployment', 'Project'],
     hints: [
-      'Create real TLS material first — `oc create secret tls` reads the cert/key files from the virtual filesystem, so a missing file fails with `error: open tls.crt: no such file or directory`. Generate a self-signed pair: openssl req -x509 -newkey rsa:2048 -nodes -keyout tls.key -out tls.crt -days 365 -subj "/CN=app.apps.cluster.example.com"',
+      'Create real TLS material first - `oc create secret tls` reads the cert/key files from the virtual filesystem, so a missing file fails with `error: open tls.crt: no such file or directory`. Generate a self-signed pair: openssl req -x509 -newkey rsa:2048 -nodes -keyout tls.key -out tls.crt -days 365 -subj "/CN=app.apps.cluster.example.com"',
       'Create the TLS Secret from those files: oc create secret tls app-tls --cert=tls.crt --key=tls.key -n web',
       'Create the edge Route: oc create route edge app --service=app-svc --cert=tls.crt --key=tls.key -n web',
       'Verify admission and TLS: oc get route app -n web -o yaml; look for status.ingress[0].conditions type=Admitted, status=True',
@@ -588,7 +588,7 @@ const CHALLENGES = [
     ],
     availableResources: ['Project', 'Deployment', 'Service'],
     hints: [
-      'Review kustomize/overlays/prod/kustomization.yaml in the Files panel: it uses v5 `labels:` (with includeSelectors) and `patches:` targeting the Deployment — namespace, namePrefix, images and replicas are composed on top. (`patchesStrategicMerge`/`commonLabels` are deprecated.)',
+      'Review kustomize/overlays/prod/kustomization.yaml in the Files panel: it uses v5 `labels:` (with includeSelectors) and `patches:` targeting the Deployment - namespace, namePrefix, images and replicas are composed on top. (`patchesStrategicMerge`/`commonLabels` are deprecated.)',
       'Apply the overlay: oc apply -k kustomize/overlays/prod',
       'Verify the rendered objects: oc get deploy,svc -n webapp-prod',
       'The Deployment is named prod-webapp after namePrefix; oc get deploy prod-webapp -n webapp-prod -o yaml shows image and replicas.',
@@ -703,7 +703,7 @@ const CHALLENGES = [
       'Create the project quota: oc create quota team-quota --hard=pods=10,requests.cpu=4,requests.memory=8Gi',
       // Issue #38: real oc/kubectl have no `create limitrange` subcommand. Teach
       // the declarative path instead (the shipped example sets default/defaultRequest/min/max).
-      'Create the LimitRange from YAML (there is no `oc create limitrange` subcommand): oc apply -f examples/limitrange.yaml — it sets default cpu 500m/memory 512Mi, defaultRequest cpu 100m/memory 128Mi and max cpu 2/memory 4Gi. Any LimitRange in quota-lab counts, so a heredoc such as `oc apply -f - <<EOF … EOF` works too.',
+      'Create the LimitRange from YAML (there is no `oc create limitrange` subcommand): oc apply -f examples/limitrange.yaml - it sets default cpu 500m/memory 512Mi, defaultRequest cpu 100m/memory 128Mi and max cpu 2/memory 4Gi. Any LimitRange in quota-lab counts, so a heredoc such as `oc apply -f - <<EOF … EOF` works too.',
       'Deploy within the guardrails: oc create deployment api --image=quay.io/openshift/origin-hello-openshift:latest',
       'Set requests/limits: oc set resources deployment/api --requests=cpu=100m,memory=128Mi --limits=cpu=500m,memory=512Mi',
       'Resolve the ResourceQuotaExceeded incident from the incident panel (raise the quota or right-size requests).',
@@ -767,7 +767,7 @@ const CHALLENGES = [
     hints: [
       'Create the user and group: oc create user developer; oc adm groups new developers developer',
       'Bind the built-in edit ClusterRole at project scope: oc adm policy add-role-to-group edit developers -n team-dev (or create your own binding: oc create rolebinding dev-edit --clusterrole=edit --group=developers -n team-dev)',
-      'Prove it: oc auth can-i delete pods --as=developer -n team-dev and oc auth can-i update deployments --as=developer -n team-dev — the lab grades these answers, not the binding name.',
+      'Prove it: oc auth can-i delete pods --as=developer -n team-dev and oc auth can-i update deployments --as=developer -n team-dev - the lab grades these answers, not the binding name.',
       'Inspect the binding: oc get rolebinding -n team-dev -o yaml (a reused binding such as dev-edit is just as valid as one named edit).',
       'Avoid cluster-admin and wildcard rules; edit is enough for a developer in one project.',
     ],
@@ -776,7 +776,7 @@ const CHALLENGES = [
     id: 8,
     title: 'SCC for a Privileged Workload',
     description:
-      'Admit a workload that requests elevated security with a SecurityContextConstraint: apply the privileged app manifest, create a dedicated ServiceAccount, grant the privileged SCC to that ServiceAccount with a 4.x RBAC binding, and resolve the SCCForbidden incident. anyuid allows an arbitrary UID but NOT privileged containers — privileged: true needs the privileged SCC. Never grant privileged to the project default SA.',
+      'Admit a workload that requests elevated security with a SecurityContextConstraint: apply the privileged app manifest, create a dedicated ServiceAccount, grant the privileged SCC to that ServiceAccount with a 4.x RBAC binding, and resolve the SCCForbidden incident. anyuid allows an arbitrary UID but NOT privileged containers - privileged: true needs the privileged SCC. Never grant privileged to the project default SA.',
     timeLimit: 300,
     docsLinks: [DOCS.scc, DOCS.rbac],
     objectives: [
@@ -845,12 +845,12 @@ const CHALLENGES = [
       'RoleBinding',
     ],
     hints: [
-      'Apply the workload: oc apply -f challenges/privileged-app.yaml — it sets serviceAccountName: priv-sa and requests privileged: true. The manifest does NOT create that ServiceAccount.',
-      'The rejected Pod is never created on 4.x: oc get pods -n secure stays empty and oc describe deployment/privileged-app -n secure shows FailedCreate — either "unable to validate against any security context constraint" (SCC denial) or, before the grant, `error looking up service account secure/priv-sa: serviceaccount "priv-sa" not found` when the ServiceAccount is missing.',
-      'Create the dedicated identity (the manifest only references it): oc create sa priv-sa -n secure — do NOT grant elevated SCCs to the default ServiceAccount.',
+      'Apply the workload: oc apply -f challenges/privileged-app.yaml - it sets serviceAccountName: priv-sa and requests privileged: true. The manifest does NOT create that ServiceAccount.',
+      'The rejected Pod is never created on 4.x: oc get pods -n secure stays empty and oc describe deployment/privileged-app -n secure shows FailedCreate - either "unable to validate against any security context constraint" (SCC denial) or, before the grant, `error looking up service account secure/priv-sa: serviceaccount "priv-sa" not found` when the ServiceAccount is missing.',
+      'Create the dedicated identity (the manifest only references it): oc create sa priv-sa -n secure - do NOT grant elevated SCCs to the default ServiceAccount.',
       'Grant the SCC the 4.x way: oc adm policy add-scc-to-user privileged -z priv-sa -n secure (creates a RoleBinding to ClusterRole system:openshift:scc:privileged; the SCC users list stays unchanged).',
       'Verify with RBAC, not the SCC users list: oc auth can-i use scc/privileged --as=system:serviceaccount:secure:priv-sa; oc get rolebinding -n secure; then oc get pods -n secure shows the admitted Pod Running as priv-sa.',
-      'The SCCForbidden incident clears when the state is right — the ServiceAccount can use the privileged SCC and its privileged Pod is Running; the incident panel resolution action is only for exploring the fault.',
+      'The SCCForbidden incident clears when the state is right - the ServiceAccount can use the privileged SCC and its privileged Pod is Running; the incident panel resolution action is only for exploring the fault.',
     ],
   },
   {
@@ -931,18 +931,18 @@ const CHALLENGES = [
     focusFiles: ['challenges/shop-networkpolicy.yaml'],
     availableResources: ['Project', 'NetworkPolicy', 'Deployment', 'Service', 'Route'],
     hints: [
-      'Apply the provided policy set: oc apply -f challenges/shop-networkpolicy.yaml — or write your own equivalent policies; the check probes traffic behaviour, not NetworkPolicy object names.',
+      'Apply the provided policy set: oc apply -f challenges/shop-networkpolicy.yaml - or write your own equivalent policies; the check probes traffic behaviour, not NetworkPolicy object names.',
       'A NetworkPolicy is additive: a default-deny policy that selects every Pod isolates the project, then explicit allow rules re-open only the paths you name.',
-      'DNS is required: on OpenShift the dns-default Pods listen on 5353, so the egress rule must allow UDP and TCP 5353 to the openshift-dns namespace — port 53 does NOT unblock name resolution.',
+      'DNS is required: on OpenShift the dns-default Pods listen on 5353, so the egress rule must allow UDP and TCP 5353 to the openshift-dns namespace - port 53 does NOT unblock name resolution.',
       'Verify from a Pod: oc get networkpolicy -n shop; then oc exec deploy/frontend -- curl -sv http://backend:8080 (allowed) and try http://frontend:8080 from the backend (blocked) and an external host from the frontend (blocked).',
-      'Resolve the DNSResolutionFailure incident by allowing egress to the openshift-dns namespace on 5353 (UDP and TCP) — the incident clears as soon as the policy is present.',
+      'Resolve the DNSResolutionFailure incident by allowing egress to the openshift-dns namespace on 5353 (UDP and TCP) - the incident clears as soon as the policy is present.',
     ],
   },
   {
     id: 10,
     title: 'Install an Operator',
     description:
-      'Install the MetalLB Operator with OLM, create the IPAddressPool and L2Advertisement, expose a LoadBalancer Service with an external IP, and uninstall an unwanted operator Subscription. Then install the Pipelines operator AllNamespaces in openshift-operators (the cluster-global OperatorGroup) — no new OperatorGroup is needed there.',
+      'Install the MetalLB Operator with OLM, create the IPAddressPool and L2Advertisement, expose a LoadBalancer Service with an external IP, and uninstall an unwanted operator Subscription. Then install the Pipelines operator AllNamespaces in openshift-operators (the cluster-global OperatorGroup) - no new OperatorGroup is needed there.',
     timeLimit: 420,
     docsLinks: [DOCS.operators, DOCS.metallb],
     objectives: [
@@ -1031,11 +1031,11 @@ const CHALLENGES = [
     ],
     hints: [
       'Apply the whole OLM manifest set (OperatorGroup + Subscription for package metallb-operator + MetalLB CR + IPAddressPool + L2Advertisement, all in metallb-system): oc apply -f challenges/metallb-operator.yaml',
-      'Watch OLM: oc get sub,csv,installplan -n metallb-system — an InstallPlan appears, then the CSV metallb-operator.v4.22.0-202610281200 reaches Succeeded; oc get subscription -n metallb-system -o yaml shows status.installedCSV (redhat-operators package name is metallb-operator).',
+      'Watch OLM: oc get sub,csv,installplan -n metallb-system - an InstallPlan appears, then the CSV metallb-operator.v4.22.0-202610281200 reaches Succeeded; oc get subscription -n metallb-system -o yaml shows status.installedCSV (redhat-operators package name is metallb-operator).',
       'Create a LoadBalancer Service in the store project: oc create service loadbalancer web-lb --tcp=80:8080 -n store',
-      'Check the EXTERNAL-IP column: oc get svc web-lb -n store (MetalLB assigns it from metallb-pool/L2Advertisement; oc describe svc web-lb and oc get events show MetalLB’s Normal IPAllocated event — Assigned IP ["192.168.100.200"]).',
-      'Uninstall the old AAP operator properly: oc delete subscription ansible-automation-platform-operator -n openshift-operators, then delete its CSV — read the name from oc get csv -n openshift-operators (aap-operator.v2.6.0) and run oc delete csv aap-operator.v2.6.0 -n openshift-operators — deleting the Subscription alone leaves the operator installed.',
-      'AllNamespaces variant: apply examples/subscription-pipelines.yaml (Subscription for openshift-pipelines-operator-rh in openshift-operators) — the cluster-global global-operators OperatorGroup is already there, so no OperatorGroup is needed; watch oc get sub,csv -n openshift-operators until the Pipelines CSV reaches Succeeded.',
+      'Check the EXTERNAL-IP column: oc get svc web-lb -n store (MetalLB assigns it from metallb-pool/L2Advertisement; oc describe svc web-lb and oc get events show MetalLB’s Normal IPAllocated event - Assigned IP ["192.168.100.200"]).',
+      'Uninstall the old AAP operator properly: oc delete subscription ansible-automation-platform-operator -n openshift-operators, then delete its CSV - read the name from oc get csv -n openshift-operators (aap-operator.v2.6.0) and run oc delete csv aap-operator.v2.6.0 -n openshift-operators - deleting the Subscription alone leaves the operator installed.',
+      'AllNamespaces variant: apply examples/subscription-pipelines.yaml (Subscription for openshift-pipelines-operator-rh in openshift-operators) - the cluster-global global-operators OperatorGroup is already there, so no OperatorGroup is needed; watch oc get sub,csv -n openshift-operators until the Pipelines CSV reaches Succeeded.',
       'Confirm the AAP uninstall: oc get csv -n openshift-operators no longer lists the AAP CSV (the Pipelines Subscription/CSV from the AllNamespaces install may still be present).',
     ],
   },
@@ -1043,7 +1043,7 @@ const CHALLENGES = [
     id: 11,
     title: 'HTPasswd Onboarding',
     description:
-      'Configure HTPasswd authentication end-to-end: create an htpasswd entry, store it in openshift-config, apply the OAuth identity provider, log in as the new user, add group membership and grant project permissions — then rotate that user password the real way and log in with the new one.',
+      'Configure HTPasswd authentication end-to-end: create an htpasswd entry, store it in openshift-config, apply the OAuth identity provider, log in as the new user, add group membership and grant project permissions - then rotate that user password the real way and log in with the new one.',
     timeLimit: 420,
     docsLinks: [DOCS.idp, DOCS.auth, DOCS.rbac],
     objectives: [
@@ -1130,9 +1130,9 @@ const CHALLENGES = [
     hints: [
       'Create the htpasswd entry (the simulator has a virtual htpasswd file): htpasswd -c -b htpasswd alice openshift',
       'Store it in openshift-config with the mandatory htpasswd key: oc create secret generic htpass-secret --from-file=htpasswd=htpasswd -n openshift-config',
-      'Configure the provider from the Files panel: oc apply -f challenges/oauth-htpasswd.yaml — or write the OAuth manifest yourself and oc apply -f idp.yaml / cat <<EOF | oc apply -f - / oc patch oauth cluster --type=merge -p \'{"spec":…}\'. The check grades the resulting OAuth state, not the command.',
+      'Configure the provider from the Files panel: oc apply -f challenges/oauth-htpasswd.yaml - or write the OAuth manifest yourself and oc apply -f idp.yaml / cat <<EOF | oc apply -f - / oc patch oauth cluster --type=merge -p \'{"spec":…}\'. The check grades the resulting OAuth state, not the command.',
       'Wait for the OAuth rollout, then log in: oc login -u alice -p openshift; oc whoami',
-      'Rotate the password with YOUR OWN new password: oc extract secret/htpass-secret -n openshift-config --to /tmp --confirm; htpasswd -bB /tmp/htpasswd alice "<new-password>"; oc set data secret/htpass-secret -n openshift-config --from-file=htpasswd=/tmp/htpasswd — the operator restarts oauth-openshift, so wait for the rollout (oc get clusteroperators authentication) before oc login -u alice -p "<new-password>" (the old password is rejected until then). There is no fixed password: the check grades state — alice’s hash changed after a successful login and a later login with the new password succeeds.',
+      'Rotate the password with YOUR OWN new password: oc extract secret/htpass-secret -n openshift-config --to /tmp --confirm; htpasswd -bB /tmp/htpasswd alice "<new-password>"; oc set data secret/htpass-secret -n openshift-config --from-file=htpasswd=/tmp/htpasswd - the operator restarts oauth-openshift, so wait for the rollout (oc get clusteroperators authentication) before oc login -u alice -p "<new-password>" (the old password is rejected until then). There is no fixed password: the check grades state - alice’s hash changed after a successful login and a later login with the new password succeeds.',
       'Create the group with the user (or add later): oc adm groups new developers alice  # oc adm groups add-users developers alice',
       'Grant project access: oc adm policy add-role-to-user edit alice -n onboarding',
       'Verify: oc auth can-i get pods --as=alice -n onboarding',
@@ -1232,7 +1232,7 @@ const CHALLENGES = [
       'Then apply the Route: oc apply -f manifests/route.yaml -n prod; oc get route webapp -n prod and confirm Admitted.',
       'Create and start a build: oc new-build nodejs:20-ubi9 --name=builder; oc start-build builder',
       'Create the quota: oc create quota prod-quota --hard=pods=20,requests.cpu=4,requests.memory=8Gi',
-      'Run the Job: oc create job db-migrate --image=busybox:latest. Trap: a compute quota without a LimitRange rejects a Pod that omits requests — no Pod is created and oc describe job db-migrate -n prod shows a FailedCreate event ("failed quota: prod-quota: must specify requests.cpu,requests.memory"). A Job’s pod template is IMMUTABLE, so updating the resources of an existing Job with `oc set resources` is rejected (The Job \\"db-migrate\\" is invalid: spec.template: Invalid value: …: field is immutable): delete the Job and recreate it from a manifest that sets the requests — oc create job db-migrate --image=busybox:latest --dry-run=client -o yaml > job.yaml, add resources.requests.cpu: 100m and memory: 128Mi to the container, then oc delete job db-migrate and oc apply -f job.yaml (a `cat <<EOF | oc apply -f -` manifest works too). Watch it Complete with oc get job db-migrate -w.',
+      'Run the Job: oc create job db-migrate --image=busybox:latest. Trap: a compute quota without a LimitRange rejects a Pod that omits requests - no Pod is created and oc describe job db-migrate -n prod shows a FailedCreate event ("failed quota: prod-quota: must specify requests.cpu,requests.memory"). A Job’s pod template is IMMUTABLE, so updating the resources of an existing Job with `oc set resources` is rejected (The Job \\"db-migrate\\" is invalid: spec.template: Invalid value: …: field is immutable): delete the Job and recreate it from a manifest that sets the requests - oc create job db-migrate --image=busybox:latest --dry-run=client -o yaml > job.yaml, add resources.requests.cpu: 100m and memory: 128Mi to the container, then oc delete job db-migrate and oc apply -f job.yaml (a `cat <<EOF | oc apply -f -` manifest works too). Watch it Complete with oc get job db-migrate -w.',
       'Grant RBAC: oc create user developer; oc adm policy add-role-to-user edit developer -n prod',
       'Verify the Route is admitted and the Job completes before the timer runs out.',
     ],
@@ -1241,7 +1241,7 @@ const CHALLENGES = [
     id: 13,
     title: 'Production Network Policies',
     description:
-      'Make the payments project zero-trust: deny all ingress and egress by default, then re-open only the DNS egress and the gateway → ledger API path on port 8080 — while keeping the reverse direction blocked. A default-deny policy is provided in challenges/payments-networkpolicy.yaml; apply it (or write your own), then add the allow rules. The lab grades traffic behaviour, not NetworkPolicy object names.',
+      'Make the payments project zero-trust: deny all ingress and egress by default, then re-open only the DNS egress and the gateway → ledger API path on port 8080 - while keeping the reverse direction blocked. A default-deny policy is provided in challenges/payments-networkpolicy.yaml; apply it (or write your own), then add the allow rules. The lab grades traffic behaviour, not NetworkPolicy object names.',
     timeLimit: 300,
     docsLinks: [DOCS.network],
     objectives: [
@@ -1289,9 +1289,9 @@ const CHALLENGES = [
     focusFiles: ['challenges/payments-networkpolicy.yaml'],
     availableResources: ['Project', 'NetworkPolicy', 'Deployment', 'Service', 'Pod'],
     hints: [
-      'Isolate the project first with the provided default-deny policy: oc apply -f challenges/payments-networkpolicy.yaml (or write your own equivalent) — NetworkPolicies are additive, so the deny isolates the project and each allow rule re-opens exactly one path. No policy is applied to payments at start.',
+      'Isolate the project first with the provided default-deny policy: oc apply -f challenges/payments-networkpolicy.yaml (or write your own equivalent) - NetworkPolicies are additive, so the deny isolates the project and each allow rule re-opens exactly one path. No policy is applied to payments at start.',
       'DNS: allow egress to the openshift-dns namespace on BOTH UDP and TCP port 5353 (the dns-default Pods listen on 5353, not 53). Without it, gateway cannot resolve ledger and every call fails.',
-      'Direction matters: with default-deny in both directions you need an egress rule on gateway AND an ingress rule on ledger. Do not mirror those rules for ledger → gateway — the deny objective proves the path stays closed.',
+      'Direction matters: with default-deny in both directions you need an egress rule on gateway AND an ingress rule on ledger. Do not mirror those rules for ledger → gateway - the deny objective proves the path stays closed.',
       'Verify as the workloads: oc exec deploy/gateway -n payments -- curl -sv http://ledger:8080 (allowed), oc exec deploy/ledger -n payments -- curl -sv http://gateway:8080 (blocked), and oc get networkpolicy -n payments.',
       'The check probes the traffic evaluator: hand-written policies with any names/selectors are fine as long as the resulting traffic behaviour matches.',
     ],

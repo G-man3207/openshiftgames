@@ -1,5 +1,5 @@
 /**
- * ClusterState.js — in-memory OpenShift cluster resource store for OpenShift Games.
+ * ClusterState.js — in-memory OpenShift cluster resource store for shifting.pro.
  *
  * This is the single source of truth for every resource in the simulated
  * cluster. It is intentionally dependency-free (no DOM, no Three.js) so it can

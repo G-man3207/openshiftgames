@@ -316,7 +316,7 @@ export class ResourceSpotlight {
     this._renderToast({
       kicker: 'Nothing of yours yet',
       title: 'Create a resource to make it yours',
-      meta: 'Palette or oc — new objects get a red ring and a Mine count',
+      meta: 'Palette or oc - new objects get a red ring and a Mine count',
     });
   }
 

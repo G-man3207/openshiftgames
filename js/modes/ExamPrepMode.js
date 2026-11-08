@@ -1,5 +1,5 @@
 /**
- * EX280 Prep — non-3D overlay UI for OpenShift Games.
+ * EX280 Prep — non-3D overlay UI for shifting.pro.
  *
  * Provides the in-app exam prep experience required by docs/CONVERSION-SPEC.md §11:
  *   1. Objective tracker  — all 9 groups / 55 EX280V422 bullets, mastery status,
@@ -868,7 +868,7 @@ export class ExamPrepUI {
           console.warn('EX280 Prep: quick lab setup hook failed:', error?.message || error);
         }
         const message = firstCommand
-          ? `Quick lab “${lab.title}” ready in Sandbox — start with: ${firstCommand}`
+          ? `Quick lab “${lab.title}” ready in Sandbox - start with: ${firstCommand}`
           : `Quick lab “${lab.title}” ready in Sandbox.`;
         try {
           app?._showToast?.(message);
@@ -919,7 +919,7 @@ export class ExamPrepUI {
         completed: 0,
         total: checks.length,
         pending: [
-          'Launch the lab in Sandbox first — completion is checked against the live cluster.',
+          'Launch the lab in Sandbox first - completion is checked against the live cluster.',
         ],
       };
     }
@@ -965,11 +965,11 @@ export class ExamPrepUI {
           pass: false,
           completed: 0,
           total: 0,
-          pending: ['Unknown quick lab — launch it in Sandbox first.'],
+          pending: ['Unknown quick lab - launch it in Sandbox first.'],
         };
     if (!result.pass) {
       const detail = result.pending.slice(0, 3).join('; ');
-      const message = `“${label}” not marked complete yet — the live check is ${result.completed}/${result.total}. Still to do: ${detail}`;
+      const message = `“${label}” not marked complete yet - the live check is ${result.completed}/${result.total}. Still to do: ${detail}`;
       this._liveMessage(message);
       try {
         this._app()?._showToast?.(message);
@@ -980,7 +980,7 @@ export class ExamPrepUI {
     }
     this._markExamPrep(objectiveId, 'mastered');
     this._renderAll();
-    const message = `“${label}” check passed (${result.completed}/${result.total}) — ${this.getProgressSummary().mastered}/${EX280_OBJECTIVE_COUNT} bullets with verified evidence.`;
+    const message = `“${label}” check passed (${result.completed}/${result.total}) - ${this.getProgressSummary().mastered}/${EX280_OBJECTIVE_COUNT} bullets with verified evidence.`;
     this._liveMessage(message);
     try {
       this._app()?._showToast?.(message);
@@ -1509,7 +1509,7 @@ export class ExamPrepUI {
         : almost
           ? 'Almost there'
           : 'Keep going';
-      this.readinessBadge.title = `Evidence threshold: ${Math.round(EX280_READINESS_THRESHOLD * 100)}% of bullets have drill evidence (a passed quick-lab check, or the bullet's own commands run in a completed campaign level or lab). Tracked study coverage — not a Red Hat pass prediction.`;
+      this.readinessBadge.title = `Evidence threshold: ${Math.round(EX280_READINESS_THRESHOLD * 100)}% of bullets have drill evidence (a passed quick-lab check, or the bullet's own commands run in a completed campaign level or lab). Tracked study coverage - not a Red Hat pass prediction.`;
     }
     const track = this.overlay?.querySelector('.ep-progress-track');
     if (track) track.setAttribute('aria-valuenow', String(snapshot.masteredCount));
@@ -1574,7 +1574,7 @@ export class ExamPrepUI {
     const effectiveStatus = consoleOnly && statusKey === 'mastered' ? 'practiced' : statusKey;
     const meta = STATUS_META[effectiveStatus] || STATUS_META.todo;
     const statusTitle = consoleOnly
-      ? 'Documentation only: the simulator has no web-console UI, so this bullet cannot be verified here — use the docs link.'
+      ? 'Documentation only: the simulator has no web-console UI, so this bullet cannot be verified here - use the docs link.'
       : "Mastered = a passed quick-lab check, or this bullet's own command run successfully in a completed campaign level or lab.";
     const commands = (bullet.commands || [])
       .map(

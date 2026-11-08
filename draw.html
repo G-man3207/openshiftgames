@@ -3,28 +3,28 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>OpenShift Draw — 3D OpenShift Architecture Diagram</title>
+    <title>OpenShift Draw - 3D OpenShift Architecture Diagram</title>
     <meta
       name="description"
       content="Design OpenShift architectures visually in 3D. Drag Projects, Routes, BuildConfigs and more, draw connections, export OpenShift YAML. Built for EX280."
     />
-    <meta property="og:title" content="OpenShift Draw — 3D OpenShift Architecture Diagram" />
+    <meta property="og:title" content="OpenShift Draw - 3D OpenShift Architecture Diagram" />
     <meta
       property="og:description"
       content="Design OpenShift architectures visually in 3D. Drag Projects, Routes, BuildConfigs and more, draw connections, export OpenShift YAML. Built for EX280."
     />
     <meta property="og:type" content="website" />
     <meta property="og:url" content="https://shifting.pro/draw" />
-    <meta property="og:site_name" content="OpenShift Games" />
+    <meta property="og:site_name" content="shifting.pro" />
     <meta property="og:image" content="https://shifting.pro/og-image.png" />
     <meta property="og:image:width" content="1200" />
     <meta property="og:image:height" content="630" />
     <meta
       property="og:image:alt"
-      content="OpenShift Draw — a 3D architecture diagram of OpenShift resources with YAML export"
+      content="OpenShift Draw - a 3D architecture diagram of OpenShift resources with YAML export"
     />
     <meta name="twitter:card" content="summary_large_image" />
-    <meta name="twitter:title" content="OpenShift Draw — 3D OpenShift Architecture Diagram" />
+    <meta name="twitter:title" content="OpenShift Draw - 3D OpenShift Architecture Diagram" />
     <meta
       name="twitter:description"
       content="Design OpenShift architectures visually in 3D. Drag Projects, Routes, BuildConfigs and more, draw connections, export OpenShift YAML. Built for EX280."
@@ -100,7 +100,7 @@
         <a
           href="/"
           class="flex items-center gap-2 text-white/60 hover:text-white/90 transition-colors"
-          aria-label="Back to OpenShift Games"
+          aria-label="Back to shifting.pro"
         >
           <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path
@@ -375,7 +375,7 @@
       id="draw-watermark"
       class="fixed bottom-4 left-1/2 -translate-x-1/2 z-30 flex items-center gap-2 text-[10px] text-white/15"
     >
-      <span>OpenShift Games &middot; /draw</span>
+      <span>shifting.pro &middot; /draw</span>
     </div>
 
     <script type="module">
@@ -653,7 +653,7 @@
                 : '';
               const icon = ICONS[kind] || FALLBACK_ICON;
               sectionsHtml.push(`
-              <div class="palette-item" data-resource="${escapeHtml(kind)}" draggable="true" title="${escapeHtml(kind)} — ${escapeHtml(apiVersionForKind(kind))}">
+              <div class="palette-item" data-resource="${escapeHtml(kind)}" draggable="true" title="${escapeHtml(kind)} - ${escapeHtml(apiVersionForKind(kind))}">
                 <div class="palette-icon"><svg viewBox="0 0 24 24" fill="none">${icon}</svg></div>
                 <div class="palette-label">${escapeHtml(label)}</div>
                 <div class="palette-tooltip">${escapeHtml(kind)} · ${escapeHtml(apiVersionForKind(kind))}${shortcut}</div>
@@ -1045,7 +1045,7 @@
                 'default'
               );
               this.connectionSource = null;
-              this._setStatus('Connection mode — click source resource');
+              this._setStatus('Connection mode - click source resource');
             }
           });
 
@@ -1128,7 +1128,7 @@
             btn.classList.toggle('bg-openshift/20', this.connectionMode);
             btn.classList.toggle('border-openshift/40', this.connectionMode);
             btn.classList.toggle('text-openshift-orange', this.connectionMode);
-            this._setStatus(this.connectionMode ? 'Connection mode — click source resource' : '');
+            this._setStatus(this.connectionMode ? 'Connection mode - click source resource' : '');
           });
 
           document.getElementById('btn-clear').addEventListener('click', () => {
@@ -1377,7 +1377,7 @@
         exportYAML() {
           const resources = this._placedResources();
           if (resources.length === 0) {
-            this._setStatus('Nothing to export — drag a resource from the palette first', 3000);
+            this._setStatus('Nothing to export - drag a resource from the palette first', 3000);
             return;
           }
 
@@ -1414,7 +1414,7 @@
         shareLink() {
           const resources = this._placedResources();
           if (resources.length === 0) {
-            this._setStatus('Nothing to share yet — add a resource first', 2500);
+            this._setStatus('Nothing to share yet - add a resource first', 2500);
             return;
           }
 
@@ -1461,7 +1461,7 @@
               window.prompt('Copy this share link:', url);
             }
           } catch (error) {
-            this._setStatus('Diagram too large for a share link — use YAML export', 3000);
+            this._setStatus('Diagram too large for a share link - use YAML export', 3000);
           }
         }
 

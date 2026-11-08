@@ -1,5 +1,5 @@
 /**
- * RBACEngine.js — OpenShift RBAC + SCC evaluation model for OpenShift Games.
+ * RBACEngine.js — OpenShift RBAC + SCC evaluation model for shifting.pro.
  *
  * Pure, DOM-free helper functions used by `ClusterState` and `GameEngine` to
  * answer `oc auth can-i`, `oc adm policy ...` and SecurityContextConstraint

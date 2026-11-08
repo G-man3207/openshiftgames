@@ -1,5 +1,5 @@
 /**
- * GameEngine.js — core OpenShift Games engine.
+ * GameEngine.js — core shifting.pro engine.
  *
  * Owns the EventBus, `ClusterState` (cluster model) and `SimulationTick`
  * (controllers). Provides:

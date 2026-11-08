@@ -1,4 +1,4 @@
-# OpenShift Games — Conversion Specification (v1)
+# shifting.pro - Conversion Specification (v1)
 
 > **Documentation note (2026-11-04).** Learner-facing documentation now lives in the
 > [GitHub wiki](https://github.com/G-man3207/openshiftgames/wiki): the EX280 Study Guide and the
@@ -6,12 +6,12 @@
 > This spec, the architecture map, the declarative-engine guide, the research notes and the
 > verification report remain in `docs/` as engineering records.
 
-Status: **implemented (v1.0.0, 2026-11-03)** — authoritative build contract for the Kubernetes→OpenShift conversion. Final verification results: see `docs/verification-report.md`.
+Status: **implemented (v1.0.0, 2026-11-03)** - authoritative build contract for the Kubernetes→OpenShift conversion. Final verification results: see `docs/verification-report.md`.
 Owner: Team Lead. All conversion work MUST conform to this document. If something here is
 wrong or impossible, message the Lead before changing course.
 
 Repo: `/root/openshiftgames` (currently a GitHub fork of `rohitg00/k8sgames`, Apache-2.0).
-Target: a standalone, rebranded, open-source **OpenShift Games** that teaches Red Hat
+Target: a standalone, rebranded, open-source **shifting.pro** that teaches Red Hat
 OpenShift Container Platform **4.22** and is useful preparation for **EX280 (Red Hat
 Certified Specialist in OpenShift Administration, exam version EX280V422)**.
 
@@ -49,24 +49,24 @@ Authoritative external sources (see `docs/research/` for the details and citatio
 
 ## 1. Branding, URLs, storage keys, copy
 
-| Item                 | Value                                                                                                                  |
-| -------------------- | ---------------------------------------------------------------------------------------------------------------------- |
-| Product name         | **OpenShift Games**                                                                                                    |
-| Tagline              | Learn OpenShift by playing. Built for EX280.                                                                           |
-| Menu subtitle        | OpenShift 4.22 Cluster Simulation · Built for EX280                                                                    |
-| Repo                 | https://github.com/G-man3207/openshiftgames                                                                            |
-| Canonical demo URL   | https://shifting.pro (used for og:url / og:image; README notes how to change)                                          |
-| License              | Apache-2.0 (keep `LICENSE`), add `NOTICE`                                                                              |
-| Command prompt       | `$ oc` (accepted input: optional leading `oc` or `kubectl`; both stripped; help says `oc`)                             |
-| localStorage prefix  | `openshiftgames_` (settings key `openshiftgames_settings`, progress key `openshiftgames_progress`)                     |
-| YAML export filename | `openshiftgames-cluster.yaml`                                                                                          |
-| Draw page            | `/draw` → `draw.html`, title "OpenShift Draw — 3D OpenShift Architecture Diagram", watermark "OpenShift Games · /draw" |
-| Theme accent         | OpenShift red `#EE0000` for brand accents / OpenShift-specific meshes; existing status colors stay                     |
+| Item                 | Value                                                                                                               |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| Product name         | **shifting.pro**                                                                                                    |
+| Tagline              | Learn OpenShift by playing. Built for EX280.                                                                        |
+| Menu subtitle        | OpenShift 4.22 Cluster Simulation · Built for EX280                                                                 |
+| Repo                 | https://github.com/G-man3207/openshiftgames                                                                         |
+| Canonical demo URL   | https://shifting.pro (used for og:url / og:image; README notes how to change)                                       |
+| License              | Apache-2.0 (keep `LICENSE`), add `NOTICE`                                                                           |
+| Command prompt       | `$ oc` (accepted input: optional leading `oc` or `kubectl`; both stripped; help says `oc`)                          |
+| localStorage prefix  | `openshiftgames_` (settings key `openshiftgames_settings`, progress key `openshiftgames_progress`)                  |
+| YAML export filename | `openshiftgames-cluster.yaml`                                                                                       |
+| Draw page            | `/draw` → `draw.html`, title "OpenShift Draw - 3D OpenShift Architecture Diagram", watermark "shifting.pro · /draw" |
+| Theme accent         | OpenShift red `#EE0000` for brand accents / OpenShift-specific meshes; existing status colors stay                  |
 
 Required copy:
 
-- `<title>OpenShift Games — Learn OpenShift by Playing (EX280)</title>`
-- meta description: `Learn Red Hat OpenShift by playing. Deploy apps with oc, fix CrashLoopBackOff, expose Routes, build with S2I, configure SCC/quota/RBAC — a 3D cluster simulator built for the EX280 exam.`
+- `<title>shifting.pro - Learn OpenShift by Playing (EX280)</title>`
+- meta description: `Learn Red Hat OpenShift by playing. Deploy apps with oc, fix CrashLoopBackOff, expose Routes, build with S2I, configure SCC/quota/RBAC - a 3D cluster simulator built for the EX280 exam.`
 - og/twitter titles/descriptions mirror the above; og:url `https://shifting.pro`; og:image `https://shifting.pro/og-image.png`; twitter card summary_large_image.
 - Menu footer: `Built for EX280 · based on K8s Games by Rohit (Apache-2.0) · OpenShift is a trademark of Red Hat, Inc.`
 - README disclaimer: unofficial fan/education project, not affiliated with or endorsed by Red Hat; OpenShift and Red Hat are trademarks of Red Hat, Inc.
@@ -96,7 +96,7 @@ Forbidden outside attribution contexts: `k8sgames.com`, `rohitg00/k8sgames`, `K8
 
 ---
 
-## 3. Resource model — authoritative kind catalog
+## 3. Resource model - authoritative kind catalog
 
 **Central registry (mandatory):** `js/data/kindRegistry.js` is the single source of truth for kinds,
 apiVersions, scope, aliases, `oc get` columns, palette metadata, minimap sizes, default specs,
@@ -164,7 +164,7 @@ keep `metadata.namespace` (a Project name). Commands may still accept `namespace
 | ClusterResourceQuota             | quota.openshift.io/v1         | cluster                  | selector.labels.matchLabels, quota.hard, status.total.used                    |
 | User                             | user.openshift.io/v1          | cluster                  | fullName, groups[], identities[]                                              |
 | Group                            | user.openshift.io/v1          | cluster                  | users[] (stored as spec.users in the game)                                    |
-| Identity                         | user.openshift.io/v1          | cluster                  | providerName, providerUserName, user.name — auto-created only, not in palette |
+| Identity                         | user.openshift.io/v1          | cluster                  | providerName, providerUserName, user.name - auto-created only, not in palette |
 | OAuth                            | config.openshift.io/v1        | cluster                  | singleton name `cluster`; spec.identityProviders[]                            |
 | ClusterOperator                  | config.openshift.io/v1        | cluster                  | status.conditions Available/Progressing/Degraded, versions                    |
 | ClusterVersion                   | config.openshift.io/v1        | cluster                  | singleton name `version`; status.desired.version/channel                      |
@@ -217,9 +217,9 @@ Deployment with openshift extras: { replicas, selector, strategy, template,
               containerNames: ["main"], from: {kind: ImageStreamTag, name: "app:latest"}}}] }
 ```
 
-Service API-server defaulting (issues #59/#60): every Service creation/update path — the rich
+Service API-server defaulting (issues #59/#60): every Service creation/update path - the rich
 `Service` class, `GameEngine.applyManifestObject()` (`oc apply/create/replace -f`, `oc expose`),
-`ClusterState` seeding (platform Services and project-template objects) — runs the single
+`ClusterState` seeding (platform Services and project-template objects) - runs the single
 `defaultServiceSpec()` helper in `js/resources/NetworkResources.js` and stores exactly what a real
 kube-apiserver stores: `spec.clusterIP` (a unique `172.30.0.0/16` address allocated once at create;
 `None` for headless Services), `clusterIPs`, `ipFamilies: [IPv4]`, `ipFamilyPolicy: SingleStack`,
@@ -227,7 +227,7 @@ kube-apiserver stores: `spec.clusterIP` (a unique `172.30.0.0/16` address alloca
 and `nodePort`/`externalTrafficPolicy` for NodePort/LoadBalancer types. An update that omits
 `spec.clusterIP` preserves the allocated ClusterIP (the API server never re-allocates it), and
 ExternalName Services carry none of the clusterIP fields. Service status is exactly
-`{loadBalancer: {}}` for ClusterIP — no `phase`, `conditions`, `observedGeneration` or endpoint
+`{loadBalancer: {}}` for ClusterIP - no `phase`, `conditions`, `observedGeneration` or endpoint
 counters. Ready endpoints have one source of truth, `ClusterState.getServiceEndpoints()` (Running
 Pods matching the selector in the Service namespace); the get/describe/traffic surfaces read it and
 `formatEndpointAddresses()` renders it with kubectl's truncation (first 3 `ip:port` pairs followed
@@ -243,12 +243,12 @@ Available=True/Progressing=False/Degraded=False and version `4.22.0`; ClusterVer
 (desired.version `4.22.0`, channel `stable-4.22`); SCCs `restricted-v2` and `nonroot-v2` (groups
 `system:authenticated`), `restricted-v3` (not granted to `system:authenticated` in the game's
 admission model), `anyuid` (no subjects) and `privileged` (platform-default admin/build subjects);
-virtual identities `kubeadmin` (cluster-admin ClusterRoleBinding; no User resource — real 4.x
+virtual identities `kubeadmin` (cluster-admin ClusterRoleBinding; no User resource - real 4.x
 kubeadmin is virtual and never listed by `oc get users`) and `admin` (simulator convenience
 identity, also not a User resource); the `kube-system/kubeadmin` Secret stores only a bcrypt hash of
 the installer-generated password (plain text lives only in `~/auth/kubeadmin-password`);
 `openshift-config` carries the installer bootstrap Secrets (`pull-secret` type
-`kubernetes.io/dockerconfigjson` and `initial-service-account-private-key` type Opaque — real 4.22
+`kubernetes.io/dockerconfigjson` and `initial-service-account-private-key` type Opaque - real 4.22
 never seeds the HTPasswd secret, the identity labs create it); ImageStreams in `openshift`: `nodejs`
 (tags `20-ubi9`, `22-ubi9`, `latest`), `python` (`3.12-ubi9`, `latest`), `nginx` (`1.26-ubi9`,
 `latest`); platform workloads the routers/DNS operators own on a real 4.22 install are seeded as
@@ -272,24 +272,24 @@ Pod's `/etc/resolv.conf` points at `172.30.0.10` (#58).
 Nodes follow one catalog shared by every mode: `worker-0`, `worker-1`, `master-0` (2-node clusters
 use worker-0/worker-1; the control-plane Node carries the `control-plane,master` role labels AND the
 real `node-role.kubernetes.io/master:NoSchedule` taint, so application Pods schedule onto the
-workers while the platform DaemonSet Pods tolerate the taint and keep running on the master —
+workers while the platform DaemonSet Pods tolerate the taint and keep running on the master -
 #55).
 
 ---
 
-## 4. Command bar — target command catalog
+## 4. Command bar - target command catalog
 
 Input handling: trim; accept optional leading `oc ` or `kubectl ` (strip; if `kubectl`, append an
 educational hint "tip: on OpenShift, use oc"); prompt rendered as `$ oc`; support pipes
 (`oc process ... | oc apply -f -`) and output redirects (`oc get deploy web -o yaml > web.yaml`) for
 the virtual file system. Like a real workstation shell, also support `;`, `&&` and `||` command
 sequencing (quote/escape-aware; each segment keeps its own pipes/redirects and `&&`/`||` respect the
-previous segment's exit status) plus session variables — `export NAME=value`, `$NAME`/`${NAME}`
-expansion and bash's `$?`/`${?}` last-exit-status parameter — in unquoted and double-quoted
+previous segment's exit status) plus session variables - `export NAME=value`, `$NAME`/`${NAME}`
+expansion and bash's `$?`/`${?}` last-exit-status parameter - in unquoted and double-quoted
 arguments (not inside single quotes). The exit status is the real numeric status of the last
 executed command (see §4.3), persists across segments and terminal lines, and is reset with the
 shell session; a skipped `&&`/`||` segment leaves it unchanged. Unsupported shell
-grammar (loops, conditionals, functions) is rejected loudly (`simulator: … not supported — run one
+grammar (loops, conditionals, functions) is rejected loudly (`simulator: … not supported - run one
 command per line`); never execute part of a line silently. Track every executed raw command in
 `gameEngine` command history with `{raw, baseCommand, success, timestamp}`. Tab completion must
 include new kinds/commands.
@@ -318,7 +318,7 @@ GameEngine helpers):
 - Platform Services/DNS (issues #58/#61/#62): `oc get svc,endpoints -n openshift-dns` returns the
   real `dns-default` Service (ClusterIP `172.30.0.10`, ports `53/UDP`, `53/TCP`, `9154/TCP`, named
   targetPorts `dns`/`dns-tcp`/`metrics` like a real 4.22 install) with the pod-network
-  (`10.128.x–10.131.x:5353`) Endpoints, and `oc get svc -n openshift-ingress` returns
+  (`10.128.x-10.131.x:5353`) Endpoints, and `oc get svc -n openshift-ingress` returns
   `router-internal-default` (ClusterIP, ports `80/TCP`, `443/TCP`, `1936/TCP`) with the router Pod
   Endpoints; both Services exist in every mode, including the paused pre-start sandbox (the first
   check when DNS breaks after a NetworkPolicy change, lab 13). Both read the Service's stored
@@ -332,22 +332,22 @@ GameEngine helpers):
   resolv.conf search list (bare `web` → `Name: web.<ns>.svc.cluster.local`), `dig` has its own
   real header/QUESTION/ANSWER/SERVER format (`+short` = answer IPs only, `+search` opts into the
   search list), `getent hosts` prints glibc's `%-15s %s` IP/canonical line, and unknown names print
-  the real `** server can't find <name>: NXDOMAIN` line (dig: NXDOMAIN status 0) — never a
+  the real `** server can't find <name>: NXDOMAIN` line (dig: NXDOMAIN status 0) - never a
   fabricated address (issues #59/#61).
 - Exec/shell: `oc exec <pod> [-c <container>] -- <command>` (real container names), `oc rsh <pod>`,
   `oc cp <file> <pod>:<path>` / `oc cp <pod>:<path> <file>`. Inside a Pod `cat /etc/resolv.conf`
-  prints the real cluster DNS contract — `search <project>.svc.cluster.local svc.cluster.local
-cluster.local`, `nameserver 172.30.0.10`, `options ndots:5` (issue #58) — and `cat /etc/hosts` is
+  prints the real cluster DNS contract - `search <project>.svc.cluster.local svc.cluster.local
+cluster.local`, `nameserver 172.30.0.10`, `options ndots:5` (issue #58) - and `cat /etc/hosts` is
   the kubelet-managed file (`# Kubernetes-managed hosts file.`, loopback/localnet lines and
   `<podIP>\t<podName>`, no Service entries, #62). `getent hosts|passwd|group` read the Pod files /
-  cluster DNS. An `oc exec`/`oc rsh` command the image does not model is a real OCI exec failure —
+  cluster DNS. An `oc exec`/`oc rsh` command the image does not model is a real OCI exec failure -
   `error: Internal error occurred: … exec: "<cmd>": executable file not found in $PATH` followed by
   `command terminated with exit code 127` and a failed shell status, so `&&` stops and `||`
   recovers; modelled binaries are matched by basename (`/bin/cat`) (#62). A container script
   (`oc exec <pod> -- sh -c '<script>'` or `/bin/bash -c`) runs in the container's shell (see §4.4):
   single-quoted script text is expanded from the container environment (`$VAR`/`$?`, `$HOSTNAME`),
   shell builtins (`exit N`, `:`, `cd`, `export`, `unset`, assignments) exist only in that shell, and
-  the script's `;`/`&&`/`||`/pipes follow the real exit-status rules (issues #64–#65).
+  the script's `;`/`&&`/`||`/pipes follow the real exit-status rules (issues #64-#65).
 - Mutations: `oc create <resource> <name> [flags]`, `oc apply -f <file>`, `oc create -f <file>`,
   `oc replace -f <file>`, `oc delete -f <file>`, `oc apply -k <dir>`, `oc delete <resource> <name>`,
   `oc scale <resource> <name> --replicas=N`, `oc edit <resource> <name>` (opens editor modal),
@@ -379,7 +379,7 @@ cluster.local`, `nameserver 172.30.0.10`, `options ndots:5` (issue #58) — and 
   `add-scc-to-group`, `remove-scc-from-user`, `oc auth can-i <verb> <resource> [--as=<user>]`,
   `oc auth can-i --list`, `oc adm policy who-can <verb> <resource>`.
 - Quotas/self-service: `oc create quota <name> --hard=pods=20,requests.cpu=4,requests.memory=8Gi`,
-  LimitRanges are declarative — `oc apply -f examples/limitrange.yaml` (real `oc` has no
+  LimitRanges are declarative - `oc apply -f examples/limitrange.yaml` (real `oc` has no
   `create limitrange` subcommand; the simulator rejects it the same way),
   `oc create clusterquota <name> --project-label-selector=... --hard=...`,
   `oc describe quota|limitrange|clusterresourcequota`, `oc get quota|limitrange|clusterquota`.
@@ -389,7 +389,7 @@ cluster.local`, `nameserver 172.30.0.10`, `options ndots:5` (issue #58) — and 
 - Builds/images: `oc get bc|builds|is|istag`, `oc start-build`, `oc tag <src> <dst> [--scheduled]`,
   `oc import-image <is>:<tag> --from=<image> --confirm`, `oc describe is|bc|build`.
 - Cluster: `oc adm cordon|uncordon|drain node/<node>`,
-  `oc adm taint nodes <node> key=value:NoSchedule` — plus the kubectl-compatible empty-value form
+  `oc adm taint nodes <node> key=value:NoSchedule` - plus the kubectl-compatible empty-value form
   `<key>=:<Effect>` (e.g. `oc adm taint node master-0 node-role.kubernetes.io/master=:NoSchedule`,
   issue #58), the real removal forms `<key>-`, `<key>:<Effect>-`, `<key>=<value>:<Effect>-`, and the
   real effect validation (`NoSchedule`/`PreferNoSchedule`/`NoExecute`; anything else fails with
@@ -409,7 +409,7 @@ RBAC: `oc auth can-i` evaluates the model in section 6. Commands themselves are 
 RBAC in v1 (except where a level/incident requires a Forbidden result via `--as`/login), but every
 mutating command emits an authorization check event for objectives/achievements.
 
-### 4.1 Service/DNS and CLI output-fidelity contracts (issues #59–#60)
+### 4.1 Service/DNS and CLI output-fidelity contracts (issues #59-#60)
 
 The Service data model (API-server defaulting and the single ClusterIP source) is defined in §3.2;
 these are the output contracts every command surface must keep:
@@ -449,7 +449,7 @@ these are the output contracts every command surface must keep:
   visible like real `oc`.
 - **Unscheduled Pod describe is honest (issue #60).** A never-bound Pod has no
   `status.containerStatuses`; `oc describe pod` then prints Image/Port/Host Port/Environment/
-  Mounts/Conditions (`PodScheduled False`) and the FailedScheduling event only — no `Container ID:`,
+  Mounts/Conditions (`PodScheduled False`) and the FailedScheduling event only - no `Container ID:`,
   `Image ID:`, `State:`, `Ready:` or `Restart Count:` lines. A bound/running Pod keeps the real
   kubelet status block (State Running/Ready True/restart count/IDs).
 - **`oc rollout status --timeout` blocks and exits 1 (issue #60).** With `--timeout`, a stalled
@@ -462,13 +462,13 @@ these are the output contracts every command surface must keep:
   creates a single port with no `name` (the real oc shape) and defaulted `protocol: TCP`/
   `targetPort`, so get prints `8080/TCP` and describe prints `Port: <unset> 8080/TCP`.
 
-### 4.2 NetworkPolicy-aware DNS, exec exit status and Pod-network contracts (issues #61–#62)
+### 4.2 NetworkPolicy-aware DNS, exec exit status and Pod-network contracts (issues #61-#62)
 
 The DNS diagnostics, the exec exit-status model and the Pod networking detail are part of the
 simulation contract; these are the invariants every surface must keep:
 
 - **DNS diagnostics honour NetworkPolicy (issue #61).** `nslookup`, `dig` and `getent hosts` call
-  `SimulationTick.canResolveDNS(pod)` — egress from the exec Pod to the `openshift-dns` dns-default
+  `SimulationTick.canResolveDNS(pod)` - egress from the exec Pod to the `openshift-dns` dns-default
   Pods on UDP/TCP 5353, the same check `curl`'s name resolution uses. A blocked result prints only
   `;; connection timed out; no servers could be reached` and sets the real exit status (nslookup 1,
   dig 9, getent 2), surfaced by `oc exec` as `command terminated with exit code <N>` +
@@ -499,14 +499,14 @@ simulation contract; these are the invariants every surface must keep:
   Modelled binaries match by basename (`/bin/cat`); `sh`/`bash` are no-ops; every real command
   reports its real status (see §4.3: `true`/`false`, `ls` 2, `cat`/`grep` 1).
 - **Pod network 10.128.0.0/14 (issue #62).** `SimulationTick._generatePodIP(node)` allocates
-  `status.podIP` inside the Pod's Node `spec.podCIDR` (`/23` hostPrefix, host octet 2–254, skipping
-  already-assigned Pod IPs) and falls back to 10.128–10.131 when no Node/CIDR is known; scheduler,
+  `status.podIP` inside the Pod's Node `spec.podCIDR` (`/23` hostPrefix, host octet 2-254, skipping
+  already-assigned Pod IPs) and falls back to 10.128-10.131 when no Node/CIDR is known; scheduler,
   platform seeder and incident binder pass the Node. No runtime code may emit a `10.244.` pod IP.
   HostNetwork Pods keep the Node IP as their Pod IP.
 - **Kubelet `/etc/hosts` (issue #62).** Each Pod's `/etc/hosts` (and `oc cp pod:/etc/hosts`) is the
   kubelet-managed file: `# Kubernetes-managed hosts file.`, `127.0.0.1 localhost`,
   `::1 localhost ip6-localhost ip6-loopback`, `fe00::0 ip6-localnet`, `fe00::0 ip6-mcastprefix`,
-  `fe00::1 ip6-allnodes`, `fe00::2 ip6-allrouters` and `<podIP>\t<podName>` — no
+  `fe00::1 ip6-allnodes`, `fe00::2 ip6-allrouters` and `<podIP>\t<podName>` - no
   `172.30.0.1 kubernetes.default.svc` Service entry. A Pod without `status.podIP` omits only the
   final line.
 - **rolebinding wide ServiceAccounts (issue #62).** The SERVICEACCOUNTS column of
@@ -518,7 +518,7 @@ simulation contract; these are the invariants every surface must keep:
   top-level `Label:` value printed above it. The command layer derives that column from the output
   instead of using a fixed placeholder (Service: the 24-char `Internal Traffic Policy:` label pads
   the column to 26, so values start at column 27 and the placeholder is
-  `Events:                   <none>` — 19 spaces; before #69 P4 the widest label was
+  `Events:                   <none>` - 19 spaces; before #69 P4 the widest label was
   `Session Affinity:`, giving 12 spaces); the non-empty Events table format is unchanged.
 - **dns-default named targetPorts (issue #62).** `openshift-dns/dns-default` `spec.ports` carry
   targetPort names `dns`, `dns-tcp` and `metrics` (ports unchanged 53/UDP, 53/TCP, 9154/TCP).
@@ -541,7 +541,7 @@ The simulated shell and the `oc exec`/`oc rsh` container surface share one hones
   shell, a skipped segment leaves it unchanged, and a fresh shell (engine reset) starts at 0.
   Examples: `oc exec deploy/web -- nslookup web; echo rc=$?` prints `rc=1` when the exec fails,
   `export X=5; echo $X $?` prints `5 0`, and `oc exec … -- ls /nope` on one line followed by
-  `echo rc=$?` prints `rc=2`. `$?` is a shell special parameter — it is never listed by
+  `echo rc=$?` prints `rc=2`. `$?` is a shell special parameter - it is never listed by
   `env`/`printenv`/`export`.
 - **Real command statuses in the shell.** Commands that fail without printing an error keep their
   real status: `grep` with no match returns 1 (so `cmd | grep NOPE` makes the pipeline status 1 and
@@ -557,7 +557,7 @@ The simulated shell and the `oc exec`/`oc rsh` container surface share one hones
   recovers exactly like the existing 127 not-found contract. This closes the old behaviour where a
   failing modelled command printed only its error line and the shell still saw exit 0.
 
-### 4.4 kubectl-style describe, probe flags, container `sh -c` and node metrics (issues #64–#65)
+### 4.4 kubectl-style describe, probe flags, container `sh -c` and node metrics (issues #64-#65)
 
 `oc describe` and the container shell are the surfaces a player uses to verify injected config and
 probes; these are the output contracts every command surface must keep:
@@ -566,7 +566,7 @@ probes; these are the output contracts every command surface must keep:
   `valueFrom.secretKeyRef` prints
   `<set to the key 'DB_PASS' in secret 'db'>  Optional: false`, `configMapKeyRef` the
   `<set to the key 'APP_LOG' of config map 'cfg'>` wording, `fieldRef` the resolved value plus
-  `(<apiVersion>:<fieldPath>)` and `resourceFieldRef` `(<resource>)` — never
+  `(<apiVersion>:<fieldPath>)` and `resourceFieldRef` `(<resource>)` - never
   `JSON.stringify(valueFrom)`. `oc describe pod` resolves `fieldRef` from the live Pod
   (name/namespace/uid/nodeName/serviceAccountName/hostIP/podIP/labels/annotations); a Deployment
   template has no Pod, so its `fieldRef` prints the empty resolved value like kubectl. Liveness/
@@ -576,10 +576,10 @@ probes; these are the output contracts every command surface must keep:
   the API-server values (0/1/10/1/3).
 - **kubectl-style volume rendering (issue #65).** `describeVolumes` prints the volume name (`cfg:`)
   then the source's `Type:` line (the ConfigMap/Secret/EmptyDir/PVC/HostPath/NFS/Projected/
-  DownwardAPI/CSI wording) and its fields — `Name:`/`SecretName:`/`ClaimName:`/`Path:`/`Server:`/
+  DownwardAPI/CSI wording) and its fields - `Name:`/`SecretName:`/`ClaimName:`/`Path:`/`Server:`/
   `ReadOnly:`/`Optional:`, downwardAPI `Items:`, the projected sources
   (`TokenExpirationSeconds:`, `ConfigMapName:`, `SecretName:`, `DownwardAPI:`), CSI
-  `Driver:`/`FSType:`/`VolumeAttributes:` — aligned per volume (keys padded to that volume's longest
+  `Driver:`/`FSType:`/`VolumeAttributes:` - aligned per volume (keys padded to that volume's longest
   key + 2). The injected `kube-api-access-*` projected service-account volume
   (token + ConfigMap + DownwardAPI) renders, never the old bare `Type:  configMap`; an unknown
   source prints `<unknown>`.
@@ -595,12 +595,12 @@ probes; these are the output contracts every command surface must keep:
   flag is given, and the API server defaults delay 0s/timeout 1s/period 10s/#success 1/#failure 3.
   `--open-tcp` creates the same `tcpSocket` handler through the engine path as `--get-url` creates
   `httpGet` (host optional, port numeric or named, scheme defaults HTTP).
-- **Container `sh -c` shell (issues #64–#65).** `oc exec <pod> -- sh -c '<script>'` (and
+- **Container `sh -c` shell (issues #64-#65).** `oc exec <pod> -- sh -c '<script>'` (and
   `/bin/bash -c`) runs the script in the container shell: single-quoted text is expanded there from
   the container env (`$VAR`/`${VAR}`, `$?`), so env/secret checks print real values and `$HOSTNAME`
   prints the pod name, while double-quoted text is expanded by the workstation shell first. Shell
   builtins (`exit N`, `:`, `cd`, `export`, `unset`, `KEY=VALUE` assignments) exist only in this
-  shell — `oc exec -- exit 3` is still the real missing binary (127) — and the script's
+  shell - `oc exec -- exit 3` is still the real missing binary (127) - and the script's
   `;`/`&&`/`||`/pipes follow the real exit-status rules. `id` prints coreutils output: the full
   `uid=… gid=0(root) groups=…` line for plain `id` and bare IDs for
   `-u`/`-g`/`-un`/`-gn`/`-G`/`-Gn`.
@@ -613,10 +613,10 @@ probes; these are the output contracts every command surface must keep:
   leak into describe deploy; seeded/paused states reconstruct the same series synthetically.
 - **`oc adm top nodes` (issue #65).** The metrics-server view keeps its
   NAME/CPU(cores)/CPU%/MEMORY(bytes)/MEMORY% columns and is sorted by NAME; the control-plane node is
-  the busiest (≥2000m CPU, 8–12 Gi resident control-plane components, greatest CPU%), and the worker
+  the busiest (≥2000m CPU, 8-12 Gi resident control-plane components, greatest CPU%), and the worker
   rows carry deterministic per-node variance (never two identical workers).
 
-### 4.5 Release-safe module delivery and evaluated player probes (issues #66–#69)
+### 4.5 Release-safe module delivery and evaluated player probes (issues #66-#69)
 
 The site has no build step, so the hosting config carries the release-delivery contract: the entry
 document is revalidated on every navigation and the ES-module graph is addressed by release-scoped
@@ -625,7 +625,7 @@ current release and make probes real:
 
 - **No stale/mixed-version modules after a release (issues #66/#68).** Release delivery of the
   module graph is versioned, not revalidating: every release changes the import-map prefix in BOTH
-  entry documents — `"./js/": "./v/<package.json version>/js/"` in `index.html` and `draw.html` —
+  entry documents - `"./js/": "./v/<package.json version>/js/"` in `index.html` and `draw.html` -
   so the browser resolves every `./js/` specifier and every relative import written inside the
   module graph under that prefix; `vercel.json` rewrites `/v/:version/js/:path*` to `/js/:path*`
   and serves `/v/(.*)` with `Cache-Control: public, max-age=31536000, immutable`. A returning
@@ -635,26 +635,26 @@ current release and make probes real:
   gate when they drift (`§4j`); it applies to EVERY deploy that changes `js/` or the entry
   documents, because the immutable `/v/<version>/` URLs of an unchanged version keep serving the
   previously cached modules (a changed file under the same prefix would resurrect the #68 mix).
-  The unversioned app code remains the revalidating fallback for direct access — `/js/(.*)`, `*.css`,
+  The unversioned app code remains the revalidating fallback for direct access - `/js/(.*)`, `*.css`,
   `*.html`, `/` and `/draw` send `Cache-Control: public, max-age=0, must-revalidate` (no
   `s-maxage`/`stale-while-revalidate`), so a direct unversioned request always sees the current
-  release (the #66 behaviour, kept) — while images/fonts keep the long-lived
+  release (the #66 behaviour, kept) - while images/fonts keep the long-lived
   `public, max-age=86400, s-maxage=604800, stale-while-revalidate=2592000`. The browser harness
-  serves this same rule set from the real `vercel.json` — it compiles the rewrites generically and
-  computes headers from the original request path — so `qa-issue66` (revalidation fallback) and
+  serves this same rule set from the real `vercel.json` - it compiles the rewrites generically and
+  computes headers from the original request path - so `qa-issue66` (revalidation fallback) and
   `qa-issue68` (versioned delivery) exercise the production cache path; `verify.mjs` §4i/§4j lock
   the header and version/import-map contracts statically.
 - **Player-set probes are evaluated by the kubelet tick (issue #67).**
   `oc set probe <kind>/<name> --liveness|--readiness|--startup -- <command> [args…]` stores
   `exec: {command: argv}` plus the API-server timing defaults, replacing any previous handler;
-  everything after `--` is argv verbatim (pflag-faithful — flags after `--` are NOT parsed), mixing a
+  everything after `--` is argv verbatim (pflag-faithful - flags after `--` are NOT parsed), mixing a
   handler flag with a command is an oc-style one-handler usage error, and `--remove` still wins.
   `--get-url`/`--open-tcp`/numeric flags keep their #64 semantics. Each tick (simulated
   `gameSeconds`) evaluates every running Pod's probes against the simulated container:
   `initialDelaySeconds` is measured from the container's (re)start, later evaluations run every
   `periodSeconds`, and consecutive `failureThreshold`/`successThreshold` failures/successes decide
   the state. httpGet/tcpSocket resolve the port across the Pod's containers (numeric or named; the
-  Pod shares one network namespace) — a declared-but-unmatched port refuses with
+  Pod shares one network namespace) - a declared-but-unmatched port refuses with
   `Get "http://<podIP>:<port><path>": dial tcp <podIP>:<port>: connect: connection refused` or
   `dial tcp <podIP>:<port>: connect: connection refused`; a Pod that declares no ports is the
   permissive legacy fallback. The simulated app serves `/` plus the conventional health endpoints
@@ -676,15 +676,15 @@ current release and make probes real:
   therefore intentionally lists all old ReplicaSets (including 0/0 ones); filtering them to
   `<none>` would match pre-1.27 kubectl, not the 4.22 target. A regression lock keeps the behavior.
 
-### 4.6 Versioned module delivery, honest boot errors and kubectl 1.35 describe-svc (issues #68–#69)
+### 4.6 Versioned module delivery, honest boot errors and kubectl 1.35 describe-svc (issues #68-#69)
 
 Versioned module delivery and its release rule are defined in §4.5; these are the boot-error and
 describe output contracts added in 1.13.0:
 
 - **Boot failures are honest about what failed (issue #69 P3).** Only a failed WebGL capability
   probe may show the `#webgl-error` panel ("WebGL Not Available", enable hardware
-  acceleration/update drivers). Every other failure — a renderer-constructor exception or a JS
-  error thrown from `init()` — shows `_showInitError(err)` instead: overlay
+  acceleration/update drivers). Every other failure - a renderer-constructor exception or a JS
+  error thrown from `init()` - shows `_showInitError(err)` instead: overlay
   `#init-error` with `role="alert"`, the title **The game failed to load**, the real error message
   in `#init-error-message` written with `textContent` (never interpolated as HTML), a hard-reload
   hint (`Ctrl+Shift+R` / `Cmd+Shift+R`) and a link to open a GitHub issue with the message.
@@ -704,9 +704,9 @@ describe output contracts added in 1.13.0:
   `oc get svc dns-default -n openshift-dns -o jsonpath={.spec.trafficDistribution}`; the existing
   #58 platform-Service lock and the new `§4j`/`qa-issue69` checks cover it.
 
-### 4.7 S2I digest pulls, state-based grading and 1.14.0 CLI/simulation fidelity (issues #70–#76)
+### 4.7 S2I digest pulls, state-based grading and 1.14.0 CLI/simulation fidelity (issues #70-#76)
 
-The sixteenth QA pass closed issues #70–#76. These are the contracts added or changed in 1.14.0;
+The sixteenth QA pass closed issues #70-#76. These are the contracts added or changed in 1.14.0;
 each is locked by the permanent `qa-issue70-76` browser section and `scripts/verify.mjs` §4k:
 
 - **S2I digest references resolve through ImageStream tag history (issue #70).** A container image
@@ -716,19 +716,19 @@ each is locked by the permanent `qa-issue70-76` browser section and `scripts/ver
   exact reference. Only an unmatched digest falls back to the real pull failure (`manifest unknown`
   / ImagePullBackOff). A pre-build reference to `<ns>/<name>:latest` with no tag history is
   honestly `ImagePullBackOff` until the first successful Build pushes the tag, then recovers and
-  the ImageChange rollout starts the built image — a Pod never reports Running before the tag
+  the ImageChange rollout starts the built image - a Pod never reports Running before the tag
   exists. L9 (`oc new-app openshift/nodejs:20-ubi9~https://…`) and lab 5
   (`oc new-app https://…`) are end-to-end: build Complete → new ReplicaSet Pod Running with the
   digest image → the Route serves the built code.
 - **Grading is by cluster state, never by hidden names/passwords/commands (issue #71).** L13's
   htpasswd Secret objective credits any Secret the `oauth/cluster` identity provider references and
   that actually logs the user in (a `my-htp` Secret works; `htpass-secret` is not required at
-  L13 — lab 11's own Secret-name objective is intentionally unchanged and its label states the
+  L13 - lab 11's own Secret-name objective is intentionally unchanged and its label states the
   name). The L13/lab 11 password-rotation objective grades the real state: the user's htpasswd hash
   changed after a successful login AND a fresh login with the player's new password succeeds (the
   hinted literal `NewPassw0rd!` is not graded). Lab 7 grades `can-i`-equivalent RBAC for the subject
   in `team-dev` (any binding whose Role/ClusterRole grants `edit` to group `developers`; adding edit
-  to an existing working binding must still satisfy it — the hint path does not dead-end). L17/lab 8
+  to an existing working binding must still satisfy it - the hint path does not dead-end). L17/lab 8
   grade SCC state: any Role/RoleBinding with
   `apiGroups: ["security.openshift.io"]`, `resourceNames: ["privileged"]`, `verbs: ["use"]` (or the
   `system:openshift:scc:privileged` binding) usable by the subject, plus a Pod admitted with
@@ -753,7 +753,7 @@ each is locked by the permanent `qa-issue70-76` browser section and `scripts/ver
   delete/recreate from an edited dry-run YAML with `resources.requests` (or a LimitRange
   `defaultRequest` + recreate).
 - **PendingScheduling damages through a Deployment rollout (issue #73).** The incident patches the
-  Deployment template with a bad `nodeSelector` — never a bound Pod's immutable spec: a new
+  Deployment template with a bad `nodeSelector` - never a bound Pod's immutable spec: a new
   ReplicaSet Pod is `Pending` with the real v1.35 default-scheduler event
   `0/<N> nodes are available: <M> node(s) didn't match Pod's node affinity/selector.`, the old Pods
   keep serving within `maxUnavailable`, and the Deployment reaches `ProgressDeadlineExceeded` over
@@ -768,7 +768,7 @@ each is locked by the permanent `qa-issue70-76` browser section and `scripts/ver
   line and `FIELDS:`/field self-description lines; FIELDS entries are `  <path>\t<Type>` in
   alphabetical order on one line (enum values rendered), matching the issue's sample and the 1.35
   template. A field request prints `FIELD: <path> <Type>` first and only that field's description
-  and children — e.g. `oc explain deployment.spec.strategy` lists `rollingUpdate` before `type`.
+  and children - e.g. `oc explain deployment.spec.strategy` lists `rollingUpdate` before `type`.
   Descriptions remain the game's curated teaching text (not upstream OpenAPI prose); the format and
   field structure are the contract.
 - **JSONPath list/object marshalling (issue #76).** `-o jsonpath` marshals slice and map values like
@@ -809,7 +809,7 @@ each is locked by the permanent `qa-issue70-76` browser section and `scripts/ver
   `Normal IPAllocated Assigned IP ["<ip>"]` event (e.g. `["192.168.150.200"]`); no
   cloud-provider `EnsuredLoadBalancer` text is emitted by any path. The operator CSV follows the
   redhat-operators OCP-minor bundle versioning
-  `metallb-operator.v4.22.0-202610281200` in the seed, install flow, hints and locks — not upstream
+  `metallb-operator.v4.22.0-202610281200` in the seed, install flow, hints and locks - not upstream
   `v0.14.9`.
 - **In-cluster API access, incident signals and TLS content (issues #75/#76).** L16:
   `oc exec … -- curl -sk -H "Authorization: Bearer <token>"
@@ -818,7 +818,7 @@ https://kubernetes.default.svc/api/v1/namespaces/<ns>/pods` returns a single-lin
   `pods is forbidden: User "system:serviceaccount:<ns>:<sa>" cannot list resource "pods" in API
 group "" in the namespace "<ns>"` for an unauthorised/anonymous request, and 401 Unauthorized for
   an invalid token; the shell quoting and container `$(...)` support the exact one-liner. L14 emits
-  no RBAC events — the symptom is the real forbidden line in `oc logs deploy/web`. L19's
+  no RBAC events - the symptom is the real forbidden line in `oc logs deploy/web`. L19's
   DeadlineExceeded message is exactly `Job was active longer than specified deadline`. L12 seeds a
   UBI nginx TLS fixture (containerPort 8443 named `https`; Service port 443 named `https` →
   targetPort 8443): the passthrough Route is admitted with `spec.port.targetPort: https` and
@@ -842,7 +842,7 @@ true: Privileged containers are not allowed, ...]`). Changing
   when the substitution reads it.
 - **State-based content corrections (issues #71/#75).** L7's ConfigMap-volume objective and L11's
   Service-selector objective start false; lab 1's Route-admission hint teaches host/path/certificate
-  only (endpoints do not gate admission — a missing endpoint set returns 503); lab 3/L11/EX280 TLS
+  only (endpoints do not gate admission - a missing endpoint set returns 503); lab 3/L11/EX280 TLS
   hints generate real cert/key files first (`oc create secret tls … --cert=missing.crt` fails with
   `error: open missing.crt: no such file or directory`) and use `openssl req -x509`; lab 8's hint
   requires creating `priv-sa` (the shipped manifest creates none); L3's crash comes from a seeded
@@ -858,9 +858,9 @@ Extend the existing fixed-step simulation with OpenShift controllers:
 
 - `_tickProjects`: Projects become Active immediately; deletion marks Terminating.
 - `_ensurePlatformWorkloads` / `_ensurePlatformServices` (issues #53G/#55/#58/#69 P4): once Nodes
-  exist, seed the controller-owned platform workloads — `deployment.apps/router-default` + its
+  exist, seed the controller-owned platform workloads - `deployment.apps/router-default` + its
   ReplicaSet + Pods and the `daemonset.apps/dns-default`/`node-resolver` DaemonSets with one owned
-  Pod per Node — together with the real platform Services `openshift-dns/dns-default` (ClusterIP
+  Pod per Node - together with the real platform Services `openshift-dns/dns-default` (ClusterIP
   `172.30.0.10`, ports `53/UDP`, `53/TCP`, `9154/TCP`, named target ports
   `dns`/`dns-tcp`/`metrics` resolving to 5353/5353/9154, selector
   `dns.operator.openshift.io/daemonset-dns=default`, and
@@ -868,7 +868,7 @@ Extend the existing fixed-step simulation with OpenShift controllers:
   and `openshift-ingress/router-internal-default` (ClusterIP, ports `80/TCP`, `443/TCP`, `1936/TCP`,
   selector `ingresscontroller.operator.openshift.io/deployment-ingresscontroller=default`), in every
   mode including the paused pre-start sandbox. DNS Pods run on the pod network
-  (`hostNetwork: false`, 10.128–10.131 Pod IP from the Node's `spec.podCIDR`) while
+  (`hostNetwork: false`, 10.128-10.131 Pod IP from the Node's `spec.podCIDR`) while
   `node-resolver`/the router stay hostNetwork; the DNS
   DaemonSet templates carry the `kubernetes.io/os=linux` nodeSelector and the router Pods the
   ingress-controller deployment label. The bootstrap runs synchronously from
@@ -878,8 +878,8 @@ Extend the existing fixed-step simulation with OpenShift controllers:
   deleted platform Pods.
 - `_tickPodScheduling` (issue #57): an unschedulable Pod stays `Pending` with
   `PodScheduled=False/Unschedulable`; the STATUS column shown by `oc get pod` is `Pending` (`0/1`)
-  until the Pod is bound — `ContainerCreating` is a post-binding kubelet state, never a scheduler
-  display — and `oc describe pod` prints `Node: <none>` while unscheduled. FailedScheduling retries
+  until the Pod is bound - `ContainerCreating` is a post-binding kubelet state, never a scheduler
+  display - and `oc describe pod` prints `Node: <none>` while unscheduled. FailedScheduling retries
   follow the real kube-scheduler backoff (`podInitialBackoffDuration` 1 s doubling to
   `podMaxBackoffDuration` 10 s), so Event series aggregate into realistic small counts over a
   nonzero window (e.g. `(x4 over 7s)`) instead of one event per tick (`x167 over 0s`), and each
@@ -889,7 +889,7 @@ Extend the existing fixed-step simulation with OpenShift controllers:
   the kubelet-only `Container ID:`/`Image ID:`/`State:`/`Ready:`/`Restart Count:` lines for it
   (#60); a bound/running Pod keeps the real status block. Binding also allocates `status.podIP`
   inside the Node's `spec.podCIDR` /23 (OpenShift's `10.128.0.0/14` clusterNetwork, host octet
-  2–254, never an address already assigned to another Pod; hostNetwork Pods use the Node IP), and
+  2-254, never an address already assigned to another Pod; hostNetwork Pods use the Node IP), and
   incident-bound Pods go through the same allocator (#62).
 - `_tickProbes` / Service endpoint accounting (issues #59/#60): `ClusterState.getServiceEndpoints()`
   is the canonical ready-endpoint resolver (Running Pods matching the Service selector in the same
@@ -903,7 +903,7 @@ Extend the existing fixed-step simulation with OpenShift controllers:
   existing Service stays
   `status.ingress=[{host, routerName:"default", conditions:[{type:"Admitted",status:"True",reason:"Accepted",message:"..."}], wildcardPolicy:"None"}]`
   even when the Service has zero ready endpoints (traffic then fails with 503; `oc describe route`
-  shows `Endpoints: <none>`). Admitted=False is reserved for real admission failures —
+  shows `Endpoints: <none>`). Admitted=False is reserved for real admission failures -
   `HostAlreadyClaimed` (a host/path claimed by an older Route, usually in another project),
   `ExternalCertificateValidationFailed` (missing/unreadable `spec.tls.externalCertificate` Secret),
   `Rejected`, `InvalidTargetKind`, `ServiceNotFound`; deleting the older claim admits the waiting
@@ -929,7 +929,7 @@ Extend the existing fixed-step simulation with OpenShift controllers:
   unapproved (`InstallPlanPending True RequiresApproval`, `currentCSV` = head, `installedCSV` = the
   pin, phase UpgradePending) and installing it upgrades/replaces the CSV; Automatic subscriptions
   auto-approve it. A dependency-resolution failure (unknown package/channel/startingCSV) reports
-  only `ResolutionFailed`/`ConstraintsNotSatisfiable` — no install-plan conditions or fake CSV.
+  only `ResolutionFailed`/`ConstraintsNotSatisfiable` - no install-plan conditions or fake CSV.
 - `_tickOperatorsEffects`: if the `metallb` Subscription is Succeeded, Services of type LoadBalancer get
   `status.loadBalancer.ingress[{ip}]` from the first IPAddressPool address (only when an
   L2Advertisement references the pool); otherwise `<pending>`; emit `route:admitted`-style events.
@@ -940,7 +940,7 @@ Extend the existing fixed-step simulation with OpenShift controllers:
 - `_tickQuotaLimitRanges`: enforce ResourceQuota (existing `checkQuota`) and LimitRange defaults/min/max
   on pod creation (`limitrange:violation`); enforce ClusterResourceQuota across selected projects.
 - `_tickOAuth`: OAuth provider changes take effect after ~5s (simulated oauth rollout); emit
-  `auth:provider-ready`. A freshly seeded cluster is already settled — re-adding the baseline OAuth
+  `auth:provider-ready`. A freshly seeded cluster is already settled - re-adding the baseline OAuth
   singleton/cluster reset MUST NOT start a rollout (authentication ClusterOperator stays
   Progressing=False/AsExpected); only a real `spec.identityProviders`/`spec.tokenConfig` change or a
   data change to the referenced HTPasswd Secret triggers the rollout.
@@ -955,7 +955,7 @@ Created → Started` (plus real warning reasons such as `Failed`/`BackOff`/`Fail
 - `_tickClusterHealth`: recalc ClusterOperator conditions; emit periodic cluster state tick as today.
 - Keep all existing controllers (Deployment/RS/STS/DS/Job/CronJob/HPA/PVC/quota/chaos); the
   kubelet probe controller now evaluates player-set httpGet/tcpSocket/exec probes as specified in
-  §4.5 (issues #66–#67).
+  §4.5 (issues #66-#67).
 - Events (in addition to existing): `build:started`, `build:complete`, `build:failed`,
   `route:admitted`, `route:not-admitted`, `operator:installed`, `operator:uninstalled`,
   `scc:granted`, `scc:denied`, `login`, `logout`, `project:switched`, `manifest:applied`,
@@ -981,7 +981,7 @@ Also expose `gameEngine.cluster` methods:
 - Helpers for commands: `grantSCC(scc, subject)`, `revokeSCC`, `addUserToGroup`, etc.
   Default state: kubeadmin has cluster-admin ClusterRoleBinding; `system:authenticated` group gets
   `restricted-v2` SCC in the game's admission model (the 4.22 docs also describe `restricted-v3` as
-  the default for authenticated users on new installs — verify on a live cluster); `default`
+  the default for authenticated users on new installs - verify on a live cluster); `default`
   ServiceAccount exists in each project. Password store: virtual
   `htpasswd` file in ManifestEngine (section 7) is the source of truth for HTPasswd logins; login
   succeeds only when `authProvider.ready` and the user/password match the file, creating/updating the
@@ -998,17 +998,17 @@ Also expose `gameEngine.cluster` methods:
 
 ---
 
-## 7. Declarative engine — manifests, Kustomize, Helm, templates (new files)
+## 7. Declarative engine - manifests, Kustomize, Helm, templates (new files)
 
 New module family owned by manifests-dev; must be dependency-free vanilla JS.
 
 Files:
 
-- `js/engine/YamlParser.js` — parse a practical YAML subset into plain JS objects: mappings,
+- `js/engine/YamlParser.js` - parse a practical YAML subset into plain JS objects: mappings,
   sequences, scalars (quoted/unquoted, booleans, numbers, null, `|`/`>` block scalars optional),
   comments, multiple documents separated by `---`. Export `parseYaml(text)` → `Array<object>` and
   `stringifyYaml(obj)` for editor display. Return structured errors with line numbers.
-- `js/engine/ManifestEngine.js` — virtual file system + operations:
+- `js/engine/ManifestEngine.js` - virtual file system + operations:
   - `listFiles()`, `readFile(path)`, `writeFile(path, text)`, `deleteFile(path)`, `resetFiles()`.
   - `applyFile(path)` → parse docs, call `gameEngine.applyManifestObject(obj)` (Lead/engine-dev
     provides this on GameEngine; it upserts a ResourceBase by kind/name/namespace and returns the
@@ -1024,10 +1024,10 @@ Files:
     `{{ .Values.key }}` and `{{ .Release.Name }}` with a small mustache subset, then apply; store
     release record {name, chart, namespace, status, resources}; `listHelm()`, `uninstallHelm(name)`.
   - `htpasswdAdd(user, pass)`, `htpasswdUpdate(user, pass)`, `htpasswdDelete(user)`,
-    `htpasswdList()` — operate on virtual file `htpasswd` (content lines `user:{SHA}<base64>`; a
+    `htpasswdList()` - operate on virtual file `htpasswd` (content lines `user:{SHA}<base64>`; a
     fake hash is fine, never display raw passwords). Also `readFile('htpasswd')` for editor.
   - `getState()` for objective evaluation/Exam Prep.
-- `js/ui/ManifestPanel.js` — modal "Files / Manifests" panel: file tree, textarea editor with
+- `js/ui/ManifestPanel.js` - modal "Files / Manifests" panel: file tree, textarea editor with
   line numbers optional, Save, Reset, Apply -f / Apply -k buttons, error output, docs link. `init()`,
   `show()`, `hide()`, `destroy()`; self-contained DOM; opens from toolbar button `#btn-manifests`
   (index.html) and from `oc edit` commands. On `show`, uses current level's files.
@@ -1052,7 +1052,7 @@ emit normal cluster events) and expose `window.game.manifestEngine` (set by Mani
 
 Keep the existing incident lifecycle/engine architecture. Rename `kubectlCommands` →
 `ocCommands` throughout data/engine/panel. Every investigation step uses a real `oc` command.
-Required incident set (id / name) — Lead owns final consistency; use these exact `name` values:
+Required incident set (id / name) - Lead owns final consistency; use these exact `name` values:
 
 Pod/workload: `CrashLoopBackOff`, `ImagePullBackOff`, `OOMKilled`, `SCCForbidden`,
 `PendingScheduling`, `CreateContainerConfigError`, `ReadinessProbeFailure`, `LivenessProbeFailure`,
@@ -1088,7 +1088,7 @@ Route/Build/Subscription names.
 
 ---
 
-## 9. Campaign curriculum — 22 EX280 levels in 5 chapters + a 7-level Linux prelude (js/data/CampaignLevels.js + CampaignMode.js)
+## 9. Campaign curriculum - 22 EX280 levels in 5 chapters + a 7-level Linux prelude (js/data/CampaignLevels.js + CampaignMode.js)
 
 Schema per level:
 
@@ -1109,46 +1109,46 @@ Schema per level:
 Chapters and levels (titles fixed; content authors flesh out descriptions/hints/tutorials):
 
 1. **Manage OpenShift** (Projects, CLI, querying, declarative basics)
-   1. _Your First Project_ — oc whoami/status, create Project, deploy first Pod/Deployment; objectives:
+   1. _Your First Project_ - oc whoami/status, create Project, deploy first Pod/Deployment; objectives:
       `project`, `login`, `deploy Pod`, `deploy Deployment`. Tutorial steps.
-   2. _Query, Format, Filter_ — labels/selectors, `-o wide/yaml/jsonpath/custom-columns`,
+   2. _Query, Format, Filter_ - labels/selectors, `-o wide/yaml/jsonpath/custom-columns`,
       `--field-selector`, `--sort-by`, `oc explain`; objectives: `command` patterns, `label`,
       `deploy`.
-   3. _Logs, Events & Health_ — deploy app, investigate CrashLoop incident with oc describe/logs/events,
+   3. _Logs, Events & Health_ - deploy app, investigate CrashLoop incident with oc describe/logs/events,
       read ClusterOperators/clusterversion, `oc adm top`; objectives: `resolve CrashLoopBackOff`,
       `command oc logs`, `clusterHealth`, `investigate`.
-   4. _Declarative Manifests_ — edit manifests/deployment.yaml + service.yaml, `oc apply -f`,
+   4. _Declarative Manifests_ - edit manifests/deployment.yaml + service.yaml, `oc apply -f`,
       update + re-apply, export with `oc get ... -o yaml >`; objectives: `manifest` files, `deploy`
       kinds, `command`.
-2. **Declarative & Kustomize** (V422 Declarative Resource Management) 5. _Kustomize Base_ — apply base overlay; objectives: `kustomize` base path, `deploy`. 6. _Kustomize Overlays_ — prod overlay patches image/replicas/namespace; objectives:
-   `kustomize` prod path, `image` contains, `replicas`/scale, `command`. 7. _Secrets & ConfigMaps_ — create secret/configmap via oc create -f and oc create secret,
+2. **Declarative & Kustomize** (V422 Declarative Resource Management) 5. _Kustomize Base_ - apply base overlay; objectives: `kustomize` base path, `deploy`. 6. _Kustomize Overlays_ - prod overlay patches image/replicas/namespace; objectives:
+   `kustomize` prod path, `image` contains, `replicas`/scale, `command`. 7. _Secrets & ConfigMaps_ - create secret/configmap via oc create -f and oc create secret,
    mount/env into Deployment; objectives: `deploy Secret`, `deploy ConfigMap`, `mount`, `envFrom`,
-   `noConfigMap`. 8. _Templates & Helm_ — process OpenShift template with parameters (`oc process -f | oc apply -f -`),
+   `noConfigMap`. 8. _Templates & Helm_ - process OpenShift template with parameters (`oc process -f | oc apply -f -`),
    install Helm chart (`helm install`), verify resources; objectives: `template`, `helm`, `deploy`.
-3. **Deploy & Expose** (V422 Deploy applications / Network security / Non-HTTP) 9. _Images, Builds & Image Streams_ — `oc new-app`, BuildConfig→Build→ImageStream complete,
+3. **Deploy & Expose** (V422 Deploy applications / Network security / Non-HTTP) 9. _Images, Builds & Image Streams_ - `oc new-app`, BuildConfig→Build→ImageStream complete,
    tag/digest, `oc start-build`, verify istag; objectives: `build`, `imageStream`, `deploy`,
-   `command`. 10. _Rolling Updates & Rollbacks_ — update image, watch rollout, ImagePullBackOff incident,
-   `oc rollout undo/status/history`; objectives: `update`, `rollback`, `resolve ImagePullBackOff`. 11. _Services & Routes_ — service selector, `oc expose svc`, edge TLS route with cert secret,
-   verify Admitted; objectives: `connect`, `route`, `tls`, `deploy Secret`. 12. _Non-HTTP & Load Balancer_ — install MetalLB operator (Subscription), IPAddressPool +
+   `command`. 10. _Rolling Updates & Rollbacks_ - update image, watch rollout, ImagePullBackOff incident,
+   `oc rollout undo/status/history`; objectives: `update`, `rollback`, `resolve ImagePullBackOff`. 11. _Services & Routes_ - service selector, `oc expose svc`, edge TLS route with cert secret,
+   verify Admitted; objectives: `connect`, `route`, `tls`, `deploy Secret`. 12. _Non-HTTP & Load Balancer_ - install MetalLB operator (Subscription), IPAddressPool +
    L2Advertisement, Service type LoadBalancer with EXTERNAL-IP; passthrough/reencrypt route for
    TLS app; objectives: `operator`, `serviceType LoadBalancer`, `tls passthrough`, `route`.
-4. **Identity, RBAC & Self-service** (V422 Authn/authz + developer self-service) 13. _HTPasswd & Users_ — create htpasswd users, secret in openshift-config, configure OAuth,
-   login as user, change password; objectives: `user`, `login`, `command htpasswd/oauth`. 14. _Groups & RBAC_ — groups, rolebindings, `oc auth can-i`, least privilege, UnauthorizedAccess
-   incident; objectives: `group`, `canI`, `leastPrivilege`, `deploy RoleBinding`. 15. _Quotas, LimitRanges & Templates_ — ClusterResourceQuota, ResourceQuota, LimitRange, project
+4. **Identity, RBAC & Self-service** (V422 Authn/authz + developer self-service) 13. _HTPasswd & Users_ - create htpasswd users, secret in openshift-config, configure OAuth,
+   login as user, change password; objectives: `user`, `login`, `command htpasswd/oauth`. 14. _Groups & RBAC_ - groups, rolebindings, `oc auth can-i`, least privilege, UnauthorizedAccess
+   incident; objectives: `group`, `canI`, `leastPrivilege`, `deploy RoleBinding`. 15. _Quotas, LimitRanges & Templates_ - ClusterResourceQuota, ResourceQuota, LimitRange, project
    template from `openshift` project; objectives: `quota`, `limitRange`, `template`,
-   `resolve ResourceQuotaExceeded`. 16. _Service Accounts & API Access_ — SA, `oc set serviceaccount`, grant role to SA,
+   `resolve ResourceQuotaExceeded`. 16. _Service Accounts & API Access_ - SA, `oc set serviceaccount`, grant role to SA,
    token/API access + `oc auth can-i --as=system:serviceaccount:...`; objectives:
    `deploy ServiceAccount`, `canI --as`, `deploy RoleBinding`.
-5. **Security & Operations** (V422 application security, operators, jobs) 17. _SCC & Privileged Apps_ — SCCForbidden incident, `oc adm policy add-scc-to-user anyuid -z default`,
-   run privileged app, verify; objectives: `scc`, `privileged`, `resolve SCCForbidden`. 18. _Operators_ — install Subscription (operator group/CSV), verify Succeeded, uninstall/delete;
-   objectives: `operator installed`, `operator removed`, `command`. 19. _Jobs & CronJobs_ — one-time job and cron job, verify completion/schedule, fix failed job;
-   objectives: `complete Job`, `cronJob`, `resolve JobDeadlineExceeded`. 20. _EX280 Final: Production Platform_ — build a complete platform: Project, ResourceQuota,
+5. **Security & Operations** (V422 application security, operators, jobs) 17. _SCC & Privileged Apps_ - SCCForbidden incident, `oc adm policy add-scc-to-user anyuid -z default`,
+   run privileged app, verify; objectives: `scc`, `privileged`, `resolve SCCForbidden`. 18. _Operators_ - install Subscription (operator group/CSV), verify Succeeded, uninstall/delete;
+   objectives: `operator installed`, `operator removed`, `command`. 19. _Jobs & CronJobs_ - one-time job and cron job, verify completion/schedule, fix failed job;
+   objectives: `complete Job`, `cronJob`, `resolve JobDeadlineExceeded`. 20. _EX280 Final: Production Platform_ - build a complete platform: Project, ResourceQuota,
    LimitRange, template deploy, BuildConfig→ImageStream→Deployment, Route with TLS,
    NetworkPolicy, User+Group+RBAC, SCC for SA, Operator install, Job/CronJob; objectives combine
    ~10 `deploy`/`route`/`build`/`scc`/`canI`/`operator`/`complete` objectives with
    `architectureScore` and `examScore >= 75`; time limit via starCriteria.
 
-Objective schema (CampaignMode owns `ObjectiveEvaluator` — extract to
+Objective schema (CampaignMode owns `ObjectiveEvaluator` - extract to
 `js/engine/ObjectiveEvaluator.js`, exported class/function so ChallengeMode reuses it):
 common `{ type, label, ... }`; supported types:
 
@@ -1212,7 +1212,7 @@ CampaignMode must expose `getStatus()` unchanged in shape and pass `objectivePro
 objectives panel/HUD as today. New objective types must degrade gracefully if referenced resources
 are absent.
 
-### Player guidance — `how`, `workProject` and objective notes (1.15.0)
+### Player guidance - `how`, `workProject` and objective notes (1.15.0)
 
 A live play-test showed players stuck on levels whose commands lived only in sequential `hints[]` that
 did not map to the objectives, and whose lab project was mentioned only in hint #1 (the grader is
@@ -1255,19 +1255,19 @@ project-scoped and every level starts in `default`). Levels therefore carry opti
 
 The chapter/level table above is the 1.0 curriculum; 1.16.0 extends it without renumbering anything.
 
-- **Ids are save keys, order is data.** Player progress is stored per level id, so ids 1–20 keep their
+- **Ids are save keys, order is data.** Player progress is stored per level id, so ids 1-20 keep their
   meaning forever. `CHAPTERS` in `js/data/CampaignLevels.js` defines campaign ORDER; `CAMPAIGN_LEVELS` is
   sorted by it. Helpers: `CAMPAIGN_ORDER`, `EX280_ORDER`, `PRELUDE_ORDER`, `getCampaignLevel(id)`,
   `previousLevelId(id)`, `isLevelUnlocked(id, progress)` (previous level of the same track completed, or
-  the level itself completed — an inserted level never re-locks finished work), `continueLevelId(progress)`
+  the level itself completed - an inserted level never re-locks finished work), `continueLevelId(progress)`
   (new player → first prelude level; otherwise the track completed in most recently), `isCampaignComplete`,
   `levelLabel(id)` / `levelOrdinal(id)` (positional display numbers). Never use `id - 1` or `id` as a
   position; `scripts/verify.mjs` locks this.
-- **Chapters:** 0 Linux & RHEL Foundations (prelude, `prelude: true`, ids 101–107, labels 0.1–0.7, optional:
-  never gates Level 1; 107 → 1), 1 Manage OpenShift [1–4], 2 Declarative & Kustomize [5–8], 3 Deploy &
-  Expose [9–12], 4 Identity, RBAC & Self-service [13–16], 5 Security & Operations [17, 18, 19, 21, 22, 20]
-  — id 21 Network Policies (Level 20), id 22 Nodes & Cluster Troubleshooting (Level 21), id 20 the capstone
-  (Level 22). `19 → 21 → 22 → 20`.
+- **Chapters:** 0 Linux & RHEL Foundations (prelude, `prelude: true`, ids 101-107, labels 0.1-0.7, optional:
+  never gates Level 1; 107 → 1), 1 Manage OpenShift [1-4], 2 Declarative & Kustomize [5-8], 3 Deploy &
+  Expose [9-12], 4 Identity, RBAC & Self-service [13-16], 5 Security & Operations [17, 18, 19, 21, 22, 20]
+  - id 21 Network Policies (Level 20), id 22 Nodes & Cluster Troubleshooting (Level 21), id 20 the capstone
+    (Level 22). `19 → 21 → 22 → 20`.
 - **Prelude levels** live in `js/data/LinuxLevels.js`, run on the simulated RHEL 9 workstation
   (`js/engine/LinuxHost.js`, seeded per level from `levelDef.linuxHost` by `CampaignMode.seedLinuxHost`
   after the Files panel reset) and are graded by host-state objective types (`file`, `service`, `process`,
@@ -1280,25 +1280,25 @@ The chapter/level table above is the 1.0 curriculum; 1.16.0 extends it without r
 
 ---
 
-## 10. Challenges — 13 timed labs (js/modes/ChallengeMode.js, reuse ObjectiveEvaluator)
+## 10. Challenges - 13 timed labs (js/modes/ChallengeMode.js, reuse ObjectiveEvaluator)
 
 Keep the challenge runner architecture (`CHALLENGES`, `startChallenge`, `getStatus`, etc.).
 Replace scenarios with these (id/title fixed; each 180-420s, objectives use section 9 schema,
 `startingResources` + `preloadIncidents` + `availableResources` + `hints`):
 
-1. _Three-Tier App_ — two Projects (frontend/backend), deployments, services, route to frontend.
-2. _Fix CrashLoopBackOff_ — investigate + resolve CrashLoopBackOff, health ≥90%.
-3. _Route with Edge TLS_ — service + `oc create route edge` with TLS secret, Admitted.
-4. _Kustomize Prod Overlay_ — apply prod overlay, verify image tag + replicas via objective + command.
-5. _Build & Deploy from Source_ — `oc new-app`/BuildConfig build completes, ImageStreamTag, Deployment running, Route.
-6. _Quota Guardrail_ — ResourceQuota + LimitRange + project requests; deploy within limits; resolve quota incident.
-7. _RBAC for a New Teammate_ — create user/group, rolebinding edit in project, `oc auth can-i` true, least privilege.
-8. _SCC for a Privileged Workload_ — grant anyuid to SA, run privileged/uid-0 pod, resolve SCCForbidden.
-9. _Network Isolation_ — default-deny NetworkPolicy + allow only frontend→backend, fix DNS egress.
-10. _Install an Operator_ — Subscription Succeeded (+ uninstall/delete objective), MetalLB LoadBalancer service with EXTERNAL-IP.
-11. _HTPasswd Onboarding_ — htpasswd users, OAuth config, login as user, group membership, permissions.
-12. _EX280 Speed Run_ — mixed: project, apply manifests, build, route TLS, quota, job, RBAC; under time.
-13. _Production Network Policies_ — default-deny NetworkPolicy + DNS egress + allow only gateway→ledger; graded on
+1. _Three-Tier App_ - two Projects (frontend/backend), deployments, services, route to frontend.
+2. _Fix CrashLoopBackOff_ - investigate + resolve CrashLoopBackOff, health ≥90%.
+3. _Route with Edge TLS_ - service + `oc create route edge` with TLS secret, Admitted.
+4. _Kustomize Prod Overlay_ - apply prod overlay, verify image tag + replicas via objective + command.
+5. _Build & Deploy from Source_ - `oc new-app`/BuildConfig build completes, ImageStreamTag, Deployment running, Route.
+6. _Quota Guardrail_ - ResourceQuota + LimitRange + project requests; deploy within limits; resolve quota incident.
+7. _RBAC for a New Teammate_ - create user/group, rolebinding edit in project, `oc auth can-i` true, least privilege.
+8. _SCC for a Privileged Workload_ - grant anyuid to SA, run privileged/uid-0 pod, resolve SCCForbidden.
+9. _Network Isolation_ - default-deny NetworkPolicy + allow only frontend→backend, fix DNS egress.
+10. _Install an Operator_ - Subscription Succeeded (+ uninstall/delete objective), MetalLB LoadBalancer service with EXTERNAL-IP.
+11. _HTPasswd Onboarding_ - htpasswd users, OAuth config, login as user, group membership, permissions.
+12. _EX280 Speed Run_ - mixed: project, apply manifests, build, route TLS, quota, job, RBAC; under time.
+13. _Production Network Policies_ - default-deny NetworkPolicy + DNS egress + allow only gateway→ledger; graded on
     observed traffic behaviour, not on policy names (added 1.2.0).
 
 ---
@@ -1311,21 +1311,21 @@ ManifestEngine state via `window.game`.
 
 Contents:
 
-1. **Objective tracker** — all V422 objective groups/bullets from `docs/research/exam-facts.json`
+1. **Objective tracker** - all V422 objective groups/bullets from `docs/research/exam-facts.json`
    (copy into JS data with `id`, `title`, `bullets`, `docsUrl`). For each bullet: status
    (Not started / In progress / Mastered), linked levels/challenges (click → start that level/challenge),
    key `oc` commands (copy-to-clipboard), command bar shortcut (`oc <cmd>` prefilled), "Open Red Hat docs" link.
    Mastered = linked campaign level completed OR linked challenge completed OR quick-lab passed.
    Overall progress bar (X / 55 bullets) and a study-coverage verdict (≥90% of bullets have a linked
-   drill completed — coverage of the game's drills, not a Red Hat pass prediction).
-2. **Quick labs** — 8-10 short "do it now" command drills with expected result, mapped to objectives:
+   drill completed - coverage of the game's drills, not a Red Hat pass prediction).
+2. **Quick labs** - 8-10 short "do it now" command drills with expected result, mapped to objectives:
    projects/users/route/build/kustomize/quota/scc/operator; each opens Sandbox with a seeded state and
    checks via `command`/state objectives; record pass in progress.examPrep.
-3. **Cheat sheet** — grouped `oc` command reference (from research docs) with docs links; searchable filter.
-4. **Exam facts** — EX280V422, 3h, performance-based, persistence requirement, recommended courses,
+3. **Cheat sheet** - grouped `oc` command reference (from research docs) with docs links; searchable filter.
+4. **Exam facts** - EX280V422, 3h, performance-based, persistence requirement, recommended courses,
    official objectives link, docs base URL. Naming: redhat.com titles the exam "Red Hat Certified
    System Administrator in OpenShift exam (EX280)"; Red Hat's LMS objectives PDF calls it "Red Hat
-   Certified Specialist in OpenShift Administration". Both are EX280V422 — show the official page
+   Certified Specialist in OpenShift Administration". Both are EX280V422 - show the official page
    title with the PDF name as a note.
 
 Data contract: `EX280_OBJECTIVE_GROUPS = [{id, title, bullets: [{id, title, docsUrl,
@@ -1350,7 +1350,7 @@ All 55 official bullets must be present and mapped (Lead verifies; authored from
   `data-resource` = kind; tooltips show kind + shortcut where applicable.
 - **Toolbar**: existing Auto-Align / Reset View / YAML / Help + new **Files** (`#btn-manifests`) +
   **EX280** shortcut. `/` hint says `oc`.
-- **HUD**: logo "OpenShift Games"; health; counts; mode label "OpenShift 4.22"; incident bell.
+- **HUD**: logo "shifting.pro"; health; counts; mode label "OpenShift 4.22"; incident bell.
 - **Inspector**: tabs Overview / YAML / Describe / Events; kind-specific details for Project, Route
   (host, path, TLS, admitted), BuildConfig/Build/ImageStream, Template, Subscription, SCC, quotas,
   users/groups; YAML tab uses the resource's toYAML with correct apiVersion; Describe tab mimics
@@ -1385,7 +1385,7 @@ All 55 official bullets must be present and mapped (Lead verifies; authored from
 - **ScoringEngine stat/progress keys**: keep existing progress schema; rename `namespacesCreated` →
   `projectsCreated` with migration fallback; add new counters/events. localStorage key
   `openshiftgames_progress`; load old `k8sgames_*` keys once and migrate if present (do not lose
-  existing users' progress on the original domain — best-effort migration).
+  existing users' progress on the original domain - best-effort migration).
 - **Renderer** (`ResourceMeshes.js`): add a distinct creator for every new kind using the existing
   helpers (`createStandardMaterial`, `createGlowRing`, `createLabelSprite`, geometry helpers);
   Route: arrow/road sign; Project: folder/building; BuildConfig: gear+wrench; Build: gear; ImageStream:

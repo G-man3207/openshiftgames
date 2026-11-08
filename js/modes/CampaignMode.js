@@ -637,7 +637,7 @@ class CampaignMode {
         title: this.currentLevelDef?.title || `Level ${levelLabel(this.currentLevel)}`,
         totalLevels: CAMPAIGN_LEVELS.length,
         state: this.state,
-        message: `Campaign complete — all ${EX280_ORDER.length} EX280 levels finished.`,
+        message: `Campaign complete - all ${EX280_ORDER.length} EX280 levels finished.`,
       };
       this.emit('campaign:campaign-complete', payload);
       this.emit('mode:campaign-complete', payload);

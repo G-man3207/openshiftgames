@@ -123,7 +123,7 @@ const INCIDENT_DEFS = [
     investigationSteps: [
       S(
         'oc logs <pod> --previous',
-        'Read the previous container instance — the actual crash reason is in the last run.'
+        'Read the previous container instance - the actual crash reason is in the last run.'
       ),
       S(
         'oc describe pod <pod>',
@@ -274,7 +274,7 @@ const INCIDENT_DEFS = [
       ),
       S(
         'oc get sa -n <namespace> -o name',
-        'List the project ServiceAccounts — a dedicated SA is a better identity than default for privileged workloads.'
+        'List the project ServiceAccounts - a dedicated SA is a better identity than default for privileged workloads.'
       ),
       S(
         'oc adm policy who-can use scc privileged',
@@ -320,7 +320,7 @@ const INCIDENT_DEFS = [
       ),
       S(
         'oc get deployment <deployment> -o yaml',
-        'The pod template carries a nodeSelector that no Node label satisfies — the real cause.'
+        'The pod template carries a nodeSelector that no Node label satisfies - the real cause.'
       ),
       S('oc get nodes --show-labels', 'Check Ready state and labels of candidate nodes.'),
       S('oc describe node <node>', 'Inspect taints, conditions and allocatable resources.'),
@@ -494,7 +494,7 @@ const INCIDENT_DEFS = [
       ),
       S(
         'oc get rs -n <namespace>',
-        'Old and new ReplicaSets both present — new one has no Ready pods.'
+        'Old and new ReplicaSets both present - new one has no Ready pods.'
       ),
       S(
         'oc get pods -n <namespace>',
@@ -852,7 +852,7 @@ const INCIDENT_DEFS = [
     category: 'Network',
     severity: 3,
     description:
-      'A Route was not admitted by the Ingress Controller (status.ingress[].conditions Admitted=False): a hostname claim conflict, shard/router mismatch or invalid TLS/config. Missing Service endpoints do not block admission — they only stop traffic from being served.',
+      'A Route was not admitted by the Ingress Controller (status.ingress[].conditions Admitted=False): a hostname claim conflict, shard/router mismatch or invalid TLS/config. Missing Service endpoints do not block admission - they only stop traffic from being served.',
     visualEffect: 'pulse-yellow',
     affectedResourceTypes: ['Route', 'Service'],
     investigationSteps: [
@@ -975,7 +975,7 @@ const INCIDENT_DEFS = [
       S('oc exec <pod> -- curl -sv <service>:8080', 'Reproduce the timeout from inside a Pod.'),
       S(
         'oc get events -n <namespace>',
-        'Denied connections are usually not events — verify by policy inspection.'
+        'Denied connections are usually not events - verify by policy inspection.'
       ),
     ],
     resolutionActions: [
@@ -1113,7 +1113,7 @@ const INCIDENT_DEFS = [
     category: 'Security',
     severity: 4,
     description:
-      'An application/ServiceAccount is denied by RBAC when calling the Kubernetes API (403 Forbidden). Kubernetes emits NO event for an authorization failure — the symptom is in the application log, not in `oc get events`.',
+      'An application/ServiceAccount is denied by RBAC when calling the Kubernetes API (403 Forbidden). Kubernetes emits NO event for an authorization failure - the symptom is in the application log, not in `oc get events`.',
     visualEffect: 'flash-red',
     affectedResourceTypes: ['Deployment', 'Pod', 'ServiceAccount', 'RoleBinding'],
     investigationSteps: [

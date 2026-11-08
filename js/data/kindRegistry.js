@@ -1,5 +1,5 @@
 /**
- * Central kind registry for OpenShift Games.
+ * Central kind registry for shifting.pro.
  *
  * SINGLE SOURCE OF TRUTH for OpenShift resource kinds: apiVersion, scope,
  * owner chains, CLI aliases, `oc get` columns, palette metadata, minimap sizes,
@@ -231,7 +231,7 @@ K.DaemonSet = {
     },
   }),
   explain:
-    'DaemonSet runs exactly one Pod on every (matching) node — node agents, log collectors, CNI.',
+    'DaemonSet runs exactly one Pod on every (matching) node - node agents, log collectors, CNI.',
 };
 K.Job = {
   apiVersion: 'batch/v1',
@@ -418,7 +418,7 @@ K.NetworkPolicy = {
     'NetworkPolicy is an allow-list firewall for Pods. A policy selecting all pods\n' +
     'with empty podSelector and Ingress/Egress policyTypes gives default-deny; DNS\n' +
     'egress to the dns-default pods (openshift-dns) on port 5353 must then be\n' +
-    'explicitly allowed — OpenShift DNS does not listen on port 53.',
+    'explicitly allowed - OpenShift DNS does not listen on port 53.',
 };
 K.IPAddressPool = {
   apiVersion: 'metallb.io/v1beta1',

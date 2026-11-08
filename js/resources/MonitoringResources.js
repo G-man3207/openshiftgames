@@ -605,7 +605,7 @@ function seedAlertmanager(cluster) {
     alertmanager.recordEvent(
       'Normal',
       'Watchdog',
-      "Watchdog alert is firing (dead man's switch) — the alerting pipeline is healthy"
+      "Watchdog alert is firing (dead man's switch) - the alerting pipeline is healthy"
     );
   }
 

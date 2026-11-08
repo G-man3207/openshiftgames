@@ -1,5 +1,5 @@
 /**
- * ShellTools — the dependency-free simulated bash layer of the OpenShift Games
+ * ShellTools — the dependency-free simulated bash layer of the shifting.pro
  * terminal (issue #11: "All YAML has to be written in the Files GUI").
  *
  * Real oc runs *inside* a shell, and the EX280 exam requires editing YAML with
@@ -270,7 +270,7 @@ export function splitShellSegments(input) {
       // synchronously, so fail loudly instead of pretending (#50).
       return syntaxError(
         '&',
-        'simulator: background jobs (&) are not supported — run one command per line'
+        'simulator: background jobs (&) are not supported - run one command per line'
       );
     }
     if (ch === ';' || ch === '\n') {
@@ -419,20 +419,20 @@ export function findUnsupportedShellSyntax(segments) {
     if (!tokens.length) continue;
     const first = tokens[0].toLowerCase();
     if (loops.has(first)) {
-      return 'simulator: shell loops are not supported — run one command per line';
+      return 'simulator: shell loops are not supported - run one command per line';
     }
     if (conditionals.has(first)) {
-      return 'simulator: shell conditionals are not supported — run one command per line';
+      return 'simulator: shell conditionals are not supported - run one command per line';
     }
     if (functions.has(first)) {
-      return 'simulator: shell functions are not supported — run one command per line';
+      return 'simulator: shell functions are not supported - run one command per line';
     }
     // `foo() { …; }` / `foo () { … }` function definitions.
     if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(first) && (tokens[1] === '()' || tokens[1] === '(')) {
-      return 'simulator: shell functions are not supported — run one command per line';
+      return 'simulator: shell functions are not supported - run one command per line';
     }
     if (/^[A-Za-z_][A-Za-z0-9_]*\(\)$/.test(first)) {
-      return 'simulator: shell functions are not supported — run one command per line';
+      return 'simulator: shell functions are not supported - run one command per line';
     }
   }
   return null;
@@ -938,7 +938,7 @@ function parseSubjectString(subject) {
 /**
  * Build a simulated X.509 certificate + PKCS#8 private key.
  * `organization: null` (and `null` for any RDN) omits that attribute; when the
- * option is `undefined` the simulator's branded `O = OpenShift Games` default
+ * option is `undefined` the simulator's branded `O = shifting.pro` default
  * still applies (issue #43: `openssl req` leaf subjects must match `-subj`).
  * @param {{commonName?: string, organization?: string|null,
  *   organizationalUnit?: string, country?: string, state?: string, locality?: string,
@@ -949,8 +949,7 @@ function parseSubjectString(subject) {
  */
 export function createCertificateMaterial(options = {}) {
   const commonName = String(options.commonName || options.subject || 'localhost');
-  const organization =
-    options.organization === undefined ? 'OpenShift Games' : options.organization;
+  const organization = options.organization === undefined ? 'shifting.pro' : options.organization;
   const days = Number.isFinite(Number(options.days)) ? Math.max(1, Number(options.days)) : 365;
   const now = options.notBefore ? new Date(options.notBefore) : new Date();
   const notAfter = options.notAfter
@@ -959,7 +958,7 @@ export function createCertificateMaterial(options = {}) {
   const subjectAttributes = { commonName };
   // A `null` organization explicitly disables the simulator's default O= while
   // `undefined` keeps the branded default (issue #43: a leaf created by
-  // `openssl req -x509 -subj "/CN=…"` must not gain `O = OpenShift Games`).
+  // `openssl req -x509 -subj "/CN=…"` must not gain `O = shifting.pro`).
   if (organization !== null && organization !== undefined && organization !== '') {
     subjectAttributes.organization = organization;
   }
@@ -1017,7 +1016,7 @@ export function createServiceSignedCertificate(options = {}) {
   const dnsNames = [commonName, ...(options.dnsNames || []).filter(Boolean)];
   const material = createCertificateMaterial({
     commonName,
-    organization: 'OpenShift Games',
+    organization: 'shifting.pro',
     days: options.days || 365,
     issuer: options.issuer || { commonName: 'service-ca', organization: 'OpenShift' },
     sans: { dns: dnsNames },
@@ -3169,7 +3168,7 @@ export class ShellTools {
       commonName: subjectAttributes.commonName,
       // Issue #43: the leaf subject must match `-subj` exactly — only carry
       // O (or any other RDN) when the CSR/subject actually requested it (null
-      // disables the certificate factory's default `O = OpenShift Games`).
+      // disables the certificate factory's default `O = shifting.pro`).
       organization: subjectAttributes.organization ?? null,
       organizationalUnit: subjectAttributes.organizationalUnit,
       country: subjectAttributes.country,

@@ -6,7 +6,7 @@ literally, skipping a prerequisite, fixing too early or too late. This file keep
 **Fixed** items shipped in 1.15.0; **Open** items were deliberately left alone (grading and simulator
 behaviour is locked by the 22k-line browser suite, so each one deserves its own change and test).
 1.16.0 fixed the open grading list and most of the simulator list, each with its own regression check
-(`qa-grading-1160`, `qa-sim-1160`, `scripts/verify.mjs` §4m/§4n); the new levels (Linux prelude 0.1–0.7,
+(`qa-grading-1160`, `qa-sim-1160`, `scripts/verify.mjs` §4m/§4n); the new levels (Linux prelude 0.1-0.7,
 Network Policies, Nodes & Cluster Troubleshooting) were play-tested the same way.
 
 ## Fixed in 1.15.0
@@ -29,7 +29,7 @@ Network Policies, Nodes & Cluster Troubleshooting) were play-tested the same way
 | L10, L11, L15, L17, L19, L20 | Hints that described things that do not exist (a L10 "incident", `oc get route` "Admitted" column, FailedCreate event on `oc describe deployment`, Advisor gauge in the HUD, a non-existent `oc create job` flag) | Corrected                                                                               |
 | UI                           | Raw backticks in hints, the level intro and achievement toasts; intro listed only 6 objectives                                                                                                                    | Rendered as code; all objectives listed                                                 |
 
-## Fixed in 1.16.0 — grading
+## Fixed in 1.16.0 - grading
 
 Every objective below is now graded on the cluster state a correct solution produces (or, for
 reads, on what the read actually showed), and each fix has a regression check in the browser
@@ -41,7 +41,7 @@ explains the new rules in its note (`read-wrong-project`, `read-showed-nothing`,
 | Where                      | Problem                                                                                                                                                                                            | Fix                                                                                                                                                                                                                                                                                                            |
 | -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | L9, L20, labs 5 and 12     | "Build … reaches phase Complete" / "Complete a Build" ticked when the Build was **created** (`evaluateBuild` fell back to `BuildConfig.status.lastVersion > 0`) while `oc get builds` said Running | Only a Build of that BuildConfig in phase Complete counts                                                                                                                                                                                                                                                      |
-| L9; L2, L3, L4, L18, lab 2 | Read objectives were a regex on typed text: `oc -n x get is` did not tick, while `oc get is` at level start or `oc get pods` in `default` ("No resources found") did                               | `inspect: true`: the read must succeed, run in the lab project (or `-A`) and show something — the terminal output is now recorded with the command (`> file` exports use the file); global flags before the verb are moved behind it; L9 also accepts `oc get is,istag`/`oc get all` when they list the stream |
+| L9; L2, L3, L4, L18, lab 2 | Read objectives were a regex on typed text: `oc -n x get is` did not tick, while `oc get is` at level start or `oc get pods` in `default` ("No resources found") did                               | `inspect: true`: the read must succeed, run in the lab project (or `-A`) and show something - the terminal output is now recorded with the command (`> file` exports use the file); global flags before the verb are moved behind it; L9 also accepts `oc get is,istag`/`oc get all` when they list the stream |
 | L3, Incidents panel        | Investigation ticked from commands that saw nothing; the panel's "n/4 investigated" had its own prefix matcher (fed before execution, even by failed commands) that also fed the engine            | One matcher in IncidentEngine (success + the incident's project for namespaced steps + non-empty output); the panel mirrors the engine's steps                                                                                                                                                                 |
 | L10                        | ONE `oc rollout undo` on a single revision ticked "update" and "rollback"; "Keep availability at 90%" read the incident health and could never turn red                                            | Update = pod-template change / new ReplicaSet; rollback = undo used AND an older ReplicaSet re-activated; availability = api-server's available replicas vs. its starting replicas                                                                                                                             |
 | L11, lab 3                 | Any Secret named `web-tls` / `app-tls` counted                                                                                                                                                     | `secretType: kubernetes.io/tls`                                                                                                                                                                                                                                                                                |
@@ -54,7 +54,7 @@ explains the new rules in its note (`read-wrong-project`, `read-showed-nothing`,
 | L18                        | A re-created Subscription adopted the stale InstallPlan of the deleted one: no new Manual plan, head CSV installed despite `startingCSV`, objective 5 could never tick                             | InstallPlans are owned by their Subscription (owner reference): garbage-collected with it and never adopted by another Subscription object                                                                                                                                                                     |
 | L20                        | "Architecture Advisor ≥ 25" was ticked at level start (whole-cluster score ≈ 54); the composite ticked after ~14 of 18 objectives                                                                  | Both rate the player's project `prod-platform` (0 at start, > 25 once webapp runs); the composite completes only once every other objective is done                                                                                                                                                            |
 
-## Fixed in 1.16.0 — simulator fidelity
+## Fixed in 1.16.0 - simulator fidelity
 
 Output, error wording and exit status now follow `oc` 4.22 / kubectl 1.35 (checked against the upstream
 `openshift/oc` and `kubernetes/kubectl` sources). Every fix has a regression check in the browser section
@@ -87,23 +87,23 @@ Output, error wording and exit status now follow `oc` 4.22 / kubectl 1.35 (check
 | L20, L22 (cosmetic)    | Inside `oc debug node/…` every `oc` said `bash: oc: command not found` with no cue                                                          | `sh: oc: command not found` (exit 127) plus a simulator hint to `exit`; the terminal context shows `sh-5.1# node/<name> · exit to leave`                                                                                                                                                                                       |
 | L13, L15 (Files panel) | `oc edit` that opens the (pausing) Files panel gave no cue                                                                                  | The output says the cluster is paused while the Files panel is open                                                                                                                                                                                                                                                            |
 
-## Open — grading (objective ticks when it should not, or not when it should)
+## Open - grading (objective ticks when it should not, or not when it should)
 
 None known: the 1.15.0 findings are fixed above.
 
-## Open — simulator fidelity
+## Open - simulator fidelity
 
 - **Incident side effects:** a fix made before a scheduled incident re-seeds its value is overwritten
-  (L3 `APP_MODE` at t=10 s, L14 RoleBindings at t=25 s, L20 `APP_MODE` at t=60 s) — by design, but silent; the
+  (L3 `APP_MODE` at t=10 s, L14 RoleBindings at t=25 s, L20 `APP_MODE` at t=60 s) - by design, but silent; the
   how-tos say to fix after the incident appears.
 - **Not modelled yet:** a NotReady node's Pods stay Ready and in the Service endpoints (the node lifecycle
   controller would mark them NotReady and evict them after 300 s); MetalLB only assigns an EXTERNAL-IP from
-  pools an L2Advertisement covers (real: the controller assigns, the speakers announce — changing it would let
+  pools an L2Advertisement covers (real: the controller assigns, the speakers announce - changing it would let
   L12's LoadBalancer objective tick without the L2Advertisement); `oc get bc`/`oc get builds` FROM shows the
   builder image instead of the source type (`Git`, `Git@<commit>`); a client dry run of
   `oc create deployment` prints server-side defaults (strategy, revisionHistoryLimit, a container port) that
   real client-side output omits; `oc explain` / `oc api-resources` still answer after `oc logout` (real oc may
-  serve them from its discovery cache — not verified).
+  serve them from its discovery cache - not verified).
 - **Chaos mode:** a random `CronJobMissedSchedule` incident can target a Pod (seen: `alertmanager-main-0` in
   `openshift-monitoring`), so its steps read `oc get cronjob alertmanager-main-0`; random targets should be
   limited to the incident's `affectedResourceTypes` (IncidentEngine `selectRandomTarget`).

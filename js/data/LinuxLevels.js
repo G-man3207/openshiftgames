@@ -288,7 +288,7 @@ export const LINUX_LEVELS = [
     title: 'The Shell & the Filesystem',
     ...CHAPTER,
     description:
-      'Everything in this chapter happens in the terminal of your RHEL 9 lab workstation (press `/`), where you are logged in as `student`. Your browser saved the EX280 lab files to `~/Downloads`: turn them into a tidy `~/ex280` workspace — a `manifests` directory with copies of the three YAML files, your notes moved and renamed, and the old drafts deleted.',
+      'Everything in this chapter happens in the terminal of your RHEL 9 lab workstation (press `/`), where you are logged in as `student`. Your browser saved the EX280 lab files to `~/Downloads`: turn them into a tidy `~/ex280` workspace - a `manifests` directory with copies of the three YAML files, your notes moved and renamed, and the old drafts deleted.',
     examObjectives: [],
     docsLinks: [DOCS.basics],
     startingResources: workerNodes(),
@@ -380,7 +380,7 @@ export const LINUX_LEVELS = [
     hints: [
       'Press `Tab` to complete names: type `ls ~/Dow` and press Tab. `cd` alone goes home, `cd ..` goes up one directory and `cd -` jumps back to the previous one.',
       '`ls -a` also shows hidden files (names starting with a dot, such as `.bashrc`); `ls -ld DIR` describes the directory itself instead of listing its content.',
-      'Relative or absolute: after `cd ~/ex280`, `ls manifests` and `ls ~/ex280/manifests` list the same directory — `ls /manifests` does not.',
+      'Relative or absolute: after `cd ~/ex280`, `ls manifests` and `ls ~/ex280/manifests` list the same directory - `ls /manifests` does not.',
       '`touch FILE` creates an empty file, `cp -r` copies a whole directory and `rm -i` asks before each deletion.',
     ],
     starCriteria: { time: 300, efficiency: 0.7, noFailures: false },
@@ -406,7 +406,7 @@ export const LINUX_LEVELS = [
     title: 'Read, Search & Pipe Text',
     ...CHAPTER,
     description:
-      "Logs are text, and the shell is built to search text. A teammate saved the `shop` application's Pod logs to `~/ex280/logs/shop.log`: read the newest lines, save the errors, count errors and warnings, list the failing Pods once each and strip the health-check noise — every result goes into a file next to the log.",
+      "Logs are text, and the shell is built to search text. A teammate saved the `shop` application's Pod logs to `~/ex280/logs/shop.log`: read the newest lines, save the errors, count errors and warnings, list the failing Pods once each and strip the health-check noise - every result goes into a file next to the log.",
     examObjectives: [],
     docsLinks: [DOCS.logs],
     startingResources: workerNodes(),
@@ -488,7 +488,7 @@ export const LINUX_LEVELS = [
     hints: [
       '`grep -n ERROR shop.log` adds line numbers, `grep -i error shop.log` ignores case and `grep -r ERROR ~/ex280` searches every file below a directory.',
       'Inside `less`: Space and `b` page down and up, `/word` searches, `G` jumps to the end, `q` quits.',
-      "`grep ERROR shop.log | cut -d' ' -f3 | sort | uniq -c | sort -rn` counts and ranks the failing Pods — the classic “which Pod fails most” one-liner.",
+      "`grep ERROR shop.log | cut -d' ' -f3 | sort | uniq -c | sort -rn` counts and ranks the failing Pods - the classic “which Pod fails most” one-liner.",
       '`tee` writes to a file and still shows the output: `grep WARN shop.log | tee warnings.txt`.',
     ],
     starCriteria: { time: 360, efficiency: 0.7, noFailures: false },
@@ -632,7 +632,7 @@ export const LINUX_LEVELS = [
     title: 'Users, Permissions & SELinux',
     ...CHAPTER,
     description:
-      '`~/.kube/config` holds cluster-admin credentials, but it was copied with `sudo`, so root owns it and you cannot read it. Take it back and make it private, make your helper script executable, and restore the SELinux label of a web page that was moved into `/var/www/html` — without ever switching SELinux off.',
+      '`~/.kube/config` holds cluster-admin credentials, but it was copied with `sudo`, so root owns it and you cannot read it. Take it back and make it private, make your helper script executable, and restore the SELinux label of a web page that was moved into `/var/www/html` - without ever switching SELinux off.',
     examObjectives: [],
     docsLinks: [DOCS.permissions, DOCS.sudo, DOCS.selinux],
     startingResources: workerNodes(),
@@ -699,7 +699,7 @@ export const LINUX_LEVELS = [
         label: 'Make `~/.kube/config` private: mode `600` (`rw-------`)',
         how: {
           explain:
-            'Permissions are three triplets — owner, group, others — of r=4, w=2, x=1, so `600` means read+write for you and nothing for anyone else. A kubeconfig is a password: `helm` even warns when it is group-readable. You own the file now, so `chmod` needs no sudo.',
+            'Permissions are three triplets - owner, group, others - of r=4, w=2, x=1, so `600` means read+write for you and nothing for anyone else. A kubeconfig is a password: `helm` even warns when it is group-readable. You own the file now, so `chmod` needs no sudo.',
           run: ['chmod 600 ~/.kube/config'],
           check: 'ls -l ~/.kube/config',
         },
@@ -744,7 +744,7 @@ export const LINUX_LEVELS = [
     hints: [
       'Reading `ls -l`: in `-rw-r-----. 1 root root`, the first character is the type (`-` file, `d` directory), then rw for the owner, r for the group, nothing for others; the final `.` means the file has an SELinux label.',
       'Octal cheat sheet: 7=rwx 6=rw- 5=r-x 4=r-- 0=---. `chmod 755 script` gives rwxr-xr-x; `chmod go-rwx FILE` removes everything from group and others.',
-      '`sudo -l` lists what you may run as root; `sudo -i` opens a root shell whose prompt ends in `#` — `exit` returns.',
+      '`sudo -l` lists what you may run as root; `sudo -i` opens a root shell whose prompt ends in `#` - `exit` returns.',
       'Never `setenforce 0` to make a problem go away: fix the label (`restorecon`) or the policy instead. `curl http://localhost/index.html` answers 403 until the label is right.',
     ],
     starCriteria: { time: 360, efficiency: 0.7, noFailures: false },
@@ -759,7 +759,7 @@ export const LINUX_LEVELS = [
     title: 'Processes, Services & Logs',
     ...CHAPTER,
     description:
-      'The workstation is sluggish, the lab file server `httpd` failed to start after an edit, and the clock is not synchronised. Stop the runaway process, read the journal to find why httpd fails, fix it, and make sure httpd and `chronyd` run now and after every reboot — the `systemctl` and `journalctl` skills you use on a cluster node through `oc debug node`.',
+      'The workstation is sluggish, the lab file server `httpd` failed to start after an edit, and the clock is not synchronised. Stop the runaway process, read the journal to find why httpd fails, fix it, and make sure httpd and `chronyd` run now and after every reboot - the `systemctl` and `journalctl` skills you use on a cluster node through `oc debug node`.',
     examObjectives: [],
     docsLinks: [DOCS.systemd, DOCS.logs, DOCS.time],
     startingResources: workerNodes(),
@@ -842,7 +842,7 @@ export const LINUX_LEVELS = [
         label: 'Make httpd start at every boot (enabled)',
         how: {
           explain:
-            '`start` and `restart` change the running system only; `enable` makes systemd start the unit at boot. A service that runs but is disabled is gone after the next reboot — a classic exam trap. `systemctl enable --now` does both at once.',
+            '`start` and `restart` change the running system only; `enable` makes systemd start the unit at boot. A service that runs but is disabled is gone after the next reboot - a classic exam trap. `systemctl enable --now` does both at once.',
           run: ['sudo systemctl enable httpd'],
           check: 'systemctl is-enabled httpd',
         },
@@ -879,7 +879,7 @@ export const LINUX_LEVELS = [
     title: 'Networking & the Firewall',
     ...CHAPTER,
     description:
-      'Your workstation must reach the cluster, and the cluster nodes must reach your lab file server. Check your address and route, resolve the cluster DNS names, remove the stale `/etc/hosts` line that sends `api.cluster.example.com` to a dead address, and open the firewall for HTTP — now and permanently.',
+      'Your workstation must reach the cluster, and the cluster nodes must reach your lab file server. Check your address and route, resolve the cluster DNS names, remove the stale `/etc/hosts` line that sends `api.cluster.example.com` to a dead address, and open the firewall for HTTP - now and permanently.',
     examObjectives: [],
     docsLinks: [DOCS.networking, DOCS.firewall],
     startingResources: workerNodes(),
@@ -921,7 +921,7 @@ export const LINUX_LEVELS = [
         label: 'Resolve a hostname under `*.apps.cluster.example.com` with `dig`',
         how: {
           explain:
-            'A cluster needs two DNS records: `api.cluster.example.com` for the API server and the wildcard `*.apps.cluster.example.com`, which sends every application hostname to the ingress router. `dig +short NAME` prints only the address — any name under `.apps` resolves, even one nobody created.',
+            'A cluster needs two DNS records: `api.cluster.example.com` for the API server and the wildcard `*.apps.cluster.example.com`, which sends every application hostname to the ingress router. `dig +short NAME` prints only the address - any name under `.apps` resolves, even one nobody created.',
           run: [
             'dig api.cluster.example.com',
             'dig +short console-openshift-console.apps.cluster.example.com',
@@ -966,7 +966,7 @@ export const LINUX_LEVELS = [
         label: 'Make the HTTP rule permanent',
         how: {
           explain:
-            '`--permanent` writes the rule to the saved configuration only; `--reload` then turns the saved configuration into the running one — a runtime-only rule would disappear with it. Permanent plus reload is the safe pair (`--runtime-to-permanent` saves what is running now).',
+            '`--permanent` writes the rule to the saved configuration only; `--reload` then turns the saved configuration into the running one - a runtime-only rule would disappear with it. Permanent plus reload is the safe pair (`--runtime-to-permanent` saves what is running now).',
           run: ['sudo firewall-cmd --permanent --add-service=http', 'sudo firewall-cmd --reload'],
           check: 'sudo firewall-cmd --list-all',
         },
@@ -976,7 +976,7 @@ export const LINUX_LEVELS = [
       '`cat /etc/resolv.conf` shows the DNS server and search domain, `cat /etc/hosts` the local overrides, and the `hosts:` line of `/etc/nsswitch.conf` the order (files before dns).',
       '`curl -k https://api.cluster.example.com:6443/readyz` asks the API server whether it is ready; `-k` skips the certificate check that `oc login` performs.',
       '`firewall-cmd --add-port=8080/tcp` opens a port that has no service name; `--list-all` shows the zone with its services and ports.',
-      '`ping -c 3 HOST` sends three packets and stops — without `-c` it runs until Ctrl+C.',
+      '`ping -c 3 HOST` sends three packets and stops - without `-c` it runs until Ctrl+C.',
     ],
     starCriteria: { time: 420, efficiency: 0.7, noFailures: false },
     incidents: [],
@@ -1085,7 +1085,7 @@ export const LINUX_LEVELS = [
     hints: [
       '`podman images` lists local images with their tags and `podman images --digests` adds the digest; pull by digest with `podman pull IMAGE@sha256:DIGEST`.',
       '`dnf repolist` shows the enabled repositories: `openshift-clients` comes from `rhocp-4.22-for-rhel-9-x86_64-rpms`, the OpenShift repository a subscribed RHEL machine must enable first. `rpm -qi openshift-clients` prints the package details.',
-      'Rootless `podman` cannot publish ports below 1024 (`-p 80:8080` fails with “rootlessport cannot expose privileged port 80”) — one more reason container images listen on 8080.',
+      'Rootless `podman` cannot publish ports below 1024 (`-p 80:8080` fails with “rootlessport cannot expose privileged port 80”) - one more reason container images listen on 8080.',
       'A Pod is one or more containers that share an IP address. From Level 1 on, OpenShift schedules containers like `web` onto worker nodes for you, and `oc` reads manifests from a file or from a pipe (`… | oc apply -f -`) just like the commands here.',
     ],
     starCriteria: { time: 420, efficiency: 0.7, noFailures: false },

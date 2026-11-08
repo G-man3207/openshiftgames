@@ -2,7 +2,7 @@
   "name": "openshift-games",
   "version": "1.16.0",
   "private": true,
-  "description": "OpenShift Games static site — dev tooling only (runtime is dependency-free/no-build)",
+  "description": "shifting.pro static site — dev tooling only (runtime is dependency-free/no-build)",
   "main": "index.html",
   "scripts": {
     "dev": "node scripts/dev-server.mjs",

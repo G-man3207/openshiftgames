@@ -1,5 +1,5 @@
 /**
- * HUD — in-game top bar for the OpenShift Games cluster view (OCP 4.22 / EX280).
+ * HUD — in-game top bar for the shifting.pro cluster view (OCP 4.22 / EX280).
  *
  * One 52px flat bar: pause/menu, product wordmark, platform + mode + level,
  * mission progress, cluster health, simulated clock, speed, pause, incidents
@@ -202,7 +202,7 @@ export class HUD {
           </button>
           <div class="hud-brand">
             <span class="hud-mark">${SVG.mark}</span>
-            <span id="hud-logo-text" class="hud-word" data-testid="hud-logo">OpenShift Games</span>
+            <span id="hud-logo-text" class="hud-word" data-testid="hud-logo">shifting.pro</span>
           </div>
           <span class="hud-rule" aria-hidden="true"></span>
           <span id="hud-mode" class="hud-mode" data-testid="hud-mode">${PLATFORM_LABEL}</span>
@@ -530,7 +530,7 @@ export class HUD {
     chip.classList.toggle('is-visible', paused);
     if (reasonEl) reasonEl.textContent = reason;
     if (paused) {
-      chip.title = reason ? `Simulation paused — ${reason}` : 'Simulation paused';
+      chip.title = reason ? `Simulation paused - ${reason}` : 'Simulation paused';
       chip.setAttribute(
         'aria-label',
         reason ? `Simulation paused: ${reason}` : 'Simulation paused'
