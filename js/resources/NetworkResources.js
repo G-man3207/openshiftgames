@@ -698,66 +698,122 @@ export class NetworkPolicy extends ResourceBase {
     return hasBoth ? '#ef4444' : '#22c55e';
   }
 
+  /**
+   * `oc describe networkpolicy` exactly like kubectl 1.35 describeNetworkPolicy
+   * (pkg/describe/describe.go): header block aligned by tabwriter (padding 2),
+   * `PodSelector:     <none> (Allowing the specific traffic to all pods in this
+   * namespace)`, `Not affecting … traffic` for a direction the policy does not
+   * select, `<none> (Selected pods are isolated for … connectivity)` for an
+   * empty rule list, `To Port: <any> (traffic allowed to all ports)` and no
+   * Events section (1.16.0: it printed `<all pods>`, empty rule headers and an
+   * invented `Affected Pods:` line).
+   */
   toDescribe() {
-    return `Name:         ${this.metadata.name}
-Namespace:    ${this.metadata.namespace}
-Spec:
-  PodSelector:     ${
-    Object.entries(this.spec.podSelector?.matchLabels || {})
-      .map(([k, v]) => `${k}=${v}`)
-      .join(',') || '<all pods>'
-  }
-  Allowing ingress traffic:
-${(this.spec.ingress || [])
-  .map(
-    (
-      rule
-    ) => `    To Port: ${(rule.ports || []).map((p) => `${p.port}/${p.protocol}`).join(', ') || '<all>'}
-    From:
-${(rule.from || [])
-  .map((f) => {
-    if (f.podSelector)
-      return `      PodSelector: ${Object.entries(f.podSelector.matchLabels || {})
-        .map(([k, v]) => `${k}=${v}`)
-        .join(',')}`;
-    if (f.namespaceSelector)
-      return `      NamespaceSelector: ${Object.entries(f.namespaceSelector.matchLabels || {})
-        .map(([k, v]) => `${k}=${v}`)
-        .join(',')}`;
-    return '      <all sources>';
-  })
-  .join('\n')}`
-  )
-  .join('\n')}
-  Allowing egress traffic:
-${(this.spec.egress || [])
-  .map(
-    (
-      rule
-    ) => `    To Port: ${(rule.ports || []).map((p) => `${p.port}/${p.protocol}`).join(', ') || '<all>'}
-    To:
-${(rule.to || [])
-  .map((t) => {
-    if (t.podSelector)
-      return `      PodSelector: ${Object.entries(t.podSelector.matchLabels || {})
-        .map(([k, v]) => `${k}=${v}`)
-        .join(',')}`;
-    if (t.namespaceSelector)
-      return `      NamespaceSelector: ${Object.entries(t.namespaceSelector.matchLabels || {})
-        .map(([k, v]) => `${k}=${v}`)
-        .join(',')}`;
-    return '      <all destinations>';
-  })
-  .join('\n')}`
-  )
-  .join('\n')}
-  Policy Types: ${(this.spec.policyTypes || []).join(', ')}
-Affected Pods: ${this.affectedPods.length}
-Events:
-${this.events
-  .slice(-10)
-  .map((e) => `  ${e.type}\t${e.reason}\t${e.message}`)
-  .join('\n')}`;
+    const selectorText = (selector) => {
+      if (!selector || typeof selector !== 'object') return '<none>';
+      const requirements = [];
+      for (const [key, value] of Object.entries(selector.matchLabels || {}))
+        requirements.push({ key, text: `${key}=${value ?? ''}` });
+      for (const expression of selector.matchExpressions || []) {
+        const values = [...(expression.values || [])].sort().join(',');
+        const key = expression.key;
+        const text =
+          expression.operator === 'In'
+            ? `${key} in (${values})`
+            : expression.operator === 'NotIn'
+              ? `${key} notin (${values})`
+              : expression.operator === 'DoesNotExist'
+                ? `!${key}`
+                : key;
+        requirements.push({ key, text });
+      }
+      requirements.sort((left, right) => left.key.localeCompare(right.key));
+      return requirements.map((entry) => entry.text).join(',') || '<none>';
+    };
+    const isEmptySelector = (selector) =>
+      !Object.keys(selector?.matchLabels || {}).length &&
+      !(selector?.matchExpressions || []).length;
+    const portLines = (ports) =>
+      (ports || []).length
+        ? ports.map((port) =>
+            port.endPort !== undefined && port.endPort !== null
+              ? `    To Port Range: ${port.port}-${port.endPort}/${port.protocol || 'TCP'}`
+              : `    To Port: ${port.port}/${port.protocol || 'TCP'}`
+          )
+        : ['    To Port: <any> (traffic allowed to all ports)'];
+    const peerLines = (peers, label, anyText) => {
+      if (!(peers || []).length) return [`    ${label}: <any> (${anyText})`];
+      const lines = [];
+      for (const peer of peers) {
+        lines.push(`    ${label}:`);
+        if (peer.podSelector && peer.namespaceSelector) {
+          lines.push(`      NamespaceSelector: ${selectorText(peer.namespaceSelector)}`);
+          lines.push(`      PodSelector: ${selectorText(peer.podSelector)}`);
+        } else if (peer.podSelector) {
+          lines.push(`      PodSelector: ${selectorText(peer.podSelector)}`);
+        } else if (peer.namespaceSelector) {
+          lines.push(`      NamespaceSelector: ${selectorText(peer.namespaceSelector)}`);
+        } else if (peer.ipBlock) {
+          lines.push('      IPBlock:');
+          lines.push(`        CIDR: ${peer.ipBlock.cidr || ''}`);
+          lines.push(`        Except: ${(peer.ipBlock.except || []).join(', ')}`);
+        }
+      }
+      return lines;
+    };
+    const ruleLines = (rules, direction) => {
+      if (!(rules || []).length)
+        return [`    <none> (Selected pods are isolated for ${direction} connectivity)`];
+      const lines = [];
+      rules.forEach((rule, index) => {
+        lines.push(...portLines(rule.ports));
+        lines.push(
+          ...(direction === 'ingress'
+            ? peerLines(rule.from, 'From', 'traffic not restricted by source')
+            : peerLines(rule.to, 'To', 'traffic not restricted by destination'))
+        );
+        if (index !== rules.length - 1) lines.push('    ----------');
+      });
+      return lines;
+    };
+    const types = this.spec.policyTypes || [];
+    const created = new Date(this.metadata.creationTimestamp || Date.now());
+    const createdText = Number.isNaN(created.getTime())
+      ? String(this.metadata.creationTimestamp || '')
+      : `${created.toISOString().slice(0, 19).replace('T', ' ')} +0000 UTC`;
+    const labels = Object.entries(this.metadata.labels || {}).sort(([a], [b]) =>
+      a.localeCompare(b)
+    );
+    const annotations = Object.entries(this.metadata.annotations || {})
+      .filter(([key]) => key !== 'kubectl.kubernetes.io/last-applied-configuration')
+      .sort(([a], [b]) => a.localeCompare(b));
+    const header = (title, value) => `${`${title}:`.padEnd(14)}${value}`;
+    const lines = [
+      header('Name', this.metadata.name),
+      header('Namespace', this.metadata.namespace),
+      header('Created on', createdText),
+      header('Labels', labels.length ? `${labels[0][0]}=${labels[0][1]}` : '<none>'),
+      ...labels.slice(1).map(([key, value]) => `${' '.repeat(14)}${key}=${value}`),
+      header(
+        'Annotations',
+        annotations.length ? `${annotations[0][0]}: ${annotations[0][1]}` : '<none>'
+      ),
+      ...annotations.slice(1).map(([key, value]) => `${' '.repeat(14)}${key}: ${value}`),
+      'Spec:',
+      `  PodSelector:     ${
+        isEmptySelector(this.spec.podSelector)
+          ? '<none> (Allowing the specific traffic to all pods in this namespace)'
+          : selectorText(this.spec.podSelector)
+      }`,
+      ...(types.includes('Ingress')
+        ? ['  Allowing ingress traffic:', ...ruleLines(this.spec.ingress, 'ingress')]
+        : ['  Not affecting ingress traffic']),
+      ...(types.includes('Egress')
+        ? ['  Allowing egress traffic:', ...ruleLines(this.spec.egress, 'egress')]
+        : ['  Not affecting egress traffic']),
+      `  Policy Types: ${types.join(', ') || '<none>'}`,
+    ];
+    return lines.join('\n');
   }
 }
 

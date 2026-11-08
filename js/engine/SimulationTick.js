@@ -207,10 +207,50 @@ const INJECT_CABUNDLE_ANNOTATION = 'service.beta.openshift.io/inject-cabundle';
 const INJECT_CABUNDLE_KEY = 'service-ca.crt';
 const ROUTER_NAMESPACE = 'openshift-ingress';
 const ROUTER_DEFAULT_IP = '172.30.0.20';
-const ROUTER_404_BODY =
-  '<html><body><h1>404 Not Found</h1>\nThe requested URL was not found on this server.</body></html>';
-const ROUTER_503_BODY =
-  '<html><body><h1>503 Service Unavailable</h1>\nNo server is available to handle this request.</body></html>';
+/**
+ * The OpenShift router's own 503 page (openshift/router
+ * images/router/haproxy/conf/error-page-503.http, release-4.22), served for
+ * EVERY request the router cannot hand to a backend: no Route for the host or
+ * path (the `openshift_default` backend has no servers — it only answers 404
+ * when a custom ROUTER_ERRORFILE_404 is configured), HTTP to an edge Route with
+ * insecureEdgeTerminationPolicy None, HTTP to a passthrough Route, HTTPS to a
+ * plain-HTTP Route, and a Route without reachable endpoints. 1.16.0: the stock
+ * HAProxy "No server is available" body and a 404 were served instead. The
+ * inline <style> block of the real page is omitted.
+ */
+const ROUTER_503_BODY = [
+  '<html>',
+  '  <head>',
+  '    <meta name="viewport" content="width=device-width, initial-scale=1">',
+  '  </head>',
+  '  <body>',
+  '    <div>',
+  '      <h1>Application is not available</h1>',
+  '      <p>The application is currently not serving requests at this endpoint. It may not have been started or is still starting.</p>',
+  '',
+  '      <div class="alert alert-info">',
+  '        <p class="info">',
+  '          Possible reasons you are seeing this page:',
+  '        </p>',
+  '        <ul>',
+  '          <li>',
+  "            <strong>The host doesn't exist.</strong>",
+  '            Make sure the hostname was typed correctly and that a route matching this hostname exists.',
+  '          </li>',
+  '          <li>',
+  "            <strong>The host exists, but doesn't have a matching path.</strong>",
+  '            Check if the URL path was typed correctly and that the route was created using the desired path.',
+  '          </li>',
+  '          <li>',
+  '            <strong>Route and path matches, but all pods are down.</strong>',
+  '            Make sure that the resources exposed by this route (pods, services, deployment configs, etc) have at least one pod running.',
+  '          </li>',
+  '        </ul>',
+  '      </div>',
+  '    </div>',
+  '  </body>',
+  '</html>',
+].join('\n');
 
 /** Controller-owned platform workloads (issue #55). */
 const DNS_NAMESPACE = 'openshift-dns';
@@ -682,6 +722,7 @@ export class SimulationTick {
       // node lifecycle controller removes them once the kubelet is Ready again
       // (e.g. after `chroot /host systemctl restart kubelet`).
       this._syncNodeNotReadyTaints(node, !isReady);
+      this._syncNodeUnschedulableTaint(node);
       if (!isReady) {
         // Real node lifecycle controller output while the kubelet is stopped /
         // unreachable (#49): every kubelet-posted condition becomes
@@ -768,6 +809,28 @@ export class SimulationTick {
     }
     if (!changed) return false;
     node.spec.taints = next;
+    this.cluster.update(node.uid, node);
+    return true;
+  }
+
+  /**
+   * TaintNodesByCondition: a cordoned node (`spec.unschedulable: true`, from
+   * `oc adm cordon/drain`, `oc patch` or the GUI) carries the
+   * `node.kubernetes.io/unschedulable:NoSchedule` taint, removed again on
+   * uncordon. Cordon never sets a node label (1.16.0).
+   * @param {object} node
+   * @returns {boolean} true when the node spec changed
+   */
+  _syncNodeUnschedulableTaint(node) {
+    if (!node?.spec) return false;
+    const key = 'node.kubernetes.io/unschedulable';
+    const taints = Array.isArray(node.spec.taints) ? node.spec.taints : [];
+    const has = taints.some((taint) => taint?.key === key && taint?.effect === 'NoSchedule');
+    const want = node.spec.unschedulable === true;
+    if (want === has) return false;
+    node.spec.taints = want
+      ? [...taints, { key, effect: 'NoSchedule', timeAdded: new Date().toISOString() }]
+      : taints.filter((taint) => taint?.key !== key);
     this.cluster.update(node.uid, node);
     return true;
   }
@@ -1967,6 +2030,16 @@ export class SimulationTick {
     const tolerations = pod.spec.tolerations || [];
     for (const taint of node.spec.taints || []) {
       if (taint.effect !== 'NoSchedule' && taint.effect !== 'NoExecute') continue;
+      if (!tolerations.some((toleration) => this._toleratesTaint(toleration, taint))) return taint;
+    }
+    return null;
+  }
+
+  /** First untolerated NoExecute taint (the effect that evicts running pods), if any. */
+  _firstUntoleratedNoExecuteTaint(pod, node) {
+    const tolerations = pod.spec.tolerations || [];
+    for (const taint of node.spec.taints || []) {
+      if (taint.effect !== 'NoExecute') continue;
       if (!tolerations.some((toleration) => this._toleratesTaint(toleration, taint))) return taint;
     }
     return null;
@@ -3302,6 +3375,7 @@ export class SimulationTick {
           namespace,
           labels: { ...templateLabels, ...selector, 'pod-template-hash': templateHash },
           annotations: rsAnnotations,
+          ownerReferences: [this._controllerOwnerReference(deploy)],
         },
         spec: {
           replicas: 0,
@@ -3943,18 +4017,39 @@ export class SimulationTick {
     if (options.revision !== undefined && options.revision !== null) {
       target = history.find((entry) => entry.revision === Number(options.revision));
       if (!target) {
+        // kubectl polymorphichelpers/rollback.go revisionNotFoundErr().
         return {
           success: false,
-          message: `error: unable to find specified revision ${options.revision}`,
+          message: `error: unable to find specified revision ${options.revision} in history`,
         };
       }
     } else {
       target = [...history].reverse().find((entry) => entry.revision < currentRevision);
       if (!target) {
-        // `oc rollout undo` on a Deployment with a single revision rolls back to
-        // that revision (no-op) instead of erroring.
-        target = history[history.length - 1];
+        // rollback.go deploymentRevision(): no previous ReplicaSet to roll back
+        // to is an error, never a silent no-op rollout (1.16.0 — it used to
+        // bump the generation and print `rolled back`).
+        return {
+          success: false,
+          message: `error: no rollout history found for ${singular} "${name}"`,
+        };
       }
+    }
+    // rollback.go: a revision whose template is the live one is skipped.
+    try {
+      if (
+        this._templateHash(target.template || {}) ===
+        this._templateHash(resource.spec.template || {})
+      ) {
+        return {
+          success: true,
+          skipped: true,
+          revision: target.revision,
+          message: `${singular}.apps/${name} skipped rollback (current template already matches revision ${target.revision})`,
+        };
+      }
+    } catch {
+      /* compare best effort */
     }
     resource.spec.template = deepClone(target.template || {});
     resource.metadata.generation = (Number(resource.metadata.generation) || 1) + 1;
@@ -4179,7 +4274,12 @@ export class SimulationTick {
     }
     const pod = this.cluster.addResource({
       kind: 'Pod',
-      metadata: { name: podName, namespace, labels },
+      metadata: {
+        name: podName,
+        namespace,
+        labels,
+        ownerReferences: [this._controllerOwnerReference(statefulSet)],
+      },
       spec: podSpec,
       status: { phase: 'Pending' },
     });
@@ -4273,22 +4373,39 @@ export class SimulationTick {
         }
       }
 
-      // Remove pods from nodes that no longer match the DS node selector.
+      // Remove pods from nodes they may not continue running on. Real
+      // NodeShouldRunDaemonPod: an untolerated NoSchedule taint only stops NEW
+      // daemon pods (shouldRun=false, shouldContinueRunning=true) — the running pod
+      // stays and is reported as misscheduled; only a node-selector mismatch or an
+      // untolerated NoExecute taint removes it (1.16.0: a `dedicated=:NoSchedule`
+      // taint deleted the node's dns-default/node-resolver pods).
       for (const pod of pods) {
         if (!pod.spec.nodeName) continue;
         const node = allNodes.find((entry) => entry.metadata.name === pod.spec.nodeName);
-        if (node && !targetNodes.includes(node)) this.cluster.remove(pod.uid);
+        if (!node || targetNodes.includes(node)) continue;
+        const continuesRunning =
+          node.isConditionTrue('Ready') &&
+          node.matchesSelector(nodeSelector) &&
+          !this._firstUntoleratedNoExecuteTaint({ spec: { tolerations } }, node);
+        if (!continuesRunning) this.cluster.remove(pod.uid);
       }
 
       pods = this._activePodsOf(daemonSet);
-      const ready = pods.filter((pod) => this._podIsReady(pod));
+      const targetNames = new Set(targetNodes.map((node) => node.metadata.name));
+      const onTarget = pods.filter(
+        (pod) => pod.spec.nodeName && targetNames.has(pod.spec.nodeName)
+      );
+      const misscheduled = pods.filter(
+        (pod) => pod.spec.nodeName && !targetNames.has(pod.spec.nodeName)
+      );
+      const ready = onTarget.filter((pod) => this._podIsReady(pod));
       daemonSet.status.desiredNumberScheduled = targetNodes.length;
-      daemonSet.status.currentNumberScheduled = pods.filter((pod) => pod.spec.nodeName).length;
+      daemonSet.status.currentNumberScheduled = onTarget.length;
       daemonSet.status.numberReady = ready.length;
       daemonSet.status.numberAvailable = ready.length;
       daemonSet.status.numberUnavailable = Math.max(0, targetNodes.length - ready.length);
-      daemonSet.status.numberMisscheduled = 0;
-      daemonSet.status.updatedNumberScheduled = pods.length;
+      daemonSet.status.numberMisscheduled = misscheduled.length;
+      daemonSet.status.updatedNumberScheduled = onTarget.length;
       daemonSet.status.observedGeneration = daemonSet.metadata.generation;
       if (pods.length > 0 && daemonSet.status.phase !== 'Running') daemonSet.setPhase('Running');
     }
@@ -4719,6 +4836,7 @@ export class SimulationTick {
             'cronjob.kubernetes.io/name': cronJob.metadata.name,
           },
           annotations: deepClone(cronJob.spec.jobTemplate?.metadata?.annotations || {}),
+          ownerReferences: [this._controllerOwnerReference(cronJob)],
         },
         spec: jobSpec,
       });
@@ -5705,9 +5823,11 @@ export class SimulationTick {
 
   /** `oc rollout`-independent helper: package name a Subscription tracks. */
   _packageNameForSubscription(subscription) {
+    // `spec.name` is the real package field; `packageName` is a legacy
+    // simulator alias only honoured when `name` is missing (1.16.0).
     return (
-      subscription?.spec?.packageName ||
       subscription?.spec?.name ||
+      subscription?.spec?.packageName ||
       subscription?.metadata?.name ||
       'operator'
     );
@@ -5725,9 +5845,55 @@ export class SimulationTick {
         .find(
           (plan) =>
             plan.metadata?.labels?.['operators.coreos.com/subscription'] ===
-            subscription.metadata.name
+              subscription.metadata.name && this._installPlanOwnedBy(plan, subscription)
         ) || null
     );
+  }
+
+  /**
+   * Real OLM sets a (non-blocking) owner reference from every InstallPlan to its
+   * Subscription. A re-created Subscription with the same name is a different
+   * object: it must never adopt the old one's plan (1.16.0, L18: the stale,
+   * already-approved Automatic plan made a re-applied Manual pinned
+   * Subscription skip approval and install the channel head).
+   */
+  _adoptInstallPlan(subscription, plan) {
+    if (!plan || !subscription?.uid) return;
+    this._safe(() => {
+      // The relationship makes ClusterState garbage-collect the plan with its
+      // Subscription; OLM's owner reference is non-blocking and not a controller.
+      this.cluster.addRelationship(subscription.uid, plan.uid);
+      const owner = (plan.metadata.ownerReferences || []).find(
+        (ref) => ref.uid === subscription.uid
+      );
+      if (owner) {
+        owner.controller = false;
+        owner.blockOwnerDeletion = false;
+      }
+    });
+  }
+
+  _installPlanOwnedBy(plan, subscription) {
+    const owners = (plan?.metadata?.ownerReferences || []).filter(
+      (owner) => owner?.kind === 'Subscription'
+    );
+    // Plans without owner data (seeded/legacy state) keep the label match.
+    if (owners.length === 0) return true;
+    return owners.some((owner) => owner.uid === subscription.uid);
+  }
+
+  /** Kubernetes garbage collection: a plan whose owning Subscriptions are all gone is deleted. */
+  _collectOrphanedInstallPlans() {
+    const plans = this.cluster.getByKind('InstallPlan');
+    if (plans.length === 0) return;
+    const live = new Set(this.cluster.getByKind('Subscription').map((entry) => entry.uid));
+    for (const plan of plans) {
+      const owners = (plan.metadata?.ownerReferences || []).filter(
+        (owner) => owner?.kind === 'Subscription'
+      );
+      if (owners.length === 0 || owners.some((owner) => live.has(owner.uid))) continue;
+      this.cluster.remove(plan.uid);
+    }
   }
 
   /** CSV installed by a Subscription (status.installedCSV / currentCSV). */
@@ -5809,6 +5975,7 @@ export class SimulationTick {
             (candidate) =>
               candidate.metadata?.labels?.['operators.coreos.com/subscription'] ===
                 subscription.metadata.name &&
+              this._installPlanOwnedBy(candidate, subscription) &&
               (candidate.spec?.clusterServiceVersionNames || []).includes(headCsv)
           )
       ) || null;
@@ -5835,6 +6002,7 @@ export class SimulationTick {
         status: { phase: 'RequiresApproval' },
       });
       if (!plan) return;
+      this._adoptInstallPlan(subscription, plan);
       plan.setPlan(headCsv, target.version);
       this.cluster.update(plan.uid, plan);
       this.eventBus?.emit('installplan:created', {
@@ -6887,6 +7055,7 @@ export class SimulationTick {
   }
 
   _tickSubscriptions(dt) {
+    this._collectOrphanedInstallPlans();
     const resolutionFailures = this._resolutionFailuresByNamespace();
     for (const subscription of this.cluster.getByKind('Subscription')) {
       if (subscription.metadata.deletionTimestamp) continue;
@@ -7138,6 +7307,7 @@ export class SimulationTick {
           status: { phase: 'RequiresApproval' },
         });
         if (plan) {
+          this._adoptInstallPlan(subscription, plan);
           plan.setPlan(csvName, version);
           this.cluster.update(plan.uid, plan);
           this.eventBus?.emit('installplan:created', {
@@ -8293,6 +8463,25 @@ export class SimulationTick {
     }
   }
 
+  /**
+   * The controller ownerReference a real controller writes on a child it
+   * creates (same shape as ResourceBase.addOwnerReference). Children are
+   * created WITH it, never ownerless first (1.16.0: the "You created" toast
+   * claimed incident/controller-made ReplicaSets and Pods as the player's).
+   * @param {object} owner
+   * @returns {object}
+   */
+  _controllerOwnerReference(owner) {
+    return {
+      apiVersion: owner?.apiVersion,
+      kind: owner?.kind,
+      name: owner?.metadata?.name,
+      uid: owner?.metadata?.uid || owner?.uid,
+      controller: true,
+      blockOwnerDeletion: true,
+    };
+  }
+
   _createPodForWorkload(parent, templateSource, nameOverride) {
     if (!parent) return null;
     // Do not spin up replacement pods while an admission-denied pod exists.
@@ -8344,7 +8533,12 @@ export class SimulationTick {
 
     const pod = this.cluster.addResource({
       kind: 'Pod',
-      metadata: { name: podName, namespace, labels },
+      metadata: {
+        name: podName,
+        namespace,
+        labels,
+        ownerReferences: [this._controllerOwnerReference(parent)],
+      },
       spec: podSpec,
       status: { phase: 'Pending' },
     });
@@ -9584,6 +9778,16 @@ export class SimulationTick {
   }
 
   _routerResponseHeaders(body) {
+    // The router's error page is an HAProxy errorfile sent verbatim: exactly
+    // its own header block (no Date/Server/Content-Length), 1.16.0.
+    if (body === ROUTER_503_BODY) {
+      return {
+        pragma: 'no-cache',
+        'cache-control': 'private, max-age=0, no-cache, no-store',
+        connection: 'close',
+        'content-type': 'text/html',
+      };
+    }
     return {
       'content-type': 'text/html; charset=utf-8',
       'content-length': String(String(body ?? '').length),
@@ -9795,10 +9999,10 @@ export class SimulationTick {
       }
       const result = {
         ...base,
-        status: 404,
-        statusText: 'Not Found',
-        headers: this._routerResponseHeaders(ROUTER_404_BODY),
-        body: method === 'HEAD' ? '' : ROUTER_404_BODY,
+        status: 503,
+        statusText: 'Service Unavailable',
+        headers: this._routerResponseHeaders(ROUTER_503_BODY),
+        body: method === 'HEAD' ? '' : ROUTER_503_BODY,
         reason: 'no-route',
       };
       if (scheme === 'https') {
@@ -9819,12 +10023,14 @@ export class SimulationTick {
       routeNamespace: route.metadata.namespace,
       termination,
     };
+    // No backend for this scheme/host/path: the router's default backend
+    // answers 503 with its own error page (see ROUTER_503_BODY).
     const respond404 = (reason) => ({
       ...routeBase,
-      status: 404,
-      statusText: 'Not Found',
-      headers: this._routerResponseHeaders(ROUTER_404_BODY),
-      body: method === 'HEAD' ? '' : ROUTER_404_BODY,
+      status: 503,
+      statusText: 'Service Unavailable',
+      headers: this._routerResponseHeaders(ROUTER_503_BODY),
+      body: method === 'HEAD' ? '' : ROUTER_503_BODY,
       reason,
     });
     const respond503 = (reason, policy = null) => ({

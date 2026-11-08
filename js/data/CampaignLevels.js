@@ -1,5 +1,6 @@
 /**
- * CampaignLevels — 20-level EX280 curriculum for OpenShift Games.
+ * CampaignLevels — the EX280 curriculum for OpenShift Games (22 levels in 5 chapters) and the
+ * campaign structure helpers; the Linux & RHEL Foundations prelude lives in LinuxLevels.js.
  *
  * Content source of truth: docs/CONVERSION-SPEC.md §9 (fixed chapter/level
  * titles and objective schema) + docs/research/ex280-objectives.md +
@@ -36,6 +37,8 @@
 // import is data-only (ClusterState is the engine's seed module and has no DOM
 // dependencies), so the level data and per-mode seeds cannot drift apart.
 import { NODE_CATALOG, catalogNode } from '../engine/ClusterState.js';
+// The optional Linux & RHEL Foundations prelude (chapter 0, ids 101–107).
+import { LINUX_LEVELS } from './LinuxLevels.js';
 
 const DOCS = {
   cli: 'https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/cli_tools/openshift-cli-oc',
@@ -87,6 +90,10 @@ const DOCS = {
     'https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/ingress_and_load_balancing/load-balancing-with-metallb',
   networkSecurity:
     'https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/network_security/index',
+  networkPolicy:
+    'https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/network_security/network-policy',
+  nodes:
+    'https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/nodes/working-with-nodes',
   console:
     'https://docs.redhat.com/en/documentation/openshift_container_platform/4.22/html/web_console/index',
 };
@@ -207,7 +214,13 @@ const job = (name, options = {}) => ({
   },
 });
 
-const CAMPAIGN_LEVELS = [
+/**
+ * The EX280 track (chapters 1–5). Ids are stable save keys (player progress is
+ * stored per id), so a new level gets a NEW id and is placed by `CHAPTERS`;
+ * this array may list levels in any order — `CAMPAIGN_LEVELS` below is sorted
+ * into campaign order.
+ */
+const OPENSHIFT_LEVELS = [
   // ═══════════════════════════ CHAPTER 1 — MANAGE OPENSHIFT ═══════════════════════════
   {
     id: 1,
@@ -283,8 +296,7 @@ const CAMPAIGN_LEVELS = [
       'Log in first. The installer saves the kubeadmin password in its auth directory: `cat ~/auth/kubeadmin-password`, then `oc login -u kubeadmin` and type (paste) that password at the `Password:` prompt — or pass it directly with `oc login -u kubeadmin -p <password>`. The kubeadmin secret does NOT contain the password: `oc extract secret/kubeadmin -n kube-system --to=-` prints only a bcrypt hash of it (a `$2a$10$…` hash). Check `oc whoami` afterwards.',
       'Create the project: `oc new-project first-project --display-name="First Project"`. `oc project` shows the current project.',
       'Create a Deployment: `oc create deployment hello-deploy --image=quay.io/openshift/origin-hello-openshift:latest`, then verify `oc get deployments,pods`. The level also asks for a bare Pod — `oc run hello-pod --image=quay.io/openshift/origin-hello-openshift:latest` deploys one, and the Pod view mirrors `oc describe pod`.',
-      'Trap worth knowing (not required here): a bare `oc run hello-pod --image=nginx:latest` is ADMITTED by `restricted-v2` — admission only validates the pod spec, not the image USER — and then crashes, because nginx cannot write `/var/cache/nginx` under the arbitrary non-root UID it is assigned. Use a non-root image like `quay.io/openshift/origin-hello-openshift:latest` for a healthy workload.',
-      'What IS rejected at admission: a Pod that explicitly requests `runAsUser: 0`, a `privileged: true` container or a host port (the controller shows FailedCreate and no Pod exists). If you tried the nginx trap, delete it before re-running with the supported image: `oc delete pod hello-pod`.',
+      'Use the image the level gives you. Many Docker Hub images, such as `nginx:latest`, expect to run as root, but OpenShift starts every container as a random non-root user, so they crash right after starting (Level 17 explains the security rules behind this). If you tried one, delete it with `oc delete pod hello-pod` and run it again with `quay.io/openshift/origin-hello-openshift:latest`.',
     ],
     starCriteria: { time: 240, efficiency: 0.75, noFailures: true },
     nextLevel: 2,
@@ -339,6 +351,8 @@ const CAMPAIGN_LEVELS = [
         type: 'command',
         pattern:
           'oc\\s+(-n\\s+\\S+\\s+)?get\\s+(-n\\s+\\S+\\s+)?(\\S*,)?(deploy|deployments?|all)(\\s|,|$)',
+        // A read only counts when it ran in query-lab and listed something (1.16.0).
+        inspect: true,
         label: 'Use oc get to list Deployments',
         how: {
           explain:
@@ -363,6 +377,7 @@ const CAMPAIGN_LEVELS = [
       {
         type: 'command',
         pattern: 'oc get .*(-o|--output)(=|\\s+)(wide|yaml|json|custom-columns|jsonpath|name)',
+        inspect: true,
         label: 'Format output with -o wide/yaml/json/jsonpath',
         how: {
           explain:
@@ -460,6 +475,9 @@ const CAMPAIGN_LEVELS = [
       {
         type: 'command',
         pattern: 'oc (get|describe) pods?',
+        // Graded on what the read showed (1.16.0): `oc get pods` in `default`
+        // prints "No resources found" and does not count.
+        inspect: true,
         label: 'Inspect Pods with oc get/oc describe',
         how: {
           explain:
@@ -470,6 +488,7 @@ const CAMPAIGN_LEVELS = [
       {
         type: 'command',
         pattern: 'oc logs ',
+        inspect: true,
         label: 'Read container logs with oc logs',
         how: {
           explain:
@@ -484,7 +503,7 @@ const CAMPAIGN_LEVELS = [
         label: 'Investigate the CrashLoopBackOff incident',
         how: {
           explain:
-            'The incident starts about 10 seconds into the level and the Incidents panel opens on the left. Two investigation steps tick this: use two of its commands (they carry the real Pod name), or run the two below; the panel counter may not move for those.',
+            'The incident starts about 10 seconds into the level and the Incidents panel opens on the left. Two investigation steps tick this: use two of its commands (they carry the real Pod name) or run the two below. Only commands that run in `ops-lab` and show something count; the panel counter moves with them.',
           run: ['oc describe deployment/web-app', 'oc get events --sort-by=.lastTimestamp'],
         },
       },
@@ -538,7 +557,7 @@ const CAMPAIGN_LEVELS = [
       'Read the crash output: `oc logs <pod> --previous` — `configuration validation failed: APP_MODE has an unsupported value`. `oc describe pod <pod>` shows a growing restart count and Back-off restarting failed container from the Pod’s own first start.',
       'Correlate events: `oc get events --sort-by=.lastTimestamp`, and check cluster operators with `oc get clusteroperators`.',
       'Inspect the fault: `oc describe deployment/web-app` shows the rollout is not progressing, and `oc get deployment/web-app -o yaml` shows the container env sets `APP_MODE=debug-invalid`. Correct the TEMPLATE value: `oc set env deployment/web-app APP_MODE=production` — the controller then rolls out fresh Pods. Anything else fails: `oc set env deployment/web-app FOO=bar` (unrelated variable), `oc rollout restart` and deleting a crashing Pod only recreate the same broken configuration, so the incident keeps firing.',
-      'Related trap (admission ≠ runtime): a `nginx:latest` Pod is ADMITTED by `restricted-v2` — the SCC validates the pod spec, not the image USER — and then crashes with `mkdir "/var/cache/nginx/client_temp" failed (13: Permission denied)`. Check the image USER before blaming the SCC; a Pod that explicitly requests `runAsUser: 0` IS rejected at admission (FailedCreate).',
+      'Crashed, or never started? CrashLoopBackOff means the container starts and then exits — read why with `oc logs <pod> --previous`. A root-expecting image such as `nginx:latest` crashes this way with `mkdir "/var/cache/nginx/client_temp" failed (13: Permission denied)`, because OpenShift runs it as a random non-root user (Level 17 covers the rules). ImagePullBackOff means the image never downloaded, and CreateContainerConfigError means a referenced ConfigMap or Secret key is missing: `oc describe pod <pod>` shows which in its State and Events.',
     ],
     starCriteria: { time: 360, efficiency: 0.7, noFailures: false },
     nextLevel: 4,
@@ -550,7 +569,7 @@ const CAMPAIGN_LEVELS = [
     chapter: 1,
     chapterName: 'Manage OpenShift',
     description:
-      'Stop typing long commands and describe what you want in YAML files instead. Read or edit `manifests/deployment.yaml` and `manifests/service.yaml` in the Files panel (press `F`), create the objects from them with `oc apply -f`, then export the live Deployment with `oc get -o yaml`. Everything happens in project `manifests-lab`.',
+      'Stop typing long commands and describe what you want in YAML files instead. Read or edit `manifests/deployment.yaml` and `manifests/service.yaml` in the Files panel (press `F`), create the objects from them with `oc apply -f`, export the live Deployment with `oc get -o yaml`, then let `--dry-run=client -o yaml` write a new manifest for you and apply it. Everything happens in project `manifests-lab`.',
     examObjectives: [
       'Manage OpenShift Container Platform > Use the command-line interface to manage and configure an OpenShift cluster',
       'Manage OpenShift Container Platform > Import, export, and configure Kubernetes resources',
@@ -611,11 +630,39 @@ const CAMPAIGN_LEVELS = [
       {
         type: 'command',
         pattern: 'oc get .*(-o|--output)(=|\\s+)(yaml|json)',
+        // An empty List from an empty project is not a live resource (1.16.0).
+        inspect: true,
         label: 'Export a live resource with oc get -o yaml/json',
         how: {
           explain:
             '`-o yaml` prints the live object as YAML, including fields the cluster filled in, such as `status`. Add `> /tmp/webapp.yaml` to save it to a file instead of printing it.',
           run: ['oc get deployment webapp -o yaml'],
+        },
+      },
+      // 1.16.0 curriculum review: `--dry-run=client -o yaml > file` skeletons are an
+      // EX280 staple (lab 12's immutable-Job fix relies on them) and were never taught.
+      {
+        type: 'command',
+        pattern: '^oc create (?=.*--dry-run=client)(?=.*(-o|--output)(=|\\s+)?yaml)',
+        label: 'Generate a manifest skeleton with --dry-run=client -o yaml',
+        how: {
+          explain:
+            '`--dry-run=client -o yaml` prints the YAML an `oc create` command WOULD send, without creating anything: the fastest way to start a manifest. `>` saves the output to a file instead of the screen. It works for deployments, services, secrets, configmaps, jobs, cronjobs, roles and more.',
+          run: [
+            'oc create deployment api --image=quay.io/openshift/origin-hello-openshift:latest --dry-run=client -o yaml > manifests/api.yaml',
+          ],
+          check: 'cat manifests/api.yaml',
+        },
+      },
+      {
+        type: 'manifest',
+        file: 'manifests/api.yaml',
+        label: 'Apply your generated manifests/api.yaml with oc apply -f',
+        how: {
+          explain:
+            'The generated file is a normal manifest: edit it if you like (Files panel, press `F`), then create the Deployment `api` from it with `oc apply -f`.',
+          run: ['oc apply -f manifests/api.yaml'],
+          check: 'oc get deployment api',
         },
       },
     ],
@@ -625,8 +672,9 @@ const CAMPAIGN_LEVELS = [
       'Apply the manifests: `oc apply -f manifests/deployment.yaml` then `oc apply -f manifests/service.yaml`.',
       'Re-apply after an edit is safe and idempotent — edit the YAML in the Files panel, `oc apply -f manifests/deployment.yaml` again, then compare with `oc get deployment webapp -o yaml`.',
       'Export the live object: `oc get deployment/webapp -o yaml > /tmp/webapp.yaml` (the download/editor keeps it in the virtual file system).',
+      'Never type YAML from scratch: `oc create deployment api --image=quay.io/openshift/origin-hello-openshift:latest --dry-run=client -o yaml > manifests/api.yaml` writes a ready skeleton (nothing is created yet), and `oc create job`, `cronjob`, `secret`, `configmap`, `service clusterip` and `route edge` accept the same flags. Edit the file, then `oc apply -f manifests/api.yaml`.',
     ],
-    starCriteria: { time: 300, efficiency: 0.8, noFailures: true },
+    starCriteria: { time: 360, efficiency: 0.8, noFailures: true },
     nextLevel: 5,
   },
 
@@ -919,7 +967,7 @@ const CAMPAIGN_LEVELS = [
         label: 'The template created the Deployment "web"',
         how: {
           explain:
-            'Nothing to type: this ticks by itself once the Deployment `web` from the template exists in project `template-lab`. If it stays empty although `oc get deployment` shows `web`, you created it in another project. Run `oc project` to see where you are.',
+            'Nothing to type: this ticks once the Deployment `web` from the template exists in project `template-lab`. The template also creates a Service and a Route (they make the app reachable; Level 11 covers both). If it stays empty although `oc get deployment` shows `web`, you are in another project: run `oc project`.',
           check: 'oc get deployment web',
         },
       },
@@ -1025,7 +1073,14 @@ const CAMPAIGN_LEVELS = [
       },
       {
         type: 'command',
-        pattern: 'oc (get|describe) (is|imagestream|imagestreamtag|istag)',
+        // 1.16.0: graded on what the read showed — the webapp ImageStream in
+        // build-lab (its registry repository) — so `oc get is` at level start
+        // ("No resources found") no longer ticks, while `oc -n build-lab get is`,
+        // `oc get is,istag` or `oc get all` listing the stream do.
+        pattern:
+          'oc (get|describe) (\\S+,)*(is|imagestreams?|imagestreamtags?|istags?|all)(?=[\\s,/.:]|$)',
+        inspect: true,
+        outputPattern: 'svc:5000/build-lab/webapp\\b',
         label: 'Examine the ImageStream with "oc get is" or "oc describe is"',
         how: {
           explain:
@@ -1114,10 +1169,15 @@ const CAMPAIGN_LEVELS = [
       {
         type: 'uptime',
         percentage: 90,
+        // 1.16.0: the availability of api-server itself (available vs. the
+        // replicas it served at level start), not the incident health, which
+        // stayed at 100 % in this incident-free level whatever happened.
+        kind: 'Deployment',
+        name: 'api-server',
         label: 'Keep availability at 90% or better during the rollout',
         how: {
           explain:
-            'Nothing to type: this rule is checked all the time and is ticked from the start. A rolling update keeps the old pods serving until the new ones are ready, so the bad image costs no availability; do not delete the working pods or scale the Deployment down.',
+            'Nothing to type: this checks all the time that api-server keeps at least 90% of its pods available, and turns red if you scale it down or delete it or its working pods. A rolling update keeps the old pods serving until the new ones are ready, so the bad image costs no availability.',
           check: 'oc get deployment api-server',
         },
       },
@@ -1142,7 +1202,7 @@ const CAMPAIGN_LEVELS = [
     chapter: 3,
     chapterName: 'Deploy & Expose',
     description:
-      'Pods come and go, so a Service gives them one stable address, and a Route makes that Service reachable from outside the cluster. In project `route-lab`, create a Service for the `web` Deployment, publish it as an edge-TLS Route (the router handles the HTTPS encryption), and keep a certificate and its key in a Secret.',
+      'Pods come and go, so a Service gives them one stable address, and a Route makes that Service reachable from outside the cluster. In project `route-lab`, create a Service for the `web` Deployment, make a certificate and its key with `openssl`, keep them in the TLS Secret `web-tls`, and publish `web` as an edge Route that serves that certificate (the router handles the HTTPS encryption).',
     examObjectives: [
       'Declarative Resource Management > Deploy applications from YAML resource manifests',
       'Deploy applications > Work with labels and selectors',
@@ -1186,14 +1246,34 @@ const CAMPAIGN_LEVELS = [
         },
       },
       {
+        type: 'deploy',
+        kind: 'Secret',
+        name: 'web-tls',
+        // Graded in the lab project: a Secret created in `default` must not tick
+        // the objective (the Service and Route it belongs to live in `route-lab`).
+        namespace: 'route-lab',
+        // 1.16.0: only a real TLS Secret counts (an Opaque `web-tls` does not).
+        secretType: 'kubernetes.io/tls',
+        label: 'Make a certificate with openssl and keep it in the TLS Secret "web-tls"',
+        how: {
+          explain:
+            'A TLS Secret is how OpenShift keeps a certificate and its private key, for workloads and for Routes that reference a Secret (the capstone does that). `openssl` creates a practice pair, `tls.crt` and `tls.key` (self-signed, fine for a lab); `oc create secret tls` stores both as `web-tls`.',
+          run: [
+            'openssl req -x509 -newkey rsa:2048 -nodes -keyout tls.key -out tls.crt -days 365 -subj "/CN=web-route-lab.apps.cluster.example.com"',
+            'oc create secret tls web-tls --cert=tls.crt --key=tls.key',
+          ],
+          check: 'oc get secret web-tls',
+        },
+      },
+      {
         type: 'route',
         name: 'web',
         termination: 'edge',
-        label: 'Create an edge Route "web" and get it Admitted',
+        label: 'Create the edge Route "web" with your certificate and get it Admitted',
         how: {
           explain:
-            'A Route publishes a Service outside the cluster; `edge` means the router handles the HTTPS encryption. Create it with `oc create route edge`, not `oc expose` (that makes a plain Route): if a plain Route `web` already exists, delete it first with `oc delete route web`.',
-          run: ['oc create route edge web --service=web'],
+            'A Route publishes a Service outside the cluster; `edge` means the router handles the HTTPS encryption, here with your certificate and key (`--cert`, `--key`) instead of its default one. Use `oc create route edge`, not `oc expose` (a plain Route): if a Route `web` already exists, run `oc delete route web` first.',
+          run: ['oc create route edge web --service=web --cert=tls.crt --key=tls.key'],
           check: 'oc describe route web',
         },
       },
@@ -1201,39 +1281,23 @@ const CAMPAIGN_LEVELS = [
         type: 'tls',
         enabled: true,
         termination: 'edge',
-        label: 'Terminate TLS at the Route (edge)',
+        // 1.16.0: the Route must carry its own certificate, not the router default.
+        certificate: true,
+        label: 'Terminate TLS at the Route (edge) with your own certificate',
         how: {
           explain:
-            'Nothing to type: this ticks together with the Route above, because `oc create route edge` sets the TLS termination to edge. If it stays unticked, the Route is plain (made with `oc expose`) or lives in another project.',
-          check: 'oc get route web',
-        },
-      },
-      {
-        type: 'deploy',
-        kind: 'Secret',
-        name: 'web-tls',
-        // Graded in the lab project: a Secret created in `default` must not tick
-        // the objective (the Service and Route it belongs to live in `route-lab`).
-        namespace: 'route-lab',
-        label: 'Create the TLS Secret "web-tls"',
-        how: {
-          explain:
-            'A TLS Secret stores a certificate and its private key. `openssl` first creates a practice pair, `tls.crt` and `tls.key` (self-signed, which is fine for a lab); `oc create secret tls` then stores both files as the Secret `web-tls`.',
-          run: [
-            'openssl req -x509 -newkey rsa:2048 -nodes -keyout tls.key -out tls.crt -days 365 -subj "/CN=web.apps.cluster.example.com"',
-            'oc create secret tls web-tls --cert=tls.crt --key=tls.key',
-          ],
-          check: 'oc get secret web-tls',
+            'Nothing to type: this ticks together with the Route above, because `--cert` and `--key` copy the files into the Route’s `spec.tls`. If it stays unticked, the Route was created without them (the router then serves its default certificate), is plain, or lives in another project.',
+          check: 'oc get route web -o yaml',
         },
       },
     ],
     incidents: [],
     hints: [
       'Switch projects: `oc project route-lab`. Create the Service: `oc create service clusterip web --tcp=8080:8080` (it selects app=web).',
-      'Expose it with TLS at the Route: `oc create route edge web --service=web` (omit the name to name the Route after the Service) — then `oc get route` shows the generated host and the edge TERMINATION, and `oc describe route web` shows the Admitted event.',
+      'Expose it with TLS at the Route and your certificate: `oc create route edge web --service=web --cert=tls.crt --key=tls.key` (omit the name to name the Route after the Service) — then `oc get route` shows the generated host `web-route-lab.apps.cluster.example.com` and the edge TERMINATION, and `oc describe route web` shows the Admitted event. Without `--cert`/`--key` the router serves its default wildcard certificate instead.',
       'Know the two expose forms: `oc expose svc/web --name=web-public --path=/api` creates a Route from an existing Service, while `oc expose deployment/<name>` creates ONLY a Service and never a Route (try it on another project/Deployment, not on web which already has a Service). Do not run a bare `oc expose svc/web`: it creates a plain Route named `web`, and the edge Route `web` can then only be created after `oc delete route web`.',
-      'Create real TLS material, then the Secret: `openssl req -x509 -newkey rsa:2048 -nodes -keyout tls.key -out tls.crt -days 365 -subj "/CN=web.apps.cluster.example.com"`, then `oc create secret tls web-tls --cert=tls.crt --key=tls.key` — `oc create secret tls` reads those files from the virtual filesystem and fails with `error: open tls.crt: no such file or directory` when they are missing (edge Routes can use the router default certificate, but the Secret itself must be real).',
-      'Verify: `oc describe route web` — look for TLS Termination: edge and the Admitted condition.',
+      'Create real TLS material first, named after the Route host: `openssl req -x509 -newkey rsa:2048 -nodes -keyout tls.key -out tls.crt -days 365 -subj "/CN=web-route-lab.apps.cluster.example.com"`, then `oc create secret tls web-tls --cert=tls.crt --key=tls.key`. Both `oc create secret tls` and `oc create route edge --cert` read those files from the virtual filesystem and fail with `error: open tls.crt: no such file or directory` when they are missing.',
+      'Verify: `oc describe route web` — look for TLS Termination: edge and the Admitted condition; `oc get route web -o yaml` shows your certificate under `spec.tls.certificate`. Then `curl -k https://web-route-lab.apps.cluster.example.com` answers through the router.',
     ],
     starCriteria: { time: 420, efficiency: 0.7, noFailures: true },
     nextLevel: 12,
@@ -1245,7 +1309,7 @@ const CAMPAIGN_LEVELS = [
     chapter: 3,
     chapterName: 'Deploy & Expose',
     description:
-      'Not every app speaks HTTP. In project `lb-lab`, install the MetalLB operator (it lives in its own project, `metallb-system`) and use it to give a LoadBalancer Service an external IP address, then publish the TLS-serving app `tls-app` with a passthrough Route, which forwards the encrypted traffic untouched.',
+      'Not every app speaks HTTP through the router. In project `lb-lab`, publish the TLS app `tls-app` two ways: as a Service of type LoadBalancer with its own external IP address, and through a passthrough Route that forwards the encrypted traffic untouched. On this bare-metal cluster the platform team already installed the MetalLB operator (in its own project, `metallb-system`), which hands out those addresses: check that it is ready, then give it the configuration it needs. Installing an operator yourself comes later, in the Operators level.',
     examObjectives: [
       'Deploy applications > Expose applications to external access',
       'Configure network security > Configure networking components',
@@ -1253,13 +1317,40 @@ const CAMPAIGN_LEVELS = [
       'Configure network security > Secure external and internal traffic using TLS certificates',
       'Expose non-HTTP/SNI Applications > Configure a load balancer service',
       'Expose non-HTTP/SNI Applications > Configure external application access',
-      'Manage OpenShift operators > Install an operator',
     ],
     docsLinks: [DOCS.metallb, DOCS.routes, DOCS.operatorOlm],
+    // Two Projects are seeded (the lab and the operator's), so the project row is
+    // explicit: everything the player creates outside metallb-system lives in lb-lab.
+    workProject: 'lb-lab',
     startingResources: [
       node('node-1'),
       node('node-2'),
       project('lb-lab'),
+      // 1.16.0: MetalLB was installed by "the platform team". Its project, OperatorGroup
+      // and Subscription are seeded (the same objects examples/operatorgroup.yaml and the
+      // Operators level create) and the simulated OLM resolves the InstallPlan and brings
+      // the CSV to Succeeded within a few game seconds. Installing an operator is taught
+      // in the Operators level (L18); this level only uses one.
+      project('metallb-system'),
+      {
+        kind: 'OperatorGroup',
+        name: 'metallb-operatorgroup',
+        namespace: 'metallb-system',
+        spec: { targetNamespaces: ['metallb-system'] },
+      },
+      {
+        kind: 'Subscription',
+        name: 'metallb-operator',
+        namespace: 'metallb-system',
+        // Exactly the real Subscription spec: `spec.name` is the catalog package.
+        spec: {
+          channel: 'stable',
+          installPlanApproval: 'Automatic',
+          name: 'metallb-operator',
+          source: 'redhat-operators',
+          sourceNamespace: 'openshift-marketplace',
+        },
+      },
       // Self-consistent non-HTTP TLS fixture (issue #75): the nginx personality
       // serves TLS on 8443; the Service publishes port 443 named `https` and
       // targets the named container port. A passthrough Route therefore points
@@ -1267,19 +1358,25 @@ const CAMPAIGN_LEVELS = [
       // Use the UBI nginx image: it runs as non-root, so restricted-v2 admits
       // and runs it — a bare `nginx:latest` is admitted but crashes as UID 0
       // (mkdir /var/cache/nginx … Permission denied), leaving 0 endpoints.
-      deployment('tls-app', {
-        replicas: 2,
-        image: 'registry.access.redhat.com/ubi9/nginx-122:latest',
-        containerPort: 8443,
-        containerPortName: 'https',
-      }),
-      service('tls-app', {
+      // With two seeded Projects the default project is `default`, so both name lb-lab.
+      {
+        ...deployment('tls-app', {
+          replicas: 2,
+          image: 'registry.access.redhat.com/ubi9/nginx-122:latest',
+          containerPort: 8443,
+          containerPortName: 'https',
+        }),
         namespace: 'lb-lab',
-        app: 'tls-app',
-        port: 443,
-        portName: 'https',
-        targetPort: 8443,
-      }),
+      },
+      {
+        ...service('tls-app', {
+          app: 'tls-app',
+          port: 443,
+          portName: 'https',
+          targetPort: 8443,
+        }),
+        namespace: 'lb-lab',
+      },
     ],
     availableResources: [
       'Project',
@@ -1287,54 +1384,83 @@ const CAMPAIGN_LEVELS = [
       'Pod',
       'Service',
       'Route',
-      'Subscription',
       'IPAddressPool',
       'L2Advertisement',
       'Node',
     ],
-    manifestFiles: [
-      'examples/subscription.yaml',
-      'examples/operatorgroup.yaml',
-      'examples/metallb.yaml',
-    ],
-    focusFiles: [
-      'examples/operatorgroup.yaml',
-      'examples/subscription.yaml',
-      'examples/metallb.yaml',
-    ],
-    // Project row: keep the derived default (`lb-lab`). Three of the four objectives are graded
-    // there and the operator namespace is created with `oc create namespace`, which does not
-    // change the current project, so the whole level can be played from `lb-lab`.
+    manifestFiles: ['examples/metallb.yaml'],
+    focusFiles: ['examples/metallb.yaml'],
     objectives: [
       {
-        type: 'operator',
-        name: 'metallb-operator',
-        installed: true,
-        label: 'Install the MetalLB operator (CSV metallb-operator.v4.22.0-202610281200 Succeeded)',
+        // The operator is installed for the player: the step is to read OLM's result,
+        // and only a read that showed the CSV Succeeded counts (1.16.0).
+        type: 'command',
+        pattern:
+          'oc\\s+(\\S+\\s+)*get\\s+(\\S*,)?(csv|clusterserviceversions?)(\\.operators\\.coreos\\.com)?(\\s|,|$)',
+        inspect: true,
+        namespace: 'metallb-system',
+        outputPattern: 'Succeeded',
+        label: 'Check the MetalLB operator the platform team installed (its CSV is Succeeded)',
         how: {
           explain:
-            'A Subscription (the install request) only works after an OperatorGroup (which projects the operator may watch) exists in its own project. The sample file is for another operator, so `sed` rewrites its name, namespace and channel on the way into `oc apply -f -`; wait a few seconds for PHASE Succeeded.',
+            'An operator is an add-on that runs in its own project and looks after a kind of object for you. OLM installed MetalLB from a Subscription; the ClusterServiceVersion (CSV) is the installed operator version, and PHASE `Succeeded` means it is ready. It takes a few seconds after the level starts.',
           run: [
-            'oc create namespace metallb-system',
-            'oc apply -f examples/operatorgroup.yaml',
-            "sed -e 's/ansible-automation-platform-operator/metallb-operator/' -e 's/openshift-operators/metallb-system/' -e 's/stable-2.6/stable/' examples/subscription.yaml | oc apply -f -",
+            'oc get subscription,installplan -n metallb-system',
+            'oc get csv -n metallb-system',
           ],
-          check: 'oc get csv -n metallb-system',
+          check: 'oc get pods -n metallb-system',
+        },
+      },
+      {
+        type: 'deploy',
+        kind: 'MetalLB',
+        name: 'metallb',
+        namespace: 'metallb-system',
+        label: 'Start MetalLB: create its MetalLB resource "metallb" in metallb-system',
+        how: {
+          explain:
+            'An operator does nothing until you create its own kind of resource. A `MetalLB` object named `metallb` makes the operator start its controller and speaker Pods. `examples/metallb.yaml` holds it together with the address pool and the advertisement of the next two objectives.',
+          run: ['oc apply -f examples/metallb.yaml'],
+          check: 'oc get pods -n metallb-system',
+        },
+      },
+      {
+        type: 'deploy',
+        kind: 'IPAddressPool',
+        count: 1,
+        namespace: 'metallb-system',
+        label: 'Give MetalLB addresses to hand out (an IPAddressPool in metallb-system)',
+        how: {
+          explain:
+            'Nothing more to type if you applied `examples/metallb.yaml`: its IPAddressPool `metallb-pool` lists the addresses MetalLB may give to LoadBalancer Services (192.168.100.200 to .210). On a real network they must be free addresses of the nodes’ subnet.',
+          check: 'oc get ipaddresspools -n metallb-system',
+        },
+      },
+      {
+        type: 'deploy',
+        kind: 'L2Advertisement',
+        count: 1,
+        namespace: 'metallb-system',
+        label: 'Announce the pool on the network (an L2Advertisement in metallb-system)',
+        how: {
+          explain:
+            'Nothing more to type if you applied `examples/metallb.yaml`: its L2Advertisement makes the speakers answer ARP requests for the pool’s addresses, so other machines can reach them. Without one a Service still gets an address from the pool, but no node announces it and nothing can reach it.',
+          check: 'oc get l2advertisements -n metallb-system',
         },
       },
       {
         type: 'serviceType',
         kind: 'LoadBalancer',
         count: 1,
-        label: 'Create a Service of type LoadBalancer that receives an EXTERNAL-IP',
+        namespace: 'lb-lab',
+        label: 'Expose tls-app with a Service of type LoadBalancer that receives an EXTERNAL-IP',
         how: {
           explain:
-            'A Service of type LoadBalancer asks for an external IP address. MetalLB hands one out from the address pool in `examples/metallb.yaml`, so apply that file first; EXTERNAL-IP stays `<pending>` until both the operator and the pool exist.',
+            '`oc expose` creates a Service that selects the Pods of the Deployment; `--type=LoadBalancer` asks for an external address, which the MetalLB controller takes from the pool. EXTERNAL-IP shows `<pending>` until the operator, its MetalLB resource and a pool exist.',
           run: [
-            'oc apply -f examples/metallb.yaml',
-            'oc create service loadbalancer lb --tcp=443:443',
+            'oc expose deployment tls-app --type=LoadBalancer --name=tls-app-lb --port=443 --target-port=8443',
           ],
-          check: 'oc get service lb',
+          check: 'oc get service tls-app-lb',
         },
       },
       {
@@ -1342,6 +1468,8 @@ const CAMPAIGN_LEVELS = [
         name: 'tls-app',
         service: 'tls-app',
         termination: 'passthrough',
+        targetPort: 'https',
+        namespace: 'lb-lab',
         label: 'Expose tls-app with a passthrough Route targeting the Service port name https',
         how: {
           explain:
@@ -1354,6 +1482,7 @@ const CAMPAIGN_LEVELS = [
         type: 'tls',
         enabled: true,
         termination: 'passthrough',
+        namespace: 'lb-lab',
         label: 'Passthrough TLS termination is configured',
         how: {
           explain:
@@ -1364,14 +1493,12 @@ const CAMPAIGN_LEVELS = [
     ],
     incidents: [],
     hints: [
-      'Find the catalog package: `oc get packagemanifests -n openshift-marketplace` lists `metallb-operator` (the redhat-operators package name is `metallb-operator`, not `metallb`); `oc describe packagemanifests metallb-operator -n openshift-marketplace` shows channel `stable` and currentCSV.',
-      'Install the operator the 4.x way: create its project with `oc new-project metallb-system` (or `oc create namespace metallb-system`, which keeps you in your current project), then apply the shipped single-namespace OperatorGroup: `oc apply -f examples/operatorgroup.yaml`. A Subscription without a matching OperatorGroup never installs.',
-      'Edit `examples/subscription.yaml` (it ships for another operator) so `spec.name` is `metallb-operator`, metadata.name is `metallb-operator`, metadata.namespace is `metallb-system` and `spec.channel` is `stable`, then `oc apply -f examples/subscription.yaml`. OLM creates an InstallPlan and then the CSV `metallb-operator.v4.22.0-202610281200` in metallb-system. A misspelled/old package (`metallb`) or the leftover channel `stable-2.6` fails with ResolutionFailed "no operators found in package/channel" (see `oc describe sub metallb-operator -n metallb-system`).',
-      'Verify OLM: `oc get sub,csv,installplan -n metallb-system` — the ClusterServiceVersion (not the Subscription) moves Installing → Succeeded; `oc get csv -n metallb-system` shows `metallb-operator.v4.22.0-202610281200` and `oc get subscription -n metallb-system -o yaml` shows `status.installedCSV`.',
-      'Create the operand: `oc apply -f examples/metallb.yaml` (MetalLB CR + IPAddressPool + L2Advertisement in metallb-system), then `oc get pods -n metallb-system` shows the controller/speaker Pods.',
-      'Create the LoadBalancer Service in lb-lab: `oc project lb-lab` then `oc create service loadbalancer lb --tcp=443:443`; `oc get svc lb` now gets an EXTERNAL-IP from the pool (MetalLB reports it with a `Normal IPAllocated Assigned IP ["192.168.100.200"]` event — `oc describe svc lb` / `oc get events`).',
+      'Start with what the platform team left you: `oc get subscription,installplan,csv -n metallb-system` shows the Subscription (the install request), the approved InstallPlan and the CSV `metallb-operator.v4.22.0-202610281200`, which goes from Installing to Succeeded a few seconds after the level starts; `oc get pods -n metallb-system` shows the operator Pod.',
+      'Configure the operator with its own resources, all in `metallb-system`: the `MetalLB` object starts the controller and the speakers, an `IPAddressPool` lists the addresses it may hand out and an `L2Advertisement` announces them on the local network. `examples/metallb.yaml` has all three; check them with `oc get metallb,ipaddresspools,l2advertisements -n metallb-system`.',
+      'Give tls-app its own address: `oc expose deployment tls-app --type=LoadBalancer --name=tls-app-lb --port=443 --target-port=8443`. `oc get svc tls-app-lb` shows EXTERNAL-IP `<pending>` until MetalLB has a pool to use, then an address from the pool, and `oc describe svc tls-app-lb` shows MetalLB’s `IPAllocated` event. `oc create service loadbalancer` works too, but it selects the label `app=<service-name>`, so here it would reach no Pod.',
       'Check the seeded TLS app: `oc get deploy,svc,pods -n lb-lab` — the UBI nginx image serves TLS on container port 8443 (`https`), and the Service tls-app maps port 443 named `https` to it. A passthrough Route to a plain-HTTP backend would fail the TLS handshake, which is why this fixture is TLS end to end.',
       'Expose the non-HTTP app with a passthrough Route: `oc create route passthrough tls-app --service=tls-app` — the Route gets `spec.port.targetPort: https` (the Service port NAME, not the 8443 number). Confirm `oc describe route tls-app` shows passthrough TLS and Admitted=True, then `curl -k https://<route-host>` returns the nginx page (200).',
+      'Why two ways? The router only carries HTTP, HTTPS and TLS with SNI on ports 80 and 443. A database, another TCP protocol or a client that needs a fixed IP address goes through a LoadBalancer (or NodePort) Service instead.',
     ],
     starCriteria: { time: 480, efficiency: 0.65, noFailures: false },
     nextLevel: 13,
@@ -1415,7 +1542,10 @@ const CAMPAIGN_LEVELS = [
     objectives: [
       {
         type: 'command',
-        pattern: 'htpasswd ',
+        // 1.16.0: the htpasswd TOOL adding alice (no -D). `htpasswd ` anywhere in
+        // the line also matched `oc create secret … --from-file=htpasswd`, which
+        // ticked this before any file existed (the Secret then held no users).
+        pattern: '^(oc\\s+)?htpasswd\\s+(-(?![a-zA-Z]*D)[a-zA-Z]+\\s+)*[^-\\s]\\S*\\s+alice(\\s|$)',
         label: 'Add the user "alice" to the htpasswd file (htpasswd -c -B -b)',
         how: {
           explain:
@@ -1447,10 +1577,13 @@ const CAMPAIGN_LEVELS = [
       {
         type: 'user',
         name: 'alice',
+        // 1.16.0: a first login also creates the Identity `htpasswd:alice`;
+        // `oc create user alice` alone (no Identity) does not tick.
+        viaLogin: true,
         label: 'User "alice" exists after first login',
         how: {
           explain:
-            'OpenShift creates a User only when someone logs in for the first time, so there is nothing to create by hand. This ticks together with the next objective, as soon as the login works.',
+            'OpenShift creates a User only when someone logs in for the first time, so there is nothing to create by hand. This ticks together with the next objective, as soon as the login works. An admin can also pre-create one with `oc create user NAME` (the capstone does), but that alone never lets anyone log in and does not tick this objective.',
           run: ['oc login -u alice -p redhat123'],
           check: 'oc whoami',
         },
@@ -1578,6 +1711,11 @@ const CAMPAIGN_LEVELS = [
         type: 'deploy',
         kind: 'RoleBinding',
         count: 1,
+        // 1.16.0: the binding must give edit or view to the developers group;
+        // any other learner binding (e.g. the incident's ServiceAccount fix)
+        // used to count.
+        subjects: ['group:developers'],
+        roles: ['edit', 'view'],
         label: 'Bind a role (edit/view) to the developers group in rbac-lab',
         how: {
           explain:
@@ -1615,7 +1753,7 @@ const CAMPAIGN_LEVELS = [
         label: 'Resolve the UnauthorizedAccess incident',
         how: {
           explain:
-            'About 25 seconds after the level starts, the `web` pods are denied by RBAC: the ServiceAccount `default` (the identity they run as) may not list Pods. When the incident is active, give that ServiceAccount the built-in `view` role; a binding made earlier is removed when the incident strikes.',
+            'About 25 seconds after the level starts, the `web` pods are denied by RBAC: the ServiceAccount `default` (the identity they run as) may not list Pods. When the incident is active, give that ServiceAccount the built-in `view` role; a binding made earlier is removed when the incident strikes. `-z default` means the ServiceAccount named default in that project (Level 16 covers ServiceAccounts).',
           run: [
             'oc logs deploy/web -n rbac-lab',
             'oc adm policy add-role-to-user view -z default -n rbac-lab',
@@ -1758,18 +1896,22 @@ const CAMPAIGN_LEVELS = [
         label: 'Create the project-request Template in openshift-config',
         how: {
           explain:
-            'The Template must go into `openshift-config`: without `-n openshift-config` it lands in your current project and the objective stays empty. It is created from the `template.yaml` you saved; you may first add a guardrail (such as a NetworkPolicy) under `objects:` there (Files panel, press `F`, then Save).',
+            'The Template must go into `openshift-config`: without `-n openshift-config` it lands in your current project and the objective stays empty. It is created from the `template.yaml` you saved; you may first add a guardrail under `objects:` there, such as a copy of the LimitRange from this level without its `namespace` line (Files panel, press `F`, then Save).',
           run: ['oc create -f template.yaml -n openshift-config'],
           check: 'oc get templates -n openshift-config',
         },
       },
       {
-        type: 'command',
-        pattern: 'oc (edit|patch) project\\.config',
+        // 1.16.0: graded on project.config.openshift.io/cluster itself (it
+        // names an existing Template in openshift-config). The old command
+        // regex ticked on an `oc edit` that saved nothing and never on
+        // `oc apply -f` reaching the same state.
+        type: 'projectRequestTemplate',
+        name: 'project-request',
         label: 'Point project.config.openshift.io/cluster at the template',
         how: {
           explain:
-            'This sets `spec.projectRequestTemplate.name` in the cluster-wide project settings, so `oc new-project` uses your template (the cluster needs about 8 seconds to apply it). Type it exactly as shown, starting with `oc`.',
+            'This sets `spec.projectRequestTemplate.name` in the cluster-wide project settings, so `oc new-project` uses your template (the cluster needs about 8 seconds to apply it). `oc edit` or `oc apply -f` reaching the same setting counts too; the Template must already exist in `openshift-config`.',
           run: [
             'oc patch project.config.openshift.io/cluster --type=merge -p \'{"spec":{"projectRequestTemplate":{"name":"project-request"}}}\'',
           ],
@@ -1798,8 +1940,8 @@ const CAMPAIGN_LEVELS = [
       'Set container resources: `oc set resources deployment/web --limits=cpu=500m,memory=512Mi --requests=cpu=100m,memory=128Mi`.',
       'Read the quota incident like a real cluster (it appears about 20 seconds after the level starts): `oc describe rs -l app=web -n quota-lab` (or `oc get events -n quota-lab`) shows a FailedCreate event ("exceeded quota: compute-quota, requested: pods=1, used: …, limited: …"), `oc get pods` shows NO extra Pending Pod, and `oc describe quota compute-quota` shows Used == Hard for pods (a real cluster never creates a Pod it cannot admit, so Used never exceeds Hard). Raise the guardrail to let the ReplicaSet replace the Pod: `oc patch quota compute-quota --type=merge -p \'{"spec":{"hard":{"pods":"5"}}}\'` then watch `oc get pods -n quota-lab` recover.',
       'Verify: `oc describe quota compute-quota`, `oc describe limits resource-limits`, `oc describe clusterresourcequota team-quota`. Then resolve the quota incident.',
-      'Publish a project template: `oc adm create-bootstrap-project-template -o yaml > template.yaml`, add a NetworkPolicy object to the template object list (edit `template.yaml` in the Files panel; the shipped `templates/webapp-template.yaml` shows the object-list shape), then `oc create -f template.yaml -n openshift-config` and check `oc get templates -n openshift-config`.',
-      'Point the cluster at the template: `oc edit project.config.openshift.io/cluster` and set `spec.projectRequestTemplate.name: project-request`. New projects keep using the old setting for about 8 seconds, so wait until `oc get clusteroperator openshift-apiserver` shows PROGRESSING False, then `oc new-project template-check` and confirm the templated object was created (`oc get networkpolicy -n template-check`); `oc new-project` also switches you to the new project, so return with `oc project quota-lab`. On a real cluster `oc edit` launches `$EDITOR` (vi/vim by default) in the terminal — the simulator opens its manifest editor in the Files panel (press Save to apply, then Esc to close it; the game is paused while it is open); practise vim separately for the exam.',
+      'Publish a project template: `oc adm create-bootstrap-project-template -o yaml > template.yaml`, add a guardrail object to the template object list — for example the LimitRange from `examples/limitrange.yaml` without its `metadata.namespace` line, so every new project gets default requests/limits (edit `template.yaml` in the Files panel; the shipped `templates/webapp-template.yaml` shows the object-list shape) — then `oc create -f template.yaml -n openshift-config` and check `oc get templates -n openshift-config`. Real clusters often add a default NetworkPolicy here too; Level 20 teaches NetworkPolicies.',
+      'Point the cluster at the template: `oc edit project.config.openshift.io/cluster` and set `spec.projectRequestTemplate.name: project-request`. New projects keep using the old setting for about 8 seconds, so wait until `oc get clusteroperator openshift-apiserver` shows PROGRESSING False, then `oc new-project template-check` and confirm the templated object was created (`oc get limitrange -n template-check`); `oc new-project` also switches you to the new project, so return with `oc project quota-lab`. On a real cluster `oc edit` launches `$EDITOR` (vi/vim by default) in the terminal — the simulator opens its manifest editor in the Files panel (press Save to apply, then Esc to close it; the game is paused while it is open); practise vim separately for the exam.',
     ],
     starCriteria: { time: 480, efficiency: 0.7, noFailures: false },
     nextLevel: 16,
@@ -1842,6 +1984,9 @@ const CAMPAIGN_LEVELS = [
         type: 'deploy',
         kind: 'RoleBinding',
         count: 1,
+        // 1.16.0: view → ServiceAccount api-reader, not just any binding.
+        subjects: ['system:serviceaccount:sa-lab:api-reader'],
+        roles: ['view'],
         label: 'Bind the view role to the ServiceAccount "api-reader" in sa-lab',
         how: {
           explain:
@@ -1927,10 +2072,14 @@ const CAMPAIGN_LEVELS = [
         scc: 'privileged',
         subject: 'system:serviceaccount:privileged-lab:priv-sa',
         expected: true,
+        // 1.16.0: dedicated means ONLY priv-sa — a grant that also reaches the
+        // project's `default` ServiceAccount (e.g. add-scc-to-group … for the
+        // whole project) does not tick.
+        exclusive: true,
         label: 'Grant the privileged SCC to the dedicated ServiceAccount priv-sa',
         how: {
           explain:
-            "An SCC (Security Context Constraint) decides which pods OpenShift admits; a privileged container (one with root-like power over the node) is refused until its ServiceAccount, the pod's identity, may use the `privileged` SCC. `-z priv-sa` names that account; without `-z`, `oc` would take it for a user.",
+            "An SCC (Security Context Constraint) decides which pods OpenShift admits; a privileged container (root-like power over the node) is refused until its ServiceAccount, the pod's identity, may use the `privileged` SCC. `-z priv-sa` names that account (without `-z`, `oc` takes it for a user). A grant that also reaches other accounts, like `add-scc-to-group` for the project, does not count.",
           run: ['oc adm policy add-scc-to-user privileged -z priv-sa -n privileged-lab'],
           check:
             'oc auth can-i use scc/privileged --as=system:serviceaccount:privileged-lab:priv-sa -n privileged-lab',
@@ -1965,6 +2114,7 @@ const CAMPAIGN_LEVELS = [
       'Check the identity: `oc get sa -n privileged-lab` — the shipped dedicated ServiceAccount is `priv-sa` (the workload runs as it). Avoid granting elevated SCCs to the project default SA.',
       'Grant the SCC the 4.x way (creates a RoleBinding in the project to ClusterRole system:openshift:scc:privileged): `oc adm policy add-scc-to-user privileged -z priv-sa -n privileged-lab`.',
       'Verify the grant with the RBAC question, not the SCC users list (it stays unchanged on 4.x): `oc auth can-i use scc/privileged --as=system:serviceaccount:privileged-lab:priv-sa -n privileged-lab` (the grant is a RoleBinding in the project, so without `-n` this answers `no` from another project), `oc get rolebinding -n privileged-lab`, then `oc get pods -n privileged-lab` — the privileged Pod is created and Running. The objective is graded on that state, so any equivalent binding works too — e.g. a Role with apiGroups `security.openshift.io`, resources `securitycontextconstraints`, resourceNames `privileged`, verbs `use` bound to priv-sa through a RoleBinding (not only the generated `system:openshift:scc:privileged` roleRef).',
+      'Admission is not runtime: a bare `nginx:latest` Pod is ADMITTED by `restricted-v2` — the SCC validates the pod SPEC, not the image USER — and then crashes with `mkdir() "/var/cache/nginx/client_temp" failed (13: Permission denied)` under its random non-root UID (the Level 1/3 crash). What IS rejected at admission is a Pod that explicitly requests `runAsUser: 0`, a `privileged: true` container or a host port: the ReplicaSet shows FailedCreate and no Pod exists — exactly this level. Check the image USER before blaming the SCC.',
       "Prove admission: `oc get pod -n privileged-lab -o jsonpath='{.items[*].metadata.annotations.openshift\\.io/scc}'` prints `privileged`. The SCCForbidden incident clears once the state is right — the ServiceAccount can use the privileged SCC and its privileged Pod is Running; the panel resolution action is only for exploring the fault.",
     ],
     starCriteria: { time: 420, efficiency: 0.7, noFailures: false },
@@ -2019,11 +2169,17 @@ const CAMPAIGN_LEVELS = [
       },
       {
         type: 'command',
-        pattern: 'oc (get|describe) (sub|subscription|csv|installplan)',
+        pattern:
+          'oc (get|describe) (\\S+,)*(subs?|subscriptions?|csvs?|clusterserviceversions?|installplans?|ip)(?=[\\s,/.]|$)',
+        // 1.16.0: the read must show the MetalLB operator's OLM objects (any
+        // project, since the operator lives in metallb-system, not operator-lab).
+        inspect: true,
+        namespace: '*',
+        outputPattern: 'metallb',
         label: 'Verify the Subscription / CSV / InstallPlan',
         how: {
           explain:
-            'These three objects show how OLM works: the Subscription is your request, the InstallPlan lists the install steps, and the CSV (ClusterServiceVersion) is the installed operator version. This ticks when one of these `oc get` or `oc describe` commands succeeds.',
+            'These three objects show how OLM works: the Subscription is your request, the InstallPlan lists the install steps, and the CSV (ClusterServiceVersion) is the installed operator version. This ticks when one of these `oc get` or `oc describe` commands shows the MetalLB objects.',
           run: ['oc get sub,csv,installplan -n metallb-system'],
           check: 'oc get pods -n metallb-system',
         },
@@ -2035,7 +2191,7 @@ const CAMPAIGN_LEVELS = [
         label: 'After installing, uninstall the operator (delete Subscription + CSV)',
         how: {
           explain:
-            'Uninstalling takes two deletes, in this order: the Subscription (so OLM stops reinstalling) and then the CSV (the operator itself). The objective already ticks after the first command, but the operator keeps running until the second; deleting the CSV first would bring it back.',
+            'Uninstalling takes two deletes, in this order: the Subscription (so OLM stops reinstalling) and then the CSV (the operator itself). The objective ticks once both are gone: after the first delete the operator is still installed and running, and deleting the CSV first would bring it back.',
           run: [
             'oc delete subscription metallb-operator -n metallb-system',
             'oc delete csv metallb-operator.v4.22.0-202610281200 -n metallb-system',
@@ -2202,6 +2358,347 @@ const CAMPAIGN_LEVELS = [
       'Schedule recurring work (five-field cron only — `--schedule="every 5 min"` is rejected by the API server, and the first Job only appears at the next scheduled time): `oc create cronjob cleanup --image=busybox --schedule="*/5 * * * *" -- sh -c date`.',
     ],
     starCriteria: { time: 420, efficiency: 0.7, noFailures: false },
+    nextLevel: 21,
+  },
+
+  // ═══ 1.16.0 bridge levels: new ids 21/22 (ids are save keys), played before the capstone ═══
+  {
+    id: 21,
+    title: 'Network Policies',
+    chapter: 5,
+    chapterName: 'Security & Operations',
+    description:
+      'Every Pod accepts traffic from anywhere until a NetworkPolicy selects it. In project `netpol-lab` a small shop runs `frontend`, published by the Route `frontend`, and `backend`, an internal API on port 8080. Lock it down the way the capstone needs: deny all ingress, let the OpenShift router back in so the Route keeps working, then deny egress too while keeping DNS and exactly the frontend → backend call. Policies only ever allow and they add up, so you combine small ones; the Files panel (`F`) has the OpenShift docs policies in `netpol/`.',
+    examObjectives: [
+      'Configure network security > Configure application network policies',
+      'Configure network security > Control cluster network ingress',
+      'Configure network security > Troubleshoot software defined networking',
+      'Configure network security > Configure networking components',
+      'Deploy applications > Work with labels and selectors',
+    ],
+    docsLinks: [DOCS.networkPolicy, DOCS.networkSecurity, DOCS.routes],
+    startingResources: [
+      node('node-1'),
+      node('node-2'),
+      project('netpol-lab'),
+      // The frontend runs the UBI nginx image: it serves HTTP on 8080 as a non-root user
+      // AND ships curl/nslookup, so `oc exec deploy/frontend -- curl …` is a real in-Pod
+      // connectivity test (hello-openshift is a single binary with no shell or curl).
+      deployment('frontend', {
+        replicas: 2,
+        image: 'registry.access.redhat.com/ubi9/nginx-122:latest',
+      }),
+      deployment('backend', { replicas: 2 }),
+      service('frontend'),
+      service('backend'),
+      {
+        kind: 'Route',
+        name: 'frontend',
+        spec: {
+          to: { kind: 'Service', name: 'frontend', weight: 100 },
+          port: { targetPort: 'http' },
+          tls: { termination: 'edge', insecureEdgeTerminationPolicy: 'Redirect' },
+          wildcardPolicy: 'None',
+        },
+      },
+    ],
+    availableResources: [
+      'Project',
+      'Deployment',
+      'Pod',
+      'Service',
+      'Route',
+      'NetworkPolicy',
+      'Node',
+    ],
+    manifestFiles: [
+      'netpol/deny-by-default.yaml',
+      'netpol/allow-from-openshift-ingress.yaml',
+      'netpol/allow-same-namespace.yaml',
+      'netpol/deny-all-egress.yaml',
+      'netpol/allow-dns.yaml',
+      'netpol/allow-frontend-to-backend.yaml',
+    ],
+    focusFiles: [
+      'netpol/deny-by-default.yaml',
+      'netpol/allow-from-openshift-ingress.yaml',
+      'netpol/allow-frontend-to-backend.yaml',
+    ],
+    // Graded on traffic behaviour (the labs 9/13 and capstone probes), never on policy
+    // names: any hand-written policy set that produces the same reachability counts.
+    objectives: [
+      {
+        type: 'command',
+        pattern: 'oc\\s+(\\S+\\s+)*get\\s+(\\S*,)?(pods?|po|all)(\\s|,|$)',
+        inspect: true,
+        namespace: 'openshift-ingress',
+        outputPattern: 'router-default',
+        label: 'Find the router Pods in openshift-ingress that carry every Route’s traffic',
+        how: {
+          explain:
+            'A Route is only a rule: the router Pods in the `openshift-ingress` project receive the outside traffic and connect to the Pods behind the Service. A policy will have to let that project in, and the label `policy-group.network.openshift.io/ingress` on it is what the policy matches.',
+          run: [
+            'oc get pods -n openshift-ingress',
+            'oc get namespace openshift-ingress --show-labels',
+          ],
+          check: 'oc get route frontend',
+        },
+      },
+      {
+        type: 'command',
+        pattern: 'oc\\s+(\\S+\\s+)*(exec|rsh)\\s.*\\bcurl\\b.*\\bbackend\\b',
+        inspect: true,
+        label: 'Test frontend → backend from inside a frontend Pod (oc exec … curl)',
+        how: {
+          explain:
+            '`oc exec` runs a command inside a Pod, so `curl` from a frontend Pod calls the backend Service by name, the same path the app uses. Nothing is blocked yet, so it answers; run it again after each policy to see what changed.',
+          run: ['oc exec deploy/frontend -- curl -s http://backend:8080'],
+        },
+      },
+      {
+        type: 'networkPolicy',
+        probe: 'ingress-isolation',
+        namespace: 'netpol-lab',
+        label: 'Deny all ingress by default (a policy that selects every Pod and allows nothing)',
+        how: {
+          explain:
+            'A NetworkPolicy applies to the Pods its `podSelector` picks, and `{}` picks all of them. This one allows no ingress, so the Pods accept no connection at all: the Route now answers 503 and frontend → backend fails. The next steps reopen one path at a time.',
+          run: ['oc apply -f netpol/deny-by-default.yaml'],
+          check: 'oc describe networkpolicy deny-by-default',
+        },
+      },
+      {
+        type: 'routeAccess',
+        name: 'frontend',
+        requireIsolation: true,
+        label: 'Let the OpenShift router back in: the Route frontend answers again',
+        how: {
+          explain:
+            'This policy admits traffic from every namespace labelled `policy-group.network.openshift.io/ingress: ""`, and on OpenShift that is `openshift-ingress`, where the router runs. The Route answers again while Pods of other projects stay locked out.',
+          run: ['oc apply -f netpol/allow-from-openshift-ingress.yaml'],
+          check: 'curl -k https://frontend-netpol-lab.apps.cluster.example.com',
+        },
+      },
+      {
+        type: 'networkPolicy',
+        probe: 'dns-egress',
+        namespace: 'netpol-lab',
+        source: { kind: 'Deployment', name: 'frontend' },
+        label: 'Deny all egress too, but keep DNS working (UDP and TCP 5353 to openshift-dns)',
+        how: {
+          explain:
+            'Egress rules limit what the Pods may call. Deny everything, then allow DNS: the dns-default Pods in `openshift-dns` listen on port 5353, not 53, so the rule allows UDP and TCP 5353. Without it no Pod can even look up the name `backend`.',
+          run: ['oc apply -f netpol/deny-all-egress.yaml', 'oc apply -f netpol/allow-dns.yaml'],
+          check: 'oc exec deploy/frontend -- nslookup backend',
+        },
+      },
+      {
+        type: 'networkPolicy',
+        probe: 'reach',
+        namespace: 'netpol-lab',
+        source: { kind: 'Deployment', name: 'frontend' },
+        to: { kind: 'Service', name: 'backend' },
+        port: 8080,
+        label: 'Reopen exactly frontend → backend on port 8080 (ingress and egress)',
+        how: {
+          explain:
+            'With policies in both directions a call needs two allows: ingress on the Pods that receive and egress on the Pods that send. `allow-same-namespace` lets the project’s own Pods in; the starter file becomes the egress rule once its placeholders name frontend and backend (edit it, or let `sed` fill them in).',
+          run: [
+            'oc apply -f netpol/allow-same-namespace.yaml',
+            "sed -e 's/SOURCE-APP/frontend/' -e 's/TARGET-APP/backend/' netpol/allow-frontend-to-backend.yaml | oc apply -f -",
+          ],
+          check: 'oc exec deploy/frontend -- curl -s http://backend:8080',
+        },
+      },
+      {
+        type: 'networkPolicy',
+        probe: 'deny',
+        namespace: 'netpol-lab',
+        source: { kind: 'Deployment', name: 'backend' },
+        to: { kind: 'Service', name: 'frontend' },
+        port: 8080,
+        label: 'Keep backend → frontend blocked (an allow rule only opens one direction)',
+        how: {
+          explain:
+            'Nothing to type: this guard ticks while the backend Pods cannot open a connection to the frontend. It turns red if you open egress for every Pod, for example with an egress copy of allow-same-namespace, instead of only frontend → backend.',
+          check: 'oc get networkpolicy',
+        },
+      },
+      {
+        type: 'networkPolicy',
+        probe: 'deny-external',
+        namespace: 'netpol-lab',
+        source: { kind: 'Deployment', name: 'frontend' },
+        label: 'Keep the frontend away from the internet (egress stays locked)',
+        how: {
+          explain:
+            'Nothing to type: this guard ticks once egress is denied and DNS works, so a call to an outside address fails on the egress policy itself, not on a missing DNS rule. It turns red if an egress rule lets the frontend reach any address.',
+          check: 'oc describe networkpolicy allow-frontend-to-backend',
+        },
+      },
+    ],
+    incidents: [],
+    hints: [
+      'Follow one request before you change anything: `oc get route frontend` (the host name), `oc get endpoints frontend` (the Pod addresses behind the Service) and `oc get pods -n openshift-ingress` (the router Pods that connect to them). A NetworkPolicy filters that last hop, router → Pod, and every Pod-to-Pod call.',
+      'Selectors decide everything. `podSelector: {}` means every Pod of the policy’s own project; a `podSelector` inside `from`/`to` only matches Pods of the same project; a `namespaceSelector` matches whole projects by their labels. `oc get namespace openshift-ingress --show-labels` shows the `policy-group.network.openshift.io/ingress=` label the router policy relies on.',
+      'Policies only ever allow, and they add up: once any policy selects a Pod for a direction, the Pod accepts only what some policy allows in that direction. A stricter second policy cannot take back what a broad one opened; delete the broad one instead (`oc delete networkpolicy <name>`).',
+      'Test like an admin: from the workstation `curl -k https://frontend-netpol-lab.apps.cluster.example.com` (503 means the router reached no Pod), from inside the cluster `oc exec deploy/frontend -- curl -s http://backend:8080` and `oc exec deploy/frontend -- nslookup backend`. A lookup that times out means the DNS egress rule (UDP/TCP 5353 to openshift-dns) is missing, not that backend is down.',
+      'There is no `oc create networkpolicy` command: write YAML (Files panel New, `vim`, or a heredoc into `oc apply -f -`) and apply it. The capstone ships the same building blocks: `examples/default-deny.yaml` denies ingress and egress in one policy and `examples/allow-from-router.yaml` is the router rule.',
+    ],
+    starCriteria: { time: 480, efficiency: 0.7, noFailures: true },
+    nextLevel: 22,
+  },
+
+  {
+    id: 22,
+    title: 'Nodes & Cluster Troubleshooting',
+    chapter: 5,
+    chapterName: 'Security & Operations',
+    description:
+      'Take the operator’s chair before the capstone. In project `node-lab` the `web` Deployment runs on two workers. Read the cluster’s state (nodes, resource use, node conditions, ClusterOperators), take `worker-0` out of service for maintenance without stopping `web` and bring it back. About 120 seconds in, the kubelet on `worker-1` stops and the node turns NotReady: repair it the real way, from a debug shell on the node.',
+    examObjectives: [
+      'Manage OpenShift Container Platform > Examine resources and cluster status',
+      'Manage OpenShift Container Platform > Assess the health of an OpenShift cluster',
+      'Manage OpenShift Container Platform > Troubleshoot common container, pod, and cluster events and alerts',
+    ],
+    docsLinks: [DOCS.nodes, DOCS.clusterResources, DOCS.cli],
+    startingResources: [
+      node('node-1'),
+      node('node-2'),
+      node('node-3'),
+      project('node-lab'),
+      deployment('web', { replicas: 4 }),
+      service('web'),
+    ],
+    availableResources: ['Project', 'Deployment', 'Pod', 'Service', 'Node'],
+    objectives: [
+      {
+        type: 'command',
+        pattern: 'oc\\s+(\\S+\\s+)*get\\s+(\\S*,)?(nodes?|no)(\\s|,|$)',
+        inspect: true,
+        namespace: '*',
+        outputPattern: 'Ready',
+        label: 'List the nodes and read their STATUS and ROLES (oc get nodes)',
+        how: {
+          explain:
+            '`oc get nodes` lists the machines of the cluster. STATUS `Ready` means the node agent (the kubelet) reports in; ROLES tells control-plane from worker machines, and `-o wide` adds their addresses, OS image and container runtime.',
+          run: ['oc get nodes', 'oc get nodes -o wide'],
+        },
+      },
+      {
+        type: 'command',
+        pattern: 'oc\\s+adm\\s+top\\s+(nodes?|no|pods?|po)(\\s|$)',
+        inspect: true,
+        namespace: '*',
+        label: 'Find the busiest node and Pods (oc adm top nodes / oc adm top pods)',
+        how: {
+          explain:
+            '`oc adm top` reads live CPU and memory use from the cluster metrics. `nodes` shows each machine and its share of what it can give to Pods; `pods -A` lists the Pods of every project, the usual way to find what fills a node.',
+          run: ['oc adm top nodes', 'oc adm top pods -A'],
+        },
+      },
+      {
+        type: 'command',
+        pattern: 'oc\\s+describe\\s+(nodes?|no)(\\s|/)',
+        inspect: true,
+        namespace: '*',
+        outputPattern: 'Allocatable',
+        label:
+          'Read a node’s conditions, capacity, allocatable resources and taints (oc describe node)',
+        how: {
+          explain:
+            '`oc describe node` shows the Conditions the kubelet reports (Ready, MemoryPressure, DiskPressure, PIDPressure), the Capacity of the machine, the Allocatable part left for Pods and its Taints. Compare a worker with `master-0`, whose taint keeps ordinary workloads off the control plane.',
+          run: ['oc describe node worker-0', 'oc describe node master-0'],
+        },
+      },
+      {
+        type: 'command',
+        pattern:
+          'oc\\s+get\\s+(\\S*,)?(clusteroperators?|co)(\\.config\\.openshift\\.io)?(\\s|,|$)',
+        inspect: true,
+        namespace: '*',
+        outputPattern: 'AVAILABLE',
+        label: 'Check the platform itself: ClusterOperators and the ClusterVersion',
+        how: {
+          explain:
+            'Each OpenShift component (ingress, DNS, authentication and more) is run by a ClusterOperator; a healthy one reads AVAILABLE True, PROGRESSING False, DEGRADED False. The ClusterVersion shows the installed release and whether an update is running.',
+          run: ['oc get clusteroperators', 'oc get clusterversion'],
+        },
+      },
+      {
+        type: 'node',
+        name: 'worker-0',
+        drained: true,
+        workloadsAvailable: true,
+        label: 'Drain worker-0 for maintenance while web stays fully available',
+        how: {
+          explain:
+            '`oc adm cordon` marks the node unschedulable, so no new Pod lands there; `oc adm drain` evicts its Pods and their Deployments recreate them on the other worker. DaemonSet Pods stay on every node (`--ignore-daemonsets`), and `--delete-emptydir-data` accepts losing their scratch space.',
+          run: [
+            'oc adm cordon worker-0',
+            'oc adm drain worker-0 --ignore-daemonsets --delete-emptydir-data',
+          ],
+          check: 'oc get pods -o wide',
+        },
+      },
+      {
+        type: 'node',
+        name: 'worker-0',
+        drained: true,
+        schedulable: true,
+        ready: true,
+        label: 'Maintenance done: put worker-0 back in service (uncordon)',
+        how: {
+          explain:
+            'A drained node stays `Ready,SchedulingDisabled` until you uncordon it. `oc adm uncordon` makes it schedulable again; Pods that moved away stay where they are until something replaces them.',
+          run: ['oc adm uncordon worker-0'],
+          check: 'oc get nodes',
+        },
+      },
+      {
+        type: 'resolve',
+        incidentType: 'NodeNotReady',
+        count: 1,
+        label:
+          'Resolve the NodeNotReady incident: restart the kubelet on worker-1 from a debug shell',
+        how: {
+          explain:
+            'About 120 seconds in, worker-1 turns NotReady because its kubelet stopped. `oc debug node/worker-1` opens a shell on that node, `chroot /host` switches to the node’s own tools, `systemctl status` and `journalctl` show the failure and `systemctl restart kubelet` repairs it. Type `exit` twice to get back to `oc`.',
+          run: [
+            'oc get nodes',
+            'oc describe node worker-1',
+            'oc debug node/worker-1',
+            'chroot /host',
+            'systemctl status kubelet',
+            'journalctl -u kubelet',
+            'systemctl restart kubelet',
+            'exit',
+            'exit',
+          ],
+          check: 'oc get nodes',
+        },
+      },
+      {
+        type: 'clusterHealth',
+        minPercent: 90,
+        allOperatorsAvailable: true,
+        label: 'Cluster healthy again: every ClusterOperator Available and health at 90% or better',
+        how: {
+          explain:
+            'Nothing to type: this ticks once the NodeNotReady incident has happened and been resolved while every ClusterOperator reports Available and none Degraded. `oc get nodes` and `oc get clusteroperators` are the checks to run after any node work.',
+          check: 'oc get clusteroperators',
+        },
+      },
+    ],
+    incidents: [{ type: 'NodeNotReady', triggerTime: 120, target: 'worker-1', severity: 3 }],
+    hints: [
+      'Read before you act: `oc get nodes` (STATUS, ROLES, VERSION), `oc adm top nodes` and `oc adm top pods -A` (live CPU and memory), `oc describe node worker-0` (Conditions, Capacity vs Allocatable, Taints) and `oc get clusteroperators` / `oc get clusterversion` (the platform’s own health: AVAILABLE True, PROGRESSING False, DEGRADED False).',
+      'Maintenance is cordon, drain, work, uncordon. `oc adm cordon worker-0` stops new Pods landing there (STATUS `Ready,SchedulingDisabled`); `oc adm drain worker-0 --ignore-daemonsets --delete-emptydir-data` evicts the rest so their controllers recreate them elsewhere. Every OpenShift node runs DaemonSet Pods (DNS, networking), so a drain without `--ignore-daemonsets` stops with an error.',
+      'Wait until `oc get pods -o wide` shows every web Pod Running on another node before you uncordon. Uncordoning does not move Pods back: they stay where they were rescheduled until something replaces them (for example `oc rollout restart deployment/web`).',
+      'NotReady with Conditions `Unknown` and "Kubelet stopped posting node status." means the node agent stopped. In the debug shell the prompt changes to `sh-5.1#` and the terminal talks to the node, not to `oc`, until you type `exit` twice (once to leave `chroot /host`, once to end the debug Pod).',
+      'Short form for later: `oc debug node/worker-1 -- chroot /host systemctl restart kubelet` runs one command and exits. Afterwards `oc get nodes` must show worker-1 Ready and `oc get clusteroperators` nothing Degraded.',
+    ],
+    starCriteria: { time: 480, efficiency: 0.7, noFailures: false },
     nextLevel: 20,
   },
 
@@ -2512,19 +3009,25 @@ const CAMPAIGN_LEVELS = [
       {
         type: 'architectureScore',
         minScore: 25,
+        // 1.16.0: rate YOUR project, not the platform's seeded workloads (the
+        // whole-cluster score was ≈ 54 before prod-platform even existed).
+        namespace: 'prod-platform',
         label: 'Architecture Advisor score >= 25',
         how: {
           explain:
-            'Nothing to type: the Advisor rates good practice in your cluster (replicas, probes, resource limits, ...) and is already above 25 when the level starts. The level keeps checking it, so it only turns red if a change drops the score below 25.',
+            'Nothing to type: the Advisor rates good practice in your project `prod-platform` (replicas, probes, resource limits, quotas, NetworkPolicies, ...). It starts at 0 and passes 25 once the webapp Deployment from `manifests/deployment.yaml` runs there; it turns red again if a change drops it below 25.',
         },
       },
       {
         type: 'examScore',
         minScore: 75,
+        // 1.16.0: the final gate — it completes only once every other
+        // objective is done (it used to tick after ~14 of 18).
+        namespace: 'prod-platform',
         label: 'Composite drill score >= 75 (in-game metric, not a Red Hat exam score)',
         how: {
           explain:
-            'Nothing to type: this in-game score counts your finished objectives (60 %), the cluster health (20 %) and the Architecture Advisor score (20 %). The mission card shows it as "n/75"; it ticks once about three quarters of the other objectives are done.',
+            'Nothing to type: this in-game score counts your finished objectives (60 %), the cluster health (20 %) and the Advisor score of `prod-platform` (20 %). The mission card shows it as "n/75"; it ticks last, once every other objective is done.',
         },
       },
     ],
@@ -2569,7 +3072,32 @@ const CAMPAIGN_LEVELS = [
   },
 ];
 
-const CHAPTERS = [
+// ═══════════════════════════ CAMPAIGN STRUCTURE (1.16.0) ═══════════════════════════
+//
+// `CHAPTERS` is the single source of truth for campaign ORDER; level ids are only
+// stable save keys. Two tracks share the campaign:
+//   - the optional prelude (chapter 0, Linux & RHEL Foundations, ids 101–107,
+//     displayed 0.1–0.7) — it never gates the EX280 track;
+//   - the EX280 track (chapters 1–5), displayed 1..N by position. Levels added
+//     after 1.15.0 got new ids (21 Network Policies, 22 Nodes & Cluster
+//     Troubleshooting) and sit before the capstone (id 20), so the capstone is
+//     displayed as the last number while saved progress keeps its meaning.
+// A level unlocks when the previous level of its own track is completed (or it
+// was completed before). Every consumer (CampaignMode, the level select, the
+// start page, scoring, tests) uses the helpers below instead of `id - 1`.
+
+/** Chapter id of the optional Linux & RHEL Foundations prelude. */
+const PRELUDE_CHAPTER_ID = 0;
+
+const CHAPTER_DEFS = [
+  {
+    id: PRELUDE_CHAPTER_ID,
+    name: 'Linux & RHEL Foundations',
+    levels: [101, 102, 103, 104, 105, 106, 107],
+    description:
+      'Optional prelude: the RHEL command line an OpenShift admin uses every day — files, text, permissions, services, networking, packages and containers',
+    prelude: true,
+  },
   {
     id: 1,
     name: 'Manage OpenShift',
@@ -2597,9 +3125,151 @@ const CHAPTERS = [
   {
     id: 5,
     name: 'Security & Operations',
-    levels: [17, 18, 19, 20],
-    description: 'SCCs, Operators, Jobs/CronJobs and the full EX280 capstone',
+    levels: [17, 18, 19, 21, 22, 20],
+    description:
+      'SCCs, Operators, Jobs/CronJobs, NetworkPolicies, node troubleshooting and the full EX280 capstone',
   },
 ];
 
-export { CAMPAIGN_LEVELS, CHAPTERS };
+const LEVELS_BY_ID = new Map();
+for (const level of [...LINUX_LEVELS, ...OPENSHIFT_LEVELS]) LEVELS_BY_ID.set(level.id, level);
+
+/** Chapters in campaign order, listing only levels that exist. */
+const CHAPTERS = CHAPTER_DEFS.map((chapter) => ({
+  ...chapter,
+  levels: chapter.levels.filter((id) => LEVELS_BY_ID.has(id)),
+})).filter((chapter) => chapter.levels.length > 0);
+
+/** Every level id in campaign order (prelude first, then the EX280 track). */
+const CAMPAIGN_ORDER = CHAPTERS.flatMap((chapter) => chapter.levels);
+const PRELUDE_ORDER = CHAPTERS.filter((chapter) => chapter.id === PRELUDE_CHAPTER_ID).flatMap(
+  (chapter) => chapter.levels
+);
+/** The EX280 track (chapters 1–5) in order; the capstone is its last level. */
+const EX280_ORDER = CHAPTERS.filter((chapter) => chapter.id !== PRELUDE_CHAPTER_ID).flatMap(
+  (chapter) => chapter.levels
+);
+
+/**
+ * All levels sorted in campaign order. A level missing from `CHAPTERS` would be
+ * unreachable from the level select; it is appended so deep links still work
+ * and scripts/verify.mjs reports it.
+ */
+const CAMPAIGN_LEVELS = [
+  ...CAMPAIGN_ORDER.map((id) => LEVELS_BY_ID.get(id)),
+  ...[...LEVELS_BY_ID.values()].filter((level) => !CAMPAIGN_ORDER.includes(level.id)),
+];
+
+/** @param {number|string} levelId */
+function getCampaignLevel(levelId) {
+  return LEVELS_BY_ID.get(Number(levelId)) || null;
+}
+
+/** True for a level of the optional Linux & RHEL Foundations prelude. */
+function isPreludeLevel(levelId) {
+  return PRELUDE_ORDER.includes(Number(levelId));
+}
+
+function trackOrder(levelId) {
+  return isPreludeLevel(levelId) ? PRELUDE_ORDER : EX280_ORDER;
+}
+
+/** The level before this one in its own track, or null for a track's first level. */
+function previousLevelId(levelId) {
+  const order = trackOrder(levelId);
+  const index = order.indexOf(Number(levelId));
+  return index > 0 ? order[index - 1] : null;
+}
+
+/** 1-based position of a level within its own track (display number, XP scaling). */
+function levelOrdinal(levelId) {
+  const index = trackOrder(levelId).indexOf(Number(levelId));
+  return index >= 0 ? index + 1 : Number(levelId) || 1;
+}
+
+/**
+ * The number players see: "0.1"–"0.7" for the prelude and the position in the
+ * EX280 track otherwise ("1"…"22"), never the internal id.
+ * @param {number|string} levelId
+ * @returns {string}
+ */
+function levelLabel(levelId) {
+  if (isPreludeLevel(levelId)) return `0.${levelOrdinal(levelId)}`;
+  if (EX280_ORDER.includes(Number(levelId))) return String(levelOrdinal(levelId));
+  return String(levelId ?? '');
+}
+
+/** Saved progress keys are JSON object keys (strings); accept both forms. */
+function progressEntry(campaignProgress, levelId) {
+  if (!campaignProgress || typeof campaignProgress !== 'object') return null;
+  return campaignProgress[levelId] ?? campaignProgress[String(levelId)] ?? null;
+}
+
+function isLevelCompleted(levelId, campaignProgress = {}) {
+  return Boolean(progressEntry(campaignProgress, levelId)?.completed);
+}
+
+/**
+ * A level can be started when the previous level of its own track is completed,
+ * when it is the first level of its track, or when it was completed before
+ * (replay; a level inserted in front of it never re-locks finished work).
+ */
+function isLevelUnlocked(levelId, campaignProgress = {}) {
+  const id = Number(levelId);
+  if (!LEVELS_BY_ID.has(id)) return false;
+  if (isLevelCompleted(id, campaignProgress)) return true;
+  const previous = previousLevelId(id);
+  return previous === null || isLevelCompleted(previous, campaignProgress);
+}
+
+function firstOpenLevel(order, campaignProgress) {
+  return (
+    order.find(
+      (id) => !isLevelCompleted(id, campaignProgress) && isLevelUnlocked(id, campaignProgress)
+    ) ?? null
+  );
+}
+
+/** True once every level of the campaign (prelude included) is completed. */
+function isCampaignComplete(campaignProgress = {}) {
+  return CAMPAIGN_ORDER.every((id) => isLevelCompleted(id, campaignProgress));
+}
+
+/**
+ * The level a "Start / Continue" action opens. A new player starts at the first
+ * level (the Linux prelude); otherwise the player continues the track they
+ * completed a level in most recently (falling back to the EX280 track), and a
+ * finished campaign replays from Level 1.
+ */
+function continueLevelId(campaignProgress = {}) {
+  const completed = CAMPAIGN_ORDER.filter((id) => isLevelCompleted(id, campaignProgress));
+  if (completed.length === 0) return CAMPAIGN_ORDER[0] ?? 1;
+  if (completed.length === CAMPAIGN_ORDER.length) return EX280_ORDER[0] ?? CAMPAIGN_ORDER[0];
+  let latest = null;
+  for (const id of completed) {
+    const at = Number(progressEntry(campaignProgress, id)?.completedAt) || 0;
+    if (!latest || at >= latest.at) latest = { id, at };
+  }
+  const preludeNext = firstOpenLevel(PRELUDE_ORDER, campaignProgress);
+  const ex280Next = firstOpenLevel(EX280_ORDER, campaignProgress);
+  if (latest && isPreludeLevel(latest.id) && preludeNext !== null) return preludeNext;
+  return ex280Next ?? preludeNext ?? CAMPAIGN_ORDER[0];
+}
+
+export {
+  CAMPAIGN_LEVELS,
+  CHAPTERS,
+  CAMPAIGN_ORDER,
+  EX280_ORDER,
+  PRELUDE_CHAPTER_ID,
+  PRELUDE_ORDER,
+  continueLevelId,
+  getCampaignLevel,
+  isCampaignComplete,
+  isLevelCompleted,
+  isLevelUnlocked,
+  isPreludeLevel,
+  levelLabel,
+  levelOrdinal,
+  previousLevelId,
+};

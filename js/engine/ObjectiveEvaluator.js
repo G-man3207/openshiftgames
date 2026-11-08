@@ -21,6 +21,9 @@
  */
 
 import { normalizeKind } from '../data/kindRegistry.js';
+import { templateHash } from './TemplateHash.js';
+// linux-engine (1.16.0): `file` objectives can require a manifest to parse as YAML.
+import { parseYaml } from './YamlParser.js';
 
 /** Objective types implemented by this module (CONVERSION-SPEC §9). */
 export const OBJECTIVE_TYPES = [
@@ -74,6 +77,9 @@ export const OBJECTIVE_TYPES = [
   'reschedule',
   'nodeSelector',
   'taint',
+  // 1.16.0: one Node's maintenance state (Ready, cordoned, drained) — campaign
+  // "Nodes & Cluster Troubleshooting".
+  'node',
   'command',
   'examScore',
   'architectureScore',
@@ -90,6 +96,23 @@ export const OBJECTIVE_TYPES = [
   'installPlan',
   'subscription',
   'routeAccess',
+  // 1.16.0: `project.config.openshift.io/cluster` points new projects at a
+  // project-request Template (graded on the config, not on `oc edit` typed).
+  'projectRequestTemplate',
+  // 1.16.0 (linux-engine): the simulated RHEL 9 workstation (js/engine/LinuxHost.js),
+  // graded from host STATE — files, units, processes, packages, firewalld, podman,
+  // SELinux, accounts, the shell session — plus `ran` (cwd-aware executed-command log).
+  'file',
+  'service',
+  'process',
+  'package',
+  'firewall',
+  'container',
+  'selinux',
+  'linuxUser',
+  'cwd',
+  'env',
+  'ran',
   // Extension: `label` appears in the level-2 curriculum prose in §9 even
   // though it is missing from the type list. Implemented as a state check so
   // "work with labels and selectors" is actually exercised.
@@ -136,6 +159,7 @@ const BOOLEAN_TYPES = new Set([
   'reschedule',
   'nodeSelector',
   'taint',
+  'node',
   'examScore',
   'architectureScore',
   'networkPolicy',
@@ -145,7 +169,21 @@ const BOOLEAN_TYPES = new Set([
   'installPlan',
   'subscription',
   'routeAccess',
+  'projectRequestTemplate',
   'label',
+  // linux-engine: workstation state checks are done/not-done flags.
+  'file',
+  'service',
+  'process',
+  'package',
+  'firewall',
+  'container',
+  'selinux',
+  'linuxUser',
+  'linuxuser',
+  'cwd',
+  'env',
+  'ran',
 ]);
 
 const ADMIN_USERS = new Set(['kubeadmin', 'system:admin', 'system:cluster-admin']);
@@ -425,15 +463,6 @@ function ensureBaseline(objective, factory) {
   return objective._baseline;
 }
 
-/** Stable-ish fingerprint of a workload pod template (change detection). */
-function templateFingerprint(resource) {
-  try {
-    return JSON.stringify(resourceSpec(resource).template || {});
-  } catch {
-    return '';
-  }
-}
-
 /**
  * Incident activity for "restore/keep health" objectives.
  * `activationCount` is incremented by IncidentEngine when an incident first
@@ -586,21 +615,229 @@ function commandHistory(c) {
   return [];
 }
 
-function matchCommands(c, pattern, options = {}) {
-  const rawPattern = pattern instanceof RegExp ? pattern.source : String(pattern || '');
-  const flags = pattern instanceof RegExp ? pattern.flags : 'i';
-  let regex;
+/** Compile an objective regex (string or RegExp) without stateful `g`/`y` flags. */
+function compilePattern(pattern) {
+  if (pattern === undefined || pattern === null || pattern === '') return null;
+  const rawPattern = pattern instanceof RegExp ? pattern.source : String(pattern);
+  const flags = (pattern instanceof RegExp ? pattern.flags : 'i').replace(/[gy]/g, '');
   try {
-    regex = new RegExp(rawPattern, flags);
+    return new RegExp(rawPattern, flags);
   } catch {
-    return [];
+    return null;
   }
+}
+
+/** Global `oc` flags that may precede the subcommand and take a separate value. */
+const OC_GLOBAL_VALUE_FLAGS = new Set([
+  '-n',
+  '--namespace',
+  '--context',
+  '--cluster',
+  '--user',
+  '--as',
+  '--as-group',
+  '-s',
+  '--server',
+  '--token',
+  '--kubeconfig',
+  '--request-timeout',
+  '-v',
+  '--loglevel',
+]);
+
+/**
+ * `oc -n lab get is` → `oc get is -n lab`. Objective patterns are authored as
+ * `oc <verb> <resource>`; a global flag typed before the subcommand must not
+ * hide the verb from them (1.16.0: L9 "oc -n build-lab get is" never ticked).
+ * @param {string} raw recorded command line
+ * @returns {string}
+ */
+export function canonicalCommandText(raw) {
+  const text = String(raw || '').trim();
+  const match = /^(oc|kubectl)\s+(-.*)$/i.exec(text);
+  if (!match) return text;
+  const tokens = match[2].split(/\s+/);
+  const leading = [];
+  let index = 0;
+  while (index < tokens.length && tokens[index].startsWith('-')) {
+    const token = tokens[index];
+    leading.push(token);
+    index += 1;
+    if (!token.includes('=') && OC_GLOBAL_VALUE_FLAGS.has(token) && index < tokens.length) {
+      leading.push(tokens[index]);
+      index += 1;
+    }
+  }
+  if (index >= tokens.length) return text;
+  return [match[1], ...tokens.slice(index), ...leading].join(' ');
+}
+
+function matchCommands(c, pattern, options = {}) {
+  const regex = compilePattern(pattern);
+  if (!regex) return [];
   const successOnly = options.successOnly !== false;
   return commandHistory(c).filter((entry) => {
     if (!entry || typeof entry.raw !== 'string') return false;
     if (successOnly && entry.success === false) return false;
-    return regex.test(entry.raw);
+    return regex.test(entry.raw) || regex.test(canonicalCommandText(entry.raw));
   });
+}
+
+// ─── command objectives: what a read showed, not only what was typed ──────
+//
+// A `command` objective with `inspect: true` is a READ (get/describe/logs)
+// whose evidence is what it showed (1.16.0): it must have succeeded, run
+// against the objective's project and printed something. `oc get is` at the
+// start of L9 printed "No resources found in build-lab namespace." and still
+// ticked "Examine the ImageStream"; `oc get pods` in `default` ticked L3's
+// "Inspect Pods". Fields:
+//   namespace     project the read must target ('*' = any); default: the
+//                 level's `workProject` when declared, else its single seeded
+//                 Project (no project → no restriction). `-A` always counts.
+//   outputPattern regex the output must match (what the read must show).
+
+/**
+ * Split a recorded line into its shell segments (`;`, `&&`, `||`, `|`),
+ * respecting quotes and `$(…)` substitutions.
+ * @param {string} raw
+ * @returns {string[]}
+ */
+function commandSegments(raw) {
+  const text = String(raw || '');
+  const segments = [];
+  let current = '';
+  let quote = null;
+  let depth = 0;
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+    if (quote) {
+      current += char;
+      if (char === quote) quote = null;
+      continue;
+    }
+    if (char === '"' || char === "'") {
+      quote = char;
+    } else if (char === '(' && text[index - 1] === '$') {
+      depth += 1;
+    } else if (char === ')' && depth > 0) {
+      depth -= 1;
+    } else if (
+      depth === 0 &&
+      (char === ';' || char === '|' || (char === '&' && text[index + 1] === '&'))
+    ) {
+      segments.push(current.trim());
+      current = '';
+      if (char !== ';' && text[index + 1] === char) index += 1;
+      continue;
+    }
+    current += char;
+  }
+  segments.push(current.trim());
+  return segments.filter(Boolean);
+}
+
+/** `-n X` / `--namespace=X` / `-A` of one oc segment. */
+function segmentNamespaceScope(segment) {
+  const tokens = String(segment || '')
+    .split(/\s+/)
+    .map((token) => token.replace(/^['"]|['"]$/g, ''));
+  let namespace = null;
+  let all = false;
+  for (let index = 0; index < tokens.length; index += 1) {
+    const token = tokens[index];
+    if (token === '-A' || token === '--all-namespaces' || token === '--all-namespaces=true') {
+      all = true;
+    } else if ((token === '-n' || token === '--namespace') && index + 1 < tokens.length) {
+      namespace = tokens[index + 1];
+      index += 1;
+    } else if (token.startsWith('--namespace=')) {
+      namespace = token.slice('--namespace='.length);
+    } else if (/^-n[a-z0-9]/.test(token)) {
+      namespace = token.slice(2);
+    }
+  }
+  return { all, namespace };
+}
+
+/**
+ * Lines that say a read found nothing, only switched project, or are a server
+ * warning (`Warning: apps.openshift.io/v1 DeploymentConfig is deprecated …`
+ * precedes `oc get all` output, even before "No resources found").
+ */
+const EMPTY_READ_LINE =
+  /^(No resources found\b.*|Now using project .*|Already on project .*|Warning: .*)$/i;
+
+/**
+ * Did a read print something real? Empty output, "No resources found …" and an
+ * empty `-o yaml|json` List do not count. Output that was never captured
+ * (history written without it) is unknown and does not block.
+ * @param {string|undefined} output
+ * @returns {boolean}
+ */
+export function outputShowsSomething(output) {
+  if (typeof output !== 'string') return true;
+  const lines = output
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line && !EMPTY_READ_LINE.test(line));
+  if (lines.length === 0) return false;
+  const text = lines.join('\n');
+  if (/^kind:\s*List$/m.test(text) && /^items:\s*\[\]$/m.test(text)) return false;
+  if (/"kind"\s*:\s*"List"/.test(text) && /"items"\s*:\s*\[\s*\]/.test(text)) return false;
+  return true;
+}
+
+/** Project a `command` objective's reads must target (null = any). */
+function commandObjectiveNamespace(obj, c) {
+  if (typeof obj.namespace === 'string' && obj.namespace) {
+    return obj.namespace === '*' ? null : obj.namespace;
+  }
+  const level = c.levelDef;
+  if (level && hasOwn(level, 'workProject')) return level.workProject || null;
+  return levelProjectNamespace(c);
+}
+
+/** `… > file` / `… >> file`: the stdout redirect target of one segment ('' if none). */
+function segmentRedirectTarget(segment) {
+  const unquoted = String(segment || '').replace(/'[^']*'|"[^"]*"/g, '');
+  const match = /(?:^|[^\d&>])>>?\s*([^\s|;&<>]+)/.exec(unquoted);
+  return match ? match[1] : '';
+}
+
+/** Content of a workstation file (Files panel / shell), or undefined when unreadable. */
+function readWorkstationFile(c, path) {
+  const engine = c.manifestEngine;
+  if (!engine || typeof engine.readFile !== 'function') return undefined;
+  for (const candidate of [path, String(path).replace(/^\.\//, '')]) {
+    try {
+      const text = engine.readFile(candidate);
+      if (typeof text === 'string') return text;
+    } catch {
+      /* try the next spelling */
+    }
+  }
+  return undefined;
+}
+
+/** Does one recorded read satisfy an `inspect` objective's project/output rules? */
+function inspectionCounts(entry, regex, namespace, outputRegex, c) {
+  const segments = commandSegments(entry.raw);
+  const segment =
+    segments.find((part) => regex.test(part) || regex.test(canonicalCommandText(part))) ||
+    segments[0] ||
+    '';
+  if (namespace) {
+    const scope = segmentNamespaceScope(segment);
+    const actual = scope.namespace || entry.project || null;
+    if (!scope.all && actual && actual !== namespace) return false;
+  }
+  // `oc get deployment webapp -o yaml > /tmp/webapp.yaml` prints nothing: the
+  // export is the file it wrote (unreadable → unknown, does not block).
+  const redirect = segmentRedirectTarget(segment);
+  const shown = redirect ? readWorkstationFile(c, redirect) : entry.output;
+  if (!outputShowsSomething(shown)) return false;
+  if (outputRegex && typeof shown === 'string' && !outputRegex.test(shown)) return false;
+  return true;
 }
 
 function hasAppliedFile(c, file) {
@@ -683,6 +920,49 @@ function architectureTotal(c) {
     if (typeof engine.calculateArchitectureScore === 'function') {
       const score = engine.calculateArchitectureScore(c.clusterState);
       return asNumber(score?.total, 0);
+    }
+  } catch {
+    /* ignore */
+  }
+  return 0;
+}
+
+/**
+ * Read-only view of the cluster limited to one project (plus the Nodes it runs
+ * on), shaped like the ClusterState readers the Architecture Advisor uses.
+ */
+function projectClusterView(cluster, namespace) {
+  const inProject = (resource) => {
+    const resourceNs = resourceNamespace(resource);
+    if (resourceNs) return resourceNs === namespace;
+    if (resource?.kind === 'Node') return true;
+    if (resource?.kind === 'Project' || resource?.kind === 'Namespace') {
+      return resourceName(resource) === namespace;
+    }
+    return false;
+  };
+  const byKind = (kind) => listKind(cluster, kind).filter(inProject);
+  return {
+    getResourcesByKind: byKind,
+    getByKind: byKind,
+    getAllResources: () => getAllResources(cluster).filter(inProject),
+  };
+}
+
+/**
+ * Advisor score of the player's own project (1.16.0). Scoring the whole
+ * cluster rated the platform's seeded workloads: L20's "Advisor ≥ 25" was
+ * already ticked at level start (≈ 54) before prod-platform even existed.
+ */
+function projectArchitectureTotal(c, namespace) {
+  if (!namespace) return architectureTotal(c);
+  const engine = c.scoringEngine;
+  if (!engine || !c.clusterState) return 0;
+  if (!findResource(c.clusterState, 'Project', namespace)) return 0;
+  try {
+    if (typeof engine.calculateArchitectureScore === 'function') {
+      const view = projectClusterView(c.clusterState, namespace);
+      return asNumber(engine.calculateArchitectureScore(view)?.total, 0);
     }
   } catch {
     /* ignore */
@@ -782,6 +1062,40 @@ function resourceIsUp(resource) {
   return true;
 }
 
+function secretTypeOf(secret) {
+  return String(secret?.type || resourceSpec(secret).type || 'Opaque');
+}
+
+function wantedList(obj, plural, singular) {
+  const list = asArray(obj?.[plural]).filter(Boolean).map(String);
+  if (list.length > 0) return list;
+  return obj?.[singular] ? [String(obj[singular])] : [];
+}
+
+/**
+ * Optional state filters of a `deploy` objective (1.16.0):
+ *  - `secretType`: the Secret must be of that type (L11 "Create the TLS Secret"
+ *    used to accept an Opaque `web-tls`);
+ *  - `subjects`/`subject` + `roles`/`role` on a RoleBinding: it must grant one of
+ *    the roles to one of the subjects (L14/L16 used to accept ANY learner
+ *    binding, e.g. the ServiceAccount binding that repairs the incident).
+ *    Subjects use the `group:x` / `user:x` / `system:serviceaccount:ns:sa` forms.
+ */
+function deployStateMatches(resource, obj) {
+  if (obj.secretType && secretTypeOf(resource) !== String(obj.secretType)) return false;
+  const subjects = wantedList(obj, 'subjects', 'subject');
+  if (subjects.length > 0) {
+    const granted = asArray(resourceSpec(resource).subjects || resource?.subjects);
+    if (!subjects.some((wanted) => bindingSubjectMatches(granted, wanted))) return false;
+  }
+  const roles = wantedList(obj, 'roles', 'role');
+  if (roles.length > 0) {
+    const roleRef = resourceSpec(resource).roleRef || resource?.roleRef || {};
+    if (!roles.includes(String(roleRef.name || ''))) return false;
+  }
+  return true;
+}
+
 function evaluateDeploy(obj, c) {
   const kind = canonicalKind(obj.kind);
   const name = obj.name;
@@ -790,6 +1104,7 @@ function evaluateDeploy(obj, c) {
   if (name) {
     const resource = findResource(c.clusterState, kind, name, namespace);
     if (!resource) return bool(false);
+    if (!deployStateMatches(resource, obj)) return bool(false);
     return bool(!requireRunning || resourceIsUp(resource));
   }
   let resources = listKind(c.clusterState, kind);
@@ -809,6 +1124,7 @@ function evaluateDeploy(obj, c) {
   if (kind === 'RoleBinding') {
     resources = resources.filter((resource) => !isBootstrapProjectRoleBinding(resource));
   }
+  resources = resources.filter((resource) => deployStateMatches(resource, obj));
   if (requireRunning) resources = resources.filter((resource) => resourceIsUp(resource));
   const target = Math.max(1, asNumber(obj.count, 1));
   const current = Math.min(resources.length, target);
@@ -1300,12 +1616,31 @@ function evaluateLogin(obj, c) {
  * (`oc adm groups new`/`add-users` only record group membership). A bare name
  * in a Group must therefore not tick "User alice exists" (issue #30).
  */
+/**
+ * Is a User backed by an identity-provider Identity? A first login creates the
+ * User AND the Identity `<provider>:<name>` mapped to it; `oc create user`
+ * creates a bare User with no identities.
+ */
+function userHasIdentity(c, user) {
+  const name = resourceName(user);
+  const own = [...asArray(user?.identities), ...asArray(resourceSpec(user).identities)];
+  if (own.length > 0) return true;
+  return listKind(c.clusterState, 'Identity').some((identity) => {
+    const spec = resourceSpec(identity);
+    return String(spec.user?.name || spec.userName || '') === name;
+  });
+}
+
 function evaluateUser(obj, c) {
   const users = listKind(c.clusterState, 'User');
   if (obj.name) {
-    const present = users.some((user) => resourceName(user) === obj.name);
+    const user = users.find((candidate) => resourceName(candidate) === obj.name) || null;
     // `exists: false` grades a real deletion (issue #34 auth-users bullet).
-    return bool(obj.exists === false ? !present : present);
+    if (obj.exists === false) return bool(!user);
+    // `viaLogin: true` (1.16.0): "User alice exists after first login" — a User
+    // made with `oc create user alice` has no Identity and must not tick (L13).
+    if (user && obj.viaLogin === true) return bool(userHasIdentity(c, user));
+    return bool(Boolean(user));
   }
   const target = Math.max(1, asNumber(obj.count, 1));
   return result(users.length >= target, Math.min(users.length, target), target);
@@ -1733,9 +2068,36 @@ function evaluateConnect(obj, c) {
   return bool(connected);
 }
 
-function routeMatches(route, obj) {
+/**
+ * The Service port a Route targets: `spec.port.targetPort`, or — when the Route
+ * names no port — the Service's first port (by name when it is named), which is
+ * what `oc create route`/`oc expose` fill in and what the router uses.
+ */
+function routeTargetPort(route, c) {
+  const spec = resourceSpec(route);
+  const explicit = spec.port?.targetPort;
+  if (explicit !== undefined && explicit !== null && explicit !== '') return String(explicit);
+  const serviceName = spec.to?.name || route?.serviceName || '';
+  const service = serviceName
+    ? findResource(c?.clusterState, 'Service', serviceName, resourceNamespace(route) || undefined)
+    : null;
+  const first = asArray(resourceSpec(service).ports)[0];
+  if (!first) return '';
+  return String(first.name || first.targetPort || first.port || '');
+}
+
+function routeMatches(route, obj, c = null) {
   const spec = resourceSpec(route);
   if (obj.name && resourceName(route) !== obj.name) return false;
+  // `targetPort` (1.16.0): "targeting the Service port name https" — a Route
+  // created with `--port=8443` used to tick it (L12).
+  if (
+    obj.targetPort !== undefined &&
+    obj.targetPort !== null &&
+    routeTargetPort(route, c) !== String(obj.targetPort)
+  ) {
+    return false;
+  }
   if (obj.host) {
     const host = spec.host || route.effectiveHost?.() || '';
     if (host !== obj.host) return false;
@@ -1775,7 +2137,7 @@ function evaluateRoute(obj, c) {
   let routes = listKind(c.clusterState, 'Route');
   const namespace = obj.namespace || levelProjectNamespace(c);
   if (namespace) routes = routes.filter((route) => resourceNamespace(route) === namespace);
-  routes = routes.filter((route) => routeMatches(route, obj));
+  routes = routes.filter((route) => routeMatches(route, obj, c));
   const admitted = routes.filter(routeAdmitted).length;
   const target = Math.max(1, asNumber(obj.count, 1));
   return result(admitted >= target, Math.min(admitted, target), target);
@@ -1829,37 +2191,62 @@ function evaluateTls(obj, c) {
     if (!tls || !tls.termination) return false;
     if (obj.termination && tls.termination !== obj.termination) return false;
     if (obj.name && resourceName(route) !== obj.name) return false;
+    // `certificate: true` (1.16.0): the Route serves its own certificate — a PEM
+    // in spec.tls.certificate or an externalCertificate Secret reference — not
+    // the router's default wildcard certificate.
+    if (obj.certificate === true) {
+      const pem = /-----BEGIN CERTIFICATE-----/.test(String(tls.certificate || ''));
+      if (!pem && !tls.externalCertificate?.name) return false;
+    }
     return true;
   });
   return bool(matching.length > 0);
 }
 
+/**
+ * Does a Build belong to BuildConfig `name`? The build controller stamps the
+ * `buildconfig` / `openshift.io/build-config.name` labels and annotation, the
+ * owner reference and `status.config`; a build is also named `<config>-<n>`.
+ */
+function buildBelongsToConfig(build, name) {
+  if (!name) return true;
+  const labels = resourceLabels(build);
+  if (
+    labels.buildconfig === name ||
+    labels['openshift.io/build-config.name'] === name ||
+    labels['buildconfig.openshift.io/name'] === name
+  ) {
+    return true;
+  }
+  if (build?.metadata?.annotations?.['openshift.io/build-config.name'] === name) return true;
+  if (resourceStatus(build).config?.name === name) return true;
+  if (
+    asArray(build?.metadata?.ownerReferences).some(
+      (owner) => owner?.kind === 'BuildConfig' && owner?.name === name
+    )
+  ) {
+    return true;
+  }
+  return new RegExp(`^${escapeRegex(name)}-\\d+$`).test(resourceName(build));
+}
+
+/**
+ * "A Build … reaches phase Complete" (1.16.0): only a Build object whose
+ * `status.phase` is Complete counts. The old fallback — a BuildConfig with
+ * `status.lastVersion > 0` — ticked the moment `oc new-app` or `oc start-build`
+ * CREATED the build, while `oc get builds` still said New/Running (L9, L20).
+ */
 function evaluateBuild(obj, c) {
   let builds = listKind(c.clusterState, 'Build');
   const buildNamespace = objectiveResourceNamespace(c, obj, 'Build');
   if (buildNamespace)
     builds = builds.filter((build) => resourceNamespace(build) === buildNamespace);
-  const complete = builds.filter((build) => resourceStatus(build).phase === 'Complete');
   if (obj.name) {
-    const buildDirect = complete.some((build) => resourceName(build) === obj.name);
-    if (buildDirect) return bool(true);
-    const matchingConfigs = complete.some((build) => {
-      const config = resourceStatus(build).config || {};
-      return config.name === obj.name || resourceLabels(build).buildconfig === obj.name;
-    });
-    if (matchingConfigs) return bool(true);
-    // A completed build named `<buildconfig>-<n>` belongs to the named config.
-    if (complete.some((build) => resourceName(build).startsWith(`${obj.name}-`))) return bool(true);
-    // A named BuildConfig whose last build completed also satisfies `build`.
-    const bc = findResource(
-      c.clusterState,
-      'BuildConfig',
-      obj.name,
-      objectiveResourceNamespace(c, obj, 'BuildConfig')
+    builds = builds.filter(
+      (build) => resourceName(build) === obj.name || buildBelongsToConfig(build, obj.name)
     );
-    if (!bc) return bool(false);
-    return bool(asNumber(resourceStatus(bc).lastVersion, 0) > 0);
   }
+  const complete = builds.filter((build) => resourceStatus(build).phase === 'Complete');
   const target = Math.max(1, asNumber(obj.count, 1));
   return result(complete.length >= target, Math.min(complete.length, target), target);
 }
@@ -2035,9 +2422,37 @@ function evaluateOperator(obj, c) {
   // "Uninstall" only makes sense once the operator was present during this
   // level; otherwise the objective would be complete at level start (L18).
   if (matching.length > 0) obj._sawInstalled = true;
+  // An uninstall is "delete the Subscription AND its CSV" (1.16.0): deleting the
+  // Subscription alone leaves the operator installed and running (L18, lab 10).
+  // Remember every CSV the matched Subscriptions installed while they existed,
+  // so the CSV is still recognised once its Subscription is gone (lab 10's
+  // `aap-operator.v2.6.0` does not even contain the package name).
+  const remembered = obj._installedCsvs instanceof Map ? obj._installedCsvs : new Map();
+  obj._installedCsvs = remembered;
+  for (const subscription of matching) {
+    const status = resourceStatus(subscription);
+    const namespace = resourceNamespace(subscription);
+    for (const csvName of [status.installedCSV, status.currentCSV]) {
+      if (csvName) remembered.set(`${namespace}/${csvName}`, { namespace, name: String(csvName) });
+    }
+  }
+  const installNamespaces = new Set([...remembered.values()].map((entry) => entry.namespace));
+  if (namespaceFilter) installNamespaces.add(namespaceFilter);
+  const leftoverCsvs = listKind(c.clusterState, 'ClusterServiceVersion').filter((csv) => {
+    if (resourceLabels(csv)['olm.copiedFrom']) return false; // OLM's copies follow the source
+    const namespace = resourceNamespace(csv);
+    if (remembered.has(`${namespace}/${resourceName(csv)}`)) return true;
+    if (installNamespaces.size > 0 && !installNamespaces.has(namespace)) return false;
+    if (!wanted) return false;
+    const packageLabel = String(resourceLabels(csv)['olm.package'] || '').toLowerCase();
+    return resourceName(csv).toLowerCase().includes(wanted) || packageLabel.includes(wanted);
+  });
   const target = Math.max(1, asNumber(obj.count, 1));
   const levelContext = Boolean(c.levelDef);
-  const done = matching.length === 0 && (!levelContext || obj._sawInstalled === true);
+  const done =
+    matching.length === 0 &&
+    leftoverCsvs.length === 0 &&
+    (!levelContext || obj._sawInstalled === true);
   return result(done, done ? target : 0, target);
 }
 
@@ -2402,7 +2817,33 @@ function evaluateScc(obj, c) {
     : state.kind === 'binding'
       ? asArray(state.subjects).length > 0
       : asArray(state.legacy?.users).length > 0 || asArray(state.legacy?.groups).length > 0;
+  // "Grant the SCC to the DEDICATED ServiceAccount" (1.16.0): a grant that also
+  // reaches the project's other ServiceAccounts — `add-scc-to-group privileged
+  // system:serviceaccounts:<ns>`, `-z default`, a cluster-wide group — is
+  // over-broad and must not tick (L17, lab 8). Meant for SCCs no lab
+  // ServiceAccount holds by default (privileged, anyuid, …); no first-look
+  // baseline, since the first evaluation can come after the player's grant.
+  if (present && expected && obj.exclusive === true) {
+    if (sccOverBroadSubjects(c, name, subject, namespace).length > 0) return bool(false);
+  }
   return bool(present === expected);
+}
+
+/**
+ * ServiceAccounts OTHER than `subject` in the objective's project that can use
+ * the SCC: the project's `default` ServiceAccount and a synthetic one (which
+ * only a namespace-wide or cluster-wide grant can reach).
+ * @returns {string[]} the over-broad probe subjects that can use the SCC
+ */
+function sccOverBroadSubjects(c, sccName, subject, namespace) {
+  if (!namespace) return [];
+  const probes = [
+    `system:serviceaccount:${namespace}:default`,
+    `system:serviceaccount:${namespace}:osg-scc-probe`,
+  ].filter((probe) => probe !== String(subject || ''));
+  return probes.filter(
+    (probe) => sccGrantedTo(c, sccName, probe) || sccUsableBySubject(c, sccName, probe, namespace)
+  );
 }
 
 /** Does an SCC allow privileged containers? */
@@ -2789,43 +3230,128 @@ function evaluateCoverage(obj, c) {
   return result(covered.size >= nodes.length, Math.min(covered.size, nodes.length), nodes.length);
 }
 
-function evaluateUpdate(obj, c) {
-  const kinds = resolveTargetKinds(obj, ['Deployment', 'StatefulSet', 'DaemonSet']);
+/**
+ * ReplicaSets a Deployment owns, OLDEST FIRST: ClusterState keeps owner
+ * relationships in creation order (a rollback re-activates an old ReplicaSet
+ * without re-creating it); the owner-reference scan sorts by creation time.
+ */
+function ownedReplicaSets(c, deployment) {
+  const uid = deployment?.uid || deployment?.metadata?.uid;
+  try {
+    if (uid && typeof c.clusterState?.getChildren === 'function') {
+      const children = asArray(c.clusterState.getChildren(uid)).filter(
+        (child) => child?.kind === 'ReplicaSet'
+      );
+      if (children.length > 0) return children;
+    }
+  } catch {
+    /* fall back to a scan */
+  }
+  const name = resourceName(deployment);
+  const namespace = resourceNamespace(deployment);
+  return listKind(c.clusterState, 'ReplicaSet')
+    .filter((rs) => {
+      if (resourceNamespace(rs) !== namespace) return false;
+      if (
+        asArray(rs?.metadata?.ownerReferences).some(
+          (owner) => owner?.kind === 'Deployment' && owner?.name === name
+        )
+      ) {
+        return true;
+      }
+      const hash = replicaSetHash(rs);
+      return Boolean(hash) && resourceName(rs) === `${name}-${hash}`;
+    })
+    .sort((left, right) =>
+      String(left?.metadata?.creationTimestamp || '').localeCompare(
+        String(right?.metadata?.creationTimestamp || '')
+      )
+    );
+}
+
+function replicaSetHash(rs) {
+  return String(resourceLabels(rs)['pod-template-hash'] || '');
+}
+
+/** The `pod-template-hash` the Deployment controller derives from the current template. */
+function deploymentTemplateHash(deployment) {
+  try {
+    return templateHash(resourceSpec(deployment).template || {});
+  } catch {
+    return '';
+  }
+}
+
+/** Workloads an update/rollback/availability objective is about. */
+function rolloutWorkloads(obj, c, fallbackKinds) {
+  const kinds = resolveTargetKinds(obj, fallbackKinds);
   let workloads = listKinds(c.clusterState, kinds);
   if (obj.name) workloads = workloads.filter((workload) => resourceName(workload) === obj.name);
-  if (obj.namespace)
-    workloads = workloads.filter((workload) => resourceNamespace(workload) === obj.namespace);
+  const namespace = objectiveResourceNamespace(c, obj, kinds[0]);
+  if (namespace)
+    workloads = workloads.filter((workload) => resourceNamespace(workload) === namespace);
+  return workloads;
+}
+
+/**
+ * A rolling update is a change of the POD TEMPLATE (1.16.0). A generation bump
+ * alone is not one: scaling bumps it, and so did a no-op `oc rollout undo` on a
+ * single revision, which used to tick L10's "update" AND "rollback" with one
+ * command. A Deployment's evidence is its own history, not a first-look
+ * baseline (the first evaluation can come late — the level intro pauses the
+ * mode — after the player's first command): the seeded Deployment owns ONE
+ * ReplicaSet, and an update rolls out a template with another hash (which a
+ * later rollback does not erase). Other workload kinds compare the template
+ * hash with the one first seen.
+ */
+function evaluateUpdate(obj, c) {
+  const workloads = rolloutWorkloads(obj, c, ['Deployment', 'StatefulSet', 'DaemonSet']);
   const target = Math.max(1, asNumber(obj.count, 1));
   if (workloads.length === 0) return result(false, 0, target);
-  // A controller writing status.updatedReplicas during the initial rollout is
-  // NOT a learner update. Capture the workload generation/template on the first
-  // evaluation after level start and credit only a real spec change.
   const baseline = ensureBaseline(obj, () => ({ entries: {} }));
+  const latched = new Set(asArray(obj._updatedLatch));
   for (const workload of workloads) {
     const id = workload?.uid || resourceName(workload);
-    if (!Object.prototype.hasOwnProperty.call(baseline.entries, id)) {
-      baseline.entries[id] = {
-        generation: asNumber(workload?.metadata?.generation, 1),
-        template: templateFingerprint(workload),
-      };
+    const currentHash = deploymentTemplateHash(workload);
+    let changed = false;
+    if (workload.kind === 'Deployment') {
+      const sets = ownedReplicaSets(c, workload);
+      const hashes = new Set(sets.map(replicaSetHash).filter(Boolean));
+      const firstHash = sets.length > 0 ? replicaSetHash(sets[0]) : '';
+      changed = hashes.size >= 2 || (Boolean(firstHash) && currentHash !== firstHash);
+    } else {
+      if (!hasOwn(baseline.entries, id)) baseline.entries[id] = { hash: currentHash };
+      changed = currentHash !== baseline.entries[id].hash;
     }
+    if (changed) latched.add(id);
   }
-  const updated = workloads.filter((workload) => {
-    const id = workload?.uid || resourceName(workload);
-    const base = baseline.entries[id];
-    if (!base) return true; // created during this level
-    return (
-      asNumber(workload?.metadata?.generation, 1) > base.generation ||
-      templateFingerprint(workload) !== base.template
-    );
-  }).length;
+  obj._updatedLatch = [...latched];
+  const updated = workloads.filter((workload) =>
+    latched.has(workload?.uid || resourceName(workload))
+  ).length;
   return result(updated >= target, Math.min(updated, target), target);
 }
 
+/**
+ * "Roll the Deployment back with oc rollout undo" (1.16.0): `oc rollout undo`
+ * was used AND the Deployment really runs an earlier revision again — the
+ * ReplicaSet matching its current template is OLDER than a ReplicaSet it rolled
+ * out later (the controller re-activates the old ReplicaSet). A no-op undo on a
+ * single revision, or an undo that brought the bad template back, does not count.
+ */
 function evaluateRollback(obj, c) {
   const count = asNumber(c.clusterState?._rollbackCount, 0);
   const target = Math.max(1, asNumber(obj.count, 1));
-  return result(count >= target, Math.min(count, target), target);
+  const deployments = rolloutWorkloads({ ...obj, kind: 'Deployment' }, c, ['Deployment']);
+  const rolledBack = deployments.some((deployment) => {
+    const sets = ownedReplicaSets(c, deployment);
+    const currentHash = deploymentTemplateHash(deployment);
+    const activeIndex = sets.findIndex((rs) => replicaSetHash(rs) === currentHash);
+    if (activeIndex < 0) return false;
+    return sets.some((rs, index) => index > activeIndex && replicaSetHash(rs) !== currentHash);
+  });
+  const done = rolledBack && count >= target;
+  return result(done, done ? target : Math.min(count, target - 1), target);
 }
 
 function evaluateResolve(obj, c) {
@@ -2889,8 +3415,58 @@ function evaluateInvestigate(obj, c) {
   return result(progress >= threshold, progress >= threshold ? 1 : 0, 1);
 }
 
+/**
+ * Availability of the named workload(s), in percent of the replicas they
+ * served when first seen (1.16.0). Scaling to 0 or deleting the Deployment is
+ * 0 %; a rolling update that keeps the old Pods serving stays at 100 %.
+ */
+function workloadAvailabilityPercent(obj, c) {
+  const workloads = rolloutWorkloads(obj, c, ['Deployment']);
+  const baseline = ensureBaseline(obj, () => ({ desired: {} }));
+  // The replicas the level seeded win over a first look: the first evaluation
+  // can come after the player already scaled the workload down.
+  const seeded = (workload) =>
+    asNumber(
+      asArray(c.levelDef?.startingResources).find(
+        (resource) => resource?.kind === workload.kind && resource?.name === resourceName(workload)
+      )?.spec?.replicas,
+      0
+    );
+  for (const workload of workloads) {
+    const name = `${resourceNamespace(workload)}/${resourceName(workload)}`;
+    if (!hasOwn(baseline.desired, name)) {
+      baseline.desired[name] = Math.max(
+        1,
+        seeded(workload),
+        asNumber(resourceSpec(workload).replicas, 1)
+      );
+    }
+  }
+  const names = Object.keys(baseline.desired);
+  if (names.length === 0) return 0;
+  let desired = 0;
+  let available = 0;
+  for (const name of names) {
+    const wanted = asNumber(baseline.desired[name], 1);
+    const workload = workloads.find(
+      (candidate) => `${resourceNamespace(candidate)}/${resourceName(candidate)}` === name
+    );
+    const status = resourceStatus(workload);
+    desired += wanted;
+    available += Math.min(wanted, asNumber(status.availableReplicas ?? status.numberAvailable, 0));
+  }
+  return desired > 0 ? Math.round((available / desired) * 100) : 0;
+}
+
 function evaluateUptime(obj, c) {
   const percentage = asNumber(obj.percentage, 90);
+  // `kind`/`name` (1.16.0): "keep availability during the rollout" is the
+  // workload's own availability. L10 has no incident, so the incident-health
+  // reading below stayed at 100 % even with the Deployment scaled to 0.
+  if (obj.name || obj.kind) {
+    const availability = workloadAvailabilityPercent(obj, c);
+    return result(availability >= percentage, availability, percentage);
+  }
   const health = clusterHealthPercent(c);
   // "Restore/keep health ≥ N%" cannot be satisfied before the level's incident
   // has actually happened. The baseline is the activation epoch captured at
@@ -2995,27 +3571,460 @@ function evaluateTaint(obj, c) {
   return bool(filtered.length > 0);
 }
 
+// ─── node maintenance state (1.16.0) ───────────────────────────────────────
+//
+// Campaign "Nodes & Cluster Troubleshooting" grades what `oc adm cordon|drain|
+// uncordon` leave behind, not the typed lines:
+//   { type: 'node', name, ready?, schedulable?, drained?, workloadsAvailable? }
+//   ready: true|false        the kubelet-posted Ready condition is (not) True
+//   schedulable: true|false  the node is not cordoned (`spec.unschedulable`) / is
+//   drained: true            during this run the node was seen cordoned with no
+//                            Pod left on it that a drain evicts (DaemonSet and
+//                            mirror Pods stay; finished or terminating Pods do
+//                            not count). This one fact is a LATCH, so the end
+//                            of a maintenance window (uncordon) keeps it. It
+//                            lives on the per-run objective (progress) object and
+//                            is tied to the Node's uid, so a level start resets it.
+//   workloadsAvailable: true every Deployment of the objective's `namespace` (or
+//                            the level's lab project) serves all its replicas.
+
+/** Does `pod` still sit on its node in a way `oc adm drain` would evict? */
+function podBlocksDrain(pod) {
+  if (!pod) return false;
+  const metadata = pod.metadata || {};
+  if (asArray(metadata.ownerReferences).some((reference) => reference?.kind === 'DaemonSet'))
+    return false;
+  // Static (mirror) Pods belong to the kubelet; drain never evicts them.
+  if (hasOwn(metadata.annotations, 'kubernetes.io/config.mirror')) return false;
+  if (metadata.deletionTimestamp || pod.isDeleting === true) return false;
+  const phase = resourceStatus(pod).phase;
+  return phase !== 'Succeeded' && phase !== 'Failed';
+}
+
+function nodeIsReady(node) {
+  if (!node || resourceStatus(node).phase === 'NotReady') return false;
+  try {
+    if (typeof node.isConditionTrue === 'function') return Boolean(node.isConditionTrue('Ready'));
+  } catch {
+    /* fall through to the raw conditions */
+  }
+  const ready = asArray(resourceStatus(node).conditions).find(
+    (condition) => condition?.type === 'Ready'
+  );
+  return String(ready?.status) === 'True';
+}
+
+/** Deployments of `namespace` that do not serve all their replicas. */
+function unavailableDeployments(c, namespace) {
+  if (!namespace) return [];
+  return listKind(c.clusterState, 'Deployment').filter((deployment) => {
+    if (resourceNamespace(deployment) !== namespace) return false;
+    const desired = asNumber(resourceSpec(deployment).replicas, 1);
+    return asNumber(resourceStatus(deployment).availableReplicas, 0) < desired;
+  });
+}
+
+/** Pods on `nodeName` that a drain would still evict. */
+function podsBlockingDrain(c, nodeName) {
+  return listKind(c.clusterState, 'Pod').filter(
+    (pod) => resourceSpec(pod).nodeName === nodeName && podBlocksDrain(pod)
+  );
+}
+
+/** Node state for `node` objectives; updates the run's `drained` latch. */
+function nodeObjectiveState(obj, c) {
+  const name = String(obj.name || obj.node || '');
+  const node = name ? findResource(c.clusterState, 'Node', name) : null;
+  if (!node) return null;
+  const cordoned = resourceSpec(node).unschedulable === true;
+  const nodeId = node.uid || node.metadata?.uid || name;
+  const baseline = ensureBaseline(obj, () => ({ nodeId, drainedSeen: false }));
+  if (baseline.nodeId !== nodeId) {
+    baseline.nodeId = nodeId;
+    baseline.drainedSeen = false;
+  }
+  const blocking = podsBlockingDrain(c, name);
+  if (cordoned && blocking.length === 0) baseline.drainedSeen = true;
+  const namespace = obj.namespace || levelProjectNamespace(c);
+  return {
+    name,
+    cordoned,
+    ready: nodeIsReady(node),
+    blocking,
+    drainedSeen: baseline.drainedSeen === true,
+    namespace,
+    unavailable: obj.workloadsAvailable === true ? unavailableDeployments(c, namespace) : [],
+  };
+}
+
+function evaluateNode(obj, c) {
+  const state = nodeObjectiveState(obj, c);
+  if (!state) return bool(false);
+  const checks = [];
+  if (obj.drained === true) checks.push(state.drainedSeen);
+  if (typeof obj.ready === 'boolean') checks.push(state.ready === obj.ready);
+  if (typeof obj.schedulable === 'boolean') checks.push(!state.cordoned === obj.schedulable);
+  if (obj.workloadsAvailable === true) checks.push(state.unavailable.length === 0);
+  return bool(checks.every(Boolean));
+}
+
 function evaluateCommand(obj, c) {
   const pattern = obj.pattern;
   if (!pattern) return bool(false);
-  const matches = matchCommands(c, pattern, { successOnly: obj.mustSucceed !== false });
+  let matches = matchCommands(c, pattern, { successOnly: obj.mustSucceed !== false });
+  if (obj.inspect === true) {
+    const regex = compilePattern(pattern);
+    const namespace = commandObjectiveNamespace(obj, c);
+    const outputRegex = compilePattern(obj.outputPattern);
+    matches = matches.filter((entry) => inspectionCounts(entry, regex, namespace, outputRegex, c));
+  }
   const target = Math.max(1, asNumber(obj.count, 1));
   return result(matches.length >= target, Math.min(matches.length, target), target);
 }
 
+/**
+ * Composite drill score: 60 % objectives, 20 % cluster health, 20 % Advisor.
+ * It is the capstone's FINAL gate (1.16.0): with free health and Advisor points
+ * it used to tick after ~14 of 18 objectives, i.e. while four were still open
+ * and before the scheduled incidents had even fired. It now completes only
+ * once every other objective is done and the composite reaches `minScore`;
+ * the composite itself is still reported as progress.
+ */
 function evaluateExamScore(obj, c) {
   const minScore = asNumber(obj.minScore, 75);
   const objectivePercent = objectivesCompletionPercent(c, new Set(['examscore'])) ?? 0;
   const health = clusterHealthPercent(c);
-  const architecture = architectureTotal(c);
+  const architecture = obj.namespace
+    ? projectArchitectureTotal(c, obj.namespace)
+    : architectureTotal(c);
   const composite = Math.round(objectivePercent * 0.6 + health * 0.2 + architecture * 0.2);
-  return result(composite >= minScore, composite, minScore);
+  const othersDone = objectivePercent >= 100;
+  return result(othersDone && composite >= minScore, composite, minScore);
 }
 
 function evaluateArchitectureScore(obj, c) {
   const minScore = asNumber(obj.minScore, 75);
-  const total = Math.round(architectureTotal(c));
+  // `namespace` (1.16.0): rate the player's own project, not the platform.
+  const total = Math.round(
+    obj.namespace ? projectArchitectureTotal(c, obj.namespace) : architectureTotal(c)
+  );
   return result(total >= minScore, total, minScore);
+}
+
+/**
+ * `project.config.openshift.io/cluster` points new projects at a
+ * project-request Template that exists in openshift-config (1.16.0). L15 used
+ * to grade `oc (edit|patch) project.config` typed text: it ticked on an `oc edit`
+ * that saved nothing and never on `oc apply -f` reaching the same state.
+ */
+function evaluateProjectRequestTemplate(obj, c) {
+  const cluster = c.clusterState;
+  let config = null;
+  try {
+    config = typeof cluster?.getProjectConfig === 'function' ? cluster.getProjectConfig() : null;
+  } catch {
+    config = null;
+  }
+  const name = String(config?.spec?.projectRequestTemplate?.name || '');
+  if (!name) return bool(false);
+  if (obj.name && name !== String(obj.name)) return bool(false);
+  const templateNamespace = obj.namespace || 'openshift-config';
+  return bool(Boolean(findResource(cluster, 'Template', name, templateNamespace)));
+}
+
+// ─── Linux workstation objectives (linux-engine, 1.16.0) ────────────────────
+//
+// Pure reads of the LinuxHost model (js/engine/LinuxHost.js): grading follows the state
+// of the simulated RHEL 9 workstation, never typed text — `ran` reads the host's own
+// executed-command log (resolved paths + cwd), not the raw history.
+
+function linuxHostOf(c) {
+  return c?.raw?.linuxHost || c?.gameEngine?.linuxHost || currentWindow()?.game?.linuxHost || null;
+}
+
+/** `u+x` / `go+w` / `a+r` → permission mask. */
+function linuxPermBits(spec) {
+  const match = String(spec || '').match(/^([ugoa]*)[+=]?([rwxst]+)$/);
+  if (!match) return 0;
+  const who = match[1] || 'a';
+  let bits = 0;
+  for (const target of who.includes('a') ? 'ugo' : who) {
+    const shift = { u: 6, g: 3, o: 0 }[target];
+    for (const perm of match[2]) {
+      if (perm === 's') bits |= target === 'u' ? 0o4000 : target === 'g' ? 0o2000 : 0;
+      else if (perm === 't') bits |= 0o1000;
+      else bits |= { r: 4, w: 2, x: 1 }[perm] << shift;
+    }
+  }
+  return bits;
+}
+
+function linuxRegexList(value) {
+  return (Array.isArray(value) ? value : [value])
+    .filter((entry) => entry !== undefined && entry !== null)
+    .map((entry) => {
+      try {
+        return new RegExp(String(entry), 'm');
+      } catch {
+        return new RegExp(String(entry).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'm');
+      }
+    });
+}
+
+function linuxYamlValue(document, path) {
+  return String(path)
+    .split('.')
+    .reduce(
+      (value, key) => (value === undefined || value === null ? undefined : value[key]),
+      document
+    );
+}
+
+/** One `file` check: existence, type, mode bits, owner, context and content. */
+function linuxFileHolds(host, spec) {
+  if (!spec || !spec.path) return false;
+  const info = host.fileInfo(spec.path);
+  if (spec.absent === true || spec.exists === false) return !info.exists;
+  if (!info.exists) return false;
+  const kind = spec.fileType || (spec.isDirectory ? 'dir' : spec.isFile ? 'file' : null);
+  if (kind && info.type !== (kind === 'directory' ? 'dir' : kind)) return false;
+  if (spec.isSymlink === true && !info.isSymlink) return false;
+  if (spec.mode !== undefined) {
+    const wanted =
+      typeof spec.mode === 'number' ? spec.mode : Number.parseInt(String(spec.mode), 8);
+    if ((info.mode & 0o7777) !== wanted) return false;
+  }
+  const setBits = linuxPermBits(spec.perm ?? spec.modeSet);
+  if (setBits && (info.mode & setBits) !== setBits) return false;
+  const clearBits = linuxPermBits(spec.notPerm ?? spec.modeClear);
+  if (clearBits && info.mode & clearBits) return false;
+  if (spec.owner && info.owner !== spec.owner) return false;
+  if (spec.group && info.group !== spec.group) return false;
+  if (spec.context) {
+    const wanted = String(spec.context);
+    const actual = String(info.context || '');
+    if (wanted.includes(':') ? actual !== wanted : actual.split(':')[2] !== wanted) return false;
+  }
+  const needsContent = [
+    'contains',
+    'matches',
+    'notContains',
+    'notMatches',
+    'equals',
+    'lines',
+    'lineSet',
+    'sameContentAs',
+    'yaml',
+  ].some((key) => spec[key] !== undefined);
+  if (!needsContent) return true;
+  if (info.type !== 'file' || typeof info.content !== 'string') return false;
+  const content = info.content;
+  for (const regex of linuxRegexList(spec.contains ?? spec.matches))
+    if (!regex.test(content)) return false;
+  for (const regex of linuxRegexList(spec.notContains ?? spec.notMatches))
+    if (regex.test(content)) return false;
+  if (spec.equals !== undefined) {
+    const wanted = String(spec.equals);
+    if (content !== wanted && content !== `${wanted}\n` && `${content}\n` !== wanted) return false;
+  }
+  const bodyLines = content.replace(/\n$/, '').split('\n');
+  if (Array.isArray(spec.lines)) {
+    if (bodyLines.length !== spec.lines.length) return false;
+    if (spec.lines.some((line, index) => String(line) !== bodyLines[index])) return false;
+  }
+  if (Array.isArray(spec.lineSet)) {
+    const seen = bodyLines
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .map((line) => line.replace(/^\d+\s+/, ''))
+      .sort();
+    const wanted = spec.lineSet.map((line) => String(line).trim()).sort();
+    if (seen.length !== wanted.length || seen.some((line, index) => line !== wanted[index]))
+      return false;
+  }
+  if (spec.sameContentAs) {
+    const other = host.fileInfo(spec.sameContentAs);
+    if (!other.exists || other.content !== content) return false;
+  }
+  if (spec.yaml && typeof spec.yaml === 'object') {
+    let documents;
+    try {
+      documents = parseYaml(content);
+    } catch {
+      return false;
+    }
+    const document = Array.isArray(documents) ? documents[0] : documents;
+    if (!document || typeof document !== 'object') return false;
+    for (const [path, value] of Object.entries(spec.yaml)) {
+      const actual = linuxYamlValue(document, path);
+      if (actual === undefined || String(actual) !== String(value)) return false;
+    }
+  }
+  return true;
+}
+
+function evaluateLinuxFile(obj, c) {
+  const host = linuxHostOf(c);
+  if (!host) return bool(false);
+  const checks = Array.isArray(obj.all) && obj.all.length ? obj.all : [obj];
+  return bool(checks.every((spec) => linuxFileHolds(host, spec)));
+}
+
+function evaluateLinuxService(obj, c) {
+  const host = linuxHostOf(c);
+  if (!host) return bool(false);
+  const state = host.serviceState(obj.name || obj.unit || '');
+  const checks = [];
+  if (typeof obj.active === 'boolean') checks.push(state.active === obj.active);
+  if (typeof obj.enabled === 'boolean') checks.push(state.enabled === obj.enabled);
+  if (typeof obj.failed === 'boolean') checks.push(state.failed === obj.failed);
+  if (!checks.length) checks.push(state.active);
+  return bool(checks.every(Boolean));
+}
+
+function evaluateLinuxProcess(obj, c) {
+  const host = linuxHostOf(c);
+  if (!host) return bool(false);
+  const full = obj.match !== undefined || obj.command !== undefined;
+  const running =
+    obj.pid !== undefined
+      ? host.processRunning(null, { pid: obj.pid })
+      : host.processRunning(String(obj.match ?? obj.command ?? obj.name ?? ''), {
+          full,
+          user: obj.user,
+        });
+  return bool(obj.running === false ? !running : running);
+}
+
+function evaluateLinuxPackage(obj, c) {
+  const host = linuxHostOf(c);
+  if (!host) return bool(false);
+  const installed = host.packageInstalled(obj.name);
+  return bool(obj.installed === false ? !installed : installed);
+}
+
+function evaluateLinuxFirewall(obj, c) {
+  const host = linuxHostOf(c);
+  if (!host) return bool(false);
+  const state = host.firewallHas({ service: obj.service, port: obj.port, zone: obj.zone });
+  const present = obj.present !== false;
+  const scopes = [];
+  if (obj.runtime !== undefined) scopes.push(['runtime', obj.runtime]);
+  if (obj.permanent !== undefined) scopes.push(['permanent', obj.permanent]);
+  if (!scopes.length) scopes.push(['runtime', true]);
+  return bool(scopes.every(([scope, wanted]) => (wanted ? state[scope] === present : true)));
+}
+
+function evaluateLinuxContainer(obj, c) {
+  const host = linuxHostOf(c);
+  if (!host) return bool(false);
+  const info = host.containerInfo(obj.name, { user: obj.user || 'student' });
+  if (obj.exists === false) return bool(!info.exists);
+  if (!info.exists) return bool(false);
+  if (typeof obj.running === 'boolean' && info.running !== obj.running) return bool(false);
+  if (obj.state && info.state !== obj.state) return bool(false);
+  if (obj.image) {
+    const regex = linuxRegexList(obj.image)[0];
+    if (!regex.test(info.image) && !info.image.includes(String(obj.image))) return bool(false);
+  }
+  const publish = obj.publish ?? obj.port;
+  if (publish) {
+    const parts = String(publish).split(':');
+    const wanted =
+      parts.length >= 2
+        ? `${parts[parts.length - 2]}:${parts[parts.length - 1]}`
+        : `${parts[0]}:${parts[0]}`;
+    if (!info.ports.includes(wanted.replace(/\/tcp$/, ''))) return bool(false);
+  }
+  if (obj.env && typeof obj.env === 'object') {
+    for (const [key, value] of Object.entries(obj.env))
+      if (info.env[key] !== String(value)) return bool(false);
+  }
+  return bool(true);
+}
+
+function evaluateLinuxSelinux(obj, c) {
+  const host = linuxHostOf(c);
+  if (!host) return bool(false);
+  const checks = [];
+  if (obj.mode) checks.push(host.selinux.mode === String(obj.mode).toLowerCase());
+  if (obj.configMode)
+    checks.push(host.selinuxConfigMode() === String(obj.configMode).toLowerCase());
+  if (obj.port) {
+    const [number, proto = 'tcp'] = String(obj.port).split('/');
+    checks.push(host.portType(proto, Number(number)) === (obj.type || 'http_port_t'));
+  }
+  return bool(checks.length > 0 && checks.every(Boolean));
+}
+
+function evaluateLinuxUser(obj, c) {
+  const host = linuxHostOf(c);
+  if (!host) return bool(false);
+  const user = host.users.get(String(obj.name || ''));
+  if (obj.exists === false) return bool(!user);
+  if (!user) return bool(false);
+  if (obj.uid !== undefined && user.uid !== Number(obj.uid)) return bool(false);
+  if (obj.shell && user.shell !== obj.shell) return bool(false);
+  if (obj.home && user.home !== obj.home) return bool(false);
+  const groups = host.groupsOf(user.name);
+  for (const group of asArray(obj.groups)) if (!groups.includes(group)) return bool(false);
+  if (obj.locked !== undefined) {
+    const locked = String(host.shadow.get(user.name)?.hash || '').startsWith('!');
+    if (locked !== Boolean(obj.locked)) return bool(false);
+  }
+  return bool(true);
+}
+
+function evaluateLinuxCwd(obj, c) {
+  const host = linuxHostOf(c);
+  if (!host) return bool(false);
+  return bool(host.session.cwd === host.resolvePath(String(obj.path || '~')));
+}
+
+function evaluateLinuxEnv(obj, c) {
+  const host = linuxHostOf(c);
+  if (!host) return bool(false);
+  const entry = host.envVar(String(obj.name || ''));
+  if (!entry) return bool(false);
+  if (obj.value !== undefined && entry.value !== String(obj.value)) return bool(false);
+  if (obj.exported === true && !entry.exported) return bool(false);
+  if (obj.exported === false && entry.exported) return bool(false);
+  return bool(true);
+}
+
+/**
+ * `ran`: a command was executed on the workstation — argv0 `command`, every short-option
+ * letter of `flags` present, `args` regex, and (with `path`) a resolved path operand equal
+ * to it or, with no operands, the working directory it ran in.
+ */
+function evaluateLinuxRan(obj, c) {
+  const host = linuxHostOf(c);
+  if (!host) return bool(false);
+  const wantedPath = obj.path ? host.resolvePath(String(obj.path), { cwd: '/home/student' }) : null;
+  const argsRegex = obj.args ? linuxRegexList(obj.args)[0] : null;
+  const matches = asArray(host.execLog).filter((entry) => {
+    if (obj.command && entry.command !== obj.command) return false;
+    if (obj.success !== 'any' && entry.success !== (obj.success !== false)) return false;
+    if (typeof obj.sudo === 'boolean' && entry.sudo !== obj.sudo) return false;
+    const argv = asArray(entry.argv).slice(1);
+    if (obj.flags) {
+      const letters = new Set(
+        argv.filter((arg) => /^-[A-Za-z]/.test(arg)).flatMap((arg) => arg.slice(1).split(''))
+      );
+      if ([...String(obj.flags)].some((letter) => !letters.has(letter))) return false;
+    }
+    if (argsRegex && !argsRegex.test(argv.join(' '))) return false;
+    if (wantedPath) {
+      const operands = argv.filter((arg) => !arg.startsWith('-'));
+      const hit =
+        asArray(entry.paths).includes(wantedPath) ||
+        (operands.length === 0 && entry.cwd === wantedPath);
+      if (!hit) return false;
+    }
+    return true;
+  });
+  const target = Math.max(1, asNumber(obj.count, 1));
+  return result(matches.length >= target, Math.min(matches.length, target), target);
 }
 
 function evaluateByType(type, obj, c) {
@@ -3054,6 +4063,8 @@ function evaluateByType(type, obj, c) {
       return evaluateRoute(obj, c);
     case 'routeaccess':
       return evaluateRouteAccess(obj, c);
+    case 'projectrequesttemplate':
+      return evaluateProjectRequestTemplate(obj, c);
     case 'tls':
       return evaluateTls(obj, c);
     case 'build':
@@ -3136,8 +4147,33 @@ function evaluateByType(type, obj, c) {
       return evaluateNodeSelector(obj, c);
     case 'taint':
       return evaluateTaint(obj, c);
+    case 'node':
+      return evaluateNode(obj, c);
     case 'command':
       return evaluateCommand(obj, c);
+    // linux-engine (1.16.0): the RHEL workstation.
+    case 'file':
+      return evaluateLinuxFile(obj, c);
+    case 'service':
+      return evaluateLinuxService(obj, c);
+    case 'process':
+      return evaluateLinuxProcess(obj, c);
+    case 'package':
+      return evaluateLinuxPackage(obj, c);
+    case 'firewall':
+      return evaluateLinuxFirewall(obj, c);
+    case 'container':
+      return evaluateLinuxContainer(obj, c);
+    case 'selinux':
+      return evaluateLinuxSelinux(obj, c);
+    case 'linuxuser':
+      return evaluateLinuxUser(obj, c);
+    case 'cwd':
+      return evaluateLinuxCwd(obj, c);
+    case 'env':
+      return evaluateLinuxEnv(obj, c);
+    case 'ran':
+      return evaluateLinuxRan(obj, c);
     case 'examscore':
       return evaluateExamScore(obj, c);
     case 'architecturescore':
@@ -3326,6 +4362,48 @@ function explainTemplate(objective, c) {
 }
 
 /**
+ * Notes for an unticked `node` objective (1.16.0): which part of the
+ * maintenance is missing — the drain, Pods still on the node, the workload still
+ * starting elsewhere, the final uncordon, or a node that is not Ready.
+ */
+function explainNode(objective, c) {
+  const state = nodeObjectiveState(objective, c);
+  if (!state) return null;
+  const drain = `oc adm drain ${state.name} --ignore-daemonsets --delete-emptydir-data`;
+  if (objective.drained === true && !state.drainedSeen) {
+    const count = state.blocking.length;
+    return {
+      code: 'node-not-drained',
+      text: state.cordoned
+        ? `${state.name} is cordoned but still runs ${count} Pod${count === 1 ? '' : 's'} that a drain evicts.`
+        : `${state.name} has not been drained yet: cordon it and evict its Pods first.`,
+      fix: drain,
+    };
+  }
+  if (objective.ready === true && !state.ready) {
+    return {
+      code: 'node-not-ready',
+      text: `${state.name} is not Ready: its kubelet is not reporting.`,
+    };
+  }
+  if (objective.schedulable === true && state.cordoned) {
+    return {
+      code: 'node-cordoned',
+      text: `${state.name} is still cordoned (STATUS Ready,SchedulingDisabled), so the scheduler skips it.`,
+      fix: `oc adm uncordon ${state.name}`,
+    };
+  }
+  if (objective.workloadsAvailable === true && state.unavailable.length > 0) {
+    const names = state.unavailable.map((deployment) => resourceName(deployment));
+    return {
+      code: 'node-workload-unavailable',
+      text: `Deployment ${quotedList(names, 2)} in project "${state.namespace}" does not serve all its replicas yet: its Pods are still starting on the other nodes.`,
+    };
+  }
+  return null;
+}
+
+/**
  * Explain why an objective is not ticked, or return null when there is nothing
  * useful to say. Pure and cheap (it runs every second for every unticked
  * objective) and never throws. Call it for unticked objectives only: it
@@ -3341,6 +4419,9 @@ function explainTemplate(objective, c) {
  *    'template-wrong-parameters', text, fix }` — a `template` objective: the
  *    Template is only stored, only rendered, or was applied with other
  *    parameters; `fix` is the `oc process … | oc apply -f -` pipeline to run.
+ *  - `{ code: 'node-not-drained' | 'node-not-ready' | 'node-cordoned' |
+ *    'node-workload-unavailable', text, fix? }` — a `node` objective: the
+ *    missing maintenance step (`fix` is the drain / uncordon command).
  *
  * @param {object} objective campaign / challenge objective (or its progress object)
  * @param {object} [ctx] same evaluation context as {@link evaluateObjective}
@@ -3353,10 +4434,215 @@ export function explainObjective(objective, ctx = {}) {
     const c = resolveContext(ctx);
     if (type === 'noconfigmap') return explainSensitiveConfigMap(objective, c);
     if (type === 'template') return explainTemplate(objective, c);
-    return explainWrongProject(objective, type, c);
+    if (type === 'node') return explainNode(objective, c);
+    return explainWrongProject(objective, type, c) || explainGradingRule(objective, type, c);
   } catch {
     return null;
   }
+}
+
+/** Short inline form of a recorded command for a note. */
+function noteCommand(raw) {
+  const text = String(raw || '').trim();
+  return `\`${text.length > 70 ? `${text.slice(0, 67)}...` : text}\``;
+}
+
+/**
+ * Notes for the 1.16.0 state rules, so a stricter objective says why it is not
+ * ticking (computed from the same helpers the graders use).
+ */
+function explainGradingRule(objective, type, c) {
+  switch (type) {
+    case 'command':
+      return explainInspection(objective, c);
+    case 'build':
+      return explainBuildRunning(objective, c);
+    case 'deploy':
+      return explainDeployState(objective, c);
+    case 'scc':
+      return explainSccOverBroad(objective, c);
+    case 'operator':
+      return explainOperatorLeftovers(objective, c);
+    case 'user':
+      return explainUserWithoutLogin(objective, c);
+    case 'examscore':
+      return explainExamScoreGate(objective, c);
+    default:
+      return null;
+  }
+}
+
+/** `read-wrong-project` / `read-showed-nothing` for an `inspect` command objective. */
+function explainInspection(objective, c) {
+  if (objective.inspect !== true) return null;
+  const regex = compilePattern(objective.pattern);
+  if (!regex) return null;
+  const tried = matchCommands(c, objective.pattern, {
+    successOnly: objective.mustSucceed !== false,
+  });
+  const last = tried[tried.length - 1];
+  if (!last) return null;
+  const namespace = commandObjectiveNamespace(objective, c);
+  const segments = commandSegments(last.raw);
+  const segment =
+    segments.find((part) => regex.test(part) || regex.test(canonicalCommandText(part))) ||
+    segments[0] ||
+    '';
+  const scope = segmentNamespaceScope(segment);
+  const actual = scope.namespace || last.project || null;
+  if (namespace && !scope.all && actual && actual !== namespace) {
+    return {
+      code: 'read-wrong-project',
+      text: `${noteCommand(last.raw)} ran in project "${actual}", but this objective counts what it shows in project "${namespace}".`,
+      fix: `oc project ${namespace}`,
+      found: [actual],
+      expected: namespace,
+    };
+  }
+  return {
+    code: 'read-showed-nothing',
+    text: `${noteCommand(last.raw)} did not show ${objective.outputPattern ? 'what this objective looks for' : 'anything'} yet ("No resources found" or empty). Run it again once there is something to see.`,
+  };
+}
+
+/** `build-not-complete`: the Build exists but has not reached Complete. */
+function explainBuildRunning(objective, c) {
+  let builds = listKind(c.clusterState, 'Build');
+  const namespace = objectiveResourceNamespace(c, objective, 'Build');
+  if (namespace) builds = builds.filter((build) => resourceNamespace(build) === namespace);
+  if (objective.name) {
+    builds = builds.filter(
+      (build) =>
+        resourceName(build) === objective.name || buildBelongsToConfig(build, objective.name)
+    );
+  }
+  const latest = builds[builds.length - 1];
+  if (!latest) return null;
+  const phase = String(resourceStatus(latest).phase || 'New');
+  if (phase === 'Complete') return null;
+  return {
+    code: 'build-not-complete',
+    text: `Build "${resourceName(latest)}" is ${phase}; this ticks when \`oc get builds\` shows it Complete.`,
+  };
+}
+
+/** `secret-wrong-type` / `rolebinding-wrong-grant` for `deploy` state filters. */
+function explainDeployState(objective, c) {
+  const kind = canonicalKind(objective.kind);
+  const namespace = objectiveResourceNamespace(c, objective, kind);
+  if (objective.secretType && kind === 'Secret' && objective.name) {
+    const secret = findResource(c.clusterState, 'Secret', objective.name, namespace);
+    if (!secret || secretTypeOf(secret) === String(objective.secretType)) return null;
+    return {
+      code: 'secret-wrong-type',
+      text: `Secret "${objective.name}" exists but its type is ${secretTypeOf(secret)}; this objective needs a ${objective.secretType} Secret (\`oc create secret tls\`). Delete it and create it again.`,
+      fix: `oc delete secret ${objective.name}${namespace ? ` -n ${namespace}` : ''}`,
+    };
+  }
+  const subjects = wantedList(objective, 'subjects', 'subject');
+  const roles = wantedList(objective, 'roles', 'role');
+  if (kind !== 'RoleBinding' || (subjects.length === 0 && roles.length === 0)) return null;
+  const project = namespace || levelProjectNamespace(c);
+  const learnerBindings = listKind(c.clusterState, 'RoleBinding').filter(
+    (binding) =>
+      (!project || resourceNamespace(binding) === project) &&
+      !isBootstrapProjectRoleBinding(binding)
+  );
+  if (learnerBindings.length === 0) return null;
+  const who = subjects
+    .map((subject) => subject.replace(/^system:serviceaccount:[^:]+:/, 'ServiceAccount '))
+    .join(' or ');
+  return {
+    code: 'rolebinding-wrong-grant',
+    text: `No RoleBinding${project ? ` in "${project}"` : ''} gives ${roles.length ? roles.join(' or ') : 'a role'}${who ? ` to ${who}` : ''} yet; the bindings there grant other roles or subjects.`,
+  };
+}
+
+/** `scc-over-broad`: the SCC also reaches other ServiceAccounts of the project. */
+function explainSccOverBroad(objective, c) {
+  if (objective.exclusive !== true) return null;
+  const name = objective.scc || objective.name || objective.sccName;
+  const namespace = objective.namespace || levelProjectNamespace(c) || '';
+  let subject = objective.subject;
+  if (subject && String(subject).includes('*') && namespace) {
+    subject = String(subject).split('*').join(namespace);
+  }
+  const broad = sccOverBroadSubjects(c, name, subject, namespace);
+  if (!name || broad.length === 0) return null;
+  // Name the grant that does it: a group binding, or a direct `default` grant.
+  const roleName = `system:openshift:scc:${name}`;
+  let fix = '';
+  for (const binding of listKinds(c.clusterState, ['RoleBinding', 'ClusterRoleBinding'])) {
+    const spec = resourceSpec(binding);
+    if ((spec.roleRef?.name || '') !== roleName) continue;
+    const group = asArray(spec.subjects).find(
+      (entry) =>
+        entry?.kind === 'Group' &&
+        /^system:(serviceaccounts|authenticated)/.test(String(entry.name))
+    );
+    if (group) {
+      fix = `oc adm policy remove-scc-from-group ${name} ${group.name}`;
+      break;
+    }
+    const defaultSa = asArray(spec.subjects).find(
+      (entry) => entry?.kind === 'ServiceAccount' && entry.name === 'default'
+    );
+    if (defaultSa) {
+      fix = `oc adm policy remove-scc-from-user ${name} -z default -n ${defaultSa.namespace || namespace}`;
+      break;
+    }
+  }
+  return {
+    code: 'scc-over-broad',
+    text: `The ${name} SCC also reaches the ServiceAccount "default" in "${namespace}", not only the dedicated one: a project-wide grant is too broad. Remove it and grant the SCC with \`-z\` to the dedicated ServiceAccount only.`,
+    ...(fix ? { fix } : {}),
+  };
+}
+
+/** `operator-csv-left`: the Subscription is gone but its CSV is still installed. */
+function explainOperatorLeftovers(objective, c) {
+  if (objective.installed !== false || !(objective._installedCsvs instanceof Map)) return null;
+  for (const entry of objective._installedCsvs.values()) {
+    if (!findResource(c.clusterState, 'ClusterServiceVersion', entry.name, entry.namespace))
+      continue;
+    const wanted = String(objective.name || objective.operator || '').toLowerCase();
+    const subscriptionLeft = listKind(c.clusterState, 'Subscription').some((subscription) =>
+      `${resourceName(subscription)} ${resourceSpec(subscription).name || ''}`
+        .toLowerCase()
+        .includes(wanted)
+    );
+    if (subscriptionLeft) return null;
+    return {
+      code: 'operator-csv-left',
+      text: `The Subscription is deleted, but the CSV "${entry.name}" is still installed in "${entry.namespace}": the operator keeps running until it is deleted too.`,
+      fix: `oc delete csv ${entry.name} -n ${entry.namespace}`,
+    };
+  }
+  return null;
+}
+
+/** `user-not-logged-in`: the User exists but no identity provider login created it. */
+function explainUserWithoutLogin(objective, c) {
+  if (objective.viaLogin !== true || !objective.name) return null;
+  const user = findResource(c.clusterState, 'User', objective.name);
+  if (!user || userHasIdentity(c, user)) return null;
+  return {
+    code: 'user-not-logged-in',
+    text: `User "${objective.name}" exists but has no identity (it was created by hand, e.g. \`oc create user\`); this counts the User a first login through the identity provider creates.`,
+  };
+}
+
+/** `exam-score-gated`: the composite is high enough but other objectives are open. */
+function explainExamScoreGate(objective, c) {
+  const progress = asArray(c.objectiveProgress).filter(
+    (entry) => String(entry?.type || '').toLowerCase() !== 'examscore'
+  );
+  const open = progress.filter((entry) => !entry?.completed).length;
+  if (open === 0) return null;
+  return {
+    code: 'exam-score-gated',
+    text: `This final score only counts once every other objective is done (${open} still open).`,
+  };
 }
 
 /**
@@ -3405,8 +4691,14 @@ export function evaluateObjective(objective, ctx = {}) {
 export function createObjectiveProgress(objectives) {
   return asArray(objectives).map((objective) => {
     const isBoolean = typeIsBoolean(String(objective?.type || '').toLowerCase());
+    // Per-run evaluator state (`_baseline`, latches) lives on the progress copy
+    // and never carries over from a shared level definition that something
+    // evaluated directly (tests, Exam Prep previews).
+    const authored = Object.fromEntries(
+      Object.entries(objective || {}).filter(([key]) => !key.startsWith('_'))
+    );
     return {
-      ...objective,
+      ...authored,
       current: 0,
       target: isBoolean ? 1 : Math.max(1, asNumber(objective?.count, 1)),
       completed: false,

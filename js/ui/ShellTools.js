@@ -34,6 +34,15 @@
  * this module never touches `document`/`window` at import time.
  */
 
+import {
+  LinuxHost,
+  HOME as LINUX_HOME,
+  errnoText,
+  hasGlobChars,
+  globToRegExp,
+} from '../engine/LinuxHost.js';
+import { LINUX_COMMANDS, LINUX_COMMAND_METHODS } from './LinuxCommands.js';
+
 /** Shell commands recognised without the `oc ` prefix (completion + dispatch). */
 export const SHELL_COMMANDS = [
   'cat',
@@ -69,6 +78,8 @@ export const SHELL_COMMANDS = [
   'htpasswd',
   'clear',
   'exit',
+  // 1.16.0: the RHEL 9 workstation (js/engine/LinuxHost.js + js/ui/LinuxCommands.js).
+  ...LINUX_COMMANDS,
 ];
 
 /** Commands that take file paths (Tab completion / suggestion hints). */
@@ -84,6 +95,31 @@ export const SHELL_FILE_COMMANDS = new Set([
   'sed',
   'rm',
   'source',
+  'cd',
+  'ls',
+  'cp',
+  'mv',
+  'mkdir',
+  'rmdir',
+  'touch',
+  'less',
+  'more',
+  'tee',
+  'stat',
+  'chmod',
+  'chown',
+  'chgrp',
+  'tar',
+  'file',
+  'bash',
+  'nano',
+  'diff',
+  'sort',
+  'cut',
+  'du',
+  'find',
+  'restorecon',
+  'ln',
 ]);
 
 const SHELL_COMMAND_SET = new Set(SHELL_COMMANDS);
@@ -287,6 +323,16 @@ export function expandShellVariables(text, env = {}) {
   // `$NAME` / `${NAME}` / `$?` / `${?}` at position `start` (source[start] === '$').
   const expansionAt = (start) => {
     if (source[start + 1] === '?') return { value: lastStatus(), end: start + 2 };
+    // Script positional/special parameters (`$1`, `$#`, `$@`, `$$`) when the caller defines
+    // them (scripts run by `bash`/`source`, 1.16.0); otherwise left literal as before.
+    const special = source[start + 1];
+    if (
+      special !== undefined &&
+      /[0-9#@*$]/.test(special) &&
+      Object.prototype.hasOwnProperty.call(env, special)
+    ) {
+      return { value: lookup(special), end: start + 2 };
+    }
     if (source[start + 1] === '{') {
       const close = source.indexOf('}', start + 2);
       if (close < 0) return null;
@@ -420,8 +466,17 @@ function parseSedScript(script) {
     let command = rawCommand.trim();
     if (!command) continue;
     let address = null;
-    let match = command.match(/^(\d+),(\d+)([\s\S]*)$/);
+    let match = command.match(/^\/((?:\\.|[^/\\])*)\/([\s\S]*)$/);
     if (match) {
+      // `/regex/` address (`sed '/api.cluster/d'`, 1.16.0).
+      const source = match[1].replace(/\\\//g, '/');
+      try {
+        address = { regex: new RegExp(source) };
+      } catch {
+        address = { regex: new RegExp(source.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')) };
+      }
+      command = match[2];
+    } else if ((match = command.match(/^(\d+),(\d+)([\s\S]*)$/))) {
       address = { from: Number(match[1]), to: Number(match[2]) };
       command = match[3];
     } else if ((match = command.match(/^(\d+)([\s\S]*)$/))) {
@@ -532,8 +587,21 @@ function sedReplacementString(replacement) {
   return output;
 }
 
-function sedAddressMatches(address, lineNumber, totalLines) {
+/** GNU sed -i temp-file suffix (6 chars, deterministic per path). */
+function fakeTempSuffix(path) {
+  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+  let hash = fnv1aUint(path);
+  let out = '';
+  for (let index = 0; index < 6; index += 1) {
+    out += alphabet[hash % alphabet.length];
+    hash = Math.floor(hash / alphabet.length) + 7919 * (index + 1);
+  }
+  return out;
+}
+
+function sedAddressMatches(address, lineNumber, totalLines, line = '') {
   if (!address) return true;
+  if (address.regex) return address.regex.test(line);
   if (address.last) return lineNumber === totalLines;
   const from = address.from ?? 1;
   const to = address.to ?? from;
@@ -1253,22 +1321,65 @@ export class ShellTools {
    */
   constructor(bar) {
     this.bar = bar;
-    this.cwd = '/';
     /** Last command exit code / status, exposed for teaching hints. */
     this.lastExitCode = 0;
-    /**
-     * Exported shell variables (`export NAME=value`, issue #50). Persisted for
-     * the page session / terminal (the same `ShellTools` instance lives across
-     * commands); reset when the engine resets, like a fresh login shell.
-     * @type {Map<string, string>}
-     */
-    this.env = new Map();
-    /**
-     * Plain shell variables (`NAME=value`, not exported). Expand like exported
-     * variables but are not listed by `env`/`printenv`, matching bash (#50).
-     * @type {Map<string, string>}
-     */
-    this.vars = new Map();
+    /** Host used when no GameEngine provides one (standalone Node harnesses). */
+    this._ownHost = null;
+    /** Effective user while `sudo` runs a command (null = the session user). */
+    this._euser = null;
+    this._sudoDepth = 0;
+    this._scriptDepth = 0;
+  }
+
+  /**
+   * The simulated RHEL workstation (1.16.0). The GameEngine owns it (`gameEngine.linuxHost`)
+   * so grading and level seeds see the same machine; a standalone ShellTools gets its own.
+   * @returns {LinuxHost}
+   */
+  get host() {
+    const shared = this.bar?.gameEngine?.linuxHost;
+    if (shared) return shared;
+    if (!this._ownHost) {
+      this._ownHost = new LinuxHost({ fileStore: () => this.bar?.manifestEngine || null });
+    }
+    return this._ownHost;
+  }
+
+  /** The shell's working directory (lives in the host session so cd survives commands). */
+  get cwd() {
+    return this.host.session.cwd;
+  }
+
+  set cwd(value) {
+    this.host.session.cwd = String(value || LINUX_HOME);
+  }
+
+  /**
+   * Exported shell variables (`export NAME=value`, issue #50). They live in the host's
+   * shell session (graded by the `env` objective) and reset with it, like a fresh login.
+   * @type {Map<string, string>}
+   */
+  get env() {
+    return this.host.session.env;
+  }
+
+  /**
+   * Plain shell variables (`NAME=value`, not exported). Expand like exported
+   * variables but are not listed by `env`/`printenv`, matching bash (#50).
+   * @type {Map<string, string>}
+   */
+  get vars() {
+    return this.host.session.vars;
+  }
+
+  /** The user commands run as: the `sudo` target while sudo runs, else the shell user. */
+  _user() {
+    return this._euser || this.host.session.user;
+  }
+
+  /** `[student@workstation ~]$` — the bash prompt of the current shell. */
+  prompt() {
+    return this.host.prompt();
   }
 
   /** Forget exported / shell variables and shell state (called on `engine:reset`). */
@@ -1276,6 +1387,8 @@ export class ShellTools {
     this.env.clear();
     this.vars.clear();
     this.lastExitCode = 0;
+    this._euser = null;
+    this._sudoDepth = 0;
   }
 
   /**
@@ -1284,13 +1397,30 @@ export class ShellTools {
    * @returns {Record<string, string>}
    */
   exportedEnvironment() {
+    const host = this.host;
+    const user = host.session.user;
+    const home = host.homeOf(user);
     const environment = {
-      PATH: '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
-      HOME: '/home/student',
-      USER: String(this.bar?.currentUser || 'kubeadmin'),
-      KUBECONFIG: '/home/student/.kube/config',
       SHELL: '/bin/bash',
+      HISTCONTROL: 'ignoredups',
+      HISTSIZE: '1000',
+      HOSTNAME: host.hostname,
+      PWD: host.session.cwd,
+      LOGNAME: user,
+      HOME: home,
+      LANG: 'en_US.UTF-8',
+      TERM: 'xterm-256color',
+      USER: user,
+      SHLVL: '1',
+      KUBECONFIG: `${LINUX_HOME}/.kube/config`,
+      PATH:
+        user === 'root'
+          ? '/root/.local/bin:/root/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin'
+          : `${home}/.local/bin:${home}/bin:/usr/local/bin:/usr/bin:/usr/local/sbin:/usr/sbin`,
+      MAIL: `/var/spool/mail/${user}`,
+      _: '/usr/bin/env',
     };
+    if (host.session.oldpwd) environment.OLDPWD = host.session.oldpwd;
     for (const [name, value] of this.env) environment[name] = String(value ?? '');
     return environment;
   }
@@ -1307,6 +1437,8 @@ export class ShellTools {
     // `$?` is a shell special parameter, not an environment variable: expose it
     // for expansion but never for `env`/`printenv`/`export` output (#63).
     environment['?'] = String(this.lastExitCode ?? 0);
+    environment.$ = String(this.host.shellPid || 2297);
+    if (this._scriptParams) Object.assign(environment, this._scriptParams);
     return environment;
   }
 
@@ -1353,7 +1485,21 @@ export class ShellTools {
 
   /** True when the first token is a simulated shell command (no `oc` needed). */
   isShellLead(token) {
-    return SHELL_COMMAND_SET.has(String(token ?? '').toLowerCase());
+    const word = String(token ?? '');
+    if (SHELL_COMMAND_SET.has(word.toLowerCase())) return true;
+    // 1.16.0: a path (`./deploy.sh`, `~/bin/x`, `/usr/bin/ls`) or a script on $PATH
+    // (`lab-info.sh` in ~/bin) is run by the shell, never sent to `oc`.
+    if (/^(\.{1,2}\/|~\/|\/)/.test(word)) return true;
+    if (/^[A-Za-z0-9_.-]+$/.test(word) && word.includes('.')) {
+      try {
+        return Boolean(
+          this.host.findOnPath(word, this.exportedEnvironment().PATH, { user: 'root' })
+        );
+      } catch {
+        return false;
+      }
+    }
+    return false;
   }
 
   /** Bash reserved words that are shell input even though unsupported (#50). */
@@ -1387,24 +1533,45 @@ export class ShellTools {
     return this.isShellLead(first) || this.isShellKeyword(first);
   }
 
+  // ── workstation file access (1.16.0: LinuxHost, cwd-relative, permission-checked) ──
+
+  /**
+   * Read a file as the effective user. `{ok, content, path}` or `{error: ERRNO, path}`
+   * (ENOENT, EACCES, EISDIR, ENOTDIR …).
+   */
+  _readFileResult(path) {
+    return this.host.readFile(String(path ?? ''), { user: this._user() });
+  }
+
+  /** File content or null (any failure). */
   _readFile(path) {
-    return this.bar._readVirtualFile(this.expandHomePath(path));
+    const result = this._readFileResult(path);
+    return result.ok ? result.content : null;
   }
 
   _fileExists(path) {
-    return this._readFile(path) !== null;
+    return this.host.stat(String(path ?? ''), { user: this._user() }).ok;
   }
 
-  _writeFile(path, content) {
-    const written = this.bar._writeVirtualFile(this.expandHomePath(path), String(content ?? ''));
+  /** `cmd: path: Permission denied` style error text for a failed read. */
+  _readError(command, path, result) {
+    return `${command}: ${path}: ${errnoText(result?.error || 'ENOENT')}`;
+  }
+
+  _writeFile(path, content, options = {}) {
+    const written = this.host.writeFile(String(path ?? ''), String(content ?? ''), {
+      user: this._user(),
+      append: Boolean(options.append),
+    });
     this._refreshFilesPanel();
-    return written;
+    if (written.ok) return { ok: true, path: written.path };
+    return { error: true, errno: written.error, message: errnoText(written.error) };
   }
 
   _deleteFile(path) {
-    if (typeof this.bar.manifestEngine?.deleteFile === 'function')
-      this.bar.manifestEngine.deleteFile(this.expandHomePath(path));
+    const removed = this.host.unlink(String(path ?? ''), { user: this._user() });
     this._refreshFilesPanel();
+    return removed;
   }
 
   _refreshFilesPanel() {
@@ -1418,31 +1585,10 @@ export class ShellTools {
     }
   }
 
-  _listFiles(path = '') {
-    const files = this.bar._manifestFileList();
-    const prefix = this.expandHomePath(path)
-      .replace(/^\.\/+/, '')
-      .replace(/\/+$/, '');
-    if (!prefix || prefix === '.') return files;
-    return files.filter((file) => file === prefix || file.startsWith(`${prefix}/`));
-  }
-
-  /**
-   * True for a virtual-filesystem directory path (#76). Directories are derived
-   * from file paths, so an existing-but-empty directory is not representable —
-   * except the mapped `/tmp` (see expandHomePath), which is a real workstation
-   * directory and must stay listable after its last file is removed.
-   * @param {string} path
-   * @returns {boolean}
-   */
+  /** True for an existing directory (the workstation filesystem, #76 / 1.16.0). */
   _isVirtualDirectory(path) {
-    const clean = this.expandHomePath(path)
-      .replace(/^\.\/+/, '')
-      .replace(/\/+$/, '');
-    if (!clean) return false;
-    if (clean === 'tmp') return true;
-    const prefix = `${clean}/`;
-    return this.bar._manifestFileList().some((file) => file.startsWith(prefix));
+    const found = this.host.stat(String(path ?? ''), { user: 'root' });
+    return Boolean(found.ok && found.node.type === 'dir');
   }
 
   /**
@@ -1626,32 +1772,280 @@ export class ShellTools {
    * @returns {{error: boolean, message: string, exitCode: number, clear?: boolean}}
    */
   runTokens(tokens, stdin) {
-    const name = String(tokens[0] || '').toLowerCase();
+    const typed = String(tokens[0] || '');
+    const name = typed.toLowerCase();
     const args = tokens.slice(1);
-    const handler = this[`_cmd_${name}`];
-    if (!handler) {
-      this.lastExitCode = 127;
-      return { error: true, message: `bash: ${name}: command not found`, exitCode: 127 };
-    }
-    try {
-      const result = handler.call(
-        this,
-        args,
-        stdin === null || stdin === undefined ? null : String(stdin)
-      ) || { error: false, message: '' };
+    const input = stdin === null || stdin === undefined ? null : String(stdin);
+    const finish = (result) => {
       // A handler can report its real status (`grep` exits 1 on no match);
       // otherwise any failed command is status 1 and a successful one 0 (#63).
       if (!Number.isFinite(result.exitCode)) result.exitCode = result.error ? 1 : 0;
       this.lastExitCode = result.exitCode;
+      this._recordExec(typed, args, result);
       return result;
+    };
+    // 1.16.0: `./script.sh`, `/path/to/tool`, or a script found on $PATH.
+    if (typed.includes('/') || (!this[`_cmd_${name}`] && this.isShellLead(typed))) {
+      try {
+        return finish(this._runExecutable(typed, args, input));
+      } catch (error) {
+        return finish({
+          error: true,
+          message: `bash: ${typed}: ${error?.message || error}`,
+          exitCode: 126,
+        });
+      }
+    }
+    const handler = this[`_cmd_${name}`];
+    // Commands from packages that are not installed (`dnf remove bind-utils` → no `dig`).
+    if (!handler || !this.host.commandAvailable(name)) {
+      return finish({ error: true, message: `bash: ${typed}: command not found`, exitCode: 127 });
+    }
+    try {
+      this.host.sync();
+      const result = handler.call(this, args, input) || { error: false, message: '' };
+      return finish(result);
     } catch (error) {
-      this.lastExitCode = 1;
-      return {
+      return finish({
         error: true,
         message: `${name}: ${error && error.message ? error.message : error}`,
         exitCode: 1,
-      };
+      });
     }
+  }
+
+  /** Remember an executed command for the `ran` objective (argv, cwd, resolved paths). */
+  _recordExec(command, args, result) {
+    try {
+      const host = this.host;
+      const paths = [];
+      for (const arg of args) {
+        if (!arg || arg.startsWith('-') || arg.length > 300) continue;
+        const found = host.stat(arg, { user: 'root' });
+        if (found.ok) paths.push(found.path);
+      }
+      host.recordExec({
+        command: String(command).replace(/^.*\//, ''),
+        argv: [command, ...args],
+        paths,
+        exitCode: result.exitCode,
+        success: result.exitCode === 0,
+        sudo: this._sudoDepth > 0,
+        user: this._user(),
+      });
+    } catch {
+      /* grading evidence is best-effort */
+    }
+  }
+
+  /**
+   * Run one pipeline stage from its raw text (CommandBar `_runStage`): quote-aware word
+   * splitting with bash expansions the simulator models — `~`, brace `{a,b}`, globs
+   * `* ? [..]` against the workstation filesystem (unquoted only), `#` comments and a
+   * `< file` input redirect.
+   * @param {string} text the stage (variables/substitutions already expanded)
+   * @param {string|null} stdin
+   */
+  runShellStage(text, stdin) {
+    const parsed = this.expandWords(text);
+    if (parsed.error) {
+      this.lastExitCode = 1;
+      return { error: true, message: parsed.error, exitCode: 1 };
+    }
+    let input = stdin;
+    if (parsed.inputFile !== null) {
+      const read = this._readFileResult(parsed.inputFile);
+      if (!read.ok) {
+        this.lastExitCode = 1;
+        return {
+          error: true,
+          message: `bash: ${parsed.inputFile}: ${errnoText(read.error)}`,
+          exitCode: 1,
+        };
+      }
+      input = read.content;
+    }
+    if (!parsed.words.length) return { error: false, message: '' };
+    return this.runTokens(parsed.words, input);
+  }
+
+  /**
+   * bash word expansion for one simple command. Returns `{words, inputFile}`.
+   * @param {string} text
+   */
+  expandWords(text) {
+    const source = String(text ?? '');
+    const words = [];
+    let inputFile = null;
+    let expectInput = false;
+    let current = [];
+    let started = false;
+    let quote = null;
+    const flush = () => {
+      if (!started) return;
+      const expanded = this._expandWord(current);
+      current = [];
+      started = false;
+      if (expectInput) {
+        inputFile = expanded[0] ?? '';
+        expectInput = false;
+        return;
+      }
+      words.push(...expanded);
+    };
+    for (let index = 0; index < source.length; index += 1) {
+      const ch = source[index];
+      if (quote) {
+        if (ch === quote) {
+          quote = null;
+          continue;
+        }
+        if (ch === '\\' && quote === '"' && /["\\$`]/.test(source[index + 1] || '')) {
+          current.push({ ch: source[index + 1], quoted: true });
+          index += 1;
+          continue;
+        }
+        current.push({ ch, quoted: true });
+        continue;
+      }
+      if (ch === '\\' && index + 1 < source.length) {
+        current.push({ ch: source[index + 1], quoted: true });
+        started = true;
+        index += 1;
+        continue;
+      }
+      if (ch === '"' || ch === "'") {
+        quote = ch;
+        started = true;
+        continue;
+      }
+      if (/\s/.test(ch)) {
+        flush();
+        continue;
+      }
+      if (ch === '#' && !started) break;
+      if (ch === '<' && !started) {
+        flush();
+        expectInput = true;
+        continue;
+      }
+      current.push({ ch, quoted: false });
+      started = true;
+    }
+    if (quote) return { error: 'bash: unexpected EOF while looking for matching `' + quote + "'" };
+    flush();
+    if (expectInput) return { error: "bash: syntax error near unexpected token `newline'" };
+    return { words, inputFile };
+  }
+
+  /** Expand one word (array of {ch, quoted}) → one or more argv entries. */
+  _expandWord(chars) {
+    // Brace expansion first (unquoted `{a,b}` with at least one comma).
+    const text = chars.map((entry) => entry.ch).join('');
+    const braceOpen = chars.findIndex(
+      (entry, index) =>
+        entry.ch === '{' &&
+        !entry.quoted &&
+        chars.slice(index).some((e) => e.ch === '}' && !e.quoted)
+    );
+    if (braceOpen >= 0) {
+      let depth = 0;
+      let close = -1;
+      const commas = [];
+      for (let index = braceOpen; index < chars.length; index += 1) {
+        const entry = chars[index];
+        if (entry.quoted) continue;
+        if (entry.ch === '{') depth += 1;
+        else if (entry.ch === '}') {
+          depth -= 1;
+          if (depth === 0) {
+            close = index;
+            break;
+          }
+        } else if (entry.ch === ',' && depth === 1) commas.push(index);
+      }
+      if (close > braceOpen && commas.length) {
+        const prefix = chars.slice(0, braceOpen);
+        const suffix = chars.slice(close + 1);
+        const bounds = [braceOpen, ...commas, close];
+        const results = [];
+        for (let index = 0; index < bounds.length - 1; index += 1) {
+          const middle = chars.slice(bounds[index] + 1, bounds[index + 1]);
+          results.push(...this._expandWord([...prefix, ...middle, ...suffix]));
+        }
+        return results;
+      }
+    }
+    // Tilde expansion (`~`, `~/x`, `~user/x`) at the start of an unquoted word.
+    let word = text;
+    if (chars.length && chars[0].ch === '~' && !chars[0].quoted) {
+      const slash = text.indexOf('/');
+      const user = (slash < 0 ? text : text.slice(0, slash)).slice(1);
+      const host = this.host;
+      if (!user || host.users.has(user)) {
+        const home = user ? host.homeOf(user) : host.homeOf(host.session.user);
+        word = `${home}${slash < 0 ? '' : text.slice(slash)}`;
+        chars = [
+          ...[...home].map((ch) => ({ ch, quoted: true })),
+          ...chars.slice(slash < 0 ? chars.length : slash),
+        ];
+      }
+    }
+    // Pathname expansion for unquoted glob characters.
+    const globbing = chars.some((entry) => !entry.quoted && /[*?[]/.test(entry.ch));
+    if (!globbing) return [word];
+    const matches = this._glob(chars);
+    return matches.length ? matches : [word];
+  }
+
+  /** Match a glob word against the workstation filesystem (sorted, dotfiles need a dot). */
+  _glob(chars) {
+    const word = chars.map((entry) => entry.ch).join('');
+    const absolute = word.startsWith('/');
+    const segments = [];
+    let segment = [];
+    for (const entry of chars) {
+      if (entry.ch === '/') {
+        segments.push(segment);
+        segment = [];
+      } else segment.push(entry);
+    }
+    segments.push(segment);
+    const host = this.host;
+    let bases = [absolute ? '' : null];
+    const user = this._user();
+    for (let index = 0; index < segments.length; index += 1) {
+      const part = segments[index];
+      if (!part.length) continue;
+      const literal = part.map((entry) => entry.ch).join('');
+      const hasGlob = part.some((entry) => !entry.quoted && /[*?[]/.test(entry.ch));
+      const next = [];
+      for (const base of bases) {
+        const prefix = base === null ? '' : `${base}/`;
+        if (!hasGlob) {
+          next.push(base === null ? literal : `${prefix}${literal}`);
+          continue;
+        }
+        const dir = base === null ? '.' : base === '' ? '/' : base;
+        const listing = host.readdir(dir, { user });
+        if (!listing.ok) continue;
+        const pattern = part
+          .map((entry) => (entry.quoted && /[*?[\]]/.test(entry.ch) ? `[${entry.ch}]` : entry.ch))
+          .join('');
+        const regex = globToRegExp(pattern);
+        for (const entry of listing.entries) {
+          if (entry.name.startsWith('.') && !literal.startsWith('.')) continue;
+          if (regex.test(entry.name))
+            next.push(base === null ? entry.name : `${prefix}${entry.name}`);
+        }
+      }
+      bases = next;
+      if (!bases.length) return [];
+    }
+    void hasGlobChars;
+    return bases
+      .filter((path) => path !== null && host.stat(path, { user: 'root', follow: false }).ok)
+      .sort((left, right) => (left < right ? -1 : left > right ? 1 : 0));
   }
 
   // ── file helpers ─────────────────────────────────────────────────────────
@@ -1665,24 +2059,12 @@ export class ShellTools {
    * @returns {string}
    */
   expandHomePath(path) {
+    // 1.16.0: the ONE resolver lives in LinuxHost (cwd, `~`, `/tmp`); this returns the
+    // Files-panel key of a home/tmp path (`~/auth/x` → `auth/x`, `/tmp/x` → `tmp/x`).
     const raw = String(path ?? '');
-    if (raw === '~') return '';
-    if (raw.startsWith('~/')) return raw.slice(2);
-    // `$HOME` is expanded by the shell layer (#50) before the command runs, so
-    // map the expanded absolute home directory back onto the virtual filesystem
-    // root (which is the workstation home directory).
-    const absoluteHome = raw.match(/^\/home\/student(?:\/(.*))?$/);
-    if (absoluteHome) return absoluteHome[1] ?? '';
-    // #76: `/tmp` is a real directory on the virtual filesystem. The VFS is
-    // rooted at the home directory, and ManifestEngine normalises leading
-    // slashes away, so a redirect (`> /tmp/webapp.yaml`) is stored as
-    // `tmp/webapp.yaml`. Map absolute `/tmp` paths onto that same directory so
-    // writes, `ls /tmp`, `cat`, `rm`, `oc apply -f /tmp/...` all agree.
-    if (raw === '/tmp') return 'tmp';
-    if (raw.startsWith('/tmp/')) return raw.slice(1);
     const home = raw.match(/^\$(?:\{HOME\}|HOME)(\/.*)?$/);
-    if (home) return home[1] ? home[1].slice(1) : '';
-    return raw;
+    const key = this.host.vfsKey(home ? `~${home[1] || ''}` : raw);
+    return key === null ? raw : key;
   }
 
   _readInputFiles(args, stdin, commandName) {
@@ -1690,9 +2072,9 @@ export class ShellTools {
     if (!files.length) return { contents: stdin === null ? '' : stdin, label: null, files: [] };
     const parts = [];
     for (const file of files) {
-      const content = this._readFile(file);
-      if (content === null) return { error: `${commandName}: ${file}: No such file or directory` };
-      parts.push({ file, content });
+      const read = this._readFileResult(file);
+      if (!read.ok) return { error: this._readError(commandName, file, read) };
+      parts.push({ file, content: read.content });
     }
     return { contents: parts.map((entry) => entry.content).join('\n'), parts, files };
   }
@@ -1708,31 +2090,70 @@ export class ShellTools {
   // ── cat / echo ───────────────────────────────────────────────────────────
 
   _cmd_cat(args, stdin) {
-    const files = args.filter((arg) => !arg.startsWith('-') || arg === '-');
-    if (!files.length) {
-      if (stdin === null) return this._ok('');
-      return this._ok(stdin);
+    const flags = new Set();
+    const files = [];
+    for (const arg of args) {
+      if (arg === '--show-all') flags.add('A');
+      else if (arg === '--number') flags.add('n');
+      else if (arg.startsWith('--')) continue;
+      else if (/^-[A-Za-z]+$/.test(arg)) for (const flag of arg.slice(1)) flags.add(flag);
+      else files.push(arg);
     }
+    // `cat -A` = -vET: `^I` for tabs and `$` at every line end (a final line without
+    // a newline gets no `$`, like GNU cat).
+    const render = (text) => {
+      let output = String(text ?? '');
+      const showEnds = flags.has('A') || flags.has('E') || flags.has('e');
+      const showTabs = flags.has('A') || flags.has('T') || flags.has('t');
+      if (showTabs) output = output.replace(/\t/g, '^I');
+      if (showEnds) output = output.replace(/\n/g, '$\n');
+      if (flags.has('n') || flags.has('b')) {
+        let number = 0;
+        const lines = output.split('\n');
+        const last = lines.length - 1;
+        output = lines
+          .map((line, index) => {
+            if (index === last && line === '') return line;
+            if (flags.has('b') && line === '') return line;
+            number += 1;
+            return `${String(number).padStart(6)}\t${line}`;
+          })
+          .join('\n');
+      }
+      return output;
+    };
+    if (!files.length) return this._ok(render(stdin === null ? '' : stdin));
     const chunks = [];
+    const errors = [];
     for (const file of files) {
       if (file === '-') {
         chunks.push(stdin === null ? '' : stdin);
         continue;
       }
-      const content = this._readFile(file);
-      if (content === null) {
-        const expanded = this.expandHomePath(file);
-        if (this._isVirtualDirectory(expanded)) return this._err(`cat: ${file}: Is a directory`);
-        if (this._listFiles(expanded).length) return this._err(`cat: ${file}: Is a directory`);
-        return this._err(`cat: ${file}: No such file or directory`);
+      const read = this._readFileResult(file);
+      if (!read.ok) {
+        errors.push(this._readError('cat', file, read));
+        continue;
       }
-      chunks.push(content);
+      chunks.push(read.content);
     }
-    return this._ok(chunks.join(''));
+    const text = render(chunks.join(''));
+    if (errors.length) {
+      // GNU cat prints what it could read and reports every failure (exit 1).
+      return {
+        error: true,
+        message: [text.replace(/\n$/, ''), ...errors].filter(Boolean).join('\n'),
+        exitCode: 1,
+      };
+    }
+    // The terminal shows one block per output (#76: no trailing blank line); `stdout`
+    // keeps the exact bytes for `cat a > b`.
+    return { error: false, message: text.replace(/\n$/, ''), stdout: text };
   }
 
   _cmd_echo(args, stdin) {
     let interpret = false;
+    let noNewline = false;
     const words = [];
     for (const arg of args) {
       if (/^-[neE]+$/.test(arg)) {
@@ -1740,6 +2161,7 @@ export class ShellTools {
         // line block per output, so it never needs the byte here (#76). `-e`
         // does change the payload (escape sequences).
         if (arg.includes('e')) interpret = true;
+        if (arg.includes('n')) noNewline = true;
         continue;
       }
       words.push(arg);
@@ -1751,8 +2173,9 @@ export class ShellTools {
     if (stdin !== null && stdin !== '') text = words.length ? `${text}\n${stdin}` : stdin;
     // #76: the terminal renders one block per command output, so a trailing
     // newline in the message would show as an extra blank line after `echo`;
-    // no other shell builtin ends its message with a newline either.
-    return this._ok(text);
+    // no other shell builtin ends its message with a newline either. The exact
+    // bytes (`stdout`, with echo's newline unless -n) are what `>`/`>>` write.
+    return { error: false, message: text, stdout: noNewline ? text : `${text}\n` };
   }
 
   // ── grep / head / tail / wc ──────────────────────────────────────────────
@@ -1823,7 +2246,12 @@ export class ShellTools {
           else if (char === 'c') flags.count = true;
           else if (char === 'l') flags.filesWithMatches = true;
           else if (char === 'o') flags.onlyMatching = true;
-          // -E/-F/-r/-q/--color etc. accepted; treated as plain-text matching
+          else if (char === 'w') flags.word = true;
+          else if (char === 'r' || char === 'R') flags.recursive = true;
+          else if (char === 'q') flags.quiet = true;
+          else if (char === 'h') flags.noFilename = true;
+          else if (char === 'H') flags.withFilename = true;
+          // -E/-F/--color etc. accepted; JS regular expressions cover ERE.
           rest = rest.slice(1);
         }
         void consumedNext;
@@ -1839,23 +2267,59 @@ export class ShellTools {
     if (pattern === null)
       return this._err('usage: grep [-ivnc] [-A num] [-B num] [-C num] pattern [file ...]');
     let matcher;
+    // Basic-regex alternation (`a\|b`) and grouping are written with backslashes in GNU grep.
+    const jsPattern = String(pattern)
+      .replace(/\\\|/g, '|')
+      .replace(/\\([(){}])/g, '$1');
     try {
-      matcher = new RegExp(pattern, flags.ignoreCase ? 'i' : '');
+      matcher = new RegExp(
+        flags.word ? `(?<![\\w])(?:${jsPattern})(?![\\w])` : jsPattern,
+        flags.ignoreCase ? 'i' : ''
+      );
     } catch {
       matcher = new RegExp(
         pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'),
         flags.ignoreCase ? 'i' : ''
       );
     }
+    if (flags.recursive) {
+      // `grep -r PATTERN [DIR…]`: every readable regular file below the operands.
+      const roots = files.length ? [...files] : ['.'];
+      files.length = 0;
+      const walk = (path) => {
+        const listing = this.host.readdir(path, { user: this._user() });
+        if (!listing.ok) {
+          if (listing.error === 'ENOTDIR') files.push(path);
+          return;
+        }
+        for (const entry of listing.entries) {
+          const child = path === '.' ? entry.name : `${path.replace(/\/+$/, '')}/${entry.name}`;
+          if (entry.node.type === 'dir') walk(child);
+          else if (entry.node.type === 'file') files.push(child);
+        }
+      };
+      for (const root of roots) walk(root);
+      if (files.length > 1 || roots.some((root) => this._isVirtualDirectory(root)))
+        flags.withFilename = true;
+    }
     const hasContext = flags.after > 0 || flags.before > 0;
     const sources = files.length
-      ? files.map((file) => ({ label: file, content: this._readFile(file) }))
+      ? files.map((file) => {
+          const read = this._readFileResult(file);
+          return { label: file, content: read.ok ? read.content : null, read };
+        })
       : [{ label: null, content: stdin === null ? '' : stdin }];
     const output = [];
     let matchedAny = false;
     for (const source of sources) {
-      if (source.content === null)
-        return this._err(`grep: ${source.label}: No such file or directory`);
+      if (source.content === null) {
+        // grep reports unreadable files and exits 2 (trouble), like GNU grep.
+        return {
+          error: true,
+          message: `grep: ${source.label}: ${errnoText(source.read?.error)}`,
+          exitCode: 2,
+        };
+      }
       const lines = String(source.content).split('\n');
       if (lines.length && lines[lines.length - 1] === '') lines.pop();
       const matchedIndexes = [];
@@ -1870,13 +2334,16 @@ export class ShellTools {
       }
       if (flags.count) {
         output.push(
-          sources.length > 1 && source.label
+          (sources.length > 1 || flags.withFilename) && !flags.noFilename && source.label
             ? `${source.label}:${matchedIndexes.length}`
             : String(matchedIndexes.length)
         );
         continue;
       }
-      const multiFilePrefix = sources.length > 1 && source.label ? `${source.label}:` : '';
+      const multiFilePrefix =
+        (sources.length > 1 || flags.withFilename) && !flags.noFilename && source.label
+          ? `${source.label}:`
+          : '';
       if (!hasContext) {
         for (const index of matchedIndexes) {
           const line = lines[index];
@@ -1912,7 +2379,8 @@ export class ShellTools {
     const text = output.join('\n');
     // Real grep exits 1 when nothing matched; `-c`/`-l` still print "0"/nothing,
     // so this is a failed shell status without an error message (#63).
-    if (!matchedAny) return { error: false, message: text, exitCode: 1 };
+    if (!matchedAny) return { error: false, message: flags.quiet ? '' : text, exitCode: 1 };
+    if (flags.quiet) return this._ok('');
     return this._ok(text);
   }
 
@@ -1956,11 +2424,16 @@ export class ShellTools {
     if (!positional.length) return this._ok(run(stdin === null ? '' : stdin));
     const out = [];
     for (const file of positional) {
-      const content = this._readFile(file);
-      if (content === null)
-        return this._err(`${name}: cannot open '${file}' for reading: No such file or directory`);
+      const read = this._readFileResult(file);
+      if (!read.ok) {
+        const reason =
+          read.error === 'EISDIR'
+            ? `${name}: error reading '${file}': Is a directory`
+            : `${name}: cannot open '${file}' for reading: ${errnoText(read.error)}`;
+        return this._err(reason);
+      }
       if (positional.length > 1) out.push(`==> ${file} <==`);
-      out.push(run(content));
+      out.push(run(read.content));
       if (positional.length > 1) out.push('');
     }
     return this._ok(out.join('\n').replace(/\n+$/, ''));
@@ -1997,8 +2470,15 @@ export class ShellTools {
     const lines = [];
     let total = { l: 0, w: 0, c: 0 };
     for (const file of files) {
-      const content = this._readFile(file);
-      if (content === null) return this._err(`wc: ${file}: No such file or directory`);
+      const read = this._readFileResult(file);
+      if (!read.ok) {
+        if (read.error === 'EISDIR') {
+          lines.push(`wc: ${file}: Is a directory`, `${format({ l: 0, w: 0, c: 0 })} ${file}`);
+          continue;
+        }
+        return this._err(this._readError('wc', file, read));
+      }
+      const content = read.content;
       const counts = countsFor(content);
       total = { l: total.l + counts.l, w: total.w + counts.w, c: total.c + counts.c };
       lines.push(`${format(counts)} ${file}`);
@@ -2010,27 +2490,105 @@ export class ShellTools {
   // ── text utilities ───────────────────────────────────────────────────────
 
   _cmd_sort(args, stdin) {
-    const numeric = args.includes('-n');
-    const reverse = args.includes('-r');
-    const unique = args.includes('-u');
-    const files = args.filter((arg) => !arg.startsWith('-'));
-    const input = files.length
-      ? files
-          .map((file) => this._readFile(file))
-          .filter((text) => text !== null)
-          .join('\n')
-      : stdin === null
-        ? ''
-        : stdin;
+    let numeric = false;
+    let reverse = false;
+    let unique = false;
+    let ignoreCase = false;
+    let human = false;
+    let separator = null;
+    let key = null;
+    const files = [];
+    for (let index = 0; index < args.length; index += 1) {
+      const arg = args[index];
+      if (arg === '-t' || arg === '--field-separator') {
+        separator = args[++index] ?? null;
+        continue;
+      }
+      if (arg.startsWith('-t') && arg.length > 2) {
+        separator = arg.slice(2);
+        continue;
+      }
+      if (arg === '-k' || arg === '--key') {
+        key = args[++index] ?? null;
+        continue;
+      }
+      if (arg.startsWith('-k') && arg.length > 2) {
+        key = arg.slice(2);
+        continue;
+      }
+      if (arg.startsWith('--key=')) {
+        key = arg.slice(6);
+        continue;
+      }
+      if (/^-[a-zA-Z]+$/.test(arg)) {
+        for (const flag of arg.slice(1)) {
+          if (flag === 'n') numeric = true;
+          else if (flag === 'r') reverse = true;
+          else if (flag === 'u') unique = true;
+          else if (flag === 'f') ignoreCase = true;
+          else if (flag === 'h') human = true;
+        }
+        continue;
+      }
+      if (arg.startsWith('--')) continue;
+      files.push(arg);
+    }
+    let input;
+    if (files.length) {
+      const chunks = [];
+      for (const file of files) {
+        const read = this._readFileResult(file);
+        if (!read.ok) {
+          return {
+            error: true,
+            message: `sort: cannot read: ${file}: ${errnoText(read.error)}`,
+            exitCode: 2,
+          };
+        }
+        chunks.push(read.content.endsWith('\n') ? read.content : `${read.content}\n`);
+      }
+      input = chunks.join('');
+    } else input = stdin === null ? '' : stdin;
     let lines = String(input).split('\n');
     if (lines.length && lines[lines.length - 1] === '') lines.pop();
-    lines.sort((left, right) =>
-      numeric
-        ? Number.parseFloat(left) - Number.parseFloat(right)
-        : String(left).localeCompare(String(right))
-    );
+    // `-k N[,M]`: compare from field N (fields split on -t, else on blank runs).
+    const keyOf = (line) => {
+      if (!key) return line;
+      const [startSpec, endSpec] = String(key).split(',');
+      const start = Math.max(1, Number.parseInt(startSpec, 10) || 1);
+      const end = endSpec ? Number.parseInt(endSpec, 10) || start : null;
+      const fields = separator !== null ? line.split(separator) : line.trim().split(/\s+/);
+      const slice = fields.slice(start - 1, end ? end : undefined);
+      return slice.join(separator !== null ? separator : ' ');
+    };
+    const humanValue = (text) => {
+      const match = String(text)
+        .trim()
+        .match(/^(-?[\d.]+)([KMGTP]?)/i);
+      if (!match) return 0;
+      const power = ' KMGTP'.indexOf((match[2] || ' ').toUpperCase());
+      return Number.parseFloat(match[1]) * 1024 ** Math.max(0, power);
+    };
+    const compare = (left, right) => {
+      const a = keyOf(left);
+      const b = keyOf(right);
+      if (numeric || human) {
+        const x = human ? humanValue(a) : Number.parseFloat(a) || 0;
+        const y = human ? humanValue(b) : Number.parseFloat(b) || 0;
+        if (x !== y) return x - y;
+        return left < right ? -1 : left > right ? 1 : 0;
+      }
+      const ka = ignoreCase ? a.toLowerCase() : a;
+      const kb = ignoreCase ? b.toLowerCase() : b;
+      const primary = ka.localeCompare(kb);
+      if (primary !== 0) return primary;
+      return left < right ? -1 : left > right ? 1 : 0;
+    };
+    lines.sort(compare);
     if (reverse) lines.reverse();
-    if (unique) lines = lines.filter((line, index) => index === 0 || line !== lines[index - 1]);
+    if (unique) {
+      lines = lines.filter((line, index) => index === 0 || compare(line, lines[index - 1]) !== 0);
+    }
     return this._ok(lines.join('\n'));
   }
 
@@ -2245,6 +2803,7 @@ export class ShellTools {
    */
   _cmd_sed(args, stdin) {
     let quiet = false;
+    let inPlace = null;
     const scripts = [];
     const files = [];
     for (let index = 0; index < args.length; index += 1) {
@@ -2258,13 +2817,31 @@ export class ShellTools {
         continue;
       }
       if (arg === '-E' || arg === '-r' || arg === '--regexp-extended') continue; // same subset
+      // GNU `-i[SUFFIX]` / `--in-place[=SUFFIX]` (1.16.0): edit files in place.
+      if (arg === '-i' || arg === '--in-place') {
+        inPlace = '';
+        continue;
+      }
+      if (/^-i\S+$/.test(arg)) {
+        inPlace = arg.slice(2);
+        continue;
+      }
+      if (arg.startsWith('--in-place=')) {
+        inPlace = arg.slice(11);
+        continue;
+      }
+      if (/^-[nEr]+i?$/.test(arg)) {
+        if (arg.includes('n')) quiet = true;
+        if (arg.endsWith('i')) inPlace = '';
+        continue;
+      }
       if (arg === '--') {
         for (const rest of args.slice(index + 1)) files.push(rest);
         break;
       }
       if (arg.startsWith('-') && arg !== '-') {
         return this._err(
-          `sed: unsupported option '${arg}' (simulator supports: sed [-n] [-e script] [script] [file ...])`
+          `sed: unsupported option '${arg}' (simulator supports: sed [-n] [-i] [-e script] [script] [file ...])`
         );
       }
       if (!scripts.length && !files.length) scripts.push(arg);
@@ -2274,248 +2851,98 @@ export class ShellTools {
     try {
       commands = parseSedScript(scripts.join('\n'));
     } catch (error) {
-      return this._err(`sed: ${error && error.message ? error.message : error}`);
+      return this._err(
+        `sed: -e expression #1, char 1: ${error && error.message ? error.message : error}`
+      );
+    }
+    const transform = (text) => {
+      const lines = String(text).split('\n');
+      const trailingNewline = lines.length > 1 && lines[lines.length - 1] === '';
+      if (lines.length && lines[lines.length - 1] === '') lines.pop();
+      const output = [];
+      lines.forEach((line, index) => {
+        const lineNumber = index + 1;
+        let pattern = line;
+        let deleted = false;
+        for (const command of commands) {
+          const applies = sedAddressMatches(command.address, lineNumber, lines.length, pattern);
+          if (!applies) continue;
+          if (command.type === 'print') {
+            output.push(pattern);
+            continue;
+          }
+          if (command.type === 'delete') {
+            deleted = true;
+            break;
+          }
+          if (command.type === 'substitute') {
+            const global = command.global === true;
+            const regex = global
+              ? new RegExp(command.regex.source, `${command.regex.flags.replace('g', '')}g`)
+              : command.regex;
+            const next = pattern.replace(regex, sedReplacementString(command.replacement));
+            const changed = next !== pattern || regex.test(pattern);
+            pattern = next;
+            if (command.printAfter && changed) output.push(pattern);
+          }
+        }
+        if (!deleted && !quiet) output.push(pattern);
+      });
+      return { text: output.join('\n'), trailingNewline };
+    };
+    if (inPlace !== null) {
+      if (!files.length) return this._err('sed: no input files');
+      for (const file of files) {
+        const read = this._readFileResult(file);
+        if (!read.ok) {
+          return this._err(`sed: can't read ${file}: ${errnoText(read.error)}`);
+        }
+        // GNU sed -i writes a temporary file next to the original, then renames it: the
+        // DIRECTORY must be writable (not the file), exactly like the real failure.
+        const dir = this.host.stat(read.path.replace(/\/[^/]*$/, '') || '/', { user: 'root' });
+        const ident = this.host.identity(this._user());
+        if (dir.ok && !this.host._can(dir.node, ident, 3)) {
+          const suffix = fakeTempSuffix(read.path);
+          return this._err(
+            `sed: couldn't open temporary file ${read.path.replace(/\/[^/]*$/, '')}/sed${suffix}: Permission denied`
+          );
+        }
+        const result = transform(read.content);
+        if (inPlace)
+          this.host.writeFile(`${read.path}${inPlace}`, read.content, { user: this._user() });
+        const node = this.host.stat(read.path, { user: 'root' }).node;
+        this.host._setContent(read.path, node, result.text + (result.trailingNewline ? '\n' : ''));
+      }
+      this._refreshFilesPanel();
+      return this._ok('');
     }
     let input;
     if (files.length) {
       const chunks = [];
       for (const file of files) {
-        const content = this._readFile(file);
-        if (content === null)
-          return this._err(`sed: can't read ${file}: No such file or directory`);
-        chunks.push(content);
+        const read = this._readFileResult(file);
+        if (!read.ok) return this._err(`sed: can't read ${file}: ${errnoText(read.error)}`);
+        chunks.push(read.content);
       }
       input = chunks.join('\n');
     } else {
       input = stdin === null || stdin === undefined ? '' : String(stdin);
     }
-    const lines = input.split('\n');
-    if (lines.length && lines[lines.length - 1] === '') lines.pop();
-    const output = [];
-    lines.forEach((line, index) => {
-      const lineNumber = index + 1;
-      let pattern = line;
-      let deleted = false;
-      for (const command of commands) {
-        const applies = sedAddressMatches(command.address, lineNumber, lines.length);
-        if (command.type === 'print') {
-          if (applies) output.push(pattern);
-          continue;
-        }
-        if (command.type === 'delete') {
-          if (applies) {
-            deleted = true;
-            break;
-          }
-          continue;
-        }
-        if (command.type === 'substitute') {
-          const global = command.global === true;
-          const regex = global
-            ? new RegExp(command.regex.source, `${command.regex.flags.replace('g', '')}g`)
-            : command.regex;
-          pattern = pattern.replace(regex, sedReplacementString(command.replacement));
-          if (command.printAfter && applies) output.push(pattern);
-        }
-      }
-      if (!deleted && !quiet) output.push(pattern);
-    });
-    return this._ok(output.join('\n'));
+    return this._ok(transform(input).text);
   }
 
   // ── editing / filesystem ─────────────────────────────────────────────────
 
-  _cmd_vim(args, stdin) {
-    return this._openEditor(args);
+  _cmd_vim(args) {
+    return this._openEditor(args, 'vim');
   }
 
-  _cmd_vi(args, stdin) {
-    return this._openEditor(args);
+  _cmd_vi(args) {
+    return this._openEditor(args, 'vi');
   }
 
-  _openEditor(args) {
-    const path = args.find((arg) => !arg.startsWith('-'));
-    const panel = this.bar?.game?.manifestPanel || this.bar?.manifestPanel;
-    if (!path) {
-      if (panel && typeof panel.show === 'function') {
-        panel.show();
-        return this._ok(
-          'Opening the Files panel (manifest editor). Use `vim <file>` to edit a specific manifest.'
-        );
-      }
-      return this._err('vim: the manifest editor is not available in this build');
-    }
-    if (!this._fileExists(path)) this._writeFile(path, '');
-    if (panel && typeof panel.openFile === 'function') {
-      panel.openFile(path);
-      return this._ok(
-        `Opening ${path} in the Files panel (manifest editor).\nSave (Ctrl+S) to write the file, then apply it with \`oc apply -f ${path}\`.`
-      );
-    }
-    return this._ok(
-      `${path}\n(On a real cluster vim opens this file in the terminal; this simulator opens the Files panel when available.)`
-    );
-  }
-
-  /**
-   * `ls` with real shell semantics (#36): list the IMMEDIATE children of the
-   * target directory (names relative to it, directories suffixed with `/`),
-   * de-duplicated — never the recursive full VFS paths. `ls <file>` prints the
-   * file, `ls a b` lists each target with a `a:` header, and dotfiles are
-   * hidden unless `-a`.
-   */
-  _cmd_ls(args, stdin) {
-    const flags = new Set();
-    const targets = [];
-    let endOfFlags = false;
-    for (const arg of args) {
-      if (!endOfFlags && arg === '--') {
-        endOfFlags = true;
-        continue;
-      }
-      if (!endOfFlags && arg.startsWith('-') && arg !== '-') {
-        for (const flag of arg.slice(1)) flags.add(flag);
-        continue;
-      }
-      targets.push(arg);
-    }
-    const showAll = flags.has('a');
-    const longFormat = flags.has('l');
-    const recursive = flags.has('R');
-    /** Immediate children of a directory prefix from the recursive file list. */
-    const childrenOf = (prefix) => {
-      const clean = this.expandHomePath(prefix)
-        .replace(/^\.\/+/, '')
-        .replace(/\/+$/, '');
-      const base = clean ? `${clean}/` : '';
-      const entries = new Map();
-      for (const file of this.bar._manifestFileList()) {
-        if (base && !file.startsWith(base)) continue;
-        const rest = base ? file.slice(base.length) : file;
-        if (!rest) continue;
-        const segments = rest.split('/');
-        const name = segments[0];
-        if (!name || (!showAll && name.startsWith('.'))) continue;
-        const isDirectory = segments.length > 1;
-        if (!entries.has(name)) entries.set(name, isDirectory);
-      }
-      return [...entries.entries()]
-        .sort(([left], [right]) => left.localeCompare(right))
-        .map(([name, isDirectory]) => ({ name, isDirectory }));
-    };
-    const formatEntry = (targetDir, entry) => {
-      const path = targetDir
-        ? `${String(targetDir).replace(/\/+$/, '')}/${entry.name}`
-        : entry.name;
-      if (!longFormat) return entry.isDirectory ? `${entry.name}/` : entry.name;
-      const size = entry.isDirectory ? 4096 : (this._readFile(path) || '').length;
-      return `${entry.isDirectory ? 'drwxr-xr-x' : '-rw-r--r--'}. 1 student student ${String(size).padStart(6)} ${entry.name}${entry.isDirectory ? '/' : ''}`;
-    };
-    const listTarget = (target) => {
-      const clean = this.expandHomePath(target)
-        .replace(/^\.\/+/, '')
-        .replace(/\/+$/, '');
-      const entries = childrenOf(clean);
-      if (entries.length) {
-        if (recursive) {
-          const output = entries.flatMap((entry) => {
-            const child = clean ? `${clean}/${entry.name}` : entry.name;
-            if (!entry.isDirectory) return [formatEntry(clean, entry)];
-            return [`${child}:`, ...childrenOf(child).map((item) => formatEntry(child, item))];
-          });
-          return { output };
-        }
-        return { output: entries.map((entry) => formatEntry(clean, entry)) };
-      }
-      const direct = clean ? this._readFile(clean) : null;
-      if (direct !== null) return { output: [target] };
-      if (!clean) return { output: [] };
-      // An existing-but-empty directory (`ls /tmp` after its last file is
-      // removed) lists nothing and succeeds (#76).
-      if (this._isVirtualDirectory(clean)) return { output: [] };
-      return { error: `ls: cannot access '${target}': No such file or directory` };
-    };
-    if (!targets.length) targets.push('');
-    const blocks = [];
-    for (const target of targets) {
-      const result = listTarget(target);
-      if (result.error) return this._err(result.error);
-      if (targets.length > 1 && !longFormat && result.output.length) {
-        blocks.push(`${target}:`);
-      }
-      blocks.push(...result.output);
-    }
-    return this._ok(blocks.join('\n'));
-  }
-
-  _cmd_rm(args, stdin) {
-    const force = args.some((arg) => /^-[a-zA-Z]*f/.test(arg));
-    const files = args.filter((arg) => !arg.startsWith('-'));
-    if (!files.length) return this._err('rm: missing operand');
-    const errors = [];
-    for (const file of files) {
-      if (!this._fileExists(file)) {
-        // A directory target is a real error unless -f; `rm -r` is not modelled.
-        if (this._isVirtualDirectory(file)) {
-          if (!force) errors.push(`rm: cannot remove '${file}': Is a directory`);
-          continue;
-        }
-        if (!force) errors.push(`rm: cannot remove '${file}': No such file or directory`);
-        continue;
-      }
-      this._deleteFile(file);
-    }
-    if (errors.length) return this._err(errors.join('\n'));
-    return this._ok('');
-  }
-
-  _cmd_touch(args, stdin) {
-    const files = args.filter((arg) => !arg.startsWith('-'));
-    if (!files.length) return this._err('touch: missing file operand');
-    for (const file of files) {
-      if (!this._fileExists(file)) this._writeFile(file, '');
-    }
-    return this._ok('');
-  }
-
-  _cmd_cp(args, stdin) {
-    const files = args.filter((arg) => !arg.startsWith('-'));
-    if (files.length !== 2) return this._err('cp: missing destination file operand after source');
-    const [source, destination] = files;
-    const content = this._readFile(source);
-    if (content === null)
-      return this._err(`cp: cannot stat '${source}': No such file or directory`);
-    this._writeFile(destination, content);
-    return this._ok('');
-  }
-
-  _cmd_mv(args, stdin) {
-    const files = args.filter((arg) => !arg.startsWith('-'));
-    if (files.length !== 2) return this._err('mv: missing destination file operand after source');
-    const [source, destination] = files;
-    const content = this._readFile(source);
-    if (content === null)
-      return this._err(`mv: cannot stat '${source}': No such file or directory`);
-    this._writeFile(destination, content);
-    this._deleteFile(source);
-    return this._ok('');
-  }
-
-  _cmd_pwd() {
-    return this._ok(this.cwd || '/');
-  }
-
-  _cmd_which(args) {
-    if (!args.length) return this._err('which: missing argument');
-    return this._ok(
-      args
-        .map((name) => {
-          if (this.isShellLead(name) || name === 'oc') return `/usr/bin/${name}`;
-          return `which: no ${name} in (/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin)`;
-        })
-        .join('\n')
-    );
-  }
+  // 1.16.0: ls, rm, touch, cp, mv, pwd, which, the editor (`_openEditor`) and every other
+  // RHEL workstation command live in js/ui/LinuxCommands.js (mixed in below the class).
 
   _cmd_env() {
     return this._ok(
@@ -2584,7 +3011,13 @@ export class ShellTools {
         lines.push(`bash: export: \`${arg}': not a valid identifier`);
         continue;
       }
-      this.env.set(name, equals < 0 ? '' : String(arg).slice(equals + 1));
+      // `export NAME` exports the variable's current value (`PATH=…; export PATH`).
+      const current = this.vars.has(name)
+        ? this.vars.get(name)
+        : this.env.has(name)
+          ? this.env.get(name)
+          : (this.exportedEnvironment()[name] ?? '');
+      this.env.set(name, equals < 0 ? current : String(arg).slice(equals + 1));
       this.vars.delete(name);
     }
     return lines.length ? this._err(lines.join('\n')) : this._ok('');
@@ -3338,7 +3771,7 @@ export class ShellTools {
       num_redirects: String(redirects || 0),
       time_total: '0.001',
       size_download: String(String(body || '').length),
-      content_type: String(headers['content-type'] || '')
+      content_type: String(headers['content-type'] || headers['Content-Type'] || '')
         .split(';')[0]
         .trim(),
       redirect_url: String(headers.location || ''),
@@ -3433,7 +3866,10 @@ export class ShellTools {
       if (!parsed.hostname) {
         return this._curlError(3, 'URL rejected: Malformed input to a URL function');
       }
+      // 1.16.0: the workstation's resolver first (/etc/hosts, localhost services, the API
+      // endpoint); anything it does not own keeps the router/internet paths below.
       result =
+        this._workstationHostCurl(parsed, options) ||
         this._simulatedInternetCurl(parsed) ||
         this._workstationCurl(url, {
           method: options.head ? 'HEAD' : options.method || 'GET',
@@ -3527,9 +3963,11 @@ export class ShellTools {
           return this._curlError(77, `error setting certificate file: ${options.cacert}`);
         }
       } else if (!certificate.trusted) {
-        const problem = certificate.selfSigned
-          ? 'self-signed certificate'
-          : 'unable to get local issuer certificate';
+        const problem =
+          certificate.problem ||
+          (certificate.selfSigned
+            ? 'self-signed certificate'
+            : 'unable to get local issuer certificate');
         return this._curlFailureOutput(
           options,
           { code: 60, message: `SSL certificate problem: ${problem}` },
@@ -3617,10 +4055,13 @@ export class ShellTools {
    */
   runExecCurl(args, context = {}) {
     const { options, urls } = this._parseCurlOptions(args);
+    // Keep curl's own exit status (6/7/28/35…): the exec surface prints
+    // `command terminated with exit code N` and `&&`/`||` must see it (1.16.0 —
+    // a NetworkPolicy-blocked `curl -s` used to exit 0 with no output).
     const asResult = (value) =>
       value.message === ''
-        ? { ok: !value.error, lines: [] }
-        : { ok: !value.error, lines: String(value.message).split('\n') };
+        ? { ok: !value.error, lines: [], exitCode: value.exitCode }
+        : { ok: !value.error, lines: String(value.message).split('\n'), exitCode: value.exitCode };
     if (!urls.length) {
       return {
         ok: false,
@@ -3779,6 +4220,8 @@ export class ShellTools {
 
   _cmd_skopeo(args, stdin) {
     const sub = String(args[0] || '').toLowerCase();
+    if (sub === '--version' || sub === '-v') return this._ok('skopeo version 1.18.1');
+    if (sub === 'list-tags' && this._skopeoListTags) return this._skopeoListTags(args.slice(1));
     if (sub !== 'inspect') {
       return this._err(
         `FATA[0000] skopeo: unsupported command "${sub || ''}" (simulator supports: skopeo inspect [--format=...] docker://<image>)`
@@ -3804,6 +4247,10 @@ export class ShellTools {
     const bare = String(reference)
       .replace(/^docker:\/\//, '')
       .replace(/^oci:\/\//, '');
+    // 1.16.0: images of the workstation's registry catalog answer like the registry
+    // (one digest per image whatever tag spelling, the real `skopeo inspect` JSON).
+    const catalog = this._skopeoCatalogInspect?.(bare, format);
+    if (catalog) return catalog;
     const info = this.bar._imageInfoFor(bare, this.bar.currentProject);
     const tag = bare.includes(':') ? bare.split(':').pop() : 'latest';
     const inspect = {
@@ -3840,10 +4287,10 @@ export class ShellTools {
   _cmd_clear() {
     return { error: false, message: '', clear: true };
   }
-
-  _cmd_exit() {
-    return { error: false, message: '', exit: true };
-  }
 }
+
+// The RHEL 9 workstation commands (cd, ls -l, chmod, systemctl, dnf, podman, …) and the
+// filesystem/permission-aware replacements of ls/rm/cp/mv/touch/pwd/which/exit/editor.
+Object.assign(ShellTools.prototype, LINUX_COMMAND_METHODS);
 
 export default ShellTools;

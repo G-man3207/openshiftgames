@@ -11,6 +11,7 @@
  *   helm/webapp/        a local chart for `helm install webapp helm/webapp`
  *   htpasswd            HTPasswd identity-provider user database
  *   examples/           quotas, LimitRange, Subscriptions (incl. OLM variants), BuildConfig
+ *   netpol/             the NetworkPolicy level's docs policies and its egress starter
  *
  * All files in this map parse with js/engine/YamlParser.js (helm templates are
  * valid YAML before Go-template rendering because their expressions are quoted).
@@ -552,6 +553,121 @@ spec:
               policy-group.network.openshift.io/ingress: ""
 `,
 
+  // ─── NetworkPolicy lab (campaign "Network Policies", id 21) ───────────────
+  // The OpenShift 4.22 docs policies (deny-by-default, allow-same-namespace,
+  // allow-from-openshift-ingress) plus an egress lockdown that keeps DNS
+  // working. allow-frontend-to-backend.yaml is a starter the player completes.
+  'netpol/deny-by-default.yaml': `# Deny all ingress by default (the "deny-by-default" policy from the
+# OpenShift docs). An empty podSelector selects every Pod of the project;
+# with no ingress rules nothing may connect to them until another policy
+# allows it. Egress is not affected.
+kind: NetworkPolicy
+apiVersion: networking.k8s.io/v1
+metadata:
+  name: deny-by-default
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+  ingress: []
+`,
+
+  'netpol/allow-from-openshift-ingress.yaml': `# Let the OpenShift router reach the Pods behind your Routes. The router Pods
+# run in the openshift-ingress namespace, which the ingress operator labels
+# policy-group.network.openshift.io/ingress: "" — the documented 4.x selector.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-from-openshift-ingress
+spec:
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              policy-group.network.openshift.io/ingress: ""
+  podSelector: {}
+  policyTypes:
+    - Ingress
+`,
+
+  'netpol/allow-same-namespace.yaml': `# Accept connections from any Pod of the same project ("allow-same-namespace"
+# in the OpenShift docs). A podSelector inside "from" without a
+# namespaceSelector only matches Pods of this namespace, so other projects
+# stay locked out.
+kind: NetworkPolicy
+apiVersion: networking.k8s.io/v1
+metadata:
+  name: allow-same-namespace
+spec:
+  podSelector: {}
+  ingress:
+    - from:
+        - podSelector: {}
+`,
+
+  'netpol/deny-all-egress.yaml': `# Deny all egress by default: Pods of the project may not open any
+# connection — not even a DNS lookup — until an egress rule allows it.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: deny-all-egress
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+`,
+
+  'netpol/allow-dns.yaml': `# Allow DNS lookups while egress is denied. The dns-default Pods in
+# openshift-dns listen on port 5353 (the dns-default Service maps 53 to 5353)
+# and a NetworkPolicy matches the Pod port, so allow 5353 over UDP and TCP:
+# port 53 alone does not unblock name resolution.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dns
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: openshift-dns
+      ports:
+        - protocol: UDP
+          port: 5353
+        - protocol: TCP
+          port: 5353
+`,
+
+  'netpol/allow-frontend-to-backend.yaml': `# Starter: the egress half of the frontend -> backend call. Once egress is
+# denied by default, the Pods that SEND need their own allow rule (the
+# receiving side is covered by an ingress policy). Replace the placeholders,
+# then apply the file:
+#   SOURCE-APP  app label of the Pods that send    (frontend)
+#   TARGET-APP  app label of the Pods they may call (backend)
+# The port is the Pod (container) port the backend listens on.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-frontend-to-backend
+spec:
+  podSelector:
+    matchLabels:
+      app: SOURCE-APP
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app: TARGET-APP
+      ports:
+        - protocol: TCP
+          port: 8080
+`,
+
   'examples/privileged-deployment.yaml': `apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -645,13 +761,17 @@ spec:
     - metallb-system
 `,
 
-  'examples/metallb.yaml': `apiVersion: metallb.io/v1beta1
+  'examples/metallb.yaml': `# MetalLB configuration (needs the MetalLB operator installed in metallb-system).
+# 1. MetalLB: the operator's own resource; creating it starts the controller and
+#    the speaker Pods.
+apiVersion: metallb.io/v1beta1
 kind: MetalLB
 metadata:
   name: metallb
   namespace: metallb-system
 spec: {}
 ---
+# 2. IPAddressPool: the addresses MetalLB may give to LoadBalancer Services.
 apiVersion: metallb.io/v1beta1
 kind: IPAddressPool
 metadata:
@@ -662,6 +782,7 @@ spec:
     - 192.168.100.200-192.168.100.210
   autoAssign: true
 ---
+# 3. L2Advertisement: answer ARP for the pool's addresses on the local network.
 apiVersion: metallb.io/v1beta1
 kind: L2Advertisement
 metadata:

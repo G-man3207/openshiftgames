@@ -25,6 +25,7 @@
  */
 
 import { ResourceBase } from './ResourceBase.js';
+import { templateHash } from '../engine/TemplateHash.js';
 
 /** Project the monitoring stack lives in. */
 export const MONITORING_NAMESPACE = 'openshift-monitoring';
@@ -308,10 +309,20 @@ function podAlertRecords(pod) {
     .map((status) => status.state?.waiting?.reason || '')
     .filter(Boolean);
   const records = [];
+  // The real rule is `max_over_time(…waiting_reason{reason="CrashLoopBackOff"}[5m]) >= 1`:
+  // a container the kubelet has just restarted out of its back-off (running again,
+  // not Ready yet) is still inside that window, so the alert must not blink off
+  // for the instant between a restart and the next crash (1.16.0).
+  const restartedOutOfBackOff = (status) =>
+    (status.restartCount || 0) > 0 &&
+    Boolean(status.lastState?.terminated) &&
+    Boolean(status.state?.running) &&
+    status.ready !== true;
   if (
     waitingReasons.includes('CrashLoopBackOff') ||
     pod.status?.phase === 'Failed' ||
-    statuses.some((status) => (status.restartCount || 0) > 0 && status.state?.waiting)
+    statuses.some((status) => (status.restartCount || 0) > 0 && status.state?.waiting) ||
+    statuses.some(restartedOutOfBackOff)
   ) {
     records.push({
       name: 'KubePodCrashLooping',
@@ -664,18 +675,50 @@ function seedAlertmanager(cluster) {
       resources: { requests: { cpu: '1m', memory: '10Mi' } },
     },
   ];
+  // The prometheus-operator runs Alertmanager as StatefulSet alertmanager-main
+  // with an emptyDir `alertmanager-main-db` (no storage configured). Its Pods
+  // carry that controller ownerReference — bare Pods would make the documented
+  // `oc adm drain <node> --ignore-daemonsets --delete-emptydir-data` fail with
+  // "declare no controller" (1.16.0).
+  const podLabels = { app: 'alertmanager', alertmanager: 'main' };
+  const volumes = [{ name: 'alertmanager-main-db', emptyDir: {} }];
+  const statefulSet = addResource(cluster, 'StatefulSet', 'alertmanager-main', {
+    namespace: MONITORING_NAMESPACE,
+    labels: { ...podLabels, 'app.kubernetes.io/managed-by': 'prometheus-operator' },
+    spec: {
+      replicas,
+      serviceName: 'alertmanager-operated',
+      podManagementPolicy: 'Parallel',
+      selector: { matchLabels: { ...podLabels } },
+      template: {
+        metadata: { labels: { ...podLabels } },
+        spec: {
+          containers,
+          volumes,
+          restartPolicy: 'Always',
+          serviceAccountName: 'alertmanager-main',
+        },
+      },
+    },
+    status: { replicas, readyReplicas: replicas, availableReplicas: replicas },
+  });
+  // Same revision name the StatefulSet controller derives, so it never rolls
+  // the seeded Pods on its first tick.
+  const revisionName = statefulSet?.spec?.template
+    ? `alertmanager-main-${templateHash(statefulSet.spec.template)}`
+    : 'alertmanager-main-7c9b8f6d5';
   for (let replica = 0; replica < replicas; replica += 1) {
     const podName = `alertmanager-main-${replica}`;
-    addResource(cluster, 'Pod', podName, {
+    const pod = addResource(cluster, 'Pod', podName, {
       namespace: MONITORING_NAMESPACE,
       labels: {
-        app: 'alertmanager',
-        alertmanager: 'main',
-        'controller-revision-hash': 'alertmanager-main-7c9b8f6d5',
+        ...podLabels,
+        'controller-revision-hash': revisionName,
         'statefulset.kubernetes.io/pod-name': podName,
       },
       spec: {
         containers,
+        volumes,
         nodeName: `worker-${replica}`,
         restartPolicy: 'Always',
         serviceAccountName: 'alertmanager-main',
@@ -694,6 +737,11 @@ function seedAlertmanager(cluster) {
         ),
       },
     });
+    const statefulSetUid = statefulSet?.metadata?.uid || statefulSet?.uid;
+    const podUid = pod?.metadata?.uid || pod?.uid;
+    if (statefulSetUid && podUid && typeof cluster.addRelationship === 'function') {
+      cluster.addRelationship(statefulSetUid, podUid);
+    }
   }
 }
 

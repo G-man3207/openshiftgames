@@ -468,6 +468,8 @@ const CHALLENGES = [
         type: 'command',
         pattern: 'oc\\s+(logs|describe)\\s+.*payment-service',
         count: 1,
+        // 1.16.0: the read must have shown something (not a NotFound/empty read).
+        inspect: true,
         label: 'Diagnose the failing workload with oc logs/describe',
       },
     ],
@@ -506,6 +508,8 @@ const CHALLENGES = [
         kind: 'Secret',
         name: 'app-tls',
         namespace: 'web',
+        // 1.16.0: a TLS Secret, not any Secret named app-tls.
+        secretType: 'kubernetes.io/tls',
         label: 'Create TLS Secret app-tls',
       },
       {
@@ -794,6 +798,8 @@ const CHALLENGES = [
         type: 'scc',
         scc: 'privileged',
         subject: 'system:serviceaccount:secure:priv-sa',
+        // 1.16.0: dedicated — a grant that also reaches `default` does not count.
+        exclusive: true,
         label: 'Grant the privileged SCC to the dedicated ServiceAccount priv-sa',
       },
       {
@@ -970,7 +976,8 @@ const CHALLENGES = [
         type: 'operator',
         name: 'ansible-automation-platform',
         installed: false,
-        label: 'Uninstall the old AAP operator Subscription',
+        // 1.16.0: an uninstall is Subscription AND CSV (aap-operator.v2.6.0) gone.
+        label: 'Uninstall the old AAP operator (Subscription and its CSV)',
       },
       {
         type: 'command',
@@ -1040,7 +1047,13 @@ const CHALLENGES = [
     timeLimit: 420,
     docsLinks: [DOCS.idp, DOCS.auth, DOCS.rbac],
     objectives: [
-      { type: 'command', pattern: 'htpasswd', count: 1, label: 'Create an htpasswd entry' },
+      {
+        type: 'command',
+        // 1.16.0: the htpasswd tool adding a user (not `--from-file=htpasswd`, not -D).
+        pattern: '^(oc\\s+)?htpasswd\\s+(-(?![a-zA-Z]*D)[a-zA-Z]+\\s+)*[^-\\s]\\S*\\s+[^-\\s]\\S*',
+        count: 1,
+        label: 'Create an htpasswd entry',
+      },
       {
         type: 'deploy',
         kind: 'Secret',
@@ -1058,7 +1071,13 @@ const CHALLENGES = [
         secretName: 'htpass-secret',
         label: 'Activate the OAuth HTPasswd identity provider (htpass-secret)',
       },
-      { type: 'user', name: 'alice', label: 'User alice exists (created on first login)' },
+      {
+        type: 'user',
+        name: 'alice',
+        // 1.16.0: created by a first login (has an Identity), not `oc create user`.
+        viaLogin: true,
+        label: 'User alice exists (created on first login)',
+      },
       { type: 'login', user: 'alice', label: 'Log in as alice' },
       {
         // Issue #71: state-graded rotation — the player's OWN new password
@@ -1081,6 +1100,8 @@ const CHALLENGES = [
         kind: 'RoleBinding',
         namespace: 'onboarding',
         count: 1,
+        // 1.16.0: the access must be granted to alice (or her group).
+        subjects: ['user:alice', 'group:developers'],
         label: 'Grant project access in onboarding',
       },
       {

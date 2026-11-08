@@ -817,9 +817,10 @@ export class HUD {
       levelName.textContent =
         mode === 'challenge'
           ? status.title || ''
-          : status.levelTitle
-            ? `L${status.currentLevel} · ${status.levelTitle}`
-            : `Level ${status.currentLevel || ''}`;
+          : // `levelLabel` is the display number ("0.3", "22"); ids are save keys.
+            status.levelTitle
+            ? `L${status.levelLabel || status.currentLevel} · ${status.levelTitle}`
+            : `Level ${status.levelLabel || status.currentLevel || ''}`;
     }
   }
 

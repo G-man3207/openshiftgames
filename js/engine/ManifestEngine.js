@@ -1345,6 +1345,34 @@ export class ManifestEngine {
     return { path: match.path, name: match.name };
   }
 
+  /**
+   * Record a Template the API server processed for `oc new-app --template=<name>`
+   * (a cluster or `openshift` Template, never rendered by this engine): stored
+   * like a `processTemplate()` result and marked applied, so template
+   * objectives and counters treat it exactly like `oc process … | oc apply -f -`.
+   * Call it only after every object was created (1.16.0).
+   *
+   * @param {{name: string, params?: object}} template template name + effective parameters
+   * @param {object[]} objects the processed objects
+   * @param {Array<object>} [resources] what new-app created (refs or resources)
+   * @returns {{path: string, name: string}}
+   */
+  recordTemplateDeployed(template, objects, resources = []) {
+    const name = String(template?.name || 'template');
+    const record = {
+      path: `template/${name}`,
+      name,
+      params: { ...(template?.params || {}) },
+      objects: clone(Array.isArray(objects) ? objects : []),
+      applied: false,
+      at: Date.now(),
+    };
+    this.templates.push(record);
+    if (this.templates.length > 50) this.templates.shift();
+    this._recordTemplateApplied(record, Array.isArray(resources) ? resources : []);
+    return { path: record.path, name: record.name };
+  }
+
   _matchPendingTemplate(objects) {
     // `oc process ... | oc apply -f -` pipes a `kind: List` document; flatten it
     // so the piped objects can still be matched against a pending template.

@@ -1,10 +1,14 @@
 /**
- * CampaignMode — EX280 campaign runner (20 levels, 5 chapters).
+ * CampaignMode — campaign runner: the optional Linux & RHEL Foundations prelude
+ * (chapter 0) plus the EX280 track (chapters 1–5).
  *
  * Responsibilities:
- *  - load CONVERSION-SPEC §9 level data (js/data/CampaignLevels.js),
+ *  - load CONVERSION-SPEC §9 level data (js/data/CampaignLevels.js); campaign
+ *    ORDER, unlocking and display labels come from its helpers — level ids are
+ *    stable save keys, never positions,
  *  - seed the level's Projects/Nodes/workloads through the registry factory,
  *  - seed the Files/Manifests panel for declarative levels (manifestFiles/focusFiles),
+ *  - seed the simulated RHEL workstation for Linux levels (`levelDef.linuxHost`),
  *  - load scripted incidents,
  *  - evaluate objectives every second via js/engine/ObjectiveEvaluator.js,
  *  - keep the public API consumed by index.html unchanged
@@ -15,7 +19,16 @@
  * also works against partially-integrated builds and in the Node test harness.
  */
 
-import { CAMPAIGN_LEVELS, CHAPTERS } from '../data/CampaignLevels.js';
+import {
+  CAMPAIGN_LEVELS,
+  CHAPTERS,
+  EX280_ORDER,
+  continueLevelId,
+  getCampaignLevel,
+  isLevelUnlocked,
+  isPreludeLevel,
+  levelLabel,
+} from '../data/CampaignLevels.js';
 import {
   createObjectiveProgress,
   evaluateObjectives,
@@ -33,6 +46,28 @@ const CAMPAIGN_STATE = {
 
 const DEFAULT_PROJECT = 'default';
 const DEFAULT_USER = 'kubeadmin';
+
+/** Seeded kinds that get the conventional `app=<name>` label (application objects). */
+const APP_LABELED_KINDS = new Set([
+  'Pod',
+  'Deployment',
+  'ReplicaSet',
+  'StatefulSet',
+  'DaemonSet',
+  'Job',
+  'CronJob',
+  'Service',
+  'Route',
+  'Ingress',
+  'ConfigMap',
+  'Secret',
+  'PersistentVolumeClaim',
+  'HorizontalPodAutoscaler',
+  'PodDisruptionBudget',
+  'BuildConfig',
+  'Build',
+  'ImageStream',
+]);
 
 class CampaignMode {
   constructor(gameEngine, incidentEngine, scoringEngine) {
@@ -65,10 +100,10 @@ class CampaignMode {
     const campaignProgress = progress.campaignProgress || {};
     return CAMPAIGN_LEVELS.map((level) => {
       const levelProgress = campaignProgress[level.id];
-      const previousCompleted =
-        level.id === 1 || Boolean(campaignProgress[level.id - 1]?.completed);
       return {
         id: level.id,
+        label: levelLabel(level.id),
+        prelude: isPreludeLevel(level.id),
         title: level.title,
         chapter: level.chapter,
         chapterName: level.chapterName,
@@ -78,7 +113,7 @@ class CampaignMode {
         objectives: level.objectives,
         manifestFiles: level.manifestFiles || [],
         focusFiles: level.focusFiles || [],
-        locked: !previousCompleted,
+        locked: !isLevelUnlocked(level.id, campaignProgress),
         completed: Boolean(levelProgress?.completed),
         stars: levelProgress?.stars || 0,
         bestTime: levelProgress?.bestTime || null,
@@ -103,6 +138,7 @@ class CampaignMode {
         id: chapter.id,
         name: chapter.name,
         description: chapter.description,
+        prelude: Boolean(chapter.prelude),
         levels,
         totalStars,
         maxStars: levels.length * 3,
@@ -114,7 +150,7 @@ class CampaignMode {
   // ─── level lifecycle ─────────────────────────────────────────────────────
 
   startLevel(levelId) {
-    const levelDef = CAMPAIGN_LEVELS.find((level) => level.id === Number(levelId));
+    const levelDef = getCampaignLevel(levelId);
     if (!levelDef) return false;
 
     if (!this.isLevelUnlocked(levelDef.id)) return false;
@@ -146,6 +182,9 @@ class CampaignMode {
     }
 
     this.seedManifestPanel(levelDef);
+    // After the Files panel reset: home-directory files of the workstation live
+    // in the same virtual filesystem, so the host seed must be applied last.
+    this.seedLinuxHost(levelDef);
 
     if (levelDef.tutorial) {
       this.tutorialActive = true;
@@ -171,6 +210,8 @@ class CampaignMode {
 
     this.emit('campaign:level-started', {
       levelId: levelDef.id,
+      levelLabel: levelLabel(levelDef.id),
+      prelude: isPreludeLevel(levelDef.id),
       title: levelDef.title,
       chapter: levelDef.chapter,
       chapterName: levelDef.chapterName,
@@ -187,10 +228,20 @@ class CampaignMode {
     return true;
   }
 
+  /**
+   * Unlocked when the previous level of the same track is completed (prelude
+   * and EX280 track are separate; the prelude never gates Level 1), when it is
+   * a track's first level, or when it was completed before.
+   */
   isLevelUnlocked(levelId) {
-    if (levelId <= 1) return true;
     const progress = this.scoringEngine?.getProgress?.() || { campaignProgress: {} };
-    return Boolean(progress.campaignProgress?.[levelId - 1]?.completed);
+    return isLevelUnlocked(levelId, progress.campaignProgress || {});
+  }
+
+  /** The level the "Continue" action opens for the current saved progress. */
+  getContinueLevelId() {
+    const progress = this.scoringEngine?.getProgress?.() || { campaignProgress: {} };
+    return continueLevelId(progress.campaignProgress || {});
   }
 
   /**
@@ -277,7 +328,12 @@ class CampaignMode {
       descriptor.namespace ||
       descriptor.metadata?.namespace ||
       (descriptor.kind === 'Project' ? '' : defaultProject);
-    const labels = { app: name, ...(descriptor.labels || {}) };
+    // Only application objects get the conventional `app=<name>` label; a real
+    // Node, Project, Subscription or RBAC object carries no such label (1.16.0:
+    // `oc describe node` showed `app=worker-0`).
+    const labels = APP_LABELED_KINDS.has(descriptor.kind)
+      ? { app: name, ...(descriptor.labels || {}) }
+      : { ...(descriptor.labels || {}) };
     const added = clusterState.addResource({
       kind: descriptor.kind,
       name,
@@ -362,6 +418,26 @@ class CampaignMode {
       }
     }
     return { files, focusFiles };
+  }
+
+  /**
+   * Reset the simulated RHEL workstation (js/engine/LinuxHost.js) and apply the
+   * level's `linuxHost` seed (Linux & RHEL Foundations levels). Levels without a
+   * seed get the default workstation, so a previous Linux level never leaks its
+   * files, services or containers into the next level.
+   */
+  seedLinuxHost(levelDef) {
+    const host =
+      this.gameEngine?.linuxHost ||
+      (typeof window !== 'undefined' ? window.game?.linuxHost || null : null);
+    if (!host || typeof host.reset !== 'function') return false;
+    try {
+      host.reset(levelDef?.linuxHost ?? null);
+      return true;
+    } catch (error) {
+      console.warn('CampaignMode: linuxHost.reset failed', error);
+      return false;
+    }
   }
 
   // ─── per-second tick ─────────────────────────────────────────────────────
@@ -479,7 +555,9 @@ class CampaignMode {
 
     const completionData = {
       levelId: this.currentLevel,
-      title: this.currentLevelDef?.title || `Level ${this.currentLevel}`,
+      levelLabel: levelLabel(this.currentLevel),
+      prelude: isPreludeLevel(this.currentLevel),
+      title: this.currentLevelDef?.title || `Level ${levelLabel(this.currentLevel)}`,
       chapter: this.currentLevelDef?.chapter,
       chapterName: this.currentLevelDef?.chapterName,
       stars: result?.stars || 1,
@@ -519,7 +597,8 @@ class CampaignMode {
     }
     this.emit('campaign:level-failed', {
       levelId: this.currentLevel,
-      title: this.currentLevelDef?.title || `Level ${this.currentLevel}`,
+      levelLabel: levelLabel(this.currentLevel),
+      title: this.currentLevelDef?.title || `Level ${levelLabel(this.currentLevel)}`,
       reason,
       elapsedTime: Math.round(this.elapsedTime),
     });
@@ -541,7 +620,7 @@ class CampaignMode {
   start() {
     if (this.state === CAMPAIGN_STATE.PLAYING) return true;
     if (this.currentLevel && this.currentLevelDef) return this.retryLevel();
-    return this.startLevel(1);
+    return this.startLevel(this.getContinueLevelId());
   }
 
   nextLevel() {
@@ -554,10 +633,11 @@ class CampaignMode {
       this.campaignFinished = true;
       const payload = {
         levelId: this.currentLevel,
-        title: this.currentLevelDef?.title || `Level ${this.currentLevel}`,
+        levelLabel: levelLabel(this.currentLevel),
+        title: this.currentLevelDef?.title || `Level ${levelLabel(this.currentLevel)}`,
         totalLevels: CAMPAIGN_LEVELS.length,
         state: this.state,
-        message: 'Campaign complete — all 20 EX280 levels finished.',
+        message: `Campaign complete — all ${EX280_ORDER.length} EX280 levels finished.`,
       };
       this.emit('campaign:campaign-complete', payload);
       this.emit('mode:campaign-complete', payload);
@@ -750,6 +830,9 @@ class CampaignMode {
     return {
       state: this.state,
       currentLevel: this.currentLevel,
+      // Display number ("0.3", "12", "22"); `currentLevel` stays the stable id.
+      levelLabel: this.currentLevel ? levelLabel(this.currentLevel) : null,
+      prelude: this.currentLevel ? isPreludeLevel(this.currentLevel) : false,
       levelTitle: this.currentLevelDef?.title || null,
       chapter: this.currentLevelDef?.chapter || null,
       chapterName: this.currentLevelDef?.chapterName || null,

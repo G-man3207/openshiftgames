@@ -70,7 +70,7 @@
     <script type="importmap">
       {
         "imports": {
-          "./js/": "./v/1.15.0/js/",
+          "./js/": "./v/1.16.0/js/",
           "three": "https://unpkg.com/three@0.152.0/build/three.module.js",
           "three/addons/": "https://unpkg.com/three@0.152.0/examples/jsm/"
         }
@@ -183,7 +183,8 @@
               </button>
             </div>
             <p class="sp-specs">
-              <span><strong>20</strong> levels</span>
+              <span><strong>22</strong> EX280 levels</span>
+              <span><strong>7</strong> Linux levels</span>
               <span><strong>13</strong> timed labs</span>
               <span><strong>55</strong> exam objectives</span>
               <span>No install</span>
@@ -241,15 +242,16 @@
                 class="menu-btn sp-mode"
                 type="button"
                 data-mode="campaign"
-                title="20-level EX280 campaign"
+                title="22-level EX280 campaign with an optional Linux prelude"
               >
                 <span class="sp-mode-name">Campaign</span>
                 <span class="sp-mode-desc"
-                  >Twenty levels across the EX280 chapters: projects and the CLI, YAML and
-                  Kustomize, builds and Routes, identity and RBAC, security and a final production
-                  platform.</span
+                  >Twenty-two levels across the EX280 chapters: projects and the CLI, YAML and
+                  Kustomize, builds and Routes, identity and RBAC, security, network policies, node
+                  troubleshooting and a final production platform. New to Linux? Start with the RHEL
+                  foundations prelude.</span
                 >
-                <span class="sp-mode-meta">20 levels · 5 chapters</span>
+                <span class="sp-mode-meta">22 levels · 5 chapters · Linux prelude</span>
                 <span class="sp-mode-arrow"
                   ><svg
                     viewBox="0 0 16 16"
@@ -498,12 +500,13 @@
               src="img/start/levels.png"
               width="3000"
               height="2220"
-              alt="The EX280 campaign level select: five chapters of four levels each, with progress, lock states and a Start campaign action."
+              alt="The campaign level select: the optional Linux &amp; RHEL Foundations prelude above the five EX280 chapters, with progress, lock states and a Start campaign action."
             />
             <figcaption class="sp-fig-caption">
-              The campaign in the app: five chapters, twenty levels, one level unlocked at a time.
-              Every level carries the EX280 objectives it drills, and the EX280 Prep tracker turns
-              them into a readiness verdict.
+              The campaign in the app: an optional Linux &amp; RHEL foundations prelude, then five
+              chapters and twenty-two EX280 levels, one level unlocked at a time. Every EX280 level
+              carries the objectives it drills, and the EX280 Prep tracker turns them into a
+              readiness verdict.
             </figcaption>
           </figure>
         </section>
@@ -551,8 +554,8 @@
                 Operators, SCCs and LoadBalancers that behave like the platform.
               </li>
               <li>
-                <strong>Twenty levels, five chapters</strong>From your first Project to a full
-                production platform build.
+                <strong>Twenty-two levels, five chapters</strong>From your first Project to a full
+                production platform build, after an optional seven-level Linux &amp; RHEL prelude.
               </li>
               <li>
                 <strong>Thirteen timed labs</strong>Speed drills from CrashLoopBackOff to edge TLS
@@ -1016,11 +1019,12 @@
           <div class="select-titles">
             <h2>EX280 Campaign</h2>
             <p>
-              20 levels · 5 chapters · from your first Project to a production OpenShift platform
+              Linux prelude + 22 levels · 5 chapters · from the RHEL shell to a production OpenShift
+              platform
             </p>
           </div>
           <div class="select-actions">
-            <span id="level-select-progress" class="select-progress">0 / 20 complete</span>
+            <span id="level-select-progress" class="select-progress">0 / 29 complete</span>
             <button id="level-continue" class="btn-primary">Continue</button>
           </div>
         </header>
@@ -1220,8 +1224,8 @@
             You finished the campaign. Now do it on a real cluster.
           </h2>
           <p class="handover-lede">
-            All 20 levels are done, but a simulator cannot replace a real API server. Before you
-            book EX280V422, stand up a cluster of your own and re-run the workflows where exam
+            All 22 EX280 levels are done, but a simulator cannot replace a real API server. Before
+            you book EX280V422, stand up a cluster of your own and re-run the workflows where exam
             muscle memory matters most.
           </p>
         </header>
@@ -1408,7 +1412,16 @@
       import { ChaosMode } from './js/modes/ChaosMode.js';
       import { SandboxMode } from './js/modes/SandboxMode.js';
       import { ChallengeMode } from './js/modes/ChallengeMode.js';
-      import { CAMPAIGN_LEVELS, CHAPTERS } from './js/data/CampaignLevels.js';
+      import {
+        CAMPAIGN_LEVELS,
+        CHAPTERS,
+        CAMPAIGN_ORDER,
+        EX280_ORDER,
+        continueLevelId,
+        isCampaignComplete,
+        isLevelUnlocked,
+        levelLabel,
+      } from './js/data/CampaignLevels.js';
       import { ACHIEVEMENTS } from './js/data/Achievements.js';
       import { CHALLENGES } from './js/modes/ChallengeMode.js';
       import {
@@ -1616,6 +1629,8 @@
             manifestEngine: null,
             manifestPanel: null,
             examPrepUI: null,
+            // The simulated RHEL workstation (js/engine/LinuxHost.js, 1.16.0).
+            linuxHost: this.engine.linuxHost || null,
           };
 
           // #67: kubelet-executed probes must reuse the SAME simulated container
@@ -2054,11 +2069,15 @@
             const isCampaign = this.currentMode === 'campaign';
             const isFinalLevel = isCampaign && data.nextLevel == null;
             const nextBtn = document.getElementById('level-complete-next');
+            // The last Linux prelude level hands over to the EX280 track.
+            const leavesPrelude = isCampaign && data.prelude && data.nextLevel === EX280_ORDER[0];
             const nextLabel = isFinalLevel
               ? 'Finish campaign'
-              : this.modeInstance && typeof this.modeInstance.nextLevel === 'function'
-                ? 'Next Level'
-                : 'Back to menu';
+              : leavesPrelude
+                ? 'Start Level 1'
+                : this.modeInstance && typeof this.modeInstance.nextLevel === 'function'
+                  ? 'Next Level'
+                  : 'Back to menu';
             if (nextBtn) nextBtn.textContent = nextLabel;
             if (isFinalLevel && titleEl && !/complete/i.test(String(data.title || ''))) {
               titleEl.textContent = 'Campaign complete!';
@@ -2408,7 +2427,7 @@
             } else if (mode === 'chaos') {
               kickerEl.textContent = `Chaos mode · Wave ${status.waveNumber || 1}`;
             } else {
-              kickerEl.textContent = `Campaign · Level ${status.currentLevel || 1}${status.chapterName ? ` · ${status.chapterName}` : ''}`;
+              kickerEl.textContent = `Campaign · Level ${status.levelLabel || levelLabel(status.currentLevel || 1)}${status.chapterName ? ` · ${status.chapterName}` : ''}`;
             }
           }
           if (subEl) {
@@ -2544,8 +2563,13 @@
          */
         _isInsertableCommand(text) {
           const value = String(text || '').trim();
-          if (!/^(oc|helm|cat|echo|htpasswd|openssl|curl|vi|vim|ls|export|skopeo)\s+\S/.test(value))
-            return false;
+          // `oc`/`helm` need arguments; workstation commands (the 1.16.0 RHEL prelude)
+          // may stand alone (`pwd`, `id`, `getenforce`).
+          const withArgs =
+            /^(oc|helm|cat|echo|printf|htpasswd|openssl|curl|vi|vim|ls|cd|export|skopeo|sed|grep|head|tail|cut|sort|uniq|wc|tr|tee|less|find|stat|du|df|base64|rm|rmdir|mkdir|touch|cp|mv|ln|tar|sudo|chmod|chown|chgrp|restorecon|ps|pgrep|kill|pkill|top|systemctl|journalctl|ip|ss|ping|dig|host|nslookup|getent|firewall-cmd|dnf|rpm|podman|printenv|which|source|bash)\s+\S/;
+          const bare =
+            /^(pwd|id|whoami|groups|getenforce|sestatus|hostname|uptime|date|free -h|timedatectl|env)$/;
+          if (!withArgs.test(value) && !bare.test(value)) return false;
           return !/<[A-Za-z][\w.-]*>|…|\.\.\./.test(value);
         }
 
@@ -3728,11 +3752,13 @@
             progress = {};
           }
           const campaignProgress = progress.campaignProgress || {};
-          const levels = CAMPAIGN_LEVELS.length || 20;
+          // The handover follows the capstone: it reports the EX280 track (the
+          // optional Linux prelude is not an EX280 drill).
+          const levels = EX280_ORDER.length || 20;
           let completed = 0;
           let stars = 0;
-          for (const level of CAMPAIGN_LEVELS) {
-            const entry = campaignProgress[level.id] ?? campaignProgress[String(level.id)];
+          for (const levelId of EX280_ORDER) {
+            const entry = campaignProgress[levelId] ?? campaignProgress[String(levelId)];
             if (entry?.completed) completed += 1;
             stars += Math.max(0, Math.min(3, Number(entry?.stars) || 0));
           }
@@ -3801,7 +3827,7 @@
                 : { label: 'Keep going', tone: 'todo' };
           const cards = [
             {
-              label: 'Campaign levels',
+              label: 'EX280 levels',
               value: `${results.completed}/${results.levels}`,
               note: 'completed',
             },
@@ -3889,7 +3915,7 @@
             const needsClusterAdmin = HANDOVER_CLUSTER_ADMIN_LEVEL_IDS.has(id);
             items.push({
               id: `level-${id}`,
-              title: `Redo L${id} — ${level?.title || `Campaign level ${id}`}`,
+              title: `Redo L${levelLabel(id)} — ${level?.title || `Campaign level ${levelLabel(id)}`}`,
               detail: needsClusterAdmin
                 ? 'Cluster-admin on a real cluster (not the Developer Sandbox): replay the same workflow and watch the console.'
                 : 'Replay the same workflow against a real API server and watch the console.',
@@ -4026,8 +4052,14 @@
                   this.incidentEngine,
                   this.scoringEngine
                 );
-                if (this.modeInstance.startLevel(levelOrChallenge || 1) === false)
-                  this.modeInstance.startLevel(1);
+                // A locked or unknown level falls back to where the player is
+                // (the Continue level), never to a level they already passed.
+                if (
+                  this.modeInstance.startLevel(
+                    levelOrChallenge || this.modeInstance.getContinueLevelId()
+                  ) === false
+                )
+                  this.modeInstance.startLevel(this.modeInstance.getContinueLevelId());
                 break;
               case 'chaos':
                 this.modeInstance = new ChaosMode(
@@ -4309,7 +4341,7 @@
                 metaEl.dataset.urgent = String(left <= 30);
               }
             } else {
-              metaEl.textContent = `Campaign · Level ${status.currentLevel || '?'}${status.chapterName ? ` · ${status.chapterName}` : ''}`;
+              metaEl.textContent = `Campaign · Level ${status.levelLabel || status.currentLevel || '?'}${status.chapterName ? ` · ${status.chapterName}` : ''}`;
               delete metaEl.dataset.urgent;
             }
           }
@@ -4318,8 +4350,8 @@
               ? "Time's up — lab failed"
               : status.title || 'Timed lab'
             : status.levelTitle
-              ? `L${status.currentLevel || '?'} · ${status.levelTitle}`
-              : `Level ${status.currentLevel || '?'}`;
+              ? `L${status.levelLabel || status.currentLevel || '?'} · ${status.levelTitle}`
+              : `Level ${status.levelLabel || status.currentLevel || '?'}`;
           if (descEl) {
             descEl.innerHTML = this._inlineFormat(levelDef?.description || '');
             // Only clamped (and clickable) while the terminal covers the lower screen.
@@ -4353,7 +4385,8 @@
                 'The lab clock reached 00:00 — retry the lab from the result dialog.';
             } else if (pending) {
               nextWrap.hidden = false;
-              nextText.textContent = pending.label || pending.type || 'Continue';
+              // Labels may carry `code` (paths/commands in the Linux prelude).
+              nextText.innerHTML = this._inlineFormat(pending.label || pending.type || 'Continue');
             } else if (total > 0) {
               nextWrap.hidden = false;
               nextText.textContent = 'All objectives complete — nice work.';
@@ -4383,7 +4416,7 @@
                   ? '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="m3.5 8.5 3 3 6-7" stroke-linecap="round" stroke-linejoin="round"/></svg>'
                   : ''
               }</span>
-              <span class="obj-main"><span class="obj-label">${escapeHtml(obj.label || obj.type || 'Objective')}${progress}</span>${note ? `<span class="obj-note">${note}</span>` : ''}</span>`;
+              <span class="obj-main"><span class="obj-label">${this._inlineFormat(obj.label || obj.type || 'Objective')}${progress}</span>${note ? `<span class="obj-note">${note}</span>` : ''}</span>`;
               listEl.appendChild(row);
             }
           }
@@ -4851,7 +4884,7 @@
                 <h3 class="intro-block-title">${helpObjective ? 'Next step' : 'All objectives complete'}</h3>
                 ${
                   helpObjective
-                    ? `<p class="intro-next">${escapeHtml(helpObjective.label || helpObjective.type)}</p>`
+                    ? `<p class="intro-next">${this._inlineFormat(helpObjective.label || helpObjective.type)}</p>`
                     : '<p class="intro-note">Nice work. The level finishes by itself.</p>'
                 }
                 ${helpObjective?.note?.text ? `<div class="mission-note">${this._noteHtml(helpObjective.note)}</div>` : ''}
@@ -4864,12 +4897,12 @@
               </div>`
               : '';
           const title = isCampaign
-            ? `L${levelDef.id} · ${levelDef.title}`
+            ? `L${levelLabel(levelDef.id)} · ${levelDef.title}`
             : isChallenge
               ? levelDef.title
               : modeNames[mode] || mode;
           const kicker = isCampaign
-            ? `Campaign · Level ${levelDef.id}${levelDef.chapterName ? ` · ${levelDef.chapterName}` : ''}`
+            ? `Campaign · Level ${levelLabel(levelDef.id)}${levelDef.chapterName ? ` · ${levelDef.chapterName}` : ''}`
             : isChallenge
               ? `Timed lab · ${Math.round((levelDef.timeLimit || 0) / 60)} minutes`
               : `${modeNames[mode] || mode} · OpenShift 4.22`;
@@ -4887,7 +4920,7 @@
                  ${objectiveItems
                    .map(
                      (item) =>
-                       `<li${item.done ? ' class="is-done"' : ''}>${escapeHtml(item.label)}${item.done ? '<span class="intro-done"> · done</span>' : ''}</li>`
+                       `<li${item.done ? ' class="is-done"' : ''}>${this._inlineFormat(item.label)}${item.done ? '<span class="intro-done"> · done</span>' : ''}</li>`
                    )
                    .join('')}
                </ol>
@@ -5067,41 +5100,36 @@
           if (progressLabel)
             progressLabel.textContent = `${completedIds.length} / ${(CAMPAIGN_LEVELS || []).length} complete`;
 
-          let continueLevel = 1;
-          for (const level of CAMPAIGN_LEVELS || []) {
-            const prevCompleted = level.id === 1 || campaignProgress[level.id - 1]?.completed;
-            const isLocked = !prevCompleted;
-            if (!isLocked && !campaignProgress[level.id]?.completed) {
-              continueLevel = level.id;
-              break;
-            }
-          }
+          // Campaign order, unlocking and display numbers come from the level
+          // data helpers: ids are stable save keys, not positions (1.16.0).
+          const continueLevel = continueLevelId(campaignProgress);
           const continueBtn = document.getElementById('level-continue');
           if (continueBtn) {
-            const campaignComplete = completedIds.length === (CAMPAIGN_LEVELS || []).length;
+            const campaignComplete = isCampaignComplete(campaignProgress);
             continueBtn.textContent =
               completedIds.length === 0
                 ? 'Start campaign'
                 : campaignComplete
                   ? 'Replay campaign'
-                  : `Continue · Level ${continueLevel}`;
-            continueBtn.onclick = () =>
-              this.launchGame('campaign', campaignComplete ? 1 : continueLevel);
+                  : `Continue · Level ${levelLabel(continueLevel)}`;
+            continueBtn.onclick = () => this.launchGame('campaign', continueLevel);
           }
 
           for (const chapterInfo of CHAPTERS || []) {
             const block = document.createElement('section');
-            block.className = 'chapter-block';
-            const chapterLevels = (CAMPAIGN_LEVELS || []).filter(
-              (level) => (level.chapter || 1) === chapterInfo.id
-            );
+            block.className = `chapter-block${chapterInfo.prelude ? ' chapter-prelude' : ''}`;
+            // `CHAPTERS[].levels` is the campaign order (chapter 0 is the prelude:
+            // never fall back to chapter 1 for a falsy chapter id).
+            const chapterLevels = (chapterInfo.levels || [])
+              .map((id) => (CAMPAIGN_LEVELS || []).find((level) => level.id === id))
+              .filter(Boolean);
             const doneInChapter = chapterLevels.filter(
               (level) => campaignProgress[level.id]?.completed
             ).length;
             block.innerHTML = `
             <header class="chapter-row">
               <div class="chapter-titles">
-                <h3 class="chapter-name">${escapeHtml(chapterInfo.name)}</h3>
+                <h3 class="chapter-name">${escapeHtml(chapterInfo.name)}${chapterInfo.prelude ? ' <span class="chapter-tag">Optional prelude</span>' : ''}</h3>
                 <p class="chapter-desc">${escapeHtml(chapterInfo.description || '')}</p>
               </div>
               <span class="chapter-progress">${doneInChapter} / ${chapterLevels.length}</span>
@@ -5109,8 +5137,7 @@
             <div class="chapter-levels"></div>`;
             const levelsWrap = block.querySelector('.chapter-levels');
             for (const level of chapterLevels) {
-              const prevCompleted = level.id === 1 || campaignProgress[level.id - 1]?.completed;
-              const isLocked = !prevCompleted;
+              const isLocked = !isLevelUnlocked(level.id, campaignProgress);
               const entry = campaignProgress[level.id];
               const isCompleted = Boolean(entry?.completed);
               const stars = entry?.stars || 0;
@@ -5127,11 +5154,12 @@
               card.type = 'button';
               card.className = classes;
               card.dataset.level = String(level.id);
+              card.dataset.levelLabel = levelLabel(level.id);
               card.disabled = isLocked;
               card.innerHTML = `
-              <span class="level-number">${isLocked ? '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="3.5" y="7" width="9" height="6.5" rx="1.5"/><path d="M5.5 7V5a2.5 2.5 0 015 0v2" stroke-linecap="round"/></svg>' : level.id}</span>
+              <span class="level-number">${isLocked ? '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="3.5" y="7" width="9" height="6.5" rx="1.5"/><path d="M5.5 7V5a2.5 2.5 0 015 0v2" stroke-linecap="round"/></svg>' : escapeHtml(levelLabel(level.id))}</span>
               <span class="level-body">
-                <span class="level-title">${escapeHtml(level.title || level.name || `Level ${level.id}`)}</span>
+                <span class="level-title">${escapeHtml(level.title || level.name || `Level ${levelLabel(level.id)}`)}</span>
                 <span class="level-meta">${isCompleted ? 'Completed' : isLocked ? 'Locked — finish the previous level' : isNext ? 'Up next' : 'Ready'}</span>
               </span>
               <span class="level-tail">
@@ -5202,7 +5230,7 @@
             const card = document.createElement('div');
             card.className = `achievement-card ${isUnlocked ? 'unlocked' : 'locked'}`;
             card.innerHTML = `
-            <div class="achievement-icon">${ach.icon || '&#127942;'}</div>
+            <div class="achievement-icon" aria-hidden="true">${isUnlocked ? '&#9733;' : '&#9734;'}</div>
             <div class="achievement-name">${escapeHtml(isUnlocked ? ach.name : '???')}</div>
             <div class="achievement-desc">${escapeHtml(isUnlocked ? String(ach.description).replace(/`/g, '') : 'Keep playing to unlock')}</div>`;
             grid.appendChild(card);
@@ -5237,7 +5265,7 @@
             ${cell('Incidents Resolved', incidents)}
             ${cell('oc Commands Run', commands)}
             ${cell('Time Played', this.formatTime(stats.totalTimePlayed || 0))}
-            ${cell('Campaign Stars', `${stars} / 60`, 'text-yellow-400')}
+            ${cell('Campaign Stars', `${stars} / ${(CAMPAIGN_ORDER || []).length * 3}`, 'text-yellow-400')}
             ${cell('Achievements', `${ach} / ${(ACHIEVEMENTS || []).length}`, 'text-yellow-400')}
             ${cell('Best Chaos Time', this.formatTime(stats.longestChaosSurvival ?? stats.bestChaosSurvival ?? stats.bestChaosTime ?? 0), 'text-red-400')}
             ${cell('XP Level', progress.xpLevel || progress.level || 1, 'text-blue-400')}
@@ -5292,22 +5320,27 @@
           else app._showInitError(err);
         });
 
-      // GitHub stars (optional; fails silently offline / rate-limited)
-      fetch(GITHUB_API, { headers: { Accept: 'application/vnd.github+json' } })
-        .then((response) => (response.ok ? response.json() : null))
-        .then((data) => {
-          if (!data || typeof data.stargazers_count !== 'number') return;
-          const text =
-            data.stargazers_count >= 1000
-              ? `${(data.stargazers_count / 1000).toFixed(1)}k`
-              : String(data.stargazers_count);
-          window._ghStars = text;
-          for (const id of ['github-star-count', 'hud-github-stars', 'game-github-stars']) {
-            const el = document.getElementById(id);
-            if (el) el.textContent = text;
-          }
-        })
-        .catch(() => {});
+      // GitHub stars (optional; fails silently offline / rate-limited). Only on the
+      // production host: api.github.com allows 60 unauthenticated requests/hour per
+      // IP, and a throttled answer without CORS headers is logged by the browser as
+      // a console error that no `.catch()` can suppress (local runs / test suites).
+      if (/(^|\.)shifting\.pro$/.test(window.location.hostname)) {
+        fetch(GITHUB_API, { headers: { Accept: 'application/vnd.github+json' } })
+          .then((response) => (response.ok ? response.json() : null))
+          .then((data) => {
+            if (!data || typeof data.stargazers_count !== 'number') return;
+            const text =
+              data.stargazers_count >= 1000
+                ? `${(data.stargazers_count / 1000).toFixed(1)}k`
+                : String(data.stargazers_count);
+            window._ghStars = text;
+            for (const id of ['github-star-count', 'hud-github-stars', 'game-github-stars']) {
+              const el = document.getElementById(id);
+              if (el) el.textContent = text;
+            }
+          })
+          .catch(() => {});
+      }
     </script>
   </body>
 </html>

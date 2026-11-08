@@ -76,6 +76,9 @@ export const EX280_LEVEL_TITLES = {
   18: 'Operators',
   19: 'Jobs & CronJobs',
   20: 'EX280 Final: Production Platform',
+  // 1.16.0 bridge levels: new ids (ids are save keys), played before the capstone.
+  21: 'Network Policies',
+  22: 'Nodes & Cluster Troubleshooting',
 };
 
 /** Fixed challenge titles (mirrors docs/CONVERSION-SPEC.md §10 — the game is the source of truth). */
@@ -277,7 +280,7 @@ export const EX280_OBJECTIVE_GROUPS = [
         summary:
           'Inspect nodes, pods, deployments, ClusterOperators and the ClusterVersion to understand the state of the cluster and its workloads.',
         docsUrl: DOCS.nodes,
-        levels: [3, 20],
+        levels: [3, 22, 20],
         challenges: [2],
         commands: [
           `oc get nodes -o wide`,
@@ -324,7 +327,7 @@ export const EX280_OBJECTIVE_GROUPS = [
         summary:
           'Check node readiness, ClusterOperator Available/Degraded/Progressing states, ClusterVersion and top resource consumers before making changes.',
         docsUrl: DOCS.nodes,
-        levels: [3, 20],
+        levels: [3, 22, 20],
         challenges: [2],
         commands: [
           `oc get nodes -o wide`,
@@ -341,7 +344,7 @@ export const EX280_OBJECTIVE_GROUPS = [
         summary:
           'Diagnose ImagePullBackOff, CrashLoopBackOff, Pending, SCC/quota admission failures and route admission using describe, events, logs and debug.',
         docsUrl: DOCS.nodes,
-        levels: [3, 10],
+        levels: [3, 10, 22],
         challenges: [2, 9],
         commands: [
           `oc describe pod <pod>`,
@@ -547,7 +550,7 @@ export const EX280_OBJECTIVE_GROUPS = [
         summary:
           'Apply labels/annotations, query with selectors and keep Deployment selectors consistent with pod template labels and Service selectors.',
         docsUrl: DOCS.buildingApps,
-        levels: [2, 11],
+        levels: [2, 11, 21],
         challenges: [1, 9],
         commands: [
           `oc label deployment/web tier=frontend`,
@@ -691,7 +694,7 @@ export const EX280_OBJECTIVE_GROUPS = [
         summary:
           'Understand the cluster network configuration, the IngressController/router, the default ingress domain and how Services connect to pods.',
         docsUrl: DOCS.ingressLb,
-        levels: [11, 12],
+        levels: [11, 12, 21],
         challenges: [3],
         commands: [
           `oc get network/cluster -o yaml`,
@@ -706,7 +709,7 @@ export const EX280_OBJECTIVE_GROUPS = [
         summary:
           'Verify service endpoints, test connectivity from inside the cluster, inspect router/network pods and use oc debug node for node-level networking checks.',
         docsUrl: DOCS.networkSecurity,
-        levels: [3, 11],
+        levels: [11, 21],
         challenges: [9],
         commands: [
           `oc get endpoints`,
@@ -738,7 +741,7 @@ export const EX280_OBJECTIVE_GROUPS = [
         summary:
           'Implement default-deny ingress and targeted allow rules for applications; verify with in-cluster connectivity tests.',
         docsUrl: DOCS.networkPolicy,
-        levels: [20],
+        levels: [21, 20],
         challenges: [9],
         commands: [
           `oc apply -f deny-by-default.yaml -n web`,
@@ -768,7 +771,7 @@ export const EX280_OBJECTIVE_GROUPS = [
         summary:
           'Write NetworkPolicies with pod/namespace selectors and ports: default deny, allow same namespace, allow a labelled namespace, and restore DNS/ingress access.',
         docsUrl: DOCS.networkPolicy,
-        levels: [20],
+        levels: [21, 20],
         challenges: [9, 13],
         commands: [
           `oc apply -f allow-frontend.yaml -n web`,
@@ -889,7 +892,7 @@ export const EX280_OBJECTIVE_GROUPS = [
         summary:
           'Customize the template OpenShift uses for self-service project creation: generate the bootstrap `project-request` template, add guardrails (for example a NetworkPolicy) to its object list, store it in `openshift-config`, point the `project.config.openshift.io/cluster` singleton at it and verify that a new project inherits the objects. On a real cluster `oc edit` opens `$EDITOR` (vi/vim) in the terminal; the simulator opens its manifest editor instead.',
         docsUrl: DOCS.projects,
-        levels: [15, 8],
+        levels: [15],
         challenges: [12],
         commands: [
           `oc adm create-bootstrap-project-template -o yaml > template.yaml`,
@@ -913,7 +916,7 @@ export const EX280_OBJECTIVE_GROUPS = [
         summary:
           'Install from OperatorHub or CLI: create an OperatorGroup only for SingleNamespace installs, create a Subscription, approve the InstallPlan when manual and wait for the CSV to succeed. The simulator ships a local Subscription example (`examples/subscription.yaml`).',
         docsUrl: DOCS.operatorUserTasks,
-        levels: [12, 18],
+        levels: [18],
         challenges: [10],
         quickLabs: ['lab-operator'],
         commands: [
@@ -1820,6 +1823,38 @@ export const EX280_CHEATSHEET = [
     ],
   },
   {
+    id: 'network-policies',
+    title: 'Network policies',
+    docsUrl: DOCS.networkPolicy,
+    items: [
+      { cmd: `oc get networkpolicy -n <ns>`, note: 'Policies of a project.' },
+      {
+        cmd: `oc describe networkpolicy <name> -n <ns>`,
+        note: 'Selected Pods, allowed peers and ports.',
+      },
+      {
+        cmd: `oc apply -f deny-by-default.yaml -n <ns>`,
+        note: 'podSelector: {} with ingress: [] isolates every Pod.',
+      },
+      {
+        cmd: `oc get namespace openshift-ingress --show-labels`,
+        note: 'Router namespace label policy-group.network.openshift.io/ingress=.',
+      },
+      {
+        cmd: `oc label namespace <ns> team=<name>`,
+        note: 'Label a project for a namespaceSelector.',
+      },
+      {
+        cmd: `oc exec deploy/<name> -- curl -s http://<svc>:<port>`,
+        note: 'Test a path from inside a Pod.',
+      },
+      {
+        cmd: `oc exec deploy/<name> -- nslookup <svc>`,
+        note: 'DNS egress check (dns-default listens on 5353).',
+      },
+    ],
+  },
+  {
     id: 'health-troubleshooting',
     title: 'Cluster health & troubleshooting',
     docsUrl: DOCS.nodes,
@@ -1836,6 +1871,21 @@ export const EX280_CHEATSHEET = [
       { cmd: `oc get events -n <ns>`, note: 'Recent events.' },
       { cmd: `oc debug deployment/<name>`, note: 'Debug a copy of the workload pod.' },
       { cmd: `oc debug node/<node>`, note: 'Root shell on a node.' },
+      { cmd: `oc describe node <node>`, note: 'Conditions, capacity/allocatable, taints.' },
+      { cmd: `oc adm cordon <node>`, note: 'Stop scheduling new Pods on a node.' },
+      {
+        cmd: `oc adm drain <node> --ignore-daemonsets --delete-emptydir-data`,
+        note: 'Evict a node’s Pods before maintenance.',
+      },
+      { cmd: `oc adm uncordon <node>`, note: 'Return a node to service.' },
+      {
+        cmd: `oc debug node/<node> -- chroot /host journalctl -u kubelet`,
+        note: 'Read the kubelet log on a node.',
+      },
+      {
+        cmd: `oc debug node/<node> -- chroot /host systemctl restart kubelet`,
+        note: 'Restart a stopped kubelet (NotReady node).',
+      },
       { cmd: `oc adm must-gather`, note: 'Collect diagnostics.' },
       { cmd: `oc adm inspect clusteroperator`, note: 'Namespace/operator dump.' },
       { cmd: `oc get network/cluster -o yaml`, note: 'Cluster network config.' },

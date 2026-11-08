@@ -4856,6 +4856,19 @@ body.terminal-open {
   font-size: var(--fs-11);
   white-space: nowrap;
 }
+/* The optional Linux & RHEL Foundations prelude (chapter 0). */
+.chapter-tag {
+  display: inline-block;
+  margin-left: var(--s2);
+  padding: 1px 7px;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  color: var(--faint);
+  font-size: var(--fs-11);
+  font-weight: 500;
+  letter-spacing: 0;
+  vertical-align: 2px;
+}
 .chapter-levels {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -4904,10 +4917,13 @@ body.terminal-open {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 26px;
+  /* A circle for 1–2 digit numbers, a pill for prelude labels such as "0.3". */
+  box-sizing: border-box;
+  min-width: 26px;
   height: 26px;
+  padding: 0 6px;
   flex: 0 0 auto;
-  border-radius: 50%;
+  border-radius: 999px;
   border: 1px solid var(--line-strong);
   color: var(--muted);
   font-family: var(--font-mono);

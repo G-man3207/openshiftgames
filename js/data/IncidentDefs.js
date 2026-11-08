@@ -657,7 +657,9 @@ const INCIDENT_DEFS = [
       'oc get job <job> -o yaml',
       'oc logs job/<job>',
       'oc delete job <job>',
-      'oc create job <job> --image=perl --active-deadline-seconds=600 -- perl -e "print 42"',
+      // `oc create job` has only --image/--from: a plain Job carries no deadline
+      // (a longer activeDeadlineSeconds belongs in a Job manifest) — 1.16.0.
+      'oc create job <job> --image=perl -- perl -e "print 42"',
     ],
     autoResolveTime: null,
     docsUrl: DOCS.pod,

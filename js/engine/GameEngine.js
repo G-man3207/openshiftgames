@@ -47,6 +47,8 @@ import { apiVersionForKind, createResource, normalizeKind } from '../data/kindRe
 import { knownImageSecurityProfile } from '../resources/ImageSecurityProfiles.js';
 // API-server defaulting for Service objects (spec.clusterIP et al., issues #59/#60).
 import { defaultServiceSpec } from '../resources/NetworkResources.js';
+// The simulated RHEL 9 workstation behind the terminal (1.16.0, linux-engine).
+import { LinuxHost } from './LinuxHost.js';
 
 // ─── SHA1 + base64 helpers (for the simulated {SHA} htpasswd hashes) ──────
 
@@ -1119,6 +1121,14 @@ export class GameEngine {
     this.manifestEngine = null;
     /** Last error from applyManifestObject for caller diagnostics. */
     this.lastApplyError = null;
+    /**
+     * The simulated RHEL 9 workstation (js/engine/LinuxHost.js): filesystem, users,
+     * systemd, packages, network, firewalld, podman. Its home/tmp file contents live in
+     * the ManifestEngine (Files panel); CampaignMode re-seeds it per level with
+     * `linuxHost.reset(levelDef.linuxHost)`.
+     * @type {LinuxHost}
+     */
+    this.linuxHost = new LinuxHost({ fileStore: () => this._getManifestEngine() });
 
     this.state = GAME_STATES.INIT;
     this.mode = options.mode || GAME_MODES.SANDBOX;
@@ -2725,11 +2735,17 @@ export class GameEngine {
    * so objectives/achievements can track authorization. `command:executed` is
    * emitted by the CommandBar itself (per the integration contract).
    *
+   * `details.output` (what the line printed) and the project that was current
+   * when it ran are kept on the entry: `command` objectives and incident
+   * investigation only count a read that ran in the lab project and actually
+   * showed something (1.16.0 grading fixes).
+   *
    * @param {string} raw raw command line as typed
    * @param {boolean} [success]
-   * @returns {{raw: string, baseCommand: string, args: string[], success: boolean, timestamp: number}}
+   * @param {{output?: string}} [details]
+   * @returns {{raw: string, baseCommand: string, args: string[], success: boolean, timestamp: number, project: string|null, output?: string}}
    */
-  recordCommand(raw, success = true) {
+  recordCommand(raw, success = true, details = {}) {
     const parsed = GameEngine.parseCommandLine(raw);
     const entry = {
       raw: parsed.raw,
@@ -2737,7 +2753,9 @@ export class GameEngine {
       args: parsed.args,
       success: success !== false,
       timestamp: Date.now(),
+      project: this.currentProject || null,
     };
+    if (typeof details?.output === 'string') entry.output = details.output.slice(0, 4000);
     this._commandHistory.push(entry);
     if (this._commandHistory.length > this._maxCommandHistory) this._commandHistory.shift();
     this.eventBus.emit('command:recorded', entry);
@@ -3574,12 +3592,33 @@ export class GameEngine {
     };
   }
 
+  /**
+   * `oc new-app` CREATES every generated object (bulk Create, never apply): an
+   * object that already exists is an AlreadyExists error for that object while
+   * the others are still created, and the run ends `--> Failed` (exit 1).
+   * Records `{kind, name, namespace}` in `errors` instead of updating (1.16.0).
+   * @param {object} object manifest to create
+   * @param {Array<object>} errors collector for AlreadyExists entries
+   * @returns {object|null} the created resource, or null
+   */
+  _newAppCreate(object, errors) {
+    const kind = object?.kind;
+    const name = object?.metadata?.name;
+    const namespace = object?.metadata?.namespace || '';
+    if (kind && name && this.cluster.getByName(kind, name, namespace)) {
+      errors.push({ kind, name, namespace, reason: 'AlreadyExists' });
+      return null;
+    }
+    return this.applyManifestObject(object);
+  }
+
   /** @param {object} options */
   _newAppFromImage(options) {
     const namespace = options.namespace || this.currentProject;
     const name = options.name || this._appNameFor(options.image);
     const resources = [];
-    const deployment = this.applyManifestObject(
+    const errors = Array.isArray(options.errors) ? options.errors : [];
+    const deployment = this._newAppCreate(
       this._buildDeploymentObject({
         ...options,
         name,
@@ -3589,19 +3628,22 @@ export class GameEngine {
           options.containerPort ||
           knownImageSecurityProfile(options.image)?.ports?.[0] ||
           8080,
-      })
+      }),
+      errors
     );
-    if (!deployment)
+    if (!deployment && !errors.length)
       return { success: false, message: this.lastApplyError || 'failed to create deployment' };
-    resources.push(deployment);
-    const service = this.applyManifestObject(
-      this._buildServiceObject({ ...options, name, namespace })
+    if (deployment) resources.push(deployment);
+    const service = this._newAppCreate(
+      this._buildServiceObject({ ...options, name, namespace }),
+      errors
     );
     if (service) resources.push(service);
     this.eventBus.emit('app:created', { name, namespace, resources, source: 'image' });
     return {
-      success: true,
+      success: errors.length === 0,
       resources,
+      errors,
       message: `Deployment "${name}" created; Service "${name}" created`,
     };
   }
@@ -3623,16 +3665,28 @@ export class GameEngine {
     const source = options.code || options.git;
     const name = options.name || this._appNameFor(source === '.' ? 'app' : source);
     const resources = [];
+    const errors = Array.isArray(options.errors) ? options.errors : [];
     const imageStreamObject = {
       apiVersion: 'image.openshift.io/v1',
       kind: 'ImageStream',
       metadata: { name, namespace, labels: { app: name } },
       spec: { lookupPolicy: { local: false }, tags: [] },
     };
-    const imageStream = this.applyManifestObject(imageStreamObject);
+    const imageStream = this._newAppCreate(imageStreamObject, errors);
     if (imageStream) resources.push(imageStream);
 
-    const builderImage = options.builderImage || 'nodejs:20-ubi9';
+    // The builder named in `<builder>~<repo>` (or `--image-stream`): an image
+    // stream of the `openshift` namespace (`httpd` → `httpd:latest`), or a
+    // registry image used as a DockerImage builder. It used to be ignored, so
+    // every S2I app built with nodejs (1.16.0).
+    const builderSpec = String(options.builderImage || 'nodejs:20-ubi9');
+    const builderFrom = builderSpec.includes('/')
+      ? { kind: 'DockerImage', name: builderSpec }
+      : {
+          kind: 'ImageStreamTag',
+          name: builderSpec.includes(':') ? builderSpec : `${builderSpec}:latest`,
+          namespace: 'openshift',
+        };
     const buildConfigObject = {
       apiVersion: 'build.openshift.io/v1',
       kind: 'BuildConfig',
@@ -3646,7 +3700,7 @@ export class GameEngine {
         strategy: {
           type: 'Source',
           sourceStrategy: {
-            from: { kind: 'ImageStreamTag', name: builderImage, namespace: 'openshift' },
+            from: builderFrom,
           },
         },
         output: { to: { kind: 'ImageStreamTag', name: `${name}:latest` } },
@@ -3659,10 +3713,10 @@ export class GameEngine {
         ([envName, value]) => ({ name: envName, value: String(value) })
       );
     }
-    const buildConfig = this.applyManifestObject(buildConfigObject);
+    const buildConfig = this._newAppCreate(buildConfigObject, errors);
     if (buildConfig) resources.push(buildConfig);
 
-    const deployment = this.applyManifestObject(
+    const deployment = this._newAppCreate(
       this._buildDeploymentObject({
         ...options,
         name,
@@ -3678,26 +3732,40 @@ export class GameEngine {
             },
           },
         ],
-      })
+      }),
+      errors
     );
     if (deployment) resources.push(deployment);
-    const service = this.applyManifestObject(
-      this._buildServiceObject({ ...options, name, namespace })
+    const service = this._newAppCreate(
+      this._buildServiceObject({ ...options, name, namespace }),
+      errors
     );
     if (service) resources.push(service);
 
-    const buildResult = this.startBuild(name, { namespace });
     this.eventBus.emit('app:created', { name, namespace, resources, source: 'git' });
+    // Only a NEWLY created BuildConfig fires its ConfigChange trigger; a re-run
+    // that hit AlreadyExists starts no second build (1.16.0).
+    if (!buildConfig) {
+      return {
+        success: errors.length === 0,
+        resources,
+        errors,
+        message: `BuildConfig "${name}" already exists`,
+      };
+    }
+    const buildResult = this.startBuild(name, { namespace });
     if (!buildResult.success) {
       return {
-        success: true,
+        success: errors.length === 0,
         resources,
+        errors,
         message: `Deployment "${name}" created; ${buildResult.message}`,
       };
     }
     return {
-      success: true,
+      success: errors.length === 0,
       resources,
+      errors,
       message: `Deployment "${name}" created; Build "${buildResult.build?.metadata?.name}" started`,
     };
   }
@@ -5762,8 +5830,10 @@ export class GameEngine {
   _handleCordon(command) {
     const node = this.cluster.getByName('Node', command.name, '');
     if (!node) return { success: false, message: `Node "${command.name}" not found` };
+    // Cordon is `spec.unschedulable` only; the node lifecycle controller adds
+    // the node.kubernetes.io/unschedulable:NoSchedule TAINT (SimulationTick).
+    // Real Kubernetes never labels a cordoned node (1.16.0).
     node.spec.unschedulable = true;
-    node.setLabel('node.kubernetes.io/unschedulable', 'true');
     this._addNotification('warning', `Cordoned node "${command.name}"`);
     return { success: true };
   }
@@ -5772,7 +5842,6 @@ export class GameEngine {
     const node = this.cluster.getByName('Node', command.name, '');
     if (!node) return { success: false, message: `Node "${command.name}" not found` };
     node.spec.unschedulable = false;
-    node.removeLabel('node.kubernetes.io/unschedulable');
     this._addNotification('info', `Uncordoned node "${command.name}"`);
     return { success: true };
   }
@@ -6059,6 +6128,12 @@ export class GameEngine {
     this._applyDifficulty();
     this.state = GAME_STATES.INIT;
     this._syncAuthProviderFromOAuth({ silent: true });
+    // A new run starts on the default workstation (a campaign level re-seeds it after).
+    try {
+      this.linuxHost?.reset?.(null);
+    } catch {
+      /* the workstation model never blocks an engine reset */
+    }
     this.eventBus.emit('engine:reset', { timestamp: Date.now() });
   }
 

@@ -34,6 +34,33 @@ import {
   LEGACY_INCIDENT_ALIASES,
 } from '../data/IncidentDefs.js';
 import { ResourceBase } from '../resources/ResourceBase.js';
+import { outputShowsSomething } from './ObjectiveEvaluator.js';
+
+/**
+ * Investigation words (after `_investigationWord`) naming cluster-scoped
+ * resources: a step about them is not tied to the incident's project.
+ */
+const CLUSTER_SCOPED_INVESTIGATION_WORDS = new Set([
+  'node',
+  'clusteroperator',
+  'clusterresourcequota',
+  'clusterversion',
+  'persistentvolume',
+  'storageclass',
+  'user',
+  'group',
+  'identity',
+  'identitie',
+  'oauth',
+  'scc',
+  'securitycontextconstraint',
+  'clusterrole',
+  'clusterrolebinding',
+  'namespace',
+  'project',
+  'csr',
+  'certificatesigningrequest',
+]);
 
 const INCIDENT_STATE = {
   CREATED: 'Created',
@@ -5119,8 +5146,15 @@ class IncidentEngine {
   _onCommandExecuted(payload = {}) {
     if (this.paused || this._resolving) return;
     if (payload.success === false) return;
-    const raw = String(payload.raw || payload.command || '').trim();
-    if (!/^oc\s+/i.test(raw)) return;
+    let raw = String(payload.raw || payload.command || '').trim();
+    // The terminal's `oc ` prefix is optional: `get events` runs like `oc get events`.
+    if (raw && !/^(oc|kubectl)\s+/i.test(raw)) raw = `oc ${raw}`;
+    if (!/^(oc|kubectl)\s+/i.test(raw)) return;
+    raw = raw.replace(/^kubectl\s+/i, 'oc ');
+    // ONE investigation matcher for the engine, the investigate objective and
+    // the Incidents panel (1.16.0): a read that showed nothing — "No resources
+    // found in default namespace.", empty output — is no evidence.
+    if (typeof payload.output === 'string' && !outputShowsSomething(payload.output)) return;
     for (const [, incident] of this.activeIncidents) {
       if (incident.state === INCIDENT_STATE.RESOLVED) continue;
       if (incident.state === INCIDENT_STATE.CREATED) continue;
@@ -5138,6 +5172,10 @@ class IncidentEngine {
       // the step text is authored).
       const match = raw.match(/^oc\s+(logs|describe)\s+(.*)$/i);
       if (!match) continue;
+      // Same project rule as the step matcher: `oc describe deployment/web-app`
+      // run from `default` did not look at the incident's workload.
+      if (!this._evidenceInNamespace(this._investigationEvidence(raw), incident.namespace))
+        continue;
       const action = match[1].toLowerCase();
       const ref = this._parseInvestigationRef(match[2]);
       if (!ref || !this._commandTargetsIncident(incident, ref, action)) continue;
@@ -5227,14 +5265,18 @@ class IncidentEngine {
       '--username',
       '--tail',
       '--since',
-      '-A',
-      '--all-namespaces',
     ]);
     const words = [];
     let namespace = null;
+    let allNamespaces = false;
     for (let i = 0; i < tokens.length; i += 1) {
       const token = tokens[i];
       if (token === '--') break;
+      // `-A` is a boolean: it must not swallow the next word (`oc get -A pods`).
+      if (token === '-A' || token === '--all-namespaces' || token === '--all-namespaces=true') {
+        allNamespaces = true;
+        continue;
+      }
       if (token.startsWith('-')) {
         let name = token;
         let value = null;
@@ -5261,7 +5303,26 @@ class IncidentEngine {
         words.push(token);
       }
     }
-    return { words, namespace };
+    return { words, namespace, allNamespaces };
+  }
+
+  /**
+   * Does an investigation command look at `expectedNamespace`? `-A` covers every
+   * project; otherwise `-n`/`--namespace`, else the current project.
+   */
+  _evidenceInNamespace(evidence, expectedNamespace) {
+    if (!expectedNamespace || evidence?.allNamespaces) return true;
+    const actual = evidence?.namespace || this.gameEngine?.currentProject || '';
+    return !actual || actual === expectedNamespace;
+  }
+
+  /** Is an investigation step about a cluster-scoped resource (nodes, SCCs, users …)? */
+  _stepIsClusterScoped(words) {
+    const [verb, second, third] = words;
+    // `oc adm policy who-can …` asks a cluster-wide question; `adm top node(s)`.
+    if (verb === 'adm') return second === 'top' ? third === 'node' : true;
+    if (verb === 'debug') return second === 'node';
+    return CLUSTER_SCOPED_INVESTIGATION_WORDS.has(second);
   }
 
   /**
@@ -5295,13 +5356,15 @@ class IncidentEngine {
       if (word !== '<placeholder>' && word !== actual) return false;
       actualIndex += 1;
     }
-    // A step that names the namespace only counts when the learner ran the
-    // command against the incident's namespace (or their current project).
-    if (expected.namespace) {
-      const expectedNamespace = incident.namespace || this.gameEngine?.currentProject || '';
-      const actualNamespace = evidence.namespace || this.gameEngine?.currentProject || '';
-      if (expectedNamespace && actualNamespace && expectedNamespace !== actualNamespace)
-        return false;
+    // Every namespaced step only counts when the command looked at the right
+    // project (1.16.0): the literal `-n <ns>` a step names, else the incident's
+    // project. `oc get events` / `oc get pods` from `default` used to complete
+    // two CrashLoopBackOff steps (L3). Cluster-scoped steps are exempt.
+    if (!this._stepIsClusterScoped(expectedWords)) {
+      const literal =
+        expected.namespace && !/^<.*>$/.test(expected.namespace) ? expected.namespace : '';
+      const expectedNamespace = literal || incident.namespace || '';
+      if (!this._evidenceInNamespace(evidence, expectedNamespace)) return false;
     }
     return true;
   }

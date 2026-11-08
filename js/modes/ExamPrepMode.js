@@ -46,6 +46,8 @@ import {
 } from '../data/EX280Objectives.js';
 import { createObjectiveProgress, evaluateObjectives } from '../engine/ObjectiveEvaluator.js';
 import { commandSignature } from '../engine/ScoringEngine.js';
+// Display numbers for level chips (ids are stable save keys, 1.16.0).
+import { levelLabel } from '../data/CampaignLevels.js';
 
 const LOCAL_STORAGE_KEY = 'openshiftgames_exam_prep';
 /** Learner-facing documentation (moved out of the repo docs/ folder to the GitHub wiki). */
@@ -1589,7 +1591,7 @@ export class ExamPrepUI {
       .map(
         (levelId) => `
       <button type="button" class="ep-chip" data-action="start-level" data-level="${levelId}"
-        title="Start campaign level ${levelId}: ${escapeHtml(levelTitle(levelId))}">Level ${levelId}</button>
+        title="Start campaign level ${levelLabel(levelId)}: ${escapeHtml(levelTitle(levelId))}">Level ${levelLabel(levelId)}</button>
     `
       )
       .join('');

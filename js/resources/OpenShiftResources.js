@@ -981,18 +981,24 @@ export class Subscription extends ResourceBase {
       ...metadata,
       apiVersion: metadata.apiVersion || 'operators.coreos.com/v1alpha1',
     });
+    // `spec.name` IS the package (operators.coreos.com/v1alpha1 has no
+    // `spec.packageName`). The default only applies when nothing names one; a
+    // spec merged in later (`addResource`) keeps its own `name` and no stale
+    // default package can survive next to it (1.16.0: a seeded `name:
+    // metallb-operator` resolved ansible-automation-platform-operator).
     const pkg =
       metadata.packageName ||
       metadata.package ||
       metadata.operatorName ||
+      metadata.spec?.name ||
+      metadata.subscriptionName ||
       'ansible-automation-platform-operator';
     const defaults = {
-      name: metadata.spec?.name || metadata.subscriptionName || pkg,
+      name: pkg,
       channel: metadata.channel || 'stable',
       source: metadata.source || 'redhat-operators',
       sourceNamespace: metadata.sourceNamespace || 'openshift-marketplace',
       installPlanApproval: metadata.installPlanApproval || 'Automatic',
-      packageName: pkg,
     };
     if (metadata.startingCSV) defaults.startingCSV = metadata.startingCSV;
     if (metadata.config) defaults.config = deepClone(metadata.config);
@@ -1013,7 +1019,7 @@ export class Subscription extends ResourceBase {
   }
 
   get operatorName() {
-    return this.spec.packageName || this.spec.name || this.metadata.name;
+    return this.spec.name || this.spec.packageName || this.metadata.name;
   }
 
   get installedCSV() {
@@ -1090,7 +1096,7 @@ Channel:              ${this.spec.channel}
 InstallPlan Approval:  ${this.spec.installPlanApproval || 'Automatic'}
 Source:               ${this.spec.source}
 Source Namespace:     ${this.spec.sourceNamespace}
-Package:              ${this.spec.packageName || this.spec.name}
+Package:              ${this.spec.name || this.spec.packageName}
 Current CSV:          ${this.status.currentCSV || '<none>'}
 Installed CSV:        ${this.status.installedCSV || '<none>'}
 State:                ${this.status.state || '<none>'}
@@ -1598,26 +1604,98 @@ export class OAuth extends ResourceBase {
     return result;
   }
 
+  /**
+   * `oc describe oauth cluster` — OAuth is a CRD, so real oc uses kubectl's
+   * generic describer: Name/Namespace/Labels/Annotations, then every field in
+   * sorted order with Title-Case labels (`Identity Providers`, `Mapping
+   * Method`, `File Data`) and tabwriter alignment per block of lines (1.16.0:
+   * the hand-written block printed `Mapping Method:claim`).
+   */
   toDescribe() {
-    return `Name:         ${this.metadata.name}
-API Version:  ${this.apiVersion}
-Identity Providers:
-${
-  (this.spec.identityProviders || [])
-    .map(
-      (provider) =>
-        `  Name:          ${provider.name}
-  Type:          ${provider.type}
-  Mapping Method:${provider.mappingMethod || 'claim'}
-  ${provider.htpasswd ? `HTPasswd:      ${provider.htpasswd.fileData?.name || '<none>'}` : ''}`
-    )
-    .join('\n') || '  <none>'
-}
-Events:
-${this.events
-  .slice(-10)
-  .map((e) => `  ${e.type}\t${e.reason}\t${e.message}`)
-  .join('\n')}`;
+    const rows = [];
+    const push = (level, label, value) =>
+      rows.push(
+        value === undefined
+          ? `${'  '.repeat(level)}${label}:`
+          : `${'  '.repeat(level)}${label}:\t${value}`
+      );
+    const annotations = Object.entries(this.metadata.annotations || {});
+    const labels = Object.entries(this.metadata.labels || {});
+    push(0, 'Name', this.metadata.name);
+    push(0, 'Namespace', '');
+    if (labels.length) {
+      push(0, 'Labels', `${labels[0][0]}=${labels[0][1]}`);
+      for (const [key, value] of labels.slice(1)) rows.push(`\t${key}=${value}`);
+    } else push(0, 'Labels', '<none>');
+    if (annotations.length) {
+      push(0, 'Annotations', `${annotations[0][0]}: ${annotations[0][1]}`);
+      for (const [key, value] of annotations.slice(1)) rows.push(`\t${key}: ${value}`);
+    } else push(0, 'Annotations', '<none>');
+    push(0, 'API Version', this.apiVersion);
+    push(0, 'Kind', 'OAuth');
+    push(0, 'Metadata');
+    push(1, 'Creation Timestamp', this.metadata.creationTimestamp);
+    push(1, 'Generation', this.metadata.generation ?? 1);
+    push(1, 'Resource Version', this.metadata.resourceVersion ?? '1');
+    push(1, 'UID', this.metadata.uid);
+    const smartLabel = (field) =>
+      String(field)
+        .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+        .replace(/^./, (char) => char.toUpperCase())
+        .replace(/\b(Api|Uid|Url|Id|Ca)\b/g, (word) => word.toUpperCase());
+    const walk = (level, value) => {
+      for (const field of Object.keys(value || {}).sort()) {
+        const entry = value[field];
+        if (entry === undefined) continue;
+        if (Array.isArray(entry)) {
+          push(level, smartLabel(field));
+          for (const item of entry) {
+            if (item && typeof item === 'object') walk(level + 1, item);
+            else rows.push(`${'  '.repeat(level + 1)}${item}`);
+          }
+        } else if (entry && typeof entry === 'object') {
+          push(level, smartLabel(field));
+          walk(level + 1, entry);
+        } else push(level, smartLabel(field), entry);
+      }
+    };
+    if (this.spec && Object.keys(this.spec).length) {
+      push(0, 'Spec');
+      walk(1, this.spec);
+    }
+    const events = this.events.slice(-10);
+    if (events.length) {
+      push(0, 'Events');
+      rows.push('  Type\tReason\tMessage', '  ----\t------\t-------');
+      for (const event of events) rows.push(`  ${event.type}\t${event.reason}\t${event.message}`);
+    } else push(0, 'Events', '<none>');
+    // text/tabwriter (minwidth 0, padding 2): adjacent lines that contain tabs
+    // form one block; every cell of a column is padded to the widest one.
+    const out = [];
+    for (let index = 0; index < rows.length;) {
+      if (!rows[index].includes('\t')) {
+        out.push(rows[index]);
+        index += 1;
+        continue;
+      }
+      let end = index;
+      while (end < rows.length && rows[end].includes('\t')) end += 1;
+      const block = rows.slice(index, end).map((line) => line.split('\t'));
+      const widths = [];
+      for (const cells of block)
+        cells.slice(0, -1).forEach((cell, column) => {
+          widths[column] = Math.max(widths[column] || 0, cell.length + 2);
+        });
+      for (const cells of block)
+        out.push(
+          cells
+            .map((cell, column) => (column < cells.length - 1 ? cell.padEnd(widths[column]) : cell))
+            .join('')
+            .trimEnd()
+        );
+      index = end;
+    }
+    return out.join('\n');
   }
 }
 

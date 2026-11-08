@@ -111,13 +111,6 @@ const TARGET_TOKENS = [
 ];
 const NAMESPACE_TOKENS = ['namespace', 'project'];
 
-const normalizeCommand = (value) =>
-  String(value || '')
-    .trim()
-    .replace(/^(?:kubectl|oc)\s+/i, '')
-    .replace(/\s+/g, ' ')
-    .toLowerCase();
-
 export class IncidentPanel {
   constructor() {
     this.container = null;
@@ -133,8 +126,7 @@ export class IncidentPanel {
     this._boundCreated = this._onNewIncident.bind(this);
     this._boundResolved = this._onIncidentResolved.bind(this);
     this._boundActivated = this._onIncidentActivated.bind(this);
-    this._boundCommand = this._onCommandExecuted.bind(this);
-    this._recentCommands = [];
+    this._boundStepCompleted = this._onStepCompleted.bind(this);
   }
 
   // ── Lifecycle ─────────────────────────────────────────────────────────────
@@ -158,7 +150,6 @@ export class IncidentPanel {
     this.visible = false;
     this.statusFilter = 'active';
     this.categoryFilter = 'all';
-    this._recentCommands = [];
     this.container = document.createElement('div');
     this.container.id = 'incident-panel';
     this.container.className = 'panel-side panel-left';
@@ -321,8 +312,11 @@ export class IncidentPanel {
       this._unsubscribers.push(engine.on('incident:created', this._boundCreated));
       this._unsubscribers.push(engine.on('incident:resolved', this._boundResolved));
       this._unsubscribers.push(engine.on('incident:activated', this._boundActivated));
-      this._unsubscribers.push(engine.on('command:raw', this._boundCommand));
-      this._unsubscribers.push(engine.on('command:executed', this._boundCommand));
+      // Investigation progress has ONE matcher (1.16.0): IncidentEngine checks
+      // that the command succeeded, looked at the incident's project and showed
+      // something; the panel mirrors its steps instead of fuzzy-matching typed
+      // text (which ticked `oc get events` run in `default`, even failed lines).
+      this._unsubscribers.push(engine.on('incident:step-completed', this._boundStepCompleted));
     }
   }
 
@@ -518,63 +512,32 @@ export class IncidentPanel {
     this._onNewIncident({ name: type, severity, target: resource, description: message, id: uid });
   }
 
-  // ── Investigation step matching ──────────────────────────────────────────
-  _onCommandExecuted(data = {}) {
-    const raw = String(data.command || data.raw || '').trim();
-    if (!raw) return;
-    this._recentCommands.push(raw);
-    if (this._recentCommands.length > 20) this._recentCommands.shift();
-
-    let changed = false;
-    for (const incident of this.incidents) {
-      if (incident.status !== 'active') continue;
-      incident.steps.forEach((step, index) => {
-        if (incident.completedSteps.has(index)) return;
-        const expected = this._formatStepCommand(step.command, incident);
-        if (this._fuzzyMatchCommand(raw, expected)) {
-          incident.completedSteps.add(index);
-          changed = true;
-          if (incident.engineIncidentId) {
-            window.game?.incidentEngine?.completeStep?.(incident.engineIncidentId, index);
-          }
-          window.game?.engine?.emit('xp:gain', { amount: 10, source: 'investigation' });
-        }
-      });
-    }
-    if (changed) {
-      if (this.visible) this._renderList();
-      this._saveInvestigationProgress();
-    }
+  // ── Investigation steps: mirrored from IncidentEngine ────────────────────
+  /** The engine marked one investigation step done (its matcher is the only one). */
+  _onStepCompleted(data = {}) {
+    const incident = this._findByEngineId(data.id);
+    if (!incident || incident.status !== 'active') return;
+    const index = Number(data.stepIndex);
+    if (!Number.isInteger(index) || index < 0 || incident.completedSteps.has(index)) return;
+    incident.completedSteps.add(index);
+    window.game?.engine?.emit('xp:gain', { amount: 10, source: 'investigation' });
+    if (this.visible) this._renderList();
+    this._saveInvestigationProgress();
   }
 
-  /** Fuzzy compare: exact → prefix → same base command → shared first 2-3 tokens. */
-  _fuzzyMatchCommand(userCmd, stepCmd) {
-    const u = normalizeCommand(userCmd);
-    const s = normalizeCommand(stepCmd);
-    if (!u || !s) return false;
-    if (u === s) return true;
-    if (u.startsWith(s) || s.startsWith(u)) return true;
-
-    const uParts = u.split(' ');
-    const sParts = s.split(' ');
-    if (uParts.length < 2 || sParts.length < 2) return false;
-    if (uParts[0] !== sParts[0]) return false;
-
-    // `oc get pod` vs `oc get pods` — singular/plural resources.
-    const singular = (token) => token.replace(/s$/, '');
-    if (singular(uParts[1]) === singular(sParts[1])) {
-      if (uParts.length >= 3 && sParts.length >= 3) {
-        return (
-          singular(uParts[2]) === singular(sParts[2]) ||
-          uParts[2].startsWith(sParts[2]) ||
-          sParts[2].startsWith(uParts[2])
-        );
-      }
-      return true;
-    }
-
-    const prefixLen = Math.min(uParts.length, sParts.length, 3);
-    return uParts.slice(0, prefixLen).join(' ') === sParts.slice(0, prefixLen).join(' ');
+  /**
+   * Take the done steps from the engine's live incident (the source of truth),
+   * so the "n/4 investigated" counter always equals what the investigate
+   * objective sees.
+   */
+  _syncStepsFromEngine(incident) {
+    if (!incident?.engineIncidentId) return;
+    const live = window.game?.incidentEngine?.activeIncidents?.get?.(incident.engineIncidentId);
+    const steps = live?.investigationSteps;
+    if (!Array.isArray(steps)) return;
+    incident.completedSteps = new Set(
+      steps.map((step, index) => (step?.completed ? index : -1)).filter((index) => index >= 0)
+    );
   }
 
   // ── Resolution ───────────────────────────────────────────────────────────
@@ -623,6 +586,7 @@ export class IncidentPanel {
   _canResolve(incident) {
     if (incident.status !== 'active') return false;
     if (incident.steps.length === 0) return true;
+    this._syncStepsFromEngine(incident);
     const required = Math.min(this._requiredSteps, incident.steps.length);
     return incident.completedSteps.size >= required;
   }
@@ -646,6 +610,9 @@ export class IncidentPanel {
       return;
     }
 
+    for (const incident of filtered) {
+      if (incident.status === 'active') this._syncStepsFromEngine(incident);
+    }
     list.innerHTML = filtered.map((incident) => this._renderCard(incident)).join('');
     this._bindCardEvents(list);
   }

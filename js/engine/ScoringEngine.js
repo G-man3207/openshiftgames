@@ -19,6 +19,12 @@
 
 import { ACHIEVEMENTS } from '../data/Achievements.js';
 import { RESOURCE_KINDS } from '../data/kindRegistry.js';
+import {
+  CHAPTERS,
+  PRELUDE_CHAPTER_ID,
+  isPreludeLevel,
+  levelOrdinal,
+} from '../data/CampaignLevels.js';
 
 const XP_LEVELS = [
   { level: 1, title: 'Novice', xpRequired: 0 },
@@ -56,14 +62,46 @@ const XP_LEVELS = [
 const STORAGE_KEY = 'openshiftgames_progress';
 const LEGACY_STORAGE_KEY = 'k8sgames_progress';
 
-/** Campaign chapters (20 levels × 4) used for the `chaptersCompleted` stat. */
-const CAMPAIGN_CHAPTERS = [
-  [1, 2, 3, 4],
-  [5, 6, 7, 8],
-  [9, 10, 11, 12],
-  [13, 14, 15, 16],
-  [17, 18, 19, 20],
-];
+/**
+ * EX280 chapters (1–5) used for the `chaptersCompleted` stat, derived from the
+ * campaign data so a level added to a chapter is counted. The optional Linux &
+ * RHEL Foundations prelude is tracked separately (`preludeCompleted`).
+ */
+const CAMPAIGN_CHAPTERS = CHAPTERS.filter((chapter) => chapter.id !== PRELUDE_CHAPTER_ID).map(
+  (chapter) => chapter.levels
+);
+const PRELUDE_LEVELS = CHAPTERS.filter((chapter) => chapter.id === PRELUDE_CHAPTER_ID).flatMap(
+  (chapter) => chapter.levels
+);
+
+/**
+ * Campaign-derived stats shared by load-time normalisation and level completion:
+ * `ex280LevelsCompleted` counts the EX280 track only (the "Campaign Graduate"
+ * achievement), `preludeLevelsCompleted`/`preludeCompleted` the Linux prelude.
+ */
+function campaignTrackStats(campaignProgress = {}) {
+  const completedIds = Object.keys(campaignProgress)
+    .filter((id) => campaignProgress[id]?.completed)
+    .map(Number);
+  const preludeDone = completedIds.filter((id) => isPreludeLevel(id)).length;
+  return {
+    ex280LevelsCompleted: completedIds.length - preludeDone,
+    preludeLevelsCompleted: preludeDone,
+    preludeCompleted:
+      PRELUDE_LEVELS.length > 0 && PRELUDE_LEVELS.every((id) => campaignProgress[id]?.completed)
+        ? 1
+        : 0,
+    chaptersCompleted: CAMPAIGN_CHAPTERS.filter((chapter) =>
+      chapter.every((levelId) => campaignProgress[levelId]?.completed)
+    ).length,
+  };
+}
+
+/** XP for finishing a campaign level: scales with the position in its track. */
+function campaignLevelBaseXP(levelId) {
+  const ordinal = levelOrdinal(levelId);
+  return isPreludeLevel(levelId) ? 50 + ordinal * 10 : 100 + ordinal * 25;
+}
 
 /**
  * Required/known stat keys (CONVERSION-SPEC §12). Missing keys initialise to
@@ -113,6 +151,9 @@ const STAT_DEFAULTS = {
   uniqueResourceTypesDeployed: 0,
   sandboxResourcesDeployed: 0,
   levelsCompleted: 0,
+  ex280LevelsCompleted: 0,
+  preludeLevelsCompleted: 0,
+  preludeCompleted: 0,
   chaptersCompleted: 0,
   threeStarLevels: 0,
   totalStars: 0,
@@ -600,9 +641,7 @@ class ScoringEngine {
       (sum, entry) => sum + asNumber(entry?.stars, 0),
       0
     );
-    progress.stats.chaptersCompleted = CAMPAIGN_CHAPTERS.filter((chapter) =>
-      chapter.every((levelId) => campaignProgress[levelId]?.completed)
-    ).length;
+    Object.assign(progress.stats, campaignTrackStats(campaignProgress));
     progress.stats.challengesCompleted = Object.values(challengeProgress).filter(
       (entry) => entry?.completed
     ).length;
@@ -1028,9 +1067,27 @@ class ScoringEngine {
     }
 
     if (kind === 'Pod') {
-      // Controller-created pods carry pod-template-hash. Only count pods the
-      // player created directly (palette, oc run, oc create -f Pod, ...).
-      if (resourceLabels(resource)['pod-template-hash']) {
+      // Controller-created pods (ReplicaSet `pod-template-hash`, DaemonSet and
+      // StatefulSet `controller-revision-hash`, Job `job-name`, or any controller
+      // ownerReference) are not "your first Pod": only count pods the player
+      // created directly (palette, oc run, oc create -f Pod, ...). 1.16.0: the
+      // platform DaemonSet Pods of a level's seeded Nodes unlocked "Pod Rookie"
+      // the moment a Linux prelude level started.
+      const labels = resourceLabels(resource);
+      const ownedByController = (resource?.metadata?.ownerReferences || []).some(
+        (reference) => reference && reference.controller === true
+      );
+      // Platform DaemonSet Pods get their ownerReference right after the add
+      // event, so the platform namespace is the reliable signal for them.
+      const platformNamespace = /^(openshift|kube)-/.test(String(namespace || ''));
+      if (
+        ownedByController ||
+        platformNamespace ||
+        labels['pod-template-hash'] ||
+        labels['controller-revision-hash'] ||
+        labels['job-name'] ||
+        labels['batch.kubernetes.io/job-name']
+      ) {
         // Remember the key so a follow-up `resource:created` for the same Pod
         // (from a test/stub emitter) cannot count it either.
         this._countResourceOnce(kind, name, namespace, uid);
@@ -1321,14 +1378,12 @@ class ScoringEngine {
         (this.progress.stats.completedWithoutHints || 0) + 1;
     }
 
-    this.progress.stats.chaptersCompleted = CAMPAIGN_CHAPTERS.filter((chapter) =>
-      chapter.every((level) => this.progress.campaignProgress[level]?.completed)
-    ).length;
+    Object.assign(this.progress.stats, campaignTrackStats(this.progress.campaignProgress));
 
     // Evidence that the level was completed through live objective evaluation.
     this.recordObjectiveEvidence('level', levelId, this._lastObjectiveTypes || []);
 
-    const baseXP = 100 + Number(levelId) * 25;
+    const baseXP = campaignLevelBaseXP(levelId);
     const starBonus = stars * 50;
     this.addXP(baseXP + starBonus);
 

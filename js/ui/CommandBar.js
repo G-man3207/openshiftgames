@@ -81,6 +81,8 @@ import {
   expandShellVariables,
   splitShellSegments,
 } from './ShellTools.js';
+// linux-engine (1.16.0): errno wording for workstation file access from the CLI.
+import { errnoText } from '../engine/LinuxHost.js';
 
 // ────────────────────────────────────────────────────────────────────────────
 // Constants
@@ -829,6 +831,14 @@ const EDIT_TEACHING_LINE =
   '(On a real cluster oc edit launches $EDITOR — vi/vim by default — in your terminal; this simulator opens the manifest editor.)';
 
 /**
+ * 1.16.0: the Files panel freezes the simulation, incident and mission clocks
+ * while it is open ("Paused · Files open"), so a saved `oc edit oauth cluster`
+ * looked stuck. Say so whenever `oc edit` opens the panel.
+ */
+const EDIT_PAUSE_LINE =
+  '(Simulator: the cluster is paused while the Files panel is open — save, then close the panel so controllers, rollouts and the mission clock continue.)';
+
+/**
  * CommandBar-local `oc get` column overrides that differ from the shared kind
  * registry (the registry is owned by the platform workstream). Kept here so the
  * CLI can report the real K8s 1.35 / OCP 4.22 printer columns without editing
@@ -1106,6 +1116,12 @@ const KNOWN_LONG_FLAGS = new Set([
   'no-headers',
   'template',
   'output',
+  // 1.16.0: `helm upgrade --install`, `oc logs -l … --prefix/--max-log-requests/
+  // --ignore-errors`, `oc create service clusterip --clusterip=None`
+  'install',
+  'max-log-requests',
+  'ignore-errors',
+  'clusterip',
 ]);
 
 /** Short flags the simulated `oc` implements (unknown single-letter flags error). */
@@ -1760,35 +1776,7 @@ function renderJsonPathBrace(context, innerRaw, root) {
   const literal = jsonPathQuotedLiteral(inner);
   if (literal !== null) return literal;
   if (inner === '@') return JSON.stringify(context);
-  const value = resolveJsonPathTokens(context, inner, root);
-  return jsonPathResultText(value, inner);
-}
-
-/**
- * Render one JSONPath expression result exactly like client-go's
- * `jsonpath.PrintResults` (used by `kubectl -o jsonpath`):
- *  - a multi-result wildcard expression prints every result separated by a
- *    space (`{.items[*].metadata.name}` → `a b c`);
- *  - a single map/slice/struct result is marshalled as JSON, so a slice field
- *    prints its brackets (`{.spec.ports}` → `[{...}]`, issue #76);
- *  - scalars print bare (`{.metadata.name}` → `web`), unset values print empty.
- * @param {any} value
- * @param {string} expression
- * @returns {string}
- */
-function jsonPathResultText(value, expression) {
-  const wildcard = /\[\*\]|(?:^|\.)\*(?:\.|$)/.test(String(expression ?? ''));
-  if (wildcard && Array.isArray(value)) {
-    return value
-      .map((entry) => {
-        if (entry === undefined || entry === null) return 'null';
-        return typeof entry === 'object' ? JSON.stringify(entry) : String(entry);
-      })
-      .join(' ');
-  }
-  if (Array.isArray(value)) return JSON.stringify(value);
-  if (value === undefined || value === null) return '';
-  return typeof value === 'object' ? JSON.stringify(value) : String(value);
+  return jsonPathResultsText(jsonPathResults(context, inner, root).values);
 }
 
 /** Decode a quoted JSONPath literal (`{"\n"}`, `{'\t'}`); null when not a literal. */
@@ -1825,59 +1813,253 @@ function renderJsonPathTemplate(item, root, template) {
       out += literal;
       continue;
     }
-    const value = resolveJsonPathTokens(item, inner, root);
-    out += jsonPathResultText(value, inner);
+    out += jsonPathResultsText(jsonPathResults(item, inner, root).values);
   }
   out += template.slice(lastIndex);
   return out;
 }
 
+/**
+ * Legacy single-value view of {@link jsonPathResults} (range blocks): a
+ * multi-result expression returns the result list, otherwise its one value.
+ */
 function resolveJsonPathTokens(context, expression, root = context) {
-  const expr = String(expression).trim().replace(/^\$/, '').replace(/^\./, '');
-  if (!expr) return context;
-  const segments = [];
+  const { values, multi } = jsonPathResults(context, expression, root);
+  return multi ? values : values[0];
+}
+
+/**
+ * Split a JSONPath expression into steps (client-go util/jsonpath grammar):
+ * `.field`, `..field` (recursive descent), `.*`, `['field']`, `[n]`, `[-n]`,
+ * `[a:b]`, `[*]`, unions `[0,2]`/`['a','b']` and filters `[?(@.a.b == "x")]`.
+ * @param {string} expression
+ * @returns {Array<object>}
+ */
+function tokenizeJsonPath(expression) {
+  const expr = String(expression ?? '').trim();
+  const steps = [];
   let i = 0;
-  let current = '';
+  if (expr[0] === '$' || expr[0] === '@') i = 1;
+  const readName = () => {
+    let name = '';
+    while (i < expr.length && expr[i] !== '.' && expr[i] !== '[') {
+      if (expr[i] === '\\' && i + 1 < expr.length) {
+        name += expr[i + 1];
+        i += 2;
+        continue;
+      }
+      name += expr[i];
+      i += 1;
+    }
+    return name;
+  };
   while (i < expr.length) {
     const ch = expr[i];
-    if (ch === '\\' && expr[i + 1] === '.') {
-      current += '.';
-      i += 2;
-      continue;
-    }
     if (ch === '.') {
-      if (current) segments.push(current);
-      current = '';
-      i++;
+      if (expr[i + 1] === '.') {
+        i += 2;
+        const name = readName();
+        steps.push({ type: 'recursive', name: name || '*' });
+        continue;
+      }
+      i += 1;
+      if (expr[i] === '*') {
+        i += 1;
+        steps.push({ type: 'wildcard' });
+        continue;
+      }
+      const name = readName();
+      if (name) steps.push({ type: 'field', name });
       continue;
     }
     if (ch === '[') {
-      if (current) {
-        segments.push(current);
-        current = '';
+      // Find the matching `]`, skipping quoted text and filter parentheses.
+      let depth = 0;
+      let quote = '';
+      let end = -1;
+      for (let j = i + 1; j < expr.length; j += 1) {
+        const c = expr[j];
+        if (quote) {
+          if (c === '\\') j += 1;
+          else if (c === quote) quote = '';
+          continue;
+        }
+        if (c === '"' || c === "'") quote = c;
+        else if (c === '(') depth += 1;
+        else if (c === ')') depth -= 1;
+        else if (c === ']' && depth <= 0) {
+          end = j;
+          break;
+        }
       }
-      const end = expr.indexOf(']', i);
-      const inside = end >= 0 ? expr.slice(i + 1, end) : '';
-      segments.push(inside === '*' ? '*' : inside.replace(/['"]/g, ''));
+      const inside = (end >= 0 ? expr.slice(i + 1, end) : expr.slice(i + 1)).trim();
       i = end >= 0 ? end + 1 : expr.length;
+      if (inside === '*') steps.push({ type: 'wildcard' });
+      else if (inside.startsWith('?')) {
+        steps.push({ type: 'filter', filter: parseJsonPathFilter(inside.slice(1).trim()) });
+      } else if (/^-?\d*:-?\d*(:-?\d+)?$/.test(inside)) {
+        const [start, stop, step] = inside.split(':');
+        steps.push({
+          type: 'slice',
+          start: start === '' ? null : Number(start),
+          stop: stop === '' || stop === undefined ? null : Number(stop),
+          step: step ? Number(step) : 1,
+        });
+      } else {
+        const keys = inside
+          .split(',')
+          .map((part) => part.trim())
+          .filter((part) => part !== '')
+          .map((part) =>
+            /^-?\d+$/.test(part)
+              ? { index: Number(part) }
+              : { name: part.replace(/^(['"])([\s\S]*)\1$/, '$2') }
+          );
+        steps.push({ type: 'keys', keys });
+      }
       continue;
     }
-    current += ch;
-    i++;
+    const name = readName();
+    if (name) steps.push({ type: 'field', name });
+    else i += 1;
   }
-  if (current) segments.push(current);
-  let value = context;
-  for (let s = 0; s < segments.length; s++) {
-    const segment = segments[s];
-    if (value === undefined || value === null) return undefined;
-    if (segment === '*') {
-      if (Array.isArray(value))
-        return value.map((entry) => resolvePathValue(entry, segments.slice(s + 1)));
-      return undefined;
+  return steps;
+}
+
+/** Parse a filter body `(@.a.b OP literal)` / `(@.a.b)` into a predicate spec. */
+function parseJsonPathFilter(text) {
+  const body = String(text ?? '')
+    .trim()
+    .replace(/^\(/, '')
+    .replace(/\)$/, '')
+    .trim();
+  const match = body.match(/^(@[^\s=!<>]*)\s*(==|!=|<=|>=|<|>)\s*([\s\S]+)$/);
+  if (!match) return { path: body, op: 'exists' };
+  const rawLiteral = match[3].trim();
+  let literal;
+  if (/^(['"])[\s\S]*\1$/.test(rawLiteral)) literal = rawLiteral.slice(1, -1);
+  else if (/^-?\d+(\.\d+)?$/.test(rawLiteral)) literal = Number(rawLiteral);
+  else if (rawLiteral === 'true' || rawLiteral === 'false') literal = rawLiteral === 'true';
+  else literal = rawLiteral;
+  return { path: match[1], op: match[2], literal };
+}
+
+/** Does one array element satisfy a parsed JSONPath filter? */
+function jsonPathFilterMatches(element, filter) {
+  const found = jsonPathResults(element, filter.path, element).values;
+  if (filter.op === 'exists') return found.length > 0 && found[0] !== false && found[0] !== null;
+  if (!found.length) return false;
+  const actual = found[0];
+  const expected = filter.literal;
+  if (filter.op === '==' || filter.op === '!=') {
+    const equal =
+      typeof actual === 'number' && typeof expected === 'number'
+        ? actual === expected
+        : typeof actual === 'boolean' || typeof expected === 'boolean'
+          ? String(actual) === String(expected)
+          : String(actual) === String(expected);
+    return filter.op === '==' ? equal : !equal;
+  }
+  const left = Number(actual);
+  const right = Number(expected);
+  if (!Number.isFinite(left) || !Number.isFinite(right)) return false;
+  if (filter.op === '<') return left < right;
+  if (filter.op === '<=') return left <= right;
+  if (filter.op === '>') return left > right;
+  return left >= right;
+}
+
+/**
+ * Evaluate a JSONPath expression to its RESULT LIST, like client-go's
+ * `FindResults` with allowMissingKeys (kubectl `-o jsonpath`): missing keys,
+ * out-of-range indices and non-matching filters yield no result instead of an
+ * error. `multi` is true when the expression can fan out (wildcard, filter,
+ * slice, union, recursive descent) — 1.16.0 adds filters/slices/unions/`..`.
+ * @param {any} context
+ * @param {string} expression
+ * @param {any} [root]
+ * @returns {{values: any[], multi: boolean}}
+ */
+function jsonPathResults(context, expression, root = context) {
+  const text = String(expression ?? '').trim();
+  const start = text.startsWith('$') ? root : context;
+  const steps = tokenizeJsonPath(text);
+  let current = [start];
+  let multi = false;
+  const isObject = (value) => value !== null && typeof value === 'object';
+  const collectRecursive = (value, name, out) => {
+    if (!isObject(value)) return;
+    const children = Array.isArray(value) ? value : Object.values(value);
+    if (!Array.isArray(value)) {
+      if (name === '*') out.push(...children);
+      else if (Object.prototype.hasOwnProperty.call(value, name)) out.push(value[name]);
     }
-    value = value[segment];
+    for (const child of children) collectRecursive(child, name, out);
+  };
+  for (const step of current.length ? steps : []) {
+    const next = [];
+    for (const value of current) {
+      if (value === undefined) continue;
+      if (step.type === 'field') {
+        if (isObject(value) && !Array.isArray(value) && step.name in value)
+          next.push(value[step.name]);
+      } else if (step.type === 'wildcard') {
+        multi = true;
+        if (Array.isArray(value)) next.push(...value);
+        else if (isObject(value)) next.push(...Object.values(value));
+      } else if (step.type === 'recursive') {
+        multi = true;
+        collectRecursive(value, step.name, next);
+      } else if (step.type === 'slice') {
+        multi = true;
+        if (!Array.isArray(value)) continue;
+        const length = value.length;
+        const norm = (n, fallback) =>
+          n === null ? fallback : n < 0 ? Math.max(0, length + n) : Math.min(n, length);
+        const from = norm(step.start, 0);
+        const to = norm(step.stop, length);
+        for (let index = from; index < to; index += Math.max(1, step.step)) next.push(value[index]);
+      } else if (step.type === 'keys') {
+        if (step.keys.length > 1) multi = true;
+        for (const key of step.keys) {
+          if ('index' in key) {
+            if (!Array.isArray(value)) continue;
+            const index = key.index < 0 ? value.length + key.index : key.index;
+            if (index >= 0 && index < value.length) next.push(value[index]);
+          } else if (isObject(value) && !Array.isArray(value) && key.name in value) {
+            next.push(value[key.name]);
+          }
+        }
+      } else if (step.type === 'filter') {
+        multi = true;
+        if (Array.isArray(value)) {
+          for (const element of value) {
+            if (jsonPathFilterMatches(element, step.filter)) next.push(element);
+          }
+        }
+      }
+    }
+    current = next;
   }
-  return value;
+  return { values: current.filter((value) => value !== undefined), multi };
+}
+
+/**
+ * Print a result list exactly like client-go's `jsonpath.PrintResults` (used by
+ * `kubectl -o jsonpath`): results separated by a space (`{.items[*].metadata.name}`
+ * → `a b c`), a map/slice result marshalled as JSON so a slice field keeps its
+ * brackets (`{.spec.ports}` → `[{...}]`, issue #76), scalars bare, a missing key
+ * prints nothing.
+ * @param {any[]} values
+ * @returns {string}
+ */
+function jsonPathResultsText(values) {
+  return values
+    .map((value) => {
+      if (value === null) return 'null';
+      return typeof value === 'object' ? JSON.stringify(value) : String(value);
+    })
+    .join(' ');
 }
 
 /** YAML scalar formatting rules (deterministic, safe round-trip). */
@@ -3209,6 +3391,25 @@ export class CommandBar {
     return user === undefined || user === null || user === '' ? 'kubeadmin' : user;
   }
 
+  /**
+   * True after `oc logout` (and at a level that starts logged out, L1): the
+   * engine has no session user. Real `oc logout` blanks the kubeconfig token,
+   * so every later API request goes out without credentials (1.16.0).
+   */
+  get loggedOut() {
+    const ge = this.gameEngine;
+    return Boolean(ge && 'currentUser' in ge && !ge.currentUser);
+  }
+
+  /**
+   * The identity the API server authorizes: the session user, or
+   * `system:anonymous` for a request without a token (RBAC then answers 403
+   * `Error from server (Forbidden): … User "system:anonymous" cannot …`).
+   */
+  get apiUser() {
+    return this.loggedOut ? 'system:anonymous' : this.currentUser;
+  }
+
   get currentProject() {
     const ge = this.gameEngine;
     return ge?.currentProject || ge?.currentNamespace || 'default';
@@ -3263,7 +3464,7 @@ export class CommandBar {
         </div>
         <div id="cmd-output" class="term-output" role="log" aria-live="polite"></div>
         <div class="term-prompt-row">
-          <span class="term-prompt" aria-hidden="true">$</span>
+          <span class="term-prompt" id="cmd-prompt" aria-hidden="true">[student@workstation ~]$</span>
           <input id="cmd-input" type="text" class="term-input" placeholder="Type a command — the 'oc ' prefix is optional" autocomplete="off" spellcheck="false" autocapitalize="off" />
         </div>
         <div id="cmd-suggestions" class="term-suggestions" hidden></div>
@@ -3274,9 +3475,38 @@ export class CommandBar {
   _updateContextLabel() {
     const el = document.getElementById('cmd-context');
     if (!el) return;
-    const user = this.currentUser || 'kubeadmin';
+    // 1.16.0: inside `oc debug node/…` the terminal is the node's sh, not the
+    // workstation — say so where the session context is normally shown.
+    if (this._debugSession) {
+      el.textContent = `${this._debugPrompt()} node/${this._debugSession.name} · exit to leave`;
+      return;
+    }
+    // After `oc logout` (and at the logged-out L1 start) there is no session
+    // user: never pretend to be kubeadmin (1.16.0).
+    const user = this.loggedOut ? 'not logged in' : this.currentUser || 'kubeadmin';
     const project = this.currentProject || 'default';
     el.textContent = `${user} · ${project}`;
+  }
+
+  /**
+   * Keep the debug-shell cue in sync after every line: the context label and
+   * the input placeholder switch to the node shell while `oc debug node/…` is
+   * open and back to the workstation afterwards (1.16.0).
+   */
+  _syncDebugShellCue() {
+    const active = Boolean(this._debugSession);
+    if (active === Boolean(this._debugCueActive)) return;
+    this._debugCueActive = active;
+    try {
+      this._updateContextLabel();
+    } catch {
+      /* headless / no DOM */
+    }
+    if (this.input && !this._pendingLogin) {
+      this.input.placeholder = active
+        ? `sh-5.1# on node/${this._debugSession.name} — type exit to return to the workstation`
+        : "Type a command — the 'oc ' prefix is optional";
+    }
   }
 
   _bindEvents() {
@@ -3410,9 +3640,13 @@ export class CommandBar {
     const current = tokens[tokens.length - 1] ?? '';
     const prior = tokens.slice(0, -1);
     const candidates = this._completionCandidates(prior, current);
+    // linux-engine: like bash, a completion replaces only the word being typed — the rest
+    // of the line (`ls -l `) stays (the first word keeps its optional `oc ` prefix).
+    const raw = String(this.input.value ?? '');
+    const base = prior.length === 0 ? leading : raw.slice(0, raw.search(/\S*$/));
     this.suggestions = candidates
       .slice(0, 10)
-      .map((value) => ({ type: 'completion', value: leading + value }));
+      .map((value) => ({ type: 'completion', value: base + value }));
     this.selectedSuggestion = -1;
     this._renderSuggestions();
   }
@@ -3431,7 +3665,8 @@ export class CommandBar {
       this._resources('Project')
         .map((p) => p.metadata?.name)
         .filter(Boolean);
-    const fileNames = () => this._manifestFileList();
+    // linux-engine: file completions are relative to the shell's working directory.
+    const fileNames = () => this._completionFileList();
     const flagList = (extra = []) => {
       const flags = [...(COMMAND_FLAGS[cmd] || []), ...extra];
       return filter([...new Set(flags)]);
@@ -3445,9 +3680,15 @@ export class CommandBar {
       return flagList();
     }
     const shellCommandLead = (prior[0] || '').toLowerCase();
-    if (SHELL_FILE_COMMANDS.has(shellCommandLead) && !word.startsWith('-')) {
-      const files = filter(this._manifestFileList());
-      if (files.length) return files;
+    // linux-engine: paths complete one segment at a time from the shell's cwd (bash style).
+    const previousToken = prior[prior.length - 1];
+    if (
+      (SHELL_FILE_COMMANDS.has(shellCommandLead) && !word.startsWith('-')) ||
+      ['-f', '--filename', '--file', '-k', '--kustomize'].includes(previousToken)
+    ) {
+      const paths = this._pathCompletions(word);
+      if (paths && paths.length) return paths;
+      if (paths) return [];
     }
     if (current === '') {
       const previous = prior[prior.length - 1];
@@ -3536,17 +3777,32 @@ export class CommandBar {
 
   _applySuggestion(suggestion) {
     if (!suggestion || !this.input) return;
-    this.input.value = suggestion.value + ' ';
+    // linux-engine: a completed directory keeps the cursor inside it (`Downloads/`), like bash.
+    this.input.value = suggestion.value + (suggestion.value.endsWith('/') ? '' : ' ');
     this.suggestions = [];
     this.selectedSuggestion = -1;
     if (this.suggestionsEl) this.suggestionsEl.hidden = true;
     this.input.focus();
+    if (suggestion.value.endsWith('/')) this._updateSuggestions();
   }
 
   _tabComplete() {
     if (this.suggestions.length === 1) {
       this._applySuggestion(this.suggestions[0]);
     } else if (this.suggestions.length > 1) {
+      // linux-engine: bash extends an ambiguous word to the longest common prefix first.
+      const values = this.suggestions.map((entry) => entry.value);
+      let common = values[0];
+      for (const value of values.slice(1)) {
+        let index = 0;
+        while (index < common.length && common[index] === value[index]) index += 1;
+        common = common.slice(0, index);
+      }
+      if (this.input && this.selectedSuggestion < 0 && common.length > this.input.value.length) {
+        this.input.value = common;
+        this._updateSuggestions();
+        return;
+      }
       this.selectedSuggestion = (this.selectedSuggestion + 1) % this.suggestions.length;
       this._renderSuggestions();
     }
@@ -3594,7 +3850,24 @@ export class CommandBar {
       };
     }
     this._lastResult = result;
+    this._syncDebugShellCue();
+    this._syncShellPrompt();
     return result;
+  }
+
+  /**
+   * linux-engine: the input row shows the workstation's bash prompt
+   * (`[student@workstation manifests]$`, `[root@workstation ~]#` after `sudo -i`).
+   */
+  _syncShellPrompt() {
+    if (typeof document === 'undefined') return;
+    const el = document.getElementById('cmd-prompt');
+    if (!el || this._debugSession) return;
+    try {
+      el.textContent = this.shellTools?.prompt?.() || '$';
+    } catch {
+      el.textContent = '$';
+    }
   }
 
   /** Legacy entry point (index.html `ui:run-command` handler). */
@@ -3776,12 +4049,15 @@ export class CommandBar {
     // Exit status of the last executed segment is the line's result.
     const message = lineOutputs.filter(Boolean).join('\n');
     const success = lastStatus;
-    this._recordCommand(raw, baseCommand, success);
+    // The output travels with the history entry and the event: grading and
+    // incident investigation only count a read that actually showed something.
+    this._recordCommand(raw, baseCommand, success, message);
     this._emit('command:executed', {
       command: normalized,
       raw,
       baseCommand,
       success,
+      output: message,
       timestamp: Date.now(),
     });
     if (success && MUTATING_COMMANDS.has(baseCommand))
@@ -3825,7 +4101,8 @@ export class CommandBar {
       // match succeeds as a pipe stage but exits 1, so `$?`/`&&` must see 1 (#63).
       const lastStageStatus = Number.isFinite(result.exitCode) ? result.exitCode : 0;
       if (isLast && redirect) {
-        const written = this._writeRedirect(redirect, text);
+        // linux-engine: the stage result carries the exact stdout bytes when it has them.
+        const written = this._writeRedirect(redirect, text, result);
         if (written.error) {
           failed = true;
           exitCode = 1;
@@ -3839,8 +4116,9 @@ export class CommandBar {
         output = text;
         exitCode = lastStageStatus;
       } else {
-        // Pipes: stdout feeds the next stage and is not echoed by the shell.
-        stageStdin = text;
+        // Pipes: stdout feeds the next stage and is not echoed by the shell
+        // (linux-engine: the exact bytes when the stage reports them, e.g. `cat file`).
+        stageStdin = typeof result.stdout === 'string' ? result.stdout : text;
       }
     }
     return { error: failed, message: failureMessage, output, exitCode };
@@ -3862,7 +4140,22 @@ export class CommandBar {
     // Shell layer first: shell flags (`-n`, `-i`…) are not oc flags, and
     // `cat`/`grep`/`vim`/`skopeo`/`htpasswd` must never be routed through `oc`.
     if (!explicitlyPrefixed && this.shellTools && this.shellTools.isShellLead(first)) {
+      // linux-engine: the raw stage text keeps quoting, so globs/`~`/`{a,b}`/`< file`
+      // expand like bash (unquoted only).
+      if (typeof this.shellTools.runShellStage === 'function') {
+        return this.shellTools.runShellStage(command, stdin ?? null);
+      }
       return this.shellTools.runTokens(tokens, stdin ?? null);
+    }
+    // linux-engine: `oc`/`kubectl` come from the openshift-clients RPM on the workstation.
+    const workstation = this._linuxHost();
+    if (workstation && !workstation.isInstalled('openshift-clients')) {
+      const word = explicitlyPrefixed
+        ? /^\s*kubectl\b/i.test(String(stage ?? '')) || /^kubectl$/i.test(first)
+          ? 'kubectl'
+          : 'oc'
+        : tokens[0];
+      return { error: true, message: `bash: ${word}: command not found`, exitCode: 127 };
     }
     // Cobra validates flag values before dispatch: `oc -n` / `oc --namespace`
     // must report `flag needs an argument` instead of an unknown-command error
@@ -3917,6 +4210,15 @@ export class CommandBar {
    */
   _validateFlags(tokens) {
     const command = String(tokens[0] || '').toLowerCase();
+    // pflag shorthand clusters: once a value-taking shorthand appears, the rest
+    // of the cluster is its value (`-owide`, `-oyaml`, `-lapp=web`, `-nfoo`), so
+    // those characters are never flags of their own (1.16.0). `-f`/`-p` are
+    // booleans for `oc logs` (follow/previous) and values everywhere else.
+    const valueShorthands = new Set(['c', 'e', 'f', 'k', 'l', 'n', 'o', 'p', 'u', 'z', 'L']);
+    if (command === 'logs') {
+      valueShorthands.delete('f');
+      valueShorthands.delete('p');
+    }
     for (let i = 0; i < tokens.length; i++) {
       const token = String(tokens[i]);
       if (token === '--') break;
@@ -3936,6 +4238,7 @@ export class CommandBar {
             `Error: unknown shorthand flag: '${char}' in ${token}\nSee 'oc ${command} --help' for usage.`
           );
         }
+        if (valueShorthands.has(char)) break;
       }
     }
     return null;
@@ -3969,6 +4272,7 @@ export class CommandBar {
       'format',
       'node',
       'overwrite',
+      'prefix', // `oc logs --prefix` (bool) vs `oc set env --prefix=FOO_`
       'reference-policy',
       'remove',
       'source',
@@ -4174,11 +4478,14 @@ export class CommandBar {
     // Only real oc commands are echoed with the `$ oc` prompt; shell input
     // (`cat file`, `htpasswd …`) keeps its own `$ ` prompt (issue #11). An
     // explicit `oc`/`kubectl` prefix always means oc (`oc cp`, `oc rsh`).
+    // linux-engine (1.16.0): the prompt is the workstation's bash prompt
+    // (`[student@workstation ~]$`, `#` as root), so `cd` is visible in the scrollback.
     const shellLine = !prefixed && !usedKubectl && this.shellTools?.isShellLine(normalized);
+    const prompt = this.shellTools?.prompt?.() || '$';
     if (shellLine) {
-      this._appendOutput(`$ ${display}`, 'text-green-400/80');
+      this._appendOutput(`${prompt} ${display}`, 'text-green-400/80');
     } else {
-      this._appendOutput(`${OC_PROMPT} ${normalized}`, 'text-green-400/80');
+      this._appendOutput(`${prompt}${OC_PROMPT.slice(1)} ${normalized}`, 'text-green-400/80');
     }
     if (usedKubectl) {
       this._appendOutput(
@@ -4188,11 +4495,15 @@ export class CommandBar {
     }
   }
 
-  _recordCommand(raw, baseCommand, success) {
+  _recordCommand(raw, baseCommand, success, output) {
     const ge = this.gameEngine;
     if (ge && typeof ge.recordCommand === 'function') {
       try {
-        ge.recordCommand(this._recordedForm(raw, baseCommand), success);
+        ge.recordCommand(
+          this._recordedForm(raw, baseCommand),
+          success,
+          typeof output === 'string' ? { output } : {}
+        );
       } catch {
         /* non-fatal */
       }
@@ -4213,7 +4524,46 @@ export class CommandBar {
   _recordedForm(raw, baseCommand) {
     const text = String(raw ?? '').trim();
     if (!text || INPUT_PREFIX_WORD_RE.test(text)) return text;
+    // linux-engine: a workstation shell line (`cp a b`, `whoami`, `top -b -n 1`, `htpasswd …`)
+    // ran in bash, not oc — record it as typed so `command` objectives match real usage.
+    if (this.shellTools?.isShellLine?.(text) && !this._ocShorthandStage(text)) return text;
     return Object.prototype.hasOwnProperty.call(BASE_COMMANDS, baseCommand) ? `oc ${text}` : text;
+  }
+
+  /**
+   * linux-engine: the historical bare oc forms that share a Linux command name and are
+   * still delegated to oc (`top pods|nodes` → `oc adm top`, `diff -f|-k …` → `oc diff`).
+   * @param {string} stage
+   * @returns {boolean}
+   */
+  _ocShorthandStage(stage) {
+    const text = String(stage ?? '').trim();
+    return (
+      /^top\s+(?:pods?|po|nodes?|no)\b/i.test(text) ||
+      /^diff\s+(?:.*\s)?(?:-f|-k|--filename|--kustomize)(?:[\s=]|$)/i.test(text)
+    );
+  }
+
+  /**
+   * linux-engine: the part of a line the API authorization gate must see. Bare shell
+   * stages (`cp a b`, `top -b -n 1`) run on the workstation and never reach the API, so
+   * a restricted user is not refused as if they had typed `oc cp`/`oc adm top`.
+   * @param {string} normalized prefix-stripped line
+   * @param {string} raw typed line
+   * @returns {string}
+   */
+  _gateCommandText(normalized, raw) {
+    const shell = this.shellTools;
+    if (!shell || typeof shell.isShellLead !== 'function') return normalized;
+    const prefixed = INPUT_PREFIX_WORD_RE.test(String(raw ?? ''));
+    const { stages } = splitPipeline(normalized);
+    const kept = stages.filter((stage, index) => {
+      if ((index === 0 && prefixed) || /^\s*(?:oc|kubectl)\s+/i.test(stage)) return true;
+      if (this._ocShorthandStage(stage)) return true;
+      return !shell.isShellLead(tokenizeCommand(stage)[0] || '');
+    });
+    if (kept.length === stages.length) return normalized;
+    return kept.join(' | ');
   }
 
   _emit(event, payload) {
@@ -4235,10 +4585,23 @@ export class CommandBar {
   _authorizationGate(normalized, raw, baseCommand) {
     const ge = this.gameEngine;
     if (!ge || typeof ge.authorizeCommand !== 'function') return null;
+    // `oc create <generator>|-f … --dry-run=client` and `oc run --dry-run=client`
+    // only render the object locally (no API request is made), so RBAC — and
+    // being logged out — cannot refuse them (1.16.0).
+    if (
+      /^(?:(?:oc|kubectl)\s+)?(?:create|run)\b/.test(String(normalized || '').trim()) &&
+      /\s--dry-run(?:=client)?(?=\s|$)/.test(` ${normalized} `) &&
+      !/[|;&]/.test(String(normalized || ''))
+    ) {
+      return null;
+    }
+    // linux-engine: only the stages that reach the API are authorized.
+    const gateCommand = this._gateCommandText(normalized, raw);
+    if (!gateCommand) return null;
     let gate = null;
     try {
-      gate = ge.authorizeCommand(normalized, {
-        user: this.currentUser,
+      gate = ge.authorizeCommand(gateCommand, {
+        user: this.apiUser,
         namespace: this.currentProject,
       });
     } catch {
@@ -4246,8 +4609,30 @@ export class CommandBar {
     }
     if (!gate || typeof gate !== 'object') return null;
     this._gate = gate;
+    // A project LIST is filtered per user for logged-in sessions, but an
+    // anonymous request (after `oc logout`) is simply refused by RBAC.
+    if (this.loggedOut && !gate.exempt && gate.requiresProjectFilter) {
+      gate = {
+        ...gate,
+        allowed: false,
+        message:
+          'Error from server (Forbidden): projects.project.openshift.io is forbidden: User "system:anonymous" cannot list resource "projects" in API group "project.openshift.io" at the cluster scope',
+      };
+    }
     if (gate.exempt || gate.allowed !== false) return null;
-    const message = gate.message || 'Error from server (Forbidden): request is forbidden';
+    let message = gate.message || 'Error from server (Forbidden): request is forbidden';
+    // A refused ProjectRequest (no self-provisioner) answers with the cluster's
+    // projectRequestMessage, default "You may not request a new project via
+    // this API." (project.config.openshift.io/cluster) — 1.16.0.
+    if (gate.resource === 'projectrequests' && gate.verb === 'create') {
+      let custom = '';
+      try {
+        custom = String(this._projectConfigObject()?.spec?.projectRequestMessage || '').trim();
+      } catch {
+        custom = '';
+      }
+      message = `Error from server (Forbidden): ${custom || 'You may not request a new project via this API.'}`;
+    }
     this._appendOutput(message, 'text-red-400');
     this._recordCommand(raw, baseCommand, false);
     this._emit('command:executed', {
@@ -4275,7 +4660,7 @@ export class CommandBar {
       if (!object || typeof object !== 'object' || !object.kind) continue;
       let result = null;
       try {
-        result = ge.authorizeObject(verb, object, { user: this.currentUser, namespace });
+        result = ge.authorizeObject(verb, object, { user: this.apiUser, namespace });
       } catch {
         return null;
       }
@@ -4433,6 +4818,7 @@ export class CommandBar {
     if (!this.container) return;
     this.visible = true;
     this._updateContextLabel();
+    this._syncShellPrompt();
     this.container.classList.add('is-open');
     document.body.classList.add('terminal-open');
     if (focus) requestAnimationFrame(() => this.input?.focus());
@@ -4895,21 +5281,95 @@ Object.assign(CommandBar.prototype, {
   },
 
   /**
-   * Map an absolute `/home/student/...` path (what `$HOME` expands to after the
-   * shell layer runs, #50) back onto the virtual filesystem, whose root is the
-   * workstation home directory. Other paths pass through unchanged (the
-   * ManifestEngine normalises leading slashes itself).
+   * linux-engine: Tab-completion paths as the shell sees them from its cwd — the Files
+   * keys at home (unchanged), keys below the cwd made relative to it inside home/tmp,
+   * and the directory's own entries elsewhere (`cd /etc` → `hosts`, `ssh/` …).
+   * @returns {string[]}
+   */
+  /**
+   * linux-engine: bash pathname completion of one word — the entries of the directory part
+   * (`~/`, `Downloads/`, `/etc/`, or the cwd) that start with the last segment, directories
+   * suffixed with `/`, dotfiles only when the segment starts with `.`. null without a host.
+   * @param {string} word the partial word as typed
+   * @returns {string[]|null}
+   */
+  _pathCompletions(word) {
+    const host = this._linuxHost();
+    if (!host) return null;
+    const text = String(word ?? '');
+    const slash = text.lastIndexOf('/');
+    const dirPart = slash >= 0 ? text.slice(0, slash + 1) : '';
+    const namePart = slash >= 0 ? text.slice(slash + 1) : text;
+    const listing = host.readdir(dirPart || '.', { user: host.session.user });
+    if (!listing.ok) return [];
+    return listing.entries
+      .filter((entry) => entry.name.startsWith(namePart))
+      .filter((entry) => namePart.startsWith('.') || !entry.name.startsWith('.'))
+      .map((entry) => {
+        const isDir =
+          entry.node.type === 'dir' ||
+          (entry.node.type === 'link' &&
+            host.stat(entry.path, { user: 'root' }).node?.type === 'dir');
+        return `${dirPart}${entry.name}${isDir ? '/' : ''}`;
+      });
+  },
+
+  _completionFileList() {
+    const files = this._manifestFileList();
+    const host = this._linuxHost();
+    if (!host) return files;
+    const key = host.vfsKey('.');
+    if (key === '') return files;
+    if (key !== null) {
+      const prefix = `${key}/`;
+      return files
+        .filter((file) => file.startsWith(prefix))
+        .map((file) => file.slice(prefix.length));
+    }
+    const listing = host.readdir('.', { user: host.session.user });
+    if (!listing.ok) return [];
+    return listing.entries.map((entry) =>
+      entry.node.type === 'dir' ? `${entry.name}/` : entry.name
+    );
+  },
+
+  // ── Linux workstation path model (linux-engine, 1.16.0) ─────────────────
+  // ONE resolver for every file the CLI touches: js/engine/LinuxHost.js. Relative paths
+  // resolve against the shell's working directory (`cd manifests && oc apply -f
+  // deployment.yaml`), `~`/`$HOME`/`/tmp` map onto the Files panel exactly as before
+  // (with cwd = home every path maps to the same key), and other absolute paths are real
+  // workstation files with owners and modes (`> /etc/x` → Permission denied).
+
+  /** The simulated RHEL workstation (ShellTools falls back to its own host). */
+  _linuxHost() {
+    return this.shellTools?.host || this.gameEngine?.linuxHost || null;
+  },
+
+  /**
+   * Files-panel key of a typed path (`~/x` / `/home/student/x` / `x` at home → `x`,
+   * `/tmp/x` → `tmp/x`), or the absolute path for a file outside home and /tmp.
    * @param {string} path
    * @returns {string}
    */
   _normalizeVirtualPath(path) {
     const raw = String(path ?? '');
+    const host = this._linuxHost();
+    if (host && raw !== '-') {
+      const key = host.vfsKey(raw);
+      return key !== null ? key : host.resolvePath(raw);
+    }
     if (raw === '/home/student') return '';
     if (raw.startsWith('/home/student/')) return raw.slice('/home/student/'.length);
     return raw;
   },
 
+  /** Read a typed path as the shell user (null when missing/unreadable). */
   _readVirtualFile(path) {
+    const host = this._linuxHost();
+    if (host) {
+      const read = host.readFile(String(path ?? ''), { user: host.session.user });
+      return read.ok ? read.content : null;
+    }
     const me = this.manifestEngine;
     if (!me || typeof me.readFile !== 'function') return null;
     try {
@@ -4920,7 +5380,41 @@ Object.assign(CommandBar.prototype, {
     }
   },
 
+  /** Read a Files-panel key directly (internal plumbing, cwd-independent). */
+  _readVfsKey(key) {
+    const me = this.manifestEngine;
+    if (!me || typeof me.readFile !== 'function') return null;
+    try {
+      const text = me.readFile(String(key ?? ''));
+      return typeof text === 'string' ? text : null;
+    } catch {
+      return null;
+    }
+  },
+
   _writeVirtualFile(path, content, options = {}) {
+    const host = this._linuxHost();
+    if (host) {
+      const target = String(path ?? '');
+      const writeOptions = { user: host.session.user, append: Boolean(options.append) };
+      let written = host.writeFile(target, String(content ?? ''), writeOptions);
+      if (written.error === 'ENOENT' && host.vfsKey(target) !== null) {
+        // oc's own file writes (`oc extract --to=dir`, `oc cp pod:/x dir/x`) keep the
+        // Files panel's implied directories; shell redirects use real bash semantics.
+        const abs = host.resolvePath(target);
+        host.mkdir(abs.slice(0, abs.lastIndexOf('/')) || '/', {
+          user: host.session.user,
+          parents: true,
+        });
+        written = host.writeFile(target, String(content ?? ''), writeOptions);
+      }
+      if (written.ok) return { ok: true, path: written.path };
+      return {
+        error: true,
+        errno: written.error,
+        message: `error: unable to write "${path}": ${errnoText(written.error)}`,
+      };
+    }
     const me = this.manifestEngine;
     if (!me || typeof me.writeFile !== 'function') return this._manifestNotReady();
     try {
@@ -4942,16 +5436,45 @@ Object.assign(CommandBar.prototype, {
   },
 
   _tempStdinPath(content) {
+    // Internal temp copy for `-f -`: keyed in the Files panel store, never cwd-relative.
     const path = `.oc/stdin-${++this._stdinCounter}.yaml`;
-    const written = this._writeVirtualFile(path, content);
-    if (written.error) return null;
+    const me = this.manifestEngine;
+    if (!me || typeof me.writeFile !== 'function') return null;
+    try {
+      me.writeFile(path, String(content ?? ''));
+    } catch {
+      return null;
+    }
     return path;
   },
 
-  _writeRedirect(redirect, text) {
-    if (!this._manifestReady()) return this._manifestNotReady();
-    const written = this._writeVirtualFile(redirect.file, text, { append: redirect.append });
-    if (written.error) return written;
+  /**
+   * `cmd > file` / `>> file`: bash writes the command's exact stdout (a command that
+   * reports `stdout` keeps its bytes, e.g. `printf`/`echo -n`; other output gets its
+   * final newline). Redirects run as the shell user, so `sudo cmd > /etc/x` still fails.
+   */
+  _writeRedirect(redirect, text, result = null) {
+    const host = this._linuxHost();
+    if (!host) {
+      if (!this._manifestReady()) return this._manifestNotReady();
+      const written = this._writeVirtualFile(redirect.file, text, { append: redirect.append });
+      if (written.error) return written;
+      this.shellTools?._refreshFilesPanel?.();
+      return { ok: true, message: '' };
+    }
+    const value =
+      result && typeof result.stdout === 'string'
+        ? result.stdout
+        : text && !String(text).endsWith('\n')
+          ? `${text}\n`
+          : String(text ?? '');
+    const written = host.writeFile(redirect.file, value, {
+      user: host.session.user,
+      append: Boolean(redirect.append),
+    });
+    if (written.error) {
+      return { error: true, message: `bash: ${redirect.file}: ${errnoText(written.error)}` };
+    }
     this.shellTools?._refreshFilesPanel?.();
     // Real bash prints nothing when a redirect succeeds; the file content is the
     // only observable effect (`oc get deploy -o yaml > deploy.yaml`).
@@ -4965,6 +5488,15 @@ Object.assign(CommandBar.prototype, {
       const tempPath = this._tempStdinPath(stdinText);
       if (!tempPath) return { error: this._manifestNotReady() };
       return { file: tempPath };
+    }
+    const host = this._linuxHost();
+    if (host && host.vfsKey(path) === null) {
+      // A file outside home and /tmp (`oc apply -f /etc/app.yaml`): apply a temp copy.
+      const read = host.readFile(path, { user: host.session.user });
+      if (read.ok) {
+        const tempPath = this._tempStdinPath(read.content);
+        if (tempPath) return { file: tempPath };
+      }
     }
     return { file: this._normalizeVirtualPath(path) };
   },
@@ -5010,14 +5542,16 @@ Object.assign(CommandBar.prototype, {
     }
     const direct = this._readVirtualFile(path);
     if (direct !== null) return this._parseManifestPreviewText(direct, path);
-    const prefix = `${String(path).replace(/\/+$/, '')}/`;
+    // linux-engine: directories are listed by their Files-panel key (cwd-aware).
+    const dirKey = String(this._normalizeVirtualPath(path)).replace(/\/+$/, '');
+    const prefix = dirKey ? `${dirKey}/` : '';
     const files = this._manifestFileList().filter(
-      (file) => file.startsWith(prefix) && /\.(ya?ml|json)$/i.test(file)
+      (file) => file.startsWith(prefix) && !file.startsWith('.oc/') && /\.(ya?ml|json)$/i.test(file)
     );
     if (!files.length) return { error: this._err(`error: the path "${path}" does not exist`) };
     const docs = [];
     for (const file of files) {
-      const parsed = this._parseManifestPreviewText(this._readVirtualFile(file) ?? '', file);
+      const parsed = this._parseManifestPreviewText(this._readVfsKey(file) ?? '', file);
       if (parsed.error) return parsed;
       docs.push(...parsed.docs);
     }
@@ -5129,7 +5663,8 @@ Object.assign(CommandBar.prototype, {
     }
     let result;
     try {
-      result = me.renderKustomize(dir);
+      // linux-engine: the directory is resolved against the shell's cwd.
+      result = me.renderKustomize(this._normalizeVirtualPath(dir));
     } catch (error) {
       return this._err(`error: ${error && error.message ? error.message : error}`);
     }
@@ -5137,6 +5672,8 @@ Object.assign(CommandBar.prototype, {
       return this._err(result?.error || result?.errors?.[0] || 'error: kustomize build failed');
     const objects = Array.isArray(result.objects) ? result.objects : [];
     if (!objects.length) return this._err('error: no objects passed to apply');
+    const conflict = this._namespaceFlagConflict(objects, flags);
+    if (conflict) return conflict;
     const warnings = (result.warnings || []).map((warning) => `warning: ${warning}`);
     const printed = this._printDryRunObjects(objects, {
       command: 'apply',
@@ -5148,10 +5685,50 @@ Object.assign(CommandBar.prototype, {
     return this._ok([...warnings, printed.message].filter(Boolean).join('\n'));
   },
 
+  /**
+   * kubectl resource.Builder `RequireNamespace` (EnforceNamespace = an explicit
+   * `-n`): an object without metadata.namespace takes the flag's namespace, but
+   * an object that names a DIFFERENT namespace aborts the request — `-n` never
+   * moves it (1.16.0; `oc apply -k <overlay> -n default` used to rewrite the
+   * overlay's namespace).
+   * @param {object[]} docs rendered manifest documents (List items included)
+   * @param {object} flags parsed flags
+   * @returns {{error:true,message:string}|null}
+   */
+  _namespaceFlagConflict(docs, flags = {}) {
+    const requested =
+      flags && flags.namespace && flags.namespace !== true ? String(flags.namespace) : '';
+    if (!requested) return null;
+    const queue = Array.isArray(docs) ? [...docs] : [];
+    while (queue.length) {
+      const doc = queue.shift();
+      if (!doc || typeof doc !== 'object') continue;
+      if (doc.kind === 'List' && Array.isArray(doc.items)) {
+        queue.unshift(...doc.items);
+        continue;
+      }
+      const kind = resolveKindToken(String(doc.kind || ''));
+      if (!kind || !this._isNamespaced(kind)) continue;
+      const own = doc.metadata?.namespace;
+      if (own && own !== requested) {
+        return this._err(
+          `error: the namespace from the provided object "${own}" does not match the namespace "${requested}". You must pass '--namespace=${own}' to perform this operation.`
+        );
+      }
+    }
+    return null;
+  },
+
   _applyFileDelegated(path, options = {}) {
     if (!this._manifestReady()) return this._manifestNotReady();
-    path = this._normalizeVirtualPath(path);
+    // linux-engine: `path` stays as typed; every consumer below resolves it once against
+    // the shell cwd (pre-resolving here would resolve it twice when cwd ≠ home).
     const flags = options.flags || {};
+    {
+      const preview = this._manifestPreviewDocs(path, options);
+      const conflict = preview.error ? null : this._namespaceFlagConflict(preview.docs, flags);
+      if (conflict) return conflict;
+    }
     const dryRun = this._dryRunMode(flags);
     if (dryRun === 'invalid')
       return this._err('error: --dry-run must be "none", "server", or "client"');
@@ -5203,8 +5780,9 @@ Object.assign(CommandBar.prototype, {
     if (resolved.error) return resolved.error;
     const me = this.manifestEngine;
     if (typeof me.applyFile !== 'function') return this._manifestNotReady();
-    // Real oc's `-n` sets the namespace for every applied object (kubectl's
-    // EnforceNamespace); the Files panel keeps calling applyFile(path) unchanged.
+    // Real oc's `-n` fills in the namespace of objects that carry none
+    // (EnforceNamespace; a conflicting one was rejected above); the Files panel
+    // keeps calling applyFile(path) unchanged.
     const namespaceOverride =
       options.flags && options.flags.namespace && options.flags.namespace !== true
         ? String(options.flags.namespace)
@@ -5232,17 +5810,23 @@ Object.assign(CommandBar.prototype, {
     }
     const namespace =
       flags && flags.namespace && flags.namespace !== true ? String(flags.namespace) : null;
-    if (namespace) {
-      const namespaceError = this._requireNamespace(namespace);
-      if (namespaceError) return namespaceError;
-    }
+    let rendered = null;
     if (typeof me.renderKustomize === 'function') {
-      let rendered = null;
       try {
         rendered = me.renderKustomize(dir);
       } catch {
         rendered = null;
       }
+      // The overlay's `namespace:` wins over nothing: `-n` that disagrees with
+      // it is the builder's client-side error, before any API call (1.16.0).
+      const conflict = this._namespaceFlagConflict(rendered?.objects || [], flags || {});
+      if (conflict) return conflict;
+    }
+    if (namespace) {
+      const namespaceError = this._requireNamespace(namespace);
+      if (namespaceError) return namespaceError;
+    }
+    if (typeof me.renderKustomize === 'function') {
       if (rendered && Array.isArray(rendered.objects) && rendered.objects.length) {
         const authorizationError = this._authorizeManifestObjects(
           rendered.objects,
@@ -5266,7 +5850,14 @@ Object.assign(CommandBar.prototype, {
 
   _deleteFileDelegated(path, options = {}) {
     if (!this._manifestReady()) return this._manifestNotReady();
-    path = this._normalizeVirtualPath(path);
+    // linux-engine: resolved once by each consumer (cwd-aware), see _applyFileDelegated.
+    {
+      const preview = this._manifestPreviewDocs(path, options);
+      const conflict = preview.error
+        ? null
+        : this._namespaceFlagConflict(preview.docs, options.flags || {});
+      if (conflict) return conflict;
+    }
     const namespaceError = this._requireManifestNamespaces(
       path,
       options.flags || {},
@@ -6739,7 +7330,7 @@ Object.assign(CommandBar.prototype, {
         const spec = resource.spec || resource;
         return {
           NAME: name,
-          PACKAGE: spec.packageName || spec.name || name,
+          PACKAGE: spec.name || spec.packageName || name,
           SOURCE: spec.source || 'redhat-operators',
           CHANNEL: spec.channel || 'stable',
         };
@@ -7584,8 +8175,8 @@ Object.assign(CommandBar.prototype, {
       output = this._describeLines(kind, resource).join('\n');
     output = scrubInternalAnnotationsText(output);
     // Real 4.22 `oc describe quota` prints only the Resource/Used/Hard table —
-    // no Events section (#43).
-    if (kind === 'ResourceQuota' || kind === 'ClusterResourceQuota') {
+    // no Events section (#43); kubectl's describeNetworkPolicy has none either.
+    if (kind === 'ResourceQuota' || kind === 'ClusterResourceQuota' || kind === 'NetworkPolicy') {
       const eventsAt = output.search(/^Events:/m);
       if (eventsAt >= 0) output = output.slice(0, eventsAt).replace(/\s+$/, '');
       return output;
@@ -8614,6 +9205,8 @@ Object.assign(CommandBar.prototype, {
   _cmdGetAll({ flags, output, allNamespaces, namespace }) {
     // Real `oc get all` covers the `all` API category only. ConfigMaps, Secrets
     // and PVCs are deliberately NOT part of it.
+    // Discovery order of the `all` category on OCP 4.22: core and apps first,
+    // then the openshift-apiserver groups build → image → route (routes last).
     const order = [
       'Pod',
       'Service',
@@ -8624,11 +9217,16 @@ Object.assign(CommandBar.prototype, {
       'Job',
       'CronJob',
       'HorizontalPodAutoscaler',
-      'Route',
       'BuildConfig',
       'Build',
       'ImageStream',
+      'Route',
     ];
+    // Listing the category also lists DeploymentConfigs, and since 4.14 the
+    // API server answers that request with this deprecation warning header,
+    // which oc prints first (stderr; omitted for -o yaml|json|name pipelines).
+    const dcWarning =
+      'Warning: apps.openshift.io/v1 DeploymentConfig is deprecated in v4.14+, unavailable in v4.10000+';
     const structured = ['yaml', 'json', 'name', 'jsonpath', 'custom-columns'].includes(
       output.format
     );
@@ -8649,7 +9247,7 @@ Object.assign(CommandBar.prototype, {
     if (!visible.length) {
       if (structured) return this._ok(this._formatResourcesStructured([], flags, output));
       return this._ok(
-        allNamespaces ? 'No resources found.' : `No resources found in ${namespace} namespace.`
+        `${dcWarning}\n${allNamespaces ? 'No resources found.' : `No resources found in ${namespace} namespace.`}`
       );
     }
     if (structured) {
@@ -8667,7 +9265,7 @@ Object.assign(CommandBar.prototype, {
         namespaceColumn: Boolean(allNamespaces) && this._isNamespaced(entry.kind),
       })
     );
-    return this._ok(sections.join('\n\n'));
+    return this._ok(`${dcWarning}\n${sections.join('\n\n')}`);
   },
 
   /** YAML/JSON/name/jsonpath/custom-columns output for a mixed list of resources. */
@@ -9322,10 +9920,14 @@ Object.assign(CommandBar.prototype, {
       const namespaceError = this._requireNamespace(namespace);
       if (namespaceError) return namespaceError;
     }
+    // Real oc describes strictly inside the request namespace: no fallback to
+    // a same-named object in another project (`oc get`/`logs`/`set env` already
+    // answer NotFound there) — 1.16.0.
     const resource = this._findResource(kind, name, {
       namespace: flags.namespace,
       explicitNamespace: Boolean(flags.namespace),
       allowPrefix: false,
+      allowOtherNamespaces: false,
     });
     if (!resource) return this._err(this._notFoundMessage(kind, name));
     return this._ok(this._describeResource(kind, resource));
@@ -9333,11 +9935,32 @@ Object.assign(CommandBar.prototype, {
 
   _cmdLogs(tokens) {
     const { positionals, flags } = parseArgs(tokens, {
-      shortValues: { '-n': 'namespace', '-c': 'container' },
+      shortValues: { '-n': 'namespace', '-c': 'container', '-l': 'selector' },
       shortBools: { '-f': 'follow', '-p': 'previous' },
-      longValues: ['namespace', 'container', 'tail', 'since', 'since-time', 'version'],
-      longBools: ['follow', 'previous', 'timestamps', 'all-containers'],
+      longValues: [
+        'namespace',
+        'container',
+        'tail',
+        'since',
+        'since-time',
+        'version',
+        'selector',
+        'max-log-requests',
+      ],
+      longBools: ['follow', 'previous', 'timestamps', 'all-containers', 'prefix', 'ignore-errors'],
     });
+    const selector = flags.selector && flags.selector !== true ? String(flags.selector) : '';
+    if (selector && positionals.length) {
+      return this._err(
+        "error: only a selector (-l) or a POD name is allowed\nSee 'oc logs -h' for help and examples"
+      );
+    }
+    if (selector) {
+      const namespace = flags.namespace || this.currentProject;
+      const namespaceError = this._requireNamespace(namespace);
+      if (namespaceError) return namespaceError;
+      return this._logsForSelector(selector, namespace, flags);
+    }
     if (!positionals.length) {
       return this._err(
         'error: you must specify a resource to get logs from.\n\nUsage:\n  oc logs <pod|deployment/name|build/name|bc/name> [flags]'
@@ -9411,6 +10034,60 @@ Object.assign(CommandBar.prototype, {
     let lines = this._podLogLines(pod, containerName, Boolean(options.flags.previous));
     if (Number.isFinite(options.tail) && options.tail >= 0) lines = lines.slice(-options.tail);
     return this._ok(lines.join('\n'));
+  },
+
+  /**
+   * `oc logs -l <selector>` (kubectl 1.35 logs.go): every matching Pod of the
+   * namespace in API (name) order, each Pod's default container, the last 10
+   * lines per Pod unless `--tail` is given, `[pod/<name>/<container>] ` per line
+   * with `--prefix`. No match prints `No resources found in <ns> namespace.`;
+   * a Pod that cannot serve logs stops the stream unless `--ignore-errors`.
+   * @param {string} selector
+   * @param {string} namespace
+   * @param {object} flags
+   */
+  _logsForSelector(selector, namespace, flags) {
+    let pods = this._getKindList('Pod').filter((pod) => pod.metadata?.namespace === namespace);
+    pods = this._sortResourcesByName(this._filterResources(pods, 'Pod', { selector }));
+    if (!pods.length) return this._ok(`No resources found in ${namespace} namespace.`);
+    const explicitTail =
+      flags.tail !== undefined && flags.tail !== true ? parseInt(flags.tail, 10) : null;
+    const tail = Number.isFinite(explicitTail) ? explicitTail : 10;
+    const output = [];
+    for (const pod of pods) {
+      const podName = pod.metadata?.name || '';
+      const containers = this._containerList(pod);
+      const names = flags['all-containers']
+        ? containers.map((container) => container.name)
+        : [
+            flags.container && flags.container !== true
+              ? String(flags.container)
+              : containers[0]?.name || 'main',
+          ];
+      for (const containerName of names) {
+        let failure = null;
+        if (containers.length && !containers.some((container) => container.name === containerName))
+          failure = `Error from server (BadRequest): container "${containerName}" is not valid for pod "${podName}"`;
+        else if ((pod.status?.phase || 'Pending') === 'Pending') {
+          const reason =
+            (pod.status?.containerStatuses || []).find((entry) => entry.state?.waiting)?.state
+              ?.waiting?.reason || 'ContainerCreating';
+          failure = `error: container "${containerName}" in pod "${podName}" is waiting to start: ${reason}`;
+        } else if (flags.previous && !this._podHasPreviousContainer(pod, containerName)) {
+          failure = `Error from server (BadRequest): previous terminated container "${containerName}" in pod "${podName}" not found`;
+        }
+        if (failure) {
+          if (flags['ignore-errors']) continue;
+          output.push(failure);
+          return { ...this._err(output.join('\n')), exitCode: 1 };
+        }
+        let lines = this._podLogLines(pod, containerName, Boolean(flags.previous));
+        if (tail >= 0) lines = lines.slice(-tail);
+        const prefix = flags.prefix ? `[pod/${podName}/${containerName}] ` : '';
+        output.push(...lines.map((line) => `${prefix}${line}`));
+      }
+    }
+    return this._ok(output.join('\n'));
   },
 
   /** Parse incident/campaign-produced `openshiftgames.io/logs*` annotations. */
@@ -9731,6 +10408,13 @@ Object.assign(CommandBar.prototype, {
       longValues: ['namespace'],
     });
     const namespace = flags.namespace || this.currentProject;
+    // projectstatus.go Describe(): the namespace GET is the first hard error,
+    // and an anonymous request (after `oc logout`) is Forbidden (1.16.0).
+    if (this.loggedOut) {
+      return this._err(
+        `Error from server (Forbidden): namespaces "${namespace}" is forbidden: User "system:anonymous" cannot get resource "namespaces" in API group "" in the namespace "${namespace}"`
+      );
+    }
     const namespaceError = this._requireNamespace(namespace);
     if (namespaceError) return namespaceError;
     const inScope = (resource) => resource.metadata?.namespace === namespace;
@@ -9842,7 +10526,7 @@ Object.assign(CommandBar.prototype, {
         .map((entry) => (typeof entry === 'string' ? entry : entry?.user || entry?.name || ''))
         .filter(Boolean);
     }
-    const file = this._readVirtualFile('htpasswd');
+    const file = this._readVirtualFile('/home/student/htpasswd');
     if (typeof file === 'string') {
       return file
         .split('\n')
@@ -9868,7 +10552,9 @@ Object.assign(CommandBar.prototype, {
       if (/^https?:\/\//.test(positional)) server = positional;
       else if (!user) user = positional;
     }
-    if (token && !user) user = 'kubeadmin';
+    // A bearer token is authenticated by the API server, never mapped to a
+    // default identity (it used to log ANY string in as kubeadmin) — 1.16.0.
+    if (token) return this._loginWithToken(token, server);
     if (!user) {
       return this._usageError(
         'login',
@@ -10071,41 +10757,39 @@ Object.assign(CommandBar.prototype, {
     // GameEngine.login() emits `login` itself; only emit in the pre-engine fallback.
     if (!hadLoginApi) this._emit('login', { user, server });
 
+    return this._ok(`Login successful.\n\n${this._loginProjectSummary()}`);
+  },
+
+  /**
+   * oc 4.22 loginoptions.go #gatherProjectInfo, printed after the login line:
+   * exactly one visible project gets the singular sentence (and becomes the
+   * current project); several are listed with the current one marked
+   * `  * <name>` and the rest indented four spaces, then `Using project "<name>".`
+   * (#76).
+   * @returns {string}
+   */
+  _loginProjectSummary() {
     const projects = this._visibleProjectNames();
     const current = this.currentProject;
     if (!projects.length) {
-      return this._ok(
-        [
-          'Login successful.',
-          '',
-          "You don't have any projects. You can try to create a new project, by running",
-          '',
-          '    oc new-project <projectname>',
-          '',
-        ].join('\n')
-      );
+      return [
+        "You don't have any projects. You can try to create a new project, by running",
+        '',
+        '    oc new-project <projectname>',
+        '',
+      ].join('\n');
     }
-    // oc 4.22 loginoptions.go #gatherProjectInfo: exactly one visible project
-    // gets the singular sentence (and becomes the current project); several are
-    // listed with the current one marked `  * <name>` and the rest indented
-    // four spaces, then `Using project "<name>".` (#76).
     if (projects.length === 1) {
       const only = projects[0];
       if (only !== current) this._setCurrentProject(only);
-      return this._ok(
-        [
-          'Login successful.',
-          '',
-          `You have one project on this server: "${only}"`,
-          '',
-          `Using project "${only}".`,
-        ].join('\n')
-      );
+      return [
+        `You have one project on this server: "${only}"`,
+        '',
+        `Using project "${only}".`,
+      ].join('\n');
     }
     const activeProject = projects.includes(current) ? current : projects[0];
-    const lines = [
-      'Login successful.',
-      '',
+    return [
       "You have access to the following projects and can switch between them with 'oc project <projectname>':",
       '',
       ...projects.map((project) =>
@@ -10113,19 +10797,20 @@ Object.assign(CommandBar.prototype, {
       ),
       '',
       `Using project "${activeProject}".`,
-    ];
-    return this._ok(lines.join('\n'));
+    ].join('\n');
   },
 
   _cmdLogout() {
     const ge = this.gameEngine;
+    // oc 4.22 logout.go Validate(): nothing to revoke once the token is gone.
+    if (this.loggedOut) return this._err('error: You must have a token in order to logout.');
     const user = this.currentUser;
-    let message = `Logged out '${user}' on '${OC_SERVER_URL}'`;
+    // logout.go RunLogout(): `Logged %q out on %q` (user, then the API server).
+    const message = `Logged "${user}" out on "${OC_SERVER_URL}"`;
+    this._lastSessionUser = user;
     if (ge && typeof ge.logout === 'function') {
       try {
-        const result = ge.logout();
-        if (result && typeof result === 'object' && typeof result.message === 'string')
-          message = result.message;
+        ge.logout();
       } catch {
         /* fall through */
       }
@@ -10145,18 +10830,102 @@ Object.assign(CommandBar.prototype, {
       shortBools: { '-c': 'show-context', '-t': 'show-token' },
       longBools: ['show-server', 'show-context', 'show-token', 'show-console'],
     });
-    const ge = this.gameEngine;
-    const loggedOut = Boolean(ge && 'currentUser' in ge && !ge.currentUser);
-    if (loggedOut) return this._err('error: You must be logged in to the server (Unauthorized)');
+    // The kubeconfig context `<namespace>/<cluster>/<user>` survives `oc logout`.
     if (flags['show-server']) return this._ok(OC_SERVER_URL);
-    if (flags['show-console']) return this._ok(OC_CONSOLE_URL);
-    if (flags['show-context'])
-      return this._ok(`${this.currentUser}/api-cluster-example-com:6443/${this.currentUser}`);
-    if (flags['show-token'])
-      return this._ok(
-        `sha256~${stableHash(`${this.currentUser}-token`, 99999999).toString(16).padStart(8, '0')}`
+    if (flags['show-context']) return this._ok(this._kubeconfigNames().context);
+    if (this.loggedOut) {
+      // whoami.go: Validate() needs a bearer token for -t; otherwise the
+      // SelfSubjectReview and the users/~ fallback both go out anonymously.
+      if (flags['show-token'])
+        return this._err('error: no token is currently in use for this session');
+      if (flags['show-console'])
+        return this._err(
+          'error: unable to determine console location: configmaps "console-public" is forbidden: User "system:anonymous" cannot get resource "configmaps" in API group "" in the namespace "openshift-config-managed"'
+        );
+      return this._err(
+        'Error from server (Forbidden): users.user.openshift.io "~" is forbidden: User "system:anonymous" cannot get resource "users" in API group "user.openshift.io" at the cluster scope'
       );
+    }
+    if (flags['show-console']) return this._ok(OC_CONSOLE_URL);
+    if (flags['show-token']) return this._ok(this._sessionToken(this.currentUser));
     return this._ok(this.currentUser);
+  },
+
+  /** The OAuth access token the simulated cluster issued to `user` (`oc whoami -t`). */
+  _sessionToken(user) {
+    return `sha256~${stableHash(`${user}-token`, 99999999).toString(16).padStart(8, '0')}`;
+  },
+
+  /**
+   * Which identity a bearer token authenticates as, or null when the API
+   * server would reject it (401). The simulated cluster only knows tokens it
+   * issued itself: OAuth tokens (`oc whoami -t`) of kubeadmin or an existing
+   * User, and unexpired ServiceAccount tokens (`oc create token <sa>`) whose
+   * ServiceAccount still exists (1.16.0).
+   * @param {string} token
+   * @returns {string|null}
+   */
+  _userForToken(token) {
+    const text = String(token || '').trim();
+    if (!text) return null;
+    if (text.startsWith('sha256~')) {
+      const users = [
+        'kubeadmin',
+        ...this._resources('User')
+          .map((user) => user.metadata?.name)
+          .filter(Boolean),
+      ];
+      return users.find((user) => this._sessionToken(user) === text) || null;
+    }
+    const parts = text.split('.');
+    if (parts.length !== 3) return null;
+    let claims = null;
+    try {
+      const base64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+      const padded = base64 + '='.repeat((4 - (base64.length % 4)) % 4);
+      const json =
+        typeof atob === 'function'
+          ? decodeURIComponent(escape(atob(padded)))
+          : Buffer.from(padded, 'base64').toString('utf8');
+      claims = JSON.parse(json);
+    } catch {
+      return null;
+    }
+    const match = String(claims?.sub || '').match(/^system:serviceaccount:([^:]+):([^:]+)$/);
+    if (!match) return null;
+    if (Number(claims.exp) && Number(claims.exp) * 1000 <= Date.now()) return null;
+    const serviceAccount = this.cluster?.getByName?.('ServiceAccount', match[2], match[1]);
+    if (!serviceAccount) return null;
+    const uid = claims.kubernetes?.serviceaccount?.uid;
+    if (uid && uid !== (serviceAccount.metadata?.uid || serviceAccount.uid)) return null;
+    return claims.sub;
+  },
+
+  /**
+   * `oc login --token=…` (loginoptions.go gatherAuthInfo): whoami with the
+   * token, then `Logged into "<server>" as "<user>" using the token provided.`
+   * and the project summary; a token the server rejects is the real 401 text.
+   * @param {string} token
+   * @param {string} server
+   */
+  _loginWithToken(token, server) {
+    const user = this._userForToken(token);
+    if (!user) return this._err('error: The token provided is invalid or expired.');
+    const ge = this.gameEngine;
+    if (ge) {
+      ge.currentUser = user;
+      try {
+        ge.ensureCurrentProject?.();
+        ge._recordLogin?.(user, 'token');
+        ge.eventBus?.emit?.('login', { user, provider: 'token', project: this.currentProject });
+      } catch {
+        /* session bookkeeping is best effort */
+      }
+    } else {
+      this._emit('login', { user, server });
+    }
+    const summary = this._loginProjectSummary();
+    return this._ok(`Logged into "${server}" as "${user}" using the token provided.\n\n${summary}`);
   },
 
   _cmdProject(tokens) {
@@ -10165,6 +10934,15 @@ Object.assign(CommandBar.prototype, {
       longBools: ['short', 'quiet'],
     });
     const shortOnly = Boolean(flags.short || flags.quiet);
+    // project.go ConfirmProjectAccess(): an anonymous GET of the project is
+    // Forbidden after `oc logout` (1.16.0).
+    if (this.loggedOut && !positionals.length) {
+      return this._err(
+        `error: you do not have rights to view project "${this.currentProject}" specified in your config or the project doesn't exist`
+      );
+    }
+    if (this.loggedOut)
+      return this._err(`error: You are not a member of project "${positionals[0]}".`);
     if (!positionals.length) {
       if (shortOnly) return this._ok(this.currentProject);
       return this._ok(`Using project "${this.currentProject}" on server "${OC_SERVER_URL}".`);
@@ -10181,6 +10959,11 @@ Object.assign(CommandBar.prototype, {
 
   _cmdProjects(tokens) {
     const { flags } = parseArgs(tokens, { longBools: ['short', 'quiet'] });
+    if (this.loggedOut) {
+      return this._err(
+        'Error from server (Forbidden): projects.project.openshift.io is forbidden: User "system:anonymous" cannot list resource "projects" in API group "project.openshift.io" at the cluster scope'
+      );
+    }
     const visibleProjects = this._visibleProjectNames();
     if (flags.quiet || flags.short) {
       return this._ok(visibleProjects.join('\n'));
@@ -10256,10 +11039,29 @@ Object.assign(CommandBar.prototype, {
     );
   },
 
+  /**
+   * The kubeconfig stanzas `oc login` writes (oc cliconfig nicknames): cluster
+   * `api-cluster-example-com:6443`, user `<user>/<cluster>` and context
+   * `<namespace>/<cluster>/<user>`. `oc logout` keeps them and only blanks the
+   * token (1.16.0).
+   */
+  _kubeconfigNames() {
+    const cluster = 'api-cluster-example-com:6443';
+    const user = this.loggedOut ? this._lastSessionUser || 'kubeadmin' : this.currentUser;
+    return {
+      cluster,
+      user,
+      authInfo: `${user}/${cluster}`,
+      namespace: this.currentProject,
+      context: `${this.currentProject}/${cluster}/${user}`,
+    };
+  },
+
   _cmdConfig(tokens) {
     const { positionals } = parseArgs(tokens, {});
     const sub = (positionals[0] || '').toLowerCase();
-    const contextName = `${this.currentUser}/api-cluster-example-com:6443/${this.currentUser}`;
+    const names = this._kubeconfigNames();
+    const contextName = names.context;
     if (!sub) {
       return this._err(
         'error: you must specify a subcommand\n\nValid subcommands: current-context, view, get-contexts, use-context'
@@ -10270,24 +11072,25 @@ Object.assign(CommandBar.prototype, {
       return this._ok(
         padTable(
           ['CURRENT', 'NAME', 'CLUSTER', 'AUTHINFO', 'NAMESPACE'],
-          [['*', contextName, 'cluster', this.currentUser, this.currentProject]]
+          [['*', contextName, names.cluster, names.authInfo, names.namespace]]
         )
       );
     }
     if (sub === 'view') {
       const kubeconfig = {
         apiVersion: 'v1',
-        clusters: [{ cluster: { server: OC_SERVER_URL }, name: 'cluster' }],
+        clusters: [{ cluster: { server: OC_SERVER_URL }, name: names.cluster }],
         contexts: [
           {
-            context: { cluster: 'cluster', namespace: this.currentProject, user: this.currentUser },
+            context: { cluster: names.cluster, namespace: names.namespace, user: names.authInfo },
             name: contextName,
           },
         ],
         'current-context': contextName,
         kind: 'Config',
         preferences: {},
-        users: [{ name: this.currentUser, user: { token: 'sha256~simulated-kubeconfig-token' } }],
+        // `oc config view` redacts secrets; after `oc logout` the token is gone.
+        users: [{ name: names.authInfo, user: this.loggedOut ? {} : { token: 'REDACTED' } }],
       };
       return this._ok(toYamlDocument(kubeconfig));
     }
@@ -10350,6 +11153,12 @@ Object.assign(CommandBar.prototype, {
           openshiftVersion: OCP_VERSION,
           serverVersion,
         };
+    // version.go: the OpenShift version comes from ClusterVersion "version",
+    // which an anonymous session (after `oc logout`) may not read — oc then
+    // omits it ("must be logged in to cluster as admin", logged at -v=5). The
+    // Kubernetes version stays: /version is public (1.16.0).
+    const anonymousServer = this.loggedOut && !flags.client;
+    if (anonymousServer) delete object.openshiftVersion;
     if (output.format === 'json') return this._ok(JSON.stringify(object, null, 4));
     if (output.format === 'yaml') return this._ok(toYamlDocument(object));
     if (output.format !== 'table') {
@@ -10359,6 +11168,11 @@ Object.assign(CommandBar.prototype, {
     }
     if (flags.client) {
       return this._ok(`Client Version: ${OC_CLIENT_VERSION}\nKustomize Version: v5.7.1`);
+    }
+    if (anonymousServer) {
+      return this._ok(
+        `Client Version: ${OC_CLIENT_VERSION}\nKustomize Version: v5.7.1\nKubernetes Version: ${KUBERNETES_GIT_VERSION}`
+      );
     }
     return this._ok(
       `Client Version: ${OC_CLIENT_VERSION}\nKustomize Version: v5.7.1\nServer Version: ${OC_SERVER_VERSION}\nKubernetes Version: ${KUBERNETES_GIT_VERSION}`
@@ -10697,20 +11511,8 @@ Object.assign(CommandBar.prototype, {
     const { positionals, flags, afterDoubleDash } = parseArgs(tokens, this._createFlagSpec());
     if (flags.filename) return this._createFromFile(flags.filename, ctx, 'create', flags);
     if (!positionals.length) {
-      return this._err(
-        'error: must specify a resource type or -f <filename>.\n\n' +
-          'Create resources by name:\n' +
-          '  oc create deployment <name> --image=<image>\n' +
-          '  oc create secret generic <name> --from-literal=key=value\n' +
-          '  oc create configmap <name> --from-literal=key=value\n' +
-          '  oc create quota <name> --hard=pods=20,requests.cpu=4\n' +
-          '  oc create clusterquota <name> --project-label-selector=env=dev --hard=pods=10\n' +
-          '  oc create job <name> --image=<image> -- <command>\n' +
-          '  oc create cronjob <name> --image=<image> --schedule="*/5 * * * *" -- <command>\n' +
-          '  oc create user <name> | oc create group <name> [users...]\n' +
-          '  oc create serviceaccount <name> | oc create rolebinding <name> --clusterrole=edit --user=<user>\n\n' +
-          "Or from a manifest:\n  oc create -f <file>\n\nRun 'oc create --help' for details."
-      );
+      // kubectl create Validate(): FilenameOptions.RequireFilenameOrKustomize().
+      return this._err('error: must specify one of -f and -k');
     }
     const sub = positionals[0].toLowerCase();
     const rest = positionals.slice(1);
@@ -10751,8 +11553,8 @@ Object.assign(CommandBar.prototype, {
         return this._createClusterQuota(rest, flags);
       case 'user':
         return this._createUser(rest, flags);
-      case 'group':
-        return this._createGroup(rest, flags);
+      // No `oc create group`: groups are made with `oc adm groups new` (1.16.0;
+      // the default branch answers like kubectl create's Unexpected args).
       case 'serviceaccount':
       case 'sa':
         return this._createServiceAccount(rest, flags);
@@ -10761,6 +11563,7 @@ Object.assign(CommandBar.prototype, {
       case 'clusterrolebinding':
         return this._createRoleBindingCommand(rest, flags, true);
       case 'service':
+      case 'svc':
         return this._createService(rest, flags);
       case 'job':
         return this._createJob(rest, flags, afterDoubleDash);
@@ -10782,8 +11585,41 @@ Object.assign(CommandBar.prototype, {
       case 'ns':
         return this._createNamespace(rest, flags);
       default: {
-        const kind = resolveKindToken(sub);
-        if (!kind) return this._resourceTypeError(positionals[0]);
+        // Only real `oc create` subcommands exist (kubectl create + oc's
+        // route/deploymentconfig/clusterquota/user/identity/useridentitymapping/
+        // imagestream/imagestreamtag/build). Anything else — `oc create
+        // subscription x`, `oc create networkpolicy x`, `oc create group x`,
+        // `oc create pod x` — is kubectl create's Complete() rejection, never a
+        // generic object (1.16.0).
+        const GENERATORS = new Set([
+          'deployment',
+          'deploy',
+          'deploymentconfig',
+          'dc',
+          'imagestream',
+          'is',
+          'imagestreamtag',
+          'istag',
+          'identity',
+          'useridentitymapping',
+          'build',
+          'ingress',
+          'ing',
+          'poddisruptionbudget',
+          'pdb',
+          'priorityclass',
+          'pc',
+        ]);
+        const kind = GENERATORS.has(sub) ? resolveKindToken(sub) : null;
+        if (!kind) {
+          return this._err(
+            `error: Unexpected args: [${positionals.join(' ')}]\nSee 'oc create -h' for help and examples`
+          );
+        }
+        // create_deployment.go: cmd.MarkFlagRequired("image").
+        if (kind === 'Deployment' && !(flags.image && flags.image !== true)) {
+          return this._err('error: required flag(s) "image" not set');
+        }
         return this._createGeneric(kind, rest[0], flags);
       }
     }
@@ -10791,9 +11627,9 @@ Object.assign(CommandBar.prototype, {
 
   _createGeneric(kind, name, flags) {
     if (!name) {
-      return this._usageError(
-        'create',
-        `name is required for ${kind.toLowerCase()}\n\n  oc create ${kind.toLowerCase()} <name> [flags]`
+      // kubectl NameFromCommandArgs().
+      return this._err(
+        `error: exactly one NAME is required, got 0\nSee 'oc create ${kind.toLowerCase()} -h' for help and examples`
       );
     }
     const namespace = this._namespaceFromFlags(flags);
@@ -10837,6 +11673,8 @@ Object.assign(CommandBar.prototype, {
     const labels = parseCommaAssignments(
       flags.labels && flags.labels !== true ? String(flags.labels) : []
     );
+    // create_deployment.go puts `app=<name>` on the Deployment itself too.
+    if (kind === 'Deployment' && !labels.app) labels.app = name;
     if (kind === 'Job' || kind === 'CronJob' || kind === 'Pod') {
       spec.template = spec.template || {};
     }
@@ -10858,15 +11696,58 @@ Object.assign(CommandBar.prototype, {
       'basic-auth',
       'ssh-auth',
     ];
-    let secretType = rest[0];
-    let name = rest[1];
+    const secretType = rest[0];
+    const name = rest[1];
+    // `oc create secret` is a parent command (kubectl DefaultSubCommandRun):
+    // the type is a required subcommand. `oc create secret mysecret …` used to
+    // create a generic Secret anyway (1.16.0).
     if (!types.includes(secretType)) {
-      name = rest[0];
-      secretType = 'generic';
+      const parentFlag = [
+        'from-literal',
+        'from-file',
+        'from-env-file',
+        'cert',
+        'key',
+        'docker-server',
+        'docker-username',
+        'docker-password',
+        'type',
+      ].find((flag) => flags[flag] !== undefined);
+      if (parentFlag)
+        return this._err(
+          `error: unknown flag: --${parentFlag}\nSee 'oc create secret --help' for usage.`
+        );
+      if (rest.length)
+        return this._err(
+          `error: unknown command "${rest.join(' ')}"\nSee 'oc create secret -h' for help and examples`
+        );
+      return this._err(
+        [
+          'Create a secret with specified type.',
+          '',
+          ' A docker-registry type secret is for accessing a container registry.',
+          '',
+          ' A generic type secret indicate an Opaque secret type.',
+          '',
+          ' A tls type secret holds TLS certificate and its associated key.',
+          '',
+          'Available Commands:',
+          '  docker-registry   Create a secret for use with a Docker registry',
+          '  generic           Create a secret from a local file, directory, or literal value',
+          '  tls               Create a TLS secret',
+          '',
+          'Usage:',
+          '  oc create secret (docker-registry | generic | tls) [options]',
+          '',
+          'Use "oc create secret <command> --help" for more information about a given command.',
+          'Use "oc options" for a list of global command-line options (applies to all commands).',
+        ].join('\n')
+      );
     }
     if (!name) {
+      // kubectl NameFromCommandArgs().
       return this._err(
-        'error: must specify one of: generic, tls, docker-registry\n\n  oc create secret generic <name> --from-literal=key=value\n  oc create secret tls <name> --cert=tls.crt --key=tls.key\n  oc create secret docker-registry <name> --docker-server=... --docker-username=... --docker-password=...'
+        `error: exactly one NAME is required, got 0\nSee 'oc create secret ${secretType} -h' for help and examples`
       );
     }
     const namespace = this._namespaceFromFlags(flags);
@@ -10928,23 +11809,13 @@ Object.assign(CommandBar.prototype, {
       )) {
         data[key] = this._base64(value);
       }
-      for (const fileSpec of this._arrayFlag(flags, 'from-file')) {
-        const eq = String(fileSpec).indexOf('=');
-        const key = eq >= 0 ? String(fileSpec).slice(0, eq) : this._basename(String(fileSpec));
-        const path = eq >= 0 ? String(fileSpec).slice(eq + 1) : String(fileSpec);
-        const content = this._readVirtualFile(path);
-        if (content === null)
-          warnings.push(
-            `warning: "${path}" not found in the virtual filesystem; using simulated content`
-          );
-        data[key] = this._base64(content ?? `simulated secret content for ${key}\n`);
-      }
+      const fromFiles = this._readFromFileSources(this._arrayFlag(flags, 'from-file'));
+      if (fromFiles.error) return fromFiles.error;
+      for (const entry of fromFiles.entries) data[entry.key] = this._base64(entry.content);
       for (const envFile of this._arrayFlag(flags, 'from-env-file')) {
         const content = this._readVirtualFile(String(envFile));
-        if (content === null) {
-          warnings.push(`warning: "${envFile}" not found in the virtual filesystem`);
-          continue;
-        }
+        if (content === null)
+          return this._err(`error: error reading ${envFile}: no such file or directory`);
         for (const line of content.split('\n')) {
           const match = line.match(/^([A-Za-z0-9_.-]+)=(.*)$/);
           if (match) data[match[1]] = this._base64(match[2]);
@@ -10961,6 +11832,44 @@ Object.assign(CommandBar.prototype, {
     return this._finishCreateObject(object, flags, { warnings });
   },
 
+  /**
+   * Read `--from-file=[key=]path` sources like kubectl's create configmap /
+   * secret generic: a file becomes one key (its basename unless `key=` is
+   * given), a directory contributes each file directly inside it, and a
+   * missing path is the real `error reading <path>: no such file or directory`
+   * (1.16.0: it used to invent "simulated content").
+   * @param {string[]} specs
+   * @returns {{entries: Array<{key: string, content: string}>, error: object|null}}
+   */
+  _readFromFileSources(specs) {
+    const entries = [];
+    for (const fileSpec of specs) {
+      const text = String(fileSpec);
+      const eq = text.indexOf('=');
+      const path = eq >= 0 ? text.slice(eq + 1) : text;
+      const content = this._readVirtualFile(path);
+      if (content !== null) {
+        entries.push({ key: eq >= 0 ? text.slice(0, eq) : this._basename(path), content });
+        continue;
+      }
+      const prefix = `${this._normalizeVirtualPath(path).replace(/\/+$/, '')}/`;
+      const children = this._manifestFileList().filter(
+        (file) => file.startsWith(prefix) && !file.slice(prefix.length).includes('/')
+      );
+      if (eq < 0 && children.length) {
+        for (const file of children) {
+          entries.push({ key: this._basename(file), content: this._readVirtualFile(file) ?? '' });
+        }
+        continue;
+      }
+      return {
+        entries,
+        error: this._err(`error: error reading ${path}: no such file or directory`),
+      };
+    }
+    return { entries, error: null };
+  },
+
   _createConfigMap(rest, flags) {
     const name = rest[0];
     if (!name)
@@ -10970,14 +11879,13 @@ Object.assign(CommandBar.prototype, {
       );
     const namespace = this._namespaceFromFlags(flags);
     const data = { ...parseCommaAssignments(this._arrayFlag(flags, 'from-literal')) };
-    for (const fileSpec of this._arrayFlag(flags, 'from-file')) {
-      const eq = String(fileSpec).indexOf('=');
-      const key = eq >= 0 ? String(fileSpec).slice(0, eq) : this._basename(String(fileSpec));
-      const path = eq >= 0 ? String(fileSpec).slice(eq + 1) : String(fileSpec);
-      data[key] = this._readVirtualFile(path) ?? `# simulated content for ${path}\n`;
-    }
+    const fromFiles = this._readFromFileSources(this._arrayFlag(flags, 'from-file'));
+    if (fromFiles.error) return fromFiles.error;
+    for (const entry of fromFiles.entries) data[entry.key] = entry.content;
     for (const envFile of this._arrayFlag(flags, 'from-env-file')) {
       const content = this._readVirtualFile(String(envFile));
+      if (content === null)
+        return this._err(`error: error reading ${envFile}: no such file or directory`);
       if (!content) continue;
       for (const line of content.split('\n')) {
         const match = line.match(/^([A-Za-z0-9_.-]+)=(.*)$/);
@@ -11107,23 +12015,6 @@ Object.assign(CommandBar.prototype, {
     );
   },
 
-  _createGroup(rest, flags) {
-    const name = rest[0];
-    if (!name)
-      return this._usageError('create', 'name is required\n\n  oc create group <name> [users...]');
-    const users = [...rest.slice(1), ...this._arrayFlag(flags, 'user')];
-    const ge = this.gameEngine;
-    if (ge && typeof ge.createGroupResource === 'function') {
-      const result = ge.createGroupResource(name, users);
-      if (result.success === false) return this._err(result.message);
-      return this._ok(result.message || `group.user.openshift.io/${name} created`);
-    }
-    return this._finishCreateObject(
-      { apiVersion: 'user.openshift.io/v1', kind: 'Group', metadata: { name }, spec: { users } },
-      flags
-    );
-  },
-
   _createServiceAccount(rest, flags) {
     const name = rest[0];
     if (!name)
@@ -11183,17 +12074,61 @@ Object.assign(CommandBar.prototype, {
 
   _createService(rest, flags) {
     const types = ['clusterip', 'nodeport', 'loadbalancer', 'externalname'];
-    let serviceTypeToken = rest[0] ? String(rest[0]).toLowerCase() : 'clusterip';
-    let name = rest[1];
+    const serviceTypeToken = rest[0] ? String(rest[0]).toLowerCase() : '';
+    // `oc create service` is only a parent command (kubectl
+    // DefaultSubCommandRun): the type is a required subcommand. `oc create
+    // service web` used to create a ClusterIP Service anyway (1.16.0).
     if (!types.includes(serviceTypeToken)) {
-      name = rest[0];
-      serviceTypeToken = 'clusterip';
-    }
-    if (!name) {
-      return this._usageError(
-        'create',
-        'name is required\n\n  oc create service clusterip|nodeport|loadbalancer <name> --tcp=80:8080'
+      if (flags.tcp !== undefined)
+        return this._err(`error: unknown flag: --tcp\nSee 'oc create service --help' for usage.`);
+      if (rest.length)
+        return this._err(
+          `error: unknown command "${rest.join(' ')}"\nSee 'oc create service -h' for help and examples`
+        );
+      return this._err(
+        [
+          'Create a service using a specified subcommand.',
+          '',
+          'Aliases:',
+          'service, svc',
+          '',
+          'Available Commands:',
+          '  clusterip      Create a ClusterIP service',
+          '  externalname   Create an ExternalName service',
+          '  loadbalancer   Create a LoadBalancer service',
+          '  nodeport       Create a NodePort service',
+          '',
+          'Usage:',
+          '  oc create service [flags] [options]',
+          '',
+          'Use "oc create service <command> --help" for more information about a given command.',
+          'Use "oc options" for a list of global command-line options (applies to all commands).',
+        ].join('\n')
       );
+    }
+    const name = rest[1];
+    if (!name) {
+      // kubectl NameFromCommandArgs().
+      return this._err(
+        `error: exactly one NAME is required, got 0\nSee 'oc create service ${serviceTypeToken} -h' for help and examples`
+      );
+    }
+    // create_service.go: ExternalName needs --external-name; every other type
+    // needs at least one --tcp port pair (unless --clusterip=None).
+    if (
+      serviceTypeToken === 'externalname' &&
+      !(flags['external-name'] && flags['external-name'] !== true)
+    ) {
+      return this._err('error: required flag(s) "external-name" not set');
+    }
+    if (
+      serviceTypeToken !== 'externalname' &&
+      !this._arrayFlag(flags, 'tcp').length &&
+      !this._arrayFlag(flags, 'udp').length &&
+      !flags.port &&
+      String(flags.clusterip || '') !== 'None'
+    ) {
+      return this._err('error: at least one tcp port specifier must be provided');
     }
     const namespace = this._namespaceFromFlags(flags);
     const type = {
@@ -11213,27 +12148,31 @@ Object.assign(CommandBar.prototype, {
         value: `${flags.port}${flags['target-port'] ? `:${flags['target-port']}` : ''}`,
       });
     }
-    if (!protocols.length) protocols.push({ protocol: 'TCP', value: '80:8080' });
+    // create_service.go: each `--tcp=<port>:<targetPort>` becomes a port named
+    // after the pair with ':' → '-' (`--tcp=443:8080` → `443-8080`), and the
+    // Service carries `app=<name>` as label and selector (1.16.0).
     const ports = protocols.map((entry) => {
       const [portText, targetText] = entry.value.split(':');
       const port = Number(portText);
       return {
-        name: `${port}-${entry.protocol.toLowerCase()}`,
+        name: String(entry.value).replace(/:/g, '-'),
         port,
         targetPort: Number(targetText || port),
         protocol: entry.protocol,
       };
     });
     const spec = { type, selector: { app: name }, ports };
+    if (String(flags.clusterip || '') === 'None') spec.clusterIP = 'None';
     if (type === 'ExternalName') {
-      spec.externalName =
-        flags['external-name'] && flags['external-name'] !== true
-          ? String(flags['external-name'])
-          : `${name}.example.com`;
-      delete spec.selector;
+      spec.externalName = String(flags['external-name']);
     }
     return this._finishCreateObject(
-      { apiVersion: 'v1', kind: 'Service', metadata: { name, namespace }, spec },
+      {
+        apiVersion: 'v1',
+        kind: 'Service',
+        metadata: { name, namespace, labels: { app: name } },
+        spec,
+      },
       flags
     );
   },
@@ -11283,13 +12222,33 @@ Object.assign(CommandBar.prototype, {
 
   _createJob(rest, flags, afterDoubleDash = []) {
     const name = rest[0];
-    if (!name)
-      return this._usageError(
-        'create',
-        'name is required\n\n  oc create job <name> --image=<image> [--restart=Never|OnFailure] -- <command>   |   oc create job <name> --from=cronjob/<cronjob>'
+    // kubectl NameFromCommandArgs().
+    if (rest.length !== 1)
+      return this._err(
+        `error: exactly one NAME is required, got ${rest.length}\nSee 'oc create job -h' for help and examples`
       );
     const namespace = this._namespaceFromFlags(flags);
     const from = flags.from && flags.from !== true ? String(flags.from) : null;
+    // kubectl create_job.go only has --image and --from (plus the generic
+    // output/dry-run flags): Job tuning such as activeDeadlineSeconds belongs in
+    // a manifest. The invented flags used to be accepted (1.16.0).
+    for (const invented of [
+      'restart',
+      'completions',
+      'parallelism',
+      'backoff-limit',
+      'active-deadline-seconds',
+    ]) {
+      if (flags[invented] !== undefined)
+        return this._err(
+          `error: unknown flag: --${invented}\nSee 'oc create job --help' for usage.`
+        );
+    }
+    // create_job.go Validate(): no default image.
+    if (!(flags.image && flags.image !== true) && !from)
+      return this._err('error: either --image or --from must be specified');
+    if (from && afterDoubleDash.length)
+      return this._err('error: cannot specify --from and command');
     const image = flags.image && flags.image !== true ? String(flags.image) : 'busybox:latest';
     const commandSpec = this._createContainerCommand(flags, afterDoubleDash);
     const restartPolicy =
@@ -11355,16 +12314,20 @@ Object.assign(CommandBar.prototype, {
 
   _createCronJob(rest, flags, afterDoubleDash = []) {
     const name = rest[0];
-    if (!name) {
-      return this._usageError(
-        'create',
-        'name is required\n\n  oc create cronjob <name> --image=<image> --schedule="<cron schedule>" -- <command>'
-      );
-    }
     const schedule = flags.schedule && flags.schedule !== true ? String(flags.schedule) : null;
-    if (!schedule) {
+    // create_cronjob.go: MarkFlagRequired("image") and ("schedule"); cobra
+    // checks them before the command runs and lists every missing one (1.16.0:
+    // --image used to default to busybox).
+    const missingRequired = [
+      ...(flags.image && flags.image !== true ? [] : ['"image"']),
+      ...(schedule ? [] : ['"schedule"']),
+    ];
+    if (missingRequired.length) {
+      return this._err(`error: required flag(s) ${missingRequired.join(', ')} not set`);
+    }
+    if (rest.length !== 1) {
       return this._err(
-        'error: required flag(s) "schedule" not set\n\n  oc create cronjob <name> --image=<image> --schedule="*/5 * * * *"'
+        `error: exactly one NAME is required, got ${rest.length}\nSee 'oc create cronjob -h' for help and examples`
       );
     }
     // API-server-level schedule validation (runtime owns the cron parser).
@@ -11912,7 +12875,7 @@ Object.assign(CommandBar.prototype, {
         /* ignore panel wiring errors */
       }
       return this._ok(
-        `Opening the manifest editor for ${this._resourceRef(kind)}/${name} in the Files panel. Save to apply changes.\n${EDIT_TEACHING_LINE}`
+        `Opening the manifest editor for ${this._resourceRef(kind)}/${name} in the Files panel. Save to apply changes.\n${EDIT_TEACHING_LINE}\n${EDIT_PAUSE_LINE}`
       );
     }
     // Legacy shell fallback (index.html edit dialog) until ManifestPanel is wired.
@@ -12066,6 +13029,31 @@ Object.assign(CommandBar.prototype, {
     return { kind: refKind, name, rest: positionals.slice(1) };
   },
 
+  /**
+   * Is `kind` served by a CustomResourceDefinition on OCP 4.22 (no strategic
+   * merge patch)? Operator/config API groups, MetalLB, monitoring, SCCs and
+   * ClusterResourceQuota are CRDs; core/apps/batch/networking and the
+   * openshift-apiserver groups (routes, builds, images, templates, projects,
+   * users) are compiled-in types.
+   * @param {string} kind
+   * @returns {boolean}
+   */
+  _isCustomResourceKind(kind) {
+    if (kind === 'ClusterResourceQuota') return true;
+    const group = String(apiVersionForKind(kind) || '').split('/')[0];
+    return [
+      'operators.coreos.com',
+      'config.openshift.io',
+      'operator.openshift.io',
+      'monitoring.coreos.com',
+      'metallb.io',
+      'security.openshift.io',
+      'machineconfiguration.openshift.io',
+      'console.openshift.io',
+      'imageregistry.operator.openshift.io',
+    ].includes(group);
+  },
+
   _cmdPatch(tokens) {
     const { positionals, flags } = parseArgs(tokens, {
       shortValues: { '-n': 'namespace', '-p': 'patch' },
@@ -12104,6 +13092,14 @@ Object.assign(CommandBar.prototype, {
     if (patchType !== 'json' && Array.isArray(patch)) {
       return this._err(`error: cannot use --type=${patchType} with a JSON patch array`);
     }
+    // CRD-served kinds (OLM, config/operator.openshift.io, monitoring, MetalLB,
+    // SCC, ClusterResourceQuota) do not implement strategic merge patch — the
+    // API server answers 415 to oc's default `--type=strategic` (1.16.0).
+    if (patchType === 'strategic' && this._isCustomResourceKind(kind)) {
+      return this._err(
+        'Error from server (UnsupportedMediaType): the body of the request was in an unknown format - accepted media types include: application/json-patch+json, application/merge-patch+json, application/apply-patch+yaml'
+      );
+    }
     const namespace = this._namespaceFromFlags(flags);
     const dryRun = this._dryRunMode(flags);
     if (dryRun === 'invalid')
@@ -12118,6 +13114,23 @@ Object.assign(CommandBar.prototype, {
       allowOtherNamespaces: false,
     });
     if (!existingTarget) return this._err(this._notFoundMessage(kind, name));
+    // CRD OpenAPI schema validation: InstallPlan spec.approved is a boolean, so
+    // `{"spec":{"approved":"true"}}` is rejected instead of silently ignored.
+    if (kind === 'InstallPlan' && patchType !== 'json') {
+      const approved = patch?.spec?.approved;
+      if (approved !== undefined && approved !== null && typeof approved !== 'boolean') {
+        const typeName = Array.isArray(approved)
+          ? 'array'
+          : typeof approved === 'number'
+            ? Number.isInteger(approved)
+              ? 'integer'
+              : 'number'
+            : typeof approved;
+        return this._err(
+          `The InstallPlan "${name}" is invalid: spec.approved: Invalid value: "${typeName}": spec.approved in body must be of type boolean: "${typeName}"`
+        );
+      }
+    }
     const ge = this.gameEngine;
     if (ge && typeof ge.patchResource === 'function') {
       if (dryRun) {
@@ -13736,8 +14749,19 @@ Object.assign(CommandBar.prototype, {
         ];
         return this._ok(lines.join('\n'));
       }
-      const rows = history.map((entry) => [String(entry.revision), entry.changeCause || '<none>']);
-      return this._ok(padTable(['REVISION', 'CHANGE-CAUSE'], rows));
+      // rollout_history.go prints `<kind>/<name> ` then the history table that
+      // printDeploymentHistory renders with tabbedString (tabwriter padding 2).
+      const rows = [
+        ['REVISION', 'CHANGE-CAUSE'],
+        ...history.map((entry) => [String(entry.revision), entry.changeCause || '<none>']),
+      ];
+      const width = Math.max(...rows.map((row) => row[0].length)) + 2;
+      return this._ok(
+        [
+          `${this._resourceRef(kind)}/${name}`,
+          ...rows.map((row) => row[0].padEnd(width) + row[1]),
+        ].join('\n')
+      );
     }
     if (sub === 'undo' && sim && typeof sim.undoRollout === 'function') {
       const revision = flags.revision || flags['to-revision'];
@@ -14095,15 +15119,28 @@ Object.assign(CommandBar.prototype, {
     let pod = null;
     let kind = refKind;
     let name = refName;
+    // Names resolve strictly in the request namespace (1.16.0): a same-named
+    // Pod/workload in another project is NotFound, never exec'd into.
     if (refKind === 'Pod') {
       pod = this._findResource('Pod', refName, {
-        namespace: flags.namespace,
-        explicitNamespace: Boolean(flags.namespace),
+        namespace,
+        explicitNamespace: true,
         allowPrefix: false,
+        allowOtherNamespaces: false,
       });
     } else if (refKind) {
-      // Real oc resolves deployment/statefulset/job/... to a concrete pod.
-      pod = this._podForResource(refKind, refName, namespace, Boolean(flags.namespace));
+      // Real oc resolves deployment/statefulset/job/... to a concrete pod; a
+      // missing workload is the API's NotFound for that object.
+      if (
+        !this._findResource(refKind, refName, {
+          namespace,
+          explicitNamespace: true,
+          allowPrefix: false,
+          allowOtherNamespaces: false,
+        })
+      )
+        return this._err(this._notFoundMessage(refKind, refName));
+      pod = this._podForResource(refKind, refName, namespace, true);
       if (!pod)
         return this._err(`error: no pods found for ${this._resourceRef(refKind)}/${refName}`);
     } else {
@@ -14113,9 +15150,10 @@ Object.assign(CommandBar.prototype, {
       if (!name)
         return this._usageError('exec', 'pod name is required\n\n  oc exec -it <pod> -- <command>');
       pod = this._findResource('Pod', name, {
-        namespace: flags.namespace,
-        explicitNamespace: Boolean(flags.namespace),
+        namespace,
+        explicitNamespace: true,
         allowPrefix: false,
+        allowOtherNamespaces: false,
       });
     }
     if (!pod) return this._err(this._notFoundMessage('Pod', refName || positionals[0] || ''));
@@ -15748,7 +16786,7 @@ Object.assign(CommandBar.prototype, {
         const me = this.manifestEngine;
         if (me && typeof me.templateParameters === 'function' && filename !== '-') {
           try {
-            const declared = me.templateParameters(filename);
+            const declared = me.templateParameters(this._normalizeVirtualPath(filename));
             if (Array.isArray(declared) && declared.length) {
               return this._printTemplateParameters(declared);
             }
@@ -15856,7 +16894,8 @@ Object.assign(CommandBar.prototype, {
       longValues: ['output', 'namespace'],
       longBools: ['enable-alpha-plugins', 'load-restrictor', 'reorder'],
     });
-    const dir = positionals[0] || '.';
+    // linux-engine: `oc kustomize [dir]` renders the directory relative to the shell's cwd.
+    const dir = this._normalizeVirtualPath(positionals[0] || '.');
     const output = this._outputFormat(flags);
     const me = this.manifestEngine;
     if (!me) return this._manifestNotReady();
@@ -16025,10 +17064,15 @@ Object.assign(CommandBar.prototype, {
     const namespace = this._namespaceFromFlags(flags);
     const namespaceError = this._requireNamespace(namespace);
     if (namespaceError) return namespaceError;
-    const env = parseCommaAssignments(this._arrayFlag(flags, 'env'));
+    // new-app treats `KEY=VALUE` arguments as environment variables
+    // (`oc new-app mysql MYSQL_USER=user …`); every other argument is a
+    // component (image, image stream, source repository or template) — 1.16.0.
+    const envArgs = positionals.filter((arg) => /^[A-Za-z_][A-Za-z0-9_]*=/.test(arg));
+    const components = positionals.filter((arg) => !envArgs.includes(arg));
+    const env = parseCommaAssignments([...this._arrayFlag(flags, 'env'), ...envArgs]);
     const params = parseCommaAssignments(this._arrayFlag(flags, 'param'));
     const name = flags.name && flags.name !== true ? String(flags.name) : undefined;
-    const templateName = flags.template && flags.template !== true ? String(flags.template) : null;
+    let templateName = flags.template && flags.template !== true ? String(flags.template) : null;
     const file = flags.file && flags.file !== true ? String(flags.file) : null;
     const imageStream =
       flags['image-stream'] && flags['image-stream'] !== true
@@ -16054,14 +17098,25 @@ Object.assign(CommandBar.prototype, {
       });
     }
 
-    // `oc new-app --template=<name>`.
+    // A bare component that names a Template (`oc new-app mysql-persistent -p …`)
+    // resolves to that Template, like real new-app's template search.
+    if (
+      !templateName &&
+      !file &&
+      !image &&
+      !imageStream &&
+      !code &&
+      components.length === 1 &&
+      /^[a-z0-9]([-a-z0-9]*[a-z0-9])?$/.test(components[0]) &&
+      this._findTemplate(components[0])
+    ) {
+      templateName = components[0];
+    }
+    // `oc new-app --template=<name>`: the API server processes the Template (the
+    // project's, else the `openshift` one) and new-app CREATES the objects in the
+    // target project — recorded like `oc process | oc apply` for objectives.
     if (templateName) {
       const template = this._findTemplate(templateName);
-      if (ge && typeof ge.newApp === 'function' && template && !BUILTIN_TEMPLATES[templateName]) {
-        const result = ge.newApp({ template: templateName, params, name, namespace });
-        if (result.success === false) return this._err(result.message);
-        return this._ok(this._formatNewAppOutput(result, { namespace, templateName }));
-      }
       if (!template)
         return this._err(
           `Error while generating the application: template "${templateName}" not found`
@@ -16072,24 +17127,45 @@ Object.assign(CommandBar.prototype, {
           `error: unable to process template: Template parameter(s) required: [${missing.join(' ')}]`
         );
       const objects = this._renderTemplateObjects(template, params);
-      return this._newAppDeployObjects(objects, { namespace, templateName, name });
+      return this._newAppDeployObjects(objects, {
+        namespace,
+        templateName,
+        name,
+        recordTemplate: true,
+        templateRecord: {
+          name: templateName,
+          params: this._renderedTemplateParams(template, params),
+        },
+      });
     }
 
     // Determine the source: explicit flags, positional `<is>~<git>`, or git URL vs image.
     let resolvedImageStream = imageStream;
     let resolvedCode = code;
     let resolvedImage = image;
-    const source = positionals[0];
+    const isGitSource = (value) =>
+      /^(https?:\/\/|git@|git:\/\/)/.test(value) || /\.git($|\/)/.test(value);
+    const source = components[0];
     if (source && !resolvedImage && !resolvedImageStream && !resolvedCode) {
+      const gitComponents = components.filter((component) => isGitSource(component));
       if (source.includes('~')) {
         const [left, right] = source.split('~');
         resolvedImageStream = left;
         resolvedCode = right;
-      } else if (/^(https?:\/\/|git@|git:\/\/)/.test(source) || /\.git($|\/)/.test(source)) {
+      } else if (components.length === 2 && gitComponents.length === 1) {
+        // "If a source code repository and a builder image are specified as
+        // separate arguments, new-app uses the builder image as the builder for
+        // the source code repository" (OCP docs) — same as `<builder>~<repo>`.
+        resolvedCode = gitComponents[0];
+        resolvedImageStream = components.find((component) => component !== resolvedCode);
+      } else if (isGitSource(source)) {
         resolvedCode = source;
       } else {
         resolvedImage = source;
       }
+    } else if (!resolvedCode && components.length === 1 && isGitSource(components[0])) {
+      // `oc new-app --image-stream=nodejs https://…`: the repository is the source.
+      resolvedCode = components[0];
     }
     if (!resolvedImage && !resolvedImageStream && !resolvedCode) {
       return this._err(
@@ -16114,26 +17190,42 @@ Object.assign(CommandBar.prototype, {
         builderImage:
           flags['builder-image'] && flags['builder-image'] !== true
             ? String(flags['builder-image'])
-            : undefined,
+            : resolvedCode
+              ? resolvedImageStream || resolvedImage || undefined
+              : undefined,
       };
-      const result = ge.newApp(options);
-      if (result.success === false) return this._err(result.message);
-      // #42: real `oc new-app --image=…` creates the ImageStreamTag target for
-      // the deployed image; create and print it before the workload resources.
-      if (resolvedImage) {
-        const deployment = (result.resources || []).find((entry) => entry.kind === 'Deployment');
-        const appName =
-          deployment?.metadata?.name || this._appNameFromSource(String(resolvedImage || 'app'));
-        const imageStream = this._ensureImageStream(namespace, appName, 'latest', resolvedImage);
-        if (imageStream)
-          result.resources = [imageStream, ...(result.resources || []).filter(Boolean)];
+      // For a source build the builder is not deployed itself.
+      const deployImage = resolvedCode ? null : resolvedImage;
+      if (resolvedCode) {
+        delete options.image;
+        delete options.imageStream;
       }
-      return this._ok(
-        this._formatNewAppOutput(result, {
-          namespace,
-          source: resolvedImage || resolvedImageStream || resolvedCode || '',
-        })
-      );
+      // #42: real `oc new-app --image=…` also creates the ImageStream that tracks
+      // the deployed image; it is the first object new-app creates (1.16.0: an
+      // existing one is AlreadyExists, never re-applied).
+      const errors = [];
+      options.errors = errors;
+      let imageStream = null;
+      if (deployImage) {
+        const appName =
+          name || ge._appNameFor?.(deployImage) || this._appNameFromSource(String(deployImage));
+        if (this._findResourceExact('ImageStream', appName, namespace)) {
+          errors.push({ kind: 'ImageStream', name: appName, namespace, reason: 'AlreadyExists' });
+        } else {
+          imageStream = this._ensureImageStream(namespace, appName, 'latest', deployImage);
+        }
+      }
+      const result = ge.newApp(options);
+      if (result.success === false && !(result.errors || []).length)
+        return this._err(result.message);
+      if (imageStream)
+        result.resources = [imageStream, ...(result.resources || []).filter(Boolean)];
+      result.errors = errors;
+      const text = this._formatNewAppOutput(result, {
+        namespace,
+        source: deployImage || resolvedImageStream || resolvedCode || '',
+      });
+      return errors.length ? { ...this._err(text), exitCode: 1 } : this._ok(text);
     }
 
     // Fallback: create Deployment + Service directly.
@@ -16207,11 +17299,30 @@ Object.assign(CommandBar.prototype, {
       }
     }
     lines.push('--> Creating resources ...');
-    for (const resource of resources) {
-      const kind = resource.kind;
-      const name = resource.metadata?.name;
-      const action = resource._applyAction === 'updated' ? 'configured' : 'created';
-      lines.push(`    ${this._resourceRef(kind)} "${name}" ${action}`);
+    // bulk.Run (oc helpers/bulk): one line per object in creation order —
+    // `<kind> "<name>" created`, or `error: <resource> "<name>" already exists`
+    // for an object that exists — then `--> Success` / `--> Failed` (1.16.0).
+    const order = { ImageStream: 0, BuildConfig: 1, Deployment: 2, Service: 3 };
+    const entries = Array.isArray(result.entries)
+      ? result.entries
+      : [
+          ...resources.map((resource) => ({
+            kind: resource.kind,
+            name: resource.metadata?.name,
+            action: resource._applyAction === 'updated' ? 'configured' : 'created',
+          })),
+          ...(result.errors || []).map((error) => ({ ...error, error: true })),
+        ].sort((left, right) => (order[left.kind] ?? 9) - (order[right.kind] ?? 9));
+    for (const entry of entries) {
+      lines.push(
+        entry.error
+          ? `    error: ${this._resourceNamePlural(entry.kind)} "${entry.name}" already exists`
+          : `    ${this._resourceRef(entry.kind)} "${entry.name}" ${entry.action || 'created'}`
+      );
+    }
+    if (entries.some((entry) => entry.error)) {
+      lines.push('--> Failed');
+      return lines.join('\n');
     }
     lines.push('--> Success');
     if (resources.some((resource) => resource.kind === 'BuildConfig')) {
@@ -16223,17 +17334,74 @@ Object.assign(CommandBar.prototype, {
 
   _newAppDeployObjects(objects, context) {
     const resources = [];
-    for (const object of objects) {
+    const entries = [];
+    const namespace = context.namespace || this.currentProject;
+    for (const source of objects) {
+      // new-app creates every object in the target project (`-n` included);
+      // it used to ignore `-n` for `-f <file>` / `--template` (1.16.0).
+      const object = JSON.parse(JSON.stringify(source));
+      const kind = resolveKindToken(String(object?.kind || '')) || object?.kind;
+      if (kind && this._isNamespaced(kind)) {
+        object.metadata = object.metadata || {};
+        if (!object.metadata.namespace) object.metadata.namespace = namespace;
+      }
+      const objectName = object?.metadata?.name;
+      if (
+        kind &&
+        objectName &&
+        this._findResourceExact(
+          kind,
+          objectName,
+          this._isNamespaced(kind) ? object.metadata.namespace : ''
+        )
+      ) {
+        entries.push({ kind, name: objectName, error: true });
+        continue;
+      }
       const result = this._applyObject(object);
       if (result.error) return result.error;
       if (result.resource) {
         result.resource._applyAction = result.created === false ? 'updated' : 'created';
         resources.push(result.resource);
+        entries.push({ kind: result.resource.kind, name: result.resource.metadata?.name });
       }
     }
-    // Every object was created: `oc new-app -f <template-file>` has now applied the template.
-    if (context.recordTemplate) this._markTemplateDeployed(objects, resources);
-    return this._ok(this._formatNewAppOutput({ resources }, context));
+    const failed = entries.some((entry) => entry.error);
+    // Every object was created: the template has now been processed AND applied.
+    if (context.recordTemplate && !failed) {
+      this._markTemplateDeployed(objects, resources);
+      if (context.templateRecord)
+        this._recordTemplateDeployed(context.templateRecord, objects, resources);
+    }
+    const text = this._formatNewAppOutput({ resources, entries }, context);
+    return failed ? { ...this._err(text), exitCode: 1 } : this._ok(text);
+  },
+
+  /**
+   * The parameter values a Template was processed with (`-p` over the
+   * declared defaults) — what `oc process` reports and objectives grade.
+   */
+  _renderedTemplateParams(template, params) {
+    const values = {};
+    for (const parameter of this._templateParameterDefinitions(template)) {
+      if (parameter.value !== undefined) values[parameter.name] = String(parameter.value);
+    }
+    return { ...values, ...(params || {}) };
+  },
+
+  /**
+   * `oc new-app --template=<name>` processes a Template that may never have
+   * been rendered by the Files engine, so record it there as processed+applied
+   * (same bookkeeping as `oc process … | oc apply -f -`) — 1.16.0, L8.
+   */
+  _recordTemplateDeployed(record, objects, resources) {
+    const me = this.manifestEngine;
+    if (typeof me?.recordTemplateDeployed !== 'function') return;
+    try {
+      me.recordTemplateDeployed(record, objects, resources);
+    } catch {
+      /* bookkeeping only: never fail a deploy that already succeeded */
+    }
   },
 
   /**
@@ -17124,71 +18292,140 @@ Object.assign(CommandBar.prototype, {
     }
     const node = this._findResource('Node', nodeName, {});
     if (!node) return this._err(this._notFoundMessage('Node', nodeName));
-    if (action === 'cordon' || action === 'uncordon') {
-      const cordon = action === 'cordon';
-      this._updateResource(
-        'Node',
-        nodeName,
-        (spec) => {
-          spec.unschedulable = cordon;
-          return {};
-        },
-        {}
-      );
-      if (this.gameEngine && typeof this.gameEngine.queueCommand === 'function') {
+    const dryRun = Boolean(flags['dry-run']);
+    const dryRunSuffix = dryRun ? ' (dry run)' : '';
+    // kubectl drain.go RunCordonOrUncordon(): `already cordoned` when nothing
+    // changes; the node controller then adds/removes the
+    // node.kubernetes.io/unschedulable:NoSchedule taint (SimulationTick).
+    const setSchedulable = (cordon) => {
+      const already = Boolean(node.spec?.unschedulable) === cordon;
+      if (!already && !dryRun) {
+        this._updateResource(
+          'Node',
+          nodeName,
+          (spec) => {
+            spec.unschedulable = cordon;
+            return {};
+          },
+          {}
+        );
+        if (this.gameEngine && typeof this.gameEngine.queueCommand === 'function') {
+          try {
+            this.gameEngine.queueCommand({ type: cordon ? 'cordon' : 'uncordon', name: nodeName });
+          } catch {
+            /* ignore */
+          }
+        }
+        // The node lifecycle controller reacts within milliseconds: the
+        // unschedulable taint is visible to the very next `oc describe node`.
         try {
-          this.gameEngine.queueCommand({ type: action, name: nodeName });
+          this.gameEngine?.simulation?._syncNodeUnschedulableTaint?.(
+            this._findResource('Node', nodeName, {})
+          );
+        } catch {
+          /* the next simulation tick syncs it anyway */
+        }
+      }
+      const verb = cordon ? 'cordoned' : 'uncordoned';
+      return `node/${nodeName} ${already ? `already ${verb}` : verb}${dryRunSuffix}`;
+    };
+    if (action === 'cordon' || action === 'uncordon') {
+      return this._ok(setSchedulable(action === 'cordon'));
+    }
+    // drain (kubectl drain.go + pkg/drain/filters.go, kubectl 1.35): cordon
+    // first, then run every Pod on the node through the filters in order
+    // (DaemonSet → mirror → local storage → unreplicated). Any error aborts the
+    // drain with nothing evicted and the node left cordoned (1.16.0: it used to
+    // evict everything and only warn without --ignore-daemonsets).
+    const lines = [setSchedulable(true)];
+    const ref = (pod) => `${pod.metadata?.namespace}/${pod.metadata?.name}`;
+    const pods = this._getKindList('Pod')
+      .filter((pod) => pod.spec?.nodeName === nodeName)
+      .sort((left, right) => ref(left).localeCompare(ref(right)));
+    const errorsByMessage = new Map();
+    const warningsByMessage = new Map();
+    const evictable = [];
+    for (const pod of pods) {
+      const finished = ['Succeeded', 'Failed'].includes(pod.status?.phase);
+      const owners = pod.metadata?.ownerReferences || [];
+      const controller = owners.find((owner) => owner.controller) || owners[0] || null;
+      let status = { delete: true };
+      if (controller?.kind === 'DaemonSet' && !finished) {
+        status = flags['ignore-daemonsets']
+          ? { delete: false, warning: 'ignoring DaemonSet-managed Pods' }
+          : { delete: false, error: 'DaemonSet-managed Pods (use --ignore-daemonsets to ignore)' };
+      } else if (pod.metadata?.annotations?.['kubernetes.io/config.mirror']) {
+        status = { delete: false };
+      } else if (
+        !finished &&
+        (pod.spec?.volumes || []).some((volume) => volume?.emptyDir) &&
+        !flags['delete-emptydir-data']
+      ) {
+        status = {
+          delete: false,
+          error: 'Pods with local storage (use --delete-emptydir-data to override)',
+        };
+      } else if (!finished && !controller) {
+        // A local-storage warning is dropped by this later filter, exactly like
+        // upstream (only the last filter's message survives).
+        status = flags.force
+          ? { delete: true, warning: 'deleting Pods that declare no controller' }
+          : {
+              delete: false,
+              error: 'cannot delete Pods that declare no controller (use --force to override)',
+            };
+      }
+      if (status.error) {
+        errorsByMessage.set(status.error, [...(errorsByMessage.get(status.error) || []), ref(pod)]);
+      } else if (status.warning) {
+        warningsByMessage.set(status.warning, [
+          ...(warningsByMessage.get(status.warning) || []),
+          ref(pod),
+        ]);
+      }
+      if (status.delete && !status.error) evictable.push(pod);
+    }
+    if (errorsByMessage.size) {
+      const errors = [...errorsByMessage.entries()].map(
+        ([message, refs]) => `cannot delete ${message}: ${refs.join(', ')}`
+      );
+      const aggregate = errors.length === 1 ? errors[0] : `[${errors.join(', ')}]`;
+      lines.push(
+        `error: unable to drain node "${nodeName}" due to error: ${aggregate}, continuing command...`,
+        'There are pending nodes to be drained:',
+        ` ${nodeName}`,
+        ...errors
+      );
+      return { ...this._err(lines.join('\n')), exitCode: 1 };
+    }
+    if (warningsByMessage.size) {
+      lines.push(
+        `Warning: ${[...warningsByMessage.entries()]
+          .map(([message, refs]) => `${message}: ${refs.join(', ')}`)
+          .join('; ')}`
+      );
+    }
+    for (const pod of evictable) lines.push(`evicting pod ${ref(pod)}${dryRunSuffix}`);
+    if (!dryRun) {
+      for (const pod of evictable) {
+        try {
+          this.cluster?.remove?.(pod.metadata?.uid || pod.uid);
         } catch {
           /* ignore */
         }
-      }
-      return this._ok(`node/${nodeName} ${cordon ? 'cordoned' : 'uncordoned'}`);
-    }
-    // drain
-    const pods = this._getKindList('Pod').filter(
-      (pod) =>
-        pod.spec?.nodeName === nodeName ||
-        pod.status?.nodeName === nodeName ||
-        pod.status?.hostIP === nodeName
-    );
-    const daemonSetPods = pods.filter((pod) =>
-      (pod.metadata?.ownerReferences || []).some((ref) => ref.kind === 'DaemonSet')
-    );
-    const evictable = pods.filter(
-      (pod) => !(pod.metadata?.ownerReferences || []).some((ref) => ref.kind === 'DaemonSet')
-    );
-    const lines = [`node/${nodeName} cordoned`];
-    if (daemonSetPods.length && !flags['ignore-daemonsets']) {
-      lines.push(
-        `WARNING: ignoring DaemonSet-managed Pods: ${daemonSetPods.map((pod) => `${pod.metadata?.namespace}/${pod.metadata?.name}`).join(', ')}`
-      );
-    }
-    this._updateResource(
-      'Node',
-      nodeName,
-      (spec) => {
-        spec.unschedulable = true;
-        return {};
-      },
-      {}
-    );
-    for (const pod of evictable) {
-      lines.push(`evicting pod ${pod.metadata?.namespace}/${pod.metadata?.name}`);
-      try {
-        this.cluster?.remove?.(pod.metadata?.uid || pod.uid);
-      } catch {
-        /* ignore */
+        lines.push(`pod/${pod.metadata?.name} evicted`);
       }
     }
-    lines.push(`node/${nodeName} drained`);
+    lines.push(`node/${nodeName} drained${dryRunSuffix}`);
     return this._ok(lines.join('\n'));
   },
 
   _admTop(tokens) {
     const { positionals, flags } = parseArgs(tokens, {
-      shortValues: { '-n': 'namespace' },
-      longValues: ['namespace'],
-      longBools: ['containers', 'no-headers'],
+      shortValues: { '-n': 'namespace', '-l': 'selector' },
+      shortBools: { '-A': 'all-namespaces' },
+      longValues: ['namespace', 'selector'],
+      longBools: ['containers', 'no-headers', 'all-namespaces'],
     });
     const target = (positionals[0] || 'pods').toLowerCase();
     const namespace = flags.namespace || this.currentProject;
@@ -17245,9 +18482,20 @@ Object.assign(CommandBar.prototype, {
       return this._ok(padTable(['NAME', 'CPU(cores)', 'CPU%', 'MEMORY(bytes)', 'MEMORY%'], rows));
     }
     if (target === 'pods' || target === 'pod') {
+      // `-A/--all-namespaces` adds the NAMESPACE column across every project and
+      // `-l` filters by label, like `kubectl top pod` (1.16.0: -A was ignored).
+      const allNamespaces = Boolean(flags['all-namespaces'] || flags.A || flags['-A']);
       let pods = this._getKindList('Pod');
-      pods = pods.filter((pod) => pod.metadata?.namespace === namespace);
-      if (!pods.length) return this._ok(`No resources found in ${namespace} namespace.`);
+      if (!allNamespaces) pods = pods.filter((pod) => pod.metadata?.namespace === namespace);
+      pods = this._filterResources(pods, 'Pod', flags).sort((left, right) =>
+        `${left.metadata?.namespace}/${left.metadata?.name}`.localeCompare(
+          `${right.metadata?.namespace}/${right.metadata?.name}`
+        )
+      );
+      if (!pods.length)
+        return this._ok(
+          allNamespaces ? 'No resources found' : `No resources found in ${namespace} namespace.`
+        );
       const rows = pods.map((pod) => {
         const name = pod.metadata?.name || 'unknown';
         const usage = pod.status?.usage || {};
@@ -17259,9 +18507,17 @@ Object.assign(CommandBar.prototype, {
           typeof usage.memory === 'number'
             ? Math.round(usage.memory)
             : this._parseQuantityToMi(usage.memory) || 20 + stableHash(`${name}-mem`, 180);
-        return [name, `${cpu}m`, `${memory}Mi`];
+        const row = [name, `${cpu}m`, `${memory}Mi`];
+        return allNamespaces ? [pod.metadata?.namespace || '', ...row] : row;
       });
-      return this._ok(padTable(['NAME', 'CPU(cores)', 'MEMORY(bytes)'], rows));
+      return this._ok(
+        padTable(
+          allNamespaces
+            ? ['NAMESPACE', 'NAME', 'CPU(cores)', 'MEMORY(bytes)']
+            : ['NAME', 'CPU(cores)', 'MEMORY(bytes)'],
+          rows
+        )
+      );
     }
     return this._err('error: You must specify "pods" or "nodes"');
   },
@@ -17426,7 +18682,7 @@ Object.assign(CommandBar.prototype, {
         return this._err(
           `Error from server (NotFound): securitycontextconstraints.security.openshift.io "${sccName}" not found`
         );
-      const user = asUser || this.currentUser;
+      const user = asUser || this.apiUser;
       let allowed = null;
       if (ge && typeof ge.canI === 'function') {
         try {
@@ -17654,6 +18910,9 @@ Object.assign(CommandBar.prototype, {
       baseCommand: 'debug',
       success: !outcome.error,
       debugSession: Boolean(this._debugSession),
+      // Status inside the node shell (127 = command not found); the
+      // workstation `$?` is not touched while the debug session is open.
+      exitCode: Number.isFinite(outcome.exitCode) ? outcome.exitCode : outcome.error ? 1 : 0,
     };
     this._lastResult = result;
     return result;
@@ -17698,7 +18957,27 @@ Object.assign(CommandBar.prototype, {
         error: false,
       };
     }
-    return { message: `bash: ${first || 'command'}: command not found`, error: true };
+    return this._debugCommandNotFound(session, first);
+  },
+
+  /**
+   * `sh: <cmd>: command not found` inside the node debug shell (the debug pod
+   * and `chroot /host` both run `/bin/sh`, prompt `sh-5.1#`) — exit 127. An
+   * `oc`/`kubectl` line gets a clearly marked hint: the terminal is still on
+   * the node, not the workstation (1.16.0; it used to say `bash:` with no cue).
+   * @param {object} session active debug session
+   * @param {string} first command word
+   */
+  _debugCommandNotFound(session, first) {
+    const lines = [`sh: ${first || 'command'}: command not found`];
+    if (first === 'oc' || first === 'kubectl') {
+      const exits = session?.chroot ? 'type `exit` twice' : 'type `exit`';
+      lines.push(
+        '',
+        `Simulator hint: this terminal is inside the debug shell of node/${session?.name || 'node'} (sh-5.1#), where oc is not installed — ${exits} to return to your workstation prompt.`
+      );
+    }
+    return { message: lines.join('\n'), error: true, exitCode: 127 };
   },
 
   /**
@@ -17753,7 +19032,7 @@ Object.assign(CommandBar.prototype, {
         filters
       );
     }
-    return { message: `bash: ${first || 'command'}: command not found`, error: true };
+    return this._debugCommandNotFound(session, first);
   },
 
   /** Split `journalctl -u kubelet | tail -n 20` into command + text filters. */
@@ -18292,7 +19571,35 @@ Object.assign(CommandBar.prototype, {
             : flags['values-file'] && flags['values-file'] !== true
               ? String(flags['values-file'])
               : null;
-        const method = sub === 'install' ? 'installHelm' : 'upgradeHelm';
+        // `helm upgrade --install|-i`: install when the release does not exist
+        // yet (helm prints `Release "x" does not exist. Installing it now.`),
+        // otherwise a normal upgrade (1.16.0; --install used to be rejected).
+        let action = sub;
+        const preface = [];
+        if (sub === 'upgrade') {
+          const { releases: existingReleases } = this._helmReleaseList(namespace);
+          const releaseExists = (existingReleases || []).some(
+            (entry) => (entry.name || entry.release) === release
+          );
+          if (!releaseExists && (flags.install || flags.i)) {
+            action = 'install';
+            preface.push(`Release "${release}" does not exist. Installing it now.`);
+          } else if (releaseExists) {
+            preface.push(`Release "${release}" has been upgraded. Happy Helming!`);
+          } else {
+            // helm 3 action/upgrade.go: errMissingRelease wrapped by UPGRADE FAILED.
+            return this._err(`Error: UPGRADE FAILED: "${release}" has no deployed releases`);
+          }
+        } else if (sub === 'install') {
+          const { releases: existingReleases } = this._helmReleaseList(namespace);
+          if ((existingReleases || []).some((entry) => (entry.name || entry.release) === release)) {
+            // helm 3 action/install.go availableName(): the name is taken.
+            return this._err(
+              'Error: INSTALLATION FAILED: cannot re-use a name that is still in use'
+            );
+          }
+        }
+        const method = action === 'install' ? 'installHelm' : 'upgradeHelm';
         const dryRun =
           flags['dry-run'] === true ||
           ['client', 'server'].includes(String(flags['dry-run'] || ''));
@@ -18316,7 +19623,13 @@ Object.assign(CommandBar.prototype, {
           ...(catalogEntry?.name ? { chartName: catalogEntry.name } : {}),
           ...(catalogEntry?.appVersion ? { appVersion: catalogEntry.appVersion } : {}),
         };
-        const result = this._helmCall(method, [release, chartPath, valuesPath, renderOptions]);
+        // linux-engine: local chart dirs and values files are cwd-relative paths.
+        const result = this._helmCall(method, [
+          release,
+          catalogEntry ? chartPath : this._normalizeVirtualPath(chartPath),
+          valuesPath ? this._normalizeVirtualPath(valuesPath) : valuesPath,
+          renderOptions,
+        ]);
         if (result.error) return result;
         const record = result.result || {};
         if (record.success === false || record.ok === false) {
@@ -18336,7 +19649,7 @@ Object.assign(CommandBar.prototype, {
           (max, entry) => Math.max(max, Number(entry.revision) || 0),
           0
         );
-        const revision = sub === 'install' ? 1 : previousRevision + 1;
+        const revision = action === 'install' ? 1 : previousRevision + 1;
         if (!dryRun) {
           // Helm 3 keeps exactly one deployed revision: the previous revision
           // becomes superseded once the new one is deployed.
@@ -18352,17 +19665,18 @@ Object.assign(CommandBar.prototype, {
             valuesPath,
             repo: chartRepo,
             values: record.values ? JSON.parse(JSON.stringify(record.values)) : null,
-            description: sub === 'install' ? 'Install complete' : 'Upgrade complete',
+            description: action === 'install' ? 'Install complete' : 'Upgrade complete',
           });
         }
         const status = dryRun
-          ? sub === 'install'
+          ? action === 'install'
             ? 'pending-install'
             : 'pending-upgrade'
           : record.status || 'deployed';
         return this._ok(
           [
             ...warnings,
+            ...(dryRun ? preface.filter((line) => !/has been upgraded/.test(line)) : preface),
             `NAME: ${release}`,
             `LAST DEPLOYED: ${formatHelmDate(new Date())}`,
             `NAMESPACE: ${record.namespace || namespace}`,
@@ -18537,7 +19851,9 @@ Object.assign(CommandBar.prototype, {
       positionals.push(token);
     }
     void batch;
-    const file = positionals[0] || 'htpasswd';
+    // linux-engine: the htpasswd file is a cwd-relative path; ManifestEngine takes its key.
+    const typedFile = positionals[0] || '~/htpasswd';
+    const file = this._normalizeVirtualPath(typedFile);
     const user = positionals[1];
     const password = positionals[2];
     if (!user) {
@@ -18565,9 +19881,9 @@ Object.assign(CommandBar.prototype, {
         'error: password is required when using -b\n\n  htpasswd -c -b [-B] <file> <user> <password>'
       );
     }
-    const fileExists = this._readVirtualFile(file) !== null;
+    const fileExists = this._readVirtualFile(typedFile) !== null;
     if (!fileExists && !create) {
-      return this._err(`htpasswd: cannot modify file ${file}; use '-c' to create it`);
+      return this._err(`htpasswd: cannot modify file ${typedFile}; use '-c' to create it`);
     }
     const existingUsers = listedUsers();
     if (!create && existingUsers.includes(user) && typeof me.htpasswdUpdate === 'function') {
@@ -18578,7 +19894,7 @@ Object.assign(CommandBar.prototype, {
     if (create) {
       // `htpasswd -c <file>` truncates ONLY the target file (never the cluster's
       // root htpasswd file when a custom path like /tmp/users.htpasswd is used).
-      const truncated = this._writeVirtualFile(file, '');
+      const truncated = this._writeVirtualFile(typedFile, '');
       if (truncated.error) return truncated;
     }
     const result = this._htpasswdCall('add', user, password, file, { bcrypt });
@@ -19042,10 +20358,11 @@ Object.assign(CommandBar.prototype, {
     const syncHtpasswd =
       isSecret && next.htpasswd !== undefined && this._isOAuthHtpasswdSecret(resource);
     const decodedHtpasswd = syncHtpasswd ? this._decodeBase64(next.htpasswd) : null;
-    const rootHtpasswdBefore = syncHtpasswd ? this._readVirtualFile('htpasswd') : null;
+    // The OAuth plumbing file is ~/htpasswd regardless of the shell's cwd (linux-engine).
+    const rootHtpasswdBefore = syncHtpasswd ? this._readVfsKey('htpasswd') : null;
     if (this._sortedDataString(next) === this._sortedDataString(current)) {
       if (syncHtpasswd && decodedHtpasswd !== rootHtpasswdBefore) {
-        this._writeVirtualFile('htpasswd', decodedHtpasswd);
+        this._writeVirtualFile('/home/student/htpasswd', decodedHtpasswd);
         this._triggerOAuthRollout();
       }
       return this._ok(`info: ${name} was not changed`);
@@ -19076,7 +20393,7 @@ Object.assign(CommandBar.prototype, {
     // openshift-config and the authentication operator rolls out (~5s), after
     // which the new password works. Mirror the file + bump the OAuth singleton.
     if (syncHtpasswd) {
-      this._writeVirtualFile('htpasswd', decodedHtpasswd);
+      this._writeVirtualFile('/home/student/htpasswd', decodedHtpasswd);
       if (rootHtpasswdBefore !== decodedHtpasswd) this._triggerOAuthRollout();
     }
     return this._ok(`${this._resourceRef(kind)}/${name} data updated`);
@@ -19366,7 +20683,7 @@ Object.assign(CommandBar.prototype, {
       try {
         panel.show(object);
         return this._ok(
-          `Opening the manifest editor for project.config.openshift.io/cluster in the Files panel. Save to apply changes.\n${EDIT_TEACHING_LINE}`
+          `Opening the manifest editor for project.config.openshift.io/cluster in the Files panel. Save to apply changes.\n${EDIT_TEACHING_LINE}\n${EDIT_PAUSE_LINE}`
         );
       } catch {
         /* fall through to YAML output */
@@ -19688,6 +21005,17 @@ Object.assign(CommandBar.prototype, {
     }
     if (!name)
       return this._usageError('rsh', 'resource name is required\n\n  oc rsh deployment/<name>');
+    // A missing TYPE/NAME is the API's NotFound for that object (1.16.0).
+    if (
+      kind !== 'Pod' &&
+      !this._findResource(kind, name, {
+        namespace,
+        explicitNamespace: true,
+        allowPrefix: false,
+        allowOtherNamespaces: false,
+      })
+    )
+      return this._err(this._notFoundMessage(kind, name));
     const pod = this._podForResource(kind, name, namespace, explicitNamespace);
     if (!pod) return this._err(`error: pods "${kind === 'Pod' ? name : `${name}-`}" not found`);
     const containers = this._containerList(pod);
@@ -19792,12 +21120,11 @@ Object.assign(CommandBar.prototype, {
     // local → pod: read the virtual file (or directory) so the copy can be verified.
     let sourceText = this._readVirtualFile(source.local);
     if (sourceText === null) {
-      const prefix = `${source.local.replace(/\/+$/, '')}/`;
+      // linux-engine: the directory's Files-panel key (cwd-aware), files read by key.
+      const prefix = `${String(this._normalizeVirtualPath(source.local)).replace(/\/+$/, '')}/`;
       const files = this._manifestFileList().filter((file) => file.startsWith(prefix));
       if (files.length)
-        sourceText = files
-          .map((file) => `# ${file}\n${this._readVirtualFile(file) || ''}`)
-          .join('\n');
+        sourceText = files.map((file) => `# ${file}\n${this._readVfsKey(file) || ''}`).join('\n');
     }
     if (sourceText === null)
       return this._err(`error: tar: ${source.local}: Cannot stat: No such file or directory`);

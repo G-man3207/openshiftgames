@@ -22,10 +22,17 @@
  * commandsExecuted, yamlViewed, architectureScore, examPrepMastered.
  */
 
+import { CAMPAIGN_ORDER, EX280_ORDER, PRELUDE_ORDER } from './CampaignLevels.js';
+
 const n = (value) => {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : 0;
 };
+
+// Campaign totals come from the level data so the copy and the thresholds can
+// never drift from the real campaign (1.16.0 added levels and a Linux prelude).
+const EX280_LEVEL_COUNT = EX280_ORDER.length;
+const CAMPAIGN_STAR_COUNT = CAMPAIGN_ORDER.length * 3;
 
 /** First defined numeric stat among aliases (migration-friendly). */
 const stat = (stats, ...keys) => {
@@ -154,7 +161,8 @@ const ACHIEVEMENTS = [
     description: 'Complete your first campaign chapter.',
     icon: 'book',
     category: 'Intermediate',
-    condition: (stats) => stat(stats, 'chaptersCompleted') >= 1,
+    condition: (stats) =>
+      stat(stats, 'chaptersCompleted') >= 1 || stat(stats, 'preludeCompleted') >= 1,
     xpReward: 150,
   },
   {
@@ -325,25 +333,35 @@ const ACHIEVEMENTS = [
   {
     id: 'final-level',
     name: 'Campaign Graduate',
-    description: 'Complete all 20 campaign levels, including the Production Platform capstone.',
+    description: `Complete all ${EX280_LEVEL_COUNT} EX280 campaign levels, including the Production Platform capstone.`,
     icon: 'trophy',
     category: 'Expert',
-    condition: (stats) => stat(stats, 'levelsCompleted') >= 20,
+    // EX280 track only: the optional Linux prelude must not count towards it.
+    condition: (stats) => stat(stats, 'ex280LevelsCompleted') >= EX280_LEVEL_COUNT,
     xpReward: 1000,
   },
   {
     id: 'star-master',
     name: 'Star Master',
-    description: 'Earn all 60 campaign stars (20 levels × 3).',
+    description: `Earn all ${CAMPAIGN_STAR_COUNT} campaign stars (${CAMPAIGN_ORDER.length} levels × 3, the Linux prelude included).`,
     icon: 'star',
     category: 'Expert',
-    condition: (stats) => stat(stats, 'totalStars') >= 60,
+    condition: (stats) => stat(stats, 'totalStars') >= CAMPAIGN_STAR_COUNT,
     xpReward: 1000,
+  },
+  {
+    id: 'linux-foundations',
+    name: 'Linux Foundations',
+    description: `Complete all ${PRELUDE_ORDER.length || 7} Linux & RHEL Foundations levels.`,
+    icon: 'terminal',
+    category: 'Intermediate',
+    condition: (stats) => stat(stats, 'preludeCompleted') >= 1,
+    xpReward: 200,
   },
   {
     id: 'chapter-master',
     name: 'Platform Architect',
-    description: 'Complete all 5 campaign chapters.',
+    description: 'Complete all 5 EX280 campaign chapters.',
     icon: 'building',
     category: 'Expert',
     condition: (stats) => stat(stats, 'chaptersCompleted') >= 5,

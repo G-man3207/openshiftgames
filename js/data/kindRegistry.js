@@ -828,7 +828,8 @@ K.Subscription = {
     source: 'redhat-operators',
     sourceNamespace: 'openshift-marketplace',
     installPlanApproval: 'Automatic',
-    packageName: 'ansible-automation-platform-operator',
+    // No `packageName`: it is not a Subscription spec field (spec.name is the
+    // package), and a default here survived next to a seeded `name:` (1.16.0).
   }),
   explain:
     'Subscription installs an Operator through Operator Lifecycle Manager (OLM) in\n' +

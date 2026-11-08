@@ -12,8 +12,16 @@
  */
 
 import { EX280_OBJECTIVE_GROUPS } from '../data/EX280Objectives.js';
+// Campaign order, unlocking and display numbers (ids are stable save keys).
+import {
+  CAMPAIGN_ORDER,
+  continueLevelId,
+  isCampaignComplete,
+  isLevelUnlocked,
+  levelLabel,
+  levelOrdinal,
+} from '../data/CampaignLevels.js';
 
-const LEVEL_ORDER = Array.from({ length: 20 }, (_, index) => index + 1);
 const MAX_VISIBLE_BULLETS = 8;
 
 function compressNumbers(values) {
@@ -326,56 +334,50 @@ export class StartMenu {
     }
   }
 
-  _nextCampaignLevel() {
+  _campaignProgress() {
     try {
-      const unlocked = this._unlockedCampaignLevels();
-      const completed = LEVEL_ORDER.filter(
-        (id) => this.app?.scoringEngine?.getProgress?.()?.campaignProgress?.[id]?.completed
-      );
-      // A finished campaign has nothing to "continue": replay from level 1.
-      if (completed.length === LEVEL_ORDER.length) return 1;
-      for (const id of LEVEL_ORDER) {
-        if (!unlocked.has(id)) return Math.max(1, id - 1);
-      }
-      return LEVEL_ORDER[LEVEL_ORDER.length - 1];
+      return this.app?.scoringEngine?.getProgress?.()?.campaignProgress || {};
     } catch {
-      return 1;
+      return {};
     }
   }
 
-  /** Levels the player can start now: level 1 plus the level after each completion. */
-  _unlockedCampaignLevels() {
-    const unlocked = new Set([1]);
+  /** The level "Start / Continue" opens (shared rule with the level select). */
+  _nextCampaignLevel() {
     try {
-      const campaign = this.app?.scoringEngine?.getProgress?.()?.campaignProgress || {};
-      for (const id of LEVEL_ORDER) {
-        if (id > 1 && campaign[id - 1]?.completed) unlocked.add(id);
-      }
+      return continueLevelId(this._campaignProgress());
     } catch {
-      /* progress unavailable: only level 1 is open */
+      return CAMPAIGN_ORDER[0] || 1;
     }
-    return unlocked;
+  }
+
+  /** True when the player can start this level now (never launch a locked level). */
+  _isCampaignLevelOpen(levelId) {
+    try {
+      return isLevelUnlocked(levelId, this._campaignProgress());
+    } catch {
+      return false;
+    }
   }
 
   _updatePrimaryLabel() {
     const label = document.getElementById('sp-cta-label');
     if (!label) return;
     try {
-      const progress = this.app?.scoringEngine?.getProgress?.();
-      const campaign = progress?.campaignProgress || {};
-      const completed = LEVEL_ORDER.filter((id) => campaign[id]?.completed);
+      const campaign = this._campaignProgress();
+      const completed = CAMPAIGN_ORDER.filter((id) => campaign[id]?.completed);
       if (completed.length === 0) {
         label.textContent = 'Start the campaign';
         return;
       }
-      if (completed.length === LEVEL_ORDER.length) {
-        // Reporting "Continue · level 20" after the capstone was already
+      if (isCampaignComplete(campaign)) {
+        // Reporting "Continue · level 22" after the capstone was already
         // confusing: the campaign is finished, so offer a replay instead.
         label.textContent = 'Replay the campaign';
         return;
       }
       const next = this._nextCampaignLevel();
-      label.textContent = `Continue · level ${next}`;
+      label.textContent = `Continue · level ${levelLabel(next)}`;
     } catch {
       label.textContent = 'Start the campaign';
     }
@@ -491,8 +493,10 @@ export class StartMenu {
     const detail = document.getElementById('sp-exam-detail');
     if (!detail) return;
 
+    // Level ids are save keys: order them by campaign position and show their
+    // display numbers (the capstone is id 20 but the last numbered level).
     const levels = [...new Set(group.bullets.flatMap((bullet) => bullet.levels || []))].sort(
-      (a, b) => a - b
+      (a, b) => CAMPAIGN_ORDER.indexOf(a) - CAMPAIGN_ORDER.indexOf(b)
     );
     const challenges = [
       ...new Set(group.bullets.flatMap((bullet) => bullet.challenges || [])),
@@ -500,17 +504,16 @@ export class StartMenu {
     const visible = group.bullets.slice(0, MAX_VISIBLE_BULLETS);
     const remaining = group.bullets.length - visible.length;
     // Campaign levels unlock in order; never launch a locked level (the game would
-    // bounce the player back to level 1). Offer the first open level, or the
-    // level select if this group starts further along.
-    const unlocked = this._unlockedCampaignLevels();
-    const openLevel = levels.find((id) => unlocked.has(id)) || null;
+    // bounce the player to their Continue level). Offer the first open level, or
+    // the level select if this group starts further along.
+    const openLevel = levels.find((id) => this._isCampaignLevelOpen(id)) || null;
     const nextChallenge = challenges[0] || null;
 
     detail.innerHTML = `
       <h3>${this._escape(group.title)}</h3>
       <p class="sp-exam-meta">
         ${group.bullets.length} objective${group.bullets.length === 1 ? '' : 's'}
-        ${levels.length ? ` · practised in levels ${compressNumbers(levels)}` : ''}
+        ${levels.length ? ` · practised in levels ${compressNumbers(levels.map((id) => levelOrdinal(id)))}` : ''}
         ${challenges.length ? ` · labs ${compressNumbers(challenges)}` : ''}
       </p>
       <ul class="sp-exam-bullets">
@@ -520,7 +523,7 @@ export class StartMenu {
       <div class="sp-exam-actions">
         ${
           openLevel
-            ? `<button type="button" class="sp-btn-small" id="sp-exam-start" data-level="${openLevel}">Start level ${openLevel}${arrowIcon()}</button>`
+            ? `<button type="button" class="sp-btn-small" id="sp-exam-start" data-level="${openLevel}">Start level ${levelLabel(openLevel)}${arrowIcon()}</button>`
             : '<button type="button" class="sp-btn-small" id="sp-exam-start" data-level="">Open campaign' +
               arrowIcon() +
               '</button>'

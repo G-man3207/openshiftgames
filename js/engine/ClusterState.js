@@ -2747,6 +2747,12 @@ export class ClusterState {
     if (rawMeta.labels) Object.assign(resource.metadata.labels, rawMeta.labels);
     if (rawMeta.annotations) Object.assign(resource.metadata.annotations, rawMeta.annotations);
     if (Array.isArray(rawMeta.finalizers)) resource.metadata.finalizers = [...rawMeta.finalizers];
+    // Controllers create children WITH their ownerReferences (real API objects
+    // never appear ownerless first): `cluster:added` listeners such as the
+    // "You created …" spotlight must see the owner on the very first event (1.16.0).
+    if (Array.isArray(rawMeta.ownerReferences) && rawMeta.ownerReferences.length) {
+      resource.metadata.ownerReferences = deepClone(rawMeta.ownerReferences);
+    }
     if (obj.status) this._applyStatus(resource, obj.status);
 
     return this.add(resource);
