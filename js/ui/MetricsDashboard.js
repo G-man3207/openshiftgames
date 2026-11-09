@@ -595,7 +595,11 @@ export class MetricsDashboard {
         container.resources?.requests?.memory ?? container.resources?.limits?.memory ?? 0
       );
     }
-    cpu += parseCpuMillis(pod.status?.usage?.cpu ?? 0);
+    // status.usage.cpu is already millicores (SimulationTick), not a Kubernetes
+    // quantity. parseCpuMillis treats a bare number as cores.
+    const usageCpu = pod.status?.usage?.cpu;
+    if (typeof usageCpu === 'number') cpu += usageCpu;
+    else cpu += parseCpuMillis(usageCpu ?? 0);
     memory += parseMemoryMi(pod.status?.usage?.memory ?? 0);
 
     // Bare pods created from the palette have no requests; show a stable,

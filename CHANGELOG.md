@@ -4,6 +4,20 @@ All notable changes to shifting.pro are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 aims to follow [Semantic Versioning](https://semver.org/).
 
+## [1.16.3] — 2026-11-09
+
+### Fixed
+
+- **Unquoted CPU quantities.** YAML `cpu: 1` is a number, and the quantity parser
+  treated that number as millicores. A ResourceQuota of `requests.cpu=500m` therefore
+  admitted a Pod requesting 1 core (`oc describe quota` showed Used `1m`), a LimitRange
+  max of `200m` allowed `cpu: 0.5`, and a Pod requesting `cpu: 20` scheduled onto a
+  16-core node. The quoted form `cpu: "1"` was already 1000m, so adding quotes changed
+  whether the same request was admitted. A bare number is now a decimal quantity in
+  cores, matching the string form (`1` = `1000m`, `0.5` = `500m`); milli suffixes are
+  unchanged. The version is bumped to 1.16.3 (`package.json` and both import maps)
+  because module URLs are versioned (`/v/<version>/js/…`, cached as immutable).
+
 ## [1.16.2] — 2026-11-09
 
 ### Fixed

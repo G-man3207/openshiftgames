@@ -1,6 +1,6 @@
 {
   "name": "openshift-games",
-  "version": "1.16.2",
+  "version": "1.16.3",
   "private": true,
   "description": "shifting.pro static site — dev tooling only (runtime is dependency-free/no-build)",
   "main": "index.html",

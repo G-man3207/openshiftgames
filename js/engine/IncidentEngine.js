@@ -34,6 +34,7 @@ import {
   LEGACY_INCIDENT_ALIASES,
 } from '../data/IncidentDefs.js';
 import { ResourceBase } from '../resources/ResourceBase.js';
+import { parseCpuMillis } from './ClusterState.js';
 import { outputShowsSomething } from './ObjectiveEvaluator.js';
 
 /**
@@ -4545,10 +4546,7 @@ class IncidentEngine {
   }
 
   _parseCpuMillis(value) {
-    if (typeof value === 'number') return value;
-    const str = String(value ?? '0');
-    if (str.endsWith('m')) return parseInt(str, 10) || 0;
-    return Math.round((parseFloat(str) || 0) * 1000);
+    return parseCpuMillis(value);
   }
 
   _parseMemoryMi(value) {
@@ -6059,10 +6057,7 @@ class IncidentEngine {
   }
 
   _parseCpuMillis(value) {
-    if (typeof value === 'number') return value;
-    const str = String(value ?? '0');
-    if (str.endsWith('m')) return parseInt(str, 10) || 0;
-    return Math.round((parseFloat(str) || 0) * 1000);
+    return parseCpuMillis(value);
   }
 
   _parseMemoryMi(value) {

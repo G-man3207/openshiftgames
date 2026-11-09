@@ -8203,6 +8203,283 @@ if (seedMod?.ClusterState) {
   }
 }
 
+// ── 4p. Unquoted CPU quantities are cores, not millicores (1.16.3) ─────────
+// YAML `cpu: 1` is a number. parseCpuMillis used to return that number as
+// millicores, so a 500m quota admitted a 1-core Pod (Used printed `1m`) and a
+// 20-core Pod scheduled onto a 16-core node, while the quoted form `cpu: "1"`
+// was rejected. A bare number is a decimal quantity in cores.
+{
+  const engineMod = await tryImport('js/engine/GameEngine.js');
+  const sandboxMod = await tryImport('js/modes/SandboxMode.js');
+  const commandBarMod = await tryImport('js/ui/CommandBar.js');
+  const manifestMod = await tryImport('js/engine/ManifestEngine.js');
+  const stateMod = await tryImport('js/engine/ClusterState.js');
+  const yamlMod = await tryImport('js/engine/YamlParser.js');
+  if (
+    !engineMod?.GameEngine ||
+    !sandboxMod?.SandboxMode ||
+    !commandBarMod?.CommandBar ||
+    !manifestMod?.ManifestEngine ||
+    !stateMod?.parseCpuMillis ||
+    !yamlMod?.parseDocument
+  ) {
+    fail('cpu-quantity', '4p: engine modules are not importable for the CPU quantity lock');
+  } else {
+    const engine = new engineMod.GameEngine({ mode: 'sandbox' });
+    new sandboxMod.SandboxMode(engine, null).setupCluster(3);
+    const cluster = engine.cluster;
+    const simulation = engine.simulation;
+    simulation.randomFailureRate = 0;
+    const manifestEngine = new manifestMod.ManifestEngine({ cluster, gameEngine: engine });
+    globalThis.window = {
+      game: {
+        cluster,
+        gameEngine: engine,
+        engine: { emit() {}, on() {}, off() {} },
+        manifestEngine,
+      },
+    };
+    manifestEngine.game = globalThis.window.game;
+    const commandBar = new commandBarMod.CommandBar();
+    const cli = (raw) => {
+      try {
+        const out = commandBar.executeCommand(raw);
+        return { error: Boolean(out?.error), message: String(out?.message ?? '') };
+      } catch (err) {
+        return { error: true, message: `THROW ${err?.message || err}` };
+      }
+    };
+    const tick = (seconds) => {
+      const steps = Math.ceil(seconds / 0.05);
+      for (let step = 0; step < steps; step += 1) simulation.tick(0.05);
+    };
+    const lock = (ok, message, detail) => {
+      if (ok) passed();
+      else fail('cpu-quantity', message, detail === undefined ? undefined : JSON.stringify(detail));
+    };
+    const writeApply = (path, body, namespace) => {
+      const written = cli(`cat > ${path} <<'EOF'\n${body}EOF`);
+      const applied = cli(`oc apply -f ${path}${namespace ? ` -n ${namespace}` : ''}`);
+      return { written, applied };
+    };
+    try {
+      const parsed = stateMod.parseCpuMillis;
+      lock(
+        parsed(1) === 1000 &&
+          parsed('1') === 1000 &&
+          parsed(0.5) === 500 &&
+          parsed('0.5') === 500 &&
+          parsed(2) === 2000 &&
+          parsed('100m') === 100 &&
+          parsed('250m') === 250 &&
+          parsed(0) === 0 &&
+          parsed('100m') === parsed(0.1),
+        '4p: a bare CPU number is cores (1 → 1000m, 0.5 → 500m), agreeing with the quoted string; milli suffixes stay milli',
+        {
+          n1: parsed(1),
+          s1: parsed('1'),
+          nHalf: parsed(0.5),
+          milli: parsed('100m'),
+        }
+      );
+      const yamlNumber = yamlMod.parseDocument('cpu: 1\nhalf: 0.5\nmilli: 100m\nquoted: "1"\n');
+      lock(
+        typeof yamlNumber?.cpu === 'number' &&
+          yamlNumber.cpu === 1 &&
+          parsed(yamlNumber.cpu) === parsed(yamlNumber.quoted) &&
+          parsed(yamlNumber.half) === 500 &&
+          parsed(yamlNumber.milli) === 100,
+        '4p: the YAML parser keeps unquoted `cpu: 1` as a number, and that number is the same quantity as `cpu: "1"`',
+        yamlNumber
+      );
+
+      cli('oc new-project qa4p-cpu');
+      cli('oc create quota tight --hard=pods=10,requests.cpu=500m,requests.memory=2Gi -n qa4p-cpu');
+      const oneCore = `apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: one-core
+  namespace: qa4p-cpu
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: one-core
+  template:
+    metadata:
+      labels:
+        app: one-core
+    spec:
+      containers:
+      - name: app
+        image: quay.io/openshift/origin-hello-openshift:latest
+        resources:
+          requests:
+            cpu: 1
+            memory: 64Mi
+`;
+      const appliedOne = writeApply('/tmp/qa4p-one-core.yaml', oneCore, 'qa4p-cpu');
+      const deploy = cluster.getByName('Deployment', 'one-core', 'qa4p-cpu');
+      const storedCpu = deploy?.spec?.template?.spec?.containers?.[0]?.resources?.requests?.cpu;
+      lock(
+        !appliedOne.applied.error && storedCpu === 1 && typeof storedCpu === 'number',
+        '4p: `oc apply` of unquoted `cpu: 1` stores the YAML number, not a milli string',
+        { apply: appliedOne.applied.message.slice(0, 160), storedCpu, type: typeof storedCpu }
+      );
+      const numericAdmit = cluster.admitPodAgainstQuota('qa4p-cpu', {
+        containers: [
+          { name: 'app', image: 'x', resources: { requests: { cpu: 1, memory: '64Mi' } } },
+        ],
+      });
+      const quotedAdmit = cluster.admitPodAgainstQuota('qa4p-cpu', {
+        containers: [
+          { name: 'app', image: 'x', resources: { requests: { cpu: '1', memory: '64Mi' } } },
+        ],
+      });
+      lock(
+        numericAdmit.allowed === false &&
+          quotedAdmit.allowed === false &&
+          /requested: requests\.cpu=1000m/.test(numericAdmit.message) &&
+          numericAdmit.message === quotedAdmit.message,
+        '4p: quota admission rejects numeric `cpu: 1` and string `cpu: "1"` with the same 1000m exceeded-quota error (a 500m quota used to admit the number as 1m)',
+        { numeric: numericAdmit, quoted: quotedAdmit }
+      );
+      tick(2);
+      cluster.recalculateQuotaStatus(false);
+      const quota = cluster.getByName('ResourceQuota', 'tight', 'qa4p-cpu');
+      const rs = (cluster.getByKindAndNamespace('ReplicaSet', 'qa4p-cpu') || []).find((item) =>
+        String(item.metadata?.name || '').startsWith('one-core-')
+      );
+      const failed = (rs?.events || []).find((event) => event.reason === 'FailedCreate');
+      const pods = cluster.getByKindAndNamespace('Pod', 'qa4p-cpu') || [];
+      lock(
+        pods.length === 0 &&
+          quota?.status?.used?.['requests.cpu'] === '0m' &&
+          /exceeded quota: tight/.test(failed?.message || '') &&
+          /requests\.cpu=1000m/.test(failed?.message || ''),
+        '4p: the ReplicaSet does not create the 1-core Pod; FailedCreate names 1000m and quota Used stays 0m (it used to run and show Used 1m)',
+        {
+          pods: pods.map((pod) => pod.metadata?.name),
+          used: quota?.status?.used,
+          failed: failed?.message,
+        }
+      );
+
+      const small = `apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: small
+  namespace: qa4p-cpu
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: small
+  template:
+    metadata:
+      labels:
+        app: small
+    spec:
+      containers:
+      - name: app
+        image: quay.io/openshift/origin-hello-openshift:latest
+        resources:
+          requests:
+            cpu: 100m
+            memory: 64Mi
+`;
+      writeApply('/tmp/qa4p-small.yaml', small, 'qa4p-cpu');
+      tick(6);
+      cluster.recalculateQuotaStatus(false);
+      const smallPods = (cluster.getByKindAndNamespace('Pod', 'qa4p-cpu') || []).filter((pod) =>
+        String(pod.metadata?.name || '').startsWith('small-')
+      );
+      lock(
+        smallPods.length === 1 &&
+          smallPods[0].status?.phase === 'Running' &&
+          quota?.status?.used?.['requests.cpu'] === '100m',
+        '4p: a 100m request is unchanged (still admitted, Used 100m, not 100000m)',
+        {
+          phase: smallPods[0]?.status?.phase,
+          used: quota?.status?.used?.['requests.cpu'],
+          count: smallPods.length,
+        }
+      );
+
+      const limitCheck = cluster.checkLimitRange('qa4p-cpu', {
+        containers: [{ resources: { requests: { cpu: 0.5 } } }],
+      });
+      lock(
+        limitCheck.allowed === true,
+        '4p: LimitRange is not involved until one exists (control before the max check)',
+        limitCheck
+      );
+      const limitRange = `apiVersion: v1
+kind: LimitRange
+metadata:
+  name: cpu-max
+  namespace: qa4p-cpu
+spec:
+  limits:
+  - type: Container
+    max:
+      cpu: 200m
+`;
+      const appliedLimit = writeApply('/tmp/qa4p-limit.yaml', limitRange, 'qa4p-cpu');
+      const overMax = cluster.checkLimitRange('qa4p-cpu', {
+        containers: [{ name: 'app', resources: { requests: { cpu: 0.5, memory: '64Mi' } } }],
+      });
+      lock(
+        !appliedLimit.applied.error &&
+          overMax.allowed === false &&
+          /maximum cpu usage per Container is 200m/.test(overMax.violations?.[0] || ''),
+        '4p: LimitRange max 200m rejects numeric `cpu: 0.5` (500m); it used to compare 0.5 < 200 and allow it',
+        { apply: appliedLimit.applied.message.slice(0, 120), overMax }
+      );
+
+      cli('oc new-project qa4p-sched');
+      const huge = `apiVersion: v1
+kind: Pod
+metadata:
+  name: twenty-core
+  namespace: qa4p-sched
+spec:
+  containers:
+  - name: app
+    image: quay.io/openshift/origin-hello-openshift:latest
+    resources:
+      requests:
+        cpu: 20
+        memory: 64Mi
+`;
+      const appliedHuge = writeApply('/tmp/qa4p-twenty.yaml', huge, 'qa4p-sched');
+      const hugePod = cluster.getByName('Pod', 'twenty-core', 'qa4p-sched');
+      tick(1);
+      const schedEvent = (hugePod?.events || []).find(
+        (event) => event.reason === 'FailedScheduling'
+      );
+      lock(
+        !appliedHuge.applied.error &&
+          hugePod?.spec?.containers?.[0]?.resources?.requests?.cpu === 20 &&
+          !hugePod?.spec?.nodeName &&
+          hugePod?.status?.phase === 'Pending' &&
+          /Insufficient cpu/.test(schedEvent?.message || ''),
+        '4p: numeric `cpu: 20` stays Pending with Insufficient cpu on 16-core nodes (it used to schedule onto worker-0 as 20m)',
+        {
+          apply: appliedHuge.applied.message.slice(0, 120),
+          phase: hugePod?.status?.phase,
+          node: hugePod?.spec?.nodeName || null,
+          event: schedEvent?.message,
+        }
+      );
+    } catch (err) {
+      fail('cpu-quantity', `4p: CPU quantity lock could not run: ${err?.stack || err}`);
+    } finally {
+      delete globalThis.window;
+    }
+  }
+}
+
 // ── 5. Campaign, challenges, incidents and EX280 content ──────────────────
 const levelsMod = await tryImport('js/data/CampaignLevels.js');
 const challengesMod = await tryImport('js/modes/ChallengeMode.js');

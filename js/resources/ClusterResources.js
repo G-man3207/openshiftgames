@@ -10,9 +10,10 @@ import { deepClone } from './ManifestSerializer.js';
 const timestamp = () => new Date().toISOString();
 
 function parseCpuToMillis(cpu) {
-  if (typeof cpu === 'number') return cpu;
-  const str = String(cpu || '');
-  if (str.endsWith('m')) return parseInt(str, 10);
+  // A bare number is cores (`cpu: 1` → 1000m), matching ClusterState.parseCpuMillis.
+  const str = String(cpu ?? '').trim();
+  if (!str) return 0;
+  if (str.endsWith('m')) return parseFloat(str) || 0;
   const parsed = parseFloat(str);
   return Number.isFinite(parsed) ? parsed * 1000 : 0;
 }

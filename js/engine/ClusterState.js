@@ -696,17 +696,27 @@ export function deepMerge(target, ...sources) {
 
 /**
  * Parse a Kubernetes CPU quantity into millicores.
- * @param {string|number} value
+ *
+ * A bare number is a decimal quantity in cores, the same value as the string
+ * form. YAML `cpu: 1` is the number 1 (1 core = 1000m) and `cpu: 0.5` is 500m.
+ * Treating that number as already-millicores admitted a 1-core Pod against a
+ * 500m quota (`oc describe quota` then showed Used `1m`) and scheduled a
+ * 20-core Pod onto a 16-core node, while the quoted form `cpu: "1"` was
+ * rejected. `status.usage.cpu` is a millicore counter, not a quantity — do not
+ * pass it here.
+ * @param {string|number|null|undefined} value
  * @returns {number}
  */
 export function parseCpuMillis(value) {
   if (value === null || value === undefined) return 0;
-  if (typeof value === 'number') return value;
   const str = String(value).trim();
   if (!str) return 0;
-  if (str.endsWith('m')) return parseFloat(str) || 0;
+  if (str.endsWith('m')) {
+    const milli = parseFloat(str);
+    return Number.isFinite(milli) ? milli : 0;
+  }
   const n = parseFloat(str);
-  if (Number.isNaN(n)) return 0;
+  if (!Number.isFinite(n)) return 0;
   return Math.round(n * 1000);
 }
 
@@ -1863,8 +1873,10 @@ export class ClusterState {
 
   /**
    * Legacy quota API: register a per-namespace quota as a plain map
-   * (`{pods, cpu (millis), memory (Mi)}`). New content should create real
-   * `ResourceQuota`/`ClusterResourceQuota` resources instead.
+   * (`{pods, cpu, memory}`). `cpu` is a Kubernetes quantity (a number is cores,
+   * so `1` is 1000m; a string may be `500m` or `1`). `memory` is mebibytes when
+   * passed as a number, otherwise a quantity string. New content should create
+   * real `ResourceQuota`/`ClusterResourceQuota` resources instead.
    * @param {string} namespace
    * @param {{pods?: number, cpu?: number, memory?: number}} quota
    */

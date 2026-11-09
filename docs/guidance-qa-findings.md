@@ -91,6 +91,13 @@ Output, error wording and exit status now follow `oc` 4.22 / kubectl 1.35 (check
 
 None known: the 1.15.0 findings are fixed above.
 
+## Fixed in 1.16.3
+
+- **Unquoted CPU quantities.** YAML `cpu: 1` / `cpu: 0.5` are numbers. The quota,
+  LimitRange and scheduler parsers treated a number as millicores, so a 500m quota
+  admitted a 1-core Pod (Used `1m`) and `cpu: 20` scheduled onto a 16-core node, while
+  `cpu: "1"` was rejected. A bare number is cores. Locked by `scripts/verify.mjs` §4p.
+
 ## Fixed in 1.16.2
 
 - **Chaos mode CronJob/Job targets.** A random `CronJobMissedSchedule` with no CronJob or Job bound
