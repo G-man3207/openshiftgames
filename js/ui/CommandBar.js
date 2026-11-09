@@ -2270,6 +2270,44 @@ export function scrubInternalAnnotationsText(text) {
 }
 
 /**
+ * OpenShift 4.22 `describeSourceShort` (openshift-apiserver
+ * `pkg/build/printers/internalversion/printer.go`). The FROM column is the
+ * build *source*, not the builder image. A full hex commit (>20 chars, no
+ * non-hex) is shortened to 7; a branch ref such as `main` is kept whole.
+ * Dockerfile-only rows do not append `@rev` — that matches the printer's
+ * switch, which only appends a revision for Binary, Dockerfile+Git and Git.
+ * @param {object} spec Build or BuildConfig spec (CommonSpec)
+ * @returns {string}
+ */
+function describeBuildSourceShort(spec) {
+  const source = spec?.source || {};
+  const rev = describeBuildSourceGitRevision(spec);
+  const withRev = (label) => (rev ? `${label}@${rev}` : label);
+  if (source.binary != null) return withRev('Binary');
+  if (source.dockerfile != null && source.git != null) return withRev('Dockerfile,Git');
+  if (source.dockerfile != null) return 'Dockerfile';
+  if (source.git != null) return withRev('Git');
+  return buildSourceTypeLabel(source);
+}
+
+function buildSourceTypeLabel(source) {
+  const parts = [];
+  if (source?.git != null) parts.push('Git');
+  if (source?.dockerfile != null) parts.push('Dockerfile');
+  if (source?.binary != null) parts.push('Binary');
+  return parts.join(',');
+}
+
+function describeBuildSourceGitRevision(spec) {
+  let rev = '';
+  const commit = spec?.revision?.git?.commit;
+  if (commit) rev = String(commit);
+  if (!rev && spec?.source?.git != null) rev = String(spec.source.git.ref || '');
+  if (rev && !/[^a-fA-F0-9]/.test(rev) && rev.length > 20) rev = rev.slice(0, 7);
+  return rev;
+}
+
+/**
  * Format a fixed-width oc-style table the way oc's tabwriter does (>=3 spaces
  * between columns, last column unpadded).
  * @param {string[]} headers
@@ -6914,19 +6952,15 @@ Object.assign(CommandBar.prototype, {
   },
 
   /**
-   * `FROM` column for Build/BuildConfig rows: the builder image tag only.
-   * `oc new-build nodejs:20-ubi9~https://…` stores the combined token in some
-   * code paths; real oc prints `nodejs:20-ubi9` (#36).
+   * `FROM` column for Build rows, and for BuildConfigs that are not a custom
+   * strategy. OpenShift 4.22's table printer (`describeSourceShort` in
+   * openshift-apiserver `pkg/build/printers/internalversion/printer.go`) prints
+   * the *source* (`Git`, `Git@<commit-or-ref>`, `Dockerfile`, `Binary`, …),
+   * never the builder image. A custom-strategy BuildConfig is the exception
+   * and is handled in `_rowCells`.
    */
   _buildSourceLabel(resource) {
-    const strategy = resource.spec?.strategy || {};
-    const source = resource.spec?.source || {};
-    let from = strategy.sourceStrategy?.from?.name || '';
-    if (!from && strategy.dockerStrategy) from = 'Dockerfile';
-    if (!from && source.git?.uri) from = 'Git';
-    from = String(from).split('~')[0];
-    from = from.replace(/^(?:openshift|openshift-config)\//, '');
-    return from || '<none>';
+    return describeBuildSourceShort(resource?.spec || {});
   },
 
   /** Cells for the given kind keyed by the registry column headers. */
@@ -7291,10 +7325,15 @@ Object.assign(CommandBar.prototype, {
       }
       case 'BuildConfig': {
         const strategy = resource.spec?.strategy || {};
+        // printBuildConfig: a custom strategy prints CustomStrategy.From.Name,
+        // not describeSourceShort (OCP 4.22 printer.go).
+        const from = strategy.customStrategy
+          ? String(strategy.customStrategy.from?.name || '')
+          : this._buildSourceLabel(resource);
         return {
           NAME: name,
           TYPE: strategy.type || 'Source',
-          FROM: this._buildSourceLabel(resource),
+          FROM: from,
           LATEST: String(resource.status?.lastVersion ?? 0),
         };
       }

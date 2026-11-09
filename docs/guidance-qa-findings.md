@@ -99,11 +99,12 @@ None known: the 1.15.0 findings are fixed above.
 - **Not modelled yet:** a NotReady node's Pods stay Ready and in the Service endpoints (the node lifecycle
   controller would mark them NotReady and evict them after 300 s); MetalLB only assigns an EXTERNAL-IP from
   pools an L2Advertisement covers (real: the controller assigns, the speakers announce - changing it would let
-  L12's LoadBalancer objective tick without the L2Advertisement); `oc get bc`/`oc get builds` FROM shows the
-  builder image instead of the source type (`Git`, `Git@<commit>`); a client dry run of
+  L12's LoadBalancer objective tick without the L2Advertisement); a client dry run of
   `oc create deployment` prints server-side defaults (strategy, revisionHistoryLimit, a container port) that
   real client-side output omits; `oc explain` / `oc api-resources` still answer after `oc logout` (real oc may
-  serve them from its discovery cache - not verified).
+  serve them from its discovery cache - not verified). `oc get bc`/`oc get builds` FROM now follows the
+  OCP 4.22 printer (`Git`, `Git@<ref>`, `Git@<commit>`, `Dockerfile`, `Binary`; custom strategy prints the
+  custom image name) — fixed in 1.16.1, locked by `scripts/verify.mjs`.
 - **Chaos mode:** a random `CronJobMissedSchedule` incident can target a Pod (seen: `alertmanager-main-0` in
   `openshift-monitoring`), so its steps read `oc get cronjob alertmanager-main-0`; random targets should be
   limited to the incident's `affectedResourceTypes` (IncidentEngine `selectRandomTarget`).

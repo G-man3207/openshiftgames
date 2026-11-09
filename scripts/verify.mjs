@@ -7822,6 +7822,143 @@ if (seedMod?.ClusterState) {
         fail('sim-1160', `4n: router error-page lock could not run: ${err.message}`);
       }
 
+      // `oc get bc` / `oc get builds` FROM is the source, not the builder image.
+      // OCP 4.22 printer: openshift-apiserver pkg/build/printers/internalversion/printer.go
+      // describeSourceShort (Git / Git@<ref|7-char commit> / Dockerfile / Binary;
+      // a custom-strategy BuildConfig prints CustomStrategy.From.Name).
+      try {
+        const fromColumn = (table, name) => {
+          const line = String(table || '')
+            .split('\n')
+            .find((row) => row.startsWith(name));
+          if (!line) return '';
+          return line.trim().split(/\s{2,}/)[2] || '';
+        };
+        cli('oc new-project qa-from');
+        const gitBuild = cli(
+          'oc new-build openshift/nodejs:20-ubi9~https://github.com/openshift/nodejs-ex --name=from-git'
+        );
+        const gitBc = cli('oc get bc from-git');
+        const gitBcFrom = fromColumn(gitBc.message, 'from-git');
+        lock(
+          !gitBuild.error &&
+            gitBcFrom === 'Git@main' &&
+            !/nodejs/.test(gitBc.message) &&
+            !/~/.test(gitBc.message),
+          'FROM: a Git BuildConfig prints Git@<ref>, never the builder image or the image~git token (OCP 4.22 describeSourceShort)',
+          { from: gitBcFrom, table: gitBc.message }
+        );
+        const gitNew = cli('oc get builds from-git-1');
+        lock(
+          fromColumn(gitNew.message, 'from-git-1') === 'Git@main',
+          'FROM: a New build still prints the ref until the clone resolves a commit',
+          gitNew.message
+        );
+        tick(2);
+        const startedFrom = fromColumn(cli('oc get builds from-git-1').message, 'from-git-1');
+        const expectedCommit = cluster
+          ._fakeDigest('git:https://github.com/openshift/nodejs-ex@main')
+          .slice(0, 7);
+        lock(
+          startedFrom === `Git@${expectedCommit}`,
+          'FROM: once the build starts, oc get builds prints Git@<7-char commit> (a full hex hash is shortened like the 4.22 printer)',
+          { from: startedFrom, expected: `Git@${expectedCommit}` }
+        );
+
+        const binary = cli('oc new-build nodejs:20-ubi9 --name=from-bin');
+        const binaryTable = cli('oc get bc from-bin');
+        lock(
+          !binary.error &&
+            fromColumn(binaryTable.message, 'from-bin') === 'Binary' &&
+            !/nodejs/.test(binaryTable.message),
+          'FROM: a binary BuildConfig prints Binary, not the builder image',
+          binaryTable.message
+        );
+
+        const docker = cli('oc new-build --dockerfile --name=from-docker');
+        const dockerTable = cli('oc get bc from-docker');
+        lock(
+          !docker.error && fromColumn(dockerTable.message, 'from-docker') === 'Dockerfile',
+          'FROM: a Dockerfile BuildConfig prints Dockerfile',
+          dockerTable.message
+        );
+
+        engine.applyManifestObject({
+          apiVersion: 'build.openshift.io/v1',
+          kind: 'BuildConfig',
+          metadata: { name: 'from-both', namespace: 'qa-from' },
+          spec: {
+            source: {
+              type: 'Git',
+              git: { uri: 'https://github.com/example/app.git', ref: 'release-1' },
+              dockerfile: 'FROM scratch',
+            },
+            strategy: { type: 'Docker', dockerStrategy: { dockerfilePath: 'Dockerfile' } },
+            output: { to: { kind: 'ImageStreamTag', name: 'from-both:latest' } },
+          },
+        });
+        const bothFrom = fromColumn(cli('oc get bc from-both').message, 'from-both');
+        lock(
+          bothFrom === 'Dockerfile,Git@release-1',
+          'FROM: Dockerfile+Git prints Dockerfile,Git@<ref> (ref is not a long hex hash, so it is not shortened)',
+          bothFrom
+        );
+
+        const fullCommit = 'e79d887aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+        engine.applyManifestObject({
+          apiVersion: 'build.openshift.io/v1',
+          kind: 'Build',
+          metadata: { name: 'from-pin-1', namespace: 'qa-from' },
+          spec: {
+            source: {
+              type: 'Git',
+              git: { uri: 'https://github.com/example/app.git', ref: 'main' },
+            },
+            revision: { type: 'Git', git: { commit: fullCommit } },
+            strategy: {
+              type: 'Source',
+              sourceStrategy: {
+                from: { kind: 'ImageStreamTag', name: 'nodejs:20-ubi9', namespace: 'openshift' },
+              },
+            },
+            output: { to: { kind: 'ImageStreamTag', name: 'from-pin:latest' } },
+          },
+        });
+        const pinnedFrom = fromColumn(cli('oc get builds from-pin-1').message, 'from-pin-1');
+        lock(
+          pinnedFrom === 'Git@e79d887' && !pinnedFrom.includes(fullCommit),
+          'FROM: a full hex commit is shortened to 7 characters and wins over source.git.ref',
+          pinnedFrom
+        );
+
+        engine.applyManifestObject({
+          apiVersion: 'build.openshift.io/v1',
+          kind: 'BuildConfig',
+          metadata: { name: 'from-custom', namespace: 'qa-from' },
+          spec: {
+            source: {
+              type: 'Git',
+              git: { uri: 'https://github.com/example/app.git', ref: 'main' },
+            },
+            strategy: {
+              type: 'Custom',
+              customStrategy: {
+                from: { kind: 'DockerImage', name: 'registry.example/custom-builder:1' },
+              },
+            },
+            output: { to: { kind: 'ImageStreamTag', name: 'from-custom:latest' } },
+          },
+        });
+        const customFrom = fromColumn(cli('oc get bc from-custom').message, 'from-custom');
+        lock(
+          customFrom === 'registry.example/custom-builder:1',
+          'FROM: a custom-strategy BuildConfig prints CustomStrategy.From.Name, not the Git source',
+          customFrom
+        );
+      } catch (err) {
+        fail('sim-1160', `FROM column lock could not run: ${err.message}`);
+      }
+
       // Logged out: anonymous 403s, real logout/whoami/project errors, token login.
       try {
         const token = cli('oc whoami -t').message.trim();

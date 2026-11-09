@@ -4,6 +4,20 @@ All notable changes to shifting.pro are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 aims to follow [Semantic Versioning](https://semver.org/).
 
+## [1.16.1] — 2026-11-09
+
+### Fixed
+
+- **`oc get bc` / `oc get builds` FROM column.** The column printed the builder image
+  (`nodejs:20-ubi9`), including for a binary build. OpenShift 4.22's table printer
+  (`describeSourceShort` in openshift-apiserver
+  `pkg/build/printers/internalversion/printer.go`) prints the source: `Git`, `Git@<ref>`,
+  `Git@<7-char commit>`, `Dockerfile`, `Dockerfile,Git`, `Binary`. A custom-strategy BuildConfig
+  prints `CustomStrategy.From.Name` instead. A Git build records `spec.revision.git.commit` when it
+  leaves `New`, so `oc get builds` shows `Git@<commit>` after the clone the way a real cluster does.
+  The version is bumped to 1.16.1 (`package.json` and both import maps) because module URLs are
+  versioned (`/v/<version>/js/…`, cached as immutable).
+
 ## [1.16.0] — 2026-11-08
 
 Curriculum and correctness release. A review of the whole campaign found concepts used before they
@@ -169,9 +183,9 @@ web`, `create subscription|networkpolicy|group|pod`) fail with its errors; a mis
 
 - Still open, with notes in `docs/guidance-qa-findings.md`: Pods on a NotReady node stay Ready (no
   eviction), MetalLB withholds an address until an L2Advertisement exists (real MetalLB assigns it and only
-  announces it later), the FROM column of `oc get bc|builds`, client dry runs that print server defaults,
-  and Chaos mode can aim a CronJob incident at a Pod. `vim FILE` opens the Files panel editor rather than
-  an in-terminal vim, and lab `sudo` never prompts for a password.
+  announces it later), client dry runs that print server defaults, and Chaos mode can aim a CronJob
+  incident at a Pod. `vim FILE` opens the Files panel editor rather than an in-terminal vim, and lab
+  `sudo` never prompts for a password. The `oc get bc|builds` FROM column was fixed in 1.16.1.
 
 ## [1.15.0] — 2026-11-07
 

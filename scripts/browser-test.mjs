@@ -6476,17 +6476,21 @@ await runSection('qa-cli', async () => {
     out.message
   );
 
-  // Builds: short FROM form, real STARTED/DURATION.
+  // Builds: FROM is the source (not the builder image), real STARTED/DURATION.
   await expectCmd(
     'qa-cli #36: oc new-build with image~git source',
     'oc new-build openshift/nodejs:20-ubi9~https://github.com/openshift/nodejs-ex --name=webapp-build',
     /buildconfig\.build\.openshift\.io "webapp-build" created/
   );
   out = await runCmd('oc get bc');
+  const qaBcLine =
+    String(out.message)
+      .split('\n')
+      .find((line) => line.startsWith('webapp-build')) || '';
   assert(
-    /nodejs:20-ubi9/.test(out.message) && !/nodejs:20-ubi9~/.test(out.message),
-    'qa-cli #36: BuildConfig FROM column is the short builder tag',
-    out.message
+    /\bGit@main\b/.test(qaBcLine) && !/nodejs/.test(qaBcLine) && !/~/.test(qaBcLine),
+    'qa-cli #36: BuildConfig FROM column is the source (Git@ref), not the builder image or image~git token',
+    qaBcLine || out.message
   );
   const qaBuildStart = await expectCmd(
     'qa-cli #36: start the build',
@@ -6503,8 +6507,10 @@ await runSection('qa-cli', async () => {
       .find((line) => line.startsWith(qaBuildName)) || '';
   assert(/Complete/.test(buildLine), 'qa-cli #36: build reaches Complete', buildLine);
   assert(
-    !/<none>/.test(buildLine) && /nodejs:20-ubi9\s/.test(buildLine) && !/~/.test(buildLine),
-    'qa-cli #36: build STARTED + FROM are real',
+    !/<none>/.test(buildLine) &&
+      /Git@[0-9a-f]{7}(\s|$)/.test(buildLine) &&
+      !/nodejs/.test(buildLine),
+    'qa-cli #36: build STARTED is real and FROM is the resolved Git@<commit>, not the builder image',
     buildLine
   );
   out = await runCmd(`oc describe build ${qaBuildName}`);

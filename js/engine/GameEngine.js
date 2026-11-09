@@ -3802,7 +3802,10 @@ export class GameEngine {
   newBuild(options = {}) {
     const namespace = options.namespace || this.currentProject;
     const name = options.name || this._appNameFor(options.code || options.imageStream || 'build');
-    const strategy = options.dockerfile
+    const hasDockerfile = Boolean(options.dockerfile);
+    const dockerfileText =
+      options.dockerfile && options.dockerfile !== true ? String(options.dockerfile) : 'Dockerfile';
+    const strategy = hasDockerfile
       ? { type: 'Docker', dockerStrategy: { dockerfilePath: 'Dockerfile' } }
       : {
           type: 'Source',
@@ -3814,14 +3817,29 @@ export class GameEngine {
             },
           },
         };
+    // The 4.22 printer reads these struct fields, not spec.source.type: a
+    // binary build must carry `binary: {}` or FROM is blank, and a Dockerfile
+    // build must carry `source.dockerfile`.
+    let source;
+    if (options.code && hasDockerfile) {
+      source = {
+        type: 'Git',
+        git: { uri: String(options.code), ref: 'main' },
+        dockerfile: dockerfileText,
+      };
+    } else if (hasDockerfile) {
+      source = { type: 'Dockerfile', dockerfile: dockerfileText };
+    } else if (options.code) {
+      source = { type: 'Git', git: { uri: String(options.code), ref: 'main' } };
+    } else {
+      source = { type: 'Binary', binary: {} };
+    }
     const buildConfig = this.applyManifestObject({
       apiVersion: 'build.openshift.io/v1',
       kind: 'BuildConfig',
       metadata: { name, namespace, labels: { app: name } },
       spec: {
-        source: options.code
-          ? { type: 'Git', git: { uri: String(options.code), ref: 'main' } }
-          : { type: 'Binary' },
+        source,
         strategy,
         output: { to: { kind: 'ImageStreamTag', name: `${name}:latest` } },
         triggers: [{ type: 'ConfigChange' }],

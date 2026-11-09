@@ -6757,6 +6757,9 @@ export class SimulationTick {
           build.status.phase = 'Pending';
           build.status.reason = 'BuildPending';
           build.status.startTimestamp = new Date().toISOString();
+          // The clone has resolved: stamp spec.revision so `oc get builds` FROM
+          // becomes `Git@<commit>` instead of the BuildConfig's ref fallback.
+          this._recordResolvedGitRevision(build);
           build._phaseElapsed = 0;
           build.recordEvent('Normal', 'BuildStarted', `Build ${build.metadata.name} started`);
           this.cluster.update(build.uid, build);
@@ -6789,6 +6792,22 @@ export class SimulationTick {
         this._completeBuildSuccess(build, buildConfig);
       }
     }
+  }
+
+  /**
+   * Record the commit a Git clone resolved, the way the build pod fills
+   * `spec.revision.git.commit` before `oc get builds` shortens it to 7 hex
+   * chars. Deterministic per URI+ref so the same source always prints the
+   * same `Git@<commit>`. No-op for binary/Dockerfile-only builds and for a
+   * revision the manifest already set.
+   * @param {object} build
+   */
+  _recordResolvedGitRevision(build) {
+    const git = build?.spec?.source?.git;
+    if (!git?.uri || build.spec?.revision?.git?.commit) return;
+    const commit = this.cluster?._fakeDigest?.(`git:${git.uri}@${git.ref || ''}`);
+    if (!commit) return;
+    build.spec.revision = { type: 'Git', git: { commit } };
   }
 
   /** In-flight (New/Pending/Running) builds of a BuildConfig, excluding one. */
