@@ -91,6 +91,15 @@ Output, error wording and exit status now follow `oc` 4.22 / kubectl 1.35 (check
 
 None known: the 1.15.0 findings are fixed above.
 
+## Fixed in 1.16.2
+
+- **Chaos mode CronJob/Job targets.** A random `CronJobMissedSchedule` with no CronJob or Job bound
+  `alertmanager-main-0` (`oc get cronjob alertmanager-main-0`, damage never applied). `JobDeadlineExceeded`
+  did the same because Pod is an affected kind. Random spawns no longer borrow a Pod unless the incident
+  is about Pods, and create a repairable CronJob or Job when none exists. Locked by `scripts/verify.mjs`
+  §4o. A Job that already exists can still be chosen for `CronJobMissedSchedule` (it is an affected kind);
+  the empty-cluster case that was seen in play is the one the lock covers.
+
 ## Open - simulator fidelity
 
 - **Incident side effects:** a fix made before a scheduled incident re-seeds its value is overwritten
@@ -105,9 +114,6 @@ None known: the 1.15.0 findings are fixed above.
   serve them from its discovery cache - not verified). `oc get bc`/`oc get builds` FROM now follows the
   OCP 4.22 printer (`Git`, `Git@<ref>`, `Git@<commit>`, `Dockerfile`, `Binary`; custom strategy prints the
   custom image name) — fixed in 1.16.1, locked by `scripts/verify.mjs`.
-- **Chaos mode:** a random `CronJobMissedSchedule` incident can target a Pod (seen: `alertmanager-main-0` in
-  `openshift-monitoring`), so its steps read `oc get cronjob alertmanager-main-0`; random targets should be
-  limited to the incident's `affectedResourceTypes` (IncidentEngine `selectRandomTarget`).
 
 ## Replaying guidance
 

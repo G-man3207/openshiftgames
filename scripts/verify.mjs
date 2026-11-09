@@ -8028,6 +8028,181 @@ if (seedMod?.ClusterState) {
   }
 }
 
+// ── 4o. Chaos incident targets stay on an affected kind (1.16.2) ───────────
+// A random CronJobMissedSchedule with no CronJob or Job used to bind the first
+// platform Pod (`alertmanager-main-0`). The panel then taught
+// `oc get cronjob alertmanager-main-0`, onset damage never applied, and the
+// unsuspend fix could not resolve it. Same class: JobDeadlineExceeded (which
+// lists Pod) bound that Pod through the unknown-target lookup.
+{
+  const engineMod = await tryImport('js/engine/GameEngine.js');
+  const chaosMod = await tryImport('js/modes/ChaosMode.js');
+  const incidentMod = await tryImport('js/engine/IncidentEngine.js');
+  const commandBarMod = await tryImport('js/ui/CommandBar.js');
+  const manifestMod = await tryImport('js/engine/ManifestEngine.js');
+  if (
+    !engineMod?.GameEngine ||
+    !chaosMod?.ChaosMode ||
+    !incidentMod?.IncidentEngine ||
+    !commandBarMod?.CommandBar ||
+    !manifestMod?.ManifestEngine
+  ) {
+    fail('chaos-target', '4o: engine modules are not importable for the chaos-target lock');
+  } else {
+    const engine = new engineMod.GameEngine({ mode: 'chaos' });
+    const incidentEngine = new incidentMod.IncidentEngine(engine);
+    new chaosMod.ChaosMode(engine, incidentEngine, null).setupCluster();
+    // Sandbox clock: the cluster is the chaos seed (platform Pods, no CronJob),
+    // but random chaos respawns must not re-suspend the CronJob during the heal wait.
+    incidentEngine.start('sandbox');
+    engine.simulation.randomFailureRate = 0;
+    const cluster = engine.cluster;
+    const manifestEngine = new manifestMod.ManifestEngine({ cluster, gameEngine: engine });
+    globalThis.window = {
+      game: {
+        cluster,
+        gameEngine: engine,
+        engine: { emit() {}, on() {}, off() {} },
+        manifestEngine,
+      },
+    };
+    manifestEngine.game = globalThis.window.game;
+    const commandBar = new commandBarMod.CommandBar();
+    const cli = (raw) => {
+      try {
+        const out = commandBar.executeCommand(raw);
+        return { error: Boolean(out?.error), message: String(out?.message ?? '') };
+      } catch (err) {
+        return { error: true, message: `THROW ${err?.message || err}` };
+      }
+    };
+    const tick = (seconds) => {
+      const steps = Math.ceil(seconds / 0.05);
+      for (let step = 0; step < steps; step += 1) {
+        engine.simulation.tick(0.05);
+        incidentEngine.tick(0.05);
+      }
+    };
+    const lock = (ok, message, detail) => {
+      if (ok) passed();
+      else fail('chaos-target', message, detail === undefined ? undefined : JSON.stringify(detail));
+    };
+    const defOf = (name) => [...incidentEngine._defsById.values()].find((def) => def.name === name);
+    try {
+      const pods = cluster.getByKind('Pod') || [];
+      const cronDef = defOf('CronJobMissedSchedule');
+      const jobDef = defOf('JobDeadlineExceeded');
+      lock(
+        pods.some((pod) => pod.name === 'alertmanager-main-0') &&
+          (cluster.getByKind('CronJob') || []).length === 0 &&
+          (cluster.getByKind('Job') || []).length === 0,
+        '4o: the chaos seed has alertmanager-main-0 and no CronJob or Job (the reported empty-cluster case)',
+        { pods: pods.slice(0, 3).map((pod) => pod.name) }
+      );
+      lock(
+        incidentEngine._findFallbackTarget(cronDef) == null &&
+          incidentEngine._findFallbackTarget(jobDef) == null,
+        '4o: a non-Pod incident must not fall back to the first platform Pod'
+      );
+      const podOnly = {
+        affectedResourceTypes: ['Pod'],
+        resolution: { targetKind: 'Pod' },
+      };
+      const podFallback = incidentEngine._findFallbackTarget(podOnly);
+      lock(
+        podFallback?.kind === 'Pod',
+        '4o: a Pod incident with no owner still falls back to a Pod',
+        podFallback?.kind
+      );
+      const picked = incidentEngine.selectRandomTarget(cronDef);
+      const id = incidentEngine.spawnIncident(cronDef, picked);
+      const incident = incidentEngine.activeIncidents.get(id);
+      const cron = cluster.getByName('CronJob', incident?.target, incident?.namespace);
+      const boundPod = (cluster.getByKind('Pod') || []).find(
+        (pod) => pod.name === incident?.target
+      );
+      lock(
+        picked === 'unknown' &&
+          cron?.kind === 'CronJob' &&
+          cron.spec?.suspend === true &&
+          incident?.damageApplied === true &&
+          !boundPod &&
+          incident.target !== 'alertmanager-main-0',
+        '4o: CronJobMissedSchedule creates and suspends a CronJob instead of binding alertmanager-main-0',
+        {
+          picked,
+          target: incident?.target,
+          namespace: incident?.namespace,
+          suspend: cron?.spec?.suspend,
+          damageApplied: incident?.damageApplied,
+        }
+      );
+      const step = String(incident?.investigationSteps?.[0]?.command || '')
+        .replace(/<cronjob>/g, incident?.target || '')
+        .replace(/<namespace>/g, incident?.namespace || '');
+      const listed = cli(`oc get cronjob ${incident.target} -n ${incident.namespace}`);
+      const row = listed.message.split('\n').find((line) => line.startsWith(incident.target)) || '';
+      lock(
+        step === `oc get cronjob ${incident.target} -n ${incident.namespace}` &&
+          !listed.error &&
+          row.includes(incident.target) &&
+          /\btrue\b/.test(row) &&
+          !/alertmanager-main-0/.test(step),
+        '4o: the taught `oc get cronjob <name>` names the suspended CronJob, not a Pod',
+        { step, row, error: listed.error, message: listed.message.slice(0, 200) }
+      );
+      tick(0.1);
+      const patched = cli(
+        `oc patch cronjob ${incident.target} -n ${incident.namespace} -p '{"spec":{"suspend":false}}'`
+      );
+      tick(2.2);
+      const after = cluster.getByName('CronJob', incident.target, incident.namespace);
+      lock(
+        !patched.error &&
+          /patched/.test(patched.message) &&
+          incident.state === 'Resolved' &&
+          !incidentEngine.activeIncidents.has(id) &&
+          after?.spec?.suspend === false,
+        '4o: `oc patch cronjob … suspend:false` resolves CronJobMissedSchedule (the taught fix)',
+        {
+          patch: patched.message.slice(0, 160),
+          state: incident.state,
+          suspend: after?.spec?.suspend,
+        }
+      );
+
+      // Same class, second engine: JobDeadlineExceeded lists Pod, so the old
+      // unknown-target walk bound alertmanager-main-0 and never damaged a Job.
+      const engine2 = new engineMod.GameEngine({ mode: 'chaos' });
+      const incidents2 = new incidentMod.IncidentEngine(engine2);
+      new chaosMod.ChaosMode(engine2, incidents2, null).setupCluster();
+      incidents2.start('sandbox');
+      const jobId = incidents2.spawnIncident(jobDef, incidents2.selectRandomTarget(jobDef));
+      const jobIncident = incidents2.activeIncidents.get(jobId);
+      const job = engine2.cluster.getByName('Job', jobIncident?.target, jobIncident?.namespace);
+      lock(
+        job?.kind === 'Job' &&
+          job.status?.phase === 'Failed' &&
+          jobIncident?.damageApplied === true &&
+          jobIncident.target !== 'alertmanager-main-0',
+        '4o: JobDeadlineExceeded creates a Failed Job instead of binding alertmanager-main-0',
+        {
+          target: jobIncident?.target,
+          kind: job?.kind,
+          phase: job?.status?.phase,
+          damageApplied: jobIncident?.damageApplied,
+        }
+      );
+      incidents2.stop();
+    } catch (err) {
+      fail('chaos-target', `4o: chaos-target lock could not run: ${err?.stack || err}`);
+    } finally {
+      incidentEngine.stop();
+      delete globalThis.window;
+    }
+  }
+}
+
 // ── 5. Campaign, challenges, incidents and EX280 content ──────────────────
 const levelsMod = await tryImport('js/data/CampaignLevels.js');
 const challengesMod = await tryImport('js/modes/ChallengeMode.js');

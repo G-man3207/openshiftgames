@@ -4,6 +4,20 @@ All notable changes to shifting.pro are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 aims to follow [Semantic Versioning](https://semver.org/).
 
+## [1.16.2] — 2026-11-09
+
+### Fixed
+
+- **Chaos mode incident targets.** A random `CronJobMissedSchedule` with no CronJob or Job in the
+  cluster bound the first platform Pod (`alertmanager-main-0` in `openshift-monitoring`). The
+  Incidents panel then taught `oc get cronjob alertmanager-main-0`, onset damage never applied, and
+  unsuspending that name could not resolve the incident. The same lookup bound `JobDeadlineExceeded`
+  to that Pod. A random spawn now stays on an affected kind, and borrows a Pod only when the
+  incident is about Pods; when nothing of the right kind exists the engine creates one (a suspended
+  CronJob, or a Failed Job) that the taught command can repair. The version is bumped to 1.16.2
+  (`package.json` and both import maps) because module URLs are versioned (`/v/<version>/js/…`,
+  cached as immutable).
+
 ## [1.16.1] — 2026-11-09
 
 ### Fixed

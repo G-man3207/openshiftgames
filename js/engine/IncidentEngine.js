@@ -739,7 +739,12 @@ class IncidentEngine {
     return pool[pool.length - 1].def;
   }
 
-  /** Pick a random existing resource of one of the incident's affected kinds. */
+  /**
+   * Pick a random existing resource of one of the incident's affected kinds.
+   * Returns `'unknown'` when none exist. Spawn must not invent a target of
+   * another kind — a missing CronJob used to become the first platform Pod
+   * (`oc get cronjob alertmanager-main-0`). See `_findFallbackTarget`.
+   */
   selectRandomTarget(def) {
     const state = this.cluster;
     if (!state) return 'unknown';
@@ -776,6 +781,14 @@ class IncidentEngine {
     const exactTarget = opts.exactTarget === true;
     let resolvedTarget = this._resolveTargetResource(incident);
     if (!resolvedTarget && !exactTarget) resolvedTarget = this._findFallbackTarget(incident);
+    // selectRandomTarget() returns 'unknown' when nothing of the affected kinds
+    // exists. `_resolveTargetResource` then walks every affected kind, so a
+    // Job incident (which lists Pod) binds alertmanager-main-0 before the
+    // fallback runs. A random spawn must not keep a Pod unless the incident
+    // is about Pods, and must not keep a kind it does not affect.
+    if (resolvedTarget && !exactTarget && !this._randomTargetAllowed(incident, resolvedTarget)) {
+      resolvedTarget = null;
+    }
     if (!resolvedTarget && !exactTarget) resolvedTarget = this._ensureTargetResource(def, incident);
     if (resolvedTarget) {
       incident.target = resolvedTarget.name;
@@ -1104,6 +1117,35 @@ class IncidentEngine {
     return null;
   }
 
+  /** True when `resource.kind` is one of the incident's affected kinds. */
+  _kindAllowedForIncident(incident, resource) {
+    const kinds = incident?.affectedResourceTypes || [];
+    if (!resource) return false;
+    if (kinds.length === 0) return true;
+    return kinds.includes(resource.kind);
+  }
+
+  /**
+   * Random (non-exact) spawns may only bind a kind the incident affects, and
+   * may bind a Pod only when the resolution target is a Pod. Otherwise chaos
+   * teaches `oc get cronjob alertmanager-main-0` / `oc get job alertmanager-main-0`
+   * and onset damage never lands on a repairable object.
+   */
+  _randomTargetAllowed(incident, resource) {
+    if (!this._kindAllowedForIncident(incident, resource)) return false;
+    const targetKind = incident?.resolution?.targetKind || '';
+    if (resource.kind === 'Pod' && targetKind && targetKind !== 'Pod') return false;
+    return true;
+  }
+
+  /**
+   * Last existing resource of an affected kind, preferring the current project.
+   * Pods are skipped until an owner kind is ruled out, and used only when the
+   * incident is actually about a Pod. Any other incident with nothing of its
+   * own kinds returns null so `_ensureTargetResource` creates one — borrowing
+   * the first platform Pod made chaos print `oc get cronjob alertmanager-main-0`
+   * and left onset damage unapplied (resolution requires a CronJob).
+   */
   _findFallbackTarget(incident) {
     const kinds = incident.affectedResourceTypes || [];
     for (const kind of kinds) {
@@ -1114,6 +1156,9 @@ class IncidentEngine {
       if (preferred.length > 0) return preferred[0];
       if (list.length > 0) return list[0];
     }
+    const targetKind = incident.resolution?.targetKind || '';
+    const podIsSubject = (!targetKind || targetKind === 'Pod') && kinds.includes('Pod');
+    if (!podIsSubject) return null;
     const pods = this._safe(() => this.cluster?.getByKind('Pod')) || [];
     return pods.length > 0 ? pods[0] : null;
   }
