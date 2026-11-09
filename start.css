@@ -32,6 +32,11 @@
   --sp-pad: clamp(20px, 4vw, 56px);
   --sp-max: 1400px;
   --sp-section: clamp(88px, 9.5vw, 144px);
+  /* One page grid: every section splits at the same 5/12 line, so a section's
+     note, its second column (descriptions, figures, the detail panel) and the
+     footer's links all start on one shared vertical edge. */
+  --sp-gutter: clamp(28px, 4vw, 72px);
+  --sp-row-pad: clamp(18px, 2vw, 28px);
 
   position: fixed;
   inset: 0;
@@ -170,10 +175,20 @@ body.sp-menu-open #main-menu.sp {
   animation: none;
   margin: 0;
   font-family: var(--sp-font);
-  font-size: 16px;
+  font-size: 16px !important; /* style.css enlarges the legacy logo to 2-2.5rem !important on phones */
   font-weight: 600;
   letter-spacing: -0.015em;
   color: var(--sp-ink);
+  white-space: nowrap;
+}
+
+/* real copy: no one-word last lines, and no number range or command split
+   at its hyphen ("0-" / "100", "new-" / "project") */
+#main-menu.sp p {
+  text-wrap: pretty;
+}
+#main-menu.sp .sp-nw,
+#main-menu.sp p code {
   white-space: nowrap;
 }
 
@@ -410,7 +425,9 @@ body.sp-menu-open #main-menu.sp {
   margin: 14px 0 0;
   padding: 0;
   font-family: var(--sp-font);
-  font-size: var(--sp-t-small);
+  font-size: var(
+    --sp-t-small
+  ) !important; /* style.css shrinks it to 0.7rem !important on tablets */
   font-weight: 400;
   letter-spacing: 0.01em;
   text-transform: none;
@@ -548,10 +565,18 @@ body.sp-menu-open #main-menu.sp {
 
 #main-menu.sp .sp-sec-head {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 0.62fr);
+  /* the gutter is a real track so the heading may run into it, while the note
+     starts exactly on the section's second-column line */
+  grid-template-columns: minmax(0, 5fr) var(--sp-gutter) minmax(0, 7fr);
   align-items: end;
-  gap: 16px clamp(28px, 5vw, 96px);
+  gap: 16px 0;
   margin-bottom: clamp(32px, 4vw, 52px);
+}
+#main-menu.sp .sp-sec-head > .sp-h2 {
+  grid-column: 1 / 3;
+}
+#main-menu.sp .sp-sec-head > .sp-sec-note {
+  grid-column: 3 / -1;
 }
 #main-menu.sp .sp-h2 {
   margin: 0;
@@ -566,8 +591,8 @@ body.sp-menu-open #main-menu.sp {
 }
 #main-menu.sp .sp-sec-note {
   margin: 0;
-  justify-self: end;
-  max-width: 44ch;
+  justify-self: start;
+  max-width: 52ch;
   font-size: var(--sp-t-body);
   line-height: 1.55;
   color: var(--sp-muted);
@@ -586,14 +611,26 @@ body.sp-menu-open #main-menu.sp {
   margin: 0;
 }
 
+/* Every mode row and the two tool rows share one explicit track list, so
+   names, descriptions and arrows sit on the same vertical lines in every row
+   no matter how long each text is (the old per-row `auto` meta column moved
+   the description column from row to row). The description track starts on
+   the page's 5/12 line, the same line the section note above it uses.
+   Tracks: pad | name+meta | gutter | description | gap | arrow | pad */
+#main-menu.sp .sp-modes {
+  --sp-mode-cols: var(--sp-row-pad) calc((100% - var(--sp-gutter)) * 5 / 12 - var(--sp-row-pad))
+    var(--sp-gutter) minmax(0, 1fr) 24px 20px var(--sp-row-pad);
+}
+
 #main-menu.sp .sp-mode {
   display: grid;
-  grid-template-columns: minmax(0, 0.75fr) minmax(0, 1.55fr) auto 20px;
-  align-items: center;
-  gap: clamp(14px, 2.4vw, 44px);
+  grid-template-columns: var(--sp-mode-cols);
+  grid-template-rows: auto 1fr;
+  align-items: start;
+  gap: 6px 0;
   width: 100%;
   margin: 0;
-  padding: clamp(19px, 2.1vw, 26px) clamp(18px, 2vw, 28px);
+  padding: clamp(20px, 2.1vw, 28px) 0 !important; /* beats style.css's legacy mobile .menu-btn !important */
   border: 0;
   border-radius: var(--sp-radius);
   background: var(--sp-panel);
@@ -614,23 +651,36 @@ body.sp-menu-open #main-menu.sp {
 }
 
 #main-menu.sp .sp-mode-name {
+  grid-column: 2;
+  grid-row: 1;
   font-size: var(--sp-t-h3);
   font-weight: 700;
   letter-spacing: -0.02em;
   line-height: 1.1;
 }
 #main-menu.sp .sp-mode-desc {
-  font-size: var(--sp-t-ui);
-  line-height: 1.5;
+  grid-column: 4;
+  grid-row: 1 / span 2;
+  max-width: 62ch;
+  /* optical: lift the 15px text so its first line sits level with the name */
+  margin-top: -1px;
+  font-size: var(--sp-t-body);
+  line-height: 1.55;
   color: var(--sp-muted);
+  text-wrap: pretty;
 }
 #main-menu.sp .sp-mode-meta {
+  grid-column: 2;
+  grid-row: 2;
   font-size: var(--sp-t-small);
+  line-height: 1.45;
   color: var(--sp-dim);
-  white-space: nowrap;
   font-variant-numeric: tabular-nums;
 }
 #main-menu.sp .sp-mode-arrow {
+  grid-column: 6;
+  grid-row: 1 / span 2;
+  align-self: center;
   display: inline-flex;
   color: var(--sp-dim);
   transition:
@@ -646,21 +696,24 @@ body.sp-menu-open #main-menu.sp {
   color: var(--sp-ink);
 }
 
+/* The two tools are rows of the same list, set one size down: same tracks,
+   so their names and descriptions continue the lines of the modes above. */
 #main-menu.sp .sp-mode-extra {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  display: flex;
+  flex-direction: column;
   gap: 4px;
   margin-top: 4px;
 }
 #main-menu.sp .sp-extra {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 2px 20px;
-  padding: 20px clamp(18px, 2vw, 28px);
+  grid-template-columns: var(--sp-mode-cols);
+  align-items: start;
+  gap: 0;
+  width: 100%;
+  padding: 18px 0;
   border: 0;
   border-radius: var(--sp-radius);
-  background: var(--sp-bg-2);
+  background: transparent;
   color: var(--sp-ink);
   font-family: inherit;
   text-align: left;
@@ -672,23 +725,25 @@ body.sp-menu-open #main-menu.sp {
   background: var(--sp-panel);
 }
 #main-menu.sp .sp-extra-name {
-  grid-column: 1;
+  grid-column: 2;
   grid-row: 1;
   font-size: var(--sp-t-body);
   font-weight: 600;
+  line-height: 1.45;
   letter-spacing: -0.01em;
 }
 #main-menu.sp .sp-extra-desc {
-  grid-column: 1;
-  grid-row: 2;
-  margin-top: 3px;
-  font-size: var(--sp-t-small);
-  line-height: 1.5;
+  grid-column: 4;
+  grid-row: 1;
+  max-width: 62ch;
+  font-size: var(--sp-t-body);
+  line-height: 1.55;
   color: var(--sp-muted);
+  text-wrap: pretty;
 }
 #main-menu.sp .sp-extra-arrow {
-  grid-column: 2;
-  grid-row: 1 / span 2;
+  grid-column: 6;
+  grid-row: 1;
   align-self: center;
   display: inline-flex;
   color: var(--sp-dim);
@@ -697,8 +752,8 @@ body.sp-menu-open #main-menu.sp {
     color 0.18s ease;
 }
 #main-menu.sp .sp-extra-arrow svg {
-  width: 16px;
-  height: 16px;
+  width: 18px;
+  height: 18px;
 }
 #main-menu.sp .sp-extra:hover .sp-extra-arrow {
   transform: translateX(4px);
@@ -714,12 +769,12 @@ body.sp-menu-open #main-menu.sp {
 
 #main-menu.sp .sp-feature {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1.35fr);
+  grid-template-columns: minmax(0, 5fr) minmax(0, 7fr);
   align-items: center;
-  gap: clamp(28px, 4vw, 72px);
+  gap: var(--sp-gutter);
 }
 #main-menu.sp .sp-feature--flip {
-  grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr);
+  grid-template-columns: minmax(0, 7fr) minmax(0, 5fr);
 }
 
 #main-menu.sp .sp-h3 {
@@ -766,9 +821,9 @@ body.sp-menu-open #main-menu.sp {
 /* ── EX280 coverage: pick an objective, get the practice ───────────────── */
 #main-menu.sp .sp-exam-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1.22fr);
+  grid-template-columns: minmax(0, 5fr) minmax(0, 7fr);
   align-items: start;
-  gap: clamp(20px, 3vw, 48px);
+  gap: var(--sp-gutter);
 }
 
 #main-menu.sp .sp-exam-list {
@@ -942,23 +997,42 @@ body.sp-menu-open #main-menu.sp {
   background: var(--sp-paper);
   color: var(--sp-paper-ink);
 }
+/* Same frame and the same 5/12 split as every other section: the heading and
+   its lede hold the left column, the letter reads in the right one. */
 #main-menu.sp .sp-letter {
-  max-width: 780px;
+  display: grid;
+  grid-template-columns: minmax(0, 5fr) minmax(0, 7fr);
+  align-items: start;
+  gap: 0 var(--sp-gutter);
+  max-width: var(--sp-max);
   margin: 0 auto;
-  padding: clamp(64px, 8vw, 112px) var(--sp-pad);
+  padding: clamp(72px, 9vw, 128px) var(--sp-pad);
+}
+#main-menu.sp .sp-letter-head {
+  position: sticky;
+  top: 112px;
+}
+#main-menu.sp .sp-letter-body {
+  min-width: 0;
+}
+#main-menu.sp .sp-letter-body > p {
+  max-width: 64ch;
+}
+#main-menu.sp .sp-letter-body > p:first-child {
+  margin-top: 0;
 }
 #main-menu.sp .sp-letter .sp-h2 {
   color: var(--sp-paper-ink);
   max-width: 18ch;
 }
-#main-menu.sp .sp-letter-lede {
-  margin: clamp(26px, 3vw, 36px) 0 0;
-  font-size: var(--sp-t-lead);
-  line-height: 1.5;
-  letter-spacing: -0.015em;
+#main-menu.sp .sp-letter .sp-letter-lede {
+  margin: clamp(20px, 2.4vw, 28px) 0 0;
+  font-size: var(--sp-t-h3);
+  line-height: 1.35;
+  letter-spacing: -0.02em;
   font-weight: 600;
   color: var(--sp-paper-ink);
-  max-width: 34ch;
+  max-width: 32ch;
 }
 #main-menu.sp .sp-letter p {
   margin: 18px 0 0;
@@ -1031,7 +1105,8 @@ body.sp-menu-open #main-menu.sp {
 }
 
 /* legacy class required by the acceptance suite */
-#main-menu.sp .menu-attribution {
+#main-menu.sp .sp-letter .menu-attribution {
+  display: block; /* style.css hides the legacy class on short viewports */
   margin: 40px 0 0;
   padding: 24px 0 0;
   border: 0;
@@ -1053,19 +1128,33 @@ body.sp-menu-open #main-menu.sp {
 /* ── Footer ────────────────────────────────────────────────────────────── */
 #main-menu.sp .sp-footer {
   margin-top: var(--sp-section);
-  padding: clamp(44px, 6vw, 80px) var(--sp-pad) 36px;
+  padding: clamp(44px, 6vw, 80px) 0 36px;
   background: var(--sp-bg);
 }
+/* the same frame as the nav and every section (max width includes the side
+   padding), so the footer's left edge sits under the wordmark in the nav */
 #main-menu.sp .sp-footer-inner {
   max-width: var(--sp-max);
   margin: 0 auto;
+  padding: 0 var(--sp-pad);
 }
 
+/* brand in the 5/12 column; the three link lists share the 7/12 column, so
+   "Play" starts on the same line as every section's second column */
 #main-menu.sp .sp-footer-cols {
   display: grid;
-  grid-template-columns: minmax(0, 1.3fr) repeat(2, minmax(0, 0.8fr)) minmax(0, 0.9fr);
-  gap: 32px;
+  grid-template-columns: minmax(0, 15fr) var(--sp-gutter) repeat(3, minmax(0, 7fr));
+  gap: 32px 0;
   padding-bottom: clamp(44px, 6vw, 72px);
+}
+#main-menu.sp .sp-footer-cols > .sp-footer-col:first-child {
+  grid-column: 1;
+}
+#main-menu.sp .sp-footer-cols > .sp-footer-col:nth-child(2) {
+  grid-column: 3;
+}
+#main-menu.sp .sp-footer-cols > nav.sp-footer-col {
+  padding-right: 24px;
 }
 #main-menu.sp .sp-footer-col h3 {
   margin: 0 0 12px;
@@ -1105,7 +1194,7 @@ body.sp-menu-open #main-menu.sp {
   height: 26px;
 }
 #main-menu.sp .sp-footer-brand .menu-logo {
-  font-size: var(--sp-t-body);
+  font-size: 16px !important;
 }
 #main-menu.sp .sp-footer-tag {
   margin: 14px 0 0;
@@ -1128,11 +1217,10 @@ body.sp-menu-open #main-menu.sp {
 }
 
 #main-menu.sp .sp-footer-legal {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: space-between;
-  align-items: flex-start;
-  gap: 12px 32px;
+  display: grid;
+  grid-template-columns: minmax(0, 5fr) var(--sp-gutter) minmax(0, 7fr);
+  align-items: start;
+  gap: 12px 0;
   font-size: var(--sp-t-small);
   line-height: 1.65;
   color: var(--sp-muted);
@@ -1140,6 +1228,13 @@ body.sp-menu-open #main-menu.sp {
 #main-menu.sp .sp-footer-legal p {
   margin: 0;
   max-width: 78ch;
+}
+#main-menu.sp .sp-footer-legal p:first-child {
+  grid-column: 1;
+  padding-right: 24px;
+}
+#main-menu.sp .sp-footer-legal p:last-child {
+  grid-column: 3;
 }
 #main-menu.sp .sp-footer-legal a {
   color: var(--sp-muted);
@@ -1238,21 +1333,6 @@ html.sp-js #main-menu.sp .sp-reveal.is-in {
     grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr);
     gap: 36px;
   }
-  #main-menu.sp .sp-mode {
-    grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.5fr) auto 20px;
-    gap: 16px;
-  }
-  #main-menu.sp .sp-footer-cols {
-    grid-template-columns: minmax(0, 1.2fr) repeat(2, minmax(0, 0.85fr));
-  }
-  /* Keep the Project column (Settings / Achievements / Stats) reachable; the
-     footer reflows to 2 columns below 960px instead of hiding its actions. */
-  #main-menu.sp .sp-footer-col:last-child {
-    display: block;
-  }
-  #main-menu.sp .sp-exam-grid {
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr);
-  }
 }
 
 @media (max-width: 960px) {
@@ -1276,37 +1356,51 @@ html.sp-js #main-menu.sp .sp-reveal.is-in {
   #main-menu.sp .sp-stage {
     height: clamp(300px, 46vh, 430px);
   }
-  #main-menu.sp .sp-sec-head {
+  #main-menu.sp .sp-sec-head,
+  #main-menu.sp .sp-modes .sp-sec-head {
     grid-template-columns: minmax(0, 1fr);
     align-items: start;
   }
-  #main-menu.sp .sp-sec-note {
-    justify-self: start;
+  #main-menu.sp .sp-sec-head > .sp-h2,
+  #main-menu.sp .sp-sec-head > .sp-sec-note,
+  #main-menu.sp .sp-modes .sp-sec-head > .sp-h2,
+  #main-menu.sp .sp-modes .sp-sec-head > .sp-sec-note {
+    grid-column: 1;
   }
-  #main-menu.sp .sp-mode {
-    grid-template-columns: minmax(0, 1fr) 20px;
+  /* stacked rows: name and arrow on one line, the text below, all on the
+     same inner edge in every row (modes and tools alike) */
+  #main-menu.sp .sp-mode,
+  #main-menu.sp .sp-extra {
+    grid-template-columns: var(--sp-row-pad) minmax(0, 1fr) 16px 20px var(--sp-row-pad);
+    grid-template-rows: none;
     grid-template-areas:
-      'name arrow'
-      'desc desc'
-      'meta meta';
-    align-items: start;
-    gap: 8px 16px;
+      '. name . arrow .'
+      '. desc desc desc .'
+      '. meta meta meta .';
+    gap: 8px 0;
   }
-  #main-menu.sp .sp-mode-name {
+  #main-menu.sp .sp-mode-name,
+  #main-menu.sp .sp-extra-name {
     grid-area: name;
   }
-  #main-menu.sp .sp-mode-desc {
+  #main-menu.sp .sp-mode-desc,
+  #main-menu.sp .sp-extra-desc {
     grid-area: desc;
+    margin-top: 0;
   }
   #main-menu.sp .sp-mode-meta {
     grid-area: meta;
   }
-  #main-menu.sp .sp-mode-arrow {
+  #main-menu.sp .sp-mode-arrow,
+  #main-menu.sp .sp-extra-arrow {
     grid-area: arrow;
-    margin-top: 2px;
+    align-self: center;
   }
-  #main-menu.sp .sp-mode-extra {
-    grid-template-columns: minmax(0, 1fr);
+  #main-menu.sp .sp-extra {
+    grid-template-areas:
+      '. name . arrow .'
+      '. desc desc desc .';
+    gap: 4px 0;
   }
   #main-menu.sp .sp-feature,
   #main-menu.sp .sp-feature--flip {
@@ -1322,11 +1416,35 @@ html.sp-js #main-menu.sp .sp-reveal.is-in {
   #main-menu.sp .sp-changes {
     grid-template-columns: minmax(0, 1fr);
   }
-  #main-menu.sp .sp-footer-cols {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+  #main-menu.sp .sp-letter {
+    grid-template-columns: minmax(0, 1fr);
   }
-  #main-menu.sp .sp-footer-col:last-child {
-    display: block;
+  #main-menu.sp .sp-letter-head {
+    position: static;
+  }
+  #main-menu.sp .sp-letter-body {
+    margin-top: 32px;
+  }
+  #main-menu.sp .sp-letter .sp-letter-lede {
+    max-width: 48ch;
+  }
+  /* brand on its own row, the three link lists below it */
+  #main-menu.sp .sp-footer-cols {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+  #main-menu.sp .sp-footer-cols > .sp-footer-col:first-child {
+    grid-column: 1 / -1;
+  }
+  #main-menu.sp .sp-footer-cols > .sp-footer-col:nth-child(2) {
+    grid-column: auto;
+  }
+  #main-menu.sp .sp-footer-legal {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  #main-menu.sp .sp-footer-legal p:first-child,
+  #main-menu.sp .sp-footer-legal p:last-child {
+    grid-column: 1;
+    padding-right: 0;
   }
 }
 
@@ -1341,6 +1459,7 @@ html.sp-js #main-menu.sp .sp-reveal.is-in {
 @media (max-width: 620px) {
   #main-menu.sp {
     --sp-pad: 18px;
+    --sp-row-pad: 16px;
     --sp-section: 72px;
   }
   #main-menu.sp .sp-nav {
@@ -1401,13 +1520,10 @@ html.sp-js #main-menu.sp .sp-reveal.is-in {
     font-size: clamp(1.7rem, 7.4vw, 2.2rem);
   }
   #main-menu.sp .sp-mode {
-    padding: 16px;
+    padding: 16px 0 !important;
   }
   #main-menu.sp .sp-mode-name {
     font-size: var(--sp-t-h3);
-  }
-  #main-menu.sp .sp-mode-desc {
-    font-size: var(--sp-t-ui);
   }
   #main-menu.sp .sp-h3 {
     font-size: var(--sp-t-h3);
@@ -1419,14 +1535,14 @@ html.sp-js #main-menu.sp .sp-reveal.is-in {
     padding: 14px 16px;
   }
   #main-menu.sp .sp-footer-cols {
-    grid-template-columns: minmax(0, 1fr);
-    gap: 26px;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 28px 0;
+  }
+  #main-menu.sp .sp-footer-cols > nav.sp-footer-col {
+    padding-right: 12px;
   }
   #main-menu.sp .sp-footer-wordmark {
     font-size: clamp(2rem, 12.5vw, 3.2rem);
-  }
-  #main-menu.sp .sp-footer-legal {
-    flex-direction: column;
   }
 }
 

@@ -304,7 +304,8 @@
                 <span class="sp-mode-name">Sandbox</span>
                 <span class="sp-mode-desc"
                   >No level, no timer. Build whatever you want and get the Architecture Advisor's
-                  0-100 review on availability, security, networking, storage and cost.</span
+                  <span class="sp-nw">0-100</span> review on availability, security, networking,
+                  storage and cost.</span
                 >
                 <span class="sp-mode-meta">Free build · scored 0-100</span>
                 <span class="sp-mode-arrow"
@@ -455,7 +456,7 @@
                   Incidents arrive uninvited: failing pods, blocked Routes, quota denials. Diagnose
                   with <code>describe</code>, <code>logs</code> and events, then repair the
                   resource. Build freely in the sandbox and the Architecture Advisor grades the
-                  platform 0-100.
+                  platform <span class="sp-nw">0-100</span>.
                 </p>
               </div>
               <figure class="sp-fig">
@@ -515,125 +516,131 @@
         <!-- The homage: K8s Games, clearly and permanently credited -->
         <section id="sp-original" class="sp-original" aria-labelledby="sp-original-title">
           <div class="sp-letter sp-reveal">
-            <h2 class="sp-h2" id="sp-original-title">Where this comes from</h2>
-            <p class="sp-letter-lede">
-              shifting.pro is a derivative work of K8s Games, the game that put a Kubernetes cluster
-              in 3D on the web.
-            </p>
-            <p>
-              <a href="https://github.com/rohitg00/k8sgames" target="_blank" rel="noopener"
-                >K8s Games</a
-              >
-              by Rohit did something the documentation never does: it made a cluster a place. You
-              could build a Deployment, watch it schedule, kill a pod and see the controller put it
-              back - in a browser, with no install. It is Apache-2.0 licensed, and its source,
-              spirit and interface are the foundation this project grew from.
-            </p>
-            <p>
-              shifting.pro keeps that idea and points it at the exam: a full OpenShift 4.22 platform
-              model with Projects, Routes, S2I builds, ImageStreams, SCCs, RBAC evaluation, quotas,
-              LimitRanges and OLM operators, and every campaign level mapped to the official
-              <strong>EX280V422</strong> objective groups. The homage is intentional and permanent.
-            </p>
-
-            <ul class="sp-changes">
-              <li>
-                <strong>OpenShift 4.22 semantics</strong>Projects instead of namespaces, Routes
-                instead of Ingress, BuildConfigs and ImageStreams for source builds.
-              </li>
-              <li>
-                <strong>EX280 objective mapping</strong>Nine groups and 55 bullets tracked across
-                levels, timed labs and quick labs.
-              </li>
-              <li>
-                <strong>A real oc CLI</strong>new-project, new-app, expose, set, rollout, adm policy
-                and auth can-i, with honest failures.
-              </li>
-              <li>
-                <strong>Platform operations</strong>Quotas, LimitRanges, ClusterResourceQuota,
-                Operators, SCCs and LoadBalancers that behave like the platform.
-              </li>
-              <li>
-                <strong>Twenty-two levels, five chapters</strong>From your first Project to a full
-                production platform build, after an optional seven-level Linux &amp; RHEL prelude.
-              </li>
-              <li>
-                <strong>Thirteen timed labs</strong>Speed drills from CrashLoopBackOff to edge TLS
-                Routes and network policies, scored against the clock.
-              </li>
-            </ul>
-
-            <div class="sp-letter-links">
-              <a
-                class="sp-letter-link"
-                href="https://github.com/rohitg00/k8sgames"
-                target="_blank"
-                rel="noopener"
-                >K8s Games on GitHub
-                <svg
-                  viewBox="0 0 16 16"
-                  fill="none"
-                  stroke="currentColor"
-                  stroke-width="1.8"
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                  aria-hidden="true"
-                >
-                  <path d="M4 12 12 4M6 4h6v6" />
-                </svg>
-              </a>
-              <a
-                class="sp-letter-link"
-                href="https://github.com/G-man3207/openshiftgames"
-                target="_blank"
-                rel="noopener"
-                >shifting.pro source
-                <svg
-                  viewBox="0 0 16 16"
-                  fill="none"
-                  stroke="currentColor"
-                  stroke-width="1.8"
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                  aria-hidden="true"
-                >
-                  <path d="M4 12 12 4M6 4h6v6" />
-                </svg>
-              </a>
-              <a
-                class="sp-letter-link"
-                href="https://www.apache.org/licenses/LICENSE-2.0"
-                target="_blank"
-                rel="noopener"
-                >Apache-2.0 license
-                <svg
-                  viewBox="0 0 16 16"
-                  fill="none"
-                  stroke="currentColor"
-                  stroke-width="1.8"
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                  aria-hidden="true"
-                >
-                  <path d="M4 12 12 4M6 4h6v6" />
-                </svg>
-              </a>
+            <div class="sp-letter-head">
+              <h2 class="sp-h2" id="sp-original-title">Where this comes from</h2>
+              <p class="sp-letter-lede">
+                shifting.pro is a derivative work of K8s Games, the game that put a Kubernetes
+                cluster in 3D on the web.
+              </p>
             </div>
+            <div class="sp-letter-body">
+              <p>
+                <a href="https://github.com/rohitg00/k8sgames" target="_blank" rel="noopener"
+                  >K8s Games</a
+                >
+                by Rohit did something the documentation never does: it made a cluster a place. You
+                could build a Deployment, watch it schedule, kill a pod and see the controller put
+                it back - in a browser, with no install. It is Apache-2.0 licensed, and its source,
+                spirit and interface are the foundation this project grew from.
+              </p>
+              <p>
+                shifting.pro keeps that idea and points it at the exam: a full OpenShift 4.22
+                platform model with Projects, Routes, S2I builds, ImageStreams, SCCs, RBAC
+                evaluation, quotas, LimitRanges and OLM operators, and every campaign level mapped
+                to the official
+                <strong>EX280V422</strong> objective groups. The homage is intentional and
+                permanent.
+              </p>
 
-            <p class="menu-attribution">
-              Built for
-              <a
-                href="https://www.redhat.com/en/services/training/red-hat-certified-openshift-administrator-exam"
-                target="_blank"
-                rel="noopener"
-                >EX280</a
-              >
-              · based on
-              <a href="https://github.com/rohitg00/k8sgames" target="_blank" rel="noopener"
-                >K8s Games by Rohit</a
-              >
-              (Apache-2.0) · OpenShift is a trademark of Red Hat, Inc.
-            </p>
+              <ul class="sp-changes">
+                <li>
+                  <strong>OpenShift 4.22 semantics</strong>Projects instead of namespaces, Routes
+                  instead of Ingress, BuildConfigs and ImageStreams for source builds.
+                </li>
+                <li>
+                  <strong>EX280 objective mapping</strong>Nine groups and 55 bullets tracked across
+                  levels, timed labs and quick labs.
+                </li>
+                <li>
+                  <strong>A real oc CLI</strong>new-project, new-app, expose, set, rollout, adm
+                  policy and auth can-i, with honest failures.
+                </li>
+                <li>
+                  <strong>Platform operations</strong>Quotas, LimitRanges, ClusterResourceQuota,
+                  Operators, SCCs and LoadBalancers that behave like the platform.
+                </li>
+                <li>
+                  <strong>Twenty-two levels, five chapters</strong>From your first Project to a full
+                  production platform build, after an optional seven-level Linux &amp; RHEL prelude.
+                </li>
+                <li>
+                  <strong>Thirteen timed labs</strong>Speed drills from CrashLoopBackOff to edge TLS
+                  Routes and network policies, scored against the clock.
+                </li>
+              </ul>
+
+              <div class="sp-letter-links">
+                <a
+                  class="sp-letter-link"
+                  href="https://github.com/rohitg00/k8sgames"
+                  target="_blank"
+                  rel="noopener"
+                  >K8s Games on GitHub
+                  <svg
+                    viewBox="0 0 16 16"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="1.8"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    aria-hidden="true"
+                  >
+                    <path d="M4 12 12 4M6 4h6v6" />
+                  </svg>
+                </a>
+                <a
+                  class="sp-letter-link"
+                  href="https://github.com/G-man3207/openshiftgames"
+                  target="_blank"
+                  rel="noopener"
+                  >shifting.pro source
+                  <svg
+                    viewBox="0 0 16 16"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="1.8"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    aria-hidden="true"
+                  >
+                    <path d="M4 12 12 4M6 4h6v6" />
+                  </svg>
+                </a>
+                <a
+                  class="sp-letter-link"
+                  href="https://www.apache.org/licenses/LICENSE-2.0"
+                  target="_blank"
+                  rel="noopener"
+                  >Apache-2.0 license
+                  <svg
+                    viewBox="0 0 16 16"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="1.8"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    aria-hidden="true"
+                  >
+                    <path d="M4 12 12 4M6 4h6v6" />
+                  </svg>
+                </a>
+              </div>
+
+              <p class="menu-attribution">
+                Built for
+                <a
+                  href="https://www.redhat.com/en/services/training/red-hat-certified-openshift-administrator-exam"
+                  target="_blank"
+                  rel="noopener"
+                  >EX280</a
+                >
+                · based on
+                <a href="https://github.com/rohitg00/k8sgames" target="_blank" rel="noopener"
+                  >K8s Games by Rohit</a
+                >
+                (Apache-2.0) · OpenShift is a trademark of Red Hat, Inc.
+              </p>
+            </div>
           </div>
         </section>
         <!-- upstream-attribution:end -->
